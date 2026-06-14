@@ -42,13 +42,21 @@
   (chelonia.rt/write-log log as)
   (println (str "imported -> " (count as) " claims -> " log))))
 
-(defn cmd-export [^String log ^String out-dir]
-  (let [idx (k/build-index (:claims (fold/fold (chelonia.rt/read-log log))))
+(defn- ^String claim-sig [c]
+  (str (:l c) "|" (:p c) "|" (:r c)))
+
+(defn- sig-set [claims]
+  (vec (sort (mapv claim-sig claims))))
+
+(defn cmd-export [^String threads-dir ^String log ^String out-dir]
+  (let [log-claims (:claims (fold/fold (chelonia.rt/read-log log)))
+   file-claims (:claims (fold/fold (imp/load-corpus threads-dir)))]
+  (if (not (= (sig-set log-claims) (sig-set file-claims))) (println (str "REFUSING export: threads/ has changes not in the log " "(concurrent edits?). Run `import` first, or write via the coordinator.")) (let [idx (k/build-index log-claims)
    tes (k/thread-ids-i idx)]
   (chelonia.rt/ensure-dir out-dir)
   (doseq [te tes]
   (chelonia.rt/spit-file (str out-dir "/" (exp/thread-filename idx te)) (exp/thread-md idx te)))
-  (println (str "exported " (count tes) " threads -> " out-dir))))
+  (println (str "exported " (count tes) " threads -> " out-dir))))))
 
 (defn cmd-audit [^String log]
   (let [idx (k/build-index (:claims (fold/fold (chelonia.rt/read-log log))))
@@ -180,7 +188,7 @@
   (let [cmd (if (empty? args) "" (first args))]
   (cond
   (= cmd "import") (cmd-import threads-dir log)
-  (= cmd "export") (if (> (count args) 1) (cmd-export log (nth args 1)) (println "usage: export <out-dir>"))
+  (= cmd "export") (if (> (count args) 1) (cmd-export threads-dir log (nth args 1)) (println "usage: export <out-dir>"))
   (= cmd "ready") (cmd-ready log)
   (= cmd "blocked") (cmd-blocked log)
   (= cmd "leverage") (cmd-leverage log)

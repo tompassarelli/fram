@@ -46,16 +46,27 @@
     (chelonia.rt/write-log log as)
     (println (str "imported -> " (count as) " claims -> " log))))
 
-;; Inverse of import: fold the log -> write each thread back as markdown into
-;; out-dir. The files become a projection of the claim graph.
-(defn cmd-export [log :- String out-dir :- String] :- Nil
-  (let [idx (k/build-index (:claims (fold/fold (chelonia.rt/read-log log))))
-        tes (k/thread-ids-i idx)]
-    (chelonia.rt/ensure-dir out-dir)
-    (doseq [te tes]
-      (chelonia.rt/spit-file (str out-dir "/" (exp/thread-filename idx te))
-                             (exp/thread-md idx te)))
-    (println (str "exported " (count tes) " threads -> " out-dir))))
+;; signature of a claim set, for divergence detection
+(defn- claim-sig [c :- k/Claim] :- String (str (:l c) "|" (:p c) "|" (:r c)))
+(defn- sig-set [claims :- (Vec k/Claim)] :- (Vec String) (vec (sort (mapv claim-sig claims))))
+
+;; Inverse of import: fold the log -> write each thread as markdown into out-dir.
+;; SAFETY (concurrent agents): refuse if threads/ holds edits not yet in the log —
+;; exporting then would clobber them. Run `import` first, or route writes through
+;; the coordinator (the sole safe writer under concurrency).
+(defn cmd-export [threads-dir :- String log :- String out-dir :- String] :- Nil
+  (let [log-claims (:claims (fold/fold (chelonia.rt/read-log log)))
+        file-claims (:claims (fold/fold (imp/load-corpus threads-dir)))]
+    (if (not (= (sig-set log-claims) (sig-set file-claims)))
+      (println (str "REFUSING export: threads/ has changes not in the log "
+                    "(concurrent edits?). Run `import` first, or write via the coordinator."))
+      (let [idx (k/build-index log-claims)
+            tes (k/thread-ids-i idx)]
+        (chelonia.rt/ensure-dir out-dir)
+        (doseq [te tes]
+          (chelonia.rt/spit-file (str out-dir "/" (exp/thread-filename idx te))
+                                 (exp/thread-md idx te)))
+        (println (str "exported " (count tes) " threads -> " out-dir))))))
 
 ;; Entity-drift audit: near-duplicate tags / repo path-form collisions / long-tail.
 (defn cmd-audit [log :- String] :- Nil
@@ -232,7 +243,7 @@
       [(= cmd "import")   (cmd-import threads-dir log)]
       [(= cmd "export")
        (if (> (count args) 1)
-         (cmd-export log (nth args 1))
+         (cmd-export threads-dir log (nth args 1))
          (println "usage: export <out-dir>"))]
       [(= cmd "ready")    (cmd-ready log)]
       [(= cmd "blocked")  (cmd-blocked log)]
