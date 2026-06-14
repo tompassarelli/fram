@@ -184,6 +184,24 @@
   (chelonia.rt/write-log log (claims->assertions deduped "merge"))
   (println (str "merged " from " -> " to "  (" (count claims) " claims -> " (count deduped) ")"))))
 
+(defn- ^String tell-once [port ^String op ^String te ^String pred ^String rv]
+  (let [v (chelonia.rt/coord-version port)]
+  (if (< v 0) "nodaemon" (if (= op "assert") (chelonia.rt/coord-assert port te pred rv v) (chelonia.rt/coord-retract port te pred rv v)))))
+
+(defn- ^String tell-retry [port ^String op ^String te ^String pred ^String rv tries]
+  (let [resp (tell-once port op te pred rv)]
+  (if (and (= resp "conflict") (> tries 0)) (tell-retry port op te pred rv (- tries 1)) resp)))
+
+(defn cmd-tell [^String op ^String id ^String pred ^String value]
+  (let [te (str "thread:" id)
+   rv (if (or (= pred "depends_on") (= pred "part_of")) (str "thread:" value) value)
+   resp (tell-retry (chelonia.rt/coord-port) op te pred rv 5)]
+  (cond
+  (= resp "nodaemon") (println "no coordinator on 127.0.0.1:7977 — run `chelonia serve`, or use `set` (single-writer)")
+  (= resp "conflict") (println "rejected: write conflict after retries (another agent is racing this id+pred)")
+  (str/starts-with? resp "ok:") (println (str "committed via coordinator (v" (subs resp 3) "): " id " " pred " = " rv))
+  :else (println (str "REJECTED by coordinator: " resp)))))
+
 (defn run [args ^String threads-dir ^String log]
   (let [cmd (if (empty? args) "" (first args))]
   (cond
@@ -200,7 +218,9 @@
   (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) ""))
   (= cmd "set") (if (>= (count args) 4) (cmd-set log (nth args 1) (nth args 2) (nth args 3)) (println "usage: set <id> <pred> <value>"))
   (= cmd "merge") (if (>= (count args) 3) (cmd-merge log (nth args 1) (nth args 2)) (println "usage: merge <from-entity> <to-entity>"))
-  :else (println "usage: import | export <out-dir> | ready | blocked | leverage | next | agenda | plate | audit | validate | show <id> | set <id> <pred> <value> | merge <from> <to>"))))
+  (= cmd "tell") (if (>= (count args) 4) (cmd-tell "assert" (nth args 1) (nth args 2) (nth args 3)) (println "usage: tell <id> <pred> <value>"))
+  (= cmd "untell") (if (>= (count args) 4) (cmd-tell "retract" (nth args 1) (nth args 2) (nth args 3)) (println "usage: untell <id> <pred> <value>"))
+  :else (println "usage: import | export <out-dir> | ready | blocked | leverage | next | agenda | plate | audit | validate | show <id> | set <id> <pred> <value> | tell <id> <pred> <value> | untell <id> <pred> <value> | merge <from> <to>"))))
 
 (defn -main [& args]
   (run (vec args) (chelonia.rt/threads-dir) (chelonia.rt/log-path)))

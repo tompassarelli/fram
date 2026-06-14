@@ -23,6 +23,10 @@
 (declare-extern chelonia.rt/log-path [-> String])
 (declare-extern chelonia.rt/ensure-dir [String -> Nil])
 (declare-extern chelonia.rt/spit-file [String String -> Nil])
+(declare-extern chelonia.rt/coord-version [Int -> Int])
+(declare-extern chelonia.rt/coord-assert [Int String String String Int -> String])
+(declare-extern chelonia.rt/coord-retract [Int String String String Int -> String])
+(declare-extern chelonia.rt/coord-port [-> Int])
 
 ;; --- display helpers --------------------------------------------------------
 
@@ -235,6 +239,37 @@
     (chelonia.rt/write-log log (claims->assertions deduped "merge"))
     (println (str "merged " from " -> " to "  (" (count claims) " claims -> " (count deduped) ")"))))
 
+;; --- write THROUGH the coordinator (safe under concurrent agents) ------------
+;; Unlike `set` (direct log append, single-writer), `tell` routes the write to
+;; the running daemon: serialized commit, optimistic base_version, retry on
+;; conflict. This is the safe path when multiple agents may write at once.
+(defn- tell-once [port :- Int op :- String te :- String pred :- String rv :- String] :- String
+  (let [v (chelonia.rt/coord-version port)]
+    (if (< v 0)
+      "nodaemon"
+      (if (= op "assert")
+        (chelonia.rt/coord-assert port te pred rv v)
+        (chelonia.rt/coord-retract port te pred rv v)))))
+
+(defn- tell-retry [port :- Int op :- String te :- String pred :- String rv :- String tries :- Int] :- String
+  (let [resp (tell-once port op te pred rv)]
+    (if (and (= resp "conflict") (> tries 0))
+      (tell-retry port op te pred rv (- tries 1))
+      resp)))
+
+(defn cmd-tell [op :- String id :- String pred :- String value :- String] :- Nil
+  (let [te (str "thread:" id)
+        rv (if (or (= pred "depends_on") (= pred "part_of")) (str "thread:" value) value)
+        resp (tell-retry (chelonia.rt/coord-port) op te pred rv 5)]
+    (cond
+      [(= resp "nodaemon")
+       (println "no coordinator on 127.0.0.1:7977 — run `chelonia serve`, or use `set` (single-writer)")]
+      [(= resp "conflict")
+       (println "rejected: write conflict after retries (another agent is racing this id+pred)")]
+      [(str/starts-with? resp "ok:")
+       (println (str "committed via coordinator (v" (subs resp 3) "): " id " " pred " = " rv))]
+      [:else (println (str "REJECTED by coordinator: " resp))])))
+
 ;; --- dispatch ---------------------------------------------------------------
 
 (defn run [args :- (Vec String) threads-dir :- String log :- String] :- Nil
@@ -262,7 +297,15 @@
        (if (>= (count args) 3)
          (cmd-merge log (nth args 1) (nth args 2))
          (println "usage: merge <from-entity> <to-entity>"))]
-      [:else (println "usage: import | export <out-dir> | ready | blocked | leverage | next | agenda | plate | audit | validate | show <id> | set <id> <pred> <value> | merge <from> <to>")])))
+      [(= cmd "tell")
+       (if (>= (count args) 4)
+         (cmd-tell "assert" (nth args 1) (nth args 2) (nth args 3))
+         (println "usage: tell <id> <pred> <value>"))]
+      [(= cmd "untell")
+       (if (>= (count args) 4)
+         (cmd-tell "retract" (nth args 1) (nth args 2) (nth args 3))
+         (println "usage: untell <id> <pred> <value>"))]
+      [:else (println "usage: import | export <out-dir> | ready | blocked | leverage | next | agenda | plate | audit | validate | show <id> | set <id> <pred> <value> | tell <id> <pred> <value> | untell <id> <pred> <value> | merge <from> <to>")])))
 
 (defn -main [& args] :- Nil
   (run (vec args) (chelonia.rt/threads-dir) (chelonia.rt/log-path)))

@@ -75,3 +75,34 @@
 (defn append-assertion [path a]
   (spit path (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a)}) "\n")
         :append true))
+
+;; --- coordinator client: write THROUGH the daemon (safe concurrent path) -----
+;; One request/response over the local socket. The daemon serializes writes
+;; (optimistic base_version + obligation rules), so this is the safe multi-agent
+;; write path — unlike append-assertion, which writes the log directly.
+
+(defn- coord-rt [port req]
+  (with-open [s (java.net.Socket.)]
+    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
+    (let [w (io/writer (.getOutputStream s))
+          r (io/reader (.getInputStream s))]
+      (.write w (str (pr-str req) "\n"))
+      (.flush w)
+      (edn/read-string (.readLine r)))))
+
+(defn coord-version [port]
+  (try (let [resp (coord-rt port {:op :version})] (or (:version resp) -1))
+       (catch Exception _ -1)))
+
+(defn- coord-write [op port te pred value base]
+  (try (let [resp (coord-rt port {:op op :te te :p pred :r value :base base :frame "agent"})]
+         (cond (:ok resp)                (str "ok:" (:ok resp))
+               (= (:reject resp) :conflict) "conflict"
+               (:reject resp)            (str "reject:" (str/join "; " (:reject resp)))
+               :else                     (str "error:" (pr-str resp))))
+       (catch Exception _ "error:nodaemon")))
+
+(defn coord-assert  [port te pred value base] (coord-write :assert  port te pred value base))
+(defn coord-retract [port te pred value base] (coord-write :retract port te pred value base))
+
+(defn coord-port [] (if-let [p (System/getenv "CHELONIA_PORT")] (Integer/parseInt p) 7977))

@@ -85,6 +85,18 @@ Run the multi-agent daemon:
 bin/chelonia-daemon 7977   # loads the log, serves agents on 127.0.0.1:7977
 ```
 
+With a daemon running, **writes go through it** (serialized, rule-checked,
+conflict-retried — the safe path when multiple agents write at once), instead of
+touching the log directly:
+
+```sh
+bin/chelonia tell <id> <pred> <value>     # assert via the coordinator
+bin/chelonia untell <id> <pred> <value>   # retract via the coordinator
+```
+
+Warm reads are served from the daemon's in-memory index (~1ms): `ready`,
+`blocked`, `leverage`, `validate`.
+
 ## Built on Beagle
 
 The logic (kernel, fold, projections, import, CLI) is written in **Beagle** — a
