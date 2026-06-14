@@ -61,17 +61,17 @@
          (remove str/blank?)
          (keep (fn [line]
                  (try (let [m (edn/read-string line)]
-                        (fold/->Assertion (:tx m) (:op m) (:l m) (:p m) (:r m)))
+                        (fold/->Assertion (:tx m) (:op m) (:l m) (:p m) (:r m) (or (:frame m) (:by m) "legacy")))
                       (catch Exception _ nil))))
          vec)
     []))
 
 (defn write-log [path assertions]
   (let [lines (map (fn [a]
-                     (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a)}))
+                     (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a)}))
                    assertions)]
     (spit path (str (str/join "\n" lines) "\n"))))
 
 (defn append-assertion [path a]
-  (spit path (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a)}) "\n")
+  (spit path (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a)}) "\n")
         :append true))

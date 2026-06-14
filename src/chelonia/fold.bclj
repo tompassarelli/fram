@@ -5,7 +5,7 @@
 
 (require chelonia.kernel :as k)
 
-(defrecord Assertion [tx :- Int op :- String l :- String p :- String r :- String])
+(defrecord Assertion [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
 (defrecord Fold [claims :- (Vec k/Claim) version :- Int])
 

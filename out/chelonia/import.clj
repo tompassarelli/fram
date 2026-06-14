@@ -100,7 +100,7 @@
    i 1
    acc []]
   (if (empty? cs) acc (let [c (first cs)]
-  (recur (rest cs) (+ i 1) (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c))))))))
+  (recur (rest cs) (+ i 1) (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c) "import")))))))
 
 (defn load-corpus [^String threads-dir]
   (let [files (chelonia.rt/list-md threads-dir)

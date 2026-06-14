@@ -118,7 +118,7 @@
    cand (k/apply-assert claims (k/->Claim te pred rv))
    viol (k/violations cand te)]
   (if (not (empty? viol)) (println (str "REJECTED — " (str/join "; " viol))) (do
-  (chelonia.rt/append-assertion log (fold/->Assertion (+ (:version f) 1) "assert" te pred rv))
+  (chelonia.rt/append-assertion log (fold/->Assertion (+ (:version f) 1) "assert" te pred rv "cli"))
   (println (str "ok — " id " " pred " = " rv " (v" (+ (:version f) 1) ")"))))))
 
 (defn run [args ^String threads-dir ^String log]

@@ -1,7 +1,7 @@
 (ns chelonia.fold
   (:require [chelonia.kernel :as k]))
 
-(defrecord Assertion [tx op l p r])
+(defrecord Assertion [tx op l p r frame])
 
 (defn assertion-tx [r] (:tx r))
 
@@ -12,6 +12,8 @@
 (defn assertion-p [r] (:p r))
 
 (defn assertion-r [r] (:r r))
+
+(defn assertion-frame [r] (:frame r))
 
 (defrecord Fold [claims version])
 
