@@ -1,7 +1,7 @@
 (ns chelonia.kernel
   (:require [clojure.string :as str]))
 
-(def single-valued ["title" "state" "owner" "lead" "driver" "source" "part_of" "do_on" "valid_until" "estimate_hours" "created_at" "updated_at" "name" "body"])
+(def single-valued ["title" "state" "owner" "lead" "driver" "source" "part_of" "do_on" "valid_until" "estimate_hours" "created_at" "updated_at" "name" "body" "created_by" "slug"])
 
 (def valid-states ["draft" "ready" "active" "done" "canceled"])
 

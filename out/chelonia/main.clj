@@ -4,6 +4,7 @@
             [chelonia.fold :as fold]
             [chelonia.projections :as proj]
             [chelonia.import :as imp]
+            [chelonia.export :as exp]
             [clojure.string :as str]
             [chelonia.rt :as rt]))
 
@@ -33,6 +34,14 @@
   (let [as (imp/load-corpus threads-dir)]
   (chelonia.rt/write-log log as)
   (println (str "imported -> " (count as) " claims -> " log))))
+
+(defn cmd-export [^String log ^String out-dir]
+  (let [idx (k/build-index (:claims (fold/fold (chelonia.rt/read-log log))))
+   tes (k/thread-ids-i idx)]
+  (chelonia.rt/ensure-dir out-dir)
+  (doseq [te tes]
+  (chelonia.rt/spit-file (str out-dir "/" (exp/thread-filename idx te)) (exp/thread-md idx te)))
+  (println (str "exported " (count tes) " threads -> " out-dir))))
 
 (defn cmd-ready [^String log]
   (let [idx (k/build-index (:claims (fold/fold (chelonia.rt/read-log log))))
@@ -116,6 +125,7 @@
   (let [cmd (if (empty? args) "" (first args))]
   (cond
   (= cmd "import") (cmd-import threads-dir log)
+  (= cmd "export") (if (> (count args) 1) (cmd-export log (nth args 1)) (println "usage: export <out-dir>"))
   (= cmd "ready") (cmd-ready log)
   (= cmd "blocked") (cmd-blocked log)
   (= cmd "leverage") (cmd-leverage log)
@@ -124,7 +134,7 @@
   (= cmd "validate") (cmd-validate log)
   (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) ""))
   (= cmd "set") (if (>= (count args) 4) (cmd-set log (nth args 1) (nth args 2) (nth args 3)) (println "usage: set <id> <pred> <value>"))
-  :else (println "usage: import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <value>"))))
+  :else (println "usage: import | export <out-dir> | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <value>"))))
 
 (defn -main [& args]
   (run (vec args) (chelonia.rt/threads-dir) (chelonia.rt/log-path)))

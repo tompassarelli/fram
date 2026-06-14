@@ -16,6 +16,7 @@
 (declare-extern chelonia.rt/split-on [String String -> (Vec String)])
 (declare-extern chelonia.rt/str-index-of [String String -> Int?])
 (declare-extern chelonia.rt/split-comma [String -> (Vec String)])
+(declare-extern chelonia.rt/file-slug [String -> String])
 
 ;; --- frontmatter parse (flat YAML subset) ----------------------
 
@@ -100,7 +101,7 @@
             (conj a (k/->Claim te p (str pfx x))))
           acc xs))
 
-(defn thread->claims [m :- (Map String Any) body :- String] :- (Vec k/Claim)
+(defn thread->claims [m :- (Map String Any) body :- String slug :- String] :- (Vec k/Claim)
   (let [id (fm-opt m "id")]
     (if (nil? id)
       []
@@ -118,7 +119,9 @@
             c11 (add-scalar c10 te "estimate_hours" (fm-opt m "estimate_hours"))
             c12 (add-scalar c11 te "part_of" (prefixed "thread:" (fm-opt m "part_of")))
             c13 (add-scalar c12 te "body" body)
-            c14 (add-multi c13 te "depends_on" "thread:" (fm-list m "depends_on"))
+            cby (add-scalar c13 te "created_by" (prefixed "person:" (fm-opt m "created_by")))
+            csl (add-scalar cby te "slug" slug)
+            c14 (add-multi csl te "depends_on" "thread:" (fm-list m "depends_on"))
             c15 (add-multi c14 te "tag" "tag:" (fm-list m "tags"))
             c16 (add-multi c15 te "repo" "repo:" (fm-list m "repo"))
             c17 (add-multi c16 te "proposed_by" "person:" (fm-list m "proposed_by"))]
@@ -152,7 +155,7 @@
                        (fn [acc :- (Vec k/Claim) path :- String] :- (Vec k/Claim)
                          (let [doc (split-doc (chelonia.rt/slurp path))]
                            (if (some? doc)
-                             (vec (concat acc (thread->claims (parse-flat-fm (:fm doc)) (:body doc))))
+                             (vec (concat acc (thread->claims (parse-flat-fm (:fm doc)) (:body doc) (chelonia.rt/file-slug path))))
                              acc)))
                        []
                        files)

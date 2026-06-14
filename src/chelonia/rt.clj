@@ -24,6 +24,15 @@
        sort
        vec))
 
+(defn spit-file [path content] (spit path content) nil)
+(defn ensure-dir [dir] (.mkdirs (io/file dir)) nil)
+(defn file-slug
+  "Slug portion of a thread filename: '<id>-<slug>.md' -> '<slug>'."
+  [path]
+  (let [base (str/replace (.getName (io/file path)) #"\.md$" "")
+        dash (str/index-of base "-")]
+    (if dash (subs base (inc dash)) base)))
+
 ;; --- string ops the parser needs -------------------------------------------
 
 (defn split-on [s sep]

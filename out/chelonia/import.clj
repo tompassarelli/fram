@@ -64,7 +64,7 @@
 (defn- add-multi [acc ^String te ^String p ^String pfx xs]
   (reduce (fn [a x] (conj a (k/->Claim te p (str pfx x)))) acc xs))
 
-(defn thread->claims [m ^String body]
+(defn thread->claims [m ^String body ^String slug]
   (let [id (fm-opt m "id")]
   (if (nil? id) [] (let [te (str "thread:" id)
    c1 (add-scalar [] te "title" (fm-opt m "title"))
@@ -80,7 +80,9 @@
    c11 (add-scalar c10 te "estimate_hours" (fm-opt m "estimate_hours"))
    c12 (add-scalar c11 te "part_of" (prefixed "thread:" (fm-opt m "part_of")))
    c13 (add-scalar c12 te "body" body)
-   c14 (add-multi c13 te "depends_on" "thread:" (fm-list m "depends_on"))
+   cby (add-scalar c13 te "created_by" (prefixed "person:" (fm-opt m "created_by")))
+   csl (add-scalar cby te "slug" slug)
+   c14 (add-multi csl te "depends_on" "thread:" (fm-list m "depends_on"))
    c15 (add-multi c14 te "tag" "tag:" (fm-list m "tags"))
    c16 (add-multi c15 te "repo" "repo:" (fm-list m "repo"))
    c17 (add-multi c16 te "proposed_by" "person:" (fm-list m "proposed_by"))]
@@ -103,6 +105,6 @@
 (defn load-corpus [^String threads-dir]
   (let [files (chelonia.rt/list-md threads-dir)
    thread-claims (reduce (fn [acc path] (let [doc (split-doc (chelonia.rt/slurp path))]
-  (if (some? doc) (vec (concat acc (thread->claims (parse-flat-fm (:fm doc)) (:body doc)))) acc))) [] files)
+  (if (some? doc) (vec (concat acc (thread->claims (parse-flat-fm (:fm doc)) (:body doc) (chelonia.rt/file-slug path)))) acc))) [] files)
    all (vec (concat thread-claims (person-name-claims thread-claims)))]
   (number-assertions all)))
