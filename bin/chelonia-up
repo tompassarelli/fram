@@ -10,10 +10,23 @@ export CHELONIA_PORT="${CHELONIA_PORT:-7977}"
 LOG="${CHELONIA_LOG:-$PWD/claims.log}"
 RESTART=0; [ "$1" = "--restart" ] && RESTART=1
 
+# PIDs listening on the port. fuser/lsof are NOT always installed (e.g. NixOS),
+# and when they're missing the old kill silently no-opped, leaving a zombie that
+# squatted the port — the new daemon then failed to bind and `up` falsely
+# reported success because the zombie answered `doctor`. ss (iproute2) is
+# reliably present; kill by the listener PID and VERIFY the port frees.
+port_pids() { ss -tlnpH "sport = :$CHELONIA_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
+
 if [ "$RESTART" = 1 ]; then
   echo "stopping any coordinator on :$CHELONIA_PORT"
-  fuser -k "$CHELONIA_PORT/tcp" 2>/dev/null || true
-  lsof -ti "tcp:$CHELONIA_PORT" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+  for p in $(port_pids); do kill "$p" 2>/dev/null || true; done
+  for _ in $(seq 20); do [ -z "$(port_pids)" ] && break; sleep 0.1; done
+  for p in $(port_pids); do kill -9 "$p" 2>/dev/null || true; done
+  for _ in $(seq 20); do [ -z "$(port_pids)" ] && break; sleep 0.1; done
+  if [ -n "$(port_pids)" ]; then
+    echo "ERROR: :$CHELONIA_PORT still held by PID(s) $(port_pids | tr '\n' ' ')after SIGKILL — kill manually." >&2
+    exit 1
+  fi
 elif "$HERE/chelonia" doctor 2>/dev/null | grep -q 'coordinator UP'; then
   echo "coordinator already up on :$CHELONIA_PORT (use \`up --restart\` to reload it)"
   exit 0
