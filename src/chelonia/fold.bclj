@@ -16,23 +16,26 @@
 ;; then emit claims. Single-valued predicates key on (l,p) — latest tx wins;
 ;; multi-valued key on (l,p,r) — latest op (assert/retract) per triple wins.
 ;; (l/p, and multi-valued r's, are clean refs that never contain the separator.)
-(defrecord Latest [tx :- Int op :- String l :- String p :- String r :- String])
+(defrecord Latest [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
 (defn- key-of [a :- Assertion] :- String
   (if (k/single? (:p a))
     (str (:l a) "" (:p a))
     (str (:l a) "" (:p a) "" (:r a))))
 
+(defn- keyed-latest [asserts :- (Vec Assertion)] :- (Map String Latest)
+  (reduce
+   (fn [m :- (Map String Latest) a :- Assertion] :- (Map String Latest)
+     (let [k (key-of a)
+           prev (get m k)]
+       (if (and (some? prev) (> (:tx prev) (:tx a)))
+         m
+         (assoc m k (->Latest (:tx a) (:op a) (:l a) (:p a) (:r a) (:frame a))))))
+   {}
+   asserts))
+
 (defn fold [asserts :- (Vec Assertion)] :- Fold
-  (let [keyed (reduce
-               (fn [m :- (Map String Latest) a :- Assertion] :- (Map String Latest)
-                 (let [k (key-of a)
-                       prev (get m k)]
-                   (if (and (some? prev) (> (:tx prev) (:tx a)))
-                     m
-                     (assoc m k (->Latest (:tx a) (:op a) (:l a) (:p a) (:r a))))))
-               {}
-               asserts)
+  (let [keyed (keyed-latest asserts)
         claims (reduce
                 (fn [acc :- (Vec k/Claim) v :- Latest] :- (Vec k/Claim)
                   (if (= (:op v) "assert")
@@ -41,3 +44,9 @@
                 []
                 (vec (vals keyed)))]
     (->Fold claims (max-tx asserts))))
+
+;; Current claims as Latest records (assert-op only) — carries `frame`, so a
+;; reader can tell coordinator/agent writes from import-derived values.
+(defn fold-latest [asserts :- (Vec Assertion)] :- (Vec Latest)
+  (filterv (fn [v :- Latest] :- Bool (= (:op v) "assert"))
+           (vec (vals (keyed-latest asserts)))))

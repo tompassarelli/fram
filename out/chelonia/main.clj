@@ -46,16 +46,14 @@
 (defn- sig-member-map [claims]
   (reduce (fn [m c] (assoc m (claim-sig c) true)) {} claims))
 
-(defn- only-in-count [a b]
-  (let [bm (sig-member-map b)]
-  (count (filterv (fn [c] (nil? (get bm (claim-sig c)))) a))))
+(defn- pending-coord-count [^String log file-sigs]
+  (count (filterv (fn [v] (and (or (= (:frame v) "coord") (= (:frame v) "agent")) (nil? (get file-sigs (str (:l v) "|" (:p v) "|" (:r v)))))) (fold/fold-latest (chelonia.rt/read-log log)))))
 
 (defn cmd-import [^String threads-dir ^String log ^Boolean force]
   (let [as (imp/load-corpus threads-dir)
-   file-claims (:claims (fold/fold as))
-   log-claims (:claims (fold/fold (chelonia.rt/read-log log)))
-   lost (only-in-count log-claims file-claims)]
-  (if (and (> lost 0) (not force)) (println (str "REFUSING import: " lost " claim(s) are in the log but not the files " "(pending coordinator writes would be lost). Run `export` first to regenerate " "the files, or `import --force` to overwrite.")) (do
+   file-sigs (sig-member-map (:claims (fold/fold as)))
+   lost (pending-coord-count log file-sigs)]
+  (if (and (> lost 0) (not force)) (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the " "files (would be lost). Run `export` first, or `import --force`.")) (do
   (chelonia.rt/write-log log as)
   (println (str "imported -> " (count as) " claims -> " log))))))
 

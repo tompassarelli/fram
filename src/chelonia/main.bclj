@@ -51,10 +51,14 @@
   (reduce (fn [m :- (Map String Bool) c :- k/Claim] :- (Map String Bool)
             (assoc m (claim-sig c) true))
           {} claims))
-;; count of claims in `a` whose signature is absent from `b`
-(defn- only-in-count [a :- (Vec k/Claim) b :- (Vec k/Claim)] :- Int
-  (let [bm (sig-member-map b)]
-    (count (filterv (fn [c :- k/Claim] :- Bool (nil? (get bm (claim-sig c)))) a))))
+;; count of CURRENT coordinator/agent-written claims (by frame) absent from the
+;; files — i.e. pending writes an import would clobber. Stale import-frame values
+;; (the old side of a file edit) are NOT counted; only real coordinator writes.
+(defn- pending-coord-count [log :- String file-sigs :- (Map String Bool)] :- Int
+  (count (filterv (fn [v :- fold/Latest] :- Bool
+                    (and (or (= (:frame v) "coord") (= (:frame v) "agent"))
+                         (nil? (get file-sigs (str (:l v) "|" (:p v) "|" (:r v))))))
+                  (fold/fold-latest (chelonia.rt/read-log log)))))
 
 ;; --- commands ---------------------------------------------------------------
 
@@ -63,13 +67,11 @@
 ;; writes. Refuse if that would lose data; `export` first, or `--force` to overwrite.
 (defn cmd-import [threads-dir :- String log :- String force :- Bool] :- Nil
   (let [as (imp/load-corpus threads-dir)
-        file-claims (:claims (fold/fold as))
-        log-claims (:claims (fold/fold (chelonia.rt/read-log log)))
-        lost (only-in-count log-claims file-claims)]
+        file-sigs (sig-member-map (:claims (fold/fold as)))
+        lost (pending-coord-count log file-sigs)]
     (if (and (> lost 0) (not force))
-      (println (str "REFUSING import: " lost " claim(s) are in the log but not the files "
-                    "(pending coordinator writes would be lost). Run `export` first to regenerate "
-                    "the files, or `import --force` to overwrite."))
+      (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the "
+                    "files (would be lost). Run `export` first, or `import --force`."))
       (do (chelonia.rt/write-log log as)
           (println (str "imported -> " (count as) " claims -> " log))))))
 

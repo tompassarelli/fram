@@ -15,7 +15,7 @@ if "$HERE/chelonia" doctor 2>/dev/null | grep -q 'coordinator UP'; then
 fi
 
 echo "starting coordinator on :$CHELONIA_PORT  (log: $LOG)"
-nohup "$HERE/chelonia-daemon" "$CHELONIA_PORT" "$LOG" >"/tmp/chelonia-daemon-$CHELONIA_PORT.log" 2>&1 &
+setsid "$HERE/chelonia-daemon" "$CHELONIA_PORT" "$LOG" >"/tmp/chelonia-daemon-$CHELONIA_PORT.log" 2>&1 &
 disown 2>/dev/null || true
 
 for _ in $(seq 40); do

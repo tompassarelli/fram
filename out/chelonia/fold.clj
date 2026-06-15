@@ -24,7 +24,7 @@
 (defn- max-tx [as]
   (reduce (fn [m a] (if (> (:tx a) m) (:tx a) m)) 0 as))
 
-(defrecord Latest [tx op l p r])
+(defrecord Latest [tx op l p r frame])
 
 (defn latest-tx [r] (:tx r))
 
@@ -36,12 +36,20 @@
 
 (defn latest-r [r] (:r r))
 
+(defn latest-frame [r] (:frame r))
+
 (defn- ^String key-of [^Assertion a]
   (if (k/single? (:p a)) (str (:l a) "\u0001" (:p a)) (str (:l a) "\u0001" (:p a) "\u0001" (:r a))))
 
-(defn ^Fold fold [asserts]
-  (let [keyed (reduce (fn [m a] (let [k (key-of a)
+(defn- keyed-latest [asserts]
+  (reduce (fn [m a] (let [k (key-of a)
    prev (get m k)]
-  (if (and (some? prev) (> (:tx prev) (:tx a))) m (assoc m k (->Latest (:tx a) (:op a) (:l a) (:p a) (:r a)))))) {} asserts)
+  (if (and (some? prev) (> (:tx prev) (:tx a))) m (assoc m k (->Latest (:tx a) (:op a) (:l a) (:p a) (:r a) (:frame a)))))) {} asserts))
+
+(defn ^Fold fold [asserts]
+  (let [keyed (keyed-latest asserts)
    claims (reduce (fn [acc v] (if (= (:op v) "assert") (conj acc (k/->Claim (:l v) (:p v) (:r v))) acc)) [] (vec (vals keyed)))]
   (->Fold claims (max-tx asserts))))
+
+(defn fold-latest [asserts]
+  (filterv (fn [v] (= (:op v) "assert")) (vec (vals (keyed-latest asserts)))))
