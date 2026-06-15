@@ -179,8 +179,12 @@
     (finally (.close s))))
 
 (defn serve [port]
-  (let [ss (doto (ServerSocket.) (.setReuseAddress true) (.bind (InetSocketAddress. port)))]
-    (println (str "coordinator listening on 127.0.0.1:" port " (sole writer)"))
+  ;; Bind loopback explicitly. (InetSocketAddress. port) binds the wildcard
+  ;; 0.0.0.0 (every interface) — which would expose this UNAUTHENTICATED writer
+  ;; to the LAN. getLoopbackAddress pins it to 127.0.0.1, matching the contract.
+  (let [ss (doto (ServerSocket.) (.setReuseAddress true)
+                 (.bind (InetSocketAddress. (java.net.InetAddress/getLoopbackAddress) (int port))))]
+    (println (str "coordinator listening on 127.0.0.1:" port " (sole writer, loopback-only)"))
     (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
 
 ;; --- daemon: load the append-only log into state, then serve -----------------
