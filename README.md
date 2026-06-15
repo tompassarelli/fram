@@ -1,6 +1,6 @@
 # Chelonia
 
-**I ramble into Markdown — a task, a project, "call the dermatologist." Chelonia
+**I ramble into Markdown — a task, a project, "book the flight." Chelonia
 turns that into a queryable dependency graph, then tells me what's ready, what's
 blocked, and what boring keystone unlocks the most progress. The board is
 *derived* from that graph, never hand-maintained — so it can't quietly go stale
@@ -73,7 +73,7 @@ always current:
 ## Work and life in one graph
 
 You don't run a second app for life. A client invoice, a compiler refactor, a
-dermatologist appointment, and "do laundry" all live in the **same** claim graph;
+flight to book, and "do laundry" all live in the **same** claim graph;
 you query from a **frame** (personal vs a given client) instead of switching
 tools. Because the structure is shared, `leverage` can surface that a mundane
 chore unblocks the most of your week — exactly what a flat list hides.
