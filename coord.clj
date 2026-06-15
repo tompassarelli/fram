@@ -131,7 +131,10 @@
        (mapcat (fn [te] (map #(str (subs te 7) ": " %) (ck/violations-i idx te))))
        vec))
 
+(declare maybe-reload!)
+
 (defn handle [req]
+  (locking write-lock (maybe-reload!))   ; stay fresh if the log changed out-of-band
   (case (:op req)
     :version  {:version (:version @state)}
     :assert   (commit! (:te req) (:p req) (:r req) (:base req))
@@ -175,10 +178,26 @@
                      :version (max (:version cur) (:tx a))
                      :lastmod (assoc (:lastmod cur) [(:l a) (:p a)] (:tx a))}))))
 
+;; --- stay-fresh: reload if the log changed on disk (other agent imported) -----
+(defn- log-stamp [path] (let [f (java.io.File. path)] (str (.lastModified f) ":" (.length f))))
+
+(defn maybe-reload!
+  "Reload the log if it changed on disk out-of-band (e.g. another agent ran
+   import). Call under write-lock so it serializes with commits. This is what
+   keeps warm reads/writes fresh in a multi-agent, file-importing world."
+  []
+  (when (:log-mtime @state)            ; only once serve-daemon has initialized it
+    (let [s (log-stamp @log-path)]
+      (when (not= s (:log-mtime @state))
+        (load-log! @log-path)
+        (reindex!)
+        (swap! state assoc :log-mtime s)))))
+
 (defn serve-daemon [port log]
   (reset! log-path log)
   (load-log! log)
   (reindex!)
+  (swap! state assoc :log-mtime (log-stamp log))
   (println (str "coordinator: loaded " (count (:claims @state)) " claims from " log))
   (serve port))
 
