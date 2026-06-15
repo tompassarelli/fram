@@ -154,7 +154,7 @@
     (finally (.close s))))
 
 (defn serve [port]
-  (let [ss (ServerSocket. port)]
+  (let [ss (doto (ServerSocket.) (.setReuseAddress true) (.bind (InetSocketAddress. port)))]
     (println (str "coordinator listening on 127.0.0.1:" port " (sole writer)"))
     (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
 
