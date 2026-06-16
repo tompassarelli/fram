@@ -166,7 +166,10 @@
         superd (vec (for [[_ m] claims :when (= (:p m) sup)] (:r m)))
         all-id (concat (map first vals) ents (map first claims) (map first txs))
         all-sq (map (fn [[_ m]] (:seq m)) txs)]
-    {:next-id (inc (reduce max -1 all-id)) :next-seq (inc (reduce max -1 all-sq))
+    ;; the kernel's counters hold the LAST-used id/seq (fresh-id!/begin-tx! return
+    ;; the post-increment value), so recover them as max — NOT max+1 — else the
+    ;; next mint would skip an id/seq (a gap) instead of continuing contiguously.
+    {:next-id (reduce max 0 all-id) :next-seq (reduce max 0 all-sq)
      :supersedes-pred sup
      :objects (vec (concat (map first vals) ents (map first claims)))
      :values vals :claims claims :tx-of tx-of :txs txs :superseded superd}))
@@ -175,6 +178,25 @@
   (let [st (c/new-store)]
     (c/load-store! st (assemble-dump (committed-records (read-records path))))
     st))
+
+;; write a whole reified store as a v2 log (all records + one trailing :commit)
+;; that `replay` consumes — the migration target. After migration the live
+;; coordinator boots via (replay path); next-id/next-seq are recovered from the
+;; logged ids, so its appends continue cleanly from where migration left off.
+(defn dump-log! [st path]
+  (spit path "")
+  (let [m @st]
+    (with-open [os (java.io.FileOutputStream. (str path) true)]
+      (let [emit (fn [r] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))]
+        (doseq [[id v] (:values m)] (emit {:k :value :id id :v v}))
+        (doseq [id (keys (:objects m))
+                :when (and (not (contains? (:values m) id)) (not (contains? (:claims m) id)))]
+          (emit {:k :entity :id id}))
+        (doseq [[cid cl] (:claims m)]
+          (emit {:k :claim :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
+        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t)}))
+        (emit {:k :commit :tx :migration}))
+      (.force (.getChannel os) true))))
 
 ;; ============================================================================
 ;; adversarial concurrency + durability test (mirrors coord.clj's run-test)
