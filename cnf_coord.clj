@@ -1,0 +1,261 @@
+;; cnf_coord.clj — Stage 6: the coordinator on the REIFIED kernel.
+;; ============================================================================
+;; Sole writer, serialized (one lock). The flat coord.clj's proven skeleton
+;; (locking write-lock, optimistic base_version, rule-check, append+notify),
+;; rebuilt over the reified store (chelonia.cnf + chelonia.schema). Full Clojure
+;; — direct, mutable access to the store map, no Beagle typing friction.
+;;
+;; The six concurrency/durability holes the analysis flagged, closed here:
+;;   1. base_version  = max tx-seq over the LIVE claims on (l,p); a stale
+;;      single-valued write is rejected (lost-update protection).
+;;   2. validate-without-mutating — obligations (acyclicity) are a PURE pre-check
+;;      over resolved ids, run BEFORE any tx/entity is minted, so a rejected
+;;      write leaves ZERO unlogged state (else the live store would diverge from
+;;      a replay of the log).
+;;   3. single-subject obligations (depends_on/part_of acyclicity) for v1.
+;;   4. multi-valued idempotency — reified claim! mints a fresh cid every call,
+;;      so without this two identical link!s make duplicate live edges; we no-op
+;;      when the live (l,p,r) already exists.
+;;   5. atomic v2 log — each committed tx appends its records + a :commit marker,
+;;      fsync'd; a torn tx (records without :commit, always trailing under a
+;;      single appender) is DROPPED on replay. Durability the bb coord lacked.
+;;   6. file-import optimistic concurrency — every write goes through the one
+;;      lock; the base_version contract (C5) decides who wins.
+;;
+;;   bb -cp out cnf_coord.clj test
+;; ============================================================================
+(require '[chelonia.cnf :as c] '[chelonia.schema :as s]
+         '[clojure.edn :as edn] '[clojure.java.io :as io])
+
+(defn- store [co] (:store co))
+
+;; --- atomic v2 log: a tx's records + :commit, fsync'd -----------------------
+(defn- append-tx! [co records]
+  (with-open [os (java.io.FileOutputStream. (str (:log co)) true)]
+    (doseq [r records] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))
+    (.flush os)
+    (.force (.getChannel os) true)))            ; fsync — durability the bb coord lacked
+
+;; the records minted in `store` since id `since` (new values/entities/claims),
+;; plus this tx's provenance and the terminating :commit marker.
+(defn- delta-records [co since txid]
+  (let [m @(store co)]
+    (concat
+     (for [[id v] (:values m) :when (>= id since)] {:k :value :id id :v v})
+     (for [id (keys (:objects m))
+           :when (and (>= id since)
+                      (not (contains? (:values m) id))
+                      (not (contains? (:claims m) id)))]
+       {:k :entity :id id})
+     (for [[cid mm] (:claims m) :when (>= cid since)]
+       {:k :claim :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
+     [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])}
+      {:k :commit :tx txid}])))
+
+;; --- reads over the reified store -------------------------------------------
+(defn- live-cids-lp [co te pid]
+  (let [m @(store co)]
+    (remove #(contains? (:superseded m) %) (get (:idx-by-lp m) [te pid]))))
+(defn- seq-of [co cid]
+  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :seq] 0)))
+(defn base-version [co te pid]
+  (reduce max 0 (map #(seq-of co %) (live-cids-lp co te pid))))
+(defn current-seq [co]
+  (let [m @(store co)] (reduce max 0 (map (fn [[_ v]] (:seq v)) (:txs m)))))
+
+(defn- ent! [co tx nm]
+  (or (s/resolve-name (store co) nm)
+      (let [e (c/entity! (store co))] (s/name! (store co) e nm tx) e)))
+
+;; --- obligation: depends_on/part_of acyclicity (pure, over resolved ids) ----
+(defn- succ [co pid x]
+  (let [m @(store co)]
+    (map #(:r (get (:claims m) %))
+         (remove #(contains? (:superseded m) %) (get (:idx-by-lp m) [x pid])))))
+(defn- reaches? [co pid from to]
+  (loop [stack [from] seen #{}]
+    (if (empty? stack) false
+        (let [x (peek stack) st (pop stack)]
+          (cond (= x to) true
+                (seen x) (recur st seen)
+                :else (recur (into st (succ co pid x)) (conj seen x)))))))
+
+;; --- bootstrap a coordinator (multi-store: one engine, many coordinators) ---
+(defn new-coord [log-path]
+  (spit log-path "")
+  (let [st (c/new-store)
+        tx0 (c/begin-tx! st "bootstrap")
+        co {:store st :log log-path :lock (Object.)}]
+    (s/setup! st tx0)
+    (append-tx! co (delta-records co 0 tx0))     ; the bootstrap is the first committed tx
+    co))
+
+;; register a domain predicate's metadata (its own committed tx)
+(defn register-pred! [co pname card kind]
+  (locking (:lock co)
+    (let [since (:next-id @(store co))
+          tx (c/begin-tx! (store co) "schema")]
+      (s/def-predicate! (store co) pname card kind tx)
+      (append-tx! co (delta-records co since tx))
+      pname)))
+
+;; --- the sole writer --------------------------------------------------------
+;; kind = :assert (literal value) | :link (ref to an entity by name) | :retract
+(defn commit! [co agent te-name pred kind r-spec base]
+  (locking (:lock co)
+    (let [pid    (c/value-id (store co) pred)
+          te0    (s/resolve-name (store co) te-name)
+          tgt0   (when (= kind :link) (s/resolve-name (store co) r-spec))
+          vid    (when (= kind :assert) (c/value-id (store co) r-spec))
+          single (= "single" (s/cardinality (store co) pred))
+          bv     (if (and te0 pid) (base-version co te0 pid) 0)
+          live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
+          claims (:claims @(store co))]
+      (cond
+        ;; (1)(6) base_version: reject a stale single-valued write
+        (and single (> bv base))
+        {:reject :conflict :version (current-seq co)}
+
+        ;; (2)(3) obligation: acyclicity — pure pre-check, before any mutation
+        (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
+             (or (= te-name r-spec) (and te0 tgt0 (reaches? co pid tgt0 te0))))
+        {:reject [(str pred " cycle")] :version (current-seq co)}
+
+        ;; (4) multi-valued idempotency: no-op if the live (l,p,r) already exists
+        (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get claims %))) live))
+        {:ok (current-seq co) :idempotent true}
+        (and (not single) (= kind :assert) vid (some #(= vid (:r (get claims %))) live))
+        {:ok (current-seq co) :idempotent true}
+
+        :else
+        (let [since (:next-id @(store co))
+              tx (c/begin-tx! (store co) agent)
+              te (ent! co tx te-name)]
+          (case kind
+            :retract (doseq [old (live-cids-lp co te pid)]
+                       (c/claim! (store co) old (c/value! (store co) "cnf-supersedes") old tx))
+            :link    (s/link! (store co) te pred (ent! co tx r-spec) tx)
+            :assert  (s/assert! (store co) te pred r-spec tx))
+          (append-tx! co (delta-records co since tx))   ; (5) atomic + fsync
+          {:ok (get-in @(store co) [:txs tx :seq])})))))
+
+;; --- replay: rebuild the store from the v2 log (drops torn/uncommitted txs) --
+(defn- read-records [path]
+  (with-open [r (io/reader path)]
+    (doall (keep (fn [ln] (try (edn/read-string ln) (catch Exception _ nil)))   ; tolerate a torn last line
+                 (line-seq r)))))
+
+(defn- committed-records [recs]
+  ;; group into per-tx buffers; a buffer terminated by :commit is kept, a
+  ;; trailing buffer with no :commit (a torn tx) is dropped.
+  (loop [rs recs buf [] out []]
+    (if (empty? rs)
+      out
+      (let [r (first rs)]
+        (if (= (:k r) :commit)
+          (recur (rest rs) [] (into out buf))
+          (recur (rest rs) (conj buf r) out))))))
+
+(defn- assemble-dump [recs]
+  (let [vals   (vec (for [r recs :when (= (:k r) :value)]  [(:id r) (:v r)]))
+        ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
+        claims (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
+        tx-of  (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) (:tx r)]))
+        txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r)}]))
+        sup    (some (fn [[id v]] (when (= v "cnf-supersedes") id)) vals)
+        superd (vec (for [[_ m] claims :when (= (:p m) sup)] (:r m)))
+        all-id (concat (map first vals) ents (map first claims) (map first txs))
+        all-sq (map (fn [[_ m]] (:seq m)) txs)]
+    {:next-id (inc (reduce max -1 all-id)) :next-seq (inc (reduce max -1 all-sq))
+     :supersedes-pred sup
+     :objects (vec (concat (map first vals) ents (map first claims)))
+     :values vals :claims claims :tx-of tx-of :txs txs :superseded superd}))
+
+(defn replay [path]
+  (let [st (c/new-store)]
+    (c/load-store! st (assemble-dump (committed-records (read-records path))))
+    st))
+
+;; ============================================================================
+;; adversarial concurrency + durability test (mirrors coord.clj's run-test)
+;; ============================================================================
+(defn- live-triples [st]
+  (let [m @st]
+    (set (for [cid (keys (:claims m)) :when (not (contains? (:superseded m) cid))]
+           (let [cl (get (:claims m) cid)] [(:l cl) (:p cl) (:r cl)])))))
+
+(defn- run-test []
+  (let [log "/tmp/cnf-coord-test.log"
+        co (new-coord log)
+        _ (register-pred! co "status" "single" "literal")
+        _ (register-pred! co "tag" "multi" "ref")
+        _ (register-pred! co "part_of" "single" "ref")
+        results (atom [])
+        checks (atom [])
+        chk (fn [nm ok] (swap! checks conj [nm ok]))]
+
+    ;; ---- (A) base_version: N clients race the SAME single-valued (T,status) --
+    (let [seed (commit! co "seed" "T" "status" :assert "init" 0)
+          base (:ok seed)
+          n 24
+          fs (mapv (fn [i] (future (commit! co (str "w" i) "T" "status" :assert (str "v" i) base)))
+                   (range n))
+          rs (mapv deref fs)
+          wins (filter :ok rs)
+          conflicts (filter #(= :conflict (:reject %)) rs)
+          live (live-cids-lp co (s/resolve-name (store co) "T") (c/value-id (store co) "status"))]
+      (chk "base_version: exactly one racer wins" (= 1 (count wins)))
+      (chk "base_version: the rest are :conflict" (= (dec n) (count conflicts)))
+      (chk "single-valued: exactly one live (T,status) claim" (= 1 (count live))))
+
+    ;; ---- (B) multi-valued idempotency: identical link! twice = one edge ------
+    (let [r1 (commit! co "a" "T" "tag" :link "X" 0)
+          r2 (commit! co "a" "T" "tag" :link "X" 0)
+          live (live-cids-lp co (s/resolve-name (store co) "T") (c/value-id (store co) "tag"))]
+      (chk "idempotency: second identical link! is a no-op" (:idempotent r2))
+      (chk "idempotency: exactly one live (T,tag,X) edge" (= 1 (count live)))
+      (chk "idempotency: distinct multi values both kept"
+           (do (commit! co "a" "T" "tag" :link "Y" 0)
+               (= 2 (count (live-cids-lp co (s/resolve-name (store co) "T")
+                                         (c/value-id (store co) "tag")))))))
+
+    ;; ---- (C) obligation: part_of acyclicity rejected, no state leaked --------
+    (commit! co "a" "A" "part_of" :link "B" 0)
+    (commit! co "a" "B" "part_of" :link "C" 0)
+    (let [before (live-triples (store co))
+          self (commit! co "a" "E" "part_of" :link "E" 0)       ; fresh subject: isolates the self-loop check from base_version
+          cyc  (commit! co "a" "C" "part_of" :link "A" 0)       ; C->A closes A->B->C->A
+          after (live-triples (store co))]
+      (chk "obligation: self part_of rejected" (vector? (:reject self)))
+      (chk "obligation: cycle part_of rejected" (vector? (:reject cyc)))
+      (chk "obligation: rejected writes leak ZERO state" (= before after))
+      (chk "obligation: a valid part_of still commits"
+           (:ok (commit! co "a" "D" "part_of" :link "A" 0))))
+
+    ;; ---- (D) durability: replay reconstructs the exact live view ------------
+    (let [rp (replay log)]
+      (chk "replay: live view set-equal to the coordinator store"
+           (= (live-triples (store co)) (live-triples rp))))
+
+    ;; ---- (E) atomicity: a torn (un-committed) trailing tx is dropped --------
+    (let [before (live-triples (store co))]
+      ;; simulate a crash mid-append: records with NO :commit marker, plus a
+      ;; half-written final line.
+      (with-open [os (java.io.FileOutputStream. log true)]
+        (.write os (.getBytes (str (pr-str {:k :value :id 99999 :v "torn"}) "\n"
+                                   (pr-str {:k :claim :cid 99998 :l 0 :p 0 :r 99999 :tx 99997}) "\n"
+                                   "{:k :claim :cid 99996 :l 0 :p ")        ; torn mid-line
+                              "UTF-8")))
+      (let [rp (replay log)]
+        (chk "atomicity: torn trailing tx dropped on replay" (= before (live-triples rp)))
+        (chk "atomicity: torn value not present after replay"
+             (not (contains? (set (vals (:values @rp))) "torn")))))
+
+    ;; ---- report ------------------------------------------------------------
+    (let [cs @checks fails (remove second cs)]
+      (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
+      (if (empty? fails)
+        (println "\nStage 6: reified coordinator —" (count cs) "/" (count cs) "PASS")
+        (do (println "\nStage 6:" (count fails) "FAILED") (System/exit 1))))))
+
+(when (= "test" (first *command-line-args*)) (run-test))
