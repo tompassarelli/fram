@@ -1,0 +1,91 @@
+#lang beagle/clj
+;; ============================================================================
+;; chelonia.schema — the CNF schema/identity layer over the kernel.
+;; ============================================================================
+;; Still DOMAIN-AGNOSTIC: this is the META-model (name/identity, predicate
+;; cardinality + value-kind, cardinality-driven supersession) — NOT life-os
+;; vocabulary. Mirrors the oracle's schema.rkt + graph.rkt. The life-os
+;; predicates (title/owner/depends_on/…) are registered ON TOP via def-predicate!
+;; in the domain loader; they never appear here.
+;;
+;; Predicates are interned VALUES (a pred = value! of its name). Metadata
+;; (cardinality single|multi, value_kind ref|literal) and identity (name) are
+;; claims, so the store is self-describing — no external @id↔entity memo, and the
+;; hardcoded single-valued list is gone (cardinality is read from the graph).
+;;
+;; API (every op takes ctx + tx for writes):
+;;   (setup! ctx tx)                       bootstrap name/superseded_by/cardinality/value_kind
+;;   (def-predicate! ctx pname card kind tx) -> pid   register a predicate's metadata
+;;   (cardinality ctx pname) -> "single"|"multi"
+;;   (assert! ctx subj pname literal tx) -> cid       value claim (single -> supersede prior)
+;;   (link!   ctx subj pname target tx)  -> cid       ref claim   (single -> supersede prior)
+;;   (lookup ctx subj pname) / (lookup-all …) / (find-by ctx pname v)
+;;   (name! ctx subj nm tx) / (name-of ctx subj) / (resolve-name ctx nm)
+;; ============================================================================
+(ns chelonia.schema)
+(define-mode strict)
+(require chelonia.cnf :as c)
+
+;; Bootstrap the structural predicates. Raw claim! (fresh store, no priors to
+;; supersede). superseded_by is the supersession trigger; it is multi/ref.
+(defn setup! [ctx :- Any tx :- Any] :- Any
+  (let [name-p (c/value! ctx "name")
+        sup-p  (c/value! ctx "cnf-supersedes")   ; RESERVED: claim-level supersession
+        card-p (c/value! ctx "cardinality")       ; trigger; distinct from any domain
+        kind-p (c/value! ctx "value_kind")]
+    (c/set-supersedes-pred! ctx sup-p)
+    (swap! ctx assoc :name-pred name-p :card-pred card-p :kind-pred kind-p)
+    (c/claim! ctx name-p card-p (c/value! ctx "single") tx)
+    (c/claim! ctx card-p card-p (c/value! ctx "single") tx)
+    (c/claim! ctx kind-p card-p (c/value! ctx "single") tx)
+    (c/claim! ctx sup-p  card-p (c/value! ctx "multi") tx)
+    ctx))
+
+(defn cardinality [ctx :- Any pname :- Any] :- Any
+  (let [pid (c/value-id ctx pname)
+        cs (c/by-lp ctx pid (:card-pred (deref ctx)))]
+    (if (empty? cs) "multi" (c/literal ctx (:r (c/claim-of ctx (first cs)))))))
+
+;; supersede prior live (subj,pid) claims other than new-cid (single-valued write)
+(defn- replace! [ctx :- Any subj :- Any pid :- Any new-cid :- Any tx :- Any] :- Any
+  (let [sup (c/value! ctx "cnf-supersedes")]
+    (doseq [old (c/by-lp ctx subj pid)]
+      (when (not (= old new-cid))
+        (c/claim! ctx new-cid sup old tx)))))
+
+(defn assert! [ctx :- Any subj :- Any pname :- Any v :- Any tx :- Any] :- Int
+  (let [pid (c/value! ctx pname)
+        new-cid (c/claim! ctx subj pid (c/value! ctx v) tx)]
+    (when (= "single" (cardinality ctx pname)) (replace! ctx subj pid new-cid tx))
+    new-cid))
+
+(defn link! [ctx :- Any subj :- Any pname :- Any target :- Any tx :- Any] :- Int
+  (let [pid (c/value! ctx pname)
+        new-cid (c/claim! ctx subj pid target tx)]
+    (when (= "single" (cardinality ctx pname)) (replace! ctx subj pid new-cid tx))
+    new-cid))
+
+(defn lookup-all [ctx :- Any subj :- Any pname :- Any] :- Any
+  (let [pid (c/value-id ctx pname)]
+    (mapv (fn [cid :- Any] :- Any
+            (let [r (:r (c/claim-of ctx cid))]
+              (if (c/value-object? ctx r) (c/literal ctx r) r)))
+          (c/by-lp ctx subj pid))))
+
+(defn lookup [ctx :- Any subj :- Any pname :- Any] :- Any
+  (let [all (lookup-all ctx subj pname)] (if (empty? all) nil (first all))))
+
+(defn find-by [ctx :- Any pname :- Any v :- Any] :- Any
+  (let [pid (c/value-id ctx pname) vid (c/value-id ctx v)]
+    (mapv (fn [cid :- Any] :- Any (:l (c/claim-of ctx cid))) (c/by-pr ctx pid vid))))
+
+(defn def-predicate! [ctx :- Any pname :- Any card :- Any kind :- Any tx :- Any] :- Int
+  (let [pid (c/value! ctx pname)]
+    (assert! ctx pid "cardinality" card tx)
+    (assert! ctx pid "value_kind" kind tx)
+    pid))
+
+(defn name! [ctx :- Any subj :- Any nm :- Any tx :- Any] :- Int (assert! ctx subj "name" nm tx))
+(defn name-of [ctx :- Any subj :- Any] :- Any (lookup ctx subj "name"))
+(defn resolve-name [ctx :- Any nm :- Any] :- Any
+  (let [ls (find-by ctx "name" nm)] (if (empty? ls) nil (first ls))))

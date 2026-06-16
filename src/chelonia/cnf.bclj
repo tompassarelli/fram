@@ -3,54 +3,33 @@
 ;; chelonia.cnf — the reified CNF kernel (Stage 1).  THE one engine.
 ;; ============================================================================
 ;; DOMAIN-AGNOSTIC by construction: knows ONLY Object / Value / Claim / tx. ZERO
-;; life-os vocabulary (no thread/title/owner/clock) and ZERO code vocabulary
-;; (no fn/param/AST) — all domain terms are interned VALUES that live as claims,
-;; never symbols in this file. (Tested by cnf_invariant_test.)
+;; life-os vocabulary and ZERO code vocabulary — all domain terms are interned
+;; VALUES that live as claims, never symbols in this file. (cnf_invariant_test.)
 ;;
 ;; MULTI-STORE: no globals. Every op takes a `ctx` store handle, so one engine
-;; hosts many stores (life-os now; a far larger code-as-claims store later). No
-;; small-N assumptions — interning + indexes are hash maps keyed by id.
+;; hosts many stores. No small-N assumptions — interning + indexes are hash maps.
 ;;
-;; Conforms (single-process semantics) to the Racket oracle
-;; (cnf-experiments/cnf-lib/private/{kernel,datalog,graph}.rkt):
-;;   - ONE monotonic id space; entities, values, claims, AND txs draw from it.
-;;     Entities/values/claims are `objects`; txs are NOT objects (id gaps are fine).
-;;   - value! interns by equality, TYPE-GENERAL (string/number/keyword/symbol/
-;;     bool/list); re-intern returns the same id and consumes none.
-;;   - claims are NOT interned: each claim! mints a fresh id even for identical
-;;     (l p r), and a claim id is itself an object usable in l/p/r (reification).
-;;   - live view = claims − superseded. Supersession is DATA-DRIVEN: a claim whose
+;; Conforms (single-process semantics) to the Racket oracle:
+;;   - ONE monotonic id space; entities/values/claims are `objects`; txs draw from
+;;     it but are NOT objects (so provenance can be claims-about-tx).
+;;   - value! interns by equality, TYPE-GENERAL; re-intern returns the same id.
+;;   - claims are NOT interned: claim! mints a fresh id even for identical (l p r),
+;;     and a claim id is itself an object usable in l/p/r (reification, any depth).
+;;   - live view = claims − superseded; supersession is DATA-DRIVEN: a claim whose
 ;;     p == the registered supersedes-pred marks its r (the old claim) not-live.
 ;;   - provenance = tx entities (seq, agent) + claims; never denormalized fields.
-;; (Semantic conformance, not byte-identical ids — our id layout may differ.)
 ;;
-;; API (every op takes ctx; `!` = mutator):
-;;   (new-store) -> ctx
-;;   (entity! ctx) -> id              ;; bare object
-;;   (value! ctx v) -> id             ;; intern ANY literal -> canonical id   [app-B check 1]
-;;   (value-object? ctx id) -> Bool   ;; id carries a literal (disambiguates the #f value)
-;;   (literal ctx id) -> v|nil  ;  (value-id ctx v) -> id|nil
-;;   (begin-tx! ctx agent) -> tx      ;; tx entity (seq monotonic, NOT an object)
-;;   (set-supersedes-pred! ctx pid)   ;; register which predicate triggers supersession
-;;   (claim! ctx l p r tx) -> cid     ;; reified claim; cid is an object       [app-B check 3]
-;;   (claim-of ctx cid) -> {:l :p :r}|nil  ;  (claim-tx ctx cid) -> tx|nil  ;  (tx-seq ctx tx)
-;;   (live? ctx cid) -> Bool
-;;   (by-l/by-p/by-r ctx x) (by-lp ctx l p) (by-pr ctx p r) -> [cid...]  ;; LIVE, insertion order [check 2]
-;;   (current-claims ctx) -> [cid...]
+;; Ids are opaque (minted as Int, but flow through claim maps as Any) — query/
+;; mutate ops take id params as Any so the dynamic store + the schema/derivation
+;; layers above never fight the type system. Minters still return Int.
 ;; ============================================================================
 (ns chelonia.cnf)
 (define-mode strict)
 
 (defn new-store [] :- Any
   (atom {:next-id 0 :next-seq 0 :supersedes-pred nil
-         :objects {}        ; id -> true        (entities ∪ values ∪ claims; NOT txs)
-         :values {}         ; id -> literal
-         :val-intern {}     ; literal -> id     (canonical interning, equality-keyed)
-         :claims {}         ; cid -> {:l :p :r}
-         :tx-of {}          ; cid -> tx
-         :txs {}            ; tx  -> {:seq :agent}
-         :superseded {}     ; cid -> true       (not-live marker on the OLD claim)
-         :idx-by-l {} :idx-by-p {} :idx-by-r {} :idx-by-lp {} :idx-by-pr {}}))
+         :objects {} :values {} :val-intern {} :claims {} :tx-of {} :txs {}
+         :superseded {} :idx-by-l {} :idx-by-p {} :idx-by-r {} :idx-by-lp {} :idx-by-pr {}}))
 
 ;; --- id minting (atomic via swap!'s return value) ---------------------------
 (defn fresh-id! [ctx :- Any] :- Int (:next-id (swap! ctx update :next-id inc)))
@@ -71,8 +50,8 @@
         (swap! ctx update :val-intern assoc v id)
         id))))
 
-(defn value-object? [ctx :- Any id :- Int] :- Bool (contains? (:values (deref ctx)) id))
-(defn literal [ctx :- Any id :- Int] :- Any (get (:values (deref ctx)) id))
+(defn value-object? [ctx :- Any id :- Any] :- Bool (contains? (:values (deref ctx)) id))
+(defn literal [ctx :- Any id :- Any] :- Any (get (:values (deref ctx)) id))
 (defn value-id [ctx :- Any v :- Any] :- Any (get (:val-intern (deref ctx)) v))
 
 ;; --- transactions: drawn from the SAME id space, but NOT registered as objects
@@ -82,15 +61,15 @@
     (swap! ctx update :txs assoc tx {:seq seq :agent agent})
     tx))
 
-(defn tx-seq [ctx :- Any tx :- Int] :- Any
+(defn tx-seq [ctx :- Any tx :- Any] :- Any
   (let [m (get (:txs (deref ctx)) tx)] (if (some? m) (:seq m) 0)))
 
 ;; --- supersession is data-driven: register the predicate that triggers it ----
-(defn set-supersedes-pred! [ctx :- Any pid :- Int] :- Any
+(defn set-supersedes-pred! [ctx :- Any pid :- Any] :- Any
   (swap! ctx assoc :supersedes-pred pid))
 
 ;; --- claims (reified: each has its own Object id) ---------------------------
-(defn- index-claim! [ctx :- Any cid :- Int l :- Int p :- Int r :- Int] :- Any
+(defn- index-claim! [ctx :- Any cid :- Any l :- Any p :- Any r :- Any] :- Any
   (swap! ctx update :idx-by-l update l (fn [o :- Any] :- Any (conj (or o []) cid)))
   (swap! ctx update :idx-by-p update p (fn [o :- Any] :- Any (conj (or o []) cid)))
   (swap! ctx update :idx-by-r update r (fn [o :- Any] :- Any (conj (or o []) cid)))
@@ -99,7 +78,7 @@
 
 ;; Assert a claim. If p is the registered supersedes-pred, this claim marks its r
 ;; (the old claim) not-live — so supersession is just a claim-about-a-claim.
-(defn claim! [ctx :- Any l :- Int p :- Int r :- Int tx :- Int] :- Int
+(defn claim! [ctx :- Any l :- Any p :- Any r :- Any tx :- Any] :- Int
   (let [cid (fresh-id! ctx)]
     (swap! ctx update :objects assoc cid true)
     (swap! ctx update :claims assoc cid {:l l :p p :r r})
@@ -109,21 +88,53 @@
       (swap! ctx update :superseded assoc r true))
     cid))
 
-(defn claim-of [ctx :- Any cid :- Int] :- Any (get (:claims (deref ctx)) cid))
-(defn claim-tx [ctx :- Any cid :- Int] :- Any (get (:tx-of (deref ctx)) cid))
+(defn claim-of [ctx :- Any cid :- Any] :- Any (get (:claims (deref ctx)) cid))
+(defn claim-tx [ctx :- Any cid :- Any] :- Any (get (:tx-of (deref ctx)) cid))
 
 ;; --- queries over the LIVE view (claims − superseded) -----------------------
-(defn live? [ctx :- Any cid :- Int] :- Bool
+(defn live? [ctx :- Any cid :- Any] :- Bool
   (not (contains? (:superseded (deref ctx)) cid)))
 
 (defn- live-only [ctx :- Any cids :- Any] :- Any
-  (filterv (fn [c :- Int] :- Bool (live? ctx c)) cids))
+  (filterv (fn [c :- Any] :- Bool (live? ctx c)) cids))
 
-(defn by-l [ctx :- Any l :- Int] :- Any (live-only ctx (get (:idx-by-l (deref ctx)) l [])))
-(defn by-p [ctx :- Any p :- Int] :- Any (live-only ctx (get (:idx-by-p (deref ctx)) p [])))
-(defn by-r [ctx :- Any r :- Int] :- Any (live-only ctx (get (:idx-by-r (deref ctx)) r [])))
-(defn by-lp [ctx :- Any l :- Int p :- Int] :- Any (live-only ctx (get (:idx-by-lp (deref ctx)) [l p] [])))
-(defn by-pr [ctx :- Any p :- Int r :- Int] :- Any (live-only ctx (get (:idx-by-pr (deref ctx)) [p r] [])))
+(defn by-l [ctx :- Any l :- Any] :- Any (live-only ctx (get (:idx-by-l (deref ctx)) l [])))
+(defn by-p [ctx :- Any p :- Any] :- Any (live-only ctx (get (:idx-by-p (deref ctx)) p [])))
+(defn by-r [ctx :- Any r :- Any] :- Any (live-only ctx (get (:idx-by-r (deref ctx)) r [])))
+(defn by-lp [ctx :- Any l :- Any p :- Any] :- Any (live-only ctx (get (:idx-by-lp (deref ctx)) [l p] [])))
+(defn by-pr [ctx :- Any p :- Any r :- Any] :- Any (live-only ctx (get (:idx-by-pr (deref ctx)) [p r] [])))
 
 (defn current-claims [ctx :- Any] :- Any
   (live-only ctx (vec (keys (:claims (deref ctx))))))
+
+;; --- durable serialization --------------------------------------------------
+;; dump-store is pure (snapshot -> EDN-serializable value); load-store! rebuilds a
+;; ctx from one (the derived val-intern + 5 indexes are reconstructed, not stored).
+(defn dump-store [ctx :- Any] :- Any
+  (let [s (deref ctx)]
+    {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s)
+     :objects (vec (keys (:objects s)))
+     :values (vec (:values s))
+     :claims (vec (:claims s))
+     :tx-of (vec (:tx-of s))
+     :txs (vec (:txs s))
+     :superseded (vec (keys (:superseded s)))}))
+
+(defn load-store! [ctx :- Any data :- Any] :- Any
+  (swap! ctx (fn [old :- Any] :- Any
+               {:next-id (:next-id data) :next-seq (:next-seq data) :supersedes-pred (:supersedes-pred data)
+                :objects {} :values {} :val-intern {} :claims {} :tx-of {} :txs {} :superseded {}
+                :idx-by-l {} :idx-by-p {} :idx-by-r {} :idx-by-lp {} :idx-by-pr {}}))
+  (doseq [id (:objects data)] (swap! ctx update :objects assoc id true))
+  (doseq [e (:values data)]
+    (let [id (first e) v (nth e 1)]
+      (swap! ctx update :values assoc id v)
+      (swap! ctx update :val-intern assoc v id)))
+  (doseq [e (:claims data)]
+    (let [cid (first e) m (nth e 1)]
+      (swap! ctx update :claims assoc cid m)
+      (index-claim! ctx cid (:l m) (:p m) (:r m))))
+  (doseq [e (:tx-of data)] (swap! ctx update :tx-of assoc (first e) (nth e 1)))
+  (doseq [e (:txs data)] (swap! ctx update :txs assoc (first e) (nth e 1)))
+  (doseq [cid (:superseded data)] (swap! ctx update :superseded assoc cid true))
+  ctx)

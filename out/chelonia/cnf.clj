@@ -87,3 +87,29 @@
 
 (defn current-claims [ctx]
   (live-only ctx (vec (keys (:claims (deref ctx))))))
+
+(defn dump-store [ctx]
+  (let [s (deref ctx)]
+  {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s) :objects (vec (keys (:objects s))) :values (vec (:values s)) :claims (vec (:claims s)) :tx-of (vec (:tx-of s)) :txs (vec (:txs s)) :superseded (vec (keys (:superseded s)))}))
+
+(defn load-store! [ctx data]
+  (swap! ctx (fn [old] {:next-id (:next-id data) :next-seq (:next-seq data) :supersedes-pred (:supersedes-pred data) :objects {} :values {} :val-intern {} :claims {} :tx-of {} :txs {} :superseded {} :idx-by-l {} :idx-by-p {} :idx-by-r {} :idx-by-lp {} :idx-by-pr {}}))
+  (doseq [id (:objects data)]
+  (swap! ctx update :objects assoc id true))
+  (doseq [e (:values data)]
+  (let [id (first e)
+   v (nth e 1)]
+  (swap! ctx update :values assoc id v)
+  (swap! ctx update :val-intern assoc v id)))
+  (doseq [e (:claims data)]
+  (let [cid (first e)
+   m (nth e 1)]
+  (swap! ctx update :claims assoc cid m)
+  (index-claim! ctx cid (:l m) (:p m) (:r m))))
+  (doseq [e (:tx-of data)]
+  (swap! ctx update :tx-of assoc (first e) (nth e 1)))
+  (doseq [e (:txs data)]
+  (swap! ctx update :txs assoc (first e) (nth e 1)))
+  (doseq [cid (:superseded data)]
+  (swap! ctx update :superseded assoc cid true))
+  ctx)
