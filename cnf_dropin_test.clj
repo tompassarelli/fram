@@ -10,7 +10,7 @@
 ;;   CHELONIA_LOG=/path bb -cp out cnf_dropin_test.clj
 (require '[chelonia.cnf :as c] '[chelonia.schema :as s]
          '[chelonia.fold :as fold] '[chelonia.rt]
-         '[clojure.set :as set] '[clojure.java.io :as io])
+         '[clojure.set :as set] '[clojure.java.io :as io] '[clojure.string :as str])
 (load-file "cnf_coord_daemon.clj")
 
 (def live (System/getenv "CHELONIA_LOG"))
@@ -57,6 +57,19 @@
 (def race (mapv deref (mapv (fn [i] (future (client port {:op :assert :te "@dropin-subj" :p "title" :r (str "r" i) :base vc}))) (range 6))))
 (future-cancel server)
 
+;; --- ANTI-REGRESSION: the corrupting/irreversible bug the adversaries found ---
+;; the drop-in must NEVER write reified v2 :k-records into the canonical flat log,
+;; the REAL cold-read path (unfiltered fold, what the CLI/MCP run) must not crash
+;; and must equal the reified view, and :version must match the flat fold (doctor
+;; FRESH). Also: coord.clj must still be able to fold the post-write log (rollback).
+(def flat-lines (remove str/blank? (str/split-lines (slurp flat))))
+(def no-v2-pollution (not-any? #(str/starts-with? (str/triml %) "{:k") flat-lines))
+(def cold-fold-ok
+  (try (= (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:claims (fold/fold (chelonia.rt/read-log flat)))))
+          (domain-triples (:store @co)))
+       (catch Throwable _ false)))
+(def version-fresh (= (current-seq @co) (:version (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log flat)))))))
+
 (def checks
   [["boot: reified live view == flat fold" boot-equal]
    ["socket write committed" (:ok w1)]
@@ -65,7 +78,10 @@
    ["external flat edit absorbed on reload" absorbed]
    ["daemon write survived the reload (re-migrate is lossless)" daemon-write-survived]
    ["base_version: exactly one racer wins" (= 1 (count (filter :ok race)))]
-   ["base_version: the rest conflict" (= 5 (count (filter #(= :conflict (:reject %)) race)))]])
+   ["base_version: the rest conflict" (= 5 (count (filter #(= :conflict (:reject %)) race)))]
+   ["NO v2 :k-records pollute the canonical flat log" no-v2-pollution]
+   ["REAL cold fold (unfiltered) succeeds AND == reified view" cold-fold-ok]
+   [":version == flat fold version (doctor reports FRESH)" version-fresh]])
 
 (println "boot live:" (count (flat-set flat)))
 (let [fails (remove second checks)]

@@ -118,7 +118,7 @@
       :blocked  {:blocked (proj/blocked (index!))}
       :leverage {:leverage (lev-top (index!))}
       :validate {:violations (all-violations (index!))}
-      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (:log @co)}
+      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (or @flat-log (:log @co))}
       {:error "unknown op"})))
 
 ;; ---- socket server (verbatim shape from the proven coord.clj) ---------------
@@ -186,6 +186,7 @@
         ;; line must be dropped pre-fold. A torn line is an incomplete write that
         ;; must NOT apply (the writer retries).
         asserts (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log flat))
+        flat-max-tx (reduce max 0 (map #(or (:tx %) 0) asserts))
         claims (:claims (fold/fold (vec asserts)))
         by-pred (group-by :p claims)
         st (c/new-store)
@@ -200,7 +201,15 @@
       (doseq [cl claims]
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
           (if (ref-str? r) (s/link! st su p (ent! r) tx) (s/assert! st su p r tx)))))
-    {:store st :log flat :lock (Object.)}))
+    ;; Seed the seq-space to the flat log's max :tx so (a) :version == the flat
+    ;; fold's version (doctor reports FRESH, not STALE), (b) base_version stays
+    ;; coherent, and (c) projected flat :tx CONTINUE the flat space (no collision;
+    ;; coord.clj can still fold the log on rollback).
+    (swap! st assoc :next-seq flat-max-tx)
+    (swap! st update :txs assoc tx {:seq flat-max-tx :agent "migrate"})
+    ;; :log nil — DROP-IN: the flat log is canonical and is written ONLY by the
+    ;; daemon's append-flat!; the reified store must NOT dump v2 :k-records into it.
+    {:store st :log nil :lock (Object.)}))
 
 (defn boot-flat! [flat]
   (reset! flat-canonical? true)

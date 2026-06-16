@@ -31,10 +31,11 @@
 
 ;; --- atomic v2 log: a tx's records + :commit, fsync'd -----------------------
 (defn- append-tx! [co records]
-  (with-open [os (java.io.FileOutputStream. (str (:log co)) true)]
-    (doseq [r records] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))
-    (.flush os)
-    (.force (.getChannel os) true)))            ; fsync — durability the bb coord lacked
+  (when (:log co)                               ; nil :log = drop-in mode: the flat
+    (with-open [os (java.io.FileOutputStream. (str (:log co)) true)]   ; log is canonical
+      (doseq [r records] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))  ; and is written
+      (.flush os)                               ; ONLY via the daemon's append-flat!,
+      (.force (.getChannel os) true))))         ; never with v2 :k-records. fsync (design A).
 
 ;; the records minted in `store` since id `since` (new values/entities/claims),
 ;; plus this tx's provenance and the terminating :commit marker.
