@@ -4,4 +4,9 @@
 # (query / assert / retract; optimistic base_version + obligation rules).
 #   chelonia-daemon [port] [log]
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-exec bb -cp "$HERE/out" "$HERE/coord.clj" serve "${1:-7977}" "${2:-$HERE/claims.log}"
+# Reified CNF engine (drop-in over the flat log): same wire protocol + same
+# canonical flat log, reified substrate underneath. cd $HERE so the daemon's
+# relative (load-file "cnf_coord.clj") resolves regardless of the caller's cwd.
+# Rollback: restore the coord.clj line below, then `chelonia up --restart`.
+#   exec bb -cp "$HERE/out" "$HERE/coord.clj" serve "${1:-7977}" "${2:-$HERE/claims.log}"
+cd "$HERE" && exec bb -cp out cnf_coord_daemon.clj serve-flat "${1:-7977}" "${2:-$HERE/claims.log}"
