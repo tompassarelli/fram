@@ -15,7 +15,7 @@
   (println "cnf_shadow_test: skipped — set CHELONIA_LOG") (System/exit 0))
 
 ;; --- flat (today's) read surface = the golden reference ---------------------
-(def flat-claims (:claims (fold/fold (chelonia.rt/read-log log))))
+(def flat-claims (:claims (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log log))))))
 (def flat-idx (ck/build-index flat-claims))
 
 ;; --- reified: load flat -> store, then read through the bridge --------------

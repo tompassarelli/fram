@@ -14,7 +14,8 @@
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.edn :as edn]
          '[chelonia.cnf :as c] '[chelonia.schema :as s]
-         '[chelonia.kernel :as ck] '[chelonia.projections :as proj])
+         '[chelonia.kernel :as ck] '[chelonia.projections :as proj]
+         '[chelonia.fold :as fold] '[chelonia.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter])
 (load-file "cnf_coord.clj")          ; the reified coordinator library
@@ -24,16 +25,23 @@
 (def flat-log (atom nil))            ; the flat log, now a PROJECTION the cold CLI folds
 (def cache (atom {:index nil :version -1}))
 (def subscribers (atom []))
+(def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
+(def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
+(def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
 (def schema-preds #{"name" "cardinality" "value_kind" "cnf-supersedes"})
+
+(defn- stamp [f] (let [fi (java.io.File. (str f))] (str (.lastModified fi) ":" (.length fi))))
 
 ;; flat-log projection: each reified commit also appends the flat {:op :l :p :r}
 ;; line the CLI's cold fold reads — so "files are pure projections of the reified
 ;; store" (Stage 7) and existing reads keep working UNCHANGED across the cutover.
+;; Refreshes flat-mtime so our OWN write isn't mistaken for an external edit.
 (defn- append-flat! [op te p r seq]
   (when @flat-log
     (with-open [os (java.io.FileOutputStream. (str @flat-log) true)]
       (.write os (.getBytes (str (pr-str {:tx seq :op op :l te :p p :r r :ts "t" :by "coord"}) "\n") "UTF-8"))
-      (.flush os))))
+      (.flush os))
+    (reset! flat-mtime (stamp @flat-log))))
 
 ;; read-bridge: reified live view -> the flat (l p r) Claim vec build-index wants.
 (defn reified->claims [c0]
@@ -97,17 +105,21 @@
        (mapcat (fn [te] (map #(str (subs te 1) ": " %) (ck/violations-i idx te))))
        vec))
 
+(declare maybe-reload!)
+
 (defn handle [req]
-  (case (:op req)
-    :version  {:version (current-seq @co)}
-    :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
-    :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
-    :ready    {:ready (proj/ready (index!))}
-    :blocked  {:blocked (proj/blocked (index!))}
-    :leverage {:leverage (lev-top (index!))}
-    :validate {:violations (all-violations (index!))}
-    :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (:log @co)}
-    {:error "unknown op"}))
+  (locking dlock                       ; serialize reload + writes + reads (drop-in mode)
+    (maybe-reload!)                     ; absorb external flat edits (no-op in v2-log mode)
+    (case (:op req)
+      :version  {:version (current-seq @co)}
+      :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
+      :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
+      :ready    {:ready (proj/ready (index!))}
+      :blocked  {:blocked (proj/blocked (index!))}
+      :leverage {:leverage (lev-top (index!))}
+      :validate {:violations (all-violations (index!))}
+      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (:log @co)}
+      {:error "unknown op"})))
 
 ;; ---- socket server (verbatim shape from the proven coord.clj) ---------------
 (defn serve-conn [^Socket s]
@@ -153,6 +165,63 @@
   (boot! log flat)
   (println (str "reified coordinator: " (count (c/current-claims (:store @co))) " live claims from " log
                 (when flat (str "; flat projection -> " flat))))
+  (serve port))
+
+;; ===========================================================================
+;; DROP-IN cutover (design B): the flat log stays canonical (no format change);
+;; the daemon is a reified-engine FRONT-END over it. Boots by migrating the flat
+;; log into the reified store; commits go through the reified coordinator AND
+;; append the flat line; external edits (capture/import/set append out-of-band)
+;; are absorbed by re-migrating on mtime change. Cardinality comes from
+;; chelonia.kernel/single? (the existing canonical vocab — NO hardcoded list, so
+;; one-engine is preserved); ref-ness follows the @-prefix convention. A true
+;; reversible drop-in for coord.clj: same log, same protocol, reified underneath.
+;; ===========================================================================
+(defn- ref-str? [x] (and (string? x) (str/starts-with? x "@")))
+
+(defn migrate-flat->co [flat]
+  (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
+        ;; without fsync, so a copy/read caught mid-write can yield an assertion
+        ;; missing a field — and fold itself calls single? on :p, so the incomplete
+        ;; line must be dropped pre-fold. A torn line is an incomplete write that
+        ;; must NOT apply (the writer retries).
+        asserts (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log flat))
+        claims (:claims (fold/fold (vec asserts)))
+        by-pred (group-by :p claims)
+        st (c/new-store)
+        tx (c/begin-tx! st "migrate")]
+    (s/setup! st tx)
+    (doseq [p (keys by-pred)]
+      (s/def-predicate! st p (if (ck/single? p) "single" "multi")
+                            (if (some ref-str? (map :r (get by-pred p))) "ref" "literal") tx))
+    (let [memo (atom {})
+          ent! (fn [sid] (or (get @memo sid)
+                             (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
+      (doseq [cl claims]
+        (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
+          (if (ref-str? r) (s/link! st su p (ent! r) tx) (s/assert! st su p r tx)))))
+    {:store st :log flat :lock (Object.)}))
+
+(defn boot-flat! [flat]
+  (reset! flat-canonical? true)
+  (reset! co (migrate-flat->co flat))
+  (reset! flat-log flat)
+  (reset! flat-mtime (stamp flat))
+  (reset! cache {:index nil :version -1})
+  (index!) @co)
+
+;; absorb external edits (capture/import/set append to the flat log out-of-band).
+(defn maybe-reload! []
+  (when (and @flat-canonical? @flat-log (not= (stamp @flat-log) @flat-mtime))
+    (reset! co (migrate-flat->co @flat-log))
+    (reset! flat-mtime (stamp @flat-log))
+    (reset! cache {:index nil :version -1})
+    (index!)))
+
+(defn serve-flat-daemon [port flat]
+  (boot-flat! flat)
+  (println (str "reified coordinator (drop-in over flat log): "
+                (count (c/current-claims (:store @co))) " live claims, canonical=" flat))
   (serve port))
 
 ;; ---- adversarial socket test (mirrors coord.clj's run-test) ----------------
@@ -206,8 +275,13 @@
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd
-    "serve" (serve-daemon (Integer/parseInt (or p "7977"))
-                          (or log (str (System/getProperty "user.dir") "/chelonia-data/claims-v2.log"))
-                          flat)                       ; optional flat-log projection for cold CLI reads
-    "test"  (run-test (Integer/parseInt (or p "7988")))
+    ;; v2-log canonical + optional flat projection (design A)
+    "serve"      (serve-daemon (Integer/parseInt (or p "7977"))
+                               (or log (str (System/getProperty "user.dir") "/chelonia-data/claims-v2.log"))
+                               flat)
+    ;; DROP-IN: flat log canonical, reified engine over it (design B) — the safe
+    ;; reversible swap for coord.clj: `serve-flat 7977 <claims.log>`
+    "serve-flat" (serve-flat-daemon (Integer/parseInt (or p "7977"))
+                                    (or log (str (System/getProperty "user.dir") "/chelonia-data/claims.log")))
+    "test"       (run-test (Integer/parseInt (or p "7988")))
     nil))

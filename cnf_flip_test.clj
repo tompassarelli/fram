@@ -24,7 +24,7 @@
 (io/copy (io/file live) (io/file flip-flat))         ; the flat projection seed (full history)
 
 ;; --- migrate the copy -> reified store -> v2 log ----------------------------
-(def flat-claims (:claims (fold/fold (chelonia.rt/read-log flip-flat))))
+(def flat-claims (:claims (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log flip-flat))))))
 (def single-preds #{"title" "owner" "lead" "driver" "assignee" "source" "part_of"
                     "do_on" "valid_until" "estimate_hours" "created_at" "updated_at"
                     "body" "created_by" "committed" "outcome" "abandoned"
@@ -57,7 +57,7 @@
                    [(s/name-of st (:l cl)) pstr
                     (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
              (c/current-claims st))))
-(defn flat-triples [f] (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:claims (fold/fold (chelonia.rt/read-log f))))))
+(defn flat-triples [f] (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:claims (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log f))))))))
 
 (def before-reif (domain-triples (:store @co)))
 (def before-flat (flat-triples flip-flat))
@@ -86,7 +86,8 @@
   [["write committed over the socket"                 (and (:ok w1) (:ok w2) (:ok w3))]
    ["flat projection == reified store (faithful mirror, full corpus)" (= after-flat after-reif)]
    ["new writes landed in BOTH (reified == flat delta)" (= new-reif new-flat)]
-   ["new title present in the reified store"           (contains? after-reif [S "title" "race0"])]
+   ["the live title is one race winner (not race0-specific)"
+    (= 1 (count (filter (fn [[l p r]] (and (= l S) (= p "title") (str/starts-with? (str r) "race"))) after-reif)))]
    ["base_version: exactly one racer wins"             (= 1 race-wins)]
    ["base_version: the rest conflict"                  (= 7 race-conf)]
    ["single-valued title -> one live value after race" (= 1 (count (filter (fn [[l p _]] (and (= l S) (= p "title"))) after-reif)))]])

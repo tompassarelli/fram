@@ -23,7 +23,7 @@
 ;; run-test is guarded by command-line-args, so loading it has no side effects.
 (load-file "cnf_coord.clj")
 
-(def flat-claims (:claims (fold/fold (chelonia.rt/read-log log))))
+(def flat-claims (:claims (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (chelonia.rt/read-log log))))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
 
 ;; --- load flat -> reified (the proven Stage 2/4 loader) ---------------------
