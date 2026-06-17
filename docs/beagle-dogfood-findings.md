@@ -50,10 +50,22 @@ These gaps don't just sit in a doc; they're being fixed in the Beagle compiler i
 - **G6 — SUBSUMED, no separate fix.** The `Any`-assignability hole is inherent to `Any`
   (assignable to anything); the only remedy is reducing *upstream* `Any`, which G1/G3/G4 do.
   Documented, not a code change.
-- **G3 (heterogeneous tuple) + G4-emit (map-pattern destructuring narrowing) — REMAINING.**
-  G3 is the most fram-valuable (converts the `(Vec Any)` tuples) and — being *immutable* —
-  doesn't hit the covariance trap that sank G2. G4-emit needs an emit change (bind the
-  pattern var) before its checker narrowing can be sound.
+- **G3 (heterogeneous tuple `HVec`) — SHIPPED** (beagle `ecc853a`). `(HVec a b c)`, one-directional
+  `HVec <: Vec`, `nth`/`first`/`second` positional narrowing (constant in-bounds index only;
+  dynamic/OOB → the element LUB, never a fabricated position), and an expected-directed literal
+  check for construction that does **not** change `vector`'s default `(Vec T)` (the cheap
+  `vector`→HVec hack broke 24 tests and was reverted). fram has no retrofit site — its
+  heterogeneous tuples are justified-`(Vec Any)` in the deliberately-generic datalog engine.
+- **G4-emit (map-pattern destructuring) — SHIPPED** (beagle `4203c1b`). Fixed a *latent bug*:
+  `{:k x}` in `match` emitted the var **free** (undefined at runtime); now emit binds it
+  (clj + js) and the checker narrows it to the field type. fram doesn't use map patterns (it
+  discriminates via `if` + the kw-access slice), so this is additive.
+
+**Backlog complete: G1–G7 all resolved** (G5/G1/G4-kwaccess/G7/G2/G3/G4-emit shipped sound +
+CI-green; G6 subsumed). The hard three (G2 invariant Atom, G3 HVec, G4-emit) were done by hand
+after the adversarial gate rejected the easy/unsound versions. The only thing deliberately NOT
+built is **full row-polymorphism** (open-key flow-narrowing *outside* `match`) — a genuine
+multi-week type-system project with no current consumer.
 
 ## Genuine Beagle gaps (prioritized — these feed the language)
 
