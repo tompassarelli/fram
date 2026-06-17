@@ -5,6 +5,7 @@
 
   Paths default to the current working directory (./threads, ./claims.log) and
   are overridable via FRAM_THREADS / FRAM_LOG."
+  (:refer-clojure :exclude [slurp])   ; fram.rt/slurp wraps clojure.core/slurp; keep the JVM daemon's stderr clean
   (:require [clojure.string :as str]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -213,14 +214,39 @@
 ;; (optimistic base_version + obligation rules), so this is the safe multi-agent
 ;; write path — unlike append-assertion, which writes the log directly.
 
+;; client-side mutual TLS: present FRAM_TLS_KEYSTORE, verify the coordinator against
+;; FRAM_TLS_TRUSTSTORE. Works on babashka (client SSL classes are present; only the
+;; SERVER-side SSLServerSocket is absent, which is why the daemon runs on the JVM).
+(defn- client-ssl-context [ks ts pass]
+  (let [pw (.toCharArray ^String pass)
+        load (fn [p] (with-open [in (io/input-stream p)]
+                       (doto (java.security.KeyStore/getInstance "PKCS12") (.load in pw))))
+        kmf (doto (javax.net.ssl.KeyManagerFactory/getInstance (javax.net.ssl.KeyManagerFactory/getDefaultAlgorithm))
+              (.init (load ks) pw))
+        tmf (doto (javax.net.ssl.TrustManagerFactory/getInstance (javax.net.ssl.TrustManagerFactory/getDefaultAlgorithm))
+              (.init (load ts)))]
+    (doto (javax.net.ssl.SSLContext/getInstance "TLS")
+      (.init (.getKeyManagers kmf) (.getTrustManagers tmf) nil))))
+
+;; connect to the coordinator: FRAM_CONNECT host (default 127.0.0.1); mutual TLS when
+;; FRAM_TLS_* is set, else plaintext (the unchanged loopback default).
+(defn- coord-socket [host port]
+  (let [ks (System/getenv "FRAM_TLS_KEYSTORE") ts (System/getenv "FRAM_TLS_TRUSTSTORE") pass (System/getenv "FRAM_TLS_PASS")]
+    (if (and ks ts pass)
+      (let [s (.createSocket (.getSocketFactory (client-ssl-context ks ts pass)))]
+        (.connect s (java.net.InetSocketAddress. ^String host (int port)) 2000)
+        (.setSoTimeout s 2000)
+        (.startHandshake s)
+        s)
+      (let [s (java.net.Socket.)]
+        (.connect s (java.net.InetSocketAddress. ^String host (int port)) 2000)
+        (.setSoTimeout s 2000)
+        s))))
+
 (defn- coord-rt [port req]
-  (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
-    ;; read deadline too — else a process that ACCEPTS the port but never replies
-    ;; (wrong protocol / hung daemon) blocks .readLine forever. SocketTimeoutException
-    ;; is caught by coord-version (-> -1) and coord-write (-> error string), so this
-    ;; degrades to the same clean "no coordinator" path as connection-refused.
-    (.setSoTimeout s 2000)
+  ;; read deadline (.setSoTimeout) so a process that accepts but never replies can't
+  ;; hang .readLine; SocketTimeoutException degrades to the clean "no coordinator" path.
+  (with-open [s (coord-socket (or (System/getenv "FRAM_CONNECT") "127.0.0.1") port)]
     (let [w (io/writer (.getOutputStream s))
           r (io/reader (.getInputStream s))]
       (.write w (str (pr-str req) "\n"))

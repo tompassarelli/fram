@@ -61,8 +61,8 @@
   ;; warning only on non-loopback
   (Thread/sleep 200)
   (let [ea (slurp errA) eb (slurp errB)]
-    (chk "non-loopback logs the UNAUTHENTICATED warning" (and (str/includes? eb "WARNING") (str/includes? eb "UNAUTHENTICATED")))
-    (chk "default (loopback) logs NO warning" (not (str/includes? ea "WARNING"))))
+    (chk "non-loopback logs the UNAUTHENTICATED warning" (str/includes? eb "UNAUTHENTICATED"))
+    (chk "default (loopback) logs NO unauthenticated warning" (not (str/includes? ea "UNAUTHENTICATED"))))
   (finally
     (p/destroy-tree procA) (p/destroy-tree procB)))
 

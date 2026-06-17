@@ -17,7 +17,9 @@
          '[fram.kernel :as ck]
          '[fram.fold :as fold] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
-        '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter])
+        '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
+        '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
+        '[java.security KeyStore])
 (load-file "cnf_coord.clj")          ; the reified coordinator library
 
 ;; ---- state: one reified coordinator + a cached read index ------------------
@@ -152,18 +154,54 @@
      :loopback? loopback?
      :label (if loopback? "127.0.0.1" b)}))
 
+;; engine-terminated mTLS (JVM-only — this daemon runs on the JVM). When
+;; FRAM_TLS_KEYSTORE / FRAM_TLS_TRUSTSTORE / FRAM_TLS_PASS are all set, the listener
+;; is an SSLServerSocket that REQUIRES + verifies a client cert (mutual TLS), so a
+;; non-loopback link is safe over an untrusted network. Unset => plaintext (default,
+;; unchanged). The EDN wire protocol is identical inside the TLS session.
+(defn- tls-cfg []
+  (let [ks (System/getenv "FRAM_TLS_KEYSTORE")
+        ts (System/getenv "FRAM_TLS_TRUSTSTORE")
+        pass (System/getenv "FRAM_TLS_PASS")]
+    (when (and ks ts pass) {:ks ks :ts ts :pass pass})))
+
+(defn- load-keystore [path pw]
+  (with-open [in (FileInputStream. (str path))]
+    (doto (KeyStore/getInstance "PKCS12") (.load in pw))))
+
+(defn- tls-context [{:keys [ks ts pass]}]
+  (let [pw (.toCharArray (str pass))
+        kmf (doto (KeyManagerFactory/getInstance (KeyManagerFactory/getDefaultAlgorithm))
+              (.init (load-keystore ks pw) pw))
+        tmf (doto (TrustManagerFactory/getInstance (TrustManagerFactory/getDefaultAlgorithm))
+              (.init (load-keystore ts pw)))]
+    (doto (SSLContext/getInstance "TLS")
+      (.init (.getKeyManagers kmf) (.getTrustManagers tmf) nil))))
+
+(defn- listen-socket [addr port tls]
+  (if tls
+    (doto (.createServerSocket (.getServerSocketFactory (tls-context tls)))
+      (.setNeedClientAuth true)                                  ; mutual TLS: require + verify client cert
+      (.setEnabledProtocols (into-array String ["TLSv1.3" "TLSv1.2"]))
+      (.setReuseAddress true)
+      (.bind (InetSocketAddress. addr (int port))))
+    (doto (ServerSocket.) (.setReuseAddress true)
+          (.bind (InetSocketAddress. addr (int port))))))
+
 (defn serve [port]
   (let [cfg (bind-cfg)
         addr (:addr cfg) loopback? (:loopback? cfg) label (:label cfg)
-        ss (doto (ServerSocket.) (.setReuseAddress true)
-                 (.bind (InetSocketAddress. addr (int port))))]
-    (when-not loopback?
+        tls (tls-cfg)
+        ss (listen-socket addr port tls)]
+    (when (and (not loopback?) (not tls))
       (binding [*out* *err*]
         (println (str "WARNING: coordinator bound to " label ":" port
-                      " (non-loopback). The wire protocol is UNAUTHENTICATED — it MUST sit behind "
-                      "the Lodestar gateway / a firewall; never publish this port."))))
+                      " (non-loopback, NO TLS). The wire protocol is UNAUTHENTICATED — it MUST sit "
+                      "behind the gateway / a firewall, or set FRAM_TLS_* for mutual TLS; never publish this port."))))
     (println (str "reified coordinator listening on " label ":" port
-                  (if loopback? " (sole writer, loopback-only)" " (sole writer, behind-gateway)")))
+                  (cond tls " (sole writer, mTLS)"
+                        loopback? " (sole writer, loopback-only)"
+                        :else " (sole writer, behind-gateway)")))
     (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
 
 (defn client [port m]

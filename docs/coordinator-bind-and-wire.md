@@ -64,26 +64,28 @@ the loud warning is what protects existing users.
 
 ## Securing a non-loopback bind (mTLS)
 
-`FRAM_BIND=0.0.0.0` is only safe paired with a network boundary. Over an
-**untrusted** link, use mutual TLS. The supported transport today is an **stunnel
-sidecar** (`deploy/stunnel.example.conf`):
+Over an **untrusted** link, use mutual TLS. **Engine-terminated mTLS ships** — set
+all three on the daemon:
 
-- The coordinator keeps binding **loopback** (FRAM_BIND unset). stunnel on the
-  coordinator host terminates mTLS on a public port and forwards plaintext to the
-  loopback daemon; the gateway host runs an stunnel client presenting its cert.
-- The EDN **wire protocol is byte-identical inside the tunnel**, so this needs
-  **zero Fram code** and no version bump.
+```
+FRAM_TLS_KEYSTORE=server.p12    # PKCS12: the coordinator's cert+key
+FRAM_TLS_TRUSTSTORE=trust.p12   # PKCS12: the client CA/cert it will accept
+FRAM_TLS_PASS=...               # store password
+```
 
-**Engine-terminated mTLS is specced-and-deferred.** babashka's native image has no
-server-side `SSLServerSocket` (probed: `javax.net.ssl.SSLServerSocket` is absent;
-the client-side `SSLSocket` *is* present), so the daemon cannot terminate TLS on
-bare `bb`. Implementing it would mean running **only the coordinator daemon under
-JVM Clojure** (verified: `out/*.clj` loads under Clojure 1.12 and `SSLServerSocket`
-is present there), gated behind `FRAM_TLS_KEYSTORE`/`FRAM_TLS_TRUSTSTORE`/
-`FRAM_TLS_PASS` (default off → plaintext, unchanged), with `setNeedClientAuth(true)`
-and the `fram.rt` client switching to an `SSLSocket`. Deferred because it forces the
-coordinator off bare babashka for a boundary stunnel already covers; revisit only if
-a deployment needs in-process TLS termination.
+The listener becomes an `SSLServerSocket` with `setNeedClientAuth(true)` — it
+**requires and verifies a client cert** (mutual TLS). Unset → plaintext (default,
+unchanged). The EDN wire protocol is identical inside the TLS session. Clients
+present a cert with the same `FRAM_TLS_*` vars plus `FRAM_CONNECT=<coordinator-host>`
+(`fram.rt` connects with an `SSLSocket`); this works on **babashka** — only the
+*server*-side socket needs the JVM, which is why **the daemon runs on the JVM** (bb's
+native image has no `SSLServerSocket`; the CLI/MCP stay on bb). Verified end-to-end
+by `tls_test.clj` (trusted cert in; plaintext + wrong-cert rejected).
+
+**Alternative — stunnel sidecar** (`deploy/stunnel.example.conf`): keep the
+coordinator loopback+plaintext and front it with stunnel for TLS. Zero engine TLS
+config; useful if you'd rather manage certs outside the engine. Either way, **never
+publish the raw plaintext port.**
 
 ## Target topology this enables
 

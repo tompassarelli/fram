@@ -1,0 +1,9 @@
+;; JVM Clojure deps for the long-lived coordinator daemon (bin/fram-daemon).
+;; The daemon runs on the JVM — not babashka — because a server wants JIT
+;; throughput and full Java (real threads, javax.net.ssl.SSLServerSocket for
+;; engine-terminated mTLS, which bb's native image lacks). The CLI + MCP stay on
+;; babashka (fast per-command startup, -cp out). cheshire is declared here because
+;; the engine's rt.clj uses it; bb bundles it, the JVM needs it on the classpath.
+{:paths ["out"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        cheshire/cheshire {:mvn/version "5.13.0"}}}

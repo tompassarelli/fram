@@ -36,7 +36,10 @@ echo "starting coordinator on :$FRAM_PORT  (log: $LOG)"
 setsid "$HERE/fram-daemon" "$FRAM_PORT" "$LOG" >"/tmp/fram-daemon-$FRAM_PORT.log" 2>&1 &
 disown 2>/dev/null || true
 
-for _ in $(seq 40); do
+# the daemon now runs on the JVM (Clojure) — slower to boot than bb, and it reads
+# the whole claim log at startup, so give it room (and a first-ever run may resolve
+# deps once). ~30s ceiling; it usually answers in a few seconds.
+for _ in $(seq 120); do
   if "$HERE/fram" doctor 2>/dev/null | grep -q 'coordinator UP'; then
     echo "coordinator up on :$FRAM_PORT"
     exit 0

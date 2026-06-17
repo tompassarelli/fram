@@ -180,8 +180,11 @@ mode. Whoever runs the server, the data is never locked in.
   Markdown is the portable current-state view; the log, kept in Git, is the durable history.)
 - **You can always leave.** `fram export` regenerates your Markdown
   claim-identically, so you walk away with exactly what you put in.
-- **Nothing to build.** The compiled code is committed; running it needs only
-  [babashka](https://babashka.org). An optional GraalVM native binary
+- **Nothing to build.** The compiled code is committed. The **CLI + MCP run on
+  [babashka](https://babashka.org)** (fast per-command startup); the **long-lived
+  coordinator daemon runs on the JVM** (`clojure`) — a server wants JIT throughput
+  and full Java (real threads, `SSLServerSocket` for engine-terminated **mTLS**),
+  and startup cost is amortized. An optional GraalVM native binary
   (`native/build.sh`) gives ~0.2s/command for larger corpora.
 - **Warm, local reads.** The daemon serves ~1ms in-memory reads over that
   loopback socket.
@@ -234,7 +237,10 @@ bb -cp out datalog_test.clj      # stratified derivation
 bb -cp out cnf_test.clj          # reified claim kernel
 bb -cp out query_test.clj        # structured Datalog query + boundary rejections
 bb -cp out tools_test.clj        # tool catalog generated from the vocabulary
+bb -cp out datalog_scale_test.clj # semi-naive scales (200-chain closure, naive hung)
 bb mcp_test.clj                  # bin/fram-mcp end to end over JSON-RPC/stdio
+bb bind_test.clj                 # FRAM_BIND modes (loopback default vs 0.0.0.0)
+bb tls_test.clj                  # engine-terminated mTLS (trusted in; plaintext/wrong-cert out)
 ```
 
 ## License
