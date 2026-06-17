@@ -7,28 +7,53 @@ contortion, write it down here as "Beagle lacks X" — don't silently absorb it 
 The probe that matters is **not** "does interop compile?" (it does, trivially) — it's
 **"can I replace this `Any` with a real type, or does Beagle force me back to `Any`?"**
 
-## Findings so far (2026-06-17)
+## How this list was built
 
-| # | Where | Tried to type | Outcome | Verdict |
-|---|---|---|---|---|
-| 1 | `kernel/reachable-from?` `succ` | `[String -> (Vec String)]` (fn type) | **0 errors** | **No gap.** The `Any` I first wrote was author laziness, not a language limit. Real type now in place; kernel `cycle?`/`cycle-i?` are checked against it. |
-| 2 | `lodestar.gatepolicy` Tenant/Bucket | `defrecord` + `(Map String Tenant)` + `Float` | **0 errors** | **No gap.** Records, typed maps, numeric types, fn types all express cleanly. The security decisions are real-typed. |
-| 3 | `gatepolicy/sha256-hex` | `MessageDigest/getInstance` (static interop) | 1 error → fixed | **Minor ergonomics.** Non-`java.lang` classes need an explicit `(import …)`; otherwise Beagle parses `Pkg.Class/method` as an unresolved *namespace alias*. The error even suggested `(require …)`, which is the wrong fix for a Java class. **Possible Beagle improvement:** detect the `Pkg.Class/method` shape and suggest `(import)` instead. |
+Two passes:
+1. **Small probes** (reachability dedup, the gateway gatepolicy module). Found **no** gaps —
+   fn-types, records, typed maps, `Float` all expressed cleanly; the `Any` was author laziness.
+2. **The engine-typing pass** — typed the *whole* Fram core (cnf/schema/datalog/query/tools/main,
+   ~141 `:- Any` sites). **106 sites took real types; 35 remain justified boundaries.** Typing at
+   that scale is what surfaced the real gaps below — and fixed a latent `schema/value-id` nil bug
+   that `Any` had been masking (it's genuinely `Int?`; now guarded before the index lookups).
 
-## Justified `Any` (the one honest use)
+So: Beagle's coverage is strong for *leaf* types and records, and the bail-to-`Any` reflex is
+usually laziness — but typing a real interpreter end-to-end hits genuine, recordable limits.
 
-`Any` is correct at the **untrusted-input boundary**, where you validate dynamic data
-*into* a typed shape:
-- `gatepolicy/parse-tenant`'s `cfg` — raw registry EDN off disk → validated to a typed `Tenant`.
-- `gatepolicy/valid-op?`'s `parsed` — untrusted wire body → `Bool`.
+## Genuine Beagle gaps (prioritized — these feed the language)
 
-Everywhere else, `Any` is a smell.
+| # | Gap | Impact in Fram | Suggested direction |
+|---|---|---|---|
+| G1 | **No type alias / synonym** (`deftype` removed, no `defalias`) | `Db`/`Subst`/`Tuple`/`Lit`/`Rule` (~50 sites) must be spelled inline — e.g. `(Map String (Set (Vec Any)))` re-typed at every signature. The single biggest source of `Any`-drift pressure. | A `(defalias Db (Map String (Set (Vec Any))))` form. **Highest value.** |
+| G2 | **No parametric `(Atom T)`** | `(Atom Store)` is hard-rejected; bare `Atom` typechecks but `deref`/`swap!` erase the element type, so every store read recovers the shape with `(let [s :- Store (deref ctx)] …)`. Affects every `ctx` in cnf/schema/datalog. | Parametric `Atom` in the ctor allow-list. |
+| G3 | **No heterogeneous tuple / `HVec`** | only homogeneous `(Vec T)`. A datalog fact `[cid l p r]` (`Int` then `String`s), a dump entry `[Int claim-map]`, an index key `[l p]` all collapse to `(Vec Any)`; reads via `(nth e 1)` degrade to `Any`. | `(HVec Int String String String)` / tuple types. |
+| G4 | **No open / optional-key map (no row polymorphism)** | a `defrecord` always has *all* keys, so key-presence discrimination breaks: query's `:strata`-xor-`:rules`, `term-ok?`'s `(contains? t :var)`, the `{:ok …}`/`{:error …}` result envelopes. Forces `Any` at `query/run`, `tools/call` return, `main/route-write`. | Open/optional-key map types, or sum-of-records the checker can discriminate. |
+| G5 | **`defenum` is not enforced by the checker** | `(->ToolSpec … :bogus …)` into an `Op`-typed field AND `(= op :nonmember)` against an `Op` both pass with 0 errors. `defenum` documents intent but doesn't yet *constrain*. | Make the checker reject non-member keywords against an enum-typed slot. |
+| G6 | **The `Any`-assignability hole** | narrowing `Any → Int` via `(:seq m)` over a `(Map Keyword Any)` (e.g. `tx-seq`/`value-id` returns) passes `beagle check` only because `Any` is assignable to anything — the narrowed return type is documented intent, **not** verified. Largely a *consequence* of G3+G4 (those force `Map Keyword Any`, then field access is `Any`). | Tighter assignability from `Any`, or eliminate the upstream `Any` via G3/G4. |
+| G7 | **`doseq`/`for` clause bindings reject `:- T`** | `(doseq [e :- (Vec Any) …])` is unparseable; you bind `e` plainly (infers `Any`) and re-annotate inside the body with a `let`. (`loop` bindings *do* accept `:- T`.) | Allow `:- T` in `for`/`doseq` binding clauses for parity with `loop`. |
 
-## The real conclusion
+### Non-gap (refactor cost, recorded so it isn't mistaken for one)
+- **Map literals don't coerce to records:** `{:l 1 :p 2 :r 3}` is rejected where a record is
+  expected, so adopting a record means refactoring producers to `(->Ctor …)`. We deliberately did
+  **not** recordize `CnfClaim`/`Tx`/`WriteIntent`: a hand-written `.clj` consumer
+  (`cnf_coord/assemble-dump`) feeds plain maps into `load-store!`, and two suites assert whole-map
+  equality — a record `≠` a map literal in Clojure, so recordizing would break green tests for zero
+  runtime gain (every real consumer uses field access). Kept as `(Map Keyword Any)`. This is the
+  "willing to NOT migrate when a typed seam doesn't earn it" discipline in action.
 
-The honest gap this session surfaced was **not** in Beagle — it was **discipline**.
-Beagle expressed every real type asked of it (fn types, records, typed maps, numerics);
-the bail-to-`Any` was a human reflex when the data got dynamic, which defeats the whole
-point of a typed language. Beagle's coverage is better than the habit suggested. The fix
-was the policy (skill §4), not a language change. Keep this list open: the moment a real
-"Beagle can't say X" shows up, it goes here and feeds the language — but so far, none have.
+## Justified `Any` (the honest boundaries — 35 sites)
+
+`Any` is correct where data is genuinely open or crosses a serialization/untrusted seam:
+the value interner (`cnf/value!` — the engine accepts arbitrary EDN), the dump/load
+serialization boundary (heterogeneous `[k v]` tuples → G3), the domain-agnostic actor token
+(`begin-tx!`'s `agent`), polymorphic datalog terms (`{:var n}`-or-constant → G4), and the
+open keyword-map query/result envelopes (→ G4). Each is annotated with *why* at the site.
+
+## The conclusion (updated)
+
+The first small probes found the gap was **discipline** (reflexive `Any`). Typing the whole
+engine confirmed that *and* found where Beagle genuinely needs to grow: **G1 (type aliases)**
+and **G4 (open-key maps / row polymorphism)** are the two that would convert the most remaining
+justified-`Any` into real types, with **G5 (enforce `defenum`)** being a correctness gap in the
+checker itself. These belong in Beagle's roadmap — that's the payoff of dogfooding: a typed
+interpreter is the forcing function that a leaf-type probe never will be.
