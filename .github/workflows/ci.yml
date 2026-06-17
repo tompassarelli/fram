@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Fram had no CI of its own — its JVM daemon, engine mTLS, and 17 test suites only
+# ever ran on a dev machine, so a daemon-runtime change (bb -> JVM) slipped through
+# and broke a downstream consumer. This workflow runs the real suites + the real
+# JVM/mTLS daemon, so that class of break is caught here, at the source.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install babashka
+        run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+      # The coordinator daemon (bin/fram-daemon) and the mTLS test run on the JVM,
+      # not bb — bb's native image lacks javax.net.ssl.SSLServerSocket. ubuntu-latest
+      # ships a JDK (keytool, which tls_test uses); we add the Clojure CLI on top.
+      - name: Install Clojure CLI
+        run: |
+          curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
+          chmod +x linux-install.sh
+          sudo ./linux-install.sh
+          clojure --version
+
+      - name: Warm JVM deps (cheshire) so the daemon boots fast
+        run: clojure -P
+
+      - name: Unit + integration suites (babashka, on the committed out/)
+        run: |
+          fail=0
+          for t in *_test.clj; do
+            [ "$t" = tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
+            echo "== $t =="
+            bb -cp out "$t" || fail=1
+          done
+          exit $fail
+
+      - name: mTLS round-trip (JVM daemon, engine-terminated mutual TLS)
+        run: bb tls_test.clj
