@@ -1,5 +1,6 @@
 (ns fram.schema
-  (:require [fram.cnf :as c]))
+  (:require [fram.cnf :as c]
+            [fram.types :as t]))
 
 (defn setup! [ctx tx]
   (let [name-p (c/value! ctx "name")

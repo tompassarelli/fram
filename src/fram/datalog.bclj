@@ -28,6 +28,7 @@
 ;; ============================================================================
 (ns fram.datalog)
 (require fram.cnf :as c)
+(require fram.types :as t)
 
 ;; --- rule/term constructors (rules are plain data) --------------------------
 (defn v [name :- String] :- (Map Keyword Any) {:var name})                 ; a logic variable
@@ -43,7 +44,7 @@
 (defn- var? [t :- Any] :- Bool (and (map? t) (contains? t :var)))
 
 ;; --- EDB: project the LIVE claim store into triple/claim tuple-sets ----------
-(defn edb [ctx :- Atom] :- (Map String (Set (Vec Any)))
+(defn edb [ctx :- (Atom t/Store)] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) cid :- Int] :- (Map String (Set (Vec Any)))
             (let [cl (c/claim-of ctx cid) l (:l cl) p (:p cl) r (:r cl)
                   db1 (update db "triple" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [l p r])))]
@@ -180,14 +181,14 @@
         (let [nw (snr-round db delta rules rels)]
           (recur (db-merge db nw rels) nw))))))
 
-(defn run-rules [ctx :- Atom rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any))) (fixpoint (edb ctx) rules))
+(defn run-rules [ctx :- (Atom t/Store) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any))) (fixpoint (edb ctx) rules))
 
 ;; --- stratified negation ----------------------------------------------------
 ;; strata = ordered groups of rules. Evaluate each stratum's positive fixpoint on
 ;; top of the prior db, so a negated literal always references a FROZEN relation
 ;; from a lower stratum (or the EDB) — never a moving target. Recursion through
 ;; negation is forbidden (strata-violations catches it).
-(defn run-strata [ctx :- Atom strata :- (Vec (Vec (Map Keyword Any)))] :- (Map String (Set (Vec Any)))
+(defn run-strata [ctx :- (Atom t/Store) strata :- (Vec (Vec (Map Keyword Any)))] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) stratum :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any))) (fixpoint db stratum)) (edb ctx) strata))
 
 (defn- neg-lits [stratum :- (Vec (Map Keyword Any))] :- (Vec (Map Keyword Any))

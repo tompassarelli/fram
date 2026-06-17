@@ -1,5 +1,6 @@
 (ns fram.datalog
-  (:require [fram.cnf :as c]))
+  (:require [fram.cnf :as c]
+            [fram.types :as t]))
 
 (defn v [^String name]
   {:var name})
