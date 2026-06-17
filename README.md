@@ -16,8 +16,8 @@ derive — instead of maintaining anything.
 > in. So: a working engine with an honestly-scoped genericization in progress.
 > **CLI-shaped** — the payoff is the graph and the derived queries, not chrome.
 
-> **The life/work app built on Fram is *Lodestar*** (a separate repo, not yet
-> public): the daily-coordination verbs (`ready` / `blocked` / `leverage` /
+> **The life/work app built on Fram is *[Lodestar](https://github.com/tompassarelli/lodestar)***
+> (a separate repo): the daily-coordination verbs (`ready` / `blocked` / `leverage` /
 > `next` / `capture`), the lifecycle rules, and the projections live there.
 > *Chartroom* — a planned code-as-claims app that *authors* the graph and projects
 > source — is also built on Fram. This repo is just the engine.
@@ -118,23 +118,25 @@ integrity (`validate`) is kernel-level; lifecycle projections live in the
 consumer. Honest framing: proven under local test load, single machine — not
 distributed consensus.
 
-## Self-hostable and private
+## Self-host it, or host it for others
 
-**You run the authority — always. No hosted SaaS, no account, no cloud;
-self-hosting isn't a tier, it's the only mode.** It's a genuine *server-authority*
-design: one coordinator process owns the writes, and clients (the CLI, your
-agents) connect to it over a socket — so "self-hosted" means *a client/server you
-operate*, and you decide where the server runs.
+**You choose where the authority runs — and you can always leave with your data.**
+It's a genuine *server-authority* design: one coordinator process owns the writes,
+and clients (the CLI, your agents) connect to it over a socket. That same design
+runs three ways with **no fork in the architecture** — on your laptop, on a server
+you own, or as a multi-tenant service you host for others (one coordinator + log
+per account). The only thing that differs between them is the transport in front
+of the socket.
 
-Where it runs today: the coordinator binds **loopback only** (`127.0.0.1`) — one
-machine, the one you work on. Putting that same authority on a **remote box you
-own** is the planned next step, gated on auth + a network-safe transport (the
-socket is currently unauthenticated by design). In short: *self-hosted always;
-single-machine today; a remote server you own on the roadmap — never a vendor
-cloud.*
+Where it runs out of the box: the coordinator binds **loopback only**
+(`127.0.0.1`) — single-machine and unauthenticated by design. Remote and
+multi-tenant hosting add an **authenticated gateway** in front of that socket
+(bearer token → tenant → that tenant's coordinator); the claim model, the
+write-safety, and the "export and walk away" guarantee are identical in every
+mode. Whoever runs the server, the data is never locked in.
 
 - **Your data is two plain-text things you can `grep`:** your Markdown threads,
-  and an append-only `claims.log`. No database, no account, no cloud, no telemetry.
+  and an append-only `claims.log`. No proprietary format, no lock-in, no telemetry.
 - **Nothing is ever overwritten.** The log is the history; every change is
   provenanced and recoverable. Git is your backup.
 - **You can always leave.** `fram export` regenerates your Markdown
