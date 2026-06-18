@@ -1,0 +1,95 @@
+#!/usr/bin/env bb
+;; fram-primer — the GENERATED claim-authoring cheatsheet.
+;;
+;; Authoring against the Fram engine (claims + Datalog) had no distilled reference —
+;; every agent reverse-engineered cnf.bclj/datalog.bclj from source. This generates the
+;; cheatsheet FROM that source, so it never goes stale (the beagle-authoring discipline:
+;; "the source is the truth — don't trust a hand-maintained list; regenerate it").
+;;
+;;   bb bin/fram-primer            # print the live cheatsheet
+;;   FRAM=~/code/fram bb bin/fram-primer
+;;
+;; The SIGNATURES are extracted live from src/fram/*.bclj (never rot). The PATTERNS are
+;; curated idioms that point at the real files where each is proven.
+(require '[clojure.string :as str] '[clojure.java.io :as io])
+
+(def root (or (System/getenv "FRAM") (str (System/getProperty "user.home") "/code/fram")))
+(defn src [f] (str root "/src/fram/" f))
+
+;; --- extract public (defn name [typed args] :- Ret) signatures + a leading ;; doc ----
+;; Captures the FULL typed arg vector across line wraps + the return type. The leading
+;; comment is shown only when it's a real doc (a ;; line directly above, not a separator).
+(defn signatures [path]
+  (let [lines (vec (str/split-lines (slurp path)))]
+    (->> (map-indexed vector lines)
+         (keep (fn [[i ln]]
+                 (when (re-find #"^\(defn [a-z]" ln)                   ; public defns only (skip defn-)
+                   (let [window (-> (str/join " " (subvec lines i (min (count lines) (+ i 5))))
+                                    (str/replace #"\s+" " "))
+                         m (re-find #"\(defn (\S+)\s+(\[[^\]]*\])(?:\s*:-\s*(\([^)]*\)|\S+))?" window)
+                         nm (nth m 1) args (nth m 2) ret (nth m 3)
+                         prev (str/triml (get lines (dec i) ""))
+                         doc  (when (and (str/starts-with? prev ";;") (not (re-find #";; ---" prev)))
+                                (str/replace prev #"^;;+\s*" ""))]
+                     [(str nm "  " args (when ret (str "  :- " ret))) doc]))))
+         vec)))
+
+(defn section [title path]
+  (println (str "\n### " title "   (src/fram/" (last (str/split path #"/")) ")"))
+  (when (.exists (io/file path))
+    (doseq [[sig doc] (signatures path)]
+      (println (str "  " sig (when doc (str "\n      ; " doc)))))))
+
+(println "# Fram claim-authoring primer (GENERATED from src/fram/*.bclj — `bb bin/fram-primer`)")
+(println "\nThe program/app/work IS a claim graph (subject predicate object). You DON'T mutate —")
+(println "you assert; an update is a SUPERSEDING claim (old value stays, marked not-live);")
+(println "you reason with Datalog (relational/recursive), not imperative walks. Rent from bb:")
+(println "  bb -cp \"$FRAM_OUT\" your-script.clj      # FRAM_OUT defaults to ~/code/fram/out")
+(println "  (require '[fram.cnf :as c] '[fram.datalog :as d] '[fram.schema :as s])")
+
+(println "\n## API surface (live signatures)")
+(section "Store + identity + write — fram.cnf" (src "cnf.bclj"))
+(section "Datalog — fram.datalog"              (src "datalog.bclj"))
+(section "Typed schema loader — fram.schema"   (src "schema.bclj"))
+
+(println "\n## Canonical patterns (the idioms, with where they're proven)")
+(println (str/join "\n"
+  ["  ;; 1. INTERN + read back (value! is one-way string->id; keep a reverse map yourself)"
+   "  (def vrev (volatile! {}))"
+   "  (defn V [s] (let [id (c/value! ctx (str s))] (vswap! vrev assoc id (str s)) id))"
+   "  (defn vstr [id] (get @vrev id))                 ; ground truth: web/spike/eddy-on-claims/store.clj"
+   ""
+   "  ;; 2. UPDATE = a SUPERSEDING claim (history is FREE — old claim stays, not-live)"
+   "  (def SUPS (c/value! ctx \"supersedes\")) (c/set-supersedes-pred! ctx SUPS)"
+   "  (let [new (c/claim! ctx e attr-pid (V v) tx)]   ; assert the new value"
+   "    (c/claim! ctx new SUPS old-cid tx))           ; marks old-cid not-live; `new` is the superseder"
+   ""
+   "  ;; 3. QUERY the LIVE view (by-* / current-claims auto-filter superseded)"
+   "  (c/by-lp ctx e attr-pid)    ; live claim-ids for (subject e, predicate attr)"
+   "  (c/by-pr ctx KIND tval)     ; subjects with predicate=KIND value=tval  (e.g. all entities of a kind)"
+   "  (:r (c/claim-of ctx cid))   ; a claim's value id      (c/live? ctx cid) -> still current?"
+   ""
+   "  ;; 4. REASON: transitive closure = 2 Datalog rules (NOT an imperative loop)"
+   "  (d/run-rules ctx"
+   "    [(d/rule \"reaches\" [(d/v :x) (d/v :y)] [(d/lit \"triple\" [(d/v :x) DEP (d/v :y)])])"
+   "     (d/rule \"reaches\" [(d/v :x) (d/v :z)] [(d/lit \"triple\" [(d/v :x) DEP (d/v :m)])"
+   "                                              (d/lit \"reaches\" [(d/v :m) (d/v :z)])])])"
+   "  (d/facts db \"reaches\")    ; ground truth: web/spike/app-blast-radius/cascade.clj, fram/chartroom/src/callgraph.clj"
+   ""
+   "  ;; 5. STRATIFIED NEGATION (ready/blocked-style derivation): d/nlit + d/run-strata"
+   "  ;;    [[stratum0 positive rules] [stratum1 rules with (d/nlit ...)] ...]"
+   "  ;;    (d/strata-violations strata) must be empty.  ground truth: lodestar/cnf_lifecycle_test.clj"]))
+
+(println "\n## Reasoning/repair over BEAGLE CODE (the chartroom module — now inside fram)")
+(println (str/join "\n"
+  ["  ;; chartroom folded into fram (ADR 0001). Rent its resolver from $FRAM/chartroom:"
+   "  bb -cp \"$FRAM_OUT\" \"$FRAM/chartroom/src/resolve.clj\" <mode> ...   # FRAM=~/code/fram"
+   "  ;;   modes: resolve (refers_to) | rename <old> <new> <target> | delete | callgraph"
+   "  ;;   blast radius / who-calls / scope-correct rename+delete are Datalog over refers_to."
+   "  ;; For QUERYING a beagle codebase relationally, see the code-as-claims skill."
+   "  ;; For WRITING beagle, see the beagle-authoring skill (run `beagle doctor --deep` first)."]))
+(println "\n## Discipline")
+(println "  - Append-only: never mutate; assert + supersede. History/audit is intrinsic.")
+(println "  - Relational/recursive question -> Datalog. Flat per-row filter -> plain code is fine")
+(println "    (Datalog there is a tax: it re-states predicate schema the index already owns).")
+(println "  - claims are typed by predicate (open) — no CREATE TABLE / migrations for a new field.")
