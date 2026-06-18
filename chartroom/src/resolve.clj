@@ -582,6 +582,75 @@
        (run-resolution!)
        (body)))))
 
+;; ============================================================================
+;; S3.2 — resolve WARM, over the daemon's live store (no EDN reload).
+;; The daemon holds a populated store whose AST nodes are entities carrying the
+;; same kind/v/fN claims an --emit-edn projection has, PLUS a `name` claim
+;; `@<module>#<int>` (fram.schema/name!). Grouping there is by the name prefix,
+;; not by load-edn's per-src tracking — so the ONLY thing that differs from the
+;; EDN path is how the corpus structure (file->ents/srcs + frame/export tables)
+;; is DERIVED. Everything downstream (module-defs/forms-of/run-resolution!/...)
+;; reads file->ents + ctx, which are the bound store, so it is reused verbatim.
+;; ============================================================================
+;; module of `@kernel#127` -> "kernel" ; the daemon names every node `@<mod>#<int>`.
+(defn name->module [nm]
+  (when (string? nm)
+    (when-let [[_ m] (re-matches #"@([^#]+)#\d+" nm)] m)))
+;; corpus-from-store! — from the BOUND, already-populated store, derive the SAME
+;; corpus structure resolve-edn! computes from EDN: file->ents grouped by module,
+;; srcs = the module list, then the per-module frame/export tables (reusing
+;; module-defs/module-types/module-accessors/module-exports/module-name — they
+;; read @file->ents + ctx, which now ARE the warm store). `set!` (not root) so
+;; nothing leaks past the binding scope, exactly like resolve-edn!.
+(defn corpus-from-store! []
+  (let [NAME   (c/value-id ctx "name")            ; the daemon's node-name predicate
+        groups (if NAME
+                 (reduce (fn [acc cid]
+                           (let [cl (c/claim-of ctx cid)
+                                 nm (c/literal ctx (:r cl))
+                                 m  (name->module nm)]
+                             (if m (update acc m (fnil conj []) (:l cl)) acc)))
+                         {} (c/by-p ctx NAME))
+                 {})]
+    (reset! file->ents groups)                    ; module-keyed entity lists
+    (set! srcs (vec (keys groups)))               ; the modules ARE the srcs
+    ;; identical table computation to resolve-edn! — sourced from the warm corpus.
+    (set! file-modframe  (into {} (map (fn [s] [s (module-defs s)]) srcs)))
+    (set! file-typeframe (into {} (map (fn [s] [s (module-types s)]) srcs)))
+    (set! file-accessors (into {} (map (fn [s] [s (module-accessors s)]) srcs)))
+    (set! global-exports
+          (into {} (map (fn [s] [(module-name s)
+                                 (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
+                        (filter module-name srcs))))
+    (set! global-type-exports
+          (into {} (map (fn [s] [(module-name s) (module-types s)]) (filter module-name srcs))))
+    (set! global-accessor-exports
+          (into {} (map (fn [s] [(module-name s) (module-accessors s)]) (filter module-name srcs))))))
+;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
+;; recomputed against THAT store — store-local ids must match their store, the
+;; same seam GATE B guards), derive the corpus FROM the store, run the lexical
+;; walk (writing refers_to into the store), then invoke body within the scope.
+;; Mirror of resolve-edn! with the ONLY change being the corpus source. The store
+;; is supplied (the daemon's warm `co`), not minted, and is mutated in place: the
+;; warm refers_to edges callers-of / blast-radius read come straight from here.
+(defn resolve-warm-store!
+  ([store] (resolve-warm-store! store (fn [])))
+  ([store body]
+   (let [t   (c/begin-tx! store "resolve-warm")
+         sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))]
+     (c/set-supersedes-pred! store sup)
+     (binding [ctx store, tx t, SUP sup
+               file->ents (atom {})
+               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to")
+               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
+               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
+               srcs [] file-modframe {} file-typeframe {} file-accessors {}
+               global-exports {} global-type-exports {} global-accessor-exports {}]
+       (corpus-from-store!)
+       (run-resolution!)
+       (body)))))
+
 ;; --- projection: emit EDN for beagle --render, names resolved via refers_to --
 ;; follow refers_to transitively (re-export chains: a (js/export name) re-export is
 ;; itself a reference) to the ULTIMATE binding, and render its current name.
