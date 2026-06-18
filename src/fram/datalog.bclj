@@ -31,7 +31,7 @@
 (require fram.types :as t)
 
 ;; --- rule/term constructors (rules are plain data) --------------------------
-(defn v [name :- String] :- (Map Keyword Any) {:var name})                 ; a logic variable
+(defn v [name :- Keyword] :- (Map Keyword Any) {:var name})                 ; a logic variable (name is a keyword id, e.g. :x)
 (defn lit [rel :- String args :- (Vec Any)] :- (Map Keyword Any) {:rel rel :args args :neg false})
 ;; a NEGATED body literal (negation-as-failure): succeeds iff the ground tuple is
 ;; absent. Range-restricted — all its vars must be bound by earlier positive lits.

@@ -16,6 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The catalog currency gate (catalog_current_test.clj) diffs the GENERATED beagle
+      # fram-API catalog (stdlib-fram.rkt) against fram's source — checkout beagle to enable it.
+      - name: Checkout beagle (for the stdlib-fram.rkt currency gate)
+        uses: actions/checkout@v4
+        with:
+          repository: tompassarelli/beagle
+          path: .beagle
+
       - name: Install babashka
         run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
 
@@ -33,6 +41,8 @@ jobs:
         run: clojure -P
 
       - name: Unit + integration suites (babashka, on the committed out/)
+        env:
+          BEAGLE: ${{ github.workspace }}/.beagle
         run: |
           fail=0
           for t in *_test.clj; do
