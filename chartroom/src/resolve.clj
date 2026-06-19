@@ -894,7 +894,7 @@
   (->> (c/by-l ctx n) (map #(c/claim-of ctx %))
        (keep (fn [cl] (let [p (c/literal ctx (:p cl)) r (:r cl)]
                         (when (and (integer? r) (string? p)
-                                   (or (re-matches #"f\d+" p) (re-matches #"seg\d+" p)
+                                   (or (ord-pos? p) (re-matches #"seg\d+" p)         ; #36: ord-pos? = old f<int> OR new CRDT key
                                        (re-matches #"comment\d+" p) (= p "tail")))   ; a form's own doc-comment
                           r))))))
 (defn descendants [root]                 ; root + all transitive structural descendants
@@ -1170,6 +1170,20 @@
         (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src)))))))
 
 ;; upsert-form — add/replace a top-level def from an EDN datum spec.
+;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
+;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
+(defn wrap-forms [parent]
+  (->> (c/by-l ctx parent)
+       (keep (fn [cid] (let [cl (c/claim-of ctx cid)
+                             k (ord-parse (c/literal ctx (:p cl)))]
+                         (when k [k cid (:r cl)]))))
+       (sort-by first ord-cmp) vec))
+
+;; CRDT tie: on the daemon (capture-only) path defer to "PENDING" — the daemon sets the
+;; tie to the new node's ATOMIC name-int, so concurrent same-path inserts get distinct
+;; keys and BOTH land (commute). The single-writer CLI path has no race -> tie "0".
+(defn- ord-tie [] (if *capture-only?* "PENDING" "0"))
+
 (defn verb-upsert-form! [scope datum]
   (let [target-srcs (filter #(str/includes? % scope) srcs)]
     (when (not= 1 (count target-srcs))
@@ -1184,30 +1198,55 @@
       (*reject!* 3))
     (let [src (first target-srcs)
           wrap (wrapper-of src)
-          forms (vec (fN-claims wrap))
+          forms (wrap-forms wrap)
           new-name (when (and (seq? datum) (VALUE-DEFS (str (first datum)))) (str (second datum)))
           existing (when new-name (def-binding src new-name))
           victim-form (when existing (form-for-victim src existing))
-          victim-entry (when victim-form (some (fn [[n cid r]] (when (= r victim-form) [n cid r])) forms))
+          victim-entry (when victim-form (some (fn [[k cid r]] (when (= r victim-form) [k cid r])) forms))
           new-root (mint-datum! src datum)]
       (if victim-entry
-        (let [[n cid _] victim-entry]
+        ;; REPLACE in place: reuse the victim's PATH (new tie), retire the victim.
+        (let [[k cid _] victim-entry]
           (retire-claim! cid)
-          (c/claim! ctx wrap (c/value! ctx (str "f" n)) new-root tx))
-        ;; D (commute): a top-level APPEND's clone-frozen next-n RACED — two concurrent
-        ;; appends computed the same max+1 and both landed at one fN (#31). In the daemon
-        ;; (capture-only) path, mark the append with the "f+append" sentinel; the daemon
-        ;; allocates the real fN atomically at commit (live max+1 under dlock), so
-        ;; concurrent appends get DISTINCT positions and BOTH land. The single-writer CLI
-        ;; path (not capture-only) has no race, so it allocates next-n locally as before.
-        (if *capture-only?*
-          (c/claim! ctx wrap (c/value! ctx "f+append") new-root tx)
-          (let [next-n (inc (apply max (map first forms)))]
-            (c/claim! ctx wrap (c/value! ctx (str "f" next-n)) new-root tx))))
+          (c/claim! ctx wrap (c/value! ctx (ord-str (:path k) (ord-tie))) new-root tx))
+        ;; APPEND: a path strictly after the last form (CRDT). Concurrent appends compute
+        ;; the same path on identical clones -> distinct tie (name-int) -> both land (commute).
+        (let [last-path (when (seq forms) (:path (first (peek forms))))]
+          (c/claim! ctx wrap (c/value! ctx (ord-str (ord-append last-path) (ord-tie))) new-root tx)))
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
                     (str (if victim-entry "replaced" "added") " top-level def `" new-name
                          "` in \"" scope "\" (1 form minted as claims; refs resolved via refers_to)")))))
+
+;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a CRDT
+;; path strictly between the anchor and its next sibling. Concurrent inserts after the
+;; same anchor compute the same between-path -> distinct tie -> both land, ordered by
+;; tie (commute) — the thing append-only D could not do.
+(defn verb-insert-form! [scope after-name datum]
+  (let [target-srcs (filter #(str/includes? % scope) srcs)]
+    (when (not= 1 (count target-srcs))
+      (binding [*out* *err*] (println (str "REJECTED — insert-form scope \"" scope "\" matches "
+                                           (count target-srcs) " files (need 1).")))
+      (*reject!* 3))
+    (when (and (seq? datum) (not (VALUE-DEFS (str (first datum)))))
+      (binding [*out* *err*] (println (str "REJECTED — insert-form head `" (first datum) "` not a value def.")))
+      (*reject!* 3))
+    (let [src (first target-srcs)
+          wrap (wrapper-of src)
+          forms (wrap-forms wrap)
+          anchor-bind (def-binding src after-name)
+          anchor-form (when anchor-bind (form-for-victim src anchor-bind))
+          idx (when anchor-form (first (keep-indexed (fn [i [_ _ r]] (when (= r anchor-form) i)) forms)))]
+      (when (nil? idx)
+        (binding [*out* *err*] (println (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\".")))
+        (*reject!* 3))
+      (let [anchor-path (:path (first (nth forms idx)))
+            next-path (when (< (inc idx) (count forms)) (:path (first (nth forms (inc idx)))))
+            new-root (mint-datum! src datum)]
+        (c/claim! ctx wrap (c/value! ctx (ord-str (ord-between anchor-path next-path) (ord-tie))) new-root tx)
+        (when-not *capture-only?* (re-resolve!))
+        (author-emit-scoped! "insert-form"
+                      (str "inserted def after `" after-name "` in \"" scope "\" (CRDT mid-insert)"))))))
 
 ;; set-body — replace a defn's body with a freshly-minted body datum.
 (defn verb-set-body! [name scope datum]
@@ -1272,6 +1311,7 @@
            (case (:op spec)
              "rename"      (verb-rename! (:old spec) (:new spec) module)
              "upsert-form" (verb-upsert-form! module (:datum spec))
+             "insert-form" (verb-insert-form! module (:after spec) (:datum spec))   ; CRDT mid-insert (#36)
              "set-body"    (verb-set-body! (:name spec) module (:datum spec))
              (do (binding [*out* *err*] (println (str "run-verb-warm!: unknown op " (:op spec))))
                  (System/exit 2)))))))

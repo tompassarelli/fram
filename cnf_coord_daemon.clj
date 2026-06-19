@@ -664,7 +664,7 @@
     (reduce (fn [acc [cid cl]]
               (let [pstr (c/literal st (:p cl)) r (:r cl)]
                 (if (and (integer? r) (string? pstr)
-                         (or (re-matches #"f\d+" pstr) (re-matches #"seg\d+" pstr)
+                         (or (resolve/ord-pos? pstr) (re-matches #"seg\d+" pstr)   ; #36: ord-pos? = old f<int> OR new CRDT key
                              (re-matches #"comment\d+" pstr) (= pstr "tail")))
                   (assoc acc r [(:l cl) pstr])
                   acc)))
@@ -774,8 +774,10 @@
 ;; delta NEVER touches a non-AST pred (name/cardinality are schema; refers_to et al.
 ;; are derived). Mirrors bin/fram-commit-code ast-pred? exactly.
 (defn- ast-pred-str? [p]
-  (or (#{"kind" "v" "child" "tail" "style" "placement" "f+append"} p)  ; D: "f+append" = append-position sentinel, allocated atomically at commit
-      (boolean (and (string? p) (re-matches #"(f|seg|comment)\d+" p)))))
+  (or (#{"kind" "v" "child" "tail" "style" "placement"} p)
+      (boolean (and (string? p)
+                    (or (re-matches #"f\d+(?:\.\d+)*~(?:\d+|PENDING)" p)   ; #36: new CRDT position key (incl PENDING tie)
+                        (re-matches #"(?:f|seg|comment)\d+" p))))))         ; old f<int> + seg/comment (dual)
 
 ;; next free @<mod>#<int> for a module, from the store's existing `name` claims. New
 ;; minted nodes are numbered ABOVE every existing int so they never collide with an
@@ -814,30 +816,19 @@
 (defn- reserve-name-ints! [n]                 ; atomically reserve n consecutive name-ints
   (let [hi (swap! node-name-seq + n)] (vec (range (inc (- hi n)) (inc hi)))))
 
-;; D (commute): atomic append-POSITION allocation — the positional analog of
-;; reserve-name-ints! above. A top-level append's clone-frozen next-n RACED (#31):
-;; two concurrent appends computed the same max+1 and both landed at one fN. The verb
-;; now marks the append with the "f+append" sentinel (the lock-free clone can't pick a
-;; collision-free position); under dlock we allocate each sentinel its real fN from the
-;; parent's LIVE max, so two concurrent appends get DISTINCT positions and BOTH land.
-(defn- live-max-fN [st te]
-  (let [e (s/resolve-name st te)]
-    (if e
-      (reduce (fn [acc cid]
-                (let [p (c/literal st (:p (c/claim-of st cid)))]
-                  (if (and (string? p) (re-matches #"f\d+" p))
-                    (max acc (parse-long (subs p 1))) acc)))
-              -1 (c/by-l st e))
-      -1)))
-(defn- allocate-append-positions [st asserts]
-  (let [ctr (atom {})]                         ; per-parent, in case one edit appends >1
-    (mapv (fn [[te p r :as op]]
-            (if (= p "f+append")
-              (let [n (inc (or (@ctr te) (live-max-fN st te)))]
-                (swap! ctr assoc te n)
-                [te (str "f" n) r])
-              op))
-          asserts)))
+;; CRDT (commute, #36): the verb computes the ORDER PATH on the lock-free clone
+;; (ord-append / ord-between) and mints the position predicate "f<path>~PENDING". Here
+;; we set the TIE to the new node's ATOMIC name-int (the :r-node's @mod#<int>, already
+;; allocated by reserve-name-ints!) — the positional analog of name allocation. Two
+;; concurrent same-gap inserts share the path but get DISTINCT ties -> distinct keys ->
+;; BOTH land, ordered by tie (commute). This generalizes D (append) to insert-anywhere.
+(defn- allocate-positions [asserts]
+  (mapv (fn [[te p r :as op]]
+          (if (and (string? p) (str/ends-with? p "~PENDING"))
+            (let [tie (or (some-> (re-matches #"@[^#]+#(\d+)" (str r)) second) "0")]
+              [te (str (subs p 0 (- (count p) (count "PENDING"))) tie) r])
+            op))
+        asserts))
 
 ;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
 ;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
@@ -848,7 +839,7 @@
     ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
     ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
     ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
-    (when-not (#{"set-body" "upsert-form" "rename"} (:op spec))
+    (when-not (#{"set-body" "upsert-form" "insert-form" "rename"} (:op spec))
       (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, rename)")
                       {:reject :unknown-verb})))
     ;; GRAPH RENAME IS IDENTITY-DEFERRED — reject, do NOT silently do the wrong thing.
@@ -870,7 +861,7 @@
           ;; verbs (set-body/upsert-form read ONLY their own module's def-binding/frame).
           ;; rename is cross-module (consumer-collision + capture across all srcs read
           ;; the whole corpus' require/frame tables) — leave it whole (nil scope).
-          scope? (#{"set-body" "upsert-form"} (:op spec))
+          scope? (#{"set-body" "upsert-form" "insert-form"} (:op spec))
           scope  (when scope? (fn [s] (str/includes? s module)))
           ;; the supersedes pred the migrate store uses (set by s/setup!); the verb's
           ;; resolve-warm-store! re-points :supersedes-pred at "supersedes", but the
@@ -947,7 +938,7 @@
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
        (let [v0 (current-seq @co)
-             asserts (allocate-append-positions (:store @co) asserts)  ; D: append positions allocated atomically UNDER the lock -> concurrent appends get distinct fN, both land (commute), closing #31
+             asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
              rej (atom nil)]
         (doseq [[te p r] retracts :while (nil? @rej)]
           (let [res (do-retract te p r v0)] (when (:reject res) (reset! rej {:op :retract :te te :p p :r r :res res}))))
