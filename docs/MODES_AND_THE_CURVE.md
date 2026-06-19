@@ -305,3 +305,125 @@ applied to the geometry: never let *shown*, *argued*, and *future* wear one word
 The arc closes on a **real result**: banked wins, banked holes, three seductive
 false stories caught (premise inversion, confound-vs-headwind, shown-vs-argued).
 That is research.
+
+---
+
+## 10. Overnight build — Systems 1 & 2 (banked) + the commute decision
+
+The structural-rep fork (§5 C-mode / #32) was **settled to C (commute)** with the
+hard rule that *backward-compat is never a decider* — only correctness + the desired
+thesis design. With migration deleted from the scale, A (single-valued-reject,
+serializing) had no remaining advantage over C (commuting); both meet the
+no-silent-misorder bar with the same resolved-`refers_to` guard, and C wins the
+thesis. (Memory: `no-backward-compat-axis`.)
+
+**System 1 — commute-mode (BUILT, verified). Commits `8ab3a40`, `44964cd`.**
+- **Part 1 — D, atomic append-position allocation.** Implemented as the positional
+  analog of the existing `reserve-name-ints!` name allocator: the verb marks a
+  top-level append with the `f+append` sentinel; the daemon allocates the real `fN`
+  from the parent's live max **under the dlock**. Two concurrent appends get DISTINCT
+  positions and **both land** (commute) — no duplicate index. Chosen over the
+  tiebroken-key re-key on correctness+risk (mirrors proven code; leaves
+  `ordered-children`/`set-body`/render untouched). **R1 receipt** (`cnf_commute_receipt.clj`):
+  two concurrent `:edit-min` appends to `kernel` → 43 forms, 43 DISTINCT `fN`, 0
+  duplicate positions, both defs present. **#31 (4c6a0bf) CLOSED via commute.**
+- **Part 2 — coupling guard (no-silent-misorder bar).** Delta-based forward-ref
+  detection over resolved `refers_to`: a reference whose target sits at a higher
+  top-level `fN` in the same module is a forward-ref. **R3/R4 receipt**
+  (`cnf_gate_receipt.clj`): R4 (coupled bad order, load-time value ref) → NEW
+  forward-ref DETECTED; R3 (good order) → none. PASS.
+- **MEASURE-FIRST FINDING:** kernel has **39 legitimate pre-existing forward-refs** —
+  Beagle functions resolve at *call* time, so forward-ref is NOT a blanket coherence
+  error. Hence the guard is **delta-based** (flag only what an edit introduces). The
+  coupling-misorder hazard the bar worried about is therefore **NARROW**: it bites
+  only load-time *value* mutual-refs; FUNCTION couplings commute safely in any order.
+  So D's commute is safe for the common case, and the residual load-time case is
+  **detectable (not silent)**. Caveat: the delta check is conservative (would also
+  flag a legitimate function forward-ref an edit adds) — load-time-value-only
+  refinement is future work; it is NOT wired inline-reject (that would reject valid
+  function forward-refs) — it is a detector/gate-core, the correct choice.
+
+**System 2 — the gate-core (BANKED) = the same delta resolved-`refers_to` coherence
+check.** It validates references over the affected subgraph without rendering
+graph→Clojure (the gate is pure-graph; materialization is paid only to RUN code).
+The full staging↔published *view boundary* + publish-on-pass ceremony is the
+production wrapper (documented, not the substance); the substance — the scoped
+coherence check + its cost — is what System 3 measures.
+
+**System 3 — K-sweep (the cheaper-than-git measurement):** see §11 below.
+
+---
+
+## 11. System 3 — gate cost vs corpus size K (MEASURED, decomposed)
+
+`cnf_ksweep.clj` + `ksweep_run.sh`, over real-module SUBSET corpora (K∈{2,4,8,11}
+ingested from the `.bclj` sources). All times ms; materialization (frame build) kept
+SEPARATE from coordination (coherence scan); the unscopable `by-p NAME` floor isolated.
+
+| K | claims | scan_floor (O K) | whole_frame (MAT, O K) | scoped_frame (MAT) | coh_scan (COORD, whole) | fwd_refs |
+|---|---|---|---|---|---|---|
+| 2  | 28060  | 3  | 107 | 33 | 142 | 16 |
+| 4  | 34453  | 5  | 149 | 38 | 278 | 19 |
+| 8  | 83065  | 14 | 517 | 82 | 643 | 27 |
+| 11 | 102371 | 14 | 595 | 92 | 775 | 50 |
+
+**What's measured and true:**
+- **Scoped materialization beats whole, and the advantage WIDENS with K.** scoped/whole
+  frame = 0.31 → 0.26 → 0.16 → 0.15 (3.2× → 6.5× cheaper). The saving is exactly the
+  unaffected modules' frame builds: 74 → 503 ms, growing O(K). This is the substrate
+  win text can't have: git's coarse gate must re-validate the whole tree (O total code,
+  no smaller unit); Fram scopes the materialization to the affected module.
+- **Coordination is O(K) too** (coh_scan 142→775), tracking claims/edges.
+- **Decomposition honored** (the materialization-vs-coordination flag): frame-build and
+  coherence-scan are reported as separate numbers — neither folded into the other — and
+  *neither includes a graph→Clojure render* (the gate is pure-graph; that materialization
+  is paid only to RUN code, never to gate).
+
+**What's NOT yet measured (honest gaps — do not overclaim):**
+- **coh_scan was measured WHOLE-only.** I scoped the *materialization* half (frames), not
+  the *coordination* half (the coherence scan still does `parent-slot-index` over all
+  claims + all `refers_to` edges = O(K)). A scoped coherence scan (restrict to the
+  affected module's edges) is the remaining measurement to fully earn "scoped gate
+  cheaper." So **"cheaper than git" is PARTIALLY earned: materialization yes-and-widening;
+  coordination-scoping unmeasured.**
+- **Scoped is not flat.** An O(K) name-grouping floor remains (`by-p NAME`, scan_floor
+  3→14, plus the coh_scan's whole-claims scan). A *maintained* name/export index would
+  remove it; that index is the same "real build" the §7 Phase-0 probe flagged (YELLOW).
+- I did **not** run git's compiler head-to-head. git's coarse gate is O(total code) *by
+  construction* (text has no sub-file unit); Fram's WHOLE gate is the O(K) analog and the
+  SCOPED materialization is the sub-O(K) win. The architectural class is measured; a
+  compiler-vs-gate wall-clock is not (and would compare tools, not the substrate point).
+
+---
+
+## 12. SCOREBOARD (take it apart)
+
+Status legend: **MEASURED** (number, this arc) · **BANKED** (named, real) · **ARGUED**
+(architectural, unbuilt) · **GAP** (not yet measured) · **LIMIT** (known cost/worse).
+
+| Claim | Status | Number / evidence |
+|---|---|---|
+| Eager per-edit visibility (RAW read) — git can't | **MEASURED** | ~0.1 ms, synchronous, 12/12 reflected on first read (`cnf_propagation`, `9ccf5a7`) |
+| Derived reads lazy-on-read (reader pays) | **MEASURED** | NO-OP ~0; first-read re-resolve cost (`cnf_propagation`) |
+| Concurrent same-point appends **COMMUTE** — git can't | **MEASURED** | R1: 2 concurrent → distinct `fN`, 0 duplicate, both land (`8ab3a40`) |
+| #31 duplicate-index corruption **closed** | **MEASURED** | was LIVE (`4c6a0bf`) → R1 PASS |
+| Coupling-misorder **surfaced, not silent** | **MEASURED** | R4 detected / R3 clean (`44964cd`); hazard NARROW (load-time value mutual-refs only; functions commute) |
+| Same insertion point: **git conflicts** (raw + queue) | **MEASURED** | `git_append_baseline` (`812fc50`) |
+| Git's joint-coherence (green-main) win | **BANKED** | `#11b` — git wins, priced in barrier latency |
+| Scoped gate **materialization** cheaper than whole, widening with K | **MEASURED** | K-sweep: 3.2×→6.5×; saving 74→503 ms (`§11`) |
+| Scoped gate **coordination** cheaper than whole | **GAP** | coh_scan measured whole-only (O K); scoping it = next measurement |
+| Fram occupies git's point (git-mode) | **ARGUED** | gate-CORE built (delta coherence check); staging↔published view-boundary + publish = unbuilt production wrapper |
+| **"Cheaper than git" gate (full)** | **PARTIAL** | materialization earned + widening; coordination-scoping unmeasured |
+| O(K) name-grouping floor under scoping | **LIMIT** | scan_floor + whole-claims coh scan; a maintained index removes it (same YELLOW build, §7) |
+| Full insert-anywhere commute (fractional-CRDT keys) | **ARGUED** | append-commute built (D); middle-insert commute = documented generalization |
+
+**Net (no top-to-bottom "Fram wins"):** Fram **measurably reaches modes git's
+substrate forbids** — eager visibility, commuting concurrent appends, per-claim
+granularity — and **closed the live #31 corruption** while keeping commute. On git's
+own turf (the coherence gate), Fram **scopes the materialization sublinearly and the
+advantage widens with K**, but the coordination-scoping and the staging view-boundary
+are **not yet built/measured**, so "does git's thing cheaper, end to end" is **partially
+earned, not banked**. Git still wins continuously-green-main (a real, priced trade).
+The qualified claim is the honest one — and it is strong: *git is one fixed point; Fram
+is demonstrably more of the curve than last night, with the cheaper-gate half scoped and
+its remaining measurement named.*
