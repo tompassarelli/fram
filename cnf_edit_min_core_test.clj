@@ -42,6 +42,20 @@
 (chk "upsert-form committed (ok, ops>0)" (and (:ok uf) (pos? (or (:ops uf) 0))))
 (chk "upsert-form's new def name landed in the store" (pos? (spell-count newfn)))
 
+;; --- #25 LOCK: upsert-form is NAME-keyed — a REPLACE preserves the def name (CANNOT rename) ---
+;; This is the receipt behind the rename-ONLY guard's sufficiency: the only :edit-min verb that
+;; changes a binding's spelling is `rename` (guarded). If a future refactor made upsert node/
+;; position-keyed, a (defn cardinality …) -> different-name swap could rename past the guard;
+;; this asserts it doesn't — the name survives a body replace.
+(def card-before (spell-count "cardinality"))
+(def upmark "uniqzzqupsertrepl")
+(def uf2 (edit-min! {:op "upsert-form" :module "schema"
+                     :datum (edn/read-string (str "(defn cardinality [ctx pname] (" upmark " pname))"))}))
+(chk "upsert-form REPLACE of existing def committed" (:ok uf2))
+(chk "upsert REPLACE PRESERVED the def name (cardinality still present — not renamed)"
+     (and (pos? card-before) (pos? (spell-count "cardinality"))))
+(chk "upsert REPLACE landed the new body token" (pos? (spell-count upmark)))
+
 ;; --- rename: MUST be rejected (identity-deferred), MUST NOT mutate spellings -----
 (def before-replace (spell-count "replace!"))
 (def rn (edit-min! {:op "rename" :module "schema" :old "replace!" :new "supersede-prior!"}))
