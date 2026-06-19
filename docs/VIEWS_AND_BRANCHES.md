@@ -9,6 +9,26 @@ backed by the apple-sweep in §6.
 
 ---
 
+## 0. Vocabulary (the substrate stores *claims*)
+
+Use these words precisely — they are what make the rest of this note unambiguous:
+
+- **Assertion** — the *operation/event* of asserting (`do-assert` / `commit!`). An act, not a stored thing.
+- **Claim** — the durable, immutable, **addressable object** an assertion mints (a `cid`). **This is the
+  substrate atom:** a claim can be referenced, owned, selected, superseded, disputed, and cited. *The graph
+  stores claims* — not assertions (acts vanish) and not facts (facts are view-relative, below).
+- **Triple** — a claim's `(l p r)` payload.
+- **Fact** — a claim *selected/accepted as true inside a view*. "Fact" is therefore always relative to a view;
+  the substrate has no view-free facts.
+- **View** — a selection predicate over claims (§8). `main` is the privileged default view.
+
+> **The graph is an ocean of claims, not facts.** A program/view *selects* claims and treats them as facts.
+> Assertions are operations that mint claims; provenance lives on the claim — or on claims-about-claims, e.g.
+> `(C123 asserted-by agent-7)`, `(view-main selects C123)`. (Today provenance is recorded at transaction
+> granularity — the claim's tx carries who/when — with per-claim `asserted-by` available as the CNF capability.)
+
+---
+
 ## Verdict (one sentence)
 
 On an append-only claim graph, **writes do not conflict** — a program is a coherent *traversal*
@@ -22,14 +42,14 @@ path-selection obligations.**
 
 ## 1. The model
 
-- **The graph is append-only.** Facts are immutable; the log only grows. (Proven today; see
+- **The graph is append-only.** Claims are immutable; the log only grows. (Proven today; see
   `WHY_FRAM_EXISTS.md` and the immutability analysis.)
-- **An edit is a re-pointing, not a mutation.** To "change" a thing you assert new facts; the
-  old facts are not erased. What is "current" is a *selection* over the facts, not a property
-  stamped on them.
-- **Divergent claims may coexist indefinitely.** Two assertions that a reader might consider
-  rivals are, at the substrate level, just two facts. The substrate is not obligated to pick
-  one. It can hold both, forever, without being wrong.
+- **An edit is a re-pointing, not a mutation.** To "change" a thing you assert new claims; the
+  old claims are not erased. What is "current" is a *selection* over the claims (i.e. which
+  claims are facts in this view), not a property stamped on them.
+- **Divergent claims may coexist indefinitely.** Two rival writes are, at the substrate level,
+  just two claims. The substrate is not obligated to pick one (that is a view's job — selecting a
+  claim makes it a fact). It can hold both, forever, without being wrong.
 - **A program is a traversal under a view.** "What is the code" is the answer to a query —
   *which coherent set of claims do I select and walk?* — not a single privileged mutable state.
   Different views can select differently from the same graph.
