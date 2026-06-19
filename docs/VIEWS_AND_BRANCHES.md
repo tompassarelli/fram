@@ -116,3 +116,51 @@ liveness-vs-`refers_to` distinction in the immutability analysis). Until then, t
 case is path-selection, not conflict, and the substrate's safety story rests on the two axioms
 it *does* assert: identity (closed) and whatever single-valued predicates a domain declares
 (enforced at the write side, as §6 shows).
+
+## 8. Verified findings + the minimal "view" representation
+
+A 4-perspective adversarial check (steelman each invariant, code-ground, hunt failure modes; each
+load-bearing claim then adversarially verified) settled the empirics:
+
+- **The substrate is already view-capable; single-head lives entirely in the read/resolve layer.**
+  *Verified true:* the append-only log holds divergent claims (multi-valued AST preds; supersession
+  is an appended claim, not a delete). "Current" is **one global subtraction** — `live? = (not
+  (superseded? cid))` over a single `:superseded` set (`cnf.bclj:115`), with **no second selector
+  anywhere** in the read layer. So global-head is **not a designed invariant** — it is the only
+  shape single-storage can represent, materialized in the read layer (`live?`, one `current-seq`,
+  one warm cache, the take-firsts).
+- **Global-head is not even an *enforced* invariant.** *Verified:* there is **no in-commit
+  whole-graph resolution gate** in the running engine. "The committed corpus resolves" is emergent
+  from single-storage, not checked. (So there is nothing to *remove* — only a gate to *not add*.)
+- **`*corpus-scope*` / `resolve-modules!` is NOT a proto-view.** *Verified (a steelman claim to the
+  contrary was refuted):* it is a **performance scope**, proven set-**equal** to the whole-corpus
+  walk (sym-diff 0) — it selects the *same* answer faster, never a *different* answer. It is the
+  **seam** a view system would reuse, not a view.
+- **The forced axiom is identity, and view-relative does not escape it** — name allocation is
+  globally serialized (the one genuinely-global thing), and that is correct and closed.
+
+**The build form everyone converged on (including the global-head defender): one head + named
+overlays.** Keep one head materialized efficiently — *that is `main`, the privileged default
+view*. Deliver divergence as **named selection overlays layered above the one head**, materialized
+on demand and GC'd by dropping the name. This gives exploratory divergence **without** paying N×
+the warm-`refers_to` materialization for views nobody is reading (the real implementation cost the
+failure-mode pass surfaced). Convergence is then a **policy on a chosen view** (`main`, the build
+view), not a substrate axiom — git's branch/main social layer, recovered as policy.
+
+**The minimal "view" in CNF terms** = a **selection predicate over claims**, generalizing the one
+selector that already exists: replace the global `live?` with `select? : view → cid → Bool`. The
+engine today is the special case *view = the global superseded-fold*. Three CNF-native encodings,
+cheapest first:
+1. **Per-view superseded-set** — a view chooses which `supersedes` claims to honor. Cheapest:
+   supersession is already append-only data.
+2. **Root + reachability** — a view = a root claim plus its coherent closure. Matches "a program is
+   a traversal under a view"; reuses the renderer's existing reachability filter.
+3. **View-as-claim** — `(view selects @claim)` triples; views become first-class subjects in the
+   same graph (the exact pattern lodestar threads/topics/`@ui` already use). Most CNF-native — no
+   new atom, consistent with `WHY_FRAM_EXISTS` ("a view is just more claims about which claims count").
+
+**The read-side take-firsts (§6) are the attach points.** Each `(first …)` becomes
+`(select-for-view view …)`. So the apple-sweep cleanup and the view machinery are the *same work
+from two ends* — which is why neither is urgent today (one view = `main` = first-wins is correct),
+and both wait until a second resolving view actually earns its keep. **Nothing here is built yet;
+this section records the verified design target and the next decision (which encoding), not a task.**
