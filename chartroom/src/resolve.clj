@@ -1165,8 +1165,16 @@
         (let [[n cid _] victim-entry]
           (retire-claim! cid)
           (c/claim! ctx wrap (c/value! ctx (str "f" n)) new-root tx))
-        (let [next-n (inc (apply max (map first forms)))]
-          (c/claim! ctx wrap (c/value! ctx (str "f" next-n)) new-root tx)))
+        ;; D (commute): a top-level APPEND's clone-frozen next-n RACED — two concurrent
+        ;; appends computed the same max+1 and both landed at one fN (#31). In the daemon
+        ;; (capture-only) path, mark the append with the "f+append" sentinel; the daemon
+        ;; allocates the real fN atomically at commit (live max+1 under dlock), so
+        ;; concurrent appends get DISTINCT positions and BOTH land. The single-writer CLI
+        ;; path (not capture-only) has no race, so it allocates next-n locally as before.
+        (if *capture-only?*
+          (c/claim! ctx wrap (c/value! ctx "f+append") new-root tx)
+          (let [next-n (inc (apply max (map first forms)))]
+            (c/claim! ctx wrap (c/value! ctx (str "f" next-n)) new-root tx))))
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
                     (str (if victim-entry "replaced" "added") " top-level def `" new-name

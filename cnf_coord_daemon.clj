@@ -774,7 +774,7 @@
 ;; delta NEVER touches a non-AST pred (name/cardinality are schema; refers_to et al.
 ;; are derived). Mirrors bin/fram-commit-code ast-pred? exactly.
 (defn- ast-pred-str? [p]
-  (or (#{"kind" "v" "child" "tail" "style" "placement"} p)
+  (or (#{"kind" "v" "child" "tail" "style" "placement" "f+append"} p)  ; D: "f+append" = append-position sentinel, allocated atomically at commit
       (boolean (and (string? p) (re-matches #"(f|seg|comment)\d+" p)))))
 
 ;; next free @<mod>#<int> for a module, from the store's existing `name` claims. New
@@ -813,6 +813,31 @@
 (defn- seed-name-seq! [st] (reset! node-name-seq (global-max-name-int st)))
 (defn- reserve-name-ints! [n]                 ; atomically reserve n consecutive name-ints
   (let [hi (swap! node-name-seq + n)] (vec (range (inc (- hi n)) (inc hi)))))
+
+;; D (commute): atomic append-POSITION allocation — the positional analog of
+;; reserve-name-ints! above. A top-level append's clone-frozen next-n RACED (#31):
+;; two concurrent appends computed the same max+1 and both landed at one fN. The verb
+;; now marks the append with the "f+append" sentinel (the lock-free clone can't pick a
+;; collision-free position); under dlock we allocate each sentinel its real fN from the
+;; parent's LIVE max, so two concurrent appends get DISTINCT positions and BOTH land.
+(defn- live-max-fN [st te]
+  (let [e (s/resolve-name st te)]
+    (if e
+      (reduce (fn [acc cid]
+                (let [p (c/literal st (:p (c/claim-of st cid)))]
+                  (if (and (string? p) (re-matches #"f\d+" p))
+                    (max acc (parse-long (subs p 1))) acc)))
+              -1 (c/by-l st e))
+      -1)))
+(defn- allocate-append-positions [st asserts]
+  (let [ctr (atom {})]                         ; per-parent, in case one edit appends >1
+    (mapv (fn [[te p r :as op]]
+            (if (= p "f+append")
+              (let [n (inc (or (@ctr te) (live-max-fN st te)))]
+                (swap! ctr assoc te n)
+                [te (str "f" n) r])
+              op))
+          asserts)))
 
 ;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
 ;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
@@ -922,6 +947,7 @@
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
        (let [v0 (current-seq @co)
+             asserts (allocate-append-positions (:store @co) asserts)  ; D: append positions allocated atomically UNDER the lock -> concurrent appends get distinct fN, both land (commute), closing #31
              rej (atom nil)]
         (doseq [[te p r] retracts :while (nil? @rej)]
           (let [res (do-retract te p r v0)] (when (:reject res) (reset! rej {:op :retract :te te :p p :r r :res res}))))
