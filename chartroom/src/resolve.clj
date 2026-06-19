@@ -36,6 +36,30 @@
 (def ^:dynamic ctx nil)
 (def ^:dynamic tx  nil)
 (def ^:dynamic SUP nil)
+;; *reject!* — how a verb signals an UNACCEPTABLE edit (collision / no-capture /
+;; nothing-to-do / shape violation). The CLI path (-main) wants a process exit code;
+;; a LONG-LIVED daemon running the verb in-process must NOT die on a rejected edit —
+;; it binds *reject!* to throw, converting the exit into a catchable signal. Default
+;; = real exit (verbatim CLI behavior). Verb arms call (*reject!* code) instead of
+;; (System/exit code), so the same verb body serves both drivers.
+(def ^:dynamic *reject!* (fn [code] (System/exit code)))
+;; *resolve-walk?* — does resolve-warm-store! run the whole-corpus lexical walk
+;; (run-resolution!, ~the dominant verb-setup cost)? The walk WRITES refers_to over
+;; every module. The MINIMAL-OP authoring path (daemon :edit-min) does NOT need that
+;; walk: set-body/upsert-form mint/supersede AST claims and never read refers_to, and
+;; rename's no-capture check reads refers_to that the daemon has ALREADY materialized
+;; on the store (the clone inherits it) — so re-walking is pure waste AND would double
+;; the inherited edges. Bound false by do-edit-min => corpus tables only, no walk. The
+;; CLI/text path + cold materialize leave it true (verbatim whole-corpus resolution).
+(def ^:dynamic *resolve-walk?* true)
+;; *corpus-scope* — restrict corpus-from-store!'s EXPENSIVE per-module FRAME builds
+;; (module-defs/types/accessors) to this set of module-name strings, while still
+;; deriving the full src/module list + the cheap cross-module export/type/accessor
+;; export tables for EVERY module. A verb that edits ONE module (set-body/upsert-form)
+;; only reads its OWN module's frame (def-binding/form-for-victim), so building 11
+;; modules' frames is waste. nil => full frames for every module (verbatim behavior;
+;; rename, which walks consumers' require/frame tables cross-module, leaves it nil).
+(def ^:dynamic *corpus-scope* nil)
 (def ^:dynamic file->ents (atom {}))
 
 (defn load-edn [path]
@@ -650,18 +674,27 @@
                  {})]
     (reset! file->ents groups)                    ; module-keyed entity lists
     (set! srcs (vec (keys groups)))               ; the modules ARE the srcs
-    ;; identical table computation to resolve-edn! — sourced from the warm corpus.
-    (set! file-modframe  (into {} (map (fn [s] [s (module-defs s)]) srcs)))
-    (set! file-typeframe (into {} (map (fn [s] [s (module-types s)]) srcs)))
-    (set! file-accessors (into {} (map (fn [s] [s (module-accessors s)]) srcs)))
-    (set! global-exports
-          (into {} (map (fn [s] [(module-name s)
-                                 (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
-                        (filter module-name srcs))))
-    (set! global-type-exports
-          (into {} (map (fn [s] [(module-name s) (module-types s)]) (filter module-name srcs))))
-    (set! global-accessor-exports
-          (into {} (map (fn [s] [(module-name s) (module-accessors s)]) (filter module-name srcs))))))
+    ;; SCOPED corpus (Build B): *corpus-scope* restricts the EXPENSIVE per-module FRAME
+    ;; builds (module-defs/types/accessors) to the module(s) the verb actually reads.
+    ;; The src/module LIST is still the whole corpus (groups), so module membership /
+    ;; name->module are correct — only the frame TABLES are scoped. The only caller
+    ;; that sets a scope is the no-walk minimal-op path (set-body/upsert-form), which
+    ;; reads ONLY its target module's frame via def-binding and never run-resolution!'s
+    ;; cross-module export tables — so scoping frames + skipping the global export
+    ;; tables under a scope is sound. nil scope => full frames + exports (verbatim).
+    (let [frame-srcs (if *corpus-scope* (filter *corpus-scope* srcs) srcs)]
+      (set! file-modframe  (into {} (map (fn [s] [s (module-defs s)]) frame-srcs)))
+      (set! file-typeframe (into {} (map (fn [s] [s (module-types s)]) frame-srcs)))
+      (set! file-accessors (into {} (map (fn [s] [s (module-accessors s)]) frame-srcs))))
+    (when-not *corpus-scope*                       ; cross-module export tables — only the WALK reads them
+      (set! global-exports
+            (into {} (map (fn [s] [(module-name s)
+                                   (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
+                          (filter module-name srcs))))
+      (set! global-type-exports
+            (into {} (map (fn [s] [(module-name s) (module-types s)]) (filter module-name srcs))))
+      (set! global-accessor-exports
+            (into {} (map (fn [s] [(module-name s) (module-accessors s)]) (filter module-name srcs)))))))
 
 ;; ============================================================================
 ;; S3.3 scoped-classifier helpers — computed from the BOUND warm corpus (call
@@ -722,7 +755,7 @@
                srcs [] file-modframe {} file-typeframe {} file-accessors {}
                global-exports {} global-type-exports {} global-accessor-exports {}]
        (corpus-from-store!)
-       (run-resolution!)
+       (when *resolve-walk?* (run-resolution!))   ; Build B: the minimal-op path skips the whole-corpus walk
        (body)))))
 
 ;; ============================================================================
@@ -1035,13 +1068,23 @@
 ;; Default = nil => "all srcs" (verbatim text-path behavior).
 (def ^:dynamic *project-srcs* nil)
 (defn- emit-srcs [] (or *project-srcs* srcs))
+;; *capture-only?* — the MINIMAL-OP graph edit (daemon :edit-min) runs the verb ONLY
+;; to capture its claim mint/supersede ops; it does NOT want the verb's two heavy
+;; downstream SIDE EFFECTS: (1) re-resolve! (a whole-corpus lexical re-walk that
+;; writes DERIVED refers_to edges — discarded, since the daemon re-resolves SCOPED
+;; over the real store after the commit), and (2) author-emit-scoped! (rendering the
+;; module's resolved EDN to disk — the minimal path commits claim ops, not text).
+;; Bound true by do-edit-min so the verb does its claim work and stops. The CLI/text
+;; path leaves it false => verbatim behavior (re-resolve + project EDN).
+(def ^:dynamic *capture-only?* false)
 ;; like author-emit!, but only over *project-srcs* (the affected module on the graph path).
 (defn author-emit-scoped! [op detail]
-  (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
-  (binding [*out* *err*]
-    (println (str "================ authoring: " op " ================"))
-    (println detail)
-    (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src)))))
+  (when-not *capture-only?*
+    (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
+    (binding [*out* *err*]
+      (println (str "================ authoring: " op " ================"))
+      (println detail)
+      (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
 
 ;; rename — every INVARIANT + claim mutation from the old `rename` case arm.
 (defn verb-rename! [old new target]
@@ -1052,13 +1095,13 @@
         (binding [*out* *err*]
           (println (str "REJECTED — `" new "` already names a binding in " src
                         " (rename-doesn't-collide; no claims mutated).")))
-        (System/exit 3)))
+        (*reject!* 3)))
     (doseq [src target-srcs]
       (when (and (get (file-typeframe src) old) (not (re-find #"^[A-Z]" new)))
         (binding [*out* *err*]
           (println (str "REJECTED — `" new "` is not a valid (Capitalized) type name "
                         "(beagle type-name shape; no claims mutated).")))
-        (System/exit 3)))
+        (*reject!* 3)))
     (doseq [src target-srcs]
       (when-let [B (def-binding src old)]
         (let [caps (mapcat (fn [s] (mapcat #(capture-refs % (list (file-modframe s)) B new)
@@ -1067,7 +1110,7 @@
             (binding [*out* *err*]
               (println (str "REJECTED — renaming `" old "` -> `" new "` would be CAPTURED by a local `"
                             new "` in scope at " (count caps) " reference(s) (no-capture; no claims mutated).")))
-            (System/exit 4)))))
+            (*reject!* 4)))))
     (let [target-mods (set (keep module-name target-srcs))]
       (doseq [src srcs :when (not (some #{src} target-srcs))]
         (let [{:keys [refer rename]} (parse-require src)]
@@ -1076,7 +1119,7 @@
             (binding [*out* *err*]
               (println (str "REJECTED — renaming `" old "` -> `" new "` would DUPLICATE a binding in consumer "
                             src " (it already binds `" new "`; no-import-collision; no claims mutated).")))
-            (System/exit 3)))))
+            (*reject!* 3)))))
     (doseq [src target-srcs]
       (when-let [B (def-binding src old)]
         (let [oldc (first (filter #(= Vp (:p (c/claim-of ctx %))) (c/by-l ctx B)))
@@ -1086,13 +1129,16 @@
       (binding [*out* *err*]
         (println (str "REJECTED — no binding named `" old "` found in \"" target
                       "\" (nothing to rename; no claims mutated).")))
-      (System/exit 5))
-    (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
-    (binding [*out* *err*]
-      (println "================ Turtle #5 — O(1) shadow-correct rename ================")
-      (println (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
-      (println (str "CLAIMS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
-      (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
+      (*reject!* 5))
+    ;; capture-only (daemon :edit-min): the name claim is mutated above; SKIP the
+    ;; whole-corpus projection — the daemon commits the captured op + re-resolves scoped.
+    (when-not *capture-only?*
+      (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
+      (binding [*out* *err*]
+        (println "================ Turtle #5 — O(1) shadow-correct rename ================")
+        (println (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
+        (println (str "CLAIMS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
+        (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src)))))))
 
 ;; upsert-form — add/replace a top-level def from an EDN datum spec.
 (defn verb-upsert-form! [scope datum]
@@ -1101,12 +1147,12 @@
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
                       " source files; upsert-form needs exactly one (no claims mutated).")))
-      (System/exit 3))
+      (*reject!* 3))
     (when (and (seq? datum) (not (VALUE-DEFS (str (first datum)))))
       (binding [*out* *err*]
         (println (str "REJECTED — upsert-form spec head `" (first datum)
                       "` is not a value def (def/defn/...); no claims mutated.")))
-      (System/exit 3))
+      (*reject!* 3))
     (let [src (first target-srcs)
           wrap (wrapper-of src)
           forms (vec (fN-claims wrap))
@@ -1121,7 +1167,7 @@
           (c/claim! ctx wrap (c/value! ctx (str "f" n)) new-root tx))
         (let [next-n (inc (apply max (map first forms)))]
           (c/claim! ctx wrap (c/value! ctx (str "f" next-n)) new-root tx)))
-      (re-resolve!)
+      (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
                     (str (if victim-entry "replaced" "added") " top-level def `" new-name
                          "` in \"" scope "\" (1 form minted as claims; refs resolved via refers_to)")))))
@@ -1133,7 +1179,7 @@
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
                       " source files; set-body needs exactly one (no claims mutated).")))
-      (System/exit 3))
+      (*reject!* 3))
     (let [src (first target-srcs)
           B (def-binding src name)
           form (when B (form-for-victim src B))
@@ -1142,7 +1188,7 @@
         (binding [*out* *err*]
           (println (str "REJECTED — `" name "` is not a defn with a body in \"" scope
                         "\" (set-body needs a defn; no claims mutated).")))
-        (System/exit 5))
+        (*reject!* 5))
       (let [kids (fN-claims d)
             bracket-n (some (fn [[n _ r]] (when (brackets? r) n)) kids)
             ret? (some (fn [[n _ r]] (and (= n (inc bracket-n)) (TYPE-COLON (sym-val r)))) kids)
@@ -1152,10 +1198,10 @@
         (when (empty? body-slots)
           (binding [*out* *err*]
             (println (str "REJECTED — `" name "` has no body fN edges to replace; no claims mutated.")))
-          (System/exit 5))
+          (*reject!* 5))
         (doseq [[_ cid _] body-slots] (retire-claim! cid))
         (c/claim! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
-        (re-resolve!)
+        (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "set-body"
                       (str "replaced body of defn `" name "` in \"" scope "\" ("
                            (count body-slots) " body slot(s) superseded; new body minted as claims)"))))))

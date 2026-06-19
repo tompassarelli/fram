@@ -724,6 +724,217 @@
      :symdiff (vec (take 40 symdiff))
      :version (current-seq @co)}))
 
+;; ============================================================================
+;; :edit-min — THE MINIMAL-OP AUTHORING EDIT (Build A: edits as minimal,
+;; commutable transactions through the coordinator wire).
+;; ============================================================================
+;; The whole-module path (bin/fram-commit-code) renders the edited module, emit-edn's
+;; it into a FRESH numbering, and commits the WHOLE-module delta vs the coordinator —
+;; ~7800 ops for a 1-line set-body, because emit-edn RENUMBERS every node after the
+;; edit point. That false-conflicts two agents editing DIFFERENT defns in the SAME
+;; module (each rewrites the module), which kills disjoint-edit commutation — the
+;; entire thesis.
+;;
+;; :edit-min instead commits exactly the verb's OWN mint/supersede ops. The authoring
+;; verb (resolve.clj verb-set-body!/verb-rename!/verb-upsert-form!) already writes a
+;; SMALL claim delta: it mints a new body subtree (kind/v/fN claims on fresh nodes),
+;; points the parent's body fN edge at the new root, and SUPERSEDES the old body fN
+;; edges. We:
+;;   1. CLONE the warm store ((atom @st) — persistent map, O(1), swap!s don't touch
+;;      `co`), record `since` = the clone's :next-id.
+;;   2. run the verb over the CLONE via resolve/run-verb-warm! (NO text, NO emit-edn,
+;;      NO whole-module render). The verb mints/supersedes against LOG-RESIDENT node
+;;      identity, exactly as the text path would.
+;;   3. HARVEST the delta from the clone:
+;;        - NEW entities (objects >= since, not values/claims): the minted AST nodes.
+;;          Each needs STABLE coordinator identity — assign @<mod>#<int> at the next
+;;          free int for the module (the same @<mod>#<int> shape migrate-flat->co /
+;;          s/name! use), memoized clone-eid -> wire-name.
+;;        - NEW AST claims (cid >= since, p in the emit-edn vocabulary): translate
+;;          (l p r) to wire NAMES (subject + ref object via the name map; literal
+;;          object verbatim) -> :assert ops.
+;;        - NEW supersede markers (cid >= since, p == supersedes-pred): each victim
+;;          (the marker's :r) is an OLD AST claim; translate its (l p r) to names ->
+;;          :retract op. (Derived resolve-pred claims the verb's re-resolve! wrote on
+;;          the clone are NOT committed — the log carries 0 derived lines.)
+;;   4. apply the harvested asserts + retracts to the REAL `co` THROUGH do-assert/
+;;      do-retract — the SAME single-(te,p,r) OCC wire every commit uses. So the edit
+;;      gets per-(te,p)-group base-version OCC, flat-log persistence + fsync, dirty-
+;;      marking (scoped re-resolve), and notify, all for free. Two disjoint same-module
+;;      edits touch DISJOINT (te,p) groups => they NEVER conflict (commute by
+;;      construction). Order: retract old fN edges FIRST, then assert leaves (kind/v)
+;;      before parent fN re-points (so a referenced child exists before its parent
+;;      points at it).
+;;
+;; Returns {:ok true :module M :asserts <n> :retracts <n> :ops <n> :new-nodes <n>}
+;; or {:reject ...}. The minimal-op result is BYTE-IDENTICAL (render(log)) to the
+;; whole-module path for the same edit — same outcome, minimal mechanism.
+;; ============================================================================
+;; the emit-edn AST vocabulary — the predicates a code subtree is made of. A code
+;; delta NEVER touches a non-AST pred (name/cardinality are schema; refers_to et al.
+;; are derived). Mirrors bin/fram-commit-code ast-pred? exactly.
+(defn- ast-pred-str? [p]
+  (or (#{"kind" "v" "child" "tail" "style" "placement"} p)
+      (boolean (and (string? p) (re-matches #"(f|seg|comment)\d+" p)))))
+
+;; next free @<mod>#<int> for a module, from the store's existing `name` claims. New
+;; minted nodes are numbered ABOVE every existing int so they never collide with an
+;; ingested node id (or another concurrent edit's nodes, once that edit is committed —
+;; each fresh mint reads the current max, and commits serialize under dlock).
+(defn- next-module-int [st module]
+  (let [NAME (c/value-id st "name")
+        pfx  (str "@" module "#")
+        mx   (if NAME
+               (reduce (fn [acc cid]
+                         (let [nm (c/literal st (:r (c/claim-of st cid)))]
+                           (if (and (string? nm) (str/starts-with? nm pfx))
+                             (if-let [[_ d] (re-matches #"@[^#]+#(\d+)" nm)]
+                               (max acc (parse-long d)) acc)
+                             acc)))
+                       0 (c/by-p st NAME))
+               0)]
+    (inc mx)))
+
+;; SERIALIZED node-name allocation (Build A). Clone-side next-module-int RACES: two
+;; same-base edits read the same local max and mint identical @mod#int names -> collision
+;; under true concurrency (proven). This atomic counter, seeded above the GLOBAL max at
+;; boot, hands DISJOINT name-int ranges to concurrent edits by construction (swap! atomic),
+;; so minting needs no global write-lock — the per-(te,p) OCC carries the rest.
+(def node-name-seq (atom 0))
+(defn- global-max-name-int [st]
+  (let [NAME (c/value-id st "name")]
+    (if NAME
+      (reduce (fn [acc cid]
+                (let [nm (c/literal st (:r (c/claim-of st cid)))]
+                  (if-let [[_ d] (and (string? nm) (re-matches #"@[^#]+#(\d+)" nm))]
+                    (max acc (parse-long d)) acc)))
+              0 (c/by-p st NAME))
+      0)))
+(defn- seed-name-seq! [st] (reset! node-name-seq (global-max-name-int st)))
+(defn- reserve-name-ints! [n]                 ; atomically reserve n consecutive name-ints
+  (let [hi (swap! node-name-seq + n)] (vec (range (inc (- hi n)) (inc hi)))))
+
+;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
+;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
+;; is assigned here (the verb mints nameless local entities on the clone).
+(defn- do-edit-min [spec]
+  (let [module (:module spec)]
+    (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
+    ;; GRAPH RENAME IS IDENTITY-DEFERRED — reject, do NOT silently do the wrong thing.
+    ;; verb-rename! is O(1): it rewrites the DEF binding's spelling only and relies on
+    ;; references following refers_to (identity). On the mainline SPELLING+derive model a
+    ;; cold render re-derives refers_to BY SPELLING, so old-spelled references can't re-resolve
+    ;; to the renamed def → the rename renders the OLD name (measured: cnf_rename_spelling_check.clj
+    ;; — 2 ops, def rewritten, 2 reference leaves still "replace!"). A correct mainline rename is
+    ;; O(N) (rewrite every reference spelling) and is NOT built. Same identity-deferral as gate-v2
+    ;; (docs/VIEWS_AND_BRANCHES.md). Re-enable when references carry identity OR an O(N) rewrite
+    ;; verb lands. (The text-path CLI rename still works as a same-process projection.)
+    (when (= "rename" (:op spec))
+      (throw (ex-info "rename requires identity refs; deferred — O(1) graph rename needs identity, mainline is spelling+derive (O(N) spelling-rewrite not built). See docs/VIEWS_AND_BRANCHES.md."
+                      {:reject :identity-deferred})))
+    (let [real   (:store @co)
+          clone  (atom @real)                       ; O(1) structural clone; verb writes here only
+          since  (:next-id @clone)
+          ;; SCOPE the verb's frame build to the edited module(s) for the single-module
+          ;; verbs (set-body/upsert-form read ONLY their own module's def-binding/frame).
+          ;; rename is cross-module (consumer-collision + capture across all srcs read
+          ;; the whole corpus' require/frame tables) — leave it whole (nil scope).
+          scope? (#{"set-body" "upsert-form"} (:op spec))
+          scope  (when scope? (fn [s] (str/includes? s module)))
+          ;; the supersedes pred the migrate store uses (set by s/setup!); the verb's
+          ;; resolve-warm-store! re-points :supersedes-pred at "supersedes", but the
+          ;; clone-local marker CLAIMS it writes carry whatever pred-id it used. We
+          ;; harvest by re-reading the clone's :supersedes-pred AFTER the run.
+          ;; A REJECTED edit must NOT kill the daemon: bind *reject!* to THROW (the CLI
+          ;; default exits the process). The throw unwinds the verb + is caught by the
+          ;; :edit-min handler arm, returning {:reject ...} to the client.
+          _      (binding [resolve/*reject!*
+                           (fn [code] (throw (ex-info (str "verb rejected the edit (code " code ")")
+                                                      {:reject :verb :code code})))
+                           resolve/*capture-only?* true   ; mint/supersede only — no re-resolve, no EDN projection
+                           resolve/*resolve-walk?* false  ; Build B: skip the whole-corpus walk (set-body/upsert-form need no refers_to; rename reads the pre-materialized edges)
+                           resolve/*corpus-scope* scope]  ; Build B: scope frames to the edited module (single-module verbs)
+                   (resolve/run-verb-warm! clone spec))
+          m      @clone
+          sup-pid (:supersedes-pred m)
+          ;; Build B — O(delta), not O(corpus): a clone shares ONE monotonic :next-id
+          ;; for entities AND claims, and fresh-id! returns the POST-increment value —
+          ;; so `since` (the pre-verb :next-id) is the LAST OLD id, and every object the
+          ;; verb minted has id in (since, (:next-id m)] (inclusive of the FINAL mint,
+          ;; e.g. set-body's parent body-fN re-point). We iterate that RANGE and `get`
+          ;; each from :objects/:claims — O(verb delta), ~130 lookups — instead of
+          ;; scanning the whole ~78k-entry :claims map three times (old O(corpus) cost).
+          since-ids (range (inc since) (inc (:next-id m)))
+          ;; clone-local entity-id -> wire NAME. Existing nodes already carry a `name`
+          ;; claim (inherited from the real store); new nodes (eid >= since with no
+          ;; name) get a fresh @<mod>#<int>, numbered above every existing int.
+          name-of* (fn [eid] (s/name-of clone eid))
+          new-eids (->> since-ids
+                        (filter (fn [id] (and (contains? (:objects m) id)
+                                              (not (contains? (:values m) id))
+                                              (not (contains? (:claims m) id))
+                                              (nil? (name-of* id)))))
+                        vec)
+          ;; assign names to the new entities (sequential, above the current max int).
+          name-ints (reserve-name-ints! (count new-eids))   ; SERIALIZED atomic alloc — concurrent-safe; replaces clone-side next-module-int (which raced)
+          eid->name (into {} (map (fn [eid i] [eid (str "@" module "#" i)]) new-eids name-ints))
+          wire-name (fn [eid] (or (eid->name eid) (name-of* eid)))
+          ;; render a claim's (l p r) into wire (te p r-spec): subject -> name; object
+          ;; -> name if it's an entity (a ref/link), else the literal value verbatim.
+          ->wire (fn [cl]
+                   (let [l (:l cl) p (c/literal clone (:p cl)) r (:r cl)
+                         te (wire-name l)
+                         rs (if (c/value-object? clone r) (c/literal clone r) (wire-name r))]
+                     (when (and te (some? rs)) [te p rs])))
+          ;; the verb's NEW claims = the claim ids in [since, next-id) (O(delta)).
+          new-cid-claims (keep (fn [cid] (when-let [cl (get (:claims m) cid)] [cid cl])) since-ids)
+          ;; ASSERTS: every NEW AST claim (kind/v/fN/... ; skip derived + schema preds).
+          new-claims (->> new-cid-claims
+                          (map second)
+                          (filter (fn [cl] (let [p (c/literal clone (:p cl))]
+                                             (ast-pred-str? p)))))
+          asserts (vec (keep ->wire new-claims))
+          ;; RETRACTS: every NEW supersede marker's VICTIM, as its (l p r) by name.
+          ;; A marker is a claim (cid >= since) whose pred == the supersedes pred; its
+          ;; :r is the OLD (superseded) claim id. We retract that old claim's AST edge.
+          victim-cids (->> new-cid-claims
+                           (filter (fn [[_ cl]] (= (:p cl) sup-pid)))
+                           (map (fn [[_ cl]] (:r cl))))
+          retracts (vec (keep (fn [vcid]
+                                (when-let [vcl (get (:claims m) vcid)]
+                                  (when (ast-pred-str? (c/literal clone (:p vcl)))
+                                    (->wire vcl))))
+                              victim-cids))]
+      ;; commit through the REAL coordinator wire. Retract old edges first, then
+      ;; assert leaves (kind/v) before parent fN re-points. Each op is OCC-checked at
+      ;; the current version of its OWN (te,p) group (commit! base-version), so two
+      ;; disjoint same-module edits never false-conflict.
+      ;; (B) LOCK BOUNDARY — serialize ONLY the commit. Everything ABOVE (clone, verb,
+      ;; harvest, atomic name reservation) ran LOCK-FREE => concurrent. INSIDE this lock:
+      ;; the do-retract/do-assert ops AND, reached through them, apply-commit-delta!
+      ;; (warm-cache) + append-flat! (flat log) — the two that would corrupt if left
+      ;; outside. So: compute concurrent, commit serial, cache+log safe.
+      (locking dlock
+       (let [v0 (current-seq @co)
+             rej (atom nil)]
+        (doseq [[te p r] retracts :while (nil? @rej)]
+          (let [res (do-retract te p r v0)] (when (:reject res) (reset! rej {:op :retract :te te :p p :r r :res res}))))
+        ;; r is already a wire value: a name STRING (ref, for fN/child/tail/...) or a
+        ;; literal STRING (kind/v). do-assert's kind-of picks :link vs :assert by the
+        ;; ref-shape of the string — exactly the migrate-flat->co convention.
+        (let [leaf? (fn [[_ p _]] (#{"kind" "v"} p))
+              ordered (concat (filter leaf? asserts) (remove leaf? asserts))]
+          (doseq [[te p r] ordered :while (nil? @rej)]
+            (let [res (do-assert te p r v0)]
+              (when (:reject res) (reset! rej {:op :assert :te te :p p :r r :res res})))))
+        (if @rej
+          {:reject (:res @rej) :failed-op @rej :module module}
+          {:ok true :module module
+           :asserts (count asserts) :retracts (count retracts)
+           :ops (+ (count asserts) (count retracts))
+           :new-nodes (count new-eids) :name-ints name-ints
+           :version (current-seq @co)}))))))
+
 (declare maybe-reload!)
 
 (defn handle [req]
@@ -733,6 +944,12 @@
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
+      ;; minimal-op authoring edit: run the verb over a clone, commit ONLY its own
+      ;; mint/supersede ops through the wire (Build A). A 1-line set-body = a handful
+      ;; of ops, not a whole-module ~7800-op churn. Disjoint same-module edits commute.
+      :edit-min (try (do-edit-min (:spec req))
+                     (catch Throwable t {:reject [(str "edit-min: " (.getMessage t))]
+                                         :version (current-seq @co)}))
       :validate {:violations (all-violations (index!))}
       ;; AST/Datalog query over the WARM in-memory graph — the read surface the cold
       ;; CLI/MCP path lacked. Runs fram.query/run (validate + fixpoint) against the
@@ -987,6 +1204,7 @@
 (defn boot-flat! [flat]
   (reset! flat-canonical? true)
   (reset! co (migrate-flat->co flat))
+  (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
   (reset! flat-log flat)
   (reset! flat-mtime (stamp flat))
   (reset! cache {:index nil :version -1})
