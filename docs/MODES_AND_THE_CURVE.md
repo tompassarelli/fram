@@ -64,23 +64,29 @@ the dependency structure** (which claim references which), so Fram can gate on t
 modules because one line moved. *Same guarantee* (no incoherent state exposed),
 *cheaper enforcement.*
 
-> ⚠️ **MEASURED, AND THE FIRST PROXY DID NOT HOLD — this is not a free theorem.**
-> The propagation receipt (`cnf_propagation.clj`) measured the closest existing
-> proxy — S3.3 *scoped re-resolve* — on the real corpus (K=11 modules). Result:
-> **scoped re-resolve did NOT beat whole-corpus.** Per-module it is *flat* at
-> ~2.9–3.4 s regardless of which module is dirtied (hub `cnf` ≈ leaf `fold`),
-> essentially equal to the COLD whole-corpus walk (~2.9–3.1 s). Cause, visible in
-> the code: `materialize-refers-scoped!` still runs `corpus-from-store!` over **all
-> K** (a fixed whole-corpus cost) before walking only the affected modules — so at
-> this K the fixed scan dominates and scoping the *walk* saves nothing measurable.
+> ⚠️ **UNMEASURED — the closest proxy is a CONFOUND, not a headwind.** The
+> propagation receipt (`cnf_propagation.clj`) measured S3.3 *scoped re-resolve* on
+> the real corpus (K=11): it did NOT beat whole-corpus — flat ~2.9–3.4 s across all
+> modules (hub `cnf` ≈ leaf `fold`), because `materialize-refers-scoped!` runs
+> `corpus-from-store!` over **all K** (a fixed whole-corpus cost) before walking the
+> affected modules. **Keep two claims distinct — do not conflate them:**
 >
-> This does **not** refute the cheaper-**gate** claim — re-resolve ≠ a coherence
-> gate — but it raises a hard flag: **Fram's current scoping machinery carries a
-> whole-corpus fixed cost.** For "Fram's gate is cheaper than git's coarse gate" to
-> stand, Leg 1's gate must scope the **fixed** cost too (check coherence over the
-> affected subgraph *without* re-deriving all binding tables), and be tested at
-> larger K. Until then the "better" half of the superset claim is **unproven, with
-> a measured headwind**, not assumed.
+> 1. **About the current derived-read path (REAL finding):** S3.3 scoped re-resolve
+>    does not beat whole-corpus at K=11; the fixed `corpus-from-store!` scan
+>    dominates. True, and it is the swarm-mode *derived-read* cost.
+> 2. **About the cheaper-GATE thesis (UNMEASURED):** re-resolve recomputes *all*
+>    `refers_to` edges; a coherence gate checks *reference-validity over the affected
+>    subgraph*. Different operations — and the ~3 s floor lives entirely in
+>    `corpus-from-store!`, which a coherence gate **need not invoke**. So the proxy
+>    is a **confound** for the gate thesis: it measured the wrong operation. The
+>    cheaper-gate claim is **unmeasured — not refuted, and NOT a headwind.**
+>
+> The load-bearing open question, answerable *cheaply before building anything*:
+> can a coherence gate read the scope it needs from a **maintained** index (e.g. the
+> incrementally-updated name/export indexes, `export-snapshot`) **without** rebuilding
+> whole-corpus binding tables via `corpus-from-store!`? If yes → cheaper-gate is
+> achievable and the minimal gate receipt is cheap. If no → it needs new incremental
+> indexing (a real build). Leg 1 begins with that feasibility probe (§7).
 
 ---
 
@@ -141,12 +147,14 @@ point git conflicts, Fram-today corrupts, C would converge — carrying the #11b
   only on pass — **with a real view boundary so speculative claims are NOT visible
   to ordinary readers** — is **not built**. Until it is, "Fram can do git's
   guarantee" is *architectural*, not demonstrated.
-- **MEASURED, HEADWIND FOUND:** that Fram's git-mode gate is **cheaper** than git's.
-  The first proxy (S3.3 scoped re-resolve) was measured (`cnf_propagation.clj`) and
-  did **not** beat whole-corpus at K=11 — flat ~2.9–3.4 s across all modules,
-  because `corpus-from-store!` runs over all K every time. So the "cheaper" half of
-  the superset claim has a *measured headwind*: Fram's current scoping reduces the
-  walk but not the fixed corpus scan. Leg 1 must beat this, not assume past it.
+- **UNMEASURED (the proxy is a confound):** that Fram's git-mode gate is **cheaper**
+  than git's. The only proxy run (S3.3 scoped re-resolve) measured a *different
+  operation* dominated by `corpus-from-store!`; it is not evidence about gate cost
+  (see §2). Cheaper-gate is **not refuted and not a headwind — it is untested.** The
+  decisive, cheap probe (can a gate avoid `corpus-from-store!`?) is Leg 1, Phase 0.
+- **REAL, SEPARATE finding:** the *current derived-read path* (S3.3 scoped
+  re-resolve) does not beat whole-corpus at K=11. This bounds swarm-mode's
+  derived-read cost; it is not about the gate.
 
 ---
 
@@ -159,23 +167,36 @@ point on the curve, the eager-expose corner git cannot reach.* Results:
   polling). Eager visibility is real.
 - **DERIVED `:callers`/refers_to: LAZY-ON-READ.** First reader after a write pays
   the resolve walk; NO-OP repeats ~0; no background re-resolve.
-- **SURPRISE: scoped re-resolve did NOT beat whole-corpus** — flat ~2.9–3.4 s
-  across all 11 modules (see §2). The measure-first win of the session: the
-  "scoped is cheaper" assumption failed its first proxy test.
+- **SURPRISE: scoped *re-resolve* did NOT beat whole-corpus** — flat ~2.9–3.4 s
+  across all 11 modules (hub `cnf` ≈ leaf `fold`), because `corpus-from-store!` runs
+  over all K every time (see §2). This bounds the *derived-read* cost; it is a
+  **confound** for the cheaper-*gate* thesis (different operation), which stays
+  **unmeasured**, not failed. The measure-first win was catching that distinction
+  before it became a false concession.
 
-**Leg 1 — git-mode (next build; the "better, not just different" proof).** The
-unbuilt, unknown-magnitude one:
-1. Stage a batch of edits in a non-main view (NOT visible to ordinary readers).
-2. Joint-validate the resulting staged graph.
-3. Publish to main only if the joint graph passes.
-4. Compare against git / merge-queue on the same workload.
-5. **Measure validation SCOPE and time: whole project/module (git) vs affected
-   subgraph (Fram).** This is the substrate win, and it is a *measurement* — with a
-   known headwind: the Leg-2 result shows Fram's current scoping carries a fixed
-   whole-corpus cost (`corpus-from-store!`). So Leg 1's gate must scope the **fixed**
-   cost too — check coherence over the affected subgraph *without* re-deriving all
-   binding tables — and be tested at **larger K**, or the "cheaper" claim fails the
-   same way re-resolve did. Requires the view boundary to be real (§6).
+**Leg 1 — git-mode (the "better, not just different" proof). DO NOT build broad
+git-mode infrastructure first.** Split it; the first phase is cheap and decides
+whether the rest is worth building.
+
+- **Phase 0 — feasibility probe (cheap, investigation, the fork-decider).** Answer
+  ONE question: *can a coherence gate validate the affected subgraph WITHOUT the
+  `corpus-from-store!` whole-corpus fixed cost that floored scoped re-resolve?*
+  Determine what `corpus-from-store!` builds, why re-resolve needs it, and whether a
+  reference-validity check can read scope from a **maintained** index (the
+  incrementally-updated name/CNF indexes, `export-snapshot`) instead of rebuilding
+  binding tables. **If the gate can avoid the fixed scan → Phase 1/2 are cheap and
+  worth it now. If the gate still needs `corpus-from-store!` → STOP and report: the
+  better-than-git half needs new incremental indexing (a real build arc), and the
+  honest talk closes on the banked "more than git" half.**
+- **Phase 1 — design the minimal gate** (only if Phase 0 is green): the exact
+  staged↔published view boundary (speculative claims NOT visible to ordinary
+  readers), what "joint-validity-on-visibility" means in Fram terms, the
+  affected-subgraph input.
+- **Phase 2 — smallest receipt**: stage a batch in a non-main view; joint-validate
+  the affected subgraph; publish only on pass; prove speculative claims are invisible
+  pre-publish; **measure gate time and scope**; include ≥1 leaf and ≥1 hub edit and a
+  larger synthetic K (K=11 is too small to show scaling); compare to the merge queue.
+  Do NOT claim "cheaper than git" unless the gate demonstrably avoids the fixed scan.
 
 **Leg 3 — the curve (synthesis).** Same workload, sweep Fram from git-mode to
 swarm-mode; plot git as a single fixed dot on the coherence↔visibility frontier.
