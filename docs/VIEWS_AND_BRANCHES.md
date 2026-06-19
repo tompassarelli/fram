@@ -61,13 +61,17 @@ This reframes the whole concurrency-safety surface (see the immutability analysi
 sites are exactly the places a cardinality axiom has been asserted — and the engineering job is
 to assert them *deliberately*, never *accidentally*.
 
-## 4. Identity is the only forced axiom
+## 4. Identity allocation is the only *substrate-global* forced convergence
 
-There is exactly one cardinality axiom the substrate cannot avoid: **identity** — distinct
+There is exactly one convergence the substrate cannot avoid: **identity allocation** — distinct
 entities/values have distinct ids, and minting a new thing must not collide with another
-writer's new thing. This is definitional (it is what "an id" *means*) and it is already
-enforced (serialized name allocation; raced 16-thread/0-dup). Every *other* single-valued
-predicate is an **optional** axiom the domain may choose. References, in particular, assert
+writer's new thing. This is definitional (it is what "an id" *means*), it is **substrate-global**
+(every view shares one id space), and it is already enforced (serialized name allocation; raced
+16-thread/0-dup). **Precision (matters later, does not block anything now):** identity allocation
+is the only convergence forced *at the substrate*. Every *other* single-valued predicate may still
+exist as an axiom, but it is **view-local / declared-single** — a cardinality a domain (or a view)
+chooses, enforced for that view, *not* a substrate-global obligation. So "single-valued" is not one
+thing: identity is global and forced; declared-single predicates are local and optional. References, in particular, assert
 **none**: on the mainline a reference is a spelling that resolves-or-fails-as-undefined, so a
 "dangling reference" is not a substrate conflict — it is a reader's traversal arriving at an
 undefined name **[today]** (measured: `cnf_gate_v2_read.clj`; refs are spelling, 0 authored

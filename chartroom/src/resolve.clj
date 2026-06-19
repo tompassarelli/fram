@@ -57,11 +57,29 @@
 (def ^:dynamic FIXED nil) (def ^:dynamic QUAL nil)   ; render-mode markers
 (def ^:dynamic CTOR nil)    ; a `->Name` auto-constructor ref: render `->` + the type's name
 (def ^:dynamic ACC  nil)    ; a synth field accessor `<lower(Name)>-<field>`: stores the field
-(defn pred-val [e pname]
+;; --- read-time path-selection: the "default-main view" -----------------------
+;; Fram is view-relative (docs/VIEWS_AND_BRANCHES.md): a node's live (l,p) group MAY hold
+;; more than one claim, and choosing one is a VIEW decision. Today there is exactly one view —
+;; default-main — and its policy is "first live". `select-main-1` is THE explicit selection
+;; point: it does NOT prove uniqueness, it SELECTS the default-main member of a possibly-multi
+;; group. Routing the former bare `(first …)` take-firsts through it makes the selection named
+;; rather than silently buried; when first-class views land (VIEWS_AND_BRANCHES §8) this is
+;; where a `view` argument attaches. Behavior today is identical to `first`.
+(defn select-main-1
+  "Select the default-main member of a (live) (l,p) claim-id group `cids`. Current single-view
+   policy = first. Honest name for an implicit (first …): a SELECTION, not a uniqueness proof.
+   Returns nil on an empty group."
+  [cids] (first cids))
+
+(defn pred-val
+  "The default-main value of predicate `pname` on node `e`. `pname` may be multi-valued in the
+   graph; this SELECTS the main view's one (via select-main-1), it does not assume uniqueness."
+  [e pname]
   (let [P (c/value-id ctx pname)]
-    (when P (let [cs (c/by-lp ctx e P)] (when (seq cs) (c/literal ctx (:r (c/claim-of ctx (first cs)))))))))
-(defn kind-of [e] (pred-val e "kind"))
-(defn sym-val [e] (when (= "symbol" (kind-of e)) (pred-val e "v")))
+    (when P (let [cs (c/by-lp ctx e P)]
+              (when-let [cid (select-main-1 cs)] (c/literal ctx (:r (c/claim-of ctx cid))))))))
+(defn kind-of [e] (pred-val e "kind"))                                  ; default-main kind of node e
+(defn sym-val [e] (when (= "symbol" (kind-of e)) (pred-val e "v")))     ; default-main spelling of a symbol
 (defn ordered-children [e]
   (->> (c/by-l ctx e) (map #(c/claim-of ctx %))
        (keep (fn [cl] (let [p (c/literal ctx (:p cl))]
@@ -73,7 +91,10 @@
                         (when (and (string? p) (re-matches #"seg\d+" p)) [(parse-long (subs p 3)) (:r cl)]))))
        (sort-by first) (mapv second)))
 (defn head-sym [e] (when (= "list" (kind-of e)) (sym-val (first (ordered-children e)))))
-(defn refers-target [L] (let [cs (c/by-lp ctx L REFERS)] (when (seq cs) (:r (c/claim-of ctx (first cs))))))
+(defn refers-target
+  "The binding node that reference `L` resolves to in the default-main view (SELECTS via
+   select-main-1 over the derived refers_to group; re-derived per resolve). Not a uniqueness proof."
+  [L] (let [cs (c/by-lp ctx L REFERS)] (when-let [cid (select-main-1 cs)] (:r (c/claim-of ctx cid)))))
 (defn live-node? [e] (seq (c/by-lp ctx e KIND)))
 
 ;; --- binding extraction -----------------------------------------------------
