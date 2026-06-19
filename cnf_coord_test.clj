@@ -13,6 +13,12 @@
       chk (fn [nm ok] (swap! checks conj [nm ok]))]
 
   ;; ---- (A) base_version: N clients race the SAME single-valued (T,status) ----
+  ;; THIS IS THE single-valued same-key write-write SAFETY RECEIPT (#16): the true-conflict
+  ;; OCC path (not the disjoint commute path). 24 racers set DIFFERENT values for one
+  ;; single-valued (te,p) at the same base -> exactly one wins, the rest :conflict, exactly
+  ;; one live claim. commit! is the sole OCC site (uniform: `single` is a per-pred flag, the
+  ;; base_version check is one branch), so this generalizes across all single-valued preds.
+  ;; Distinct from name-allocation (the node-name-seq atomic counter). Mainline safety = closed.
   (let [seed (commit! co "seed" "T" "status" :assert "init" 0)
         base (:ok seed)
         n 24
