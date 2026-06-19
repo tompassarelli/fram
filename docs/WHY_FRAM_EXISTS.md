@@ -7,7 +7,7 @@
 
 ## Verdict (one sentence)
 
-Fram exists because the unit of Claim Normal Form is the **claim-object** — a fact that is itself an addressable, reifiable object — and no datom store, triple store, or graph database takes the claim-object as its atom; building CNF on top of one means emulating CNF's atom on a foreign atom, which is strictly worse than owning the engine.
+Fram exists because the unit of Claim Normal Form is the **claim-object** — a proposition that is itself an addressable, reifiable object — and no datom store, triple store, or graph database takes the claim-object as its atom; building CNF on top of one means emulating CNF's atom on a foreign atom, which is strictly worse than owning the engine.
 
 The necessity is about the **primitive**, not about performance, concurrency, or query power. On every axis people *expect* to justify a custom code-store, an off-the-shelf store wins or ties. The justification is the atom, and only the atom.
 
@@ -25,13 +25,13 @@ This document answers that airtight. It does so the only way an airtight answer 
 
 ## 1. What CNF actually is (the primitive)
 
-CNF is built on a single primitive and one fact-shape.
+CNF is built on a single primitive and one claim-shape.
 
 ```
 Object  =  addressable identity                       — the sole primitive
 Entity  =  object                          (entity!)  — bare identity, nothing more
 Value   =  object + literal                (value!)   — interned, canonical (one identity per literal)
-Claim   =  object + (l p r)                (claim!)   — a fact; itself an object
+Claim   =  object + (l p r)                (claim!)   — a proposition; itself an object
 ```
 
 Two properties follow, and together they *are* CNF:
@@ -50,7 +50,7 @@ Property (2) is the load-bearing one. Because a claim is an object, every piece 
 | Justification | `(claim₁ because claim₃)` |
 | Naming | a claim named like any other object |
 
-**The unit of CNF — the thing stored, addressed, indexed, and superseded — is therefore the claim-object: a fact that can itself be the subject of facts, at the granularity of the individual fact.** Hold onto that phrase. The entire argument is whether a vendor store can take *that* as its atom.
+**The unit of CNF — the thing stored, addressed, indexed, and superseded — is therefore the claim-object: a claim that can itself be the subject of claims, at the granularity of the individual claim.** Hold onto that phrase. The entire argument is whether a vendor store can take *that* as its atom.
 
 ---
 
@@ -67,10 +67,10 @@ Datomic's atom is the **datom**:
  └────────────── entity
 ```
 
-Three structural facts about the datom make it the wrong atom for CNF — not slower, *wrong*:
+Three structural properties of the datom make it the wrong atom for CNF — not slower, *wrong*:
 
 **(a) The datom is not an object you can reference.**
-Entities are addressable; datoms are not. There is no datom-id you can place in the `E` slot of another datom. The finest granularity at which Datomic permits reification is the **transaction**: transaction entities are real entities and *can* carry attributes (this is how transaction metadata works). But you cannot make an assertion about an *individual fact*. CNF requires exactly that — `(claim₁ supersedes claim₀)` is a statement about two specific facts. Datomic's reification granularity is the transaction (coarse); CNF's is the claim (fine). The datom cannot express per-fact reification because the fact is not addressable.
+Entities are addressable; datoms are not. There is no datom-id you can place in the `E` slot of another datom. The finest granularity at which Datomic permits reification is the **transaction**: transaction entities are real entities and *can* carry attributes (this is how transaction metadata works). But you cannot make an assertion about an *individual datom*. CNF requires exactly that — `(claim₁ supersedes claim₀)` is a statement about two specific claims. Datomic's reification granularity is the transaction (coarse); CNF's is the claim (fine). The datom cannot express per-datom reification because the datom is not addressable.
 
 **(b) The attribute slot is privileged.**
 Attribute value types and cardinalities must be declared before an attribute is used; an undeclared attribute is rejected by the transactor. `E` and `V` carry no such obligation. The three slots are not peers — `A` is a typed, pre-registered, cardinality-bearing slot the others are not. CNF's `(l p r)` is symmetric by definition; `p` is a plain object. This is a category difference in what a slot *is*.
@@ -133,7 +133,7 @@ The point of enumerating these is that the argument for Fram **survives every co
 
 ## 6. What Fram therefore is
 
-> **Fram is the storage-and-indexing engine whose native atom is the claim-object** — a fact that is itself an addressable, reifiable object, annotatable at the granularity of the individual fact.
+> **Fram is the storage-and-indexing engine whose native atom is the claim-object** — a proposition that is itself an addressable, reifiable object, annotatable at the granularity of the individual claim.
 
 Everything else about Fram — the OCC write path, the index layout, the scoped invalidation keyed on binding-set-delta, the resolver coupling — is *implementation in service of that atom*. The concurrency model is borrowed (correctly) from Datomic. The query model is conventional Datalog. The reason the engine is ours, and had to be, is the unit it stores. The atom is not the datom. CNF's atom has no vendor.
 
@@ -145,8 +145,8 @@ Everything else about Fram — the OCC write path, the index layout, the scoped 
 
 **This decision is correct as long as both of the following hold. To overturn it, refute one of them in its own terms — not with a benchmark, a "simpler" appeal, or a new vendor that is fast:**
 
-1. **CNF requires per-claim reification.** The claim is an object; metadata (supersession, provenance, transaction membership, justification) is expressed as claims about individual claims, at the granularity of the individual fact. *If this is ever false — if CNF can be redefined so that reification is needed only at transaction granularity or coarser — re-evaluate, because the datom becomes admissible.*
+1. **CNF requires per-claim reification.** The claim is an object; metadata (supersession, provenance, transaction membership, justification) is expressed as claims about individual claims, at the granularity of the individual claim. *If this is ever false — if CNF can be redefined so that reification is needed only at transaction granularity or coarser — re-evaluate, because the datom becomes admissible.*
 
-2. **No available store takes the reifiable claim-object as its native atom.** Datom stores reify at transaction granularity and privilege a typed attribute slot; RDF stores treat statement-level reification as a bolt-on/retrofit. *If a store ever ships whose native, non-emulated atom is the per-fact-reifiable proposition, re-evaluate, because adoption may then beat ownership.*
+2. **No available store takes the reifiable claim-object as its native atom.** Datom stores reify at transaction granularity and privilege a typed attribute slot; RDF stores treat statement-level reification as a bolt-on/retrofit. *If a store ever ships whose native, non-emulated atom is the per-claim-reifiable proposition, re-evaluate, because adoption may then beat ownership.*
 
 Absent a refutation of (1) or (2), Fram is not incidental, not a reinvented database, and not optional. It is the only store shape that holds CNF's primitive, and the primitive is the point.
