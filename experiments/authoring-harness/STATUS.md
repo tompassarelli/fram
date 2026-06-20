@@ -61,7 +61,7 @@ foreign language changes the runtime and collapses the control.)
 
 ## OPEN DECISIONS — need your / associates' input
 
-**1. (DIRECTION SET by advisor 2026-06-20; one gate in progress) The Tier-2 target.**
+**1. (DIRECTION SET by advisor 2026-06-20; precondition gate now RESOLVED — see `TIER2-PRECONDITION-VERDICT.md`) The Tier-2 target.**
 **Do BOTH, but FLIP the priority:** (b) — a *measured miss* by clojure-lsp on a dynamic/macro ref — is the
 talk's **empirical payload** (the thing that moves a skeptical PL room: watch lsp silently miss a ref the
 graph catches). honeysql is **supporting work, NOT the Tier-2 result**: a mechanism-demo + a cost-curve,
@@ -79,11 +79,21 @@ empirical Tier-2 number.
   "pick a target" or "**build** expansion/dispatch-aware materialization first, THEN measure" — and which
   one decides the talk claim ("graph catches what text misses" vs "graph CAN model refs text structurally
   can't, once built").
-  - **Gating check (workflow running, verdict pending):** *what reference class does Fram's walk cover
-    that lsp's doesn't?*
-    - keyword-dispatch (re-frame ids, multimethods, integrant keys): a lexical walk misses these too → (b)=BUILD.
-    - macro-generated refs (lsp's classic blind spot): graph catches IFF the walk sees the *expanded* form,
-      not the surface `.bclj` → the whole verdict hinges on this. Pending the in-code finding.
+  - **Gating check — RESOLVED (measured in-code, `TIER2-PRECONDITION-VERDICT.md`):** Fram's `refers_to` is a
+    PURELY LEXICAL-SURFACE walk (`sees_macros: no`, `sees_keyword_dispatch: no` — resolve.clj:313-344/868).
+    For EVERY class lsp misses (multimethod/keyword-dispatch, macro-generated, registry keys, reflective), a
+    lexical walk **misses it too**. **No class where lsp misses but Fram catches → no free measured gap → (b)
+    is a BUILD, not a pick.**
+  - **The reframe (this is the important part): ANALYZER vs SUBSTRATE.** "Compute a dynamic edge from source"
+    is an analyzer question — graph == lsp (both lexical). "Once an edge exists, record it as durable identity
+    and propagate rename uniformly" is the substrate/addressing question — graph wins by construction (the edge
+    is just another claim; text has no slot). The cleanest Tier-2 demo ISOLATES the substrate: reify ONE
+    dynamic edge, rename, show propagation lsp can't.
+  - **Named Tier-2 plan (for the proposal):** reify-one-dynamic-edge demo on **datahike multimethods** (richest
+    local corpus). Build options priced in the verdict doc: (1) hand-asserted `bound_to` demo (~hours,
+    purest), (2) keyword-dispatch materialization pass (~1–2 days), (3) expand-then-index (larger). Symmetric
+    check: clj-kondo has per-macro *hooks*, so frame as "graph: one uniform durable slot" vs "lsp: per-pattern
+    hook + recompute"; the hook-proof target is a runtime-computed dispatch.
 
 **2. (EMPIRICAL — resolved by running, not a decision) Does clojure-lsp latency grow with N?** Unmeasured.
 Pre-registered to measure lsp wall-time at each N. If flat, the latency axis is "graph slower at every N"
