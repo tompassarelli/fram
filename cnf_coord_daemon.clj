@@ -882,8 +882,11 @@
     ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
     ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
     ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
-    (when (= "rename" (:op spec))
-      (locking dlock (persist-bound-for-rename! spec)))
+    ;; #(a) rename-identity is persisted INSIDE the commit dlock below (ONE acquisition) —
+    ;; NOT in a separate dlock here. A separate lock would leave a lock-free window (the verb
+    ;; compute) in which a concurrent agent could commit a NEW reference AFTER the snapshot but
+    ;; BEFORE the rename commits, landing it with no identity edge (the red-team's snapshot-window
+    ;; race). Folded into the commit lock so persist + rename are atomic.
     (let [real   (:store @co)
           clone  (atom @real)                       ; O(1) structural clone; verb writes here only
           since  (:next-id @clone)
@@ -967,6 +970,12 @@
       ;; (warm-cache) + append-flat! (flat log) — the two that would corrupt if left
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
+       ;; #(a) persist rename-identity UNDER THE SAME lock as the commit (no lock-free window).
+       ;; ensure-refers! (inside) re-derives fresh, so a reference a concurrent agent committed
+       ;; BEFORE this lock is captured into bound_to; one arriving AFTER sees the renamed def
+       ;; (old spelling correctly resolves to nothing — a stale ref, not a silent mis-bind).
+       ;; v0 is read AFTER, so the rename asserts' OCC base reflects the bound_to commits.
+       (when (= "rename" (:op spec)) (persist-bound-for-rename! spec))
        (let [v0 (current-seq @co)
              asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
              rej (atom nil)]
