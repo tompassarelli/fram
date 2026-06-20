@@ -240,3 +240,26 @@ bound_to install cost a comparable per-ref amount (no wall-time divergence)? Unm
 **Caveat:** --dry diff line-count not captured (output format); N trusted from `references` (semantic count).
 **Classification:** measured-with-config. **Next:** the honeysql port (TRACK A marathon; beagle gaps jump the queue).
 
+### S-PORT-UTIL (2026-06-20T17:50Z) — honey.sql.util ported to Beagle, FIDELITY GATE GREEN
+First fidelity-gated port (LOOP-SPEC v2 TRACK A). Ported `honey.sql.util` (109 lines, cljc) → `.bclj`,
+`beagle build` → emitted clj, ran honeysql's OWN `honey.util-test` against the emitted version:
+**4 tests / 39 assertions / 0 failures / 0 errors → GATE GREEN. Port is VALID.** The port→build→gate
+pipeline works end-to-end on real honeysql code. Port lives in `/tmp/hsql-port/` (EPL-derived, regenerable,
+NOT committed to the MIT fram repo); recipe in this entry.
+
+**BEAGLE GAPS surfaced (the experiment as stress-test; logged for the upstream-fix queue, jump per v2):**
+- **G1 — reader rejects prime symbols.** `(as-> ... to' ...)` — Clojure-valid `foo'` (prime) breaks beagle's
+  quote-reader ("unexpected )"). Behavior-preserving workaround in port (`to'`→`acc`). Real Clojure divergence.
+- **G2 — `:refer-clojure :exclude` unsupported.** honeysql uses it to shadow `clojure.core/str` cleanly. Beagle
+  rejects the form; a top-level `(defn str ...)` DOES shadow (works) but emits a load WARNING beagle can't
+  suppress. Cosmetic for the gate; a real expressiveness gap (can't silence core-shadow).
+- **G3 — multi-arity anonymous fn (`fn-multi`).** honeysql `join`'s transduce reducer. Still a clean rejection
+  (gjoa's (d)); **stopgapped** via honeysql's own portable `:default` `join` impl (behavior-preserving, gate
+  passed). This is the real one — needed for a FAITHFUL `join` and likely for honey.sql. **Building it next**
+  (mine, `emit-clj.rkt`, branch `fram/honeysql-beagle` off c420169).
+- Minor: multi-arity `defn` return-type goes per-arity (after each param vec), not after the name (learned, not a gap).
+
+**Next:** (1) build `fn-multi` → revert `join` to faithful, re-gate; (2) port honey.sql core (2858 lines, where
+util/str's 239 refs live) under its full test suite; (3) arm-G rename util/str at N=239, compare per-ref cost
+vs arm-LSP's ~3.1ms/ref. Classification: measured-with-config (gate green).
+
