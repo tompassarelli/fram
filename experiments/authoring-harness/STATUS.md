@@ -61,16 +61,29 @@ foreign language changes the runtime and collapses the control.)
 
 ## OPEN DECISIONS — need your / associates' input
 
-**1. (LOAD-BEARING) The Tier-2 target.** honeysql can't show a *measured* Tier-2 divergence. Options:
-- **(a) Stay on honeysql** → push to N≈79 for the **mechanism-at-scale** number (graph O(1) rename across
-  ~79 caller sites) + keep surfacing beagle bugs. Accept Tier-2 = the Tier-1 structural guarantee only (no
-  measured miss).
-- **(b) Pivot Tier-2 to a dynamic-ref target** — code with genuine dynamic/macro/reflective references,
-  where clojure-lsp *actually misses* → a measured completeness gap. (Needs picking + porting a new slice.)
-- **(both)** a for mechanism-at-scale, b for the Tier-2 divergence — strongest, most work.
-- *My read:* name honestly that honeysql gives Tier-1 + mechanism-at-scale but not a measured Tier-2; the
-  call is whether the talk *needs* a measured Tier-2 number (→ b), or whether Tier-1 (unimpeachable) +
-  mechanism-at-scale + the honest latency tradeoff is a strong enough story (→ a).
+**1. (DIRECTION SET by advisor 2026-06-20; one gate in progress) The Tier-2 target.**
+**Do BOTH, but FLIP the priority:** (b) — a *measured miss* by clojure-lsp on a dynamic/macro ref — is the
+talk's **empirical payload** (the thing that moves a skeptical PL room: watch lsp silently miss a ref the
+graph catches). honeysql is **supporting work, NOT the Tier-2 result**: a mechanism-demo + a cost-curve,
+and a beagle-hardening goldmine. Sole overclaim guard: never let N≈79 / "mechanism-at-scale" read as the
+empirical Tier-2 number.
+- **(a) honeysql — REFRAMED as a CURVE, not a count.** Drop "graph O(1) rename across 79 sites" as a
+  headline: throughput theater, and it conflates the O(1) *semantic re-point* with *time-to-compiled-
+  correct* (which is O(affected modules) for BOTH arms — both re-render+recompile). The real product is
+  the SHAPE of both end-to-end curves + the pre-registered **amortization question**: is the N=1 warm-vs-
+  warm 3–10× graph penalty FIXED overhead that amortizes toward parity at realistic N, or per-reference
+  cost that persists? (Full reframe in `CURVE-PREREGISTRATION.md`.)
+- **(b) the measured miss — GATED on a precondition the advisor flagged (verifying in-code NOW).** A
+  measured Tier-2 gap needs BOTH: clojure-lsp misses the ref AND Fram's `refers_to` catches it. But
+  `refers_to` is a scope-correct **lexical** walk → it may share lsp's blind spots. So (b) is either
+  "pick a target" or "**build** expansion/dispatch-aware materialization first, THEN measure" — and which
+  one decides the talk claim ("graph catches what text misses" vs "graph CAN model refs text structurally
+  can't, once built").
+  - **Gating check (workflow running, verdict pending):** *what reference class does Fram's walk cover
+    that lsp's doesn't?*
+    - keyword-dispatch (re-frame ids, multimethods, integrant keys): a lexical walk misses these too → (b)=BUILD.
+    - macro-generated refs (lsp's classic blind spot): graph catches IFF the walk sees the *expanded* form,
+      not the surface `.bclj` → the whole verdict hinges on this. Pending the in-code finding.
 
 **2. (EMPIRICAL — resolved by running, not a decision) Does clojure-lsp latency grow with N?** Unmeasured.
 Pre-registered to measure lsp wall-time at each N. If flat, the latency axis is "graph slower at every N"
@@ -80,6 +93,12 @@ Pre-registered to measure lsp wall-time at each N. If flat, the latency axis is 
 position: mechanism proven (S2), one measured datapoint (N=1) on real code, the honest frame + the latency
 tradeoff stated, Tier-1 unimpeachable. Is that enough for the proposal, or push to a measured divergence
 (N≈79 and/or a Tier-2 target) first?
+- **Advisor (2026-06-20): ENOUGH.** You do NOT need the measured miss for Wednesday. Tier-1 proof +
+  the N=1 measured floor + the stated latency tradeoff + a **named** Tier-2 target/plan (the dynamic-ref
+  miss) is a complete, honest proposal. The talk is October — plenty of runway to bank the measured miss
+  before the stage. The only thing that turns the proposal into an overclaim is letting N≈79 /
+  "mechanism-at-scale" masquerade as the empirical Tier-2 result. So: ship the proposal on Tier-1 + N=1 +
+  tradeoff + named-Tier-2-plan; bank the miss for the talk.
 
 ## What I do once you decide
 - **(a):** work around the beagle bug in the carve, run N≈12 then N≈79, report the full vector (incl. lsp
