@@ -34,3 +34,24 @@ Same shape as P2. Correctness gate = recompile-clean (un-re-pointed ref -> undef
 classified separately from greet's behavioral oracle. If no clean single-module scenario exists without
 porting, HALT (do not synthesize a gamed fixture, do not port).
 
+## P-LARGE-N (2026-06-21, LOOP-SPEC v2) — arm-LSP rename wall-time vs N on VANILLA honeysql (no port, falsifier-first)
+The large-N divergence question has two halves: (a) does clojure-lsp's rename wall-time CLIMB with N? (text
+side) and (b) does the graph's edit stay flat? (graph side). (b)'s mechanism is already established (O(1)
+daemon op + cheap O(N)-once bound_to install, measured flat at N=1..4). (a) is the gating unknown and it needs
+**NO port**: clojure-lsp renames `honey.sql.util/str` (N≈79) on the real honeysql Clojure source directly.
+Measure it FIRST — it decides whether the expensive arm-G port is worth doing.
+
+- **Method:** within ONE honeysql codebase (size + warm cache held constant), `clojure-lsp rename --dry` (no
+  mutation, re-runnable) on several `honey.sql.util` / `honey.sql` vars across a range of N (edit-set size),
+  warm (diagnostics prime first), timed. Each gives (N = edit count from the dry diff, wall-time).
+- **Prediction:** based on the small-N finding (flat ~206ms, analysis-dominated), I predict lsp's rename
+  stays **~FLAT in N even at N≈79** — the edit-set application is cheap; the cost is project analysis, which is
+  cached and N-independent. If so: **no divergence even at scale → the cost-curve question resolves NULL
+  without the port**, and the port becomes confirmatory-only (arm-G's O(1) is already mechanism-established).
+- **Falsifier:** if lsp wall-time climbs materially with N (the 79-site rename much slower than a 2-site rename
+  in the same warm project), divergence exists on the text side → the big honeysql port (arm-G at N≈79, under
+  the fidelity gate) becomes high-value to confirm arm-G stays flat, and I do it (marathon; beagle gaps jump
+  the queue).
+- This is the same falsifier-first move as the Tier-2 lsp gate: measure the cheap threatening thing before
+  building the favorable arm.
+
