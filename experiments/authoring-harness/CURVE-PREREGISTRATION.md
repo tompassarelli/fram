@@ -91,3 +91,33 @@ cherry-picked magnitude. Issue-sourced refactoring + pure-addressing (Clojure-gr
    measured-MISS stays the stronger, contingent-on-a-dynamic-ref result; verification-burden is the
    weaker, ALWAYS-available one. **If it comes out ~0 for honeysql's clean static symbols, that is itself
    the honest ceiling** (Tier 2 is weak on honeysql), stated now not discovered later.
+
+## Reframed before the honeysql run (advisor relay, 2026-06-20) — the deliverable is the CURVE, not a count
+The honeysql run's product is **NOT a rename-count** ("graph renames 79 sites"). That is throughput
+theater — exactly the magnitude-brag this project is disciplined against — and it adds no mechanism: the
+re-point of one `bound_to` edge is **O(1) regardless of N**, already proven at N=1. Worse, "O(1) rename
+across 79 sites" silently **conflates two different things**: the *semantic re-point* is O(1), but
+**time-to-compiled-correct is O(affected modules) for BOTH arms** (graph and lsp both re-render +
+recompile every touched module). So that phrase must never stand unqualified next to a large N.
+
+**The actual prize of the honeysql run = the SHAPE of both end-to-end cost curves vs N**, and one
+specific pre-registered hypothesis:
+
+- **Amortization question (pre-committed, two outcomes):** is the N=1 warm-vs-warm **3–10× graph latency
+  penalty** (1) **FIXED overhead** (daemon + render startup) that **amortizes toward parity** as N grows
+  (→ "the graph pays a fixed startup cost that is negligible at the N anyone actually refactors at" —
+  honest and thesis-adjacent), or (2) **per-reference cost** that persists/grows (→ "the graph is simply
+  slower per reference")? **This is the one thing N≈79 settles that N=1 cannot.** It is a hypothesis to
+  MEASURE, not assert — either outcome is a result.
+- **Measure BOTH curves, not just the graph's.** arm-G end-to-end and arm-LSP end-to-end at N=1/≈12/≈79;
+  plus arm-LSP rename wall-time alone at each N (latency-LEVEL vs latency-DIVERGENCE, per the sharpening
+  section above).
+- **Completeness null, stated plainly up front:** honeysql's symbols are static → clojure-lsp is
+  complete → completeness **TIES** and verification-burden is **~0**. honeysql's only wins are the
+  **Tier-1 structural guarantee** and the **beagle bugs it surfaces**. **honeysql is NOT the Tier-2
+  result** — it is mechanism-demo + cost-curve. The measured Tier-2 miss lives on a separate dynamic-ref
+  target (gated on the `refers_to`-coverage precondition; see STATUS.md decision #1).
+
+**Deliverable list for the honeysql run:** two end-to-end cost curves (arm-G, arm-LSP) at N=1/≈12/≈79;
+arm-LSP rename wall-time at each N; verification-burden at each N (expected ~0); the **amortization
+verdict** (fixed-and-amortizing vs per-reference). Not a rename count.
