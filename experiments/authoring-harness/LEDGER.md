@@ -299,3 +299,30 @@ experiment is Beagle's best stress test... that IS the work").
   fixes on my branch. Tom can redirect to (B) if the marathon isn't worth the session budget.
 **Classification:** argued (feasibility), not yet measured. util port remains the one GREEN gated port.
 
+### S-DIVERGENCE-VERDICT (2026-06-20T18:20Z) — large-N divergence ANSWERED; Tom chose (B); honey.sql port DEFERRED
+Tom adjudicated the scope fork: **(B)** — the divergence question is answered without the port. Stated at
+**honest epistemic weight** (do not let compaction round these up):
+- **arm-LSP (text): MEASURED.** ~2.64s fixed + **~3.1ms/reference**, across FOUR real points (N=9/46/88/239)
+  on vanilla honeysql (S-LARGE-N-LSP). Per-ref cost is **measured-GROWING across the full range to N=239.**
+- **arm-G (graph): MEASURED-cheap at small N + O(1)-by-mechanism beyond.** O(1) daemon op + amortized
+  `bound_to` install, measured **sub-ms each at N≤4** (S-QUERY-CURVE, S-REWRITE-NECESSITY). **NOT
+  high-N-measured.** Do NOT round to "graph measured flat at N=239" — that is exactly the port we declined.
+- **Separation (true weight, one sentence):** lsp's per-ref rename cost is **measured-growing (~3.1ms/ref to
+  N=239)**; the graph's is **measured-cheap (sub-ms) at small N and O(1)-by-mechanism beyond.** Graph favored
+  on the per-ref latency axis.
+- **The decisive reason the port is unnecessary (sharper than "confirmatory"):** `util/str` is a STATIC
+  symbol → clojure-lsp catches all 239 refs → **completeness holds, ZERO correctness divergence at N=239**
+  (the honeysql ceiling, [[tier2-analyzer-miss-closed]]). An N=239 arm-G point would measure the LATENCY axis
+  *in the exact regime already conceded text-favorable-on-correctness* — it cannot carry the headline. The
+  latency curves ARE the content there, and we have them. The port confirms a conceded axis; that is the
+  diminishing-returns call.
+- **N reconciliation (79 vs 239):** **79 = distinct caller FUNCTIONS; 239 = total semantic references** to
+  util/str (clojure-lsp `references`; ≈ the "~241 cljc-doubled" CURVE-PREREG already flagged). A rename touches
+  all 239 references → **rename-cost N = 239.** Both metrics are valid; 239 is the rename-N. (Earlier docs that
+  say "N≈79" mean distinct callers; not a contradiction.)
+- **Decision: (B).** honey.sql full-suite port → **DEFERRED beagle-hardening item** (real value:
+  ^:private / fn-multi / extend-protocol / syntax-quote / clojure.template fixes — but OFF the talk's critical
+  path; resume only if TRACK B stalls). **Now moving to TRACK B (optimization build).**
+- Classification: arm-LSP measured-with-config; arm-G measured-small-N + mechanism; verdict
+  argued-from-measured-data at honest weight.
+
