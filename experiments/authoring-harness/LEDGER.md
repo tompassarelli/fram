@@ -209,3 +209,34 @@ asserted-as-measured.
 edited-reference boundary honestly. The write-side story is now "graph slower exactly ONCE (lazy identity
 install), then faster and correct," measured + durable, not "graph slower but correct."
 
+---
+
+## TRACK A — RESUMED under LOOP-SPEC v2 (porting unlocked)
+
+### S-LARGE-N-LSP (2026-06-20T17:34Z) — arm-LSP rename wall-time vs N on VANILLA honeysql (no port; P-LARGE-N)
+Falsifier-first: the gating half (does clojure-lsp's rename climb with N?) needs NO port. Within ONE honeysql
+codebase (warm cache), `clojure-lsp rename --dry` on 4 real `honey.sql.util` vars spanning N. N = true
+SEMANTIC reference count (`clojure-lsp references`, not textual): `split-by-separator`=9, `into*`=46,
+`join`=88, `str`=239. **Correction:** `util/str`'s real semantic N is **239** (210 in sql.cljc alone), NOT the
+earlier textual "79" — the "79" was a distinct-caller-function / textual approximation. Banked straight.
+
+| N | arm-LSP rename wall-time (warm, --dry, 2 runs) |
+|---|---|
+| 9   | 2647, 2694 ms |
+| 46  | 2779, 2700 ms |
+| 88  | 2920, 2944 ms |
+| 239 | 3351, 3420 ms |
+
+**Fit:** ≈ **2.64s FIXED + ~3.1ms / reference.** **lsp's rename CLIMBS with N** — P-LARGE-N's "flat" prediction
+is FALSIFIED IN DIRECTION (real positive slope), but the climb is small + baseline-dominated (26× N → 1.27×
+time; N-dependent cost ~3ms/ref atop a ~2.6s fixed analysis baseline).
+**Attribution (rule 3):** the ~2.6s baseline = the CLI re-loading+analyzing honeysql per invocation
+(N-independent; a persistent editor LSP server would lower it). The ~3.1ms/ref SLOPE = the N-dependent
+edit-set growth — that IS the honest "lsp climbs with N" signal.
+**Implication (decision this drives):** lsp climbs → there is now a measured slope for the graph to beat → the
+arm-G honeysql port at large N is **JUSTIFIED** (flips from confirmatory-only to warranted): does arm-G's
+per-ref cost come in UNDER lsp's ~3.1ms/ref (divergence in the graph's favour), or does the graph's O(N)
+bound_to install cost a comparable per-ref amount (no wall-time divergence)? Unmeasured until the port.
+**Caveat:** --dry diff line-count not captured (output format); N trusted from `references` (semantic count).
+**Classification:** measured-with-config. **Next:** the honeysql port (TRACK A marathon; beagle gaps jump the queue).
+
