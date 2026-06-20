@@ -45,6 +45,7 @@ case "$SCN" in
   query-N1) SRC="src/fram/query.bclj"; MODULE="query"; OLD="lit-errors";  NEW="lit-errs";  CLJ_NS="fram.query"; ORACLE_MODE=recompile; NREFS=1 ;;
   query-N2) SRC="src/fram/query.bclj"; MODULE="query"; OLD="strata-of";   NEW="strata-fn"; CLJ_NS="fram.query"; ORACLE_MODE=recompile; NREFS=2 ;;
   query-N3) SRC="src/fram/query.bclj"; MODULE="query"; OLD="max-results"; NEW="max-res";   CLJ_NS="fram.query"; ORACLE_MODE=recompile; NREFS=3 ;;
+  fold-N2)  SRC="src/fram/fold.bclj";  MODULE="fold";  OLD="key-of"; NEW="key-fn"; CLJ_NS="fram.fold"; ORACLE_MODE=recompile; NREFS=2 ;;  # cross-module confirmation (different module)
   query-varsof|query-N4)   # private defn-, 4 intra-module refs, no cross-module use
     SRC="src/fram/query.bclj"; MODULE="query"; OLD="vars-of"; NEW="vars-set"
     CLJ_NS="fram.query"; ORACLE_MODE=recompile
