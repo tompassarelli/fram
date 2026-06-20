@@ -27,7 +27,8 @@ now(){ date +%s%N; }
 ms(){ echo $(( ( $(now) - $1 ) / 1000000 )); }
 
 kill_port(){ for p in $(ss -tlnpH "sport = :$PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do kill "$p" 2>/dev/null || true; done; }
-trap 'kill_port; rm -rf harness "$WD"' EXIT
+OUTROOT=""   # ns-root dir beagle-build-all writes into (e.g. harness/ for harness.greet, fram/ for fram.query); set after registry, cleaned on exit
+trap 'kill_port; rm -rf ${OUTROOT:+"$OUTROOT"} "$WD" 2>/dev/null' EXIT
 kill_port
 
 # --- scenario registry --------------------------------------------------------
@@ -53,8 +54,9 @@ case "$SCN" in
   *) echo "unknown scenario: $SCN (add it to the registry)"; exit 2 ;;
 esac
 
+OUTROOT="${CLJ_NS%%.*}"   # beagle-build-all output root for this scenario's ns (cleaned by trap)
 echo "## scenario=$SCN module=$MODULE rename $OLD->$NEW N(refs)=$NREFS port=$PORT"
-echo "## wd=$WD"
+echo "## wd=$WD outroot=$OUTROOT"
 
 # behavioral oracle (only for ORACLE_MODE=behavioral): load a clj, call the fn, assert ==.
 # recompile mode uses recompile-clean as the correctness gate instead (an un-re-pointed ref =>
@@ -107,8 +109,8 @@ after=$(grep -c . "$WD/code.log")
 t=$(now); bb -cp out bin/fram-render-code "$MODULE" --log "$WD/code.log" --out "$WD/G.bclj" >/dev/null 2>&1; G_RENDER=$(ms "$t")
 grep -qw "$NEW" "$WD/G.bclj" || { echo "arm-G FAIL: new name absent in render"; exit 1; }   # OLD may persist in COMMENTS — that is the Tier-1 no-false-hit property, NOT a failure; correctness = recompile+oracle
 t=$(now); "$BEAGLE/bin/beagle-build-all" "$WD/G.bclj" >/dev/null; G_RECOMPILE=$(ms "$t")   # 0 errors == every ref re-pointed (correctness gate for BOTH modes)
-if [ "$ORACLE_MODE" = behavioral ]; then bb "$WD/oracle.bb" harness/$MODULE.clj >/dev/null; fi
-rm -rf harness
+if [ "$ORACLE_MODE" = behavioral ]; then bb "$WD/oracle.bb" "$OUTROOT/$MODULE.clj" >/dev/null; fi
+rm -rf "$OUTROOT"
 echo "arm-G    ingest(setup,one-time)=${G_INGEST}ms  edit(daemon-repoint,warm)=${G_EDIT}ms  render=${G_RENDER}ms  recompile(beagle,typed)=${G_RECOMPILE}ms"
 echo "arm-G    log: $before -> $after claims (rename = +1 assert/+1 retract = O(1))"
 
