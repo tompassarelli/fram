@@ -113,3 +113,26 @@ eager-by-construction (commit swaps `@co` before `:edit-min` returns; version is
 monotonic), not asserted per-read against the specific def. A fair propagation proxy, not
 a targeted content check. Same disjoint-target corpus throughout; same-file overlap (git
 conflicts) is the #45 continuous-arrival follow-up.
+
+## Content-asserted (the hostile-question pass)
+
+The flat ~1ms above used a `:version` read, which returns whether or not it reflects the
+specific write. Propagation is commit-to-visible, and "visible" must mean the reader
+OBSERVED writer i's own def, not that a read returned (the same bug shape as the
+write-bleeds-into-prop conflation, one level up). So the read now polls a lock-free
+`:seen {:v <name>}` (names are unique per writer; interned-in-the-warm-snapshot <=> that
+writer's def reached the store) and stamps t-vis only once writer i's def is CONFIRMED
+present.
+
+| K | git-prop | graph-prop (content-asserted) |
+|---|---------:|------------------------------:|
+| 1 | 49.9 | 1.6 |
+| 2 | 83.3 | 1.6 |
+| 4 | 143.7 | 1.7 |
+| 8 | 313.7 | 2.2 |
+
+graph propagation stays FLAT ~1.6-2.2ms across K WITH the content assertion. The earlier
+1.1ms was not masking a delay: the def is visible essentially the instant commit returns
+(eager store), and confirming it costs a lock-free interning lookup. **Caveat now CLOSED**
+— visibility is asserted per-read, not argued by-construction. git climbs 50->314ms
+(merge-queue). At K=8, ~140x lower and flat vs climbing. This is the bulletproof version.

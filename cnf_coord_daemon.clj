@@ -1012,6 +1012,10 @@
     ;; concurrent writers. Used to measure true propagation (commit -> reader sees) without
     ;; the read-coupled-to-writer-lock artifact the dlock-wrapped :version/:status have.
     (= :version-free (:op req)) {:version (current-seq @co)}
+    ;; LOCK-FREE CONTENT check: is value string (:v req) interned in the warm @co snapshot
+    ;; yet? Names are unique per writer, so interned <=> that writer's def reached the store.
+    ;; This is the propagation visibility signal (commit -> reader sees THIS def), off the dlock.
+    (= :seen (:op req)) {:seen (boolean (c/value-id (:store @co) (:v req)))}
     (= :edit-min (:op req))
     (try (do-edit-min (:spec req))
          (catch Throwable t {:reject [(str "edit-min: " (.getMessage t))]

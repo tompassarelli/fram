@@ -61,12 +61,17 @@
 
 ;; ---- GRAPH arm: K concurrent writers to one warm daemon (distinct defs) ----
 (defn graph-writer [port i base]
-  (let [t0 (nowns)
+  (let [nm (str base i)
+        t0 (nowns)
         ins (client port {:op :edit-min :spec {:op "upsert-form" :module "kernel"
-                                               :datum (list 'def (symbol (str base i)) i)}})
+                                               :datum (list 'def (symbol nm) i)}})
         t-write (nowns)                                ; commit returns; store eager-updated
-        _ (:version (client port {:op :version-free}))  ; B's read — O(1) LOCK-FREE version (off the dlock; isolates true propagation)
-        t-vis (nowns)]
+        ;; CONTENT ASSERTION — commit->visible means B's read REFLECTS writer i's OWN def,
+        ;; not merely that a read returned. Poll the lock-free :seen until nm is in the store.
+        t-vis (loop [n 0]
+                (cond (:seen (client port {:op :seen :v nm})) (nowns)
+                      (> n 100000) (do (println "  graph: def" nm "NEVER seen") (nowns))
+                      :else (recur (inc n))))]
     {:landed (boolean (:ok ins)) :write (ms t0 t-write) :prop (ms t-write t-vis)}))
 
 (defn run-K [arm K port]
