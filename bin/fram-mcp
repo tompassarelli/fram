@@ -9,4 +9,4 @@
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
 export FRAM_LOG="${FRAM_LOG:-$HERE/claims.log}"
-cd "$HERE" && exec bb -cp out fram_mcp.clj
+cd "$HERE" && exec bb -cp out tests/fram_mcp.clj

@@ -21,7 +21,7 @@ jobs:
       - name: Checkout beagle (for the stdlib-fram.rkt currency gate)
         uses: actions/checkout@v4
         with:
-          repository: tompassarelli/beagle
+          repository: Autonymy/beagle
           path: .beagle
 
       - name: Install babashka
@@ -40,20 +40,23 @@ jobs:
       - name: Warm JVM deps (cheshire) so the daemon boots fast
         run: clojure -P
 
+      - name: README anti-rot gate (URLs, verbs, paths, the core loop runs)
+        run: scripts/readme-check.sh
+
       - name: Unit + integration suites (babashka, on the committed out/)
         env:
           BEAGLE: ${{ github.workspace }}/.beagle
         run: |
           fail=0
-          for t in *_test.clj; do
-            [ "$t" = tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
+          for t in tests/*_test.clj; do
+            [ "$t" = tests/tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
             echo "== $t =="
             bb -cp out "$t" || fail=1
           done
           exit $fail
 
       - name: mTLS round-trip (JVM daemon, engine-terminated mutual TLS)
-        run: bb tls_test.clj
+        run: bb tests/tls_test.clj
 
       # Perf-budget: the #44 propagation thesis (graph-prop FLAT in K; graph >> git at K=8) must not
       # silently rot. Ratio-based budgets (machine-independent) + generous absolute ceilings, so CI
