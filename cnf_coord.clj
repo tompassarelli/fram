@@ -186,6 +186,64 @@
                   (append-tx! co (delta-records co since tx))
                   {:ok (get-in @(store co) [:txs tx :seq])})))))))))
 
+;; --- exclusive lease (mutual exclusion) — ADDITIVE; commit!/retract! untouched ----
+;; Closes the lost-update-not-mutex hole: base_version protects against a STALE
+;; overwrite, not against two acquirers each reading a FRESH base (both "win", the
+;; second stomps the first — measured: experiments/coordinator-write-path). Here the
+;; acquire reads holder LIVENESS fresh INSIDE the lock. One single-valued cell on
+;; @lease:<R> co-encodes holder|expiry-ms|epoch (one cell, never separately-CAS'd two);
+;; held-ness is DERIVED (present AND expiry > coord-clock). The coordinator is the sole
+;; clock authority (now read in-lock). A lapsed lease is reclaimed by the next
+;; acquirer's own commit — no sweeper writer. (Add "lease" to FRAM_SINGLE_VALUED in
+;; prod; acquire-lease! also pins the cardinality single on first use.)
+(def ^:dynamic *lease-pred* "lease")
+(defn- lease-subj [res] (str "@lease:" res))
+(defn- encode-lease [h exp epoch] (str h "|" exp "|" epoch))
+(defn- decode-lease [s]
+  (when (string? s)
+    (let [[h e ep] (str/split s #"\|")]
+      (when (and h e ep) {:holder h :exp (parse-long e) :epoch (parse-long ep)}))))
+(defn- read-lease [co res]                       ; current decoded lease on @lease:<res>, or nil
+  (let [te  (s/resolve-name (store co) (lease-subj res))
+        pid (c/value-id (store co) *lease-pred*)]
+    (when (and te pid)
+      (when-let [cid (first (live-cids-lp co te pid))]
+        (decode-lease (c/literal (store co) (:r (get (:claims @(store co)) cid))))))))
+
+;; acquire (or refresh-if-mine, or reclaim-if-lapsed). ttl-ms = lease duration.
+(defn acquire-lease! [co holder res ttl-ms]
+  (locking (:lock co)
+    (let [now (System/currentTimeMillis)         ; sole clock authority, read IN-lock
+          cur (read-lease co res)]
+      (if (and cur (> (:exp cur) now) (not= (:holder cur) holder))
+        {:reject :held :holder (:holder cur) :exp (:exp cur) :version (current-seq co)}
+        (let [epoch (inc (or (:epoch cur) 0))     ; monotonic fence epoch
+              exp   (+ now ttl-ms)
+              since (:next-id @(store co))
+              tx    (c/begin-tx! (store co) holder)
+              te    (ent! co tx (lease-subj res))]
+          (when (not= "single" (s/cardinality (store co) *lease-pred*))   ; the cell must supersede
+            (s/def-predicate! (store co) *lease-pred* "single" "literal" tx))
+          (s/assert! (store co) te *lease-pred* (encode-lease holder exp epoch) tx)
+          (append-tx! co (delta-records co since tx))
+          {:ok (get-in @(store co) [:txs tx :seq]) :holder holder :exp exp :epoch epoch})))))
+
+(defn release-lease! [co holder res]              ; explicit early release (holder only)
+  (locking (:lock co)
+    (let [cur (read-lease co res)]
+      (if (and cur (= (:holder cur) holder))
+        (retract! co holder (lease-subj res) *lease-pred* nil (current-seq co))
+        {:ok (current-seq co) :noop true}))))
+
+;; fencing: a protected write tagged with the holder's lease epoch is valid ONLY while
+;; that holder still holds the lease at that epoch — closes the paused-then-woken hole a
+;; perfect lock can't. A re-acquire bumps the epoch, so a stale token is rejected.
+(defn fence-ok? [co res holder epoch]
+  (locking (:lock co)
+    (let [cur (read-lease co res)]
+      (boolean (and cur (= (:holder cur) holder) (= epoch (:epoch cur))
+                    (> (:exp cur) (System/currentTimeMillis)))))))
+
 ;; --- replay: rebuild the store from the v2 log (drops torn/uncommitted txs) --
 (defn- read-records [path]
   (with-open [r (io/reader path)]
