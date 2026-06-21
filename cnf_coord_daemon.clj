@@ -1079,6 +1079,14 @@
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
+      ;; --- exclusive-lease WIRE VERBS (Lodestar shadow: agents lease @lease:<res> over the socket) ---
+      ;; Route to the in-process lease arm (acquire/release/fence — cnf_lease_test 10/10). The
+      ;; lease fn reads holder liveness IN its own coord lock (the real mutual-exclusion seam);
+      ;; the outer dlock just serializes with other daemon ops. A bare `:assert @lease:<res>` is
+      ;; the UNSAFE (lost-update) path the lease arm exists to close — agents MUST use these.
+      :acquire-lease (acquire-lease! @co (:holder req) (:res req) (:ttl-ms req))
+      :release-lease (release-lease! @co (:holder req) (:res req))
+      :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
       ;; AST/Datalog query over the WARM in-memory graph — the read surface the cold
