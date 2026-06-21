@@ -1,0 +1,215 @@
+#lang beagle/clj
+;; ============================================================================
+;; fram.coord-resolver — the daemon's resolver-woven layer, ported to Beagle.
+;; ============================================================================
+;; Self-host hygiene (under L2): the store-internal + resolver-woven handlers that
+;; lived as hand-Clojure in cnf_coord_daemon.clj move here. CUT 1 = the store-internal
+;; foundation (no resolve/* binding yet): strip-resolve-claims! + restore-seq-space!.
+;; (Later cuts: with-resolve-read + materialize-refers-* + callers/keyset/edit-min,
+;;  now portable since G-A landed — cross-module (binding [resolve/* ..]) type-checks.)
+;; ============================================================================
+(ns fram.coord-resolver)
+(define-mode strict)
+(require fram.types :as t)
+(require fram.cnf :as c)
+(require fram.coord-daemon :as cd)   ; daemon state (co/dirty-modules/export-snapshot/...) + module-node-ids
+(require resolve :as r)              ; the lexical resolver (chartroom/src/resolve.bclj, ns `resolve`)
+
+;; remove every victim cid from an index's cid-vectors, dropping keys whose vec empties
+;; (a fresh fold never emits an empty bucket). Two concrete-typed variants: the by-l/p/r
+;; indexes are Int-keyed; by-lp/pr are (Vec Int)-keyed. (No generics needed; no Any.)
+(defn- drop-victims-int [m :- (Map Int (Vec Int)) victims :- (Set Int)] :- (Map Int (Vec Int))
+  (reduce-kv (fn [acc :- (Map Int (Vec Int)) k :- Int cids :- (Vec Int)] :- (Map Int (Vec Int))
+               (let [kept :- (Vec Int) (vec (remove (fn [c :- Int] :- Bool (contains? victims c)) cids))]
+                 (if (empty? kept) acc (assoc acc k kept))))
+             (let [e :- (Map Int (Vec Int)) {}] e) m))
+
+(defn- drop-victims-vec [m :- (Map (Vec Int) (Vec Int)) victims :- (Set Int)] :- (Map (Vec Int) (Vec Int))
+  (reduce-kv (fn [acc :- (Map (Vec Int) (Vec Int)) k :- (Vec Int) cids :- (Vec Int)] :- (Map (Vec Int) (Vec Int))
+               (let [kept :- (Vec Int) (vec (remove (fn [c :- Int] :- Bool (contains? victims c)) cids))]
+                 (if (empty? kept) acc (assoc acc k kept))))
+             (let [e :- (Map (Vec Int) (Vec Int)) {}] e) m))
+
+(defn- dissoc-all [m :- (Map Int Any) victims :- (Set Int)] :- (Map Int Any)
+  (reduce (fn [mm :- (Map Int Any) v :- Int] :- (Map Int Any) (dissoc mm v)) m victims))
+
+;; strip EVERY live resolve-pred claim (refers_to + render markers) from the store's
+;; claims + tx-of + objects + superseded + all five indexes. subj-keep? nil => strip all
+;; (whole-corpus); a fn Int->Bool => strip only claims whose SUBJECT it accepts (scoped,
+;; one module's derived edges). These claims are derived/in-memory (never on the flat log),
+;; so dropping them from the maps is exactly right. Returns the count stripped.
+(defn strip-resolve-claims! [ctx :- (Atom t/Store) subj-keep? :- (U [Int -> Bool] Nil)] :- Int
+  (let [s    :- t/Store (deref ctx)
+        vint :- (Map Any Int) (:val-intern s)
+        rp-ids :- (Set Int)
+          (set (keep (fn [nm :- String] :- Int? (get vint nm)) cd/resolve-preds))
+        entries :- (Vec Any) (vec (:claims s))         ; [cid {:l :p :r}] map-entries
+        victims :- (Set Int)
+          (set (keep (fn [e :- Any] :- Int?
+                       (let [cid :- Int (first e)
+                             cl  :- (Map Keyword Any) (nth e 1)
+                             pid :- Int (:p cl)
+                             lid :- Int (:l cl)]
+                         (if (and (contains? rp-ids pid)
+                                  (if (nil? subj-keep?) true (let [f :- [Int -> Bool] subj-keep?] (f lid))))
+                           cid
+                           nil)))
+                     entries))]
+    (if (empty? victims)
+      0
+      (do (swap! ctx
+            (fn [st :- t/Store] :- t/Store
+              (-> st
+                  (update :claims     (fn [m :- (Map Int (Map Keyword Any))] :- (Map Int (Map Keyword Any))
+                                        (reduce (fn [mm :- (Map Int (Map Keyword Any)) v :- Int] :- (Map Int (Map Keyword Any)) (dissoc mm v)) m victims)))
+                  (update :tx-of      (fn [m :- (Map Int Int)] :- (Map Int Int)
+                                        (reduce (fn [mm :- (Map Int Int) v :- Int] :- (Map Int Int) (dissoc mm v)) m victims)))
+                  (update :objects    (fn [m :- (Map Int Bool)] :- (Map Int Bool)
+                                        (reduce (fn [mm :- (Map Int Bool) v :- Int] :- (Map Int Bool) (dissoc mm v)) m victims)))
+                  (update :superseded (fn [m :- (Map Int Bool)] :- (Map Int Bool)
+                                        (reduce (fn [mm :- (Map Int Bool) v :- Int] :- (Map Int Bool) (dissoc mm v)) m victims)))
+                  (update :idx-by-l   (fn [m :- (Map Int (Vec Int))] :- (Map Int (Vec Int)) (drop-victims-int m victims)))
+                  (update :idx-by-p   (fn [m :- (Map Int (Vec Int))] :- (Map Int (Vec Int)) (drop-victims-int m victims)))
+                  (update :idx-by-r   (fn [m :- (Map Int (Vec Int))] :- (Map Int (Vec Int)) (drop-victims-int m victims)))
+                  (update :idx-by-lp  (fn [m :- (Map (Vec Int) (Vec Int))] :- (Map (Vec Int) (Vec Int)) (drop-victims-vec m victims)))
+                  (update :idx-by-pr  (fn [m :- (Map (Vec Int) (Vec Int))] :- (Map (Vec Int) (Vec Int)) (drop-victims-vec m victims))))))
+          (count victims)))))
+
+;; the resolver opens a tx (begin-tx! bumps :next-seq + a :txs entry) while materializing
+;; refers_to; that would move current-seq + poison the query cache. SNAPSHOT the seq-space
+;; + supersedes-pred before, restore after: minted refers_to ids stay (next-id stays
+;; advanced), but :next-seq / :txs roll back (current-seq unchanged) and :supersedes-pred
+;; is restored to the migrate store's cnf-supersedes.
+(defn restore-seq-space! [ctx :- (Atom t/Store) before :- t/Store] :- Any
+  (swap! ctx (fn [s :- t/Store] :- t/Store
+               (assoc s :next-seq        (:next-seq before)
+                        :supersedes-pred (:supersedes-pred before)
+                        :txs             (:txs before)))))
+
+;; ---- CUT 2: resolver-woven materialize (cross-module r/* binding) ----
+;; READ-ONLY bind of the resolver's accessors over a store: ctx + the marker value-ids
+;; (store-local) + the corpus tables; corpus-from-store! then derives the def-binding tables
+;; (writes no claims). The body is a THUNK (not a macro): G-A makes the DIRECT cross-module
+;; binding type-check, but a macro's syntax-quote qualifies r/ctx -> resolve/ctx which G-A's
+;; use-site-keyed import set misses (flagged to beagle-1). r/* dynvars are untyped -> reads narrow.
+(defn with-resolve-read* [store :- (Atom t/Store) thunk :- [-> Any]] :- Any
+  (binding [r/ctx store
+            r/Vp     (c/value-id store "v")
+            r/KIND   (c/value-id store "kind")
+            r/REFERS (c/value-id store "refers_to")
+            r/FIXED  (c/value-id store "keep_spelling")
+            r/QUAL   (c/value-id store "qualifier")
+            r/CTOR   (c/value-id store "ctor_prefix")
+            r/ACC    (c/value-id store "accessor_field")
+            r/file->ents (atom {})
+            r/srcs [] r/file-modframe {} r/file-typeframe {}
+            r/file-accessors {} r/global-exports {}
+            r/global-type-exports {} r/global-accessor-exports {}]
+    (r/corpus-from-store!)
+    (thunk)))
+
+;; materialize refers_to WHOLE-CORPUS over the warm store: strip all stale refers_to,
+;; re-walk every module (resolve-warm-store! self-binds + writes the edges), restore the
+;; seq-space. Ground truth (set-equal to the EDN path). Returns instrumentation.
+(defn materialize-refers-whole! [] :- (Map Keyword Any)
+  (let [co0    :- Any (deref cd/co)
+        st     :- (Atom t/Store) (:store co0)
+        before :- t/Store (deref st)
+        stripped :- Int (strip-resolve-claims! st nil)
+        walk-info :- (Atom Any) (atom (let [x :- Any nil] x))]
+    (r/resolve-warm-store! st
+      (fn [] :- Any (reset! walk-info {:forms-walked  (deref r/n-forms-walked)
+                                       :modules-walked (deref r/walked-modules)})))
+    (restore-seq-space! st before)
+    (let [wi :- (Map Keyword Any) (deref walk-info)]
+      {:stripped stripped :forms-walked (:forms-walked wi) :modules-walked (:modules-walked wi)})))
+
+;; snapshot EVERY module's current export-set (taken right after a materialize so the next
+;; edit's classifier diffs a coherent baseline). Cheap: table reads, no walk.
+(defn snapshot-exports! [st :- (Atom t/Store)] :- Any
+  (reset! cd/export-snapshot
+    (let [snap :- (Map String Any)
+          (with-resolve-read* st
+            (fn [] :- Any
+              (let [ss :- (Vec Any) r/srcs]
+                (into {} (mapv (fn [m :- Any] :- (Vec Any) [(let [ms :- String m] ms) (r/module-export-set m)])
+                               (filterv (fn [m :- Any] :- Bool (some? m)) ss))))))]
+      snap)))
+
+;; classify dirty -> {:affected (re-walk set) :macro? :export-changed}. For each dirty module:
+;; if its export-set is UNCHANGED only it re-resolves; if CHANGED (or new), it + its consumers
+;; (modules importing it). A defmacro touch => whole-corpus (macro?). Call under with-resolve-read*.
+(defn classify-affected [dirty :- (Set String) snapshot :- (Map String Any)] :- (Map Keyword Any)
+  (let [ig :- (Map String Any) (r/import-graph)
+        consumers (fn [m :- String] :- (Set String)
+                    (set (keep (fn [e :- Any] :- String?
+                                 (let [s :- String (first e)
+                                       imps :- (Set String) (nth e 1)]
+                                   (if (contains? imps m) s nil)))
+                               (vec ig))))
+        macro?   :- Bool (boolean (some (fn [m :- String] :- Bool (r/module-has-macro? m)) dirty))
+        changed  :- (Set String) (set (filterv (fn [m :- String] :- Bool
+                                                  (not= (r/module-export-set m) (get snapshot m :coord-resolver/absent)))
+                                                (vec dirty)))
+        affected :- (Set String) (reduce (fn [acc :- (Set String) m :- String] :- (Set String) (into acc (consumers m)))
+                                         dirty (vec changed))]
+    {:affected affected :macro? macro? :export-changed changed}))
+
+;; re-resolve ONLY the affected module set: classify -> strip those modules' edges -> resolve-modules!
+;; walks just them -> restore seq-space -> re-snapshot -> clear dirty. macro-touch => whole-corpus.
+(defn materialize-refers-scoped! [] :- (Map Keyword Any)
+  (let [co0    :- Any (deref cd/co)
+        st     :- (Atom t/Store) (:store co0)
+        before :- t/Store (deref st)
+        dirty  :- (Set String) (deref cd/dirty-modules)
+        cls    :- (Map Keyword Any) (with-resolve-read* st (fn [] :- Any (classify-affected dirty (deref cd/export-snapshot))))
+        affected :- (Set String) (:affected cls)
+        macro?   :- Bool (:macro? cls)
+        export-changed :- (Set String) (:export-changed cls)]
+    (if macro?
+      (let [whole :- (Map Keyword Any) (materialize-refers-whole!)]
+        (snapshot-exports! st)
+        (reset! cd/dirty-modules (let [e :- (Set String) #{}] e))
+        {:mode :whole-macro-fallback :walked :all :stripped (:stripped whole) :export-changed export-changed})
+      (let [keep-ids :- (U (Set Int) Nil) (cd/module-node-ids st affected)
+            scope-set :- (Set Int) (if (some? keep-ids) keep-ids (let [e :- (Set Int) #{}] e))
+            stripped :- Int (strip-resolve-claims! st (fn [lid :- Int] :- Bool (contains? scope-set lid)))
+            walk-info :- (Atom Any) (atom (let [x :- Any nil] x))]
+        (r/resolve-modules! st affected
+          (fn [] :- Any (reset! walk-info {:forms-walked (deref r/n-forms-walked) :modules-walked (deref r/walked-modules)})))
+        (restore-seq-space! st before)
+        (snapshot-exports! st)
+        (reset! cd/dirty-modules (let [e :- (Set String) #{}] e))
+        (let [wi :- (Map Keyword Any) (deref walk-info)]
+          {:mode :scoped :walked affected :stripped stripped :export-changed export-changed
+           :forms-walked (:forms-walked wi) :modules-walked (:modules-walked wi)})))))
+
+;; keep refers_to current for the next read: COLD (never materialized) => whole + snapshot;
+;; WARM (dirty modules) => scoped re-resolve; CLEAN => nothing.
+(defn ensure-refers! [] :- Any
+  (cond
+    [(not (deref cd/materialized?))
+     (let [rr :- (Map Keyword Any) (materialize-refers-whole!)
+           co0 :- Any (deref cd/co)]
+       (snapshot-exports! (:store co0))
+       (reset! cd/dirty-modules (let [e :- (Set String) #{}] e))
+       (reset! cd/materialized? true)
+       (reset! cd/refers-version (cd/cur-seq))
+       (reset! cd/last-materialize (let [x :- Any (assoc rr :mode :whole-cold :walked :all)] x)))]
+    [(not (empty? (deref cd/dirty-modules)))
+     (let [rr :- (Map Keyword Any) (materialize-refers-scoped!)]
+       (reset! cd/refers-version (cd/cur-seq))
+       (reset! cd/last-materialize (let [x :- Any rr] x)))]
+    [:else nil]))
+
+;; INCREMENTAL CORPUS CACHE: seed module->entity-ids ONCE (cold corpus-from-store! full reduce),
+;; reuse across commits; re-seed only when the target module is absent or after a reload.
+(defn ensure-corpus-groups! [module :- String] :- Any
+  (let [cg0 :- Any (deref cd/corpus-groups)]
+    (if (or (nil? cg0) (not (contains? (let [m :- (Map String Any) cg0] m) module)))
+      (with-resolve-read* (:store (let [c :- Any (deref cd/co)] c))
+        (fn [] :- Any (reset! cd/corpus-groups (let [fe :- Any (deref r/file->ents)] fe))))
+      nil))
+  (deref cd/corpus-groups))
+
+(defn invalidate-corpus-groups! [] :- Any (reset! cd/corpus-groups (let [x :- Any nil] x)))
