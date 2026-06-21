@@ -831,7 +831,7 @@
         (when-let [line (read-line-bounded r max-line-bytes)]
           (let [req (parse-req line)]
             (if (= (:op req) :subscribe)
-              (do (fram.rt/subscribe! w)
+              (do (fram.rt/subscribe! w (:filter req))   ; scoped-subscribe: nil filter => firehose (back-compat)
                   ;; A subscriber is long-lived: it RECEIVES pushed events and sends
                   ;; nothing, so the request-path read timeout (5s) must NOT apply or
                   ;; it would drop every idle subscriber. Disable it for this socket;

@@ -356,22 +356,33 @@
 ;; subscriber delivery is BEST-EFFORT + OFF the write path (a single-threaded executor):
 ;; a writer whose write/flush throws is dropped; single thread keeps events ordered. rt
 ;; OWNS the registry so the Beagle do-assert!/do-retract! just fire (rt/notify-subs! event);
-;; the daemon shim registers sockets via (rt/subscribe! writer). (Scoped filter = later add.)
-(defonce ^:private subscribers (atom []))
+;; the daemon shim registers sockets via (rt/subscribe! writer [filter]).
+;; SCOPED SUBSCRIBE (G2 primitive 4): a subscriber may pass a filter {:p <pred> :r [<v>..]};
+;; an event E reaches S iff S has NO filter (firehose, back-compat) OR (= (:p E) (:p f)) AND
+;; (:r E) is in the filter's r-set. Mechanism not policy: one (p,r) match (by-pr-friendly),
+;; the agent owns its scope. A non-matching subscriber is KEPT (not delivered, not dropped).
+(defonce ^:private subscribers (atom []))   ; vec of {:w writer :f filter|nil}
 (defonce ^:private notify-exec
   (java.util.concurrent.Executors/newSingleThreadExecutor
     (reify java.util.concurrent.ThreadFactory
       (newThread [_ r] (doto (Thread. r "cnf-notify") (.setDaemon true))))))
-(defn subscribe! [w] (swap! subscribers conj w) nil)        ; register a long-lived subscriber writer
+(defn subscribe!
+  ([w] (subscribe! w nil))                                  ; no filter => firehose (back-compat)
+  ([w filt] (swap! subscribers conj {:w w :f filt}) nil))   ; scoped: filt = {:p <pred> :r [<v>..]}
 (defn subscriber-count [] (count @subscribers))
+(defn- sub-match? [filt event]
+  (or (nil? filt)
+      (and (= (:p event) (:p filt)) (contains? (set (:r filt)) (:r event)))))
 (defn notify-subs! [event]
   (let [line (str (pr-str event) "\n")]
     (.execute notify-exec
       (fn [] (reset! subscribers
-                     (vec (filter (fn [w]
-                                    (try (.write ^java.io.BufferedWriter w line)
-                                         (.flush ^java.io.BufferedWriter w) true
-                                         (catch Throwable _ false)))
+                     (vec (filter (fn [s]
+                                    (if (sub-match? (:f s) event)
+                                      (try (.write ^java.io.BufferedWriter (:w s) line)
+                                           (.flush ^java.io.BufferedWriter (:w s)) true
+                                           (catch Throwable _ false))
+                                      true))                 ; not in scope: keep, don't deliver
                                   @subscribers))))))
   nil)
 
