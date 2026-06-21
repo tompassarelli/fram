@@ -41,28 +41,11 @@
 
 ;; --- string ops the parser needs -------------------------------------------
 
-(defn split-on [s sep]
-  (vec (str/split s (re-pattern (java.util.regex.Pattern/quote sep)) -1)))
 (defn str-index-of [s sub] (str/index-of s sub))
 (defn split-comma [s]
   (->> (str/split s #",") (map str/trim) (remove str/blank?) vec))
 (defn today-iso [] (str (java.time.LocalDate/now)))
 (defn str-lt? [a b] (neg? (compare a b)))
-
-;; split a triple line "<predicate><ws><object...>" into [pred obj]; obj may
-;; contain spaces (it's the rest of the line). Blank/garbage -> [line ""].
-(defn split-kv [line]
-  (let [t (str/trim line)
-        m (re-find #"^(\S+)\s+(.*)$" t)]
-    (if m [(nth m 1) (nth m 2)] [t ""])))
-
-;; --- claim-native triple-file value (de)serialization -----------------------
-;; A claim object in a triple file is either a ref (@id, handled by the caller)
-;; or a literal. Literals are quoted/unquoted via EDN — bulletproof escaping
-;; (the same pr-str/read-string pair the log uses), so no hand-rolled quoter can
-;; ever emit something a real parser rejects.
-(defn edn-quote [s] (pr-str s))
-(defn edn-unquote [s] (edn/read-string s))
 
 ;; --- thread id: human-grouped, fixed-width, opaque key ----------------------
 ;; 2026-06-15-150040 (yyyy-MM-dd-HHmmss). Dashes for glance-readability; fixed
@@ -356,6 +339,17 @@
   nil)
 (defn read-lines [path]                                     ; all lines of a file as a vector
   (with-open [r (io/reader path)] (vec (line-seq r))))
+
+;; --- resolver host seam (the host-interop chartroom.resolve declares-extern) ---
+;; Genuine host calls only — exit / diagnostics / format / timing. (Regex, edn,
+;; parse-long, split-lines were de-warted to native Beagle: regex literals +
+;; clojure.string / clojure.edn / parse-long ARE native; no host indirection needed.)
+(defn exit! [code] (System/exit (long code)))                       ; *reject!* default
+(defn println-out! [s] (println s) nil)                            ; stdout diagnostic
+(defn println-err! [s] (binding [*out* *err*] (println s)) nil)    ; the (binding [*out* *err*] …) sites
+(defn nano-time [] (System/nanoTime))                              ; FRAM_PROF timing
+(defn format-str [fmt args] (apply format fmt args))              ; format with a vec of args
+
 (defn filter-digits [s] (str/replace s #"[^0-9]" ""))
 (defn is-iso-datetime-19 [s]
   (boolean (and (= 19 (count s)) (re-matches #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}" s))))

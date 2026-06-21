@@ -1,0 +1,1492 @@
+#lang beagle/clj
+;; ============================================================================
+;; chartroom.resolve — Turtle #5/#6 lexical IDENTITY resolver, AUTHORED IN BEAGLE.
+;; ============================================================================
+;; A real lexical resolver: adds `refers_to <binding-node-id>` to each reference,
+;; pointing it at the CORRECT binding under shadowing (nearest enclosing scope).
+;; The hand-written resolve.clj (1565 lines of bb-script Clojure) becomes this
+;; typed module calling the cnf API; the root chartroom/src/resolve.clj is a thin
+;; re-export shim (ns resolve) so the daemon + ~10 tests load-file UNCHANGED, and
+;; -main / callgraph (datalog+cheshire) stay shim-side. Regex literals are a Beagle
+;; reader gap, so all regex is routed through fram.rt externs (pattern-as-string).
+;;
+;; DYNAMIC-VAR DISCIPLINE: Beagle's def grammar rejects `(def ^:dynamic N :- T v)`,
+;; so the 32 dynamic vars are UNTYPED (Any transport) and each READ recovers its
+;; concrete type at the use site via `(let [x :- T <dynvar>] …)` (the deref-erase
+;; idiom, cnf.bclj:27). `binding` + `set!` over them are proven (build type-checks
+;; the recovered reads). Atoms deref the same way.
+;; ============================================================================
+(ns resolve)   ; ns `resolve` (matches the original) so consumers' qualified `resolve/foo` + `resolve/<dynvar>` resolve to the INTERNED vars these defs create (bb/SCI qualified access needs interned, not :refer'd). The Clojure CLI (-main/callgraph) is appended into this same ns by the build.
+(define-mode strict)
+(require fram.types :as t)
+(require fram.cnf :as c)
+(require clojure.string :as str)
+(require fram.rt :as rt)
+
+;; --- host seam (declared-extern against fram.rt) -----------------------------
+(declare-extern fram.rt/slurp [String -> String])
+(declare-extern fram.rt/parse-edn [String -> Any])
+(declare-extern fram.rt/getenv [String -> (U String Nil)])
+(declare-extern fram.rt/exit! [Int -> Nil])
+(declare-extern fram.rt/println-out! [String -> Nil])
+(declare-extern fram.rt/println-err! [String -> Nil])
+(declare-extern fram.rt/nano-time [-> Int])
+(declare-extern fram.pr-str [Any -> String])
+(declare-extern fram.rt/format-str [String (Vec Any) -> String])
+(declare-extern fram.str/split-lines [String -> (Vec String)])
+(declare-extern fram.parse-long [String -> Int?])
+(declare-extern fram.rt/spit-file [String String -> Nil])
+
+;; --- constants (typed; non-dynamic defs CAN carry :- T) ----------------------
+(def ORD-STEP :- Int 65536)
+(def PARAM-FORMS :- (Set String) #{"defn" "defn-" "fn" "defmacro" "fn*"})
+(def DEF-FORMS   :- (Set String) #{"def" "def-" "defonce"})
+(def VALUE-DEFS  :- (Set String) (into PARAM-FORMS DEF-FORMS))
+(def TYPE-DEFS   :- (Set String) #{"defrecord" "deftype" "defprotocol" "definterface" "defunion"})
+(def TYPE-COLON  :- (Set String) #{":-" ":"})
+(def LET-FORMS   :- (Set String) #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding"
+                                   "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})
+(def FOR-FORMS   :- (Set String) #{"doseq" "for"})
+(def MATCH-FORMS :- (Set String) #{"match"})
+
+;; --- dynamic state (UNTYPED ^:dynamic transport; recover types at read sites) -
+;; store handles + tx + supersedes-pred (rebound per pipeline to a FRESH store)
+(def ^:dynamic ctx nil)            ; (Atom t/Store)
+(def ^:dynamic tx  nil)            ; Int
+(def ^:dynamic SUP nil)            ; Int
+;; verb-rejection handler (CLI exits; daemon rebinds to throw)
+(def ^:dynamic *reject!* (fn [code :- Int] :- Nil (rt/exit! code)))
+;; control flags
+(def ^:dynamic *resolve-walk?* true)        ; Bool
+(def ^:dynamic *corpus-scope* nil)          ; (U (Set String) Nil)
+(def ^:dynamic *corpus-cache* nil)          ; (U (Map String (Vec Int)) Nil)
+(def ^:dynamic *deleted-forms* #{})         ; (Set Int)
+(def ^:dynamic *deleted-subtree* #{})       ; (Set Int)
+(def ^:dynamic *resolve-out* nil)           ; (U String Nil)
+(def ^:dynamic *project-srcs* nil)          ; (U (Vec String) Nil)
+(def ^:dynamic *capture-only?* false)       ; Bool
+;; module -> entity-ids (mutable accumulator)
+(def ^:dynamic file->ents (atom {}))        ; (Atom (Map String (Vec Int)))
+;; render-mode marker predicate value-ids (store-local Int, recomputed per store)
+(def ^:dynamic Vp nil) (def ^:dynamic KIND nil) (def ^:dynamic REFERS nil)
+(def ^:dynamic BOUND nil) (def ^:dynamic FIXED nil) (def ^:dynamic QUAL nil)
+(def ^:dynamic CTOR nil) (def ^:dynamic ACC nil)
+;; resolution counters (fresh atoms per pipeline)
+(def ^:dynamic n-resolved (atom 0)) (def ^:dynamic n-unresolved (atom 0))
+(def ^:dynamic n-xmod (atom 0)) (def ^:dynamic n-type (atom 0))
+(def ^:dynamic n-comment (atom 0))
+(def ^:dynamic n-forms-walked (atom 0)) (def ^:dynamic walked-modules (atom #{}))
+;; per-src resolver closures (rebound per module during the walk!)
+(def ^:dynamic *xresolve* (fn [nm :- String] :- Any nil))   ; -> (U (Map Keyword Any) Nil)
+(def ^:dynamic *tresolve* (fn [nm :- String] :- Int? nil))  ; -> Int?
+(def ^:dynamic *aresolve* (fn [nm :- String] :- Any nil))   ; -> (U (Vec Any) Nil)
+;; corpus tables (set! inside the binding scope; inert at root)
+(def ^:dynamic srcs [])                     ; (Vec String)
+(def ^:dynamic file-modframe {})            ; (Map String (Map String Int))
+(def ^:dynamic file-typeframe {})           ; (Map String (Map String Int))
+(def ^:dynamic file-accessors {})           ; (Map String (Map String (Vec Any)))
+(def ^:dynamic global-exports {})           ; (Map String (Map String Int))
+(def ^:dynamic global-type-exports {})      ; (Map String (Map String Int))
+(def ^:dynamic global-accessor-exports {})  ; (Map String (Map String (Vec Any)))
+
+;; ============================================================================
+;; FUNCTIONS — appended by the tiered translation below (leaves first).
+;; ============================================================================
+
+(defn load-edn! [path :- String] :- String
+  (let [lines :- (Vec String) (str/split-lines (rt/slurp path))
+        src   :- String (subs (let [l :- String (first (filter (fn [l :- String] :- Bool (str/starts-with? l "@file")) lines))] l) 6)
+        local (atom {})
+        ent   (fn [lid :- Any] :- Int
+                (let [r :- Int (or (get (deref local) lid)
+                                   (let [e (c/entity! ctx)]
+                                     (swap! local (fn [m :- (Map Any Int)] :- (Map Any Int) (assoc m lid e)))
+                                     (swap! file->ents (fn [m :- (Map String (Vec Int))] :- (Map String (Vec Int))
+                                                         (update m src (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) e)))))
+                                     e))]
+                  r))]
+    (doseq [line lines]
+      (when (str/starts-with? line "[")
+        (let [[s p o] (rt/parse-edn line)]
+          (c/claim! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx))))
+    src))
+
+;; --- claim-graph accessors --------------------------------------------------
+;; --- read-time path-selection: the "default-main view" -----------------------
+;; Fram is view-relative (docs/VIEWS_AND_BRANCHES.md): a node's live (l,p) group MAY hold
+;; more than one claim, and choosing one is a VIEW decision. Today there is exactly one view —
+;; default-main — and its policy is "first live". `select-main-1` is THE explicit selection
+;; point: it does NOT prove uniqueness, it SELECTS the default-main member of a possibly-multi
+;; group. Routing the former bare `(first …)` take-firsts through it makes the selection named
+;; rather than silently buried; when first-class views land (VIEWS_AND_BRANCHES §8) this is
+;; where a `view` argument attaches. Behavior today is identical to `first`.
+(defn select-main-1 [cids :- (Vec Int)] :- Int? (first cids))
+
+(defn pred-val [e :- Int pname :- String] :- Any
+  (let [P (c/value-id ctx pname)]
+    (when P (let [cs (c/by-lp ctx e P)]
+              (when-let [cid (select-main-1 cs)]
+                (c/literal ctx (let [r :- Int (or (c/claim-r ctx cid) 0)] r)))))))
+(defn kind-of [e :- Int] :- Any (pred-val e "kind"))                      ; default-main kind of node e
+(defn sym-val [e :- Int] :- Any (when (= "symbol" (kind-of e)) (pred-val e "v")))   ; default-main spelling of a symbol
+;; ---- CRDT order keys (#36): positions as DATA, insert-anywhere commute ----------
+;; A child-position predicate is "f<path>~<tie>": path = logoot int-vector (dense — a
+;; path strictly between any two always exists), tie = the child node's atomic name-int
+;; (unique -> concurrent same-gap inserts get DISTINCT keys -> both land -> commute).
+;; Compare by (path, tie). DUAL parser: also reads the OLD "f<int>" format (path
+;; [(inc i)*STEP], tie 0) so the resolver keeps working during corpus migration.
+;; Library confirmed standalone in cnf_ordkey_test.clj (Stage A, 12/12).
+(defn ord-parse [p :- Any]              ; -> {:path [int...] :tie int} | nil
+  (when (string? p)
+    (let [m :- (U (Vec String) Nil) (re-matches #"f(\d+(?:\.\d+)*)~(\d+)" p)]
+      (if (some? m)
+        (let [ps :- String (nth m 1) ts :- String (nth m 2)]
+          {:path (mapv (fn [x :- String] :- Int (or (parse-long x) 0)) (str/split ps #"\."))
+           :tie (or (parse-long ts) 0)})
+        (let [m2 :- (U (Vec String) Nil) (re-matches #"f(\d+)" p)]
+          (if (some? m2)
+            {:path [(* (inc (or (parse-long (nth m2 1)) 0)) ORD-STEP)] :tie 0}
+            nil))))))
+(defn ord-pos? [p :- Any] :- Bool (boolean (ord-parse p)))           ; is p a child-position predicate (old or new)?
+(defn ord-str [path :- (Vec Int) tie :- Any] :- String (str "f" (str/join "." path) "~" tie))
+(defn ord-veccmp [a :- (Vec Int) b :- (Vec Int)] :- Int
+  (loop [a (seq a) b (seq b)]
+    (cond [(and (nil? a) (nil? b)) 0]
+          [(nil? a) -1]
+          [(nil? b) 1]
+          [:else (let [c :- Int (compare (first a) (first b))]
+                   (if (zero? c) (recur (next a) (next b)) c))])))
+(defn ord-cmp [x :- (Map Keyword Any) y :- (Map Keyword Any)] :- Int
+  (let [c :- Int (ord-veccmp (:path x) (:path y))]
+    (if (zero? c) (compare (:tie x) (:tie y)) c)))
+(defn ord-append [last-path :- (Vec Int)] :- (Vec Int)
+  (if (empty? last-path)
+    [ORD-STEP]
+    (conj (vec (butlast last-path)) (let [n :- Int (+ (let [l :- Int (or (last last-path) 0)] l) ORD-STEP)] n))))
+(defn ord-between [lo :- (U (Vec Int) Nil) hi :- (U (Vec Int) Nil)] :- (Vec Int)   ; a path strictly between lo and hi (nil = open end)
+  (cond [(and (nil? lo) (nil? hi)) [ORD-STEP]]
+        [(nil? hi) (ord-append (let [l :- (Vec Int) (or lo [])] l))]
+        [:else (let [lo :- (Vec Int) (or lo [0])]
+                 (loop [i 0 acc []]
+                   (let [a :- Int (get lo i 0)
+                         b :- Int (get hi i (+ a (* 2 ORD-STEP)))]
+                     (if (> (let [d :- Int (- b a)] d) 1)
+                       (conj acc (quot (let [s :- Int (+ a b)] s) 2))
+                       (recur (inc i) (conj acc a))))))]))
+
+(defn ordered-children [e :- Int] :- (Vec Int)                      ; fN children, in CRDT-key (path,tie) order
+  (->> (c/by-l ctx e)
+       (keep (fn [cid :- Int]
+               (when-let [k (ord-parse (c/literal ctx (let [p :- Int (or (c/claim-p ctx cid) 0)] p)))]
+                 [k (let [r :- Int (or (c/claim-r ctx cid) 0)] r)])))
+       (sort-by first ord-cmp)
+       (mapv second)))
+(defn ordered-segs [e :- Int] :- (Vec Int)                          ; Turtle #6: a comment node's segN children, in order
+  (->> (c/by-l ctx e)
+       (keep (fn [cid :- Int]
+               (let [p :- Any (c/literal ctx (let [pp :- Int (or (c/claim-p ctx cid) 0)] pp))]
+                 (when (and (string? p) (re-matches #"seg\d+" p))
+                   [(parse-long (subs p 3)) (let [r :- Int (or (c/claim-r ctx cid) 0)] r)]))))
+       (sort-by first)
+       (mapv second)))
+(defn head-sym [e :- Int] :- Any
+  (when (= "list" (kind-of e))
+    (let [cs :- (Vec Int) (ordered-children e)]
+      (when (not (empty? cs)) (sym-val (let [c :- Int (first cs)] c))))))
+(defn bound-target
+  "The DURABLE identity target of reference `L` — the bound_to edge points at the binding's
+   stable @mod#int node-id, not its spelling. nil if L carries no durable edge (legacy/unedged
+   refs fall back to the spelling-derived refers_to)."
+  [L :- Int] :- Int?
+  (when BOUND
+    (let [cs (c/by-lp ctx L BOUND)]
+      (when-let [cid (select-main-1 cs)] (c/claim-r ctx cid)))))
+(defn refers-target
+  "The binding node reference `L` resolves to (default-main view). Prefers the DURABLE bound_to
+   identity edge; falls back to the derived refers_to (spelling-walk) for unedged/legacy refs.
+   Not a uniqueness proof (select-main-1)."
+  [L :- Int] :- Int?
+  (or (bound-target L)
+      (let [cs (c/by-lp ctx L REFERS)]
+        (when-let [cid (select-main-1 cs)] (c/claim-r ctx cid)))))
+(defn live-node? [e :- Int] :- Any (seq (c/by-lp ctx e KIND)))
+
+;; --- binding extraction -----------------------------------------------------
+(defn brackets? [e :- Int] :- Bool (= "#%brackets" (head-sym e)))
+(defn map-node? [e :- Int] :- Bool (= "#%map" (head-sym e)))
+
+;; symbol leaves bound by a (destructuring) pattern
+(defn collect-bind-syms [node :- Int] :- (Vec Int)
+  (cond
+    [(sym-val node) (let [v :- (U String Nil) (sym-val node)]
+                      (if (contains? #{"&" "_"} v) [] [node]))]
+    [(brackets? node) (mapcat collect-bind-syms (rest (ordered-children node)))]      ; [a b & rest]
+    [(map-node? node)                                                                 ; {:keys [a]} / {x :k} / :as
+     (loop [ks :- (Vec Int) (rest (ordered-children node)) acc :- (Vec Int) []]
+       (if (empty? ks) acc
+         (let [k :- Int (first ks) kv :- (U String Nil) (sym-val k) v :- Int (second ks)]
+           (cond
+             [(contains? #{":keys" ":strs" ":syms"} kv)
+              (recur (drop 2 ks) (into acc (when (and v (brackets? v))
+                                             (filterv sym-val (rest (ordered-children v))))))]
+             [(= ":as" kv)  (recur (drop 2 ks) (into acc (collect-bind-syms v)))]
+             [(= ":or" kv)  (recur (drop 2 ks) acc)]                                  ; defaults; keys bound elsewhere
+             [(sym-val k)   (recur (drop 2 ks) (conj acc k))]                         ; {sym :keyword} -> sym binds
+             [:else         (recur (drop 2 ks) (into acc (collect-bind-syms k)))]))))] ; nested destructuring key
+    ;; typed PAREN binding `(name :- T)` / `(name : T)` — a legal param/field surface.
+    ;; The bound name(s) are the symbols BEFORE the type marker; without this they fall
+    ;; through to [] and the body use of `name` wrongly resolves to a same-named outer
+    ;; def (capture). Stop at `:-` OR `:` so the type (e.g. Int) is NOT mis-collected.
+    [(= "list" (kind-of node))
+     (mapcat collect-bind-syms
+             (take-while (fn [x :- Int] :- Bool (not (contains? TYPE-COLON (sym-val x))))
+                         (ordered-children node)))]
+    [:else []]))
+;; :or DEFAULT value-exprs inside a destructuring pattern
+(defn collect-or-vals [node :- Int] :- (Vec Int)
+  (cond                                          ; (live refs — evaluated when the key is absent)
+    [(map-node? node)
+     (loop [ks :- (Vec Int) (rest (ordered-children node)) acc :- (Vec Int) []]
+       (if (empty? ks) acc
+         (let [k :- Int (first ks) kv :- (U String Nil) (sym-val k) v :- Int (second ks)]
+           (cond
+             [(= ":or" kv) (recur (drop 2 ks) (into acc (when (and v (map-node? v))   ; {sym default ...}
+                                                          (keep-indexed (fn [i :- Int c :- Int] :- Int?
+                                                                          (when (odd? i) c))
+                                                                        (rest (ordered-children v))))))]
+             [(contains? #{":keys" ":strs" ":syms" ":as"} kv) (recur (drop 2 ks) acc)]
+             [(sym-val k)  (recur (drop 2 ks) acc)]
+             [:else        (recur (drop 2 ks) (into acc (collect-or-vals k)))]))))]   ; nested destructuring
+    [(brackets? node) (mapcat collect-or-vals (rest (ordered-children node)))]
+    [:else []]))
+;; param names from [x :- T y], skipping types
+(defn param-binds [bracket :- Int] :- (Vec Int)
+  (loop [ks :- (Vec Int) (rest (ordered-children bracket)) binds :- (Vec Int) [] skip :- Bool false]
+    (if (empty? ks) binds
+      (let [k :- Int (first ks) v :- (U String Nil) (sym-val k)]
+        (cond [skip            (recur (rest ks) binds false)]
+              [(contains? TYPE-COLON v)  (recur (rest ks) binds true)]
+              [:else           (recur (rest ks) (into binds (collect-bind-syms k)) false)])))))
+;; let/loop bindings are SEQUENTIAL — binding i's value (and :or defaults) see bindings
+;; 0..i-1. Return ORDERED entries [bind-syms value-node or-default-vals] so walk/capture
+;; can build the frame incrementally (a flat outer-scope walk! misses sibling shadowing —
+;; a real capture / mis-resolve bug).
+;; -> [ [syms value-node or-vals] ... ] in source order
+(defn let-bind-pairs [bracket :- Int] :- (Vec (Vec Any))
+  (loop [ks :- (Vec Int) (rest (ordered-children bracket)) acc :- (Vec (Vec Any)) []]
+    (if (empty? ks) acc
+      (let [pat :- Int (first ks)
+            after :- (Vec Int) (if (contains? TYPE-COLON (sym-val (second ks))) (drop 3 ks) (rest ks))  ; skip `:- T`
+            val :- Int (first after)]
+        (recur (rest after) (conj acc [(collect-bind-syms pat) val (collect-or-vals pat)]))))))
+;; for/doseq, ordered: [:bind syms vnode orvals] | [:expr node]
+(defn for-bind-pairs [bracket :- Int] :- (Vec (Vec Any))
+  (loop [ks :- (Vec Int) (rest (ordered-children bracket)) acc :- (Vec (Vec Any)) []]
+    (if (empty? ks) acc
+      (let [k :- Int (first ks) kv :- (U String Nil) (sym-val k) v :- Int (second ks)]
+        (cond
+          [(contains? #{":when" ":while"} kv) (recur (drop 2 ks) (conj acc [:expr v]))]   ; modifier expr (sees prior binds)
+          [(= ":let" kv)            (recur (drop 2 ks)
+                                           (into acc (when (and v (brackets? v))
+                                                       (mapv (fn [p :- (Vec Any)] :- (Vec Any)
+                                                               (let [s :- Any (first p) vn :- Any (second p) ov :- Any (nth p 2)]
+                                                                 [:bind s vn ov]))
+                                                             (let-bind-pairs v)))))]
+          [(contains? TYPE-COLON (sym-val v))
+           (recur (drop 4 ks) (conj acc [:bind (collect-bind-syms k) (nth ks 3 nil) (collect-or-vals k)]))]  ; [x :- T coll]
+          [:else
+           (recur (drop 2 ks) (conj acc [:bind (collect-bind-syms k) v (collect-or-vals k)]))])))))
+(defn frame-of [bsyms :- (Vec Int)] :- (Map String Int)
+  (into {} (mapv (fn [b :- Int] :- (Vec Any) [(sym-val b) b]) bsyms)))
+;; symbols a match pattern binds: the NON-head leaves of a
+;; (Ctor a b) pattern, recursively (the head is a type ref)
+(defn match-pat-binds [pat :- Int] :- (Vec Int)
+  (cond
+    [(sym-val pat) (let [v :- (U String Nil) (sym-val pat)] (if (contains? #{"_"} v) [] [pat]))]
+    [(= "list" (kind-of pat)) (mapcat match-pat-binds (rest (ordered-children pat)))]   ; skip the ctor head
+    [(brackets? pat) (mapcat match-pat-binds (rest (ordered-children pat)))]            ; [a b] seq pattern
+    [:else []]))                                                                        ; literals bind nothing
+
+;; forward-declare the mutually-recursive lexical-walk cluster: bb/SCI resolves
+;; symbols top-to-bottom at analysis time, so a forward call (walk-all! -> walk!)
+;; needs the name pre-declared (JVM Clojure interns at def-time + wouldn't; this is
+;; for the bb runtime the daemon/tests use). Mirrors the original resolve.clj declare.
+(declare walk! walk-type! walk-all! walk-fn-arity! walk-pat-heads! walk-quasi! walk-quasi-seq!)
+
+(defn bind! [L :- Int target :- Int] :- Any (c/claim! ctx L REFERS target tx) (swap! n-resolved (fn [x :- Int] :- Int (+ x 1))))
+(defn bind-xmod! [node :- Int x :- Any]   ; x = {:target :mode :alias :accessor} from *xresolve*; refers_to + render markers
+  (when (and x (:target x))
+    (bind! node (:target x))
+    (cond
+      [(= (:mode x) :fixed) (c/claim! ctx node FIXED (c/value! ctx "1") tx)]       ; :rename — keep own spelling
+      [(= (:mode x) :qual)  (c/claim! ctx node QUAL (c/value! ctx (:alias x)) tx)]  ; x/name — show alias/newname
+      [:else nil])                                                                  ; :tracking — render def's current name
+    (when (:accessor x)                                                             ; cross-module synth accessor: render <lower(name)>-field
+      (c/claim! ctx node ACC (c/value! ctx (:accessor x)) tx))
+    (swap! n-xmod (fn [n :- Int] :- Int (+ n 1)))
+    true))
+(defn walk-type! [node :- Int] :- Any                       ; resolve a TYPE position to its type definition
+  (cond
+    [(sym-val node) (let [nm :- (U String Nil) (sym-val node)]   ; module-local type, else cross-module (:refer/:as) type
+                      (or (when-let [b (*tresolve* nm)] (bind! node b) (swap! n-type (fn [n :- Int] :- Int (+ n 1))) true)
+                          (bind-xmod! node (*xresolve* nm))))]
+    [(= "list" (kind-of node)) (doseq [c (ordered-children node)] (walk-type! c))]   ; compound type
+    [(brackets? node) (doseq [c (rest (ordered-children node))] (walk-type! c))]
+    [:else nil]))
+(defn resolve-type-after-colon! [nodes :- (Vec Int)] :- Any   ; in a flat seq, walk-type! the node after `:-`/`:`
+  (loop [xs nodes]
+    (when (seq xs)
+      (if (contains? TYPE-COLON (sym-val (first xs)))
+        (when (second xs) (walk-type! (second xs)))
+        (recur (rest xs))))))
+(defn resolve-types-in-bracket! [bracket :- Int] :- Any   ; resolve every `:- T`/`: T` in a param/field vector
+  (loop [ks (rest (ordered-children bracket))]
+    (when (seq ks)
+      (let [k (first ks)]
+        (cond
+          [(contains? TYPE-COLON (sym-val k)) (do (when (second ks) (walk-type! (second ks))) (recur (drop 2 ks)))]
+          [(= "list" (kind-of k)) (do (resolve-type-after-colon! (ordered-children k))   ; paren `(x :- T)`
+                                      (recur (rest ks)))]
+          [:else (recur (rest ks))])))))
+(defn walk-all! [nodes :- (Vec Int) scope :- (Vec (Map String Int))] :- Any (doseq [n nodes] (walk! n scope)))
+(defn walk-fn-arity! [forms :- (Vec Int) scope :- (Vec (Map String Int))] :- Any   ; one fn arity: (param-bracket (:- Ret)? body...)
+  (let [pv :- Int? (first (filter (fn [f :- Int] :- Bool (brackets? f)) forms))
+        binds :- (Vec Int) (if pv (param-binds pv) [])
+        _ (when pv (resolve-types-in-bracket! pv))            ; resolve PARAM types -> type defs
+        or-vals :- (Vec Int) (if pv (mapcat collect-or-vals (rest (ordered-children pv))) [])  ; :or defaults: live refs
+        frame :- (Map String Int) (frame-of binds)
+        body :- (Vec Int) (loop [xs (rest (drop-while (fn [f :- Int] :- Bool (not (brackets? f))) forms))]   ; drop (:- T)/(:raises T) pairs
+                            (if (contains? #{":-" ":" ":raises"} (sym-val (first xs)))
+                              (do (when (second xs) (walk-type! (second xs))) (recur (drop 2 xs)))
+                              xs))]
+    (walk-all! or-vals scope)                     ; :or defaults evaluate in the OUTER scope (before params bind)
+    (walk-all! body (cons frame scope))))         ; param names bind in body; types resolved to type defs
+(defn walk-pat-heads! [pat :- Int scope :- (Vec (Map String Int))] :- Any   ; resolve constructor heads in a (nested) match pattern as type refs
+  (when (= "list" (kind-of pat))
+    (walk! (first (ordered-children pat)) scope)  ; ctor head -> type ref (walk's *tresolve* fallback handles it)
+    (doseq [c (rest (ordered-children pat))] (walk-pat-heads! c scope))))   ; recurse nested sub-patterns
+(defn walk! [node :- Int scope :- (Vec (Map String Int))] :- Any
+  (cond
+    [(= "symbol" (kind-of node))
+     (let [nm :- (U String Nil) (sym-val node)
+           bt :- Int? (bound-target node)
+           local :- Int? (some (fn [m :- (Map String Int)] :- Int? (get m nm)) scope)]   ; nearest frame binding nm
+       (cond
+         ;; #(a) identity: a reference with a DURABLE bound_to edge resolves by IDENTITY (binding's stable
+         ;; @mod#int), not by spelling — a target rename (display-name only) leaves this intact and render
+         ;; follows it to the target's CURRENT name. Spelling is the fallback.
+         [bt (bind! node bt)]
+         [local (bind! node local)]
+         ;; free symbol: cross-module value/type import (:refer/:rename/:as), else a module-local TYPE used in
+         ;; value position (constructor `(Point ...)` / defunion variant — its name leaf IS the type def), else native.
+         [(bind-xmod! node (*xresolve* nm)) nil]
+         [(when-let [b (*tresolve* nm)] (bind! node b) (swap! n-type (fn [n :- Int] :- Int (+ n 1))) true) nil]
+         ;; auto-constructor factory — `->Name` (positional) or `map->Name` (map), bare OR alias-qualified (`a/->Name`).
+         ;; Strip the prefix, resolve type Name (module-local then cross-module), store the prefix so render re-applies it.
+         [(when-let [pfx (cond [(or (str/starts-with? (or nm "") "map->") (str/includes? (or nm "") "/map->")) "map->"]
+                               [(or (str/starts-with? (or nm "") "->") (str/includes? (or nm "") "/->")) "->"]
+                               [:else nil])]
+            (let [stripped :- String (str/replace (or nm "") pfx "")]    ; a/map->Point -> a/Point ; ->Point -> Point
+              (or (when-let [b (*tresolve* stripped)]
+                    (bind! node b) (c/claim! ctx node CTOR (c/value! ctx pfx) tx) (swap! n-type (fn [n :- Int] :- Int (+ n 1))) true)
+                  (when (bind-xmod! node (*xresolve* stripped))
+                    (c/claim! ctx node CTOR (c/value! ctx pfx) tx) true)))) nil]
+         ;; synthesized field accessor `<lower(Record)>-<field>` — bind to the record, store the field so
+         ;; render reconstructs `<lower(newName)>-<field>` when the record is renamed.
+         [(when-let [a (*aresolve* nm)]
+            (bind! node (first a)) (c/claim! ctx node ACC (c/value! ctx (second a)) tx) (swap! n-type (fn [n :- Int] :- Int (+ n 1))) true) nil]
+         [:else (swap! n-unresolved (fn [n :- Int] :- Int (+ n 1)))]))]   ; builtin/native — correctly NO refers_to
+    [(= "list" (kind-of node))
+     (let [kids :- (Vec Int) (ordered-children node) h :- (U String Nil) (head-sym node)]
+       (cond
+         [(contains? #{"quote"} h) nil]                       ; quoted data are not references
+         [(contains? #{"quasiquote"} h) (walk-quasi! node scope false)]   ; template: bare module refs live, quotes data, unquotes escape
+         [(contains? TYPE-DEFS h)                             ; skip the type name; resolve field/variant/method-param types
+          (doseq [c (drop 2 kids)]
+            (cond
+              [(brackets? c) (resolve-types-in-bracket! c)]          ; defrecord/deftype direct field vector
+              [(= "list" (kind-of c))                                ; defunion variant / defprotocol method sig
+               (do (doseq [b (filter (fn [x :- Int] :- Bool (brackets? x)) (ordered-children c))] (resolve-types-in-bracket! b))
+                   ;; a method sig (m [params] :- Ret) also carries a RETURN type after the bracket
+                   (resolve-type-after-colon! (rest (drop-while (fn [x :- Int] :- Bool (not (brackets? x))) (ordered-children c)))))]
+              ;; a BARE union member (defunion Result Ok Err) that names an existing type is a REFERENCE to it — bind so a
+              ;; rename of the record cascades; a true nullary variant resolves to itself (skip).
+              [(sym-val c) (let [b :- Int? (*tresolve* (sym-val c))] (when (and b (not= b c)) (bind! c b) (swap! n-type (fn [n :- Int] :- Int (+ n 1)))))]
+              [:else nil]))]
+         [(contains? DEF-FORMS h)                             ; (def name :- T val) — skip name, resolve T, walk! val
+          (let [after-name :- (Vec Int) (drop 2 kids)]
+            (if (= ":-" (sym-val (first after-name)))
+              (do (when (second after-name) (walk-type! (second after-name)))
+                  (walk-all! (drop 2 after-name) scope))
+              (walk-all! after-name scope)))]
+         [(contains? PARAM-FORMS h)                           ; single-arity (top-level [params]) OR multi-arity (([p]..)([p]..))
+          (let [after-name :- (Vec Int) (if (contains? #{"defn" "defn-" "defmacro"} h) (drop 2 kids) (rest kids))]
+            (if (some (fn [a :- Int] :- Bool (brackets? a)) after-name)
+              (walk-fn-arity! after-name scope)     ; single arity
+              (doseq [a after-name]
+                (when (and (= "list" (kind-of a)) (brackets? (first (ordered-children a))))
+                  (walk-fn-arity! (ordered-children a) scope)))))]   ; each ([params] :- Ret body...) arity
+         [(contains? LET-FORMS h)
+          (let [bracket :- Int (second kids)
+                _ (when (and bracket (brackets? bracket)) (resolve-types-in-bracket! bracket))  ; `:- T` annotations
+                pairs :- (Vec Any) (if (and bracket (brackets? bracket)) (let-bind-pairs bracket) [])
+                ;; SEQUENTIAL: binding i's value + :or defaults see bindings 0..i-1
+                final :- (Vec (Map String Int))
+                (reduce (fn [sc :- (Vec (Map String Int)) pr :- Any] :- (Vec (Map String Int))
+                          (let [[bsyms vnode orvals] pr]
+                            (walk-all! orvals sc) (when vnode (walk! vnode sc))
+                            (cons (frame-of bsyms) sc)))
+                        scope pairs)]
+            (walk-all! (drop 2 kids) final))]        ; body sees all bindings
+         [(contains? FOR-FORMS h)
+          (let [bracket :- Int (second kids)
+                _ (when (and bracket (brackets? bracket)) (resolve-types-in-bracket! bracket))  ; `:- T` annotations
+                entries :- (Vec Any) (if (and bracket (brackets? bracket)) (for-bind-pairs bracket) [])
+                final :- (Vec (Map String Int))
+                (reduce (fn [sc :- (Vec (Map String Int)) e :- Any] :- (Vec (Map String Int))
+                          (if (= :expr (first e))
+                            (do (walk! (second e) sc) sc)         ; :when/:while expr sees prior binds
+                            (let [[_ bsyms vnode orvals] e]
+                              (walk-all! orvals sc) (when vnode (walk! vnode sc))
+                              (cons (frame-of bsyms) sc))))
+                        scope entries)]
+            (walk-all! (drop 2 kids) final))]        ; body sees all for bindings
+         [(contains? MATCH-FORMS h)                           ; (match expr [pattern body] ...) — patterns bind + ref ctors
+          (let [kids :- (Vec Int) (ordered-children node)]
+            (walk! (second kids) scope)             ; the matched expression
+            (doseq [clause (drop 2 kids)]
+              (when (brackets? clause)
+                (let [cc :- (Vec Int) (rest (ordered-children clause)) pat :- Int (first cc) body :- (Vec Int) (rest cc)]
+                  (walk-pat-heads! pat scope)         ; constructor heads are TYPE references
+                  (walk-all! body (cons (frame-of (match-pat-binds pat)) scope))))))]  ; body sees pattern binds
+         [(= h "letfn")                             ; (letfn [(name [params] :- Ret body...) ...] body...)
+          (let [bracket :- Int (second kids)        ; fn NAMES are mutually-recursive bindings
+                fnlists :- (Vec Int) (if (and bracket (brackets? bracket)) (filter (fn [x :- Int] :- Bool (= "list" (kind-of x))) (rest (ordered-children bracket))) [])
+                frame :- (Map String Int) (frame-of (keep (fn [fl :- Int] :- Int (first (ordered-children fl))) fnlists))
+                bodyscope :- (Vec (Map String Int)) (cons frame scope)]
+            (doseq [fl fnlists] (walk-fn-arity! (rest (ordered-children fl)) bodyscope))  ; each fn body sees all names + own params
+            (walk-all! (drop 2 kids) bodyscope))]    ; letfn body sees all fn names
+         [(contains? #{"extend-type" "extend-protocol"} h)    ; (extend-type T Proto (method [params] body...) ...)
+          (doseq [c (rest kids)]
+            (cond
+              [(sym-val c) (walk! c scope)]          ; Type / Protocol — type references
+              [(= "list" (kind-of c)) (let [ic :- (Vec Int) (ordered-children c)]
+                                        (walk! (first ic) scope)           ; method name — protocol-method ref
+                                        (walk-fn-arity! (rest ic) scope))]  ; impl params bind in the impl body
+              [:else nil]))]
+         [(= h "as->")                              ; (as-> init name step...) — `name` binds the accumulator
+          (let [init :- Int? (if (> (count kids) 1) (second kids) nil)
+                nm :- Int? (if (> (count kids) 2) (nth kids 2) nil)
+                frame :- (Map String Int) (frame-of (if (and nm (sym-val nm)) [nm] []))]
+            (when init (walk! init scope))           ; init evaluated in the OUTER scope (before name binds)
+            (walk-all! (drop 3 kids) (cons frame scope)))]   ; each step sees the accumulator name
+         [:else (walk-all! kids scope)]))]           ; ordinary call: head + args are all references
+    [:else nil]))
+
+;; quasiquote: most of a template is quoted DATA. What an `,x` (unquote) / `,@x` (unquote-splicing) escapes is
+;; evaluated code (real references). AND — a bare template symbol that names a MODULE DEF or IMPORT is itself a live
+;; reference: Clojure `` ` `` namespace-qualifies it and beagle hygiene-aliases it (`base__hyg`), so renaming the def
+;; must follow it. A symbol bound by a real LOCAL (param/let — an inner frame) or a free gensym is hygiene/quote data
+;; and must be left alone. `quoted?` tracks being inside a `(quote ..)` WITHIN the template: there a bare symbol is
+;; inert DATA (not hygiene-aliased), so it must NOT resolve — BUT an `(unquote ..)` still escapes to evaluated code
+;; even inside a quote, so unquotes are always live regardless of quote nesting.
+(defn walk-quasi! [node :- Int scope :- (Vec (Map String Int)) quoted? :- Bool] :- Any
+  (cond
+    [(sym-val node)
+     (when-not quoted?                                    ; bare symbol in (quote ..) = data; outside = live ref
+       (let [nm :- (U String Nil) (sym-val node)]
+         (cond
+           [(some (fn [m :- (Map String Int)] :- Int? (get m nm)) (butlast scope)) nil]   ; a real local/gensym binding — leave it
+           [(get (last scope) nm) (bind! node (get (last scope) nm))]   ; module def — live qualified ref
+           [(bind-xmod! node (*xresolve* nm)) nil]          ; cross-module import — live ref
+           [:else nil])))]                                  ; truly free symbol — quoted data, leave it
+    [(= "list" (kind-of node))
+     (let [h :- (U String Nil) (head-sym node)]
+       (cond
+         [(contains? #{"unquote" "unquote-splicing"} h) (walk-all! (rest (ordered-children node)) scope)]  ; explicit (unquote ..)
+         [(contains? #{"quote"} h) (walk-quasi-seq! (ordered-children node) scope true)]   ; inside a quote: bare syms = data
+         [:else (walk-quasi-seq! (ordered-children node) scope quoted?)]))]       ; still template; scan siblings
+    [:else nil]))
+;; scan template siblings: a bare `~`/`,` (or `~@`/`,@`) TOKEN — beagle's reader form for unquote (it does NOT emit
+;; an (unquote ..) wrapper) — escapes its FOLLOWING sibling back to live code, even inside a quote.
+(defn walk-quasi-seq! [children :- (Vec Int) scope :- (Vec (Map String Int)) quoted? :- Bool] :- Any
+  (loop [cs children]
+    (when (seq cs)
+      (if (contains? #{"~" "," "~@" ",@"} (sym-val (first cs)))
+        (do (when (second cs) (walk! (second cs) scope)) (recur (drop 2 cs)))   ; ~EXPR — live escape
+        (do (walk-quasi! (first cs) scope quoted?) (recur (rest cs)))))))
+
+;; module frame = all top-level defs (so forward references resolve) ----------
+(defn unwrap-def [form :- Int] :- Int?
+  (if (= "js/export" (head-sym form)) (second (ordered-children form)) form))
+(defn module-defs [src :- String] :- (Map String Int)
+  (let [wrapper (some (fn [e :- Int] :- Int? (when (= "beagle-file" (head-sym e)) e))
+                      (let [fe :- (Map String (Vec Int)) (deref file->ents)] (get fe src)))
+        forms :- (Vec Int) (rest (ordered-children wrapper))]
+    (into {} (mapcat (fn [f :- Int] :- Any
+                       (let [d (unwrap-def f)]
+                         (cond
+                           [(contains? VALUE-DEFS (head-sym d))   ; def/defn — value binding
+                            (let [nl (second (ordered-children d))] (when (sym-val nl) [[(sym-val nl) nl]]))]
+                           ;; defprotocol/definterface methods are public callable VARS — each method
+                           ;; sig (name [params] :- Ret) defines `name`; collect so it renames + resolves.
+                           [(contains? #{"defprotocol" "definterface"} (head-sym d))
+                            (keep (fn [m :- Int] :- Any
+                                    (when (= "list" (kind-of m))
+                                      (let [nl (first (ordered-children m))]
+                                        (when (sym-val nl) [(sym-val nl) nl]))))
+                                  (drop 2 (ordered-children d)))]
+                           [:else nil])))
+                     forms))))
+;; --- cross-module: parse ns/:require (imports) and js/export (exports) -------
+(defn forms-of [src :- String] :- (Vec Int)
+  (rest (ordered-children (some (fn [e :- Int] :- Int? (when (= "beagle-file" (head-sym e)) e))
+                                (let [fe :- (Map String (Vec Int)) (deref file->ents)] (get fe src))))))
+(defn ns-form [src :- String] :- Int?
+  (some (fn [f :- Int] :- Int? (when (= "ns" (head-sym f)) f)) (forms-of src)))
+(defn module-name [src :- String] :- String?
+  (when-let [nf (ns-form src)] (sym-val (second (ordered-children nf)))))
+(defn merge-import-opts [acc :- (Map Keyword Any) modn :- String? kids :- (Vec Int)] :- (Map Keyword Any)   ; kids = tokens after the module name; fold :refer/:as/:rename
+  (let [idx (fn [kw :- String] :- Int? (first (keep-indexed (fn [i :- Int k :- Int] :- Int? (when (= kw (sym-val k)) i)) kids)))
+        ri (idx ":refer") ai (idx ":as") rri (idx ":rename")
+        nb (when ri (nth kids (inc ri) nil))
+        refers (when (and nb (brackets? nb)) (keep sym-val (rest (ordered-children nb))))
+        alias (when ai (sym-val (nth kids (inc ai) nil)))
+        rmap (when rri (let [mb (nth kids (inc rri) nil)]   ; {srcname -> localname}
+                         (when (and mb (map-node? mb))
+                           (loop [cs :- (Vec Int) (rest (ordered-children mb)) m :- (Map String String) {}]
+                             (if (< (count cs) 2) m
+                               (recur (drop 2 cs) (assoc m (sym-val (first cs)) (sym-val (second cs)))))))))
+        acc1 (if (seq refers)
+               (update acc :refer (fn [m :- Any] :- Any (into m (mapv (fn [n :- String] :- Any [n modn]) refers))))
+               acc)
+        acc2 (if alias
+               (update acc1 :as (fn [m :- Any] :- Any (assoc m alias modn)))
+               acc1)
+        acc3 (if (seq rmap)
+               (update acc2 :rename (fn [m :- Any] :- Any (into m (mapv (fn [pr :- Any] :- Any (let [sn (first pr) ln (nth pr 1)] [ln [modn sn]])) (vec rmap)))))
+               acc2)]
+    acc3))
+(defn parse-require [src :- String] :- (Map Keyword Any)   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
+  (let [empty :- (Map Keyword Any) {:refer {} :as {} :rename {}}
+        ;; bare top-level beagle requires: (require modn :as a :refer [..] :rename {..})
+        bare (reduce (fn [acc :- (Map Keyword Any) f :- Int] :- (Map Keyword Any)
+                       (if (= "require" (head-sym f))
+                         (let [kids :- (Vec Int) (ordered-children f)]
+                           (merge-import-opts acc (sym-val (nth kids 1 nil)) (drop 2 kids)))
+                         acc))
+                     empty (forms-of src))]
+    (if-let [nf (ns-form src)]
+      (if-let [reqs (some (fn [c :- Int] :- Int? (when (and (= "list" (kind-of c))
+                                                            (= ":require" (sym-val (first (ordered-children c))))) c))
+                          (ordered-children nf))]
+        (reduce (fn [acc :- (Map Keyword Any) spec :- Int] :- (Map Keyword Any)                      ; ns-form specs: [modn :refer [..] :as a ...]
+                  (if (not (brackets? spec)) acc
+                    (let [kids :- (Vec Int) (rest (ordered-children spec))]
+                      (merge-import-opts acc (sym-val (first kids)) (rest kids)))))
+                bare (rest (ordered-children reqs)))
+        bare)
+      bare)))
+(defn module-exports [src :- String] :- (Map String Int)            ; {exported-name -> binding-node}  (js/export def OR re-export)
+  (into {} (keep (fn [f :- Int] :- Any
+                   (when (= "js/export" (head-sym f))
+                     (let [d (second (ordered-children f))]
+                       (cond
+                         [(contains? VALUE-DEFS (head-sym d)) (let [nl (second (ordered-children d))] [(sym-val nl) nl])]
+                         [(sym-val d)               [(sym-val d) d]]   ; (js/export red) — re-export
+                         [:else nil]))))
+                 (forms-of src))))
+(defn type-name-leaf [d :- Int] :- Int?              ; a type def's name-leaf, unwrapping a parameterized (Name Params) head
+  (let [nl0 (second (ordered-children d))]
+    (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)))
+(defn module-types [src :- String] :- (Map String Int)              ; {type-name -> name-leaf}  (defrecord/deftype/.../defunion + variants)
+  (let [defs :- (Vec Int) (filterv (fn [f :- Int] :- Bool (contains? TYPE-DEFS (head-sym (unwrap-def f)))) (forms-of src))
+        names (into {} (keep (fn [f :- Int] :- Any (let [nl (type-name-leaf (unwrap-def f))]
+                                                     (when (sym-val nl) [(sym-val nl) nl]))) defs))
+        ;; defunion variant constructors: inline (Variant [fields]) OR bare nullary `None`. A bare member
+        ;; that is ALSO a top-level type name (e.g. (defunion Result Ok Err) over defrecords) is NOT a new
+        ;; binding — `merge names` below makes the type-def name authoritative, and walk! binds the member
+        ;; occurrence to it as a reference, so the whole type renames together (no defrecord/union split).
+        variants (into {} (mapcat (fn [f :- Int] :- Any
+                                    (let [d (unwrap-def f)]
+                                      (when (= "defunion" (head-sym d))
+                                        (keep (fn [v :- Int] :- Any
+                                                (cond
+                                                  [(= "list" (kind-of v))
+                                                   (let [vn (first (ordered-children v))]
+                                                     (when (sym-val vn) [(sym-val vn) vn]))]
+                                                  [(sym-val v) [(sym-val v) v]]
+                                                  [:else nil]))
+                                              (drop 2 (ordered-children d))))))
+                                  defs))]
+    (merge variants names)))
+;; beagle synthesizes a field accessor `<lower(RecordName)>-<field>` per defrecord/deftype field.
+;; A renamed record must carry its accessor CALL sites, so map each accessor name to its type + field.
+(defn module-accessors [src :- String] :- (Map String (Vec Any))          ; {"point-x" -> [Point-name-leaf "x"]}
+  (into {} (mapcat (fn [f :- Int] :- Any
+                     (let [d (unwrap-def f)]
+                       (when (contains? #{"defrecord" "deftype"} (head-sym d))
+                         (let [nl (type-name-leaf d)
+                               fb (first (filterv (fn [c :- Int] :- Bool (brackets? c)) (drop 2 (ordered-children d))))]
+                           (when (and (sym-val nl) fb)
+                             (let [pfx :- String (str/lower-case (sym-val nl))]
+                               (mapv (fn [fld :- String] :- Any [(str pfx "-" fld) [nl fld]])
+                                     (keep sym-val (param-binds fb)))))))))
+                   (forms-of src))))
+(defn def-binding [src :- String nm :- String] :- Int?
+  (or (get (file-modframe src) nm) (get (file-typeframe src) nm)))  ; value OR type
+(defn make-xresolve [src :- String] :- Any   ; returns a closure [String -> (U (Map Keyword Any) Nil)]; bracket fn-type RETURN annotations mis-emit as multi-arity (beagle bug), so :- Any at this boundary
+  (let [parsed :- (Map Keyword Any) (parse-require src)
+        refer  (:refer parsed)
+        as     (:as parsed)
+        rename (:rename parsed)
+        ;; a :refer'd / :as-qualified / :rename'd name may be a VALUE or a TYPE export
+        xport (fn [m :- Any n :- Any] :- Int? (or (get-in global-exports [m n]) (get-in global-type-exports [m n])))
+        xacc  (fn [m :- Any n :- Any] :- Any (get-in global-accessor-exports [m n]))]   ; [type-leaf field] or nil
+    (fn [nm :- String]
+      (cond
+        [(get refer nm)  (let [m (get refer nm)]
+                           (if-let [t (xport m nm)] {:target t :mode :tracking}
+                             (when-let [a (xacc m nm)] {:target (first a) :mode :tracking :accessor (nth a 1)})))]
+        [(get rename nm) (let [rr (get rename nm) m (first rr) sn (nth rr 1)] {:target (xport m sn) :mode :fixed})]
+        [(str/includes? nm "/")
+         ;; qualifier is an :as alias OR a fully-spelled module name (e.g. (require acc.prod) then acc.prod/Box)
+         (let [parts :- (Vec String) (str/split nm #"/")           ; (str/split nm #"/" 2): first seg = al, rest rejoined = pn
+               al (first parts)
+               pn (str/join "/" (rest parts))
+               m (or (get as al)
+                     (when (some (fn [tab :- Any] :- Bool (contains? tab al))
+                                 [global-exports global-type-exports global-accessor-exports]) al))]
+           (when m
+             (if-let [t (xport m pn)] {:target t :mode :qual :alias al}
+               (when-let [a (xacc m pn)] {:target (first a) :mode :qual :alias al :accessor (nth a 1)}))))]
+        [:else nil]))))
+
+;; --- Turtle #6: resolve identifier mentions INSIDE comments -----------------
+;; A comment is a sequence of text + symbol-candidate segments. A symbol segment
+;; that EXACTLY names an in-scope binding (module def / type / refer-import) gets
+;; a refers_to edge — so it renders the binding's CURRENT name and renames with
+;; it, exactly like code. A `red-zone` token is one symbol (≠ `red`) and a quoted
+;; `"red"` was demoted to text by beagle's lexer, so neither resolves: the rename
+;; win without the sed corruption. Module scope (comments-in-bodies are a follow-up).
+;; NOTE (Beagle purity rule E019): resolve-comment! / walk-comments! mutate via cbind!
+;; (a `!` fn), so strict-mode forces the `!` suffix -> resolve-comment! / walk-comments!.
+;; The other-tier caller re-resolve! (line ~1110) must call (walk-comments! src).
+(defn cbind! [L :- Int target :- Int] :- Any
+  (c/claim! ctx L REFERS target tx)
+  (swap! n-comment (fn [x :- Int] :- Int (+ x 1))))
+(defn resolve-comment! [e :- Int src :- String] :- Any
+  (doseq [seg (ordered-segs e) :when (= "symbol" (kind-of seg))]
+    (let [nm :- (U String Nil) (sym-val seg)]
+      (when (some? nm)
+        (let [b :- Any (or (def-binding src nm)              ; module value/type def (forward refs ok)
+                           (:target (*xresolve* nm)))]        ; refer/rename/alias import -> tracks current name
+          (when b (cbind! seg b)))))))
+(defn walk-comments! [src :- String] :- Any
+  (let [es :- (Map String (Vec Int)) (deref file->ents)]
+    (doseq [e (get es src) :when (= "comment" (kind-of e))]
+      (resolve-comment! e src))))
+
+(defn run-resolution-over! [walk-srcs :- (Vec String)] :- Any   ; the lexical walk! over a CHOSEN subset of srcs (reads bound tables)
+  ;; The cross-module tables (global-exports / *xresolve* / file-typeframe / ...) are
+  ;; already bound from the WHOLE corpus, so each walked module's imports resolve
+  ;; against every other module's exports exactly as a full walk! would — we just
+  ;; restrict WHICH modules we re-walk (and re-write refers_to for). This is the
+  ;; resolver half of S3.3 scoped re-resolve: full tables, partial walk.
+  (doseq [src walk-srcs]
+    (binding [*xresolve* (make-xresolve src)
+              *tresolve* (fn [nm :- String] :- Int?
+                           (let [tf :- (Map String (Map String Int)) file-typeframe]
+                             (get (get tf src) nm)))
+              *aresolve* (fn [nm :- String] :- Any
+                           (let [af :- (Map String (Map String (Vec Any))) file-accessors]
+                             (get (get af src) nm)))]
+      (let [forms :- (Vec Int) (forms-of src)
+            fmf   :- (Map String (Map String Int)) file-modframe]
+        (swap! walked-modules (fn [s :- (Set String)] :- (Set String) (conj s src)))
+        (swap! n-forms-walked (fn [x :- Int] :- Int (+ x (count forms))))
+        (walk-all! forms [(get fmf src)]))
+      (walk-comments! src))))
+(defn run-resolution! [] :- Any        ; the lexical walk! over every bound src (reads bound tables)
+  (let [s :- (Vec String) srcs]
+    (run-resolution-over! s)))
+
+;; ============================================================================
+;; resolve-edn! — the RUNNABLE pipeline over an ARBITRARY bound store.
+;; Binds a FRESH store (ctx/tx/SUP + predicate value-ids recomputed against it),
+;; a fresh file->ents atom, and fresh counters; load-edn's `edn-paths` into that
+;; bound store; computes + binds the corpus tables from those srcs; runs the
+;; resolution driver; then invokes `body` WITHIN the binding scope (so CLI
+;; dispatch — rename/delete/extract/author — and tests read the bound state).
+;; The store is local to this call: a daemon resolving over its warm store gets a
+;; clean store B every time, and NOTHING leaks to the inert root binding.
+;; ============================================================================
+(defn resolve-edn!
+  ([edn-paths :- (Vec String)] :- Any
+   (resolve-edn! edn-paths (fn [] :- Any nil)))
+  ([edn-paths :- (Vec String) body :- [-> Any]] :- Any
+   (let [store (c/new-store)
+         t     (c/begin-tx! store "resolve")
+         sup   (c/value! store "supersedes")]
+     (c/set-supersedes-pred! store sup)
+     (binding [ctx store tx t SUP sup
+               file->ents (atom {})
+               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
+               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
+               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
+               n-forms-walked (atom 0) walked-modules (atom #{})
+               srcs [] file-modframe {} file-typeframe {} file-accessors {}
+               global-exports {} global-type-exports {} global-accessor-exports {}]
+       ;; load EDN into the FRESH bound store, then compute the corpus tables from
+       ;; THOSE srcs (set! the thread-local binding — never the root value).
+       (set! srcs (mapv (fn [p :- String] :- String (load-edn! p)) edn-paths))
+       (set! file-modframe (into {} (map (fn [s :- String] :- (Vec Any) [s (module-defs s)]) srcs)))
+       (set! file-typeframe (into {} (map (fn [s :- String] :- (Vec Any) [s (module-types s)]) srcs)))
+       (set! file-accessors (into {} (map (fn [s :- String] :- (Vec Any) [s (module-accessors s)]) srcs)))
+       (set! global-exports
+             (into {} (map (fn [s :- String] :- (Vec Any)
+                             [(module-name s)
+                              (let [e :- (Map String Int) (module-exports s)] (if (seq e) e (module-defs s)))])
+                           (filter (fn [s :- String] (module-name s)) srcs))))
+       (set! global-type-exports
+             (into {} (map (fn [s :- String] :- (Vec Any) [(module-name s) (module-types s)])
+                           (filter (fn [s :- String] (module-name s)) srcs))))
+       (set! global-accessor-exports
+             (into {} (map (fn [s :- String] :- (Vec Any) [(module-name s) (module-accessors s)])
+                           (filter (fn [s :- String] (module-name s)) srcs))))
+       (run-resolution!)
+       (body)))))
+
+;; name->module — the @<module>#<seq> prefix of a node's fully-qualified name, or nil.
+(defn name->module [nm :- Any]
+  (when (string? nm)
+    (when-let [g (re-matches #"@([^#]+)#\d+" nm)]
+      (nth g 1))))
+;; corpus-from-store! — from the BOUND, already-populated store, derive the SAME
+;; corpus structure resolve-edn! computes from EDN: file->ents grouped by module,
+;; srcs = the module list, then the per-module frame/export tables (reusing
+;; module-defs/module-types/module-accessors/module-exports/module-name — they
+;; read @file->ents + ctx, which now ARE the warm store). `set!` (not root) so
+;; nothing leaks past the binding scope, exactly like resolve-edn!.
+(defn corpus-from-store! [] :- Nil
+  (let [t0     :- Int (rt/nano-time)
+        NAME   (c/value-id ctx "name")            ; the daemon's node-name predicate
+        groups :- (Map String (Vec Int))
+        (cond
+          ;; INCREMENTAL CORPUS CACHE — skip the O(total) name reduce when the daemon
+          ;; supplies the maintained module->entity-ids map (the dominant per-verb cost).
+          [(some? *corpus-cache*) *corpus-cache*]
+          [(some? NAME) (reduce (fn [acc :- (Map String (Vec Int)) cid :- Int] :- (Map String (Vec Int))
+                                  (let [nm (c/literal ctx (:r (c/claim-of ctx cid)))
+                                        m  (name->module nm)]
+                                    (if (some? m)
+                                      (update acc m (fn [o :- (Vec Int)] :- (Vec Int)
+                                                      (conj (or o []) (:l (c/claim-of ctx cid)))))
+                                      acc)))
+                                {} (c/by-p ctx NAME))]
+          [:else {}])
+        t-groups :- Int (rt/nano-time)]
+    (reset! file->ents groups)                    ; module-keyed entity lists
+    (set! srcs (vec (keys groups)))               ; the modules ARE the srcs
+    ;; SCOPED corpus (Build B): *corpus-scope* restricts the EXPENSIVE per-module FRAME
+    ;; builds (module-defs/types/accessors) to the module(s) the verb actually reads.
+    ;; The src/module LIST is still the whole corpus (groups), so module membership /
+    ;; name->module are correct — only the frame TABLES are scoped. nil scope => full
+    ;; frames + exports (verbatim).
+    (let [frame-srcs :- (Vec String)
+          (if (some? *corpus-scope*)
+            (filterv (fn [s :- String] :- Bool (boolean (*corpus-scope* s))) srcs)   ; *corpus-scope* is a PREDICATE (the daemon binds a fn; may also be a set-as-IFn) — call it, don't contains?
+            srcs)]
+      (set! file-modframe  (into {} (map (fn [s :- String] [s (module-defs s)]) frame-srcs)))
+      (set! file-typeframe (into {} (map (fn [s :- String] [s (module-types s)]) frame-srcs)))
+      (set! file-accessors (into {} (map (fn [s :- String] [s (module-accessors s)]) frame-srcs))))
+    (when (not (some? *corpus-scope*))             ; cross-module export tables — only the WALK reads them
+      (set! global-exports
+            (into {} (map (fn [s :- String] [(module-name s)
+                                             (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
+                          (filterv (fn [s :- String] :- Bool (some? (module-name s))) srcs))))
+      (set! global-type-exports
+            (into {} (map (fn [s :- String] [(module-name s) (module-types s)])
+                          (filterv (fn [s :- String] :- Bool (some? (module-name s))) srcs))))
+      (set! global-accessor-exports
+            (into {} (map (fn [s :- String] [(module-name s) (module-accessors s)])
+                          (filterv (fn [s :- String] :- Bool (some? (module-name s))) srcs)))))
+    (when (= "1" (rt/getenv "FRAM_PROF"))
+      (let [s :- (Vec String) srcs]
+        (rt/println-err!
+          (rt/format-str "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s"
+                         [(/ (- t-groups t0) 1e6) (/ (- (rt/nano-time) t-groups) 1e6)
+                          (some? *corpus-cache*) (count s) (boolean *corpus-scope*)]))))))
+;; module-export-set: every NAME module M makes resolvable to a consumer — the value
+;; exports (js/export or, beagle-implicit, all top-level defs) UNION the type exports
+;; (records/unions/protocols + variants) UNION the synth field-accessor names. This is
+;; precisely the surface a consumer's :refer/:as/:rename can bind, so a change to THIS
+;; set is exactly what forces a consumer re-walk; an internal body edit leaves it fixed.
+(defn module-export-set [src :- String] :- (Set String)
+  (let [v    (module-exports src)
+        vexp (if (seq v) v (module-defs src))]   ; beagle implicit-export fallback (mirrors global-exports)
+    (into #{} (concat (keys vexp)
+                      (keys (module-types src))
+                      (keys (module-accessors src))))))
+;; import-graph: {module -> #{modules it imports}} over the whole corpus, from each
+;; module's (ns :require ...) / bare (require ...). Consumers of M = the modules whose
+;; import-set contains M (the reverse edge). Used to widen the dirty set when M's
+;; export-set changed: M PLUS everyone importing M re-resolves.
+(defn module-imports [src :- String] :- (Set String)
+  (let [pr     (parse-require src)
+        refer  (:refer pr)
+        as     (:as pr)
+        rename (:rename pr)]
+    (into #{} (concat (vals refer) (vals as) (map (fn [x :- Any] :- Any (first x)) (vals rename))))))
+(defn import-graph [] :- (Map String (Set String))
+  (into {} (map (fn [s :- String] [(module-name s) (module-imports s)])
+                (filterv (fn [s :- String] :- Bool (some? (module-name s))) srcs))))
+;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
+;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
+;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
+;; has zero defmacro).
+(defn module-has-macro? [src :- String] :- Bool
+  (boolean (some (fn [f :- Int] :- Bool (= "defmacro" (head-sym (unwrap-def f)))) (forms-of src))))
+;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
+;; recomputed against THAT store — store-local ids must match their store, the
+;; same seam GATE B guards), derive the corpus FROM the store, run the lexical
+;; walk! (writing refers_to into the store), then invoke body within the scope.
+;; Mirror of resolve-edn! with the ONLY change being the corpus source. The store
+;; is supplied (the daemon's warm `co`), not minted, and is mutated in place: the
+;; warm refers_to edges callers-of / blast-radius read come straight from here.
+(defn resolve-warm-store!
+  ([store :- (Atom t/Store)] :- Any (resolve-warm-store! store (fn [] :- Any nil)))
+  ([store :- (Atom t/Store) body :- Any] :- Any
+   (let [t   (c/begin-tx! store "resolve-warm")
+         sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))]
+     (c/set-supersedes-pred! store sup)
+     (binding [ctx store, tx t, SUP sup
+               file->ents (atom {})
+               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
+               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
+               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
+               n-forms-walked (atom 0) walked-modules (atom #{})
+               srcs [] file-modframe {} file-typeframe {} file-accessors {}
+               global-exports {} global-type-exports {} global-accessor-exports {}]
+       (corpus-from-store!)
+       (when *resolve-walk?* (run-resolution!))   ; Build B: the minimal-op path skips the whole-corpus walk!
+       (body)))))
+;; resolve-modules! : SCOPED re-resolve over the warm store. Identical store-binding +
+;; corpus derivation to resolve-warm-store! (so it sees the FULL cross-module
+;; export/import tables — M's imports resolve against every module's exports), but only
+;; WALKS (and writes refers_to for) `module-set`. The caller (the daemon) strips the
+;; affected modules' prior refers_to first. module-set is a set of module-name strings.
+;; An empty set walks nothing (a pure table rebuild).
+(defn resolve-modules!
+  ([store :- (Atom t/Store) module-set :- (Set String)] :- Any (resolve-modules! store module-set (fn [] :- Any nil)))
+  ([store :- (Atom t/Store) module-set :- (Set String) body :- Any] :- Any
+   (let [t   (c/begin-tx! store "resolve-scoped")
+         sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))]
+     (c/set-supersedes-pred! store sup)
+     (binding [ctx store, tx t, SUP sup
+               file->ents (atom {})
+               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
+               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
+               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
+               n-forms-walked (atom 0) walked-modules (atom #{})
+               srcs [] file-modframe {} file-typeframe {} file-accessors {}
+               global-exports {} global-type-exports {} global-accessor-exports {}]
+       (corpus-from-store!)                          ; FULL tables from the whole store
+       (run-resolution-over! (filterv (fn [s :- String] :- Bool (contains? module-set s)) srcs))  ; WALK only the affected subset
+       (body)))))
+;; --- projection: emit EDN for beagle --render, names resolved via refers_to --
+;; follow refers_to transitively (re-export chains: a (js/export name) re-export is
+;; itself a reference) to the ULTIMATE binding, and render its current name.
+(defn ultimate [B :- Int] :- Int
+  (loop [b :- Int B n :- Int 0]
+    (let [t :- Int? (refers-target b)]
+      (if (and (some? t) (< n 64)) (recur t (+ n 1)) b))))
+(defn binding-name [B :- Int] (sym-val (ultimate B)))
+
+;; ============================================================================
+;; AUTHORING — mint a NEW datum subtree into the SAME claim store (the inverse of
+;; claims-roundtrip.rkt's datum->claims). This is what makes add-def / set-body a
+;; CLAIM OPERATION, not a text splice: a Clojure EDN datum (the structured edit
+;; spec the agent emits, e.g. `(defn add-two [x :- Int] :- Int (+ x 2))`) is walked
+;; into fresh entities carrying `kind`/`v`/`fN` claims — exactly the reader-datum
+;; shape --emit-edn projects — and registered in file->ents so extract-file! emits
+;; them. The wrapper/body fN edges are then wired (append) or SUPERSEDED (replace),
+;; reusing the rename template (assert new, supersede old; reads filter superseded).
+;; The renderer reconstructs purely from fN/tail, so a minted subtree round-trips
+;; byte-stable, and any reference in it resolves via the SAME lexical walk! (a fresh
+;; pass over forms-of after minting), giving scope-correctness for free.
+;; ============================================================================
+(defn register! [src :- String e :- Int] :- Int
+  (swap! file->ents update src (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) e)))
+  e)
+;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->claims:55-64).
+;; Beagle reads [..] as (#%brackets ..) and {..} as (#%map ..), so a vector/map datum
+;; in the spec is minted as a `list` headed by that desugaring symbol — identical to
+;; what --emit-edn produces, keeping the projection lossless.
+(defn mint-leaf! [src :- String kind :- String v :- String] :- Int
+  (let [e :- Int (register! src (c/entity! ctx))]
+    (c/claim! ctx e KIND (c/value! ctx kind) tx)
+    (c/claim! ctx e Vp (c/value! ctx v) tx)
+    e))
+(defn mint-datum! [src :- String d :- Any] :- Int
+  (cond
+    [(nil? d)        (let [e :- Int (register! src (c/entity! ctx))] (c/claim! ctx e KIND (c/value! ctx "nil") tx) e)]
+    [(symbol? d)     (mint-leaf! src "symbol"  (str d))]
+    [(keyword? d)    (mint-leaf! src "keyword" (subs (str d) 1))]
+    [(string? d)     (mint-leaf! src "string"  d)]
+    [(boolean? d)    (mint-leaf! src "bool"    (if d "true" "false"))]
+    [(char? d)       (mint-leaf! src "char"    (str d))]
+    [(number? d)     (mint-leaf! src "number"  (str d))]
+    [(or (list? d) (seq? d) (vector? d) (map? d))
+     ;; symbols built via (symbol ..) — writing #%brackets literally would be read as a
+     ;; reader tag by Clojure's reader at load time of this file.
+     (let [head  :- Any (cond [(vector? d) [(symbol "#%brackets")]] [(map? d) [(symbol "#%map")]] [:else []])
+           elems :- Any (concat head (if (map? d) (apply concat (seq d)) (seq d)))
+           e     :- Int (register! src (c/entity! ctx))]
+       (c/claim! ctx e KIND (c/value! ctx "list") tx)
+       (doseq [[i x] (map-indexed vector elems)]
+         (c/claim! ctx e (c/value! ctx (str "f" i)) (mint-datum! src x) tx))
+       e)]
+    [:else (mint-leaf! src "other" (pr-str d))]))
+;; the body fN edges of a defn form = the consecutive fN child claims whose slot is
+;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
+(defn fN-claims [parent :- Int] :- (Vec Any)            ; -> [[N claim-id child-node] ...] over LIVE fN edges, ordered
+  (->> (c/by-l ctx parent)
+       (keep (fn [cid :- Int] :- Any
+               (let [p :- Any (c/literal ctx (c/claim-p ctx cid))]
+                 (when (and (string? p) (some? (re-matches #"f\d+" p)))
+                   [(parse-long (subs p 1)) cid (c/claim-r ctx cid)]))))
+       (sort-by first)))
+;; supersede a claim WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
+;; The supersedes edge needs a subject; a fresh entity is fine — the live-view filter
+;; keys off the superseded :r (the old claim id), not the subject (cnf.bclj:105-106,116).
+(defn retire-claim! [oldc :- Int] :- Int (c/claim! ctx (c/entity! ctx) SUP oldc tx))
+
+;; --- delete projection: omit a top-level form + its subtree, renumber siblings ---
+;; The renderer reads fN children CONSECUTIVELY and includes only nodes reachable from
+;; the root, so deleting a form means (a) skip its whole subtree (else its orphaned root
+;; would compete with the real wrapper) and (b) re-emit the wrapper's surviving forms at
+;; consecutive fN (a gap would truncate the file). Pure projection — the store is not mutated.
+(defn wrapper-of [src :- String] :- Int?
+  (let [m :- (Map String (Vec Int)) (deref file->ents)]
+    (some (fn [e :- Int] :- Int? (when (= "beagle-file" (head-sym e)) e)) (get m src))))
+(defn structural-kids [n :- Int] :- (Vec Int)                ; child node ids via fN/segN/commentN/tail edges
+  (->> (c/by-l ctx n)
+       (keep (fn [cid :- Int] :- Int?
+               (let [p :- Any (c/literal ctx (c/claim-p ctx cid))
+                     r :- Int? (c/claim-r ctx cid)]
+                 (when (and (integer? r) (string? p)
+                            (or (ord-pos? p) (some? (re-matches #"seg\d+" p))   ; #36: ord-pos? = old f<int> OR new CRDT key
+                                (some? (re-matches #"comment\d+" p)) (= p "tail")))   ; a form's own doc-comment
+                   r))))))
+(defn descendants [root :- Int] :- (Set Int)                 ; root + all transitive structural descendants
+  (loop [seen #{} stack [root]]
+    (if (empty? stack) seen
+      (let [n :- Int (peek stack)]
+        (if (contains? seen n) (recur seen (vec (pop stack)))
+          (recur (conj seen n) (into (vec (pop stack)) (structural-kids n))))))))
+(defn form-for-victim [src :- String victim :- Int] :- Int?       ; the top-level form whose def-NAME is victim (only the name —
+  (let [w :- Int? (wrapper-of src)]                                ; a defunion VARIANT is not its own top-level form, so it won't match)
+    (if (some? w)
+      (some (fn [f :- Int] :- Int?
+              (let [nl0 :- Int? (second (ordered-children (unwrap-def f)))]   ; the name leaf (2nd child), nil if absent
+                (if (some? nl0)
+                  (let [nl :- Int (if (= "list" (kind-of nl0))               ; (Name Params) head -> the inner name
+                                    (let [g0 :- Int? (first (ordered-children nl0))] (if (some? g0) g0 nl0))
+                                    nl0)]
+                    (if (= victim nl) f nil))
+                  nil)))
+            (rest (ordered-children w)))
+      nil)))
+
+;; --- projection: emit EDN for `racket --render`, names resolved via refers_to --
+;; #36: ALWAYS renumber wrapper form-edges to consecutive integers (the graph keeps
+;; CRDT keys f<path>~<tie>; the .bclj view must be clean integer fN so racket sees
+;; every form). REACHABILITY filter: emit ONLY descendants(wrapper) via LIVE
+;; structural edges, so superseded old-subtree orphans drop (skip under the delete
+;; path, which has its own subtree machinery). The bb-script's with-open/*out*
+;; writer + per-line println becomes: build a (Vec String) of lines and rt/spit-file.
+(defn extract-file! [src :- String out-path :- String] :- Nil
+  (let [ents :- (Vec Int) (or (get (deref file->ents) src) [])
+        ds :- (Set Int) *deleted-subtree*
+        wrap :- Int? (wrapper-of src)
+        root :- Int? (when (empty? *deleted-forms*) (wrapper-of src))
+        live :- (U (Set Int) Nil) (when root (descendants (or root 0)))
+        keep? (fn [e :- Int] :- Bool (or (nil? live) (contains? (or live #{}) e)))
+        emit-line
+        (fn [e :- Int cid :- Int]
+          (let [p :- Int (or (c/claim-p ctx cid) 0)
+                r :- Int (or (c/claim-r ctx cid) 0)
+                ps :- Any (c/literal ctx p)]
+            (cond
+              [(and (= e (or wrap 0)) (string? ps) (ord-pos? ps) (not= ps "f0")) nil]
+              [(contains? #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"} ps) nil]
+              [(and (= ps "v") (refers-target e))
+               (let [D :- Int (or (refers-target e) 0)
+                     fixed? (seq (c/by-lp ctx e FIXED))
+                     qual :- Any (pred-val e "qualifier")
+                     cpfx :- Any (pred-val e "ctor_prefix")
+                     afield :- Any (pred-val e "accessor_field")
+                     nm0 :- (U String Nil) (binding-name D)
+                     nm :- String (cond [cpfx   (str cpfx nm0)]
+                                        [afield (str (str/lower-case (str nm0)) "-" afield)]
+                                        [:else  (str nm0)])]
+                 (str "[" e " \"v\" "
+                      (pr-str (cond [fixed? (c/literal ctx r)]
+                                           [qual   (str qual "/" nm)]
+                                           [:else  nm]))
+                      "]"))]
+              [(c/value-object? ctx r)
+               (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")]
+              [:else (str "[" e " " (pr-str ps) " " r "]")])))
+        node-lines :- (Vec String)
+        (reduce
+          (fn [acc :- (Vec String) e :- Int] :- (Vec String)
+            (if (and (not (contains? ds e)) (keep? e))
+              (reduce (fn [a :- (Vec String) cid :- Int] :- (Vec String)
+                        (let [ln :- (U String Nil) (emit-line e cid)]
+                          (if ln (conj a ln) a)))
+                      acc (c/by-l ctx e))
+              acc))
+          [] ents)
+        form-lines :- (Vec String)
+        (if wrap
+          (vec (keep-indexed
+                 (fn [i :- Int f :- Int] :- String
+                   (str "[" (or wrap 0) " \"f" (+ i 1) "\" " f "]"))
+                 (filterv (fn [f :- Int] :- Bool (not (contains? *deleted-forms* f)))
+                          (rest (ordered-children (or wrap 0))))))
+          [])
+        all-lines :- (Vec String) (vec (concat (cons (str "@file " src) node-lines) form-lines))]
+    (rt/spit-file out-path (str (str/join "\n" all-lines) "\n"))))
+
+;; render output dir honors *resolve-out* (default $RESOLVE_OUT, then /tmp) so
+;; concurrent gate runs / agents don't collide on a global /tmp/resolved-*.edn.
+(defn out-path [src :- String] :- String
+  (str (or *resolve-out* (rt/getenv "RESOLVE_OUT") "/tmp")
+       "/resolved-" (last (str/split src #"/")) ".edn"))
+
+;; --- no-capture invariant ---------------------------------------------------
+;; Renaming def B to `new` is UNSOUND if a reference to B would, after rendering as
+;; `new`, be captured by a LOCAL binding `new` in scope at that reference. A ref
+;; that resolves to B (unqualified, name-tracking — not :rename-fixed or x/qualified)
+;; is captured iff `new` is in its scope. capture-refs reuses walk's exact frame
+;; construction so the check is scope-precise. (`new` is `newnm` — host-reserved.)
+(defn renders-as-tracked-name? [node :- Int] :- Bool
+  (and (not (seq (c/by-lp ctx node FIXED)))
+       (not (pred-val node "qualifier"))))
+(defn capture-refs [node :- Int scope :- (Vec (Map String Int)) B :- Int newnm :- String] :- (Vec Int)
+  (cond
+    [(= (kind-of node) "symbol")
+     (let [t :- Int? (refers-target node)]
+       (if (and t (= B (ultimate (or t 0)))
+                (renders-as-tracked-name? node)
+                (some (fn [m :- Any] :- Any (get m newnm)) scope))
+         [node] []))]
+    [(= (kind-of node) "list")
+     (let [kids :- (Vec Int) (ordered-children node)
+           h :- (U String Nil) (head-sym node)]
+       (cond
+         [(contains? PARAM-FORMS (or h ""))
+          (let [after-name :- (Vec Int) (if (contains? #{"defn" "defn-" "defmacro"} (or h "")) (vec (drop 2 kids)) (vec (rest kids)))
+                cap-arity (fn [forms :- (Vec Int)] :- (Vec Int)
+                            (let [pv :- Int? (first (filterv (fn [x :- Int] :- Bool (brackets? x)) forms))
+                                  frame :- (Map String Int) (frame-of (if pv (param-binds (or pv 0)) []))
+                                  or-vals :- (Vec Int) (if pv (vec (mapcat (fn [x :- Int] :- (Vec Int) (collect-or-vals x)) (rest (ordered-children (or pv 0))))) [])
+                                  body :- (Vec Int) (loop [xs :- (Vec Int) (vec (rest (drop-while (fn [x :- Int] :- Bool (not (brackets? x))) forms)))]
+                                                      (if (contains? #{":-" ":" ":raises"} (or (sym-val (first xs)) "")) (recur (vec (drop 2 xs))) xs))]
+                              (vec (concat (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x scope B newnm)) or-vals)
+                                           (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x (cons frame scope) B newnm)) body)))))]
+            (if (some (fn [x :- Int] :- Bool (brackets? x)) after-name)
+              (cap-arity after-name)
+              (vec (mapcat (fn [a :- Int] :- (Vec Int)
+                             (if (and (= "list" (kind-of a)) (brackets? (or (first (ordered-children a)) 0)))
+                               (cap-arity (ordered-children a)) []))
+                           after-name))))]
+         [(contains? LET-FORMS (or h ""))
+          (let [bracket :- Int? (second kids)
+                pairs :- (Vec Any) (if (and bracket (brackets? (or bracket 0))) (let-bind-pairs (or bracket 0)) [])
+                acc :- (Vec Any) (reduce (fn [a :- (Vec Any) pr :- Any] :- (Vec Any)
+                                           (let [sc :- Any (first a)
+                                                 caps :- (Vec Int) (or (second a) [])
+                                                 bsyms :- (Vec Int) (or (first pr) [])
+                                                 vnode :- Int? (second pr)
+                                                 orvals :- (Vec Int) (or (nth pr 2 nil) [])]
+                                             [(cons (frame-of bsyms) sc)
+                                              (into caps (vec (concat (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x sc B newnm)) orvals)
+                                                                      (if vnode (capture-refs (or vnode 0) sc B newnm) []))))]))
+                                         [scope []] pairs)
+                final :- Any (first acc)
+                vcaps :- (Vec Int) (or (second acc) [])]
+            (vec (concat vcaps (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x final B newnm)) (drop 2 kids)))))]
+         [(contains? FOR-FORMS (or h ""))
+          (let [bracket :- Int? (second kids)
+                entries :- (Vec Any) (if (and bracket (brackets? (or bracket 0))) (for-bind-pairs (or bracket 0)) [])
+                acc :- (Vec Any) (reduce (fn [a :- (Vec Any) e :- Any] :- (Vec Any)
+                                           (let [sc :- Any (first a)
+                                                 caps :- (Vec Int) (or (second a) [])]
+                                             (if (= :expr (first e))
+                                               [sc (into caps (capture-refs (or (second e) 0) sc B newnm))]
+                                               (let [bsyms :- (Vec Int) (or (nth e 1 nil) [])
+                                                     vnode :- Int? (nth e 2 nil)
+                                                     orvals :- (Vec Int) (or (nth e 3 nil) [])]
+                                                 [(cons (frame-of bsyms) sc)
+                                                  (into caps (vec (concat (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x sc B newnm)) orvals)
+                                                                          (if vnode (capture-refs (or vnode 0) sc B newnm) []))))]))))
+                                         [scope []] entries)
+                final :- Any (first acc)
+                vcaps :- (Vec Int) (or (second acc) [])]
+            (vec (concat vcaps (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x final B newnm)) (drop 2 kids)))))]
+         [(contains? MATCH-FORMS (or h ""))
+          (let [kids :- (Vec Int) (ordered-children node)]
+            (vec (concat (capture-refs (or (second kids) 0) scope B newnm)
+                         (mapcat (fn [clause :- Int] :- (Vec Int)
+                                   (if (brackets? clause)
+                                     (let [cc :- (Vec Int) (vec (rest (ordered-children clause)))
+                                           pat :- Int (or (first cc) 0)
+                                           body :- (Vec Int) (vec (rest cc))
+                                           frame :- (Map String Int) (frame-of (match-pat-binds pat))]
+                                       (vec (concat (capture-refs pat scope B newnm)
+                                                    (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x (cons frame scope) B newnm)) body))))
+                                     []))
+                                 (drop 2 kids)))))]
+         [(= h "letfn")
+          (let [bracket :- Int? (second kids)
+                fnlists :- (Vec Int) (if (and bracket (brackets? (or bracket 0)))
+                                       (filterv (fn [x :- Int] :- Bool (= "list" (kind-of x))) (rest (ordered-children (or bracket 0))))
+                                       [])
+                frame :- (Map String Int) (frame-of (vec (keep (fn [x :- Int] :- Int? (first (ordered-children x))) fnlists)))
+                bodyscope :- Any (cons frame scope)
+                cap-arity (fn [forms :- (Vec Int)] :- (Vec Int)
+                            (let [pv :- Int? (first (filterv (fn [x :- Int] :- Bool (brackets? x)) forms))
+                                  pframe :- (Map String Int) (frame-of (if pv (param-binds (or pv 0)) []))
+                                  fbody :- (Vec Int) (loop [xs :- (Vec Int) (vec (rest (drop-while (fn [x :- Int] :- Bool (not (brackets? x))) forms)))]
+                                                       (if (contains? #{":-" ":" ":raises"} (or (sym-val (first xs)) "")) (recur (vec (drop 2 xs))) xs))]
+                              (vec (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x (cons pframe bodyscope) B newnm)) fbody))))]
+            (vec (concat (mapcat (fn [fl :- Int] :- (Vec Int) (cap-arity (vec (rest (ordered-children fl))))) fnlists)
+                         (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x bodyscope B newnm)) (drop 2 kids)))))]
+         [(contains? #{"extend-type" "extend-protocol"} (or h ""))
+          (vec (mapcat (fn [c :- Int] :- (Vec Int)
+                         (if (= "list" (kind-of c))
+                           (let [ic :- (Vec Int) (ordered-children c)
+                                 pv :- Int? (first (filterv (fn [x :- Int] :- Bool (brackets? x)) (rest ic)))
+                                 pframe :- (Map String Int) (frame-of (if pv (param-binds (or pv 0)) []))
+                                 fbody :- (Vec Int) (loop [xs :- (Vec Int) (vec (rest (drop-while (fn [x :- Int] :- Bool (not (brackets? x))) (rest ic))))]
+                                                      (if (contains? #{":-" ":" ":raises"} (or (sym-val (first xs)) "")) (recur (vec (drop 2 xs))) xs))]
+                             (vec (concat (capture-refs (or (first ic) 0) scope B newnm)
+                                          (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x (cons pframe scope) B newnm)) fbody))))
+                           (capture-refs c scope B newnm)))
+                       (rest kids)))]
+         [(= h "as->")
+          (let [init :- Int? (nth kids 1 nil)
+                nm :- Int? (nth kids 2 nil)
+                frame :- (Map String Int) (frame-of (if (sym-val (or nm 0)) [(or nm 0)] []))]
+            (vec (concat (if init (capture-refs (or init 0) scope B newnm) [])
+                         (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x (cons frame scope) B newnm)) (drop 3 kids)))))]
+         [:else (vec (mapcat (fn [x :- Int] :- (Vec Int) (capture-refs x scope B newnm)) kids))]))]
+    [:else []]))
+
+;; ============================================================================
+;; FUNCTIONS — appended by the tiered translation below (leaves first).
+;; ============================================================================
+
+(defn re-resolve! [] :- Any
+  (let [s :- (Vec String) srcs
+        modframe  :- (Map String (Map String Int))
+          (into {} (map (fn [src :- String] :- (Vec Any) [src (module-defs src)]) s))
+        typeframe :- (Map String (Map String Int))
+          (into {} (map (fn [src :- String] :- (Vec Any) [src (module-types src)]) s))
+        accessors :- (Map String (Map String (Vec Any)))
+          (into {} (map (fn [src :- String] :- (Vec Any) [src (module-accessors src)]) s))]
+    (doseq [src s]
+      (binding [*xresolve* (make-xresolve src)
+                *tresolve* (fn [nm :- String] :- Int? (get (get typeframe src) nm))
+                *aresolve* (fn [nm :- String] :- Any (get (get accessors src) nm))]
+        (walk-all! (forms-of src) (list (get modframe src)))
+        (walk-comments! src)))))
+
+(defn author-emit! [op :- String detail :- String] :- Any
+  (let [s :- (Vec String) srcs]
+    (doseq [src s] (extract-file! src (out-path src)))
+    (rt/println-err! (str "================ authoring: " op " ================"))
+    (rt/println-err! detail)
+    (doseq [src s] (rt/println-err! (str "projected -> " (out-path src) "   <- " src)))))
+
+(defn- emit-srcs [] :- (Vec String) (or *project-srcs* srcs))
+
+;; like author-emit!, but only over *project-srcs* (the affected module on the graph path).
+(defn author-emit-scoped! [op :- String detail :- String] :- Any
+  (when-not *capture-only?*
+    (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
+    (rt/println-err! (str "================ authoring: " op " ================"))
+    (rt/println-err! detail)
+    (doseq [src (emit-srcs)] (rt/println-err! (str "projected -> " (out-path src) "   <- " src)))))
+
+;; rename — every INVARIANT + claim mutation from the old `rename` case arm.
+(defn verb-rename! [old :- String new :- String target :- String] :- Any
+  (let [target-srcs :- (Vec String) (filterv (fn [s :- String] :- Bool (str/includes? s target)) srcs)
+        edits (atom 0)]
+    (doseq [src target-srcs]
+      (when (and (def-binding src old) (def-binding src new))
+        (rt/println-err! (str "REJECTED — `" new "` already names a binding in " src
+                              " (rename-doesn't-collide; no claims mutated)."))
+        (*reject!* 3)))
+    (doseq [src target-srcs]
+      (when (and (some? (get (file-typeframe src) old)) (nil? (re-find #"^[A-Z]" new)))
+        (rt/println-err! (str "REJECTED — `" new "` is not a valid (Capitalized) type name "
+                              "(beagle type-name shape; no claims mutated)."))
+        (*reject!* 3)))
+    (doseq [src target-srcs]
+      (let [B :- Int? (def-binding src old)]
+       (when (some? B)
+        (let [caps :- (Vec Int)
+                (vec (mapcat (fn [s :- String] :- (Vec Int)
+                               (mapcat (fn [f :- Int] :- (Vec Int)
+                                         (capture-refs f (list (get file-modframe s)) B new))
+                                       (forms-of s)))
+                             srcs))]
+          (when (seq caps)
+            (rt/println-err! (str "REJECTED — renaming `" old "` -> `" new "` would be CAPTURED by a local `"
+                                  new "` in scope at " (count caps) " reference(s) (no-capture; no claims mutated)."))
+            (*reject!* 4))))))
+    (let [target-mods :- (Set String)
+            (into #{} (keep (fn [src :- String] (module-name src)) target-srcs))]
+      (doseq [src srcs :when (not (some (fn [s :- String] :- Bool (= s src)) target-srcs))]
+        (let [pr :- (Map Keyword Any) (parse-require src)
+              refer :- (Map String String) (:refer pr)
+              rename :- (Map String (Vec Any)) (:rename pr)]
+          (when (and (contains? target-mods (get refer old))
+                     (or (def-binding src new) (get refer new) (get rename new)))
+            (rt/println-err! (str "REJECTED — renaming `" old "` -> `" new "` would DUPLICATE a binding in consumer "
+                                  src " (it already binds `" new "`; no-import-collision; no claims mutated)."))
+            (*reject!* 3)))))
+    (doseq [src target-srcs]
+      (let [B :- Int? (def-binding src old)]
+       (when (some? B)
+        (let [oldc :- Any (first (filterv (fn [cid :- Int] :- Bool (= Vp (c/claim-p ctx cid))) (c/by-l ctx B)))
+              nc :- Int (c/claim! ctx B Vp (c/value! ctx new) tx)]
+          (c/claim! ctx nc SUP oldc tx)
+          (swap! edits (fn [x :- Int] :- Int (+ x 1)))))))
+    (when (zero? (let [e :- Int (deref edits)] e))
+      (rt/println-err! (str "REJECTED — no binding named `" old "` found in \"" target
+                            "\" (nothing to rename; no claims mutated)."))
+      (*reject!* 5))
+    ;; capture-only (daemon :edit-min): the name claim is mutated above; SKIP the
+    ;; whole-corpus projection — the daemon commits the captured op + re-resolves scoped.
+    (when-not *capture-only?*
+      (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
+      (rt/println-err! "================ Turtle #5 — O(1) shadow-correct rename ================")
+      (rt/println-err! (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
+      (rt/println-err! (str "CLAIMS EDITED: " (let [e :- Int (deref edits)] e)
+                            "  (just the definition's name; references follow refers_to)"))
+      (doseq [src (emit-srcs)] (rt/println-err! (str "projected -> " (out-path src) "   <- " src))))))
+
+;; upsert-form — add/replace a top-level def from an EDN datum spec.
+;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
+;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
+(defn wrap-forms [parent :- Int] :- (Vec (Vec Any))
+  (vec (sort-by (fn [e :- (Vec Any)] :- Any (first e)) ord-cmp
+                (keep (fn [cid :- Int]
+                        (let [p :- Int (c/claim-p ctx cid)
+                              k :- (U (Map Keyword Any) Nil) (ord-parse (c/literal ctx p))]
+                          (when k [k cid (c/claim-r ctx cid)])))
+                      (c/by-l ctx parent)))))
+
+;; CRDT tie: on the daemon (capture-only) path defer to "PENDING" — the daemon sets the
+;; tie to the new node's ATOMIC name-int, so concurrent same-path inserts get distinct
+;; keys and BOTH land (commute). The single-writer CLI path has no race -> tie "0".
+(defn- ord-tie [] :- String (if *capture-only?* "PENDING" "0"))
+
+(defn verb-upsert-form! [scope :- String datum :- Any] :- Any
+  (let [target-srcs :- (Vec String) (filterv (fn [s :- String] :- Bool (str/includes? s scope)) srcs)]
+    (when (not= 1 (count target-srcs))
+      (rt/println-err! (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
+                            " source files; upsert-form needs exactly one (no claims mutated)."))
+      (*reject!* 3))
+    (when (and (seq? datum) (not (contains? VALUE-DEFS (str (first datum)))))
+      (rt/println-err! (str "REJECTED — upsert-form spec head `" (first datum)
+                            "` is not a value def (def/defn/...); no claims mutated."))
+      (*reject!* 3))
+    (let [src :- String (first target-srcs)
+          wrap :- Any (wrapper-of src)
+          forms :- (Vec (Vec Any)) (wrap-forms wrap)
+          new-name :- (U String Nil)
+            (when (and (seq? datum) (contains? VALUE-DEFS (str (first datum)))) (str (second datum)))
+          existing :- Int? (when new-name (def-binding src new-name))
+          victim-form :- Int? (when existing (form-for-victim src existing))
+          victim-entry :- (U (Vec Any) Nil)
+            (when victim-form
+              (some (fn [e :- (Vec Any)]
+                      (let [r :- Int (nth e 2)] (when (= r victim-form) e)))
+                    forms))
+          new-root :- Int (mint-datum! src datum)]
+      (if victim-entry
+        ;; REPLACE in place: reuse the victim's PATH (new tie), retire the victim.
+        (let [k :- (Map Keyword Any) (nth victim-entry 0)
+              cid :- Int (nth victim-entry 1)]
+          (retire-claim! cid)
+          (c/claim! ctx wrap (c/value! ctx (ord-str (:path k) (ord-tie))) new-root tx))
+        ;; APPEND: a path strictly after the last form (CRDT). Concurrent appends compute
+        ;; the same path on identical clones -> distinct tie (name-int) -> both land (commute).
+        (let [last-path :- (U (Vec Int) Nil)
+                (when (seq forms) (let [pk :- (Map Keyword Any) (first (peek forms))] (:path pk)))]
+          (c/claim! ctx wrap (c/value! ctx (ord-str (ord-append (or last-path [])) (ord-tie))) new-root tx)))
+      (when-not *capture-only?* (re-resolve!))
+      (author-emit-scoped! "upsert-form"
+                    (str (if victim-entry "replaced" "added") " top-level def `" new-name
+                         "` in \"" scope "\" (1 form minted as claims; refs resolved via refers_to)")))))
+
+;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a CRDT
+;; path strictly between the anchor and its next sibling. Concurrent inserts after the
+;; same anchor compute the same between-path -> distinct tie -> both land, ordered by
+;; tie (commute) — the thing append-only D could not do.
+(defn verb-insert-form! [scope :- String after-name :- String datum :- Any] :- Any
+  (let [target-srcs :- (Vec String) (filterv (fn [s :- String] :- Bool (str/includes? s scope)) srcs)]
+    (when (not= 1 (count target-srcs))
+      (rt/println-err! (str "REJECTED — insert-form scope \"" scope "\" matches "
+                            (count target-srcs) " files (need 1)."))
+      (*reject!* 3))
+    (when (and (seq? datum) (not (contains? VALUE-DEFS (str (first datum)))))
+      (rt/println-err! (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
+      (*reject!* 3))
+    (let [src :- String (first target-srcs)
+          wrap :- Any (wrapper-of src)
+          forms :- (Vec (Vec Any)) (wrap-forms wrap)
+          anchor-bind :- Int? (def-binding src after-name)
+          anchor-form :- Int? (when anchor-bind (form-for-victim src anchor-bind))
+          idx :- Int?
+            (when anchor-form
+              (first (keep-indexed (fn [i :- Int e :- (Vec Any)] :- Int?
+                                     (let [r :- Int (nth e 2)] (when (= r anchor-form) i)))
+                                   forms)))]
+      (when (nil? idx)
+        (rt/println-err! (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\"."))
+        (*reject!* 3))
+      (when (some? idx)
+       (let [i :- Int idx
+            anchor-path :- (Vec Int) (let [k :- (Map Keyword Any) (first (nth forms i))] (:path k))
+            next-path :- (U (Vec Int) Nil)
+              (when (< (+ i 1) (count forms)) (let [k :- (Map Keyword Any) (first (nth forms (+ i 1)))] (:path k)))
+            new-root :- Int (mint-datum! src datum)]
+        (c/claim! ctx wrap (c/value! ctx (ord-str (ord-between anchor-path next-path) (ord-tie))) new-root tx)
+        (when-not *capture-only?* (re-resolve!))
+        (author-emit-scoped! "insert-form"
+                      (str "inserted def after `" after-name "` in \"" scope "\" (CRDT mid-insert)")))))))
+
+;; insert-comment — author a standalone LINE comment (Turtle #6) leading/trailing an
+;; anchor def. Comments do NOT live in the wrapper fN order; they attach to their anchor
+;; FORM via a `commentN` edge (claims-roundtrip.rkt comment-edn-lines). This mints a
+;; kind="comment" node + one `text` seg (the lexeme) + the commentN edge — the FIRST
+;; incremental authoring of a comment node (text->graph ingest was previously the only
+;; way one entered the graph). The seg is a single `text` run (renders verbatim); symbol
+;; segs (rename-tracked identifier mentions) are a follow-up — a text seg is correct and
+;; lossless for an authored note.
+(defn- next-comment-idx [form :- Int] :- Int            ; next free commentN slot on a form (0 if none)
+  (+ 1 (reduce (fn [acc :- Int n :- Int] :- Int (max acc n))
+               -1
+               (keep (fn [cid :- Int] :- Int?
+                       (let [p :- Any (c/literal ctx (c/claim-p ctx cid))]
+                         (when (and (string? p) (re-matches #"comment\d+" p))
+                           (parse-long (subs p 7)))))
+                     (c/by-l ctx form)))))
+
+(defn verb-insert-comment! [scope :- String anchor-name :- String text :- String placement :- String] :- Any
+  (let [target-srcs :- (Vec String) (filterv (fn [s :- String] :- Bool (str/includes? s scope)) srcs)]
+    (when (not= 1 (count target-srcs))
+      (rt/println-err! (str "REJECTED — insert-comment scope \"" scope "\" matches "
+                            (count target-srcs) " files (need 1)."))
+      (*reject!* 3))
+    (when (str/blank? text)
+      (rt/println-err! "REJECTED — insert-comment needs non-empty --text; no claims mutated.")
+      (*reject!* 3))
+    (let [src :- String (first target-srcs)
+          plc :- String (if (contains? #{"leading" "trailing"} placement) placement "leading")
+          lex :- String (if (str/starts-with? (str/triml text) ";") text (str ";; " text))  ; lexeme keeps the leading ; (matches ingest capture)
+          anchor-bind :- Int? (def-binding src anchor-name)
+          anchor-form :- Int? (when anchor-bind (form-for-victim src anchor-bind))]
+      (when (nil? anchor-form)
+        (rt/println-err! (str "REJECTED — insert-comment anchor `" anchor-name "` not found in \"" scope "\"."))
+        (*reject!* 3))
+      (when (some? anchor-form)
+       (let [af :- Int anchor-form
+            k :- Int (next-comment-idx af)
+            cnode :- Int (register! src (c/entity! ctx))
+            seg :- Int (register! src (c/entity! ctx))]
+        (c/claim! ctx cnode KIND (c/value! ctx "comment") tx)
+        (c/claim! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
+        (c/claim! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
+        (c/claim! ctx seg  KIND (c/value! ctx "text") tx)
+        (c/claim! ctx seg  Vp   (c/value! ctx lex) tx)
+        (c/claim! ctx cnode (c/value! ctx "seg0") seg tx)
+        (c/claim! ctx af (c/value! ctx (str "comment" k)) cnode tx)
+        (when-not *capture-only?* (re-resolve!))
+        (author-emit-scoped! "insert-comment"
+                      (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)")))))))
+
+;; set-body — replace a defn's body with a freshly-minted body datum.
+(defn verb-set-body! [name :- String scope :- String datum :- Any] :- Any
+  (let [target-srcs :- (Vec String) (filterv (fn [s :- String] :- Bool (str/includes? s scope)) srcs)]
+    (when (not= 1 (count target-srcs))
+      (rt/println-err! (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
+                            " source files; set-body needs exactly one (no claims mutated)."))
+      (*reject!* 3))
+    (let [src :- String (first target-srcs)
+          B :- Int? (def-binding src name)
+          form :- Int? (when (some? B) (form-for-victim src B))
+          d :- Int? (when (some? form) (unwrap-def form))
+          dhead :- (U String Nil) (when (some? d) (head-sym d))]
+      (when (or (nil? form) (not (contains? PARAM-FORMS dhead)))
+        (rt/println-err! (str "REJECTED — `" name "` is not a defn with a body in \"" scope
+                              "\" (set-body needs a defn; no claims mutated)."))
+        (*reject!* 5))
+      (when (some? d)
+       (let [dd :- Int d
+            kids :- (Vec (Vec Any)) (fN-claims dd)
+            bracket-n :- Int?
+              (some (fn [e :- (Vec Any)] :- Int?
+                      (let [n :- Int (nth e 0) r :- Int (nth e 2)] (when (brackets? r) n)))
+                    kids)
+            bn :- Int (or bracket-n 0)
+            ret? :- (U Int Nil)
+              (some (fn [e :- (Vec Any)]
+                      (let [n :- Int (nth e 0) r :- Int (nth e 2)]
+                        (when (and (= n (+ bn 1)) (contains? TYPE-COLON (sym-val r))) n)))
+                    kids)
+            body-start :- Int (+ bn (if ret? 3 1))
+            body-slots :- (Vec (Vec Any))
+              (filterv (fn [e :- (Vec Any)] :- Bool (let [n :- Int (nth e 0)] (>= n body-start))) kids)
+            new-root :- Int (mint-datum! src datum)]
+        (when (empty? body-slots)
+          (rt/println-err! (str "REJECTED — `" name "` has no body fN edges to replace; no claims mutated."))
+          (*reject!* 5))
+        (doseq [e body-slots] (let [cid :- Int (nth e 1)] (retire-claim! cid)))
+        (c/claim! ctx dd (c/value! ctx (str "f" body-start)) new-root tx)
+        (when-not *capture-only?* (re-resolve!))
+        (author-emit-scoped! "set-body"
+                      (str "replaced body of defn `" name "` in \"" scope "\" ("
+                           (count body-slots) " body slot(s) superseded; new body minted as claims)")))))))
+
+;; Graph-edit orchestration entry: bind *resolve-out* + *project-srcs*, run the
+;; warm-store resolution, then dispatch the requested authoring verb. Returns the module.
+(defn run-verb-warm! [store :- (Atom t/Store) spec :- Any] :- Any
+  (let [module (:module spec)]
+    (binding [*resolve-out* (:resolve-out spec)]      ; nil => env/$RESOLVE_OUT/tmp
+      (resolve-warm-store!
+       store
+       (fn [] :- Any
+         (binding [*project-srcs* (when module
+                                    (let [s :- (Vec String) srcs
+                                          m :- String module]
+                                      (filter (fn [x :- String] :- Bool (str/includes? x m)) s)))]
+           (cond
+             [(= (:op spec) "rename")      (verb-rename! (:old spec) (:new spec) module)]
+             [(= (:op spec) "upsert-form") (verb-upsert-form! module (:datum spec))]
+             [(= (:op spec) "insert-form") (verb-insert-form! module (:after spec) (:datum spec))]   ; CRDT mid-insert (#36)
+             [(= (:op spec) "insert-comment") (verb-insert-comment! module (:after spec) (:text spec) (:placement spec))]  ; Turtle #6 comment authoring (#30)
+             [(= (:op spec) "set-body")    (verb-set-body! (:name spec) module (:datum spec))]
+             [:else (do (rt/println-err! (str "run-verb-warm!: unknown op " (:op spec)))
+                        (rt/exit! 2))])))))
+    module))
