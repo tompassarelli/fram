@@ -8,19 +8,25 @@
 (require fram.kernel :as k)
 (require fram.fold :as fold)
 (require clojure.string :as str)
+(require clojure.edn :as edn)
 (require fram.rt)
 
 (declare-extern fram.rt/slurp [String -> String])
 (declare-extern fram.rt/list-md [String -> (Vec String)])
-(declare-extern fram.rt/split-on [String String -> (Vec String)])
-(declare-extern fram.rt/split-kv [String -> (Vec String)])
-(declare-extern fram.rt/edn-unquote [String -> String])
+
+;; split a triple line "<pred><ws><object...>" -> [pred obj]; obj may contain
+;; spaces (the rest of the line). Native re-find (was an rt extern); the str
+;; coercions satisfy (Vec String) over re-find's Any match groups.
+(defn- split-kv [line :- String] :- (Vec String)
+  (let [t (str/trim line)
+        m :- Any (re-find #"^(\S+)\s+(.*)$" t)]
+    (if (some? m) [(str (nth m 1)) (str (nth m 2))] [t ""])))
 
 ;; --- split a file into [claim-head, prose-body] on the first `---` line -------
 (defrecord Doc [head :- String body :- String])
 
 (defn- split-doc [content :- String] :- Doc
-  (let [lines (fram.rt/split-on content "\n")
+  (let [lines (vec (str/split content #"\n" -1))
         n (count lines)]
     (loop [i 0]
       (cond
@@ -34,7 +40,7 @@
 (defn- parse-obj [tok :- String] :- String
   (cond
     [(str/starts-with? tok "@") tok]
-    [(str/starts-with? tok "\"") (fram.rt/edn-unquote tok)]
+    [(str/starts-with? tok "\"") (str (edn/read-string tok))]
     [:else tok]))
 
 ;; stderr warning — import runs as a CLI; a skipped/dropped thread must be
@@ -47,7 +53,7 @@
 ;; @subject line). It does not affect the parse.
 (defn- file->claims [path :- String content :- String] :- (Vec k/Claim)
   (let [doc (split-doc content)
-        lines (fram.rt/split-on (:head doc) "\n")
+        lines (vec (str/split (:head doc) #"\n" -1))
         n (count lines)
         si (loop [i 0]
              (cond
@@ -71,7 +77,7 @@
                        (let [t (str/trim (nth lines i))]
                          (if (str/blank? t)
                            (recur (+ i 1) acc)
-                           (let [kv (fram.rt/split-kv t)]
+                           (let [kv (split-kv t)]
                              (recur (+ i 1)
                                     (conj acc (k/->Claim subj (nth kv 0) (parse-obj (nth kv 1))))))))))
             body (:body doc)]
@@ -87,7 +93,7 @@
                (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c) "import")))))))
 
 ;; Parse ONE file into claims, isolating any failure to that file. A single
-;; malformed line (e.g. an unterminated quoted literal -> fram.rt/edn-unquote
+;; malformed line (e.g. an unterminated quoted literal -> clojure.edn/read-string
 ;; throws "EOF while reading string") must skip THAT file with a warning, not
 ;; abort the whole corpus import — the same crash-vs-skip discipline read-log
 ;; already applies per log line.

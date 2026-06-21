@@ -3,14 +3,11 @@
   "Inverse of import: project the claim graph back to thread files as claim
   triples. GENERIC — groups a subject's claims and renders `@id` + `predicate
   object` lines (canonical order) + the prose body. Refs render as `@id`;
-  literals via EDN (fram.rt/edn-quote) so re-import reproduces the claim set.
+  literals via EDN (native pr-str) so re-import reproduces the claim set.
   Pure string production; file IO lives in fram.main via rt externs.")
 
 (require fram.kernel :as k)
 (require clojure.string :as str)
-(require fram.rt)
-
-(declare-extern fram.rt/edn-quote [String -> String])
 
 ;; canonical predicate order (body is rendered separately, after the `---`)
 (def order :- (Vec String)
@@ -40,7 +37,7 @@
             (str/includes? v " ") (str/includes? v "\t")
             (str/includes? v "\n") (str/includes? v "\r")
             (str/starts-with? v "@") (str/starts-with? v "\""))
-      (fram.rt/edn-quote v)
+      (pr-str v)
       v)))
 
 (defn thread-md [claims :- (Vec k/Claim) te :- String] :- String
