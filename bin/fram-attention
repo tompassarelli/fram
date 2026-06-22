@@ -1,0 +1,299 @@
+#!/usr/bin/env bb
+;; ============================================================================
+;; fram-attention — the ATTENTION-EXTRACTOR for the fram/framescope light-show.
+;; ============================================================================
+;; Tails each agent's tool-use stream, extracts hard file-touch events (Read /
+;; Edit / Write / NotebookEdit / Grep), maps each touched file to a code-graph
+;; module node, and emits "attention events" (agent X is attending node Y at T).
+;;
+;; Two modes:
+;;   extract [--since N]          one-shot, NO daemon: read all
+;;     agent-*.stream.jsonl, print attention events as JSONL to stdout.
+;;   follow  [--port 7980] [--emit]
+;;     tail -f every stream (poll for new lines + pick up new agent files);
+;;     print each event (default), and with --emit also write it as a DECAYING
+;;     (last-write-wins) claim into the attention daemon on --port over the
+;;     SAME line-delimited EDN/TCP wire the bridge uses (:version + OCC :assert).
+;;
+;; The feed shape is a CLAIM in a dedicated attention daemon, so framescope's
+;; bridge serves it UNCHANGED via /graph?port=N + /live?port=N. See
+;; docs/ATTENTION-FEED-SCHEMA.md for the contract handed to @framescope.
+;;
+;;   {"agent":"<uuid>","tool":"Read","file":"src/fram/schema.bclj",
+;;    "node":"@schema","ts":"2026-06-22T10:34:07.983Z"}
+;; ============================================================================
+(require '[clojure.string :as str]
+         '[cheshire.core :as json]
+         '[clojure.edn :as edn]
+         '[clojure.java.io :as io])
+(import '[java.net Socket InetSocketAddress]
+        '[java.io RandomAccessFile])
+
+(def HOME (System/getProperty "user.home"))
+(def FLEET-DATA (io/file HOME "code/fleet-data"))
+;; the code log we scan for `file` claims (authoritative file -> module map).
+(def CODE-LOG
+  (let [here (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile)]
+    (io/file here ".fram/code.log")))
+
+;; Tools whose input names a file we treat as a HARD attention signal (v1).
+;; Grep/path-glob are soft (a scan, not a focus) but still a real touch — include
+;; them so a search at a module also lights it; tool name is preserved downstream.
+(def FILE-TOOLS #{"Read" "Edit" "Write" "MultiEdit" "NotebookEdit" "Grep"})
+
+;; ---- file-touch extraction ------------------------------------------------
+(defn touch-path
+  "The file path a tool_use block names, or nil. Read/Edit/Write -> file_path;
+   NotebookEdit -> notebook_path; Grep -> path (the dir it searched). glob alone
+   is not a file touch (no concrete path), so it's intentionally ignored."
+  [input]
+  (when (map? input)
+    (or (:file_path input) (:notebook_path input) (:path input))))
+
+(defn walk-tool-uses
+  "Recursively yield every tool_use block in an event (top-level OR nested in
+   message.content). Defensive: tolerates any shape."
+  [node]
+  (cond
+    (map? node)
+    (concat (when (= "tool_use" (:type node)) [node])
+            (mapcat walk-tool-uses (vals node)))
+    (sequential? node) (mapcat walk-tool-uses node)
+    :else nil))
+
+(defn event-ts
+  "Best timestamp for an event. assistant events carry NO timestamp; user events
+   (tool_use_result) carry a top-level ISO `timestamp`. Prefer top-level, then
+   message.timestamp; caller supplies a fallback (file mtime / counter)."
+  [ev]
+  (or (:timestamp ev)
+      (get-in ev [:message :timestamp])))
+
+(defn touches-in-line
+  "Parse one JSONL line -> seq of {:tool :file :ts} (ts may be nil). Skips
+   malformed lines and non-file tools silently."
+  [line]
+  (try
+    (let [ev (json/parse-string line true)
+          ts (event-ts ev)]
+      (->> (walk-tool-uses ev)
+           (keep (fn [tu]
+                   (let [name (:name tu)
+                         path (touch-path (:input tu))]
+                     (when (and (FILE-TOOLS name) path)
+                       {:tool name :file path :ts ts}))))))
+    (catch Exception _ nil)))
+
+;; ---- file -> module map (scan .fram/code.log for `file` claims) -----------
+(defn module-id-of
+  "Module id = the @<name> prefix before '#'. e.g. @schema#root -> @schema."
+  [subject]
+  (let [s (str subject)
+        i (.indexOf s "#")]
+    (if (neg? i) s (subs s 0 i))))
+
+(defn basename [p]
+  (let [s (str p) i (.lastIndexOf s "/")] (if (neg? i) s (subs s (inc i)))))
+
+(defn strip-ext [b]
+  (let [i (.lastIndexOf b ".")] (if (pos? i) (subs b 0 i) b)))
+
+(defn build-file->module
+  "Scan a code log for `file` claims: {:l \"@mod#root\" :p \"file\" :r \"src/...\"}.
+   Returns {full-path module-id, basename module-id} so a touch matches on either.
+   Filters strictly on :p \"file\" AND an @-prefixed subject (the cardinality
+   migration meta-claim `{:l \"file\" :p \"cardinality\"}` must NOT leak in)."
+  [log-file]
+  (if-not (.exists log-file)
+    {}
+    (with-open [r (io/reader log-file)]
+      (reduce
+        (fn [m line]
+          (let [c (try (edn/read-string line) (catch Exception _ nil))]
+            (if (and (map? c)
+                     (= "file" (:p c))
+                     (string? (:l c))
+                     (str/starts-with? (:l c) "@")
+                     (string? (:r c)))
+              (let [mod (module-id-of (:l c))
+                    path (:r c)]
+                (-> m (assoc path mod) (assoc (basename path) mod)))
+              m)))
+        {}
+        (line-seq r)))))
+
+(defn map-node
+  "Map a touched file path to a code-graph node id. Authoritative: the file->module
+   map (matched by full path then basename). Fallback for unmapped paths: a synthetic
+   module = basename without extension, prefixed @ (e.g. graph.js -> @graph)."
+  [file->mod path]
+  (or (get file->mod path)
+      (get file->mod (basename path))
+      (str "@" (strip-ext (basename path)))))
+
+;; ---- one-shot extract -----------------------------------------------------
+(defn agent-uuid-of [file]
+  ;; agent-<uuid>.stream.jsonl -> <uuid>
+  (second (re-find #"agent-(.+)\.stream\.jsonl$" (.getName file))))
+
+(defn stream-files []
+  (->> (.listFiles FLEET-DATA)
+       (filter #(re-find #"^agent-.+\.stream\.jsonl$" (.getName %)))
+       (sort-by #(.getName %))))
+
+(defn emit-jsonl [ev]
+  (println (json/generate-string ev)))
+
+(defn extract!
+  "One-shot. Reads every stream, prints one JSONL attention event per file touch.
+   --since N drops events whose ts is lexically < N (ISO compares correctly).
+   No daemon required."
+  [{:keys [since]}]
+  (let [file->mod (build-file->module CODE-LOG)
+        files (stream-files)]
+    (binding [*out* *err*]
+      (println (format ";; fram-attention extract: %d modules in file-map, %d stream files"
+                       (long (/ (count file->mod) 2)) (count files))))
+    (doseq [f files
+            :let [uuid (agent-uuid-of f)
+                  ;; fallback ts when an event has none: the stream file's mtime ISO.
+                  mtime-iso (.toString (java.time.Instant/ofEpochMilli (.lastModified f)))]
+            line (line-seq (io/reader f))
+            t (touches-in-line line)
+            :let [ts (or (:ts t) mtime-iso)]
+            :when (or (nil? since) (and ts (>= (compare (str ts) (str since)) 0)))]
+      (emit-jsonl {:agent uuid
+                   :tool (:tool t)
+                   :file (:file t)
+                   :node (map-node file->mod (:file t))
+                   :ts ts}))))
+
+;; ---- daemon wire (mirror bridge.clj send-op + assert-claim!) --------------
+(defn send-op [port op]
+  (with-open [s (Socket.)]
+    (.connect s (InetSocketAddress. "127.0.0.1" (int port)) 1500)
+    (let [w (.getOutputStream s) r (io/reader (.getInputStream s))]
+      (.write w (.getBytes (str (pr-str op) "\n"))) (.flush w)
+      (edn/read-string (.readLine r)))))
+
+(defn assert-claim!
+  "OCC-retried :assert at current :version — the exact loop bridge.clj uses."
+  [port te p r]
+  (loop [tries 5]
+    (let [v (:version (send-op port {:op :version}))
+          res (send-op port {:op :assert :te te :p p :r (str r) :base v})]
+      (if (and (:reject res) (pos? tries)) (recur (dec tries)) res))))
+
+(defn retract-claim! [port te p r]
+  (loop [tries 5]
+    (let [v (:version (send-op port {:op :version}))
+          res (send-op port {:op :retract :te te :p p :r (str r) :base v})]
+      (if (and (:reject res) (pos? tries)) (recur (dec tries)) res))))
+
+;; Attention is SINGLE-VALUED per agent (latest file wins). We model decay as
+;; last-write-wins: retract the agent's previous attending edge (so the old node
+;; stops being lit) then assert the new one. attending/attending_at/attending_tool
+;; are single-valued *by intent* — but the engine treats arbitrary domain preds as
+;; multi-valued unless seeded single, so we retract-then-assert to GUARANTEE one
+;; live edge per agent regardless of the daemon's cardinality seed.
+(def last-attended (atom {}))   ; uuid -> {:node :ts :tool}
+
+(defn emit-attention!
+  "Write one attention event as a decaying (last-write-wins) claim set into the
+   daemon. Subject = @attention:<uuid>. Supersedes the agent's previous node."
+  [port {:keys [agent node ts tool]}]
+  (let [subj (str "@attention:" agent)
+        prev (get @last-attended agent)]
+    ;; retire the previous attending edge so only the current node is lit.
+    (when (and prev (not= (:node prev) node))
+      (retract-claim! port subj "attending" (:node prev)))
+    (assert-claim! port subj "attending" node)
+    (assert-claim! port subj "attending_at" ts)
+    (when tool (assert-claim! port subj "attending_tool" tool))
+    (swap! last-attended assoc agent {:node node :ts ts :tool tool})))
+
+;; ---- follow (tail -f every stream) ----------------------------------------
+;; Per-file cursor: track byte offset so we only read NEW lines on each poll, and
+;; reset to 0 if the file shrank (rotation/truncation).
+(defn read-new-lines!
+  "Return [new-lines new-offset] for `file` given last `offset`. Handles growth,
+   rotation (len < offset -> start over), and partial trailing lines (only emit
+   complete newline-terminated lines; keep the partial in the offset)."
+  [file offset]
+  (let [raf (RandomAccessFile. file "r")
+        len (.length raf)]
+    (try
+      (let [start (if (< len offset) 0 offset)]
+        (.seek raf start)
+        (let [buf (byte-array (max 0 (- len start)))]
+          (.readFully raf buf)
+          (let [s (String. buf "UTF-8")
+                ;; only consume up to the last newline; keep any partial tail.
+                nl (.lastIndexOf s "\n")]
+            (if (neg? nl)
+              [[] start]
+              (let [consumed (subs s 0 (inc nl))
+                    lines (->> (str/split-lines consumed) (remove str/blank?))]
+                [lines (+ start (count (.getBytes consumed "UTF-8")))])))))
+      (finally (.close raf)))))
+
+(defn follow!
+  [{:keys [port emit poll-ms]}]
+  (let [file->mod (build-file->module CODE-LOG)
+        offsets (atom {})       ; path -> byte offset
+        poll (or poll-ms 500)]
+    (binding [*out* *err*]
+      (println (format ";; fram-attention follow: port=%d emit=%s poll=%dms  (%d modules)"
+                       (long port) (boolean emit) (long poll) (long (/ (count file->mod) 2))))
+      (when emit
+        (let [v (try (:version (send-op port {:op :version})) (catch Exception _ nil))]
+          (if v (println (format ";; daemon :%d reachable (version %s)" (long port) v))
+              (println (format ";; WARN: daemon :%d not reachable yet — will retry per-event" (long port)))))))
+    ;; prime offsets to current EOF so we only react to NEW activity (don't replay
+    ;; the whole backlog on startup — follow is for live attention).
+    (doseq [f (stream-files)]
+      (swap! offsets assoc (.getPath f) (.length f)))
+    (loop []
+      (doseq [f (stream-files)
+              :let [path (.getPath f)
+                    uuid (agent-uuid-of f)
+                    off (get @offsets path 0)
+                    [lines new-off] (try (read-new-lines! f off) (catch Exception _ [[] off]))
+                    mtime-iso (.toString (java.time.Instant/ofEpochMilli (.lastModified f)))]]
+        (swap! offsets assoc path new-off)
+        (doseq [line lines
+                t (touches-in-line line)
+                :let [ts (or (:ts t) mtime-iso)
+                      ev {:agent uuid :tool (:tool t) :file (:file t)
+                          :node (map-node file->mod (:file t)) :ts ts}]]
+          (emit-jsonl ev)
+          (when emit
+            (try (emit-attention! port ev)
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println (format ";; emit failed (%s): %s" (:agent ev) (.getMessage e)))))))))
+      (Thread/sleep poll)
+      (recur))))
+
+;; ---- arg parsing ----------------------------------------------------------
+(defn parse-flags [args]
+  (loop [a args m {}]
+    (if (empty? a)
+      m
+      (let [[k & more] a]
+        (case k
+          "--since" (recur (rest more) (assoc m :since (first more)))
+          "--port"  (recur (rest more) (assoc m :port (parse-long (first more))))
+          "--emit"  (recur more (assoc m :emit true))
+          "--poll"  (recur (rest more) (assoc m :poll-ms (parse-long (first more))))
+          (recur more m))))))
+
+(let [[mode & rest-args] *command-line-args*
+      flags (parse-flags rest-args)]
+  (case mode
+    "extract" (extract! flags)
+    "follow"  (follow! (merge {:port 7980 :emit false} flags))
+    (binding [*out* *err*]
+      (println "usage: fram-attention extract [--since ISO]")
+      (println "       fram-attention follow  [--port 7980] [--emit] [--poll MS]")
+      (System/exit 2))))
