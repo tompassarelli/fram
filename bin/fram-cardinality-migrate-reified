@@ -1,0 +1,127 @@
+#!/usr/bin/env bb
+;; ============================================================================
+;; fram-cardinality-migrate-reified — make a REIFIED (CNF v2) log SELF-DESCRIBING (#2).
+;; ============================================================================
+;; The flat sibling (fram-cardinality-migrate) reads `assert l p r` lines; the FLEET
+;; coordinator log (~/code/fleet-data/claims.log) is CNF-REIFIED instead
+;; ({:k :value/:claim/:tx/:commit}, integer ids). #2 removed the runtime auto-pin
+;; (ensure-single-cardinality!), so the NEW engine reads each predicate's cardinality
+;; FROM THE LOG; any pred without a (P "cardinality" "single") claim DEFAULTS TO MULTI.
+;; A naive cutover would therefore default the messaging vocab (from/to/subject/...) to
+;; multi on the live coordinator. This migrator appends the single-vocab cardinality
+;; claims through the REAL engine (replay! -> c/claim! in one committed tx ->
+;; records-since -> fsync-append), so ids never collide and the round-trip folds clean.
+;;
+;; Multi is the engine DEFAULT (absence of a cardinality claim), so we emit claims for
+;; SINGLE preds only — exactly the flat migrator's convention.
+;;
+;; OPERATOR-RUN, DAEMON DOWN, with a backup. An agent must NOT --yes a live canonical log.
+;;
+;;   bin/fram-cardinality-migrate-reified <log> --dry-run [--core-only]   ; writes <log>.migrated, verifies, no mutation
+;;   bin/fram-cardinality-migrate-reified <log> --yes     [--core-only]   ; backup + APPEND in place, verifies
+;; --core-only pins ONLY the commander's finalized list; omit it to ALSO pin the
+;; 10 flagged provenance preds (role/cost_eq/fram_ref/... — recommended single).
+;;
+;; Run with the built engine on the classpath:  bb -cp out bin/fram-cardinality-migrate-reified ...
+;; ============================================================================
+(require '[clojure.java.io :as io]
+         '[fram.cnf-coord :as cc]
+         '[fram.cnf :as c]
+         '[fram.schema :as s]
+         '[fram.rt :as rt])
+
+(defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
+
+;; --- the messaging-vocab classification (reviewable DATA, not a heuristic) ----
+;; CORE: fleet-commander's finalized single list (msg `20260622-111218`).
+(def core-single
+  ["from" "to" "subject" "body" "sent_at" "acked_at" "agent" "dir" "session_id"
+   "started_at" "current_thread" "active_workflow" "task" "cost_usd" "ended_at"
+   "exclusivity" "title" "lifecycle" "model" "effort" "context_tokens" "supervisor"
+   "holds_lease"])
+;; FLAGGED: predicates present in the live log that the commander did NOT classify.
+;; Each shows one value per subject (dup-identical live claims) => logically single.
+;; Included as single here; commander vetoes per-pred before the live apply if wanted.
+(def flagged-single
+  ["role" "cost_eq" "fram_ref" "beagle_ref" "host_seam_hash" "domain"
+   "build_entry" "bootstrap_loader" "bb_version" "known_good_at"])
+;; explicitly MULTI (engine default — NO claim emitted); listed only for verification.
+(def multi-preds ["acked_by" "holds" "watches" "cnf-supersedes"])
+
+;; default single-set = core + flagged; --core-only narrows it to the commander's list.
+(def ^:dynamic single-set (vec (concat core-single flagged-single)))
+
+;; --- migration over a replayed store: mint cardinality=single in ONE tx -------
+;; Returns {:store st :new-records [...] :pinned [...] :skipped-present [...] :absent [...]}.
+(defn migrate! [st]
+  (let [card  (c/value! st "cardinality")
+        sgl   (c/value! st "single")
+        ;; partition the single-set by live-log presence + already-pinned
+        present?  (fn [p] (some? (c/value-id st p)))
+        pinned?   (fn [p] (= "single" (s/cardinality st p)))
+        absent      (filterv (complement present?) single-set)
+        already     (filterv (every-pred present? pinned?) single-set)
+        to-pin      (filterv (every-pred present? (complement pinned?)) single-set)
+        since (c/next-id st)
+        tx    (c/begin-tx! st "migrate-cardinality-reified")]
+    (doseq [p to-pin] (c/claim! st (c/value! st p) card sgl tx))
+    {:store st
+     :new-records (c/records-since st since tx)
+     :pinned to-pin :already already :absent absent
+     :tx tx}))
+
+;; --- round-trip verification: replay the migrated log, assert cardinalities ---
+(defn verify [migrated-path orig-live-count expect-pinned]
+  (let [st (cc/replay! migrated-path)
+        bad-single (filterv #(not= "single" (s/cardinality st %))
+                            (filterv (fn [p] (some? (c/value-id st p))) single-set))
+        bad-multi  (filterv #(and (some? (c/value-id st %))
+                                  (not= "multi" (s/cardinality st %)))
+                            multi-preds)
+        new-live   (count (cc/live-triples st))]
+    {:ok (and (empty? bad-single) (empty? bad-multi)
+              (= new-live (+ orig-live-count (count expect-pinned))))
+     :bad-single bad-single :bad-multi bad-multi
+     :orig-live orig-live-count :new-live new-live
+     :delta (- new-live orig-live-count) :expected-delta (count expect-pinned)}))
+
+;; ----------------------------------------------------------------------------
+(let [[log flag & opts] *command-line-args*
+      core-only? (some #{"--core-only"} opts)]
+  (when-not log
+    (die "usage: fram-cardinality-migrate-reified <log> [--dry-run | --yes] [--core-only]"))
+  (when-not (.exists (io/file log))
+    (die "no such log:" log))
+  (when-not (#{"--dry-run" "--yes"} flag)
+    (die (str "refusing without --dry-run or --yes.\n"
+              "--dry-run writes " log ".migrated and verifies (no mutation).\n"
+              "--yes backs up + APPENDS in place (daemon DOWN only).")))
+  (when core-only? (alter-var-root #'single-set (constantly (vec core-single)))
+    (println "[--core-only] pinning the commander's list ONLY; 10 flagged preds left multi-default."))
+  (let [st0       (cc/replay! log)
+        orig-live (count (cc/live-triples st0))
+        {:keys [new-records pinned already absent]} (migrate! st0)]
+    (println (str "=== reified cardinality migration: " log " ==="))
+    (println (format "replayed: orig live-triples=%d" orig-live))
+    (println (format "pinned single (%d): %s" (count pinned) (pr-str pinned)))
+    (println (format "already single, skipped (%d): %s" (count already) (pr-str already)))
+    (println (format "listed but ABSENT from log (%d): %s" (count absent) (pr-str absent)))
+    (println (format "new wire records to append: %d (= %d claims + 1 tx + 1 commit)"
+                     (count new-records) (count pinned)))
+    (let [target (if (= flag "--yes") log (str log ".migrated"))]
+      (when (= flag "--yes")
+        (let [bak (str log ".pre-cardinality.bak")]
+          (io/copy (io/file log) (io/file bak))
+          (println (str "backup -> " bak))))
+      (when (= flag "--dry-run")
+        (io/copy (io/file log) (io/file target)))   ; seed migrated = orig, then append
+      (rt/append-records-fsync! target (vec new-records))
+      (println (str "wrote -> " target))
+      (let [v (verify target orig-live pinned)]
+        (println "=== round-trip verification ===")
+        (println (format "live-triples: orig=%d new=%d delta=%d (expected +%d)"
+                         (:orig-live v) (:new-live v) (:delta v) (:expected-delta v)))
+        (when (seq (:bad-single v)) (println "!! single preds NOT reading single:" (:bad-single v)))
+        (when (seq (:bad-multi v))  (println "!! multi preds NOT reading multi:" (:bad-multi v)))
+        (println (if (:ok v) "VERIFY: OK (round-trip fold clean)" "VERIFY: FAILED"))
+        (when-not (:ok v) (System/exit 2))))))
