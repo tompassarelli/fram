@@ -60,10 +60,15 @@
     {:landed landed :write (ms t0 t-write) :prop (ms t-write t-landed)}))
 
 ;; ---- GRAPH arm: K concurrent writers to one warm daemon (distinct defs) ----
+;; MOD must be a module PRESENT in the committed .fram/code.log fixture, else every
+;; upsert-form is rejected ("scope matches 0 source files") -> lost writes + a never-
+;; visible poll (the 46s busy-loop). The fixture is ingested --module schema, so write
+;; into schema. Override with PROP_MODULE if a future fixture carries a different module.
+(def MOD (or (System/getenv "PROP_MODULE") "schema"))
 (defn graph-writer [port i base]
   (let [nm (str base i)
         t0 (nowns)
-        ins (client port {:op :edit-min :spec {:op "upsert-form" :module "kernel"
+        ins (client port {:op :edit-min :spec {:op "upsert-form" :module MOD
                                                :datum (list 'def (symbol nm) i)}})
         t-write (nowns)                                ; commit returns; store eager-updated
         ;; CONTENT ASSERTION — commit->visible means B's read REFLECTS writer i's OWN def,

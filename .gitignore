@@ -1,6 +1,10 @@
 # generated data — regenerate with `fram import`
 /claims.log
 *.log
+# ...but the CODE-log fixture IS tracked: tests (cnf_edit_min_*, cnf_code_flip) and the
+# #44/#50 propagation perf-budget gate need it in CI, where racket is absent so it can't
+# be re-ingested. Snapshot of `fram-ingest-code src/fram/schema.bclj --module schema`.
+!.fram/code.log
 
 # native build artifacts (build with native/build.sh)
 /native/fram-native
@@ -15,3 +19,7 @@
 
 # Talk/strategy drafts — kept out of the public repo (anti-cringe)
 private-docs/
+
+# ephemeral work artifacts (migration dry-runs, log copies)
+.scratch/
+RECOVERY-*.md
