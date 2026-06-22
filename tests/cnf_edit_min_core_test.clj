@@ -2,8 +2,10 @@
 ;; cnf_edit_min_core_test.clj — IN-PROCESS green-core proof for the minimal-op
 ;; authoring path (no socket, no Beagle → no #14 flakiness). Proves do-edit-min
 ;; commits the verb's exact delta for the SAFE-on-spelling verbs (set-body /
-;; upsert-form) and that graph RENAME is explicitly REJECTED (identity-deferred),
-;; never silently rewriting only the def.
+;; upsert-form) and that graph RENAME is IMPLEMENTED via bound_to (cut-3b
+;; persist-bound-for-rename!): the def spelling is rewritten and the old-spelling
+;; references are BOUND to the renamed def, so the rename is identity-coherent
+;; (no dangling ref) rather than a silent def-only rewrite.
 ;;   bb -cp out cnf_edit_min_core_test.clj
 ;; ============================================================================
 (require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
@@ -56,15 +58,32 @@
      (and (pos? card-before) (pos? (spell-count "cardinality"))))
 (chk "upsert REPLACE landed the new body token" (pos? (spell-count upmark)))
 
-;; --- rename: MUST be rejected (identity-deferred), MUST NOT mutate spellings -----
+;; --- rename: IMPLEMENTED via bound_to (cut-3b persist-bound-for-rename!) ---------
+;; The resolver-woven port made graph rename real: it rewrites the DEF spelling and
+;; installs a bound_to claim from each old-spelling REFERENCE to the renamed def, so
+;; the refs resolve (lazy O(1) identity rename) — NOT a dangling def-only rewrite (the
+;; gate-v2 hazard). Used to be identity-deferred (rejected); now it commits coherently.
 (def before-replace (spell-count "replace!"))
 (def rn (edit-min! {:op "rename" :module "schema" :old "replace!" :new "supersede-prior!"}))
-(chk "graph rename REJECTED (not :ok)" (not (:ok rn)))
-(chk "rename reject mentions identity-deferred"
-     (boolean (re-find #"(?i)identity|deferred" (pr-str (:reject rn)))))
-(chk "rename did NOT silently rewrite the def spelling (replace! count unchanged)"
-     (= before-replace (spell-count "replace!")))
-(chk "rename did NOT partially introduce the new spelling" (zero? (spell-count "supersede-prior!")))
+(chk "graph rename SUCCEEDS via bound_to (:ok, ops>0)" (and (:ok rn) (pos? (or (:ops rn) 0))))
+(chk "rename rewrote the def spelling to the new name" (pos? (spell-count "supersede-prior!")))
+(chk "rename rewrote exactly the def site (new-spelling count == old-spelling decrease)"
+     (= (spell-count "supersede-prior!") (- before-replace (spell-count "replace!"))))
+;; coherence: each node whose spelling stayed "replace!" is a REFERENCE bound_to the
+;; renamed def — proving the rename left no dangling ref (the identity invariant).
+(def Bp (c/value-id st "bound_to"))
+(defn node-spell [n]
+  (let [cs (filter (fn [cid] (= (:l (c/claim-of st cid)) n)) (c/by-p st Vp))]
+    (when (seq cs) (c/literal st (:r (c/claim-of st (first cs)))))))
+(def bound-callers
+  (filter (fn [cid] (let [m (c/claim-of st cid)]
+                      (and (= "replace!" (node-spell (:l m)))
+                           (= "supersede-prior!" (node-spell (:r m))))))
+          (if (some? Bp) (c/by-p st Bp) [])))
+(chk "rename installed bound_to: old-spelling refs resolve to the renamed def (no dangling)"
+     (pos? (count bound-callers)))
+(chk "no dangling: every residual replace! spelling is a bound reference, not an unbound site"
+     (= (spell-count "replace!") (count bound-callers)))
 
 ;; --- #26: unknown verb rejects cleanly (must NOT hard-exit the daemon) ---
 ;; If the unknown-op path still fell through to run-verb-warm!'s (System/exit 2), this whole
