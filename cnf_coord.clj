@@ -186,6 +186,62 @@
                   (append-tx! co (delta-records co since tx))
                   {:ok (get-in @(store co) [:txs tx :seq])})))))))))
 
+;; --- exclusive lease (mutual exclusion + fencing) — ADDITIVE -----------------
+;; Closes the lost-update-vs-mutex gap: commit!'s base_version rejects a STALE
+;; overwrite, NOT two acquirers that each read a FRESH base. acquire reads holder
+;; LIVENESS fresh IN-lock. One single-valued cell on @lease:<R> co-encodes
+;; holder|expiry-ms|epoch; held-ness is DERIVED (cell present AND expiry > clock).
+;; A lapsed lease is reclaimed by the next acquirer's own commit (no sweeper).
+;; Ported into canonical's hand-written idiom from the typed spec-of-record
+;; (fram-lease/src/fram/cnf_coord.bclj); cnf_lease_test is the gate.
+(def lease-pred "lease")
+(defn- lease-subj [res] (str "@lease:" res))
+(defn- encode-lease [h exp epoch] (str h "|" exp "|" epoch))
+(defn- decode-lease [v]
+  (when (string? v)
+    (let [parts (str/split v #"\|")]
+      (when (= 3 (count parts))
+        {:holder (nth parts 0) :exp (parse-long (nth parts 1)) :epoch (parse-long (nth parts 2))}))))
+(defn- read-lease [co res]
+  (let [st (store co)
+        te (s/resolve-name st (lease-subj res))
+        pid (c/value-id st lease-pred)]
+    (when (and te pid)
+      (let [cid (first (live-cids-lp co te pid))]
+        (when cid (decode-lease (get (:values @st) (:r (get (:claims @st) cid)))))))))
+
+(defn acquire-lease! [co holder res ttl-ms]
+  (locking (:lock co)
+    (let [now (System/currentTimeMillis)
+          cur (read-lease co res)]
+      (if (and cur (> (:exp cur) now) (not= (:holder cur) holder))
+        {:reject :held :holder (:holder cur) :exp (:exp cur) :version (current-seq co)}
+        (let [epoch (inc (if cur (:epoch cur) 0))
+              exp   (+ now ttl-ms)
+              since (:next-id @(store co))
+              tx    (c/begin-tx! (store co) holder)
+              te    (ent! co tx (lease-subj res))]
+          (when (not= "single" (s/cardinality (store co) lease-pred))
+            (s/def-predicate! (store co) lease-pred "single" "literal" tx))
+          (s/assert! (store co) te lease-pred (encode-lease holder exp epoch) tx)
+          (append-tx! co (delta-records co since tx))
+          {:ok (get-in @(store co) [:txs tx :seq]) :holder holder :exp exp :epoch epoch})))))
+
+;; release-lease! re-enters (:lock co) via retract! — JVM monitors are REENTRANT,
+;; so this is safe; do NOT "fix" the nesting into a separate lock (would deadlock).
+(defn release-lease! [co holder res]
+  (locking (:lock co)
+    (let [cur (read-lease co res)]
+      (if (and cur (= (:holder cur) holder))
+        (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
+        {:ok (current-seq co) :noop true}))))
+
+(defn fence-ok? [co res holder epoch]
+  (locking (:lock co)
+    (let [cur (read-lease co res)]
+      (boolean (and cur (= (:holder cur) holder) (= epoch (:epoch cur))
+                    (> (:exp cur) (System/currentTimeMillis)))))))
+
 ;; --- replay: rebuild the store from the v2 log (drops torn/uncommitted txs) --
 (defn- read-records [path]
   (with-open [r (io/reader path)]
