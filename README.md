@@ -193,8 +193,8 @@ module's AST is the claims, and the `.bclj` source text is a rendered view of th
   stable id (`bound_to @module#int`), so renaming a definition is a ~2-claim edit and
   every reference re-points *by identity* — where a text tool must rewrite every site.
   Measured on the honeysql corpus: **238 distinct reference sites** that text must
-  re-derive and rewrite, vs a 2-claim graph edit
-  (`experiments/owned-resolution-forcing/`).
+  re-derive and rewrite, vs a 2-claim graph edit (receipt: the `after-text`
+  experiments package, `owned-resolution-forcing/`).
 - **The render is a pure function of the log.** `render(log) == render(text)`,
   byte-identical *to each other* (both derived from the graph). The general round-trip is
   *datum*-identical, not byte-identical to hand-authored source — comments and exact
@@ -208,7 +208,7 @@ question or to coordinate a concurrent edit. (Identity-addressed concurrency its
 unique — a node-id CRDT has it too; what's distinctive here is pairing it with a faithful
 *typed* projection into an existing language.)
 
-<!-- regenerate: bb experiments/owned-resolution-forcing/probe.clj -->
+<!-- regenerate: bb owned-resolution-forcing/probe.clj  (in the after-text experiments package) -->
 
 ## Anti-rot: the engine is the source of truth
 
@@ -236,15 +236,16 @@ referenced path, and fails on a stale repo URL. A command that stops working tur
   @1000**, the gap *growing* with size — **"O(N²)-shaped"** (curve + pinned source, not a
   formal fit). This is construction-*path* scaling, not language speed; the honest
   companion is that Fram **loses** a single small edit (its sibling
-  `experiments/zerolang-vs-fram/RESULTS.md`). Receipt:
-  `experiments/zerolang-vs-fram/CONSTRUCTION-SCALING.md`.
+  `zerolang-vs-fram/RESULTS.md`). Receipt: `zerolang-vs-fram/CONSTRUCTION-SCALING.md`
+  (in the `after-text` experiments package).
 - **Propagation under K concurrent disjoint writers** — graph propagation stays flat
   (~1.6–2.2 ms, K=1…8) where a git merge-queue climbs (~50→314 ms). Mirror cost, stated
   honestly: the graph **loses the write column** (~175 ms eager-index vs git's ~22–80 ms)
   — it front-loads at write to keep reads + propagation cheap. Receipt:
-  `experiments/propagation/RESULTS.md`.
+  `propagation/RESULTS.md` (in the `after-text` experiments package); the live
+  perf-regression gate stays here as `bench/propagation/`.
 
-<!-- regenerate: bb -cp out experiments/propagation/sweep.clj  (SWEEP_KS=1,2,4,8) -->
+<!-- regenerate: bb -cp out bench/propagation/sweep.clj  (SWEEP_KS=1,2,4,8) -->
 
 ## Isolation: separate graphs, not access control
 
@@ -318,7 +319,8 @@ also served over MCP by `bin/fram-mcp`. The life verbs (`ready` / `blocked` / `l
   intelligence.
 - `docs/` — conceptual sources of truth: `WHY_FRAM_EXISTS.md`,
   `VIEWS_AND_BRANCHES.md` (the write/read model), `adr/` (project boundaries).
-- `tests/` — the suites. `experiments/` — the measured receipts cited above.
+- `tests/` — the suites. `bench/` — perf-regression gates (the propagation budget).
+  The measured *receipts* cited above live in the separate `after-text` package.
 
 </details>
 

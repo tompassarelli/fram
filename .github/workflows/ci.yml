@@ -62,4 +62,4 @@ jobs:
       # silently rot. Ratio-based budgets (machine-independent) + generous absolute ceilings, so CI
       # timing noise doesn't flake. Runs the content-asserted K=1,8 sweep; budgets in perf-budget.edn.
       - name: Propagation perf-budget (flat-propagation thesis, fail on regression)
-        run: bb -cp out experiments/propagation/check-budget.clj
+        run: bb -cp out bench/propagation/check-budget.clj

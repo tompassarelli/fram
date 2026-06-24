@@ -1,6 +1,8 @@
 ;; ============================================================================
-;; experiments/propagation/check-budget.clj — #50 — CI perf-budget gate for the
+;; bench/propagation/check-budget.clj — #50 — CI perf-budget gate for the
 ;; #44 propagation thesis. Runs the CONTENT-ASSERTED K-sweep (sweep.clj), parses the
+;; (Relocated 2026-06-25: the propagation WRITEUPS moved to the after-text package;
+;;  this slim gate stays in fram as its own perf-regression test.)
 ;; SHAPE table, and asserts:
 ;;   1. graph-prop FLAT in K           (ratio graph-prop[maxK]/graph-prop[minK])  [machine-indep]
 ;;   2. graph beats git at maxK        (ratio git-prop[maxK]/graph-prop[maxK])    [machine-indep]
@@ -9,21 +11,21 @@
 ;;   5. no lost writes                 (landed=K/K both arms)
 ;; The two RATIO budgets encode the thesis and are immune to CI machine speed (both arms
 ;; measured in the same run on the same box). Budgets live in perf-budget.edn.
-;;   bb -cp out experiments/propagation/check-budget.clj
+;;   bb -cp out bench/propagation/check-budget.clj
 ;; SAFE: sweep.clj runs /tmp-only, daemon on non-7977 port, never the canonical log.
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io]
          '[babashka.process :as proc] '[clojure.edn :as edn])
 
 (def root (System/getProperty "user.dir"))
-(def budget (edn/read-string (slurp (str root "/experiments/propagation/perf-budget.edn"))))
+(def budget (edn/read-string (slurp (str root "/bench/propagation/perf-budget.edn"))))
 (println "=== #50 propagation perf-budget gate ===")
 (println "budget:" (pr-str budget))
 
 ;; --- run the content-asserted K-sweep ---
 (def res (proc/sh {:dir root :out :string :err :string
                    :extra-env {"SWEEP_KS" (:sweep-ks budget)}}
-                  "bb" "-cp" "out" "experiments/propagation/sweep.clj"))
+                  "bb" "-cp" "out" "bench/propagation/sweep.clj"))
 (def out (str (:out res) "\n" (:err res)))
 (when (str/includes? out "SKIP — no .fram/code.log")
   (println "SKIP — no .fram/code.log present; cannot run the perf-budget (not a failure).")
