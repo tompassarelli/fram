@@ -226,6 +226,28 @@
                     ["insert-form" ["--after" (:after e) "--spec-file" sf]])
     nil))
 
+;; ============================================================================
+;; WARM edit path — socket :edit-min DIRECTLY to the live coordinator (the persistent
+;; MCP server -> persistent coordinator, one round-trip). The fold is amortized to the
+;; coordinator's BOOT; per-edit pays NO ~3.8s log re-fold (vs cold fram-edit-code which
+;; boots the store from the log EVERY call). This is THE confound-kill.
+;; ============================================================================
+(defn- coord-rt [port req]
+  (with-open [s (java.net.Socket.)]
+    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 3000)
+    (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
+      (.write w (str (pr-str req) "\n")) (.flush w)
+      (clojure.edn/read-string (.readLine rd)))))
+
+;; build the warm :edit-min spec (inline datum, no temp file) from the {:edit} payload.
+(defn- edit-min-spec [e]
+  (case (:op e)
+    "rename"      {:op "rename"      :module (:module e) :old (:name e) :new (:new-name e)}
+    "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (:body e)}
+    "upsert-form" {:op "upsert-form" :module (:module e) :datum (:form e)}
+    "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (:form e)}
+    nil))
+
 ;; the corpus the verb operates over = every .bclj in the source tree (so cross-module
 ;; references resolve), with the per-file projected EDN written next to it in a temp dir.
 
@@ -239,16 +261,27 @@
       ;; committed THROUGH the coordinator. NO src/fram/*.bclj is read here — module
       ;; enumeration, the corpus, the render, and the commit input all come from the log.
       (and flip-on? flip-code-port)
-      (let [work (str (System/getProperty "java.io.tmpdir") "/fram-flipverb-" (System/nanoTime))
-            _ (.mkdirs (io/file work))
-            [vop vflags] (flip-verb-flags e work)]
-        (if (nil? vop)
-          (do (sh {} "rm" "-rf" work) {:isError true :text (str "unknown edit op: " op)})
-          ;; the downstream .bclj view path: FRAM_SRC/<module>.bclj (a projection of
-          ;; the now-canonical log). Written ONLY after the commit succeeds.
-          (let [target-bclj (str fram-src "/" module ".bclj")
-                res (flip-graph-edit! vop module vflags target-bclj)]
-            (sh {} "rm" "-rf" work) res)))
+      ;; WARM path: socket :edit-min to the live coordinator (no per-edit log re-fold).
+      (let [spec (edit-min-spec e)]
+        (if (nil? spec)
+          {:isError true :text (str "unknown edit op: " op)}
+          (let [resp (try (coord-rt (Integer/parseInt flip-code-port) {:op :edit-min :spec spec})
+                          (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
+            (cond
+              (:reject resp)
+              {:isError true :text (str "REJECTED (warm :edit-min, nothing committed): "
+                                        (str/join "; " (map str (:reject resp))))}
+              (:ok resp)
+              ;; render the downstream .bclj view WARM off the coordinator (:render op, no fold)
+              (let [target-bclj (str fram-src "/" module ".bclj")
+                    rr (apply sh {:out (io/file target-bclj) :err :string}
+                              "bb" "-cp" fram-out (str flip-bin-dir "/fram-render-code")
+                              module "--port" flip-code-port (flip-log-args))]
+                {:text (str "committed (WARM :edit-min, no re-fold): " op " on " module
+                            " — " (:ops resp) " ops"
+                            (when-not (zero? (:exit rr)) (str " (view-render warn: " (str/trim (:err rr)) ")")))})
+              :else
+              {:isError true :text (str "warm :edit-min unexpected response: " (pr-str resp))}))))
 
       ;; FRAM_FLIP=1 but no code coordinator: fail loud (don't silently text-fallback).
       flip-on?
