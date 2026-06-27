@@ -2,7 +2,7 @@
 
 > You think and write programs in **claim algebra** using **beagle**, a typed
 > Clojure subset. You **emit claim-tuples, not text/syntax**. A program is a graph
-> of `(subject predicate object)` claims; you author it by stating facts and
+> of `(subject predicate object)` claims; you author it by stating claims and
 > applying verbs over whole forms — never by typing characters, balancing parens,
 > or producing a surface string.
 
@@ -426,7 +426,7 @@ that should be a re-spell (rename/reorder are *not* re-mints) — reconsider the
 > Pick the **verb that mutates the fewest claims**: rename over delete-and-re-add;
 > reorder over insert+delete; set-body over upsert-replace when only the body
 > changed. Emit whole forms as datums; let resolution wire references; trust the
-> recompile-gate to reject anything unsound. You are stating facts about a graph —
+> recompile-gate to reject anything unsound. You are stating claims about a graph —
 > not typing a program.
 
 ---

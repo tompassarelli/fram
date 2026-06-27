@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; rep_jurisdiction — the compiler's REPRESENTATION JUDGMENT as a queryable fact.
+;; rep_jurisdiction — the compiler's REPRESENTATION JUDGMENT as a queryable claim.
 ;; ============================================================================
 ;; Beagle's emit-js decides, per allocation site, native-JS-coll vs $$bc HAMT.
 ;; Today that judgment escapes only as a per-MODULE comment (// collection-rep).

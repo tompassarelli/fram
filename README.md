@@ -2,7 +2,7 @@
 
 # Fram
 
-**An append-only claim engine.** Every fact is a triple `(subject predicate object)`;
+**An append-only claim engine.** Every claim is a triple `(subject predicate object)`;
 lifecycle is *derived*, never stored; every write serializes through one coordinator;
 and the text is a **view** of the graph you can always walk away with.
 
@@ -13,7 +13,7 @@ and the text is a **view** of the graph you can always walk away with.
 
 </div>
 
-Fram stores **claims** — relational facts — in a durable append-only log, folds them
+Fram stores **claims** — relational triples — in a durable append-only log, folds them
 into a queryable in-memory graph, derives over them with stratified Datalog, and
 serializes all writes through a sole-writer coordinator. You **derive** answers, you
 don't maintain them. References carry **identity, not spelling** (rename a thing once,
@@ -22,8 +22,8 @@ merge-freedom. The long argument, written to survive a skeptic with the negative
 conceded, is in **[docs/WHY_FRAM_EXISTS.md](docs/WHY_FRAM_EXISTS.md)**.
 
 > **"Isn't this just Datomic / Datahike / an RDF store?"** No — and the reason is the
-> *atom*, not the features. Fram's unit is the **claim-object**: a fact that is itself
-> addressable and reifiable at per-fact granularity. A datom isn't; an RDF store treats
+> *atom*, not the features. Fram's unit is the **claim-object**: a claim that is itself
+> addressable and reifiable at per-claim granularity. A datom isn't; an RDF store treats
 > statement-level reification as a bolt-on. Concurrency, Datalog, and schema-as-data are
 > *not* why Fram exists (off-the-shelf stores tie or win there) — the primitive is.
 
@@ -100,7 +100,7 @@ serializes through one coordinator. There is **no** notion of "thread", "module"
 the engine — only claims:
 
 ```
-facts ──assert──▶ claims.log (append-only) ──fold──▶ in-memory claim graph
+claims ──assert──▶ claims.log (append-only) ──fold──▶ in-memory claim graph
                                                        │
                    coordinator daemon ◀── agents query + assert concurrently
                                                        │
@@ -109,7 +109,7 @@ facts ──assert──▶ claims.log (append-only) ──fold──▶ in-memo
 
 - Entities referenced by `@` are **interned** — rename a thing once, not in N files.
 - **Derived state is never stored.** No `state` field exists in the engine; a consumer reads
-  `committed` / `outcome` / `ready` / blast-radius *off the facts*.
+  `committed` / `outcome` / `ready` / blast-radius *off the claims*.
 
 A **consumer** is a projection + a vocabulary onto that neutral engine. Two ship today, and
 they look nothing alike — which is the whole point:

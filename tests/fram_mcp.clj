@@ -24,8 +24,8 @@
 
 (def instructions
   (str
-   "Fram is a claim engine: every fact is a triple (subject predicate object); a "
-   "thread is any @id with a `title`. Lifecycle is DERIVED from facts (committed / "
+   "Fram is a claim engine: every claim is a triple (subject predicate object); a "
+   "thread is any @id with a `title`. Lifecycle is DERIVED from claims (committed / "
    "outcome / abandoned / driver / depends_on), never a stored status.\n\n"
    "These tools are GENERATED from the claim vocabulary, so they are named after "
    "your claims. For each predicate P: `P-of`/`P-list` read it, `set-P`/`add-P`/"

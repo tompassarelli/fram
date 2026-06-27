@@ -8,7 +8,7 @@
 
 ;; --- vocabulary --------------------------------------------------------------
 
-;; Lifecycle is NOT a stored enum — it's derived from these structural facts:
+;; Lifecycle is NOT a stored enum — it's derived from these structural claims:
 ;; commitment (`committed`), completion (`outcome`), withdrawal (`abandoned`),
 ;; activity (`driver`/clock, derived), blocked (`depends_on`, derived).
 ;; Cardinality vocab is INJECTED by the app (lodestar exports FRAM_SINGLE_VALUED,

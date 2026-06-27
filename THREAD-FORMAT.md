@@ -54,7 +54,7 @@ Ship the finished site behind the custom domain over HTTPS.
 
 ## Lifecycle is *derived*, never stored
 
-There is **no `state` field**. Lifecycle is read from the facts:
+There is **no `state` field**. Lifecycle is read from the claims:
 
 | condition | how it's derived |
 |---|---|

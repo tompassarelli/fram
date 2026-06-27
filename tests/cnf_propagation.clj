@@ -44,7 +44,7 @@
 (println)
 
 ;; ---- RAW propagation: write then :query reflects it (synchronous) ----------
-;; assert a fresh fact, then read it back via the daemon's :query. Measures the
+;; assert a fresh claim, then read it back via the daemon's :query. Measures the
 ;; read latency AND confirms ONE read suffices (no polling) — i.e. propagation ~0.
 (println "### RAW propagation — :assert then :query (warm cache, synchronous)")
 (let [reps 12
