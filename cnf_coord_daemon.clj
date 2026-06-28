@@ -355,14 +355,28 @@
    (reify java.util.concurrent.ThreadFactory
      (newThread [_ r] (doto (Thread. r "cnf-notify") (.setDaemon true))))))
 
+;; P5 — scoped subscribe. A subscriber MAY register a filter so the daemon pushes only
+;; relevant commits instead of the firehose (efficiency at scale). Backward-compatible:
+;; flt=nil => firehose (every commit), identical to pre-P5. A filter is
+;; {:addrs #{..} :watch #{..} :node "@agent:<uuid>"}; an event passes if it's a message
+;; to one of my addrs, a commit on a thread I watch, or a change to my own node (so the
+;; client re-scopes live on role/watch updates).
+(defn- sub-match? [flt {:keys [l p r]}]
+  (or (nil? flt)
+      (and (= p "to") (contains? (:addrs flt) r))
+      (contains? (:watch flt) l)
+      (= l (:node flt))))
+
 (defn- notify-subs! [event]
   (let [line (str (pr-str event) "\n")]
     (.execute notify-exec
       (fn []
         (reset! subscribers
-                (vec (filter (fn [w]
-                               (try (.write ^BufferedWriter w line) (.flush ^BufferedWriter w) true
-                                    (catch Throwable _ false)))
+                (vec (filter (fn [{:keys [^BufferedWriter w flt]}]
+                               (if (sub-match? flt event)
+                                 (try (.write w line) (.flush w) true   ; push; drop on disconnect
+                                      (catch Throwable _ false))
+                                 true))                                 ; no match -> keep subscriber, don't push
                              @subscribers)))))))
 
 ;; ref-shape? — is a STRING value a node reference (a link), vs a literal that
@@ -1285,7 +1299,7 @@
         (when-let [line (read-line-bounded r max-line-bytes)]
           (let [req (parse-req line)]
             (if (= (:op req) :subscribe)
-              (do (swap! subscribers conj w)
+              (do (swap! subscribers conj {:w w :flt (:filter req)})   ; P5: opt-in scoped filter (nil = firehose)
                   ;; A subscriber is long-lived: it RECEIVES pushed events and sends
                   ;; nothing, so the request-path read timeout (5s) must NOT apply or
                   ;; it would drop every idle subscriber. Disable it for this socket;
