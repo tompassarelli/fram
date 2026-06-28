@@ -50,7 +50,8 @@
        {:k :entity :id id})
      (for [[cid mm] (:claims m) :when (>= cid since)]
        {:k :claim :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
-     [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])}
+     [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])
+       :observed (get-in m [:txs txid :observed])}        ; causality (thread H): the global seq the writer had SEEN when it decided
       {:k :commit :tx txid}])))
 
 ;; --- reads over the reified store -------------------------------------------
@@ -82,6 +83,27 @@
 ;; nil on an empty group. (`view` attaches here when first-class views land — thread E.)
 (defn agent-of [co cid]
   (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :agent])))
+
+;; --- causality / as-of (thread H, Part A): the causal stamp ------------------
+;; Every coordination write already reports :base = "the version I had observed when
+;; I decided" (the daemon/CLI path passes the GLOBAL :version it round-tripped; commit!/
+;; retract! used it ONLY for the single-valued staleness reject, then dropped it). We now
+;; THREAD that base into the tx record as :observed — one int per tx, recovered through
+;; replay exactly like :seq/:agent. This turns happens-before into a recorded fact:
+;; "did peer B's claim exist in the view A read before A acted?" == (<= seq(B) observed(A)).
+;; observed-of reads it; nil for legacy/non-causal writes -> callers fall back to seq-of
+;; (commit order), so the causal election degrades to cid-order, never throws.
+;; RISK GUARD: the writer cannot claim to have observed the FUTURE — observed is clamped
+;; to the pre-commit current-seq at the write site (a backdated stamp only LOSES elections).
+(defn observed-of [co cid]
+  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :observed])))
+;; the causal key of a live claim: [observed-or-seq, cid, agent]. observed orders by
+;; DECISION time (who saw the empty group first), cid/agent keep it a total order. A LATER
+;; commit (higher cid) that DECIDED earlier (lower observed) wins — this is the whole point:
+;; election by causal view, not by commit order. Pure fn of recorded claims -> every reader
+;; computes it identically with zero coordination.
+(defn causal-key [co cid]
+  [(or (observed-of co cid) (seq-of co cid)) cid (str (agent-of co cid))])
 
 ;; --- views-as-claims (thread E): per-branch isolation over the same log ------
 ;; A VIEW is a first-class subject; (view selects @cid) claims are its OVERLAY —
@@ -118,6 +140,24 @@
            in-view (when (seq sel) (filterv sel cids))
            pool    (if (seq in-view) in-view cids)]
        (first (sort-by (fn [cid] [cid (str (agent-of co cid))]) pool))))))
+
+;; elect-causal — the CAUSAL election policy (thread H, Part C): same view-relative
+;; pool as `elect`, but ordered by the CAUSAL key [observed, cid, agent] instead of
+;; [cid, agent]. So of a contended live (l,p) group, the winner is the member whose
+;; writer DECIDED earliest (saw the empty/oldest group), tie-broken by commit order
+;; then agent. This is what lets rival drivers/roles COEXIST and resolve by "who had
+;; the earlier causal view" rather than "who happened to commit first" — both readers
+;; agree, nothing blocks. Degrades to `elect` when no :observed stamps exist (legacy
+;; claims fall back to seq-of via causal-key), so it is a strict refinement, never a
+;; regression. nil on an empty group.
+(defn elect-causal
+  ([co cids] (elect-causal co nil cids))
+  ([co view cids]
+   (when (seq cids)
+     (let [sel     (when view (view-selects co view))
+           in-view (when (seq sel) (filterv sel cids))
+           pool    (if (seq in-view) in-view cids)]
+       (first (sort-by (fn [cid] (causal-key co cid)) pool))))))
 
 (defn- ent! [co tx nm]
   (or (s/resolve-name (store co) nm)
@@ -210,8 +250,10 @@
         {:ok (current-seq co) :idempotent true}
 
         :else
-        (let [since (:next-id @(store co))
+        (let [since    (:next-id @(store co))
+              observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp, clamped to head (no future)
               tx (c/begin-tx! (store co) agent)
+              _  (swap! (store co) assoc-in [:txs tx :observed] observed)
               te (ent! co tx te-name)]
           (case kind
             :link   (s/link! (store co) te pred (ent! co tx r-spec) tx)
@@ -282,7 +324,9 @@
               (if (empty? victims)
                 {:ok (current-seq co)}
                 (let [since (:next-id @(store co))
+                      observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp on the retract tx
                       tx (c/begin-tx! (store co) agent)
+                      _  (swap! (store co) assoc-in [:txs tx :observed] observed)
                       sup (c/value! (store co) "cnf-supersedes")]
                   (doseq [old victims] (c/claim! (store co) old sup old tx))
                   (append-tx! co (delta-records co since tx))
@@ -392,7 +436,7 @@
         ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
         claims (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
         tx-of  (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) (:tx r)]))
-        txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r)}]))
+        txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r) :observed (:observed r)}]))   ; recover the causal stamp through replay (acceptance d)
         sup    (some (fn [[id v]] (when (= v "cnf-supersedes") id)) vals)
         superd (vec (for [[_ m] claims :when (= (:p m) sup)] (:r m)))
         all-id (concat (map first vals) ents (map first claims) (map first txs))
@@ -425,7 +469,7 @@
           (emit {:k :entity :id id}))
         (doseq [[cid cl] (:claims m)]
           (emit {:k :claim :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
-        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t)}))
+        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t)}))
         (emit {:k :commit :tx :migration}))
       (.force (.getChannel os) true))))
 
