@@ -27,6 +27,26 @@ conceded, is in **[docs/WHY_FRAM_EXISTS.md](docs/WHY_FRAM_EXISTS.md)**.
 > statement-level reification as a bolt-on. Concurrency, Datalog, and schema-as-data are
 > *not* why Fram exists (off-the-shelf stores tie or win there) — the primitive is.
 
+## Terminology — it's a *claim* (never a loose "fact")
+
+The substrate atom is a **claim**: an immutable, addressable triple `(subject predicate
+object)`. The graph stores claims; lifecycle is *derived* from the claim set, never stored.
+**Always call it a claim.**
+
+Do **not** use *"fact"* as a synonym for *claim*. "Fact" connotes settled, stored, view-free
+truth — exactly the model CNF (Claim Normal Form) rejects: a claim is **asserted and
+defeasible**; it can be superseded, disputed, and coexist with its rival. The word *fact* is
+reserved for two narrow, precise senses only:
+
+1. **Datalog** — a ground tuple in a relation (the `d/facts` API, "delta fact", EDB/IDB).
+   Strict Datalog-evaluation vocabulary.
+2. **Views model** — a claim *selected/accepted as true inside a view*
+   ([docs/VIEWS_AND_BRANCHES.md](docs/VIEWS_AND_BRANCHES.md) §0). Always view-relative; the
+   substrate has no view-free facts.
+
+Everywhere else — docs, MCP `instructions`, prompts, CLI help, lifecycle prose — the word is
+**claim**. Rule of thumb: if "claim" fits and the sentence stays true, it should have been "claim".
+
 ## One engine, many consumers
 
 Fram is the **engine**, not an app. The relational structure is shared, so the *same*

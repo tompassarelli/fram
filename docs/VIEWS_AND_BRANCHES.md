@@ -26,6 +26,10 @@ Use these words precisely — they are what make the rest of this note unambiguo
 > Assertions are operations that mint claims; provenance lives on the claim — or on claims-about-claims, e.g.
 > `(C123 asserted-by agent-7)`, `(view-main selects C123)`. (Today provenance is recorded at transaction
 > granularity — the claim's tx carries who/when — with per-claim `asserted-by` available as the CNF capability.)
+>
+> ⚠️ **"Fact" here means exactly one of the two precise senses above (Datalog ground tuple, or
+> a claim accepted-true in a view) — never a loose synonym for "claim."** Canonical rule:
+> [README → Terminology](../README.md).
 
 ---
 
