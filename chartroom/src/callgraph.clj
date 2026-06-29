@@ -23,8 +23,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [cheshire.core :as json]
-            [fram.cnf :as c]
-            [fram.datalog :as d]))
+            [resolve :as rsv]))   ; rsv/blast-closure: the ONE reaches-closure impl
 
 ;; ---- parse the @file-delimited claim stream (from beagle-claims) -----------
 ;; NOTE: Racket ~s emits some escapes (\e, \a, ...) Clojure's EDN reader rejects.
@@ -103,28 +102,12 @@
                    distinct vec)]
     {:defns defns :by-name by-name :edges edges}))
 
-;; ---- transitive blast radius via Fram Datalog (the persistent-store seam) ---
-;; blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks if D changes).
-(defn blast-radius [edges]
-  (let [ctx   (c/new-store)
-        tx    (c/begin-tx! ctx "code")
-        EDGE  (c/value! ctx "calls-defn")
-        k->id (volatile! {})
-        ent   (fn [k] (or (get @k->id k)
-                          (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
-        _     (doseq [[a b] edges] (c/claim! ctx (ent a) EDGE (ent b) tx))
-        id->k (into {} (map (fn [[k v]] [v k]) @k->id))
-        db    (d/run-rules ctx
-                [(d/rule "reaches" [(d/v :x) (d/v :y)]
-                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])
-                 (d/rule "reaches" [(d/v :x) (d/v :z)]
-                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])
-                          (d/lit "reaches" [(d/v :y) (d/v :z)])])])
-        reaches (set (d/facts db "reaches"))
-        blast (reduce (fn [m [xid yid]]
-                        (update m (id->k yid) (fnil conj #{}) (id->k xid)))
-                      {} reaches)]
-    {:blast blast :reaches reaches}))
+;; ---- transitive blast radius (the persistent-store seam) -------------------
+;; blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks if D
+;; changes). Delegates to resolve/blast-closure — the ONE reaches-closure impl shared
+;; by the daemon's warm :blast/:concern-overlap, the `callgraph` mode, and this CLI; the
+;; per-query throwaway recursion store now lives in exactly that one helper (decision J).
+(defn blast-radius [edges] (rsv/blast-closure edges))
 
 ;; ---- CLI: claims-file -> JSON {defns, edges, blast} ------------------------
 (defn -main [& args]

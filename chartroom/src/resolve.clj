@@ -1559,6 +1559,84 @@
     module))
 
 ;; ============================================================================
+;; call graph — the scope-correct calls_defn edges + transitive blast radius.
+;; ============================================================================
+;; Factored out of the `callgraph` MODE so the daemon's warm :blast/:concern-overlap,
+;; the offline `callgraph` mode, and chartroom/callgraph.clj all share ONE derivation
+;; (call-edges) and ONE reaches closure (blast-closure) — the per-query throwaway-store
+;; rebuild now lives in exactly one place (decision J: "one implementation shared by
+;; concern-overlap and who-calls").
+
+;; call-edges — scope-correct defn->defn edges over the CURRENTLY BOUND corpus
+;; (srcs/file-modframe + materialized refers_to must already be in scope — call under
+;; with-resolve-read / resolve-edn!). A "call" is any resolved reference inside a
+;; top-level defn's body whose binding (via refers_to, transitively) is itself a
+;; top-level defn; the caller is that enclosing defn. Edges are keyed on the binding's
+;; NODE entity-id (@mod#int identity — rename-stable, scope-correct: same-named fns in
+;; different modules are distinct nodes, so they never false-merge). Returns
+;; {:defn-meta {leaf -> {:key :file :module :name}} :edges [[caller-leaf callee-leaf]]
+;; :defn-set #{leaf}} — the daemon joins footprint @concern->@node against :edges; the
+;; CLI maps leaf->:key for JSON.
+(defn call-edges []
+  (let [dkey      (fn [src leaf] (str src "#" leaf))
+        defn-meta (into {} (for [src srcs, [nm leaf] (file-modframe src)]
+                             [leaf {:key (dkey src leaf) :file src
+                                    :module (or (module-name src)
+                                                (-> src (str/split #"/") last (str/replace #"\.[^.]+$" "")))
+                                    :name nm}]))
+        defn-set  (set (keys defn-meta))
+        ;; ALL resolved reference symbols in a subtree (any position — head call,
+        ;; value-pass, threaded step, `:- T` annotation): every reference to a defn is a
+        ;; blast dependency; head-only under-reports (proven on shipped fram/src).
+        call-refs (fn call-refs [node]
+                    (if (refers-target node) [node]
+                      (when (= "list" (kind-of node)) (mapcat call-refs (ordered-children node)))))
+        callers (mapcat
+                 (fn [form]
+                   (let [d (unwrap-def form) h (head-sym d)]
+                     (cond
+                       (VALUE-DEFS h)
+                       (let [cl (second (ordered-children d))] (when (defn-meta cl) [[cl d]]))
+                       (#{"extend-type" "extend-protocol"} h)
+                       (keep (fn [c] (when (= "list" (kind-of c))
+                                       (let [mnode (first (ordered-children c))
+                                             cl (when (sym-val mnode) (ultimate (refers-target mnode)))]
+                                         (when (and cl (defn-meta cl)) [cl c]))))
+                             (rest (ordered-children d))))))
+                 (mapcat forms-of srcs))
+        edges (vec (distinct
+                    (for [[caller-leaf body] callers
+                          r (call-refs body)
+                          :let [callee (ultimate (refers-target r))]   ; follow refers_to to the bound defn
+                          :when (and (defn-set callee) (not= callee caller-leaf))]
+                      [caller-leaf callee])))]
+    {:defn-meta defn-meta :edges edges :defn-set defn-set}))
+
+;; blast-closure — transitive blast radius over a set of [caller callee] edges via Fram
+;; Datalog: blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks
+;; if D changes). Edge keys are any hashable (node-ids for the warm path, "src#leaf"
+;; strings for JSON). Returns {:reaches #{[x y]} :blast {callee -> #{transitive-callers}}}.
+;; The ONE reaches implementation; the throwaway recursion store lives only here.
+(defn blast-closure [edges]
+  (let [ctx   (c/new-store)
+        tx    (c/begin-tx! ctx "code")
+        EDGE  (c/value! ctx "calls-defn")
+        k->id (volatile! {})
+        ent   (fn [k] (or (get @k->id k)
+                          (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
+        _     (doseq [[a b] edges] (c/claim! ctx (ent a) EDGE (ent b) tx))
+        id->k (into {} (map (fn [[k v]] [v k]) @k->id))
+        db    (d/run-rules ctx
+                [(d/rule "reaches" [(d/v :x) (d/v :y)]
+                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])
+                 (d/rule "reaches" [(d/v :x) (d/v :z)]
+                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])
+                          (d/lit "reaches" [(d/v :y) (d/v :z)])])])
+        reaches (set (map (fn [[xid yid]] [(id->k xid) (id->k yid)]) (d/facts db "reaches")))
+        blast (reduce (fn [m [x y]] (update m y (fnil conj #{}) x)) {} reaches)]
+    {:reaches reaches :blast blast}))
+
+;; ============================================================================
 ;; CLI entry. Slice the edn paths off *command-line-args* per mode (the old
 ;; `(def srcs ...)` slice), then run the WHOLE pipeline + mode dispatch inside
 ;; one `resolve-edn!` binding scope, so dispatch reads the freshly-bound store /
@@ -1637,59 +1715,15 @@
   ;; (a/f, m/f) cross-module calls. Emits the JSON beagle-cascade consumes.
   ;; ============================================================================
   "callgraph"
-  (let [dkey      (fn [src leaf] (str src "#" leaf))
-        defn-meta (into {} (for [src srcs, [nm leaf] (file-modframe src)]
-                             [leaf {:key (dkey src leaf) :file src
-                                    :module (or (module-name src)
-                                                (-> src (str/split #"/") last (str/replace #"\.[^.]+$" "")))
-                                    :name nm}]))
-        defn-set  (set (keys defn-meta))
-        ;; ALL resolved reference symbols in a subtree (any position — not just list-head).
-        ;; For a BLAST RADIUS ("what must change if I change X"), every reference to a defn is
-        ;; a dependency: a head call (f x), a value-pass (mapv f xs), a threaded step (-> x f),
-        ;; a `:- T` annotation. Head-only silently under-reports (proven on shipped fram/src).
-        call-refs (fn call-refs [node]
-                    (if (refers-target node) [node]
-                      (when (= "list" (kind-of node)) (mapcat call-refs (ordered-children node)))))
-        ;; callers = [caller-defn-leaf, body-node] pairs. A top-level value defn is one caller;
-        ;; an extend-type/extend-protocol attributes each impl method's body to that protocol
-        ;; method (the impl method-name resolves to it via refers_to) — those bodies were skipped.
-        callers (mapcat
-                 (fn [form]
-                   (let [d (unwrap-def form) h (head-sym d)]
-                     (cond
-                       (VALUE-DEFS h)
-                       (let [cl (second (ordered-children d))] (when (defn-meta cl) [[cl d]]))
-                       (#{"extend-type" "extend-protocol"} h)
-                       (keep (fn [c] (when (= "list" (kind-of c))
-                                       (let [mnode (first (ordered-children c))
-                                             cl (when (sym-val mnode) (ultimate (refers-target mnode)))]
-                                         (when (and cl (defn-meta cl)) [cl c]))))
-                             (rest (ordered-children d))))))
-                 (mapcat forms-of srcs))
-        edges (vec (distinct
-                    (for [[caller-leaf body] callers
-                          r (call-refs body)
-                          :let [callee (ultimate (refers-target r))]  ; follow refers_to to the bound defn
-                          :when (and (defn-set callee) (not= callee caller-leaf))]
-                      [(:key (defn-meta caller-leaf)) (:key (defn-meta callee))])))
-        ;; transitive blast radius via Fram Datalog: blast(D) = {x | x transitively calls D}
-        bctx (c/new-store) btx (c/begin-tx! bctx "code") EDGE (c/value! bctx "calls-defn")
-        k->e (volatile! {})
-        bent (fn [k] (or (get @k->e k) (let [e (c/entity! bctx)] (vswap! k->e assoc k e) e)))
-        _ (doseq [[a b] edges] (c/claim! bctx (bent a) EDGE (bent b) btx))
-        e->k (into {} (map (fn [[k v]] [v k]) @k->e))
-        db (d/run-rules bctx
-             [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])
-              (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])
-                                                     (d/lit "reaches" [(d/v :y) (d/v :z)])])])
-        reaches (set (d/facts db "reaches"))
-        blast (reduce (fn [m [xid yid]] (update m (e->k yid) (fnil conj #{}) (e->k xid))) {} reaches)]
+  (let [{:keys [defn-meta edges]} (call-edges)
+        key->s  (fn [leaf] (:key (defn-meta leaf)))
+        edges-s (mapv (fn [[a b]] [(key->s a) (key->s b)]) edges)
+        {:keys [reaches blast]} (blast-closure edges-s)]
     (binding [*out* *err*]
       (println (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs (refers_to + Fram Datalog)"
-                       (count defn-meta) (count edges) (count reaches))))
+                       (count defn-meta) (count edges-s) (count reaches))))
     (println (json/generate-string
-              {:defns (vec (vals defn-meta)) :edges edges
+              {:defns (vec (vals defn-meta)) :edges edges-s
                :blast (into {} (map (fn [[k vs]] [k (vec vs)]) blast))}))))))))
 
 ;; GUARD: run the pipeline only when invoked as a CLI with a recognized mode.
