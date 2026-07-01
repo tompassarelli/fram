@@ -46,14 +46,19 @@
                                  (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
 ;; emit-edn loads claims-roundtrip's .zo, compiled for beagle's flake-pinned
 ;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve
-;; the pinned racket like bin/_beagle-racket (FRAM_RACKET overrides).
+;; the pinned racket like bin/_beagle-racket (FRAM_RACKET overrides). NO bare
+;; "racket" fallback: a silent mismatch produces a stale-bytecode failure that
+;; looks like a code bug, not a version bug. Fail loud instead.
 (def ^:private racket-bin
   (or (System/getenv "FRAM_RACKET")
       (let [r (try (proc/sh {:out :string :err :string} "direnv" "exec" beagle-home "which" "racket")
                    (catch Exception _ nil))]
         (when (and r (zero? (:exit r)) (not (clojure.string/blank? (:out r))))
           (clojure.string/trim (:out r))))
-      "racket"))
+      (die (str "fram-ingest-code: cannot resolve pinned racket for " beagle-home ". "
+                "Run `source " beagle-home "/bin/_beagle-racket` first, or set FRAM_RACKET "
+                "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
+                "(version mismatch with beagle's compiled .zo bytecode)."))))
 
 ;; --- args --------------------------------------------------------------------
 (defn- parse-args [args]
