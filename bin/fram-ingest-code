@@ -22,6 +22,8 @@
 ;;     [--module <name>]       restrict to ONE module by name substring (the flip
 ;;                             experiment ingests ONLY schema; this is how)
 ;;     [--append]              append to an existing log (default: TRUNCATE+write)
+;;     [--root <dir>]          source root module names are derived from (default:
+;;                             the common ancestor dir of the ingested files)
 ;;
 ;; The default ingests every .bclj it finds (staged adoption uses this); the flip
 ;; experiment passes `--module schema` so ONLY schema.bclj is folded.
@@ -55,12 +57,13 @@
 
 ;; --- args --------------------------------------------------------------------
 (defn- parse-args [args]
-  (loop [a args, opts {:srcs [] :out nil :module nil :append false}]
+  (loop [a args, opts {:srcs [] :out nil :module nil :append false :root nil}]
     (cond
       (empty? a) opts
       (= "--out" (first a))    (recur (drop 2 a) (assoc opts :out (second a)))
       (= "--module" (first a)) (recur (drop 2 a) (assoc opts :module (second a)))
       (= "--append" (first a)) (recur (rest a) (assoc opts :append true))
+      (= "--root" (first a))   (recur (drop 2 a) (assoc opts :root (second a)))
       :else                    (recur (rest a) (update opts :srcs conj (first a))))))
 
 ;; Any Beagle source extension — the extension only selects the EMIT TARGET
@@ -79,9 +82,30 @@
                             sort vec)
       :else [])))
 
-;; module name from a Beagle path: basename without the .b* extension. schema.bclj
-;; -> "schema". This is the @<module># prefix the resolver groups by (name->module).
-(defn- module-of [path] (-> path io/file .getName (str/replace beagle-ext-re "")))
+;; module name from a Beagle path: the path RELATIVE to the ingest root (--root,
+;; default: common ancestor dir of all ingested files), DOT-joined, .b* stripped.
+;; This is the @<module># prefix the resolver groups by (name->module) — its regex
+;; (@([^#]+)#) admits any separator, but downstream builds flat filenames from the
+;; key (fram_mcp's edited-<mod>.bclj / <src>/<mod>.bclj views), so dots, not slashes.
+;; One dir of files keeps bare basenames (src/fram/schema.bclj -> "schema", as
+;; before); a TREE qualifies (tabs/index.bjs -> "tabs.index"), so duplicate
+;; basenames across dirs never collide into one module.
+(defn- path-segs [p] (vec (remove str/blank? (str/split p #"/"))))
+(defn- common-prefix [a b]
+  (loop [i 0]
+    (if (and (< i (count a)) (< i (count b)) (= (nth a i) (nth b i)))
+      (recur (inc i))
+      (subvec a 0 i))))
+(defn- infer-root-segs [paths]
+  (reduce common-prefix (map #(vec (butlast (path-segs %))) paths)))
+(defn- module-of [root-segs path]
+  (let [segs (path-segs path)
+        n    (count root-segs)
+        rel  (if (and (<= n (count segs)) (= root-segs (subvec segs 0 n)))
+               (subvec segs n)
+               segs)                                   ; not under root: full path qualifies
+        rel  (if (seq rel) rel [(peek segs)])]
+    (str/replace (str/join "." rel) beagle-ext-re "")))
 
 ;; --- emit-edn one module, parse to [s p o] triples ---------------------------
 ;; emit-edn prints `@file <path>` then one `[s "pred" o]` per line. o is an INTEGER
@@ -104,8 +128,8 @@
 ;; object -> :r the string (a LITERAL). Predicate passes through verbatim.
 ;; PLUS one bookkeeping claim @<mod>#root file "<path>" so render-from-log knows the
 ;; source path (the @file wrapper analogue; "root" never collides with an int id).
-(defn- module->claims [path]
-  (let [module (module-of path)
+(defn- module->claims [root-segs path]
+  (let [module (module-of root-segs path)
         triples (emit-edn-triples path)
         node-claims
         (mapv (fn [[s p o]]
@@ -118,9 +142,9 @@
           node-claims)))
 
 ;; --- main --------------------------------------------------------------------
-(let [{:keys [srcs out module append]} (parse-args *command-line-args*)
+(let [{:keys [srcs out module append root]} (parse-args *command-line-args*)
       out-path (or out (str (System/getProperty "user.dir") "/.fram/code.log"))]
-  (when (empty? srcs) (die "usage: bin/fram-ingest-code <src> [<src>...] [--out <log>] [--module <name>] [--append]"))
+  (when (empty? srcs) (die "usage: bin/fram-ingest-code <src> [<src>...] [--out <log>] [--module <name>] [--append] [--root <dir>]"))
   (when-not (.exists (io/file roundtrip-rkt))
     (die "missing claims-roundtrip.rkt at" roundtrip-rkt "(set FRAM_ROUNDTRIP / BEAGLE_HOME)"))
   (let [files (->> srcs (mapcat beagle-files) distinct sort
@@ -128,7 +152,8 @@
     (when (empty? files) (die "no Beagle modules matched" (pr-str srcs) (when module (str "(module filter: " module ")"))))
     (log! "fram-ingest-code: folding" (count files) "module(s) ->" out-path
           (when module (str "(module filter: " module ")")))
-    (let [all-claims (mapcat module->claims files)
+    (let [root-segs (if root (path-segs root) (infer-root-segs files))
+          all-claims (mapcat (partial module->claims root-segs) files)
           ;; monotone :tx across the whole log; existing daemon seeds :next-seq to max.
           base (if (and append (.exists (io/file out-path)))
                  (->> (str/split-lines (slurp out-path))
@@ -149,5 +174,5 @@
         (spit out-path body))
       (log! "fram-ingest-code: wrote" (count all-claims) "AST claims"
             (str "(" (count files) " module(s); ids re-keyed @<mod>#<n>)"))
-      (doseq [f files] (log! "  +" (module-of f) "<-" f))
+      (doseq [f files] (log! "  +" (module-of root-segs f) "<-" f))
       (log! "DONE — the Beagle source is now downstream of" out-path))))
