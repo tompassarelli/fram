@@ -1395,7 +1395,15 @@
         (author-emit-scoped! "insert-comment"
                       (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)"))))))
 
-;; set-body — replace a defn's body with a freshly-minted body datum.
+;; set-body — replace a def/defn's body with a freshly-minted body datum.
+;; Handles BOTH shapes: a defn (`(defn f [params] :- R body…)`), where the body
+;; follows the [param] vector, AND a plain value-def (`(def x :- T val)` /
+;; `defonce`), where the body is the single value form that follows the NAME. The
+;; two are symmetric under `ret?` (an optional `:- T` return/type annotation): the
+;; only difference is the ANCHOR slot the body starts after — the param bracket for
+;; a defn, the name for a value-def. Before, the PARAM-FORMS gate rejected every
+;; js/export-wrapped value-def (map/vector binding) with code 5 (no-victim), so
+;; "add a field to this map" was unauthorable — the duel's F021-F024 failure.
 (defn verb-set-body! [name scope datum]
   (let [target-srcs (filter #(str/includes? % scope) srcs)]
     (when (not= 1 (count target-srcs))
@@ -1407,15 +1415,19 @@
           B (def-binding src name)
           form (when B (form-for-victim src B))
           d (when form (unwrap-def form))]
-      (when (or (nil? form) (not (PARAM-FORMS (head-sym d))))
+      (when (or (nil? form) (not (VALUE-DEFS (head-sym d))))
         (binding [*out* *err*]
-          (println (str "REJECTED — `" name "` is not a defn with a body in \"" scope
-                        "\" (set-body needs a defn; no claims mutated).")))
+          (println (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope
+                        "\" (set-body needs a value binding; no claims mutated).")))
         (*reject!* 5))
-      (let [kids (fN-claims d)
-            bracket-n (some (fn [[n _ r]] (when (brackets? r) n)) kids)
-            ret? (some (fn [[n _ r]] (and (= n (inc bracket-n)) (TYPE-COLON (sym-val r)))) kids)
-            body-start (+ bracket-n (if ret? 3 1))
+      (let [kids     (fN-claims d)
+            param?   (PARAM-FORMS (head-sym d))
+            ;; body follows the [param] vector (defn) or the NAME (plain value-def).
+            anchor-n (if param?
+                       (some (fn [[n _ r]] (when (brackets? r) n)) kids)
+                       (some (fn [[n _ r]] (when (= name (sym-val r)) n)) kids))
+            ret?     (some (fn [[n _ r]] (and (= n (inc anchor-n)) (TYPE-COLON (sym-val r)))) kids)
+            body-start (+ anchor-n (if ret? 3 1))
             body-slots (filter (fn [[n _ _]] (>= n body-start)) kids)
             new-root (mint-datum! src datum)]
         (when (empty? body-slots)
@@ -1426,7 +1438,7 @@
         (c/claim! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "set-body"
-                      (str "replaced body of defn `" name "` in \"" scope "\" ("
+                      (str "replaced body of `" name "` in \"" scope "\" ("
                            (count body-slots) " body slot(s) superseded; new body minted as claims)"))))))
 
 ;; ============================================================================
