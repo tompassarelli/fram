@@ -1200,7 +1200,7 @@
 (declare maybe-reload!)
 ;; thread 019f100f-7fff: snapshot/tail-fold/as-of/incremental-aggregate surface,
 ;; defined below migrate-flat->co (so they can call it) but referenced in handle.
-(declare write-snapshot! snapshot-reconcile materialize-as-of register-agg! agg-report sweep-snapshots! built-through)
+(declare write-snapshot! snapshot-reconcile materialize-as-of register-agg! agg-report sweep-snapshots! built-through last-boot)
 
 (defn handle [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
@@ -1268,7 +1268,10 @@
                                       (= (:claims inc) (set fresh)))
                      :inc-triples (count (:triples (:idx inc))) :fresh-triples (count (:triples fidx))
                      :version (current-seq @co)})
-      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (or @flat-log (:log @co))}
+      ;; :boot echoes HOW this process booted ({:mode :snapshot|:fold :ms .. :reason ..})
+      ;; — the post-bounce verification surface for snapshot boot (thread 019f2190).
+      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co)))
+                 :log (or @flat-log (:log @co)) :boot @last-boot}
       ;; :claims — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
       ;; client feeds these straight into its kernel index instead of paying the
@@ -1696,7 +1699,67 @@
   (let [f (java.io.File. (sidecar-path flat))]
     (when (.exists f)
       (try (edn/read-string (slurp f)) (catch Exception _ nil)))))
-(defn- write-sidecar! [flat m] (spit (sidecar-path flat) (pr-str m)))
+;; temp-file + ATOMIC_MOVE rename — a concurrent reader/booter sees the OLD file or
+;; the NEW one, never a torn write (same-dir rename is atomic on POSIX).
+(defn- rename-atomic! [tmp dst]
+  (java.nio.file.Files/move
+   (.toPath (java.io.File. (str tmp))) (.toPath (java.io.File. (str dst)))
+   (into-array java.nio.file.CopyOption
+               [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                java.nio.file.StandardCopyOption/REPLACE_EXISTING])))
+(defn- write-sidecar! [flat m]
+  (let [tmp (str (sidecar-path flat) ".tmp")]
+    (spit tmp (pr-str m))
+    (rename-atomic! tmp (sidecar-path flat))))
+
+;; ---- snapshot-boot activation + stamps (thread 019f2190, plan b) -----------
+;; FRAM_SNAPSHOT_BOOT gates BOTH boot-time consumption of a checkpoint AND the
+;; periodic checkpoint writer — default OFF, so landing this on main changes
+;; nothing until an owned :7977 bounce exports the flag. An atom (not a bare env
+;; read) so in-process tests can flip it without an env round-trip.
+(def snapshot-boot-enabled?
+  (atom (contains? #{"1" "true" "on"} (str/lower-case (str (System/getenv "FRAM_SNAPSHOT_BOOT"))))))
+(def snapshot-interval-ms
+  (max 1000 (or (some-> (System/getenv "FRAM_SNAPSHOT_INTERVAL_MS") parse-long) 900000)))  ; 15 min; 1s floor
+(def last-boot (atom nil))  ; {:mode :snapshot|:fold :ms n :reason <why fold>} — ops (:status) + tests
+
+;; fold-version fingerprint: sha256 over the sources that DEFINE the folded state —
+;; the emitted runtime modules this process actually loads (classpath `out`: fold =
+;; keyed-latest semantics, kernel = cardinality vocab, schema/cnf = store ops, rt =
+;; log parsing), plus cnf_coord.clj (dump-log!/replay — the image format) and THIS
+;; file (migrate-flat->co / apply-tail! / read-log-tail). A checkpoint written by
+;; older fold logic self-invalidates. Over-invalidation (any daemon edit) is the
+;; safe direction: one whole-log fold on the first post-deploy boot, then the
+;; writer re-stamps. nil when a source is unreadable -> never stamped, never
+;; validated (fail closed).
+(def ^:private fold-fingerprint-files
+  ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/cnf.clj"
+   "out/fram/rt.clj" "cnf_coord.clj" "cnf_coord_daemon.clj"])
+(defn fold-fingerprint []
+  (try
+    (let [root (System/getProperty "user.dir")
+          hs (mapv (fn [rel]
+                     (let [f (java.io.File. ^String root ^String rel)]
+                       (if (.exists f) (sha256-file f) (throw (ex-info (str "missing " rel) {})))))
+                   fold-fingerprint-files)
+          md (java.security.MessageDigest/getInstance "SHA-256")]
+      (.update md (.getBytes ^String (str/join "\n" hs) "UTF-8"))
+      (apply str (map #(format "%02x" %) (.digest md))))
+    (catch Exception _ nil)))
+
+;; log identity: sha256 of the log's FIRST line — survives copies (unlike an inode),
+;; changes on a rotated/reset log so a checkpoint of the OLD history can't apply to
+;; a NEW one. A compaction that drops the head legitimately changes it: the
+;; compactor must re-stamp the sidecar (cnf_snapshot_test step E does).
+(defn log-identity-of [flat]
+  (try
+    (with-open [rdr (java.io.BufferedReader.
+                     (java.io.InputStreamReader. (java.io.FileInputStream. (str flat)) "UTF-8"))]
+      (when-let [l (.readLine rdr)]
+        (let [md (java.security.MessageDigest/getInstance "SHA-256")]
+          (.update md (.getBytes ^String l "UTF-8"))
+          (apply str (map #(format "%02x" %) (.digest md))))))
+    (catch Exception _ nil)))
 
 (defn- skip-fully! [^java.io.InputStream is ^long n]
   (loop [left n] (when (pos? left) (let [s (.skip is left)] (if (pos? s) (recur (- left s)) nil)))))
@@ -1705,23 +1768,31 @@
 ;; UTF-8 decode (claim values carry unicode — so NOT RandomAccessFile.readLine, which
 ;; is ISO-8859-1 and corrupts multibyte). from-byte is a seek hint: too-low only costs
 ;; extra parsing, a torn first line is dropped, and the :tx filter is the real boundary.
-(defn- read-log-tail [path from-byte from-tx]
+;; Returns {:lines [...] :max-tx n} — :max-tx counts EVERY EDN-parsed line carrying an
+;; int :tx > from-tx, INCLUDING a torn tail line (EDN-valid but missing :l/:p/:r, the
+;; realistic append-no-fsync condition): fold/max-tx and migrate-flat->co's flat-max-tx
+;; seed count such lines, so the incremental boot's version must too or a torn tail
+;; makes a snapshot boot report STALE vs the whole-log fold.
+(defn- read-log-tail* [path from-byte from-tx]
   (let [f (java.io.File. (str path))]
     (if-not (and (.exists f) (pos? (.length f)))
-      []
+      {:lines [] :max-tx (long from-tx)}
       (let [len (.length f) start (long (max 0 (min (long (or from-byte 0)) len)))]
         (with-open [is (java.io.FileInputStream. f)]
           (skip-fully! is start)
           (let [rdr (java.io.BufferedReader. (java.io.InputStreamReader. is "UTF-8"))]
-            (loop [acc (transient [])]
+            (loop [acc (transient []) mx (long from-tx)]
               (let [line (.readLine rdr)]
                 (if (nil? line)
-                  (persistent! acc)
-                  (let [m (try (let [x (edn/read-string line)]
-                                 (when (and (:l x) (:p x) (:r x) (int? (:tx x))
-                                            (> (long (:tx x)) (long from-tx))) x))
-                               (catch Exception _ nil))]
-                    (recur (if m (conj! acc m) acc))))))))))))
+                  {:lines (persistent! acc) :max-tx mx}
+                  (let [x  (try (edn/read-string line) (catch Exception _ nil))
+                        tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
+                        past? (and tx (> tx (long from-tx)))
+                        m  (when (and past? (:l x) (:p x) (:r x)) x)]
+                    (recur (if m (conj! acc m) acc)
+                           (if (and past? (> tx mx)) tx mx))))))))))))
+(defn- read-log-tail [path from-byte from-tx]
+  (:lines (read-log-tail* path from-byte from-tx)))
 
 (defn- ref-str?* [x] (and (string? x) (ref-shape? x)))
 
@@ -1802,27 +1873,74 @@
                ;; hash gate: a torn/edited image is rejected (fall back to whole migrate)
                (or (nil? (:hash snap)) (= (:hash snap) (try (sha256-file (:image snap)) (catch Exception _ nil)))))
       (let [base {:store (replay (:image snap)) :log nil :lock (Object.)}
-            tail (read-log-tail flat (:byte_offset snap) (:seq snap))]
-        (apply-tail! base tail)
-        {:co base :through (reduce max (long (:seq snap)) (map :tx tail))}))))
+            {:keys [lines max-tx]} (read-log-tail* flat (:byte_offset snap) (:seq snap))
+            through (max (long (:seq snap)) (long max-tx))]
+        (apply-tail! base lines)
+        ;; a torn tail line is dropped from APPLY but its :tx still counts toward the
+        ;; version (see read-log-tail*) — advance :next-seq so current-seq == what a
+        ;; whole-log fold of the same bytes reports (doctor FRESH, :claims version equal).
+        (swap! (:store base) update :next-seq #(max (long (or % 0)) through))
+        {:co base :through through :tail-lines (count lines)}))))
+
+;; checkpoint validation gate — nil when usable, else WHY not (the boot log line +
+;; last-boot carry the reason). Every failure falls back to the whole-log fold: a bad
+;; checkpoint may cost a slower boot, never wrong state.
+(defn- validate-sidecar [snap flat]
+  (let [fp (fold-fingerprint)]
+    (cond
+      (not (map? snap))                          "no checkpoint sidecar (missing/torn/non-EDN)"
+      (or (not (int? (:seq snap)))
+          (not (int? (:byte_offset snap))))      "sidecar malformed (:seq/:byte_offset not ints)"
+      (nil? (:fold_version snap))                "sidecar unstamped (pre-fingerprint format)"
+      (nil? fp)                                  "live fold fingerprint uncomputable (fold source unreadable)"
+      (not= fp (:fold_version snap))             (str "fold-version mismatch (checkpoint "
+                                                      (subs (str (:fold_version snap)) 0 (min 12 (count (str (:fold_version snap)))))
+                                                      "… vs live " (subs fp 0 12) "…) — fold logic changed since checkpoint")
+      (not= (:log_identity snap)
+            (log-identity-of flat))              "log identity mismatch (rotated/reset log)"
+      (> (long (:byte_offset snap))
+         (.length (java.io.File. (str flat))))   "byte offset past EOF (log truncated below checkpoint)"
+      :else nil)))
 
 (defn boot-flat! [flat]
   (reset! flat-canonical? true)
-  (let [snap (read-sidecar flat)
-        ib   (when snap (try (incremental-boot snap flat) (catch Throwable _ nil)))]
+  (let [t0   (System/nanoTime)
+        snap (read-sidecar flat)
+        why  (if @snapshot-boot-enabled?
+               (validate-sidecar snap flat)
+               "disabled (FRAM_SNAPSHOT_BOOT unset)")
+        [ib why] (if why
+                   [nil why]
+                   (try (if-let [r (incremental-boot snap flat)]
+                          [r nil]
+                          [nil "snapshot image missing/torn (hash gate)"])
+                        (catch Throwable t
+                          [nil (str "snapshot replay failed: " (.getMessage t))])))]
     (if ib
       (do (reset! co (:co ib)) (reset! built-through (:through ib)))
-      ;; cold path: no snapshot / torn image -> the proven whole-log migrate
+      ;; cold path: no/invalid checkpoint -> the proven whole-log migrate
       (let [c0 (migrate-flat->co flat)]
         (reset! co c0)
-        (reset! built-through (or (:next-seq @(:store c0)) 0)))))
-  (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
-  (reset! flat-log flat)
-  (reset! flat-mtime (stamp flat))
-  (reset! flat-bytes (.length (java.io.File. (str flat))))
-  (reset! cache {:index nil :version -1})
-  (reset-refers-state!)                  ; S3.3: derived refers_to belong to the OLD store
-  (index!) @co)
+        (reset! built-through (or (:next-seq @(:store c0)) 0))))
+    (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
+    (reset! flat-log flat)
+    (reset! flat-mtime (stamp flat))
+    (reset! flat-bytes (.length (java.io.File. (str flat))))
+    (reset! cache {:index nil :version -1})
+    (reset-refers-state!)                  ; S3.3: derived refers_to belong to the OLD store
+    (index!)
+    (let [ms (quot (- (System/nanoTime) t0) 1000000)]
+      (reset! last-boot (if ib
+                          {:mode :snapshot :ms ms :image (:image snap) :covers (:seq snap)
+                           :tail-lines (:tail-lines ib)}
+                          {:mode :fold :ms ms :reason why}))
+      (println (str "[fram] boot(flat): "
+                    (if ib
+                      (str "checkpoint " (:image snap) " (covers seq " (:seq snap) ") + tail of "
+                           (:tail-lines ib) " lines")
+                      (str "whole-log fold — " why))
+                    " in " ms " ms")))
+    @co))
 
 ;; absorb external edits (capture/import append to the flat log out-of-band). The
 ;; per-request cost is a (stamp ...) stat; on a change we now TAIL-FOLD only the new
@@ -1876,16 +1994,22 @@
           sq (current-seq co)
           _ (.mkdirs (java.io.File. (snap-dir flat)))
           image (snap-image flat sq)
+          tmp (str image ".tmp")
           byteoff (.length (java.io.File. (str flat)))
-          _ (dump-log! st image)
-          h (sha256-file image)
+          _ (dump-log! st tmp)
+          h (sha256-file tmp)
+          _ (rename-atomic! tmp image)     ; the image appears WHOLE or not at all
           ccount (count (c/current-claims st))
           subj (str "@snapshot:" sq)]
       (doseq [[p v] [["covers_through" (str sq)] ["byte_offset" (str byteoff)]
                      ["claim_count" (str ccount)] ["image_path" image]
                      ["snapshot_hash" h] ["of_view" "@view:main"]]]
         (do-assert subj p v nil))
-      (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :claim_count ccount :hash h})
+      ;; log identity read AFTER the @snapshot:* appends: on a previously-EMPTY log the
+      ;; first line only exists now, and boot validates against the log as it will read it.
+      (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :claim_count ccount :hash h
+                            :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
+                            :written_at (fram.rt/now-iso)})
       ;; the snapshot's own @snapshot:<seq> claims were appended inline (do-assert),
       ;; so the LIVE store already reflects them: advance built-through past them and
       ;; re-stamp, so a following reload tail-reads only genuinely-new appends.
@@ -1935,10 +2059,50 @@
       ;; no usable snapshot at/below N -> fold the flat log truncated at :tx <= N
       (apply-tail! (fresh-co) (filterv #(<= (long (:tx %)) n) (read-log-tail flat 0 -1))))))
 
+;; ---- periodic checkpoint writer (flag-gated with boot; thread 019f2190 plan b) ----
+;; Every snapshot-interval-ms, if commits advanced past the last checkpoint, write one
+;; (write-snapshot! serializes under dlock). Also fires once right after boot on its
+;; own thread — after a fold boot that restamps a fresh checkpoint without delaying
+;; time-to-serve — and once from a clean-shutdown hook, so the next boot's tail is
+;; as small as the shutdown was clean. Failures log and never take the daemon down.
+(def ^:private last-snapshot-seq (atom -1))
+(defn- snapshot-if-dirty! [why]
+  (try
+    (when (and @flat-log (> (long (current-seq @co)) (long @last-snapshot-seq)))
+      (let [r (write-snapshot! @co @flat-log)]
+        ;; dirtiness is measured PAST the checkpoint's own @snapshot:* metadata
+        ;; appends (current-seq, not the dump seq :ok) — else every checkpoint
+        ;; re-dirties the log with its own bookkeeping and every boot/interval
+        ;; rewrites a whole image to cover 6 metadata claims.
+        (reset! last-snapshot-seq (long (current-seq @co)))
+        (println (str "[fram] checkpoint (" why "): seq " (:ok r) " -> " (:image r)))))
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "[fram] checkpoint (" why ") FAILED: " (.getMessage t)))))))
+(defn start-snapshot-writer! []
+  (when (and @snapshot-boot-enabled? @flat-log)
+    ;; booted FROM a checkpoint -> the state through the current seq is exactly
+    ;; what the next boot reconstructs from image+tail; only NEW commits warrant
+    ;; the next checkpoint. (A fold boot leaves the seed at -1 so the post-boot
+    ;; pass bootstraps the first checkpoint immediately — the activation path.)
+    (when (= :snapshot (:mode @last-boot))
+      (reset! last-snapshot-seq (long (current-seq @co))))
+    (doto (Thread. (fn []
+                     (snapshot-if-dirty! "post-boot")
+                     (loop []
+                       (Thread/sleep (long snapshot-interval-ms))
+                       (snapshot-if-dirty! "interval")
+                       (recur))))
+      (.setName "fram-snapshot-writer") (.setDaemon true) (.start))
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. (fn [] (snapshot-if-dirty! "shutdown"))))))
+
 (defn serve-flat-daemon [port flat]
   (boot-flat! flat)
+  (start-snapshot-writer!)
   (println (str "reified coordinator (drop-in over flat log): "
-                (count (c/current-claims (:store @co))) " live claims, canonical=" flat))
+                (count (c/current-claims (:store @co))) " live claims, canonical=" flat
+                (when @snapshot-boot-enabled? " [snapshot-boot ON]")))
   (serve port))
 
 ;; ---- adversarial socket test (mirrors coord.clj's run-test) ----------------
