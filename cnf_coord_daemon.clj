@@ -1086,8 +1086,13 @@
           ;; :edit-min handler arm, returning {:reject ...} to the client.
           _      (let [tv0 (System/nanoTime)
                        res (binding [resolve/*reject!*
-                                     (fn [code] (throw (ex-info (str "verb rejected the edit (code " code ")")
-                                                                {:reject :verb :code code})))
+                                     ;; carry the verb's structured disambiguation detail (replace-in-body's
+                                     ;; :candidates + :within remedy) into the ex-info so `handle` surfaces
+                                     ;; it to the model — not just the bare match count.
+                                     (fn [code & [detail]]
+                                       (throw (ex-info (or (:message detail) (str "verb rejected the edit (code " code ")"))
+                                                       (cond-> {:reject :verb :code code}
+                                                         detail (assoc :disambiguation detail)))))
                                      resolve/*capture-only?* true   ; mint/supersede only — no re-resolve, no EDN projection
                                      resolve/*resolve-walk?* false  ; Build B: skip the whole-corpus walk
                                      resolve/*corpus-scope* scope    ; Build B: scope frames to the edited module
@@ -1216,8 +1221,14 @@
     (= :seen (:op req)) {:seen (boolean (c/value-id (:store @co) (:v req)))}
     (= :edit-min (:op req))
     (try (do-edit-min (:spec req))
-         (catch Throwable t {:reject [(str "edit-min: " (.getMessage t))]
-                             :version (current-seq @co)}))
+         (catch Throwable t
+           ;; surface a verb's structured disambiguation payload (replace-in-body candidates
+           ;; + :within suggestions) alongside the human :reject message, so the client/model
+           ;; gets HOW to disambiguate, not just that it was ambiguous.
+           (let [d (ex-data t)]
+             (cond-> {:reject [(str "edit-min: " (.getMessage t))]
+                      :version (current-seq @co)}
+               (:disambiguation d) (assoc :disambiguation (:disambiguation d))))))
   :else
   (locking dlock                       ; serialize reload + writes + reads (drop-in mode)
     (maybe-reload!)                     ; absorb external flat edits (no-op in v2-log mode)

@@ -325,8 +325,11 @@
     ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
     ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
     ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
-    "replace-in-body" {:op "replace-in-body" :module (:module e) :name (:name e)
-                       :old (clojure.edn/read-string (:old e)) :new (clojure.edn/read-string (:new e))}
+    "replace-in-body" (cond-> {:op "replace-in-body" :module (:module e) :name (:name e)
+                               :old (clojure.edn/read-string (:old e)) :new (clojure.edn/read-string (:new e))}
+                        ;; optional :within scope-narrower (enclosing-form datum STRING) — the
+                        ;; disambiguation remedy; parse it here exactly like :old/:new.
+                        (:within e) (assoc :within (clojure.edn/read-string (:within e))))
     nil))
 
 ;; the corpus the verb operates over = every .bclj in the source tree (so cross-module
@@ -351,7 +354,11 @@
             (cond
               (:reject resp)
               {:isError true :text (str "REJECTED (warm :edit-min, nothing committed): "
-                                        (str/join "; " (map str (:reject resp))))}
+                                        (str/join "; " (map str (:reject resp)))
+                                        ;; surface the structured disambiguation remedy (replace-in-body
+                                        ;; candidates + copy-pastable :within forms) so the model gets HOW
+                                        ;; to disambiguate, not just that it was ambiguous.
+                                        (when-let [d (:disambiguation resp)] (str "\n" (:message d))))}
               (:ok resp)
               ;; render the .bclj view WARM (:render, no fold), then TYPE-CHECK the edited module +
               ;; RETURN pointed Beagle errors so the agent can REPAIR (the beagle repair loop — without
@@ -427,9 +434,12 @@
                   "set-body"    (do (spit spec-file (:body e))
                                     (concat ["set-body" (:name e) module spec-file] edn-paths))
                   "rename"      (concat ["rename" (:name e) (:new-name e) module] edn-paths)
-                  "replace-in-body" (let [of (str work "/old.edn") nf (str work "/new.edn")]
+                  "replace-in-body" (let [of (str work "/old.edn") nf (str work "/new.edn")
+                                          wf (when (:within e) (str work "/within.edn"))]
                                       (spit of (:old e)) (spit nf (:new e))
-                                      (concat ["replace-in-body" (:name e) module of nf] edn-paths))
+                                      (when wf (spit wf (:within e)))
+                                      (concat ["replace-in-body" (:name e) module of nf] edn-paths
+                                              (when wf ["--within-file" wf])))
                   nil)]
             (if (nil? resolve-args)
               (do (sh {} "rm" "-rf" work) {:isError true :text (str "unknown edit op: " op)})

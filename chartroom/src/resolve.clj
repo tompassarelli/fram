@@ -40,9 +40,13 @@
 ;; nothing-to-do / shape violation). The CLI path (-main) wants a process exit code;
 ;; a LONG-LIVED daemon running the verb in-process must NOT die on a rejected edit —
 ;; it binds *reject!* to throw, converting the exit into a catchable signal. Default
-;; = real exit (verbatim CLI behavior). Verb arms call (*reject!* code) instead of
-;; (System/exit code), so the same verb body serves both drivers.
-(def ^:dynamic *reject!* (fn [code] (System/exit code)))
+;; = real exit (verbatim CLI behavior). Verb arms call (*reject!* code) — or
+;; (*reject!* code detail) to hand the driver a structured disambiguation payload
+;; (replace-in-body's candidates/:within remedy) — instead of (System/exit code), so
+;; the same verb body serves both drivers. The default ignores the detail (the CLI
+;; exits); the daemon binding threads it into the ex-info it throws so `handle`
+;; surfaces the candidates to the model.
+(def ^:dynamic *reject!* (fn [code & _] (System/exit code)))
 ;; *resolve-walk?* — does resolve-warm-store! run the whole-corpus lexical walk
 ;; (run-resolution!, ~the dominant verb-setup cost)? The walk WRITES refers_to over
 ;; every module. The MINIMAL-OP authoring path (daemon :edit-min) does NOT need that
@@ -1511,11 +1515,118 @@
                   [:leaf (kind-of n) (pred-val n "v")])))]
       (go root)
       @matches)))
+
+;; ============================================================================
+;; AUTO-DISAMBIGUATION (019f22bd-137d) — on an ambiguous/failed anchor, hand the
+;; model a STRUCTURED remedy instead of a bare match count. Two mechanisms:
+;;   (1) :candidates on REJECT — per match site, a parent-chain breadcrumb + a
+;;       copy-pastable enclosing form (:within) that isolates THAT occurrence.
+;;   (2) :within scope-narrowing — the caller supplies an enclosing anchor; the
+;;       :old match must be unique WITHIN it. Fail-closed at every level (exactly
+;;       one match or reject). Structural, not ordinal — survives concurrent edits.
+;; ============================================================================
+;; node->str / node->canon — render a graph node back to source. node->str is a
+;; compact, copy-pastable STRING (references via their CURRENT name, like render-sym;
+;; structural fN children only, CRDT-ordered; comments/tails omitted). node->canon is
+;; the SAME canonical shape datum->canon + anchor-match-sites compute, so a suggested
+;; :within is SELF-VALIDATING: we offer it only when (datum->canon (edn/read it)) ==
+;; the node's canon (round-trips) AND it matches exactly one interior form.
+(defn node->str [n]
+  (case (kind-of n)
+    "list"   (let [kids (ordered-children n)
+                   hs   (when (seq kids) (when (= "symbol" (kind-of (first kids))) (render-sym (first kids))))]
+               (cond
+                 (= hs "#%brackets") (str "[" (str/join " " (map node->str (rest kids))) "]")
+                 (= hs "#%map")      (str "{" (str/join " " (map node->str (rest kids))) "}")
+                 :else               (str "(" (str/join " " (map node->str kids)) ")")))
+    "symbol" (render-sym n)
+    "string" (pr-str (pred-val n "v"))
+    "number" (str (pred-val n "v"))
+    "char"   (str (pred-val n "v"))
+    (str (pred-val n "v"))))
+(defn node->canon [n]
+  (if (= "list" (kind-of n))
+    (into [:list] (map node->canon (ordered-children n)))
+    (if (= "symbol" (kind-of n)) [:leaf "symbol" (render-sym n)] [:leaf (kind-of n) (pred-val n "v")])))
+;; anchor-match-sites — anchor-matches, but each match also carries its ENCLOSING
+;; ANCESTOR CHAIN (def-root .. immediate-parent, descent order) so a reject can build
+;; breadcrumbs + a distinctive :within suggestion. Still ONE O(N) post-order pass
+;; (canon computed once per node). Returns [{:parent :pos :cid :child :chain} ...];
+;; the search ROOT itself is never a candidate (only its interior children).
+(defn anchor-match-sites [root target]
+  (let [matches (atom [])]
+    (letfn [(go [n chain]
+              (if (= "list" (kind-of n))
+                (into [:list]
+                      (mapv (fn [[_ pos cid ch]]
+                              (let [cc (go ch (conj chain n))]
+                                (when (= cc target)
+                                  (swap! matches conj {:parent n :pos pos :cid cid :child ch :chain (conj chain n)}))
+                                cc))
+                            (ord-edges n)))
+                (if (= "symbol" (kind-of n))
+                  [:leaf "symbol" (render-sym n)]
+                  [:leaf (kind-of n) (pred-val n "v")])))]
+      (go root [])
+      @matches)))
+;; a short, distinctive label for one breadcrumb rung (an enclosing form's head).
+(defn- crumb-label [n]
+  (or (head-sym n) (cond (map-node? n) "{}" (brackets? n) "[]" :else "(...)")))
+;; DISAMBIG-CAP — at most this many candidates in a reject payload (report the total).
+(def DISAMBIG-CAP 8)
+;; build the reject candidate for match site `site`, relative to search-root `root`,
+;; given the OTHER sites (to find the smallest enclosing form that isolates THIS one).
+(defn- reject-candidate [root site others idx]
+  (let [chain       (:chain site)
+        breadcrumb  (mapv crumb-label chain)
+        parent      (:parent site)
+        other-nodes (into #{} (mapcat :chain others))
+        ;; :within — smallest enclosing form (deepest ancestor identity-distinct from
+        ;; every other site) whose source round-trips AND matches exactly one interior
+        ;; form of the def. Guarantees a valid, copy-pastable scope-narrower.
+        within (some (fn [a]
+                       (when-not (contains? other-nodes a)
+                         (let [ac (node->canon a) s (node->str a)]
+                           (when (and (<= (count s) 800)
+                                      (= ac (try (datum->canon (edn/read-string s)) (catch Throwable _ nil)))
+                                      (= 1 (count (anchor-match-sites root ac))))
+                             s))))
+                     (reverse chain))
+        ctx-str (let [s (node->str parent)] (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
+    {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
+;; assemble the structured disambiguation payload (+ a human-readable :message) the
+;; daemon threads through *reject!* into `handle`'s reject response.
+(defn- disambig-payload [reason name scope root sites]
+  (let [total (count sites)
+        shown (vec (map-indexed (fn [i s] (reject-candidate root s (concat (take i sites) (drop (inc i) sites)) (inc i)))
+                                (take DISAMBIG-CAP sites)))
+        head  (case reason
+                :ambiguous-old   (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                                      total " matches; no claims mutated).")
+                :ambiguous-within (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                                       total " matches; no claims mutated). It must match exactly one enclosing form."))
+        lines (map (fn [c]
+                     (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c))
+                          (when (:within c) (str "\n      within: " (:within c)))))
+                   shown)
+        remedy (case reason
+                 :ambiguous-old   "Retry with :within set to one candidate's `within` form (it isolates that occurrence), or supply a larger :old."
+                 :ambiguous-within "Supply a `within` that names exactly one enclosing form (use a larger/more distinctive form).")]
+    {:reason reason :verb "replace-in-body" :name name :scope scope
+     :total total :shown (count shown) :candidates shown :remedy remedy
+     :message (str "REJECTED — " head "\n" (str/join "\n" lines)
+                   "\n  remedy: " remedy)}))
 ;; verb-replace-in-body! — swap ONE interior form of def `name` (matched by `old-datum`)
 ;; for `new-datum`. Reuses the matched edge's EXACT position literal (integer fN preserved
 ;; -> byte-stable, racket --render sees it) — retire the old edge, mint the new form, wire
 ;; a fresh edge at the same slot. Mirrors set-body's edge-swap, at interior granularity.
-(defn verb-replace-in-body! [name scope old-datum new-datum]
+;; Optional `within-datum` narrows the search to the (unique) enclosing form it matches —
+;; fail-closed at every level: within must match exactly one form, then old exactly one
+;; form inside it. On an ambiguous/absent match the reject carries a structured
+;; disambiguation payload (:candidates + :within suggestions) via *reject!*.
+(defn verb-replace-in-body!
+  ([name scope old-datum new-datum] (verb-replace-in-body! name scope old-datum new-datum nil))
+  ([name scope old-datum new-datum within-datum]
   (let [target-srcs (filter #(str/includes? % scope) srcs)]
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
@@ -1529,35 +1640,62 @@
         (binding [*out* *err*]
           (println (str "REJECTED — no def named `" name "` found in \"" scope
                         "\" (nothing to edit; no claims mutated).")))
-        (*reject!* 5))
-      (let [target-canon (datum->canon old-datum)
-            matches      (anchor-matches form target-canon)]
+        (*reject!* 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope
+                      :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")}))
+      ;; (2) :within scope-narrowing — resolve the enclosing anchor to EXACTLY ONE node
+      ;; and search `old` only inside it. Fail-closed: 0 or >1 within-matches reject.
+      (let [search-root
+            (if (nil? within-datum)
+              form
+              (let [wcanon (datum->canon within-datum)
+                    wsites (anchor-match-sites form wcanon)]
+                (cond
+                  (zero? (count wsites))
+                  (do (binding [*out* *err*]
+                        (println (str "REJECTED — `within` form not found inside `" name "` in \"" scope
+                                      "\" (0 matches; no claims mutated).")))
+                      (*reject!* 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope
+                                    :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
+                  (> (count wsites) 1)
+                  (do (binding [*out* *err*]
+                        (println (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                                      (count wsites) " matches; no claims mutated).")))
+                      (*reject!* 5 (disambig-payload :ambiguous-within name scope form wsites)))
+                  :else (:child (first wsites)))))
+            target-canon (datum->canon old-datum)
+            matches      (anchor-match-sites search-root target-canon)]
         (cond
           (zero? (count matches))
           (do (binding [*out* *err*]
-                (println (str "REJECTED — anchor form not found inside `" name "` in \"" scope
-                              "\" (0 matches; no claims mutated). The old form must match an interior "
-                              "form structurally (head + spelling + child shape).")))
-              (*reject!* 5))
+                (println (str "REJECTED — anchor `old` not found inside "
+                              (if within-datum "the `within` form" (str "`" name "`"))
+                              " in \"" scope "\" (0 matches; no claims mutated). The old form must match "
+                              "an interior form structurally (head + spelling + child shape).")))
+              (*reject!* 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope
+                            :within (some? within-datum)
+                            :message (str "REJECTED — anchor `old` not found inside "
+                                          (if within-datum "the `within` form" (str "`" name "`"))
+                                          " in \"" scope "\" (0 matches).")}))
           (> (count matches) 1)
           (do (binding [*out* *err*]
-                (println (str "REJECTED — anchor form is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                              (count matches) " matches; no claims mutated). Supply a larger enclosing "
-                              "form so exactly one interior form matches (old_string uniqueness).")))
-              (*reject!* 5))
+                (println (str "REJECTED — anchor `old` is AMBIGUOUS inside "
+                              (if within-datum "the `within` form" (str "`" name "`"))
+                              " in \"" scope "\" (" (count matches) " matches; no claims mutated).")))
+              (*reject!* 5 (disambig-payload :ambiguous-old name scope search-root matches)))
           :else
-          (let [[parent pos-lit cid _] (first matches)
+          (let [{:keys [parent pos cid]} (first matches)
                 new-root (mint-datum! src new-datum)]
             ;; retire the matched fN edge + re-point the SAME position literal at the
             ;; freshly-minted form — by-l filters superseded, so reads see only the new
             ;; child; the integer fN is reused verbatim -> byte-stable outside the edit.
             (retire-claim! cid)
-            (c/claim! ctx parent (c/value! ctx pos-lit) new-root tx)
+            (c/claim! ctx parent (c/value! ctx pos) new-root tx)
             (when-not *capture-only?* (re-resolve!))
             (author-emit-scoped! "replace-in-body"
                           (str "replaced 1 interior form inside `" name "` in \"" scope
+                               (when within-datum "\" (scoped by :within)")
                                "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
-                               "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
+                               "def NOT re-emitted — siblings + comments preserved; refs via refers_to)")))))))))
 
 ;; delete — remove a top-level def by name. CLAIM-NATIVE + fail-closed: the same
 ;; victim/subtree/orphan computation as the CLI `delete` arm, but the EFFECT is a
@@ -1693,7 +1831,8 @@
              "insert-form" (verb-insert-form! module (:after spec) (:datum spec))   ; CRDT mid-insert (#36)
              "insert-comment" (verb-insert-comment! module (:after spec) (:text spec) (:placement spec))  ; Turtle #6 comment authoring (#30)
              "set-body"    (verb-set-body! (:name spec) module (:datum spec))
-             "replace-in-body" (verb-replace-in-body! (:name spec) module (:old spec) (:new spec))  ; SUB-DEF surgical edit — swap one interior form (mega-def floor)
+             "replace-in-body" (verb-replace-in-body! (:name spec) module (:old spec) (:new spec) (:within spec))  ; SUB-DEF surgical edit — swap one interior form (mega-def floor); optional :within narrows the scope
+
              "delete"      (verb-delete! (:name spec) module)   ; remove a top-level def (fail-closed on orphans)
              "reorder"     (verb-reorder! (:name spec) module (:after spec))   ; move a def — re-spell order key, no node churn
              (do (binding [*out* *err*] (println (str "run-verb-warm!: unknown op " (:op spec))))
@@ -1786,9 +1925,14 @@
 ;; library (no recognized mode), nothing runs — no load-edn over mis-sliced args.
 (def MODES #{"resolve" "rename" "delete" "reorder" "callgraph" "upsert-form" "set-body" "replace-in-body"})
 (defn -main []
-  (let [edn-paths (drop (case mode "resolve" 1 "rename" 4 "delete" 3 "reorder" 4 "callgraph" 1
+  (let [;; strip an optional `--within-file <path>` flag (replace-in-body's scope-narrower)
+        ;; so it never lands in the edn-paths slice below (load-edn would slurp it as a file).
+        raw      (vec *command-line-args*)
+        fi       (.indexOf raw "--within-file")
+        stripped (if (neg? fi) raw (concat (take fi raw) (drop (+ fi 2) raw)))
+        edn-paths (drop (case mode "resolve" 1 "rename" 4 "delete" 3 "reorder" 4 "callgraph" 1
                                    "upsert-form" 3 "set-body" 4 "replace-in-body" 5)
-                        *command-line-args*)]
+                        stripped)]
     (resolve-edn!
      edn-paths
      (fn []
@@ -1851,11 +1995,16 @@
   ;; def (matched structurally by the OLD form) with a NEW form, WITHOUT re-emitting the
   ;; def. Anchor-form addressing (Edit-tool old_string on the AST): unique match required,
   ;; fail-closed on 0/>1. old-file/new-file each hold one EDN datum (the verb reads them).
+  ;; An OPTIONAL `--within-file <path>` flag (anywhere after new-file; stripped from the
+  ;; edn-paths slice in -main) holds an enclosing-form datum that narrows the search (the
+  ;; `old` match must be unique WITHIN it) — the disambiguation remedy.
   "replace-in-body"
   (let [[name scope old-file new-file] (drop 1 *command-line-args*)
+        within-file (second (drop-while #(not= "--within-file" %) *command-line-args*))
         old-datum (edn/read-string (slurp old-file))
-        new-datum (edn/read-string (slurp new-file))]
-    (verb-replace-in-body! name scope old-datum new-datum))
+        new-datum (edn/read-string (slurp new-file))
+        within-datum (when within-file (edn/read-string (slurp within-file)))]
+    (verb-replace-in-body! name scope old-datum new-datum within-datum))
 
   ;; ============================================================================
   ;; callgraph — the scope-correct call graph + transitive blast radius, derived
