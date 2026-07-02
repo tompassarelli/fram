@@ -5,6 +5,10 @@
 ;; from the image). Run: bb -cp out tests/cnf_snapshot_test.clj
 (require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.string :as str])
 (load-file "cnf_coord_daemon.clj")
+;; this test IS the snapshot-boot machinery's gate — enable the (default-OFF)
+;; activation flag in-process (thread 019f2190; see cnf_snapshot_boot_test.clj
+;; for the flag/invalidation matrix itself)
+(reset! snapshot-boot-enabled? true)
 
 (def LOG "/tmp/cnf-snapshot-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
@@ -65,7 +69,11 @@
                        (remove str/blank?)
                        (filter #(> (long (:tx (read-string %))) 5)))]
     (write-lines! LOG tail-only)
-    (write-sidecar! LOG (assoc (read-sidecar LOG) :byte_offset 0)))  ; tail now starts at byte 0
+    ;; a compaction rewrites the log head -> the compactor re-stamps the sidecar:
+    ;; tail now starts at byte 0, and the log's first-line identity changed
+    (write-sidecar! LOG (assoc (read-sidecar LOG)
+                               :byte_offset 0
+                               :log_identity (log-identity-of LOG))))
   (boot-flat! LOG)
   (chk "boot(post-compaction): full state from image+tail" (= (live-name-triples @co) full-after-tail))
   (let [st (:store @co)]
