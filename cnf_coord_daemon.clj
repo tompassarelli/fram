@@ -33,6 +33,7 @@
 (def co (atom nil))                  ; {:store :log :lock} — reified canonical (v2 log)
 (def flat-log (atom nil))            ; the flat log, now a PROJECTION the cold CLI folds
 (def cache (atom {:index nil :version -1}))
+(def claims-wire-cache (atom {:version -1 :triples nil}))  ; :claims op — fold-ordered [l p r] wire triples, per version
 (def subscribers (atom []))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
@@ -1257,6 +1258,28 @@
                      :inc-triples (count (:triples (:idx inc))) :fresh-triples (count (:triples fidx))
                      :version (current-seq @co)})
       :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co))) :log (or @flat-log (:log @co))}
+      ;; :claims — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
+      ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
+      ;; client feeds these straight into its kernel index instead of paying the
+      ;; per-process cold fold. Ordering here is part of the op's CONTRACT — the
+      ;; client renders byte-identical output without re-ordering, and bb shares
+      ;; clojure.lang.PersistentHashMap with the JVM so the hash order agrees.
+      ;; Computed AFTER maybe-reload! above (exactly as fresh as the flat log at
+      ;; request time) and cached per version — a read storm re-serializes, never
+      ;; re-orders. :log echoes which log this daemon serves so a client can refuse
+      ;; a mismatched daemon (fram.rt/coord-live-claims checks it). Clients ask with
+      ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
+      :claims   (let [v (current-seq @co)
+                      cc @claims-wire-cache
+                      triples (if (= v (:version cc))
+                                (:triples cc)
+                                (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
+                                               (fold/refold-order (reified->claims @co)))]
+                                  (reset! claims-wire-cache {:version v :triples ts})
+                                  ts))]
+                  {:version v
+                   :log (or @flat-log (:log @co))
+                   :claims triples})
       ;; thread 019f100f-7fff — snapshot/compaction surface:
       ;; :snapshot writes a checkpoint (dump-log! image + @snapshot:<seq> claims);
       ;; :snapshot-reconcile is the gate (live store == from-scratch whole migrate).

@@ -60,3 +60,6 @@
 
 (defn fold-latest [asserts]
   (filterv (fn [v] (= (:op v) "assert")) (vec (vals (keyed-latest asserts)))))
+
+(defn refold-order [claims]
+  (vec (vals (reduce (fn [m c] (assoc m (key-of (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) c)) {} claims))))

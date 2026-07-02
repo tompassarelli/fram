@@ -76,3 +76,22 @@
 (defn fold-latest [asserts :- (Vec Assertion)] :- (Vec Latest)
   (filterv (fn [v :- Latest] :- Bool (= (:op v) "assert"))
            (vec (vals (keyed-latest asserts)))))
+
+;; Reconstruct fold's emission ORDER from a set-equal live view. The coordinator's
+;; :claims op serves its warm store through this (cached per version), so the CLI's
+;; daemon-first read path renders byte-identically to the cold fold. fold emits
+;; (vals keyed-latest) — hash-map iteration order over the key-of strings — and
+;; downstream output order (build-index subjects, every projection listing)
+;; inherits it. Re-keying a set-equal claim vec through the SAME key-of yields the
+;; same relative order: an entry's position in a persistent hash map is a function
+;; of its own key hash, not of insertion order; the cold map's extra retract-latest
+;; keys (skipped when fold emits claims) don't reorder the surviving entries; and
+;; bb + the JVM share clojure.lang.PersistentHashMap, so daemon-computed order ==
+;; CLI-computed order. (The synthetic Assertion exists only to reuse key-of
+;; verbatim — same \001 separator bytes.)
+(defn refold-order [claims :- (Vec k/Claim)] :- (Vec k/Claim)
+  (vec (vals (reduce
+              (fn [m :- (Map String k/Claim) c :- k/Claim] :- (Map String k/Claim)
+                (assoc m (key-of (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) c))
+              {}
+              claims))))

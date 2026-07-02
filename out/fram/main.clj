@@ -12,6 +12,10 @@
 (defn- ^String short-id [^String te]
   (if (str/starts-with? te "@") (subs te 1) te))
 
+(defn- live-claims [^String log]
+  (let [warm (fram.rt/coord-live-claims (fram.rt/coord-port) log)]
+  (if (empty? warm) (:claims (fold/fold (fram.rt/read-log log))) warm)))
+
 (defn- ^String claim-sig [c]
   (str (:l c) "|" (:p c) "|" (:r c)))
 
@@ -56,11 +60,10 @@
   (println (str "\n" (count problems) " violation(s)."))))))
 
 (defn cmd-show [^String log ^String id]
-  (let [f (fold/fold (fram.rt/read-log log))
-   claims (:claims f)
+  (let [claims (live-claims log)
    te (str "@" id)
    exact (k/q-by-l claims te)
-   matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids claims)))]
+   matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids-i (k/build-index claims))))]
   (cond
   (not (empty? exact)) (doseq [c exact]
   (println (str "  " (:p c) "  " (:r c))))

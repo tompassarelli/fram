@@ -89,13 +89,21 @@
        " |terminal=" (sorted-join terminal-preds)
        " |withdrawn=" (sorted-join withdrawn-preds)))
 
+;; Map-backed membership for single?: it runs once per assertion in every
+;; fold/refold (and per claim in the daemon's migrate/tail-fold), so the
+;; vec-contains? linear scan over the ~23-pred vocab was a measurable slice of
+;; the whole read path (~40ms of a 10.7k-claim refold on bb).
+(def single-valued-set :- (Map String Bool)
+  (reduce (fn [m :- (Map String Bool) p :- String] :- (Map String Bool) (assoc m p true))
+          {} single-valued))
+
 ;; `emoji_*` are presentation-config predicates (e.g. @ui emoji_blocked "🧱") —
 ;; single-valued by prefix so re-configuring replaces, with no per-key listing.
 (defn single? [p :- String] :- Bool
   ;; (string? p) guards str/starts-with? against a non-string p — defense in depth
   ;; so a stray/torn record can't NPE the whole cold-read path (fold already drops
   ;; torn lines; this is the belt to that suspenders).
-  (or (vec-contains? single-valued p) (and (string? p) (str/starts-with? p "emoji_"))))
+  (or (some? (get single-valued-set p)) (and (string? p) (str/starts-with? p "emoji_"))))
 
 ;; --- the claim -------------------------------------------------------------
 

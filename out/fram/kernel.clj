@@ -24,8 +24,10 @@
 (defn ^String vocab-fingerprint []
   (str "single=" (sorted-join single-valued) " |terminal=" (sorted-join terminal-preds) " |withdrawn=" (sorted-join withdrawn-preds)))
 
+(def single-valued-set (reduce (fn [m p] (assoc m p true)) {} single-valued))
+
 (defn ^Boolean single? [^String p]
-  (or (vec-contains? single-valued p) (and (string? p) (str/starts-with? p "emoji_"))))
+  (or (some? (get single-valued-set p)) (and (string? p) (str/starts-with? p "emoji_"))))
 
 (defrecord Claim [l p r])
 

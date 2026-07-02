@@ -27,6 +27,7 @@
 (declare-extern fram.rt/coord-retract [Int String String String Int -> String])
 (declare-extern fram.rt/coord-port [-> Int])
 (declare-extern fram.rt/coord-status [Int -> String])
+(declare-extern fram.rt/coord-live-claims [Int String -> (Vec k/Claim)])
 (declare-extern fram.rt/coord-watch [Int -> Nil])
 (declare-extern fram.rt/history [String String -> Nil])
 (declare-extern fram.rt/parse-edn [String -> Any])
@@ -35,6 +36,18 @@
 
 (defn- short-id [te :- String] :- String
   (if (str/starts-with? te "@") (subs te 1) te))
+
+;; --- daemon-first read (thread 019f2190) -------------------------------------
+;; The current claim set: the coordinator's warm live view when a daemon serves
+;; THIS log (served in fold emission order — the :claims op contract — so
+;; downstream output is byte-identical to the cold fold's), else the cold fold.
+;; [] from coord-live-claims is the whole capability handshake — daemon down /
+;; old daemon / different log.
+(defn- live-claims [log :- String] :- (Vec k/Claim)
+  (let [warm (fram.rt/coord-live-claims (fram.rt/coord-port) log)]
+    (if (empty? warm)
+      (:claims (fold/fold (fram.rt/read-log log)))
+      warm)))
 
 ;; --- claim-set signatures (divergence detection for the import/export guards) -
 (defn- claim-sig [c :- k/Claim] :- String (str (:l c) "|" (:p c) "|" (:r c)))
@@ -114,14 +127,18 @@
 ;; (it would match every thread), and an ambiguous prefix lists the candidates and
 ;; picks none.
 (defn cmd-show [log :- String id :- String] :- Nil
-  (let [f (fold/fold (fram.rt/read-log log))
-        claims (:claims f)
+  (let [claims (live-claims log)
         te (str "@" id)
         exact (k/q-by-l claims te)
         matches (if (or (not (empty? exact)) (str/blank? id))
                   []
+                  ;; prefix resolution over the INDEX: (k/thread-ids claims) is a
+                  ;; flat one-per-subject scan — O(subjects × claims), ~2s on the
+                  ;; 10.7k-claim log — while thread-ids-i over build-index is
+                  ;; O(claims). Same subjects, same uniq claim order, so the match
+                  ;; list (and the ambiguous-prefix listing) is byte-identical.
                   (filterv (fn [t :- String] :- Bool (str/starts-with? (short-id t) id))
-                           (k/thread-ids claims)))]
+                           (k/thread-ids-i (k/build-index claims))))]
     (cond
       [(not (empty? exact))
        (doseq [c exact] (println (str "  " (:p c) "  " (:r c))))]
