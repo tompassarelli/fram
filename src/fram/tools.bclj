@@ -201,10 +201,16 @@
                           "the existing interior form as an EDN datum string (the anchor — matched "
                           "STRUCTURALLY, like an Edit old_string on the AST; must match exactly one interior "
                           "form, else rejected). `new` is its replacement as an EDN datum string. e.g. old "
-                          "\"(when done (finish))\" new \"(when done (cleanup) (finish))\". Preserves all "
-                          "sibling forms + comments. Recompile-gated + fail-closed.")
+                          "\"(when done (finish))\" new \"(when done (cleanup) (finish))\". If `old` is "
+                          "AMBIGUOUS (>1 match), the rejection lists candidates with breadcrumbs + a "
+                          "copy-pastable enclosing form for each; pass one as the OPTIONAL `within` (an "
+                          "enclosing-form EDN datum string) to narrow the search — `old` must then match "
+                          "exactly one form INSIDE `within` (structural, survives concurrent edits; prefer "
+                          "it to an occurrence index). Preserves all sibling forms + comments. "
+                          "Recompile-gated + fail-closed.")
                      [(->Param "module" "string" true) (->Param "name" "string" true)
-                      (->Param "old" "string" true) (->Param "new" "string" true)]
+                      (->Param "old" "string" true) (->Param "new" "string" true)
+                      (->Param "within" "string" false)]
                      :replace-in-body "")]
         per-pred (reduce (fn [acc :- (Vec ToolSpec) pred :- String] :- (Vec ToolSpec)
                            (vec (concat acc (pred-tools claims pred))))
@@ -291,5 +297,6 @@
               ;; SUB-DEF surgical edit — carry the anchor (:old) + replacement (:new) EDN
               ;; datum strings; the host applies the resolve.clj replace-in-body verb out-of-band.
               [(= op :replace-in-body) {:edit {:op "replace-in-body" :module (:module args)
-                                               :name (:name args) :old (:old args) :new (:new args)}}]
+                                               :name (:name args) :old (:old args) :new (:new args)
+                                               :within (:within args)}}]
               [:else              {:error [(str "unhandled op for tool '" tool "'")]}])))))))

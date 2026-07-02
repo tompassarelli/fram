@@ -30,7 +30,7 @@
  [edn-path]
  (fn []
    (binding [r/*capture-only?* true
-             r/*reject!* (fn [code] (throw (ex-info (str "REJECT " code) {:code code})))]
+             r/*reject!* (fn [code & _] (throw (ex-info (str "REJECT " code) {:code code})))]
      (println "================ replace-in-body verb test ================")
      ;; 1) SUCCESS: unique anchor (empty? cs) -> (zero? (count cs))
      (let [res (run-verb #(r/verb-replace-in-body! "cardinality" "schema"
@@ -48,14 +48,14 @@
    [edn-path]
    (fn []
      (binding [r/*capture-only?* true
-               r/*reject!* (fn [code] (throw (ex-info (str "REJECT " code) {:code code})))]
+               r/*reject!* (fn [code & _] (throw (ex-info (str "REJECT " code) {:code code})))]
        (let [res (run-verb #(r/verb-replace-in-body! "cardinality" "schema" anchor '(x)))]
          (check nm (and (= code (:code res)) (nil? (:minted res)))))))))
 (r/resolve-edn!
  [edn-path]
  (fn []
    (binding [r/*capture-only?* true
-             r/*reject!* (fn [code] (throw (ex-info (str "REJECT " code) {:code code})))]
+             r/*reject!* (fn [code & _] (throw (ex-info (str "REJECT " code) {:code code})))]
      (let [res (run-verb #(r/verb-replace-in-body! "no-such-def" "schema" '(a) '(b)))]
        (check "no-def rejects (code 5), nothing minted" (and (= 5 (:code res)) (nil? (:minted res))))))))
 
