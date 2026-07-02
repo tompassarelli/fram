@@ -36,9 +36,6 @@
 (defn- short-id [te :- String] :- String
   (if (str/starts-with? te "@") (subs te 1) te))
 
-(defn- trunc [s :- String n :- Int] :- String
-  (if (> (count s) n) (str (subs s 0 (- n 1)) "…") s))
-
 ;; --- claim-set signatures (divergence detection for the import/export guards) -
 (defn- claim-sig [c :- k/Claim] :- String (str (:l c) "|" (:p c) "|" (:r c)))
 (defn- sig-set [claims :- (Vec k/Claim)] :- (Vec String) (vec (sort (mapv claim-sig claims))))
@@ -111,15 +108,32 @@
       (do (doseq [p problems] (println (str "  " p)))
           (println (str "\n" (count problems) " violation(s)."))))))
 
+;; show is full-fidelity: values print WHOLE, never elided — the handoff protocol
+;; reads note/learning claims in full. Resolution: exact @id first, then a UNIQUE
+;; uuidv7 id-PREFIX (the short form people paste); a blank token never prefix-matches
+;; (it would match every thread), and an ambiguous prefix lists the candidates and
+;; picks none.
 (defn cmd-show [log :- String id :- String] :- Nil
   (let [f (fold/fold (fram.rt/read-log log))
         claims (:claims f)
         te (str "@" id)
-        cs (k/q-by-l claims te)]
-    (if (empty? cs)
-      (println (str "no claims for " te))
-      (doseq [c cs]
-        (println (str "  " (:p c) "  " (trunc (:r c) 80)))))))
+        exact (k/q-by-l claims te)
+        matches (if (or (not (empty? exact)) (str/blank? id))
+                  []
+                  (filterv (fn [t :- String] :- Bool (str/starts-with? (short-id t) id))
+                           (k/thread-ids claims)))]
+    (cond
+      [(not (empty? exact))
+       (doseq [c exact] (println (str "  " (:p c) "  " (:r c))))]
+      [(= (count matches) 1)
+       (doseq [c (k/q-by-l claims (first matches))]
+         (println (str "  " (:p c) "  " (:r c))))]
+      [(> (count matches) 1)
+       (do (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
+           (doseq [m matches]
+             (let [title (k/one claims m "title")]
+               (println (str "  " (short-id m) (if (some? title) (str "  " title) ""))))))]
+      [:else (println (str "no claims for " te))])))
 
 ;; Single-process write path: read -> fold -> apply candidate -> validate -> append.
 ;; tx ASSIGNMENT (finding #17): the new line's tx is (max-tx + 1) over a FRESH

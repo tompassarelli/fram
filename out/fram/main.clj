@@ -12,9 +12,6 @@
 (defn- ^String short-id [^String te]
   (if (str/starts-with? te "@") (subs te 1) te))
 
-(defn- ^String trunc [^String s n]
-  (if (> (count s) n) (str (subs s 0 (- n 1)) "…") s))
-
 (defn- ^String claim-sig [c]
   (str (:l c) "|" (:p c) "|" (:r c)))
 
@@ -62,9 +59,19 @@
   (let [f (fold/fold (fram.rt/read-log log))
    claims (:claims f)
    te (str "@" id)
-   cs (k/q-by-l claims te)]
-  (if (empty? cs) (println (str "no claims for " te)) (doseq [c cs]
-  (println (str "  " (:p c) "  " (trunc (:r c) 80)))))))
+   exact (k/q-by-l claims te)
+   matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids claims)))]
+  (cond
+  (not (empty? exact)) (doseq [c exact]
+  (println (str "  " (:p c) "  " (:r c))))
+  (= (count matches) 1) (doseq [c (k/q-by-l claims (first matches))]
+  (println (str "  " (:p c) "  " (:r c))))
+  (> (count matches) 1) (do
+  (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
+  (doseq [m matches]
+  (let [title (k/one claims m "title")]
+  (println (str "  " (short-id m) (if (some? title) (str "  " title) ""))))))
+  :else (println (str "no claims for " te)))))
 
 (defn cmd-set [^String log ^String id ^String pred ^String value]
   (let [f (fold/fold (fram.rt/read-log log))
