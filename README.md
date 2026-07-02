@@ -204,6 +204,15 @@ bin/fram query '{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y
 Both are served over **MCP** (`bin/fram-mcp`, JSON-RPC over stdio); the CLI (`fram tools`
 / `fram call <tool> <edn>` / `fram query <edn>`) is the same surface for humans.
 
+Over MCP the *default* is the **TELL/ASK knowledge-base core** — `tell` / `untell` /
+`show` / `ask` plus `threads` / `validate` and the graph-edit verbs (~10 tools) — because
+a large generated catalog is a per-session context tax on the model, and the typed
+per-predicate schemas duplicate a guarantee the engine already gives (every write is
+serialized + rule-checked at the coordinator; single-vs-multi cardinality lives in the
+kernel, so `tell` = assert subsumes `set-P`/`add-P`). `FRAM_MCP_SURFACE=full` serves the
+generated per-predicate catalog instead, and `tools/call` accepts both namings on every
+surface.
+
 ## Identity-addressed code (Chartroom)
 
 [Chartroom](chartroom/) points the engine at *code*. The claim log is canonical: a
