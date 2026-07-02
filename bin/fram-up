@@ -33,6 +33,10 @@ elif "$HERE/fram" doctor 2>/dev/null | grep -q 'coordinator UP'; then
 fi
 
 echo "starting coordinator on :$FRAM_PORT  (log: $LOG)"
+# Snapshot boot rides every revive: without this, an auto-revive silently boots
+# flag-off and refolds the whole log (the 2026-07-03 activation race). Explicit
+# FRAM_SNAPSHOT_BOOT=0 still wins; a bad checkpoint only costs a fold, never state.
+export FRAM_SNAPSHOT_BOOT="${FRAM_SNAPSHOT_BOOT:-1}"
 setsid "$HERE/fram-daemon" "$FRAM_PORT" "$LOG" >"/tmp/fram-daemon-$FRAM_PORT.log" 2>&1 &
 disown 2>/dev/null || true
 
