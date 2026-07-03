@@ -29,13 +29,97 @@
 
 (defn- store [co] (:store co))
 
-;; --- atomic v2 log: a tx's records + :commit, fsync'd -----------------------
+;; --- GROUP COMMIT: the durable-append engine (fsync OUT of the write lock) ---
+;; The convoy this kills: every commit used to hold the coordinator lock (and, in
+;; the daemon, the global dlock) across its OWN open+write+fsync, so K concurrent
+;; writers serialized on the disk flush — measured BEFORE: p50 grew ~7x from K=1
+;; to K=16 and throughput plateaued ~700-800 writes/s. Now a commit ENQUEUES its
+;; log lines (still inside the lock, so queue order == commit order == log order)
+;; and durability is awaited via a TICKET (promise):
+;;   * *durable-tickets* UNBOUND (library callers, tests, scripts): the enqueue
+;;     awaits its ticket inline — byte-identical semantics to the old direct
+;;     write+fsync (durable before the fn returns), just via the appender thread.
+;;   * *durable-tickets* BOUND (the daemon binds it per request): the ticket is
+;;     collected and awaited AFTER the lock is released — so the lock is held
+;;     only for in-memory work, and concurrent writers' appends coalesce.
+;; ONE appender thread drains the queue, appends every pending item's lines in
+;; enqueue order, fsyncs ONCE per file per batch, then delivers every ticket.
+;; Durability contract UNCHANGED: an ack (ticket delivery / fn return) happens
+;; only after the claim's bytes are fsynced; an append/fsync failure is delivered
+;; as the Throwable and rethrown on the awaiting thread (fail closed). A crash
+;; before the fsync loses only UN-acked commits, exactly as before; v2 torn-tx
+;; replay and the flat fold's keyed-latest already tolerate a torn tail.
+(def ^:dynamic *durable-tickets* nil)   ; nil => inline await; atom => deferred collect
+(def group-io-lock (Object.))           ; batch write+fsync+callbacks vs external stat checks
+(def ^:private group-q (java.util.concurrent.LinkedBlockingQueue.))
+(def ^:private group-appender-started (atom false))
+
+(defn- deliver-all! [items v] (doseq [{:keys [ticket]} items] (deliver ticket v)))
+
+(defn- group-appender-loop []
+  (loop []
+    (let [fst (.take group-q)
+          buf (java.util.ArrayList.)]
+      (.add buf fst)
+      (.drainTo group-q buf)                     ; the batch = everything pending now
+      (let [items (vec buf)]
+        ;; group-io-lock makes (write+fsync+on-flushed) atomic w.r.t. the daemon's
+        ;; maybe-reload! stamp check, so our own async append is never mistaken
+        ;; for an external edit (stamp and file move together).
+        (locking group-io-lock
+          (doseq [[path pitems] (group-by :path items)]
+            (let [real (filter #(seq (:lines %)) pitems)]
+              (try
+                (when (and path (seq real))
+                  (with-open [os (java.io.FileOutputStream. (str path) true)]
+                    (doseq [{:keys [lines]} real, ^String ln lines]
+                      (.write os (.getBytes ln "UTF-8")))
+                    (.flush os)
+                    (.force (.getChannel os) true)))   ; ONE fsync covers the whole batch
+                (doseq [{:keys [on-flushed]} pitems :when on-flushed] (on-flushed))
+                (deliver-all! pitems :ok)
+                (catch Throwable t (deliver-all! pitems t)))))))
+      (recur))))
+
+(defn- ensure-group-appender! []
+  (when (compare-and-set! group-appender-started false true)
+    (doto (Thread. ^Runnable group-appender-loop)
+      (.setName "fram-group-appender") (.setDaemon true) (.start))))
+
+(defn await-durable! [ticket]
+  (let [r (deref ticket)]
+    (when (instance? Throwable r) (throw r))
+    r))
+
+;; enqueue `lines` for durable append to `path`. Returns the ticket when deferred
+;; (collected into *durable-tickets*); awaits it inline otherwise. on-flushed (may
+;; be nil) runs on the appender thread after the batch's fsync, before delivery.
+(defn enqueue-durable! [path lines on-flushed]
+  (ensure-group-appender!)
+  (let [t (promise)]
+    (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed})
+    (if *durable-tickets*
+      (do (swap! *durable-tickets* conj t) t)
+      (await-durable! t))))
+
+;; barrier: returns once every enqueue that happened-before it is on disk (FIFO
+;; queue + in-order batches). No-op if nothing was ever enqueued.
+(defn durable-barrier! []
+  (when @group-appender-started
+    (let [t (promise)]
+      (.put group-q {:path nil :lines [] :ticket t})
+      (await-durable! t))))
+
+;; --- atomic v2 log: a tx's records + :commit, fsync'd (via group commit) -----
 (defn- append-tx! [co records]
-  (when (:log co)                               ; nil :log = drop-in mode: the flat
-    (with-open [os (java.io.FileOutputStream. (str (:log co)) true)]   ; log is canonical
-      (doseq [r records] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))  ; and is written
-      (.flush os)                               ; ONLY via the daemon's append-flat!,
-      (.force (.getChannel os) true))))         ; never with v2 :k-records. fsync (design A).
+  (when (:log co)                               ; nil :log = drop-in mode: the flat log is
+    ;; the mapv REALIZES the lazy delta-records — keep it INSIDE the (when (:log co))
+    ;; guard: in drop-in mode the delta seq must stay unrealized (it walks the store).
+    ;; One enqueued item = one tx's records => the tx stays CONTIGUOUS in the log,
+    ;; so torn-tx replay semantics (records without :commit are dropped) still hold.
+    (enqueue-durable! (str (:log co))
+                      (mapv (fn [r] (str (pr-str r) "\n")) records)
+                      nil)))
 
 ;; the records minted in `store` since id `since` (new values/entities/claims),
 ;; plus this tx's provenance and the terminating :commit marker.

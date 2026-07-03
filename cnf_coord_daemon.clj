@@ -175,16 +175,19 @@
 (def ^:dynamic *flat-batch* nil)
 (defn- flat-line [op te p r seq]
   (str (pr-str {:tx seq :op op :l te :p p :r r :ts (fram.rt/now-ts) :by "coord"}) "\n"))
+;; DURABILITY (finding #13) is preserved through GROUP COMMIT (cnf_coord/enqueue-durable!):
+;; the lines are enqueued (in commit order — callers hold dlock) and the {:ok} ack only
+;; happens after the appender thread has fsynced them (handle awaits the tickets after
+;; releasing dlock; library callers await inline). In drop-in (serve-flat) mode the flat
+;; log is the ONLY durable record; the batch fsync makes the acked write survive a crash
+;; exactly as the old in-lock fsync did — but K concurrent writers now share ONE fsync
+;; instead of convoying on K of them. flat-mtime is refreshed on the appender thread,
+;; atomically with the append (group-io-lock), so our OWN write is never mistaken for an
+;; external edit by maybe-reload!.
 (defn- write-flat-lines! [lines]
   (when (and @flat-log (seq lines))
-    (with-open [os (java.io.FileOutputStream. (str @flat-log) true)]
-      (doseq [^String ln lines] (.write os (.getBytes ln "UTF-8")))
-      (.flush os)
-      ;; DURABILITY (finding #13): ONE fsync flushes the whole commit's appends before we ack {:ok}.
-      ;; In drop-in (serve-flat) mode the flat log is the ONLY durable record; .force(true) makes the
-      ;; acked write survive a crash. Batching keeps the same guarantee (whole commit fsync'd at once).
-      (.force (.getChannel os) true))
-    (reset! flat-mtime (stamp @flat-log))))
+    (enqueue-durable! (str @flat-log) (vec lines)
+                      (fn [] (reset! flat-mtime (stamp @flat-log))))))
 (defn- append-flat! [op te p r seq]
   (if *flat-batch*
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
@@ -195,7 +198,7 @@
       (write-flat-lines! lines)
       (reset! *flat-batch* [])
       (when (= "1" (System/getenv "FRAM_PROF"))
-        (binding [*out* *err*] (println (format "  flush(fsync) n=%d %.1fms" (count lines) (/ (- (System/nanoTime) t0) 1e6))))))))
+        (binding [*out* *err*] (println (format "  flush(enqueue) n=%d %.1fms" (count lines) (/ (- (System/nanoTime) t0) 1e6))))))))
 
 ;; render one live claim cid into the SAME (l-name p-str r-rendered) shape build-index
 ;; wants: subject -> name, predicate -> literal, object -> literal (value) | name (ref).
@@ -1202,7 +1205,7 @@
 ;; defined below migrate-flat->co (so they can call it) but referenced in handle.
 (declare write-snapshot! snapshot-reconcile materialize-as-of register-agg! agg-report sweep-snapshots! built-through last-boot)
 
-(defn handle [req]
+(defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
   ;; boundary), so wrapping the whole op in the outer dlock re-serializes the lock-free compute
@@ -1439,6 +1442,19 @@
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
       {:error "unknown op"}))))
+
+;; GROUP COMMIT boundary: collect this request's durability tickets while the
+;; work (and dlock) runs, then await them AFTER the lock is released — so the
+;; critical section covers only in-memory commit work (validate/OCC/rule-check/
+;; store-mutate/warm-cache), never the fsync. The reply still happens only after
+;; every one of this request's appends is fsynced (durability-before-ack holds);
+;; a failed append/fsync rethrows here and surfaces as the same {:error} the old
+;; in-lock fsync failure did. Reads collect no tickets and pass straight through.
+(defn handle [req]
+  (binding [*durable-tickets* (atom [])]
+    (let [resp (handle* req)]
+      (doseq [t @*durable-tickets*] (await-durable! t))
+      resp)))
 
 ;; ---- socket server (verbatim shape from the proven coord.clj) ---------------
 ;; Hardened (findings #2/#5/#19/#20): every accepted socket gets a read timeout
@@ -1952,6 +1968,12 @@
 ;; the log), we fall back to the whole migrate — correctness floor.
 (defn maybe-reload! []
   (when (and @flat-canonical? @flat-log)
+    ;; group-io-lock: the appender thread updates the file AND flat-mtime atomically
+    ;; under this monitor, so the stamp comparison here can never catch our own async
+    ;; append halfway (file moved, stamp not yet refreshed) and misread it as an
+    ;; external edit. External edits still trip it exactly as before. Lock order is
+    ;; dlock -> group-io-lock (here); the appender takes ONLY group-io-lock — no cycle.
+    (locking group-io-lock
     (let [st (stamp @flat-log)]
       (when (not= st @flat-mtime)
         (let [tail (read-log-tail @flat-log @flat-bytes @built-through)]
@@ -1978,7 +2000,7 @@
         (reset! flat-bytes (.length (java.io.File. (str @flat-log))))
         (reset! cache {:index nil :version -1})
         (reset-refers-state!)
-        (index!)))))
+        (index!))))))
 
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> claims ------
 ;; dump-log! writes the live store as a v2 image the EXISTING replay consumes (reuse,
@@ -2007,6 +2029,11 @@
         (do-assert subj p v nil))
       ;; log identity read AFTER the @snapshot:* appends: on a previously-EMPTY log the
       ;; first line only exists now, and boot validates against the log as it will read it.
+      ;; GROUP COMMIT: the appends above may still be queued (deferred tickets when this
+      ;; runs under a socket request); the barrier makes them durable BEFORE the identity
+      ;; read, or log-identity-of could see an empty/stale file and stamp a nil identity
+      ;; (boot would then fail closed to a whole fold — safe, but silently slower).
+      (durable-barrier!)
       (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :claim_count ccount :hash h
                             :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
                             :written_at (fram.rt/now-iso)})
