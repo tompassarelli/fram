@@ -1393,6 +1393,9 @@
 ;; type NAMES pre-mint; arity/deep type errors need the real gate (A2 / racket).
 (defn- default-def-check [_module _name] nil)
 (def ^:private def-check-hook (atom default-def-check))
+;; the whole-world gate (A2's whole-tree-check) behind the S-profile `check {}` verb —
+;; nil until wired (FRAM_DEFCHECK=1); a fn [] -> nil (clean) | {:ok false :stage :gate ..}.
+(def ^:private whole-tree-hook (atom nil))
 
 ;; ---- signature derivation (best-effort, from the surface form) --------------
 (defn- types-in-bracket [bracket]
@@ -1586,6 +1589,31 @@
                                   forms))]
               {:ok true :module want :defs defs :count (count defs) :version (current-seq @co)})))))))
 
+;; ---- phase 2: wire A2's WARM def-level check (thread A2, cnf_defcheck.clj) ---
+;; Opt-in via FRAM_DEFCHECK=1 so LIVE task coordinators (7977/48942/48950 — no code,
+;; no sidecar) are untouched; the EXP-026 code daemon sets it. Graceful degrade: any
+;; load/resolve failure leaves the advisory default in place (never breaks the daemon).
+;; A2's check-def reads fram.defcheck/*coord-port* — we bind it to THIS daemon's serving
+;; port per call (with-bindings; no root mutation). *autostart?* boots the 49060 sidecar.
+(defn- maybe-wire-def-check! [port]
+  (when (= "1" (System/getenv "FRAM_DEFCHECK"))
+    (try
+      (load-file (str (System/getProperty "user.dir") "/cnf_defcheck.clj"))
+      (let [cp  (resolve 'fram.defcheck/*coord-port*)
+            cd  (some-> (resolve 'fram.defcheck/check-def) var-get)
+            wtc (some-> (resolve 'fram.defcheck/whole-tree-check) var-get)]
+        (if (and cp cd)
+          (do
+            (reset! def-check-hook (fn [module name] (with-bindings {cp port} (cd module name))))
+            (when wtc (reset! whole-tree-hook (fn [] (with-bindings {cp port} (wtc)))))
+            (println (str "def-check: WARM primitive wired — fram.defcheck/check-def @ coord-port " port
+                          (when wtc " (+ whole-tree-check -> :check verb)"))))
+          (binding [*out* *err*]
+            (println "def-check: cnf_defcheck.clj loaded but check-def/*coord-port* not found; staying advisory"))))
+      (catch Throwable t
+        (binding [*out* *err*]
+          (println (str "def-check: warm primitive unavailable (" (.getMessage t) "); staying advisory-deferred")))))))
+
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
@@ -1612,6 +1640,18 @@
                                   (catch Throwable t (ex->s-err (:module (:spec req)) (:name (:spec req)) t)))
     (= :index     (:op req)) (try (do-index (:spec req))
                                   (catch Throwable t (ex->s-err (:module (:spec req)) nil t)))
+    ;; :check {} — the whole-world gate the agent calls before declaring done (spec
+    ;; S-profile contract). Delegates to A2's whole-tree-check (:stage :gate) when wired;
+    ;; else reports :deferred (advisory phase). nil from the gate = the tree is clean.
+    (= :check (:op req))
+    (if-let [wtc @whole-tree-hook]
+      (let [res (try (wtc) (catch Throwable t (ex->s-err nil nil t)))]
+        (if (nil? res)
+          {:ok true :checked :whole-tree :version (current-seq @co)}
+          (assoc res :version (current-seq @co))))
+      {:ok true :checked :deferred
+       :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + cnf_defcheck.clj)"
+       :version (current-seq @co)})
     (= :edit-min (:op req))
     (try (do-edit-min (:spec req))
          (catch Throwable t
@@ -1981,6 +2021,7 @@
                   (cond tls " (sole writer, mTLS)"
                         loopback? " (sole writer, loopback-only)"
                         :else " (sole writer, behind-gateway)")))
+    (maybe-wire-def-check! port)          ; phase 2: wire A2's warm def-level check (FRAM_DEFCHECK=1)
     (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
 
 (defn client [port m]

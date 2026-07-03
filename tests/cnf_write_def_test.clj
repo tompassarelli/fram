@@ -124,6 +124,19 @@
 (let [resp (r M "a1-selftest-inx")]   ; typo of a1-selftest-inc
   (check "unknown def :stage :lookup + :nearest" (and (= :lookup (:stage resp)) (seq (:nearest resp))) (pr-str resp)))
 
+(println "\n=== ROBUSTNESS: multi-form / replace-by-name / quote / def-form sig ===")
+(let [resp (w M "(def a1-multi-a 1)\n(defn a1-multi-b [x :- Int] :- Int x)")]
+  (check "multi-form :source -> both forms minted" (and (:ok resp) (= 2 (:written resp))) (pr-str resp)))
+(let [r1s (:source (do (w M "(def a1-rep :- Int 1)") (r M "a1-rep")))
+      r2  (do (w M "(def a1-rep :- Int 2)") (r M "a1-rep"))]      ; replace by name
+  (check "upsert replaces by name (idempotent surface)"
+         (and (:ok r2) (str/includes? (:source r2) "2") (not= r1s (:source r2))) (pr-str [r1s (:source r2)])))
+(let [resp (w M "(def a1-q 'sym)") rd (r M "a1-q")]
+  (check "'x canonicalizes + writes -> :ok" (:ok resp) (pr-str resp))
+  (check "'x stored/rendered as (quote sym)" (and (:ok rd) (str/includes? (str (:source rd)) "quote")) (pr-str (:source rd))))
+(let [_ (w M "(def a1-sig :- String \"hi\")") rd (r M "a1-sig")]
+  (check "def-form sig derived (String)" (= "String" (:sig rd)) (pr-str (:sig rd))))
+
 (println "\n=== SEAM: def-check-hook surfaces a def-level reject end-to-end (deliverable 5) ===")
 ;; Prove the swappable check seam: A2 `reset!`s a (fn [module name] -> nil | ERROR) here.
 ;; A mock stands in for A2's warm primitive to verify write-def wires it correctly.
