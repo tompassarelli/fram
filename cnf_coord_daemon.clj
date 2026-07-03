@@ -1205,6 +1205,379 @@
 ;; defined below migrate-flat->co (so they can call it) but referenced in handle.
 (declare write-snapshot! snapshot-reconcile materialize-as-of register-agg! agg-report sweep-snapshots! built-through last-boot)
 
+;; ============================================================================
+;; S-PROFILE TEXT-BRIDGE VERB LAYER (thread A1) — adapter v2 §"S-profile tool
+;; contract". Gives sonnet the interface it already knows: TEXT in, repair-grade
+;; errors out. write-def (text->forms->graph), read-def / index (graph->text), all
+;; over the SAME warm store + the SAME edit-min commit path, never a second parser.
+;;
+;; Closed under mistake (spec doctrine 3): every call, on ANY malformed input,
+;; returns the structured ERROR shape below — never a stack trace, never the
+;; t-r1 message-less IOOBE from (nth form 4). The reader is the HOST LispReader
+;; (NOT clojure.edn — real code has #(...) / '/ :: ), with *read-eval* false so a
+;; `#=(...)` injection is refused at read time.
+;; ============================================================================
+
+;; ---- the ERROR shape (build to this — the A2/A3 coordination seam) ----------
+;; {:ok false :stage :parse|:canon|:type|:gate|:lookup :at {:module :def :line?}
+;;  :message "..." :expected? :got? :suggestion "imperative fix" :nearest [..]}
+(defn- s-err [stage & {:keys [at message expected got suggestion nearest]}]
+  (cond-> {:ok false :stage stage}
+    at             (assoc :at at)
+    message        (assoc :message message)
+    expected       (assoc :expected expected)
+    got            (assoc :got got)
+    suggestion     (assoc :suggestion suggestion)
+    (seq nearest)  (assoc :nearest (vec nearest))))
+
+(defn- pr-short [x] (let [s (pr-str x)] (if (<= (count s) 60) s (str (subs s 0 57) "..."))))
+
+;; ---- nearest-miss (Levenshtein) ---------------------------------------------
+(defn- levenshtein [a b]
+  (let [a (str a) b (str b) m (count a) n (count b)]
+    (cond (zero? m) n (zero? n) m
+      :else
+      (loop [i 1 prev (vec (range (inc n)))]
+        (if (> i m) (peek prev)
+          (recur (inc i)
+                 (loop [j 1 row (transient [i])]
+                   (if (> j n) (persistent! row)
+                     (let [cost (if (= (.charAt a (dec i)) (.charAt b (dec j))) 0 1)]
+                       (recur (inc j) (conj! row (min (inc (nth prev j))
+                                                      (inc (nth row (dec j)))
+                                                      (+ (nth prev (dec j)) cost)))))))))))))
+;; NB: `distinct` is broken on sets in the daemon runtime (a loaded ns clobbered
+;; clojure.core/distinct — it nth's the coll, which PersistentHashSet refuses). The
+;; candidate colls here are already unique (sets / map-keys), so no dedup is needed.
+(defn- nearest-names [target candidates & {:keys [n max-dist] :or {n 3 max-dist 3}}]
+  (->> candidates
+       (map (fn [c] [(str c) (levenshtein target c)]))
+       (filter (fn [[_ d]] (<= d max-dist)))
+       (sort-by second) (take n) (mapv first)))
+
+;; Beagle builtin type names (primitives + parametric ctors — from beagle-lib/
+;; private/types*.rkt). `Vec` is real; `Vector` is NOT (the t-r1 fumble → suggest Vec).
+(def ^:private beagle-types
+  #{"Any" "Int" "Integer" "Float" "Double" "Long" "Number" "Num" "String" "Bool"
+    "Boolean" "Nil" "Char" "Byte" "Keyword" "Symbol" "Void" "Unit"
+    "Vec" "List" "Set" "Map" "Promise" "NixType" "Arr" "Ptr" "Atom" "HVec" "Result" "Fn" "U"})
+
+;; ---- the reader: host LispReader, sentinel ns so `::kw` is detectable --------
+;; ::kw silently resolves to (ns-name *ns*)/kw — mint-datum! would corrupt it into a
+;; symbol leaf ":<ns>/kw". Binding *ns* to a sentinel makes ns==sentinel ⇔ the source
+;; wrote `::`, which canon-1 rejects with a pointed fix.
+(def ^:private canon-sentinel (create-ns 'fram.autocanon.sentinel))
+(def ^:private canon-sentinel-name (name (ns-name canon-sentinel)))
+
+;; strip a leading ```lang ... ``` markdown fence (a real t-r1 fumble: EDN wrapped
+;; in a code fence). Idempotent on unfenced text.
+(defn- strip-md-fences [s]
+  (let [t (str/trim s)]
+    (if (str/starts-with? t "```")
+      (let [after (subs t 3)
+            after (if-let [nl (str/index-of after "\n")] (subs after (inc nl)) "")
+            close (str/last-index-of after "```")]
+        (str/trim (if close (subs after 0 close) after)))
+      s)))
+
+(defn- read-code-forms [source]
+  (let [src (strip-md-fences source)
+        rdr (java.io.PushbackReader. (java.io.StringReader. src))
+        eof (Object.)]
+    (try
+      (binding [*read-eval* false *ns* canon-sentinel]
+        (loop [forms []]
+          (let [f (read {:eof eof :read-cond :allow} rdr)]
+            (if (identical? f eof) {:forms forms} (recur (conj forms f))))))
+      (catch Throwable t
+        (let [m (str (.getMessage t))]
+          {:error (s-err :parse
+                         :message (str "cannot read Beagle source: " (if (str/blank? m) (.getSimpleName (class t)) m))
+                         :got (let [p (str/trim src)] (subs p 0 (min 60 (count p))))
+                         :suggestion (cond
+                                       (re-find #"EvalReader" m)      "remove the `#=(...)` read-eval form (refused)"
+                                       (re-find #"(?i)Invalid token: ::" m) "replace `::alias/kw` with a plain `:kw`"
+                                       (re-find #"(?i)EOF|unmatched|Unexpected" m) "balance the parens/brackets; send complete forms only"
+                                       :else "send only well-formed Beagle forms (no prose, no markdown)"))})))))
+
+;; ---- canonicalization: #(...)→(fn ..), reject ::kw --------------------------
+(defn- anon-param? [s]                      ; #() reader params: p1__NN# / rest__NN#
+  (and (symbol? s) (re-matches #"(?:p\d+|rest)__\d+#?" (name s))))
+(defn- subst-syms [form m]
+  (cond
+    (symbol? form) (get m form form)
+    (seq? form)    (map #(subst-syms % m) form)
+    (vector? form) (mapv #(subst-syms % m) form)
+    (map? form)    (into {} (map (fn [[k v]] [(subst-syms k m) (subst-syms v m)]) form))
+    :else form))
+(defn- rename-anon-params [params]          ; [p1__# p2__# & rest__#] -> [arg1 arg2 & varargs] + subst map
+  (loop [ps (seq params) i 1 out [] m {}]
+    (if (nil? ps) [out m]
+      (let [p (first ps)]
+        (cond
+          (= '& p)        (recur (next ps) i (conj out '&) m)
+          (anon-param? p) (let [nm (if (str/starts-with? (name p) "rest") 'varargs (symbol (str "arg" i)))]
+                            (recur (next ps) (inc i) (conj out nm) (assoc m p nm)))
+          :else           (recur (next ps) (inc i) (conj out p) m))))))
+(declare canon-1)
+(defn- canon-fn* [form]                     ; (fn* [params] body...) -> (fn [renamed] body') ; #() is single-arity
+  (let [tail (rest form)]
+    (if (and (seq tail) (vector? (first tail)))
+      (let [[params m] (rename-anon-params (first tail))]
+        (cons 'fn (cons params (doall (map #(subst-syms (canon-1 %) m) (rest tail))))))
+      (cons 'fn (doall (map canon-1 tail))))))
+(defn- canon-1 [form]
+  (cond
+    (keyword? form) (if (= (namespace form) canon-sentinel-name)
+                      (throw (ex-info "auto-namespaced keyword"
+                                      {:s-canon true :got (str "::" (name form))
+                                       :suggestion (str "use `:" (name form) "` (single colon — Beagle has no `::`)")}))
+                      form)
+    ;; doall: realize EAGERLY so a nested `::kw` throw fires INSIDE canon-form's
+    ;; try/catch (a lazy `map` would defer it to mint-time, escaping as a :gate error).
+    ;; doall keeps seq-ness (mint-datum! distinguishes seq? from vector?), unlike mapv.
+    (seq? form)     (if (= 'fn* (first form)) (canon-fn* form) (doall (map canon-1 form)))
+    (vector? form)  (mapv canon-1 form)
+    (map? form)     (into {} (map (fn [[k v]] [(canon-1 k) (canon-1 v)]) form))
+    :else form))
+(defn- canon-form [form]
+  (try {:form (canon-1 form)}
+       (catch clojure.lang.ExceptionInfo e
+         (let [d (ex-data e)]
+           (if (:s-canon d)
+             {:error (s-err :canon :message (str "`" (:got d) "` cannot be canonicalized")
+                            :got (:got d) :suggestion (:suggestion d))}
+             (throw e))))))
+
+;; ---- static type-name lint (pre-mint, no racket) ----------------------------
+;; Collects uppercase type-name symbols in `:- <T>` / `:raises <T>` positions and, for
+;; any unknown one that is CLOSE to a builtin, returns the repair-grade error. Novel
+;; types with no close builtin are left for the real def-level check (avoids false block).
+(defn- collect-type-names [form]
+  (let [acc (atom [])]
+    (letfn [(type-walk [t]
+              (cond
+                (symbol? t) (let [nm (name t)]
+                              (when (and (pos? (count nm)) (Character/isUpperCase ^char (first nm)))
+                                (swap! acc conj nm)))
+                (or (seq? t) (vector? t)) (doseq [x t :when (not= '-> x)] (type-walk x))
+                :else nil))
+            (go [f]
+              (when (sequential? f)
+                (loop [xs (seq f)]
+                  (when xs
+                    (let [x (first xs)]
+                      (when (and (keyword? x) (#{"-" "raises"} (name x)) (next xs)) (type-walk (fnext xs)))
+                      (go x)
+                      (recur (next xs)))))))]
+      (go form)
+      (distinct @acc))))
+(defn- static-type-check [module form corpus-types]
+  (let [known (into beagle-types corpus-types)]
+    (some (fn [tn]
+            (when-not (contains? known tn)
+              (let [near (nearest-names tn beagle-types :n 3 :max-dist 3)]
+                (when (seq near)
+                  (s-err :type :at {:module module}
+                         :message (str "no such type `" tn "`")
+                         :got tn :expected (str "a Beagle type (e.g. " (first near) ")")
+                         :suggestion (str "use `" (first near) "`")
+                         :nearest near)))))
+          (collect-type-names form))))
+
+;; ---- def-level check seam (deliverable 5) -----------------------------------
+;; ONE swappable fn: (fn [module name] -> nil | error-map). nil = clean. A2 (@cc-fram
+;; -9d5855ed) owns the FAST warm primitive; when it lands green they `reset!` it here.
+;; Default is a no-op (deep check DEFERRED — surfaced as :deep-check :deferred in the
+;; result so it is never SILENT). The static-type lint above already catches unknown
+;; type NAMES pre-mint; arity/deep type errors need the real gate (A2 / racket).
+(defn- default-def-check [_module _name] nil)
+(def ^:private def-check-hook (atom default-def-check))
+
+;; ---- signature derivation (best-effort, from the surface form) --------------
+(defn- types-in-bracket [bracket]
+  (loop [xs (seq bracket) acc []]
+    (if (nil? xs) acc
+      (if (and (keyword? (first xs)) (= "-" (name (first xs))) (next xs))
+        (recur (nnext xs) (conj acc (fnext xs)))
+        (recur (next xs) acc)))))
+(defn- sig-of-form [form]
+  (when (and (seq? form) (>= (count form) 2))
+    (let [h (str (first form))]
+      (cond
+        (resolve/DEF-FORMS h)                 ; (def name :- T v) -> "T"
+        (let [t (loop [xs (seq (drop 2 form))]
+                  (when xs (if (and (keyword? (first xs)) (= "-" (name (first xs))) (next xs)) (fnext xs) (recur (next xs)))))]
+          (when t (pr-str t)))
+        (resolve/PARAM-FORMS h)               ; (defn name [a :- A] :- R ..) -> "(A -> R)"
+        (let [bracket (first (filter vector? form))
+              after   (when bracket (next (drop-while #(not (identical? % bracket)) form)))
+              ret     (when (and after (keyword? (first after)) (= "-" (name (first after)))) (fnext after))
+              ptypes  (when bracket (types-in-bracket bracket))]
+          (when bracket (str "(" (str/join " " (map pr-str ptypes)) " -> " (if ret (pr-str ret) "?") ")")))
+        :else nil))))
+
+;; ---- module / def resolution over the warm store (call under with-resolve-read)
+(defn- module-srcs [module] (filter #(str/includes? % module) resolve/srcs))
+(defn- corpus-type-names [] (set (mapcat keys (vals resolve/global-type-exports))))
+(defn- def-node-name [fnode]
+  (resolve/sym-val (second (resolve/ordered-children (resolve/unwrap-def fnode)))))
+
+;; ---- exception / reject -> ERROR shape (NEVER a bare throw) ------------------
+(defn- ex->s-err [module nm t]
+  (let [d (ex-data t)
+        msg (or (not-empty (str (.getMessage t))) (:message d) (str "internal error: " (.getSimpleName (class t))))]
+    (s-err :gate :at {:module module :def nm}
+           :message msg
+           :got (.getSimpleName (class t))
+           :suggestion (or (:suggestion d) "simplify the form; ensure every referenced helper/type exists"))))
+(defn- reject->s-err [module nm er]
+  (let [msg (if (vector? (:reject er)) (str/join "; " (:reject er)) (str (:reject er)))]
+    (cond-> (s-err :canon :at {:module module :def nm}
+                   :message (str "verb rejected: " msg)
+                   :suggestion "send exactly one named value def per form; narrow ambiguous edits")
+      (:disambiguation er) (assoc :disambiguation (:disambiguation er)))))
+
+;; ---- write-def --------------------------------------------------------------
+;; A t-r1 fumble: the agent sends the WIRE CHANGESET ([{:op "upsert-form" :form (defn
+;; ..)}] or a bare {:op ..}) instead of source. Detect it + point at the :form/:body so
+;; the repair is exact ("send the def itself"), not the generic "not a form".
+(defn- changeset-forms [form]
+  (let [ops (cond (map? form)                                   [form]
+                  (and (vector? form) (seq form) (every? map? form)) form
+                  :else nil)]
+    (when (and ops (every? #(contains? % :op) ops))
+      (vec (keep #(or (:form %) (:body %)) ops)))))
+(defn- write-one-form [module raw corpus-types]
+  (let [cr (canon-form raw)]
+    (if (:error cr)
+      (update (:error cr) :at #(merge {:module module} %))
+      (let [form (:form cr)]
+        (cond
+          (changeset-forms form)
+          (let [cf (changeset-forms form)]
+            (s-err :canon :at {:module module}
+                   :message "this is a wire changeset ({:op ...} maps), not Beagle source"
+                   :got (pr-short form)
+                   :suggestion (if (seq cf)
+                                 (str "send the def source directly: " (pr-short (first cf)))
+                                 "send `(def ...)`/`(defn ...)` source, not the {:op ...} wire form")))
+          (not (seq? form))
+          (s-err :canon :at {:module module} :message (str "top-level item is not a form: " (pr-short form))
+                 :got (pr-short form) :suggestion "send a `(def ...)`/`(defn ...)` form — not a bare value or prose")
+          (not (resolve/VALUE-DEFS (str (first form))))
+          (s-err :canon :at {:module module}
+                 :message (str "top-level head `" (first form) "` is not a value def")
+                 :got (str (first form)) :expected "def / defn / defonce / def-"
+                 :suggestion (str "wrap it as `(def <name> " (pr-short form) ")` or `(defn <name> [..] ..)`")
+                 :nearest (nearest-names (str (first form)) resolve/VALUE-DEFS :n 2 :max-dist 3))
+          (< (count form) 2)
+          (s-err :canon :at {:module module} :message "def has no name" :suggestion "name it: `(def <name> ...)`")
+          :else
+          (let [nm (str (second form))]
+            (or (static-type-check module form corpus-types)
+                (let [er (try (do-edit-min {:op "upsert-form" :module module :datum form})
+                              (catch Throwable t {:ex t}))]
+                  (cond
+                    (:ex er)     (ex->s-err module nm (:ex er))
+                    (:reject er) (reject->s-err module nm er)
+                    (:ok er)     (let [chk (@def-check-hook module nm)]
+                                   (if (nil? chk)
+                                     {:ok true :name nm :module module :ops (:ops er) :version (:version er)}
+                                     (update chk :at #(merge {:module module :def nm} %))))
+                    :else (s-err :gate :at {:module module :def nm}
+                                 :message (str "upsert-form: unexpected result " (pr-short er))
+                                 :suggestion "retry; if it persists inspect the daemon state"))))))))))
+(defn- do-write-def [spec]
+  (let [module (:module spec) source (:source spec)]
+    (cond
+      (str/blank? module) (s-err :parse :message "write-def: :module is required" :suggestion "call {:module \"<name>\" :source \"...\"}")
+      (str/blank? source) (s-err :parse :message "write-def: :source is required (raw Beagle text)" :suggestion "call {:module M :source \"(def x 1)\"}")
+      :else
+      (let [rc (read-code-forms source)]
+        (if (:error rc)
+          (update (:error rc) :at #(merge {:module module} %))
+          (let [forms (:forms rc)]
+            (if (empty? forms)
+              (s-err :parse :at {:module module} :message "no top-level forms in :source" :suggestion "send at least one `(def ...)`/`(defn ...)` form")
+              (let [pre (with-resolve-read (:store @co)
+                          (let [ss (module-srcs module)]
+                            (if (= 1 (count ss))
+                              {:ok true :corpus-types (corpus-type-names)}
+                              {:ok false :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5) :count (count ss)})))]
+                (if-not (:ok pre)
+                  (s-err :lookup :at {:module module}
+                         :message (if (> (:count pre) 1) (str "module `" module "` is ambiguous (" (:count pre) " sources match)")
+                                      (str "no such module `" module "`"))
+                         :nearest (:nearest pre)
+                         :suggestion (if (seq (:nearest pre)) (str "did you mean `" (first (:nearest pre)) "`?") "run `index` to list modules, or ingest it first"))
+                  (loop [fs forms results []]
+                    (if (empty? fs)
+                      {:ok true :module module :written (count results) :results results
+                       :deep-check (if (identical? @def-check-hook default-def-check) :deferred :ran)
+                       :version (current-seq @co)}
+                      (let [res (try (write-one-form module (first fs) (:corpus-types pre))
+                                     (catch Throwable t
+                                       (ex->s-err module (try (str (second (first fs))) (catch Throwable _ nil)) t)))]
+                        (if (:ok res)
+                          (recur (rest fs) (conj results res))
+                          {:ok false :module module :written (count results) :results results :failed res
+                           :version (current-seq @co)})))))))))))))
+
+;; ---- read-def ---------------------------------------------------------------
+(defn- do-read-def [spec]
+  (let [module (:module spec) nm (:name spec)]
+    (cond
+      (str/blank? module) (s-err :parse :message "read-def: :module is required" :suggestion "call {:module M :name N}")
+      (str/blank? nm)     (s-err :parse :message "read-def: :name is required" :suggestion "call {:module M :name N}")
+      :else
+      (with-resolve-read (:store @co)
+        (let [ss (module-srcs module)]
+          (if (not= 1 (count ss))
+            (s-err :lookup :at {:module module} :message (str "no such module `" module "`")
+                   :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5)
+                   :suggestion "run `index` to list modules")
+            (let [src (first ss) bnode (resolve/def-binding src nm)]
+              (if (nil? bnode)
+                (s-err :lookup :at {:module module :def nm} :message (str "no such def `" nm "` in `" module "`")
+                       :nearest (nearest-names nm (keys (resolve/file-modframe src)) :n 3 :max-dist 4)
+                       :suggestion "run `index` on this module to see its defs")
+                (let [fnode (resolve/form-for-victim src bnode)]
+                  (if (nil? fnode)
+                    (s-err :lookup :at {:module module :def nm} :message (str "`" nm "` has no top-level form (a variant/field?)")
+                           :suggestion "read its parent def")
+                    (let [src-text (resolve/node->str fnode)]
+                      {:ok true :module module :name nm
+                       :source src-text
+                       :sig (try (sig-of-form (edn/read-string src-text)) (catch Throwable _ nil))
+                       :version (current-seq @co)})))))))))))
+
+;; ---- index ------------------------------------------------------------------
+(defn- do-index [spec]
+  (with-resolve-read (:store @co)
+    (let [all-mods (vec (sort (into #{} resolve/srcs)))   ; into #{} — `distinct` is clobbered on sets here
+          want (:module spec)]
+      (if (str/blank? want)
+        {:ok true :modules all-mods :count (count all-mods) :version (current-seq @co)}
+        (let [ss (module-srcs want)]
+          (if (not= 1 (count ss))
+            (s-err :lookup :at {:module want} :message (str "no such module `" want "`")
+                   :nearest (nearest-names want resolve/srcs :n 3 :max-dist 5)
+                   :suggestion "call `index` with no :module to list all modules")
+            (let [src (first ss)
+                  wrapper (resolve/wrapper-of src)
+                  forms (when wrapper (resolve/wrap-forms wrapper))
+                  defs (vec (keep (fn [[_ _ fnode]]
+                                    (when (and fnode (= "list" (resolve/kind-of fnode)))
+                                      (let [h (str (resolve/head-sym fnode))]
+                                        (when (resolve/VALUE-DEFS h)
+                                          (let [nm (def-node-name fnode)]
+                                            (when nm
+                                              {:name nm :head h
+                                               :sig (try (sig-of-form (edn/read-string (resolve/node->str fnode))) (catch Throwable _ nil))}))))))
+                                  forms))]
+              {:ok true :module want :defs defs :count (count defs) :version (current-seq @co)})))))))
+
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
@@ -1222,14 +1595,28 @@
     ;; yet? Names are unique per writer, so interned <=> that writer's def reached the store.
     ;; This is the propagation visibility signal (commit -> reader sees THIS def), off the dlock.
     (= :seen (:op req)) {:seen (boolean (c/value-id (:store @co) (:v req)))}
+    ;; S-PROFILE text-bridge verbs (thread A1). LOCK-FREE: write-def commits through
+    ;; do-edit-min (which takes dlock itself); read-def/index are @co snapshot reads.
+    ;; All return the structured ERROR shape on any malformed input — never a bare throw.
+    (= :write-def (:op req)) (try (do-write-def (:spec req))
+                                  (catch Throwable t (ex->s-err (:module (:spec req)) nil t)))
+    (= :read-def  (:op req)) (try (do-read-def (:spec req))
+                                  (catch Throwable t (ex->s-err (:module (:spec req)) (:name (:spec req)) t)))
+    (= :index     (:op req)) (try (do-index (:spec req))
+                                  (catch Throwable t (ex->s-err (:module (:spec req)) nil t)))
     (= :edit-min (:op req))
     (try (do-edit-min (:spec req))
          (catch Throwable t
            ;; surface a verb's structured disambiguation payload (replace-in-body candidates
            ;; + :within suggestions) alongside the human :reject message, so the client/model
-           ;; gets HOW to disambiguate, not just that it was ambiguous.
-           (let [d (ex-data t)]
-             (cond-> {:reject [(str "edit-min: " (.getMessage t))]
+           ;; gets HOW to disambiguate, not just that it was ambiguous. NEVER a message-less
+           ;; reject (the t-r1 IOOBE anti-pattern): synthesize from the exception class when
+           ;; getMessage is nil, and attach the full structured :error shape for repair.
+           (let [d   (ex-data t)
+                 msg (or (not-empty (str (.getMessage t))) (:message d)
+                         (str "internal error: " (.getSimpleName (class t))))]
+             (cond-> {:reject [(str "edit-min: " msg)]
+                      :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
                       :version (current-seq @co)}
                (:disambiguation d) (assoc :disambiguation (:disambiguation d))))))
   :else
