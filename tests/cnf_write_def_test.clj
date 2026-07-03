@@ -124,6 +124,25 @@
 (let [resp (r M "a1-selftest-inx")]   ; typo of a1-selftest-inc
   (check "unknown def :stage :lookup + :nearest" (and (= :lookup (:stage resp)) (seq (:nearest resp))) (pr-str resp)))
 
+(println "\n=== SEAM: def-check-hook surfaces a def-level reject end-to-end (deliverable 5) ===")
+;; Prove the swappable check seam: A2 `reset!`s a (fn [module name] -> nil | ERROR) here.
+;; A mock stands in for A2's warm primitive to verify write-def wires it correctly.
+(reset! def-check-hook
+        (fn [module name]
+          (when (str/includes? (str name) "seam-bad")
+            {:ok false :stage :type :message (str name " fails the mock type gate")
+             :suggestion "fix the mock type error"})))
+(try
+  (let [good (w M "(def a1-seam-good 1)")
+        bad  (w M "(def a1-seam-bad 2)")
+        e (err-of bad)]
+    (check "hook clean -> write succeeds, :deep-check :ran" (and (:ok good) (= :ran (:deep-check good))) (pr-str good))
+    (check "hook reject -> write fails closed" (false? (:ok bad)) (pr-str bad))
+    (check "hook reject surfaces :stage :type" (= :type (:stage e)) (pr-str e))
+    (check "hook reject :at merged with module+def" (and (= M (:module (:at e))) (= "a1-seam-bad" (:def (:at e)))) (pr-str (:at e)))
+    (check "hook reject carries a :suggestion" (not (str/blank? (str (:suggestion e)))) (pr-str e)))
+  (finally (reset! def-check-hook default-def-check)))   ; restore before the fixture sweep
+
 ;; --- A0's real t-r1 fumble corpus (thread A0) -------------------------------
 ;; Each fixture carries `:emitted` — the RAW text the model actually produced in
 ;; EXP-021 t-r1 (often a fenced EDN changeset, prose, JSON keys, or a bare form). We

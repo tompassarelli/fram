@@ -1481,6 +1481,14 @@
                   (cond
                     (:ex er)     (ex->s-err module nm (:ex er))
                     (:reject er) (reject->s-err module nm er)
+                    ;; ADVISORY def-level check (post-commit). A2's primitive reads the LIVE
+                    ;; store given [module name], so the def is committed FIRST, then checked.
+                    ;; A :type reject is INNER-LOOP FEEDBACK, not a transaction abort: the warm
+                    ;; store is a scratchpad that tolerates in-progress type errors BY DESIGN
+                    ;; (the whole-tree gate at promotion is authoritative — cnf_defcheck.clj
+                    ;; "authority split"). So we surface the error (agent fixes + re-upserts,
+                    ;; replacing by name — idempotent) rather than rolling back, which would cost
+                    ;; a full corpus read per write. The commit mechanics stay atomic (OCC).
                     (:ok er)     (let [chk (@def-check-hook module nm)]
                                    (if (nil? chk)
                                      {:ok true :name nm :module module :ops (:ops er) :version (:version er)}
