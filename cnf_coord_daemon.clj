@@ -410,10 +410,21 @@
        (= \@ (.charAt s 0))
        (not (re-find #"\s" s))))
 
-;; kind from the value: a ref-shaped @-string => ref (link), else literal (assert)
-;; — exactly the convention the migration loader uses, so daemon writes stay
-;; consistent with the migrated store.
-(defn- kind-of [r] (if (and (string? r) (ref-shape? r)) :link :assert))
+;; VALUE-PREDS — predicates whose object is ALWAYS a literal leaf value in the CODE
+;; graph, NEVER a node link, even when the value is a whitespace-free @-string. A Clojure
+;; DEREF `@atom` (malli error.cljc's `@!likely-misspelling-of`, core.cljc's `@cache`, …) is
+;; a symbol SPELLING stored under "v"; without this guard ref-shape? links it to a phantom
+;; node named "@atom", and warm-render then emits that entity-id where racket expects a
+;; string ("string->symbol: contract violation, given: <node-id>"). Structural references
+;; (fN/child/span/col/line/pos/refers_to/…) carry real @<module>#<int> node-names under
+;; OTHER predicates, so link detection there is unaffected. (Comment lexemes are also "v"
+;; segs — a comment mentioning `@id` is likewise a literal, not a link.)
+(def ^:private VALUE-PREDS #{"v"})
+;; kind from the value: a ref-shaped @-string under a NON-value predicate => ref (link),
+;; else literal (assert) — exactly the convention the migration loader uses, so daemon
+;; writes stay consistent with the migrated store.
+(defn- link-value? [p r] (and (string? r) (not (VALUE-PREDS p)) (ref-shape? r)))
+(defn- kind-of [p r] (if (link-value? p r) :link :assert))
 
 ;; forward ref: the-model §9 cascade is defined after do-retract (it calls both
 ;; do-retract + do-assert), but do-assert calls it — declare so SCI resolves it.
@@ -425,7 +436,7 @@
   (if (schema-preds p)
     {:reject [(str "reserved predicate '" p "' (engine-internal; use a domain predicate)")] :version (current-seq @co)}
     (let [pre (current-seq @co)
-          res (commit! @co "coord" te p (kind-of r) r base)]
+          res (commit! @co "coord" te p (kind-of p r) r base)]
       (if (:ok res)
         (do (when-not (:idempotent res)
               (append-flat! "assert" te p r (:ok res))
@@ -2176,7 +2187,7 @@
     (s/setup! st tx)
     (doseq [p (keys by-pred) :when (not (schema-preds p))]   ; skip reserved engine preds (defensive)
       (s/def-predicate! st p (if (ck/single? p) "single" "multi")
-                            (if (some ref-str? (map :r (get by-pred p))) "ref" "literal") tx))
+                            (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
     ;; present in the flat log still get their cardinality CLAIM, so a first runtime
     ;; write supersedes (not accumulates) — the replacement for finding #12's per-write
@@ -2190,7 +2201,7 @@
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
       (doseq [cl claims :when (not (schema-preds (:p cl)))]
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
-          (if (ref-str? r) (s/link! st su p (ent! r) tx) (s/assert! st su p r tx)))))
+          (if (link-value? p r) (s/link! st su p (ent! r) tx) (s/assert! st su p r tx)))))
     ;; Seed the seq-space to the flat log's max :tx so (a) :version == the flat
     ;; fold's version (doctor reports FRESH, not STALE), (b) base_version stays
     ;; coherent, and (c) projected flat :tx CONTINUE the flat space (no collision;
@@ -2372,22 +2383,24 @@
         (doseq [p (keys by-pred)]
           (when (empty? (c/by-lp st (c/value! st p) (c/value-id st "cardinality")))
             (s/def-predicate! st p (if (ck/single? p) "single" "multi")
-                                  (if (some ref-str?* (map :r (get by-pred p))) "ref" "literal") tx)))
+                                  (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx)))
         (doseq [[_ a] (tail-keyed-latest valid)]
           (let [p (:p a) r (:r a) single? (ck/single? p)
                 su (sub! (:l a)) pid (c/value! st p)
                 live (c/by-lp st su pid)]      ; already live-only
             (if (= "retract" (:op a))
               (let [sup (c/value! st "cnf-supersedes")
-                    rid (when (ref-str?* r) (s/resolve-name st r))
+                    link? (link-value? p r)
+                    rid (when link? (s/resolve-name st r))
                     victims (if single? live
                                 (filter #(let [cr (:r (c/claim-of st %))]
-                                           (if (ref-str?* r) (= rid cr) (= (c/value-id st r) cr))) live))]
+                                           (if link? (= rid cr) (= (c/value-id st r) cr))) live))]
                 (doseq [old victims] (c/claim! st old sup old tx)))
-              (let [exists? (some #(let [cr (:r (c/claim-of st %))]
-                                     (if (ref-str?* r) (= (s/resolve-name st r) cr) (= (c/value-id st r) cr))) live)]
+              (let [link? (link-value? p r)
+                    exists? (some #(let [cr (:r (c/claim-of st %))]
+                                     (if link? (= (s/resolve-name st r) cr) (= (c/value-id st r) cr))) live)]
                 (when-not (and (not single?) exists?)
-                  (if (ref-str?* r) (s/link! st su p (sub! r) tx) (s/assert! st su p r tx)))))))
+                  (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx)))))))
         (let [tmax (reduce max 0 (map :tx valid))]
           (swap! st assoc :next-seq tmax)
           (swap! st update :txs assoc tx {:seq tmax :agent "tail"}))))

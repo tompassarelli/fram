@@ -682,6 +682,11 @@
         xacc  (fn [m n] (get-in global-accessor-exports [m n]))]   ; [type-leaf field] or nil
     (fn [nm]
       (cond
+        ;; a symbol node with no `v` (nil name) is not a resolvable cross-module ref — bail
+        ;; before `str/includes?` NPEs. Such nodes appear inside .cljc reader-conditional
+        ;; content (`#?(:clj …)`), which the warm resolver descends into during render;
+        ;; leaving them unresolved renders their own spelling, exactly right under no-rename.
+        (nil? nm) nil
         (get refer nm)  (let [m (get refer nm)]
                           (if-let [t (xport m nm)] {:target t :mode :tracking}
                             (when-let [a (xacc m nm)] {:target (first a) :mode :tracking :accessor (second a)})))
