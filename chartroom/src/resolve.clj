@@ -967,7 +967,28 @@
     (c/claim! ctx e KIND (c/value! ctx kind) tx)
     (c/claim! ctx e Vp (c/value! ctx v) tx)
     e))
+;; Reader metadata (`^Type` / `^:flag` / `^{..}`) rides on the datum as Clojure meta —
+;; the host LispReader normalizes `^Type`→{:tag Type}, `^:dynamic`→{:dynamic true}. The
+;; write-def raw-source path minted a bare `(str sym)`, DROPPING it silently: a whole-block
+;; `extend-protocol` re-author lost every `^OutputStream` param hint (→ reflection). Mint it
+;; as beagle's `(#%meta <m> <target>)` node (unwrap-meta's inverse) so hints + `^:dynamic`
+;; names survive. Match beagle's reader shorthand (parse.rkt): {:tag Sym}→Sym (bare symbol),
+;; a single {:flag true}→:flag (keyword), else the full map (`^{..}` longhand). Source-position
+;; keys the reader may attach are stripped (a plain PushbackReader adds none, but be defensive).
+(defn- clj-meta->beagle-meta [m]
+  (cond
+    (and (= 1 (count m)) (contains? m :tag) (symbol? (:tag m))) (:tag m)
+    (and (= 1 (count m)) (true? (val (first m))))               (key (first m))
+    :else m))
+(defn- reader-meta [d]
+  (when (instance? clojure.lang.IObj d)
+    (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file]))))
+
 (defn mint-datum! [src d]
+  (if-let [m (reader-meta d)]
+    ;; strip the meta and re-mint under an explicit (#%meta …) wrapper (recursion mints the
+    ;; bare target normally; a single #%meta suffices — Clojure merges stacked hints to one map).
+    (mint-datum! src (list (symbol "#%meta") (clj-meta->beagle-meta m) (with-meta d nil)))
   (cond
     ;; EDN `nil` must mint as the SYMBOL nil — beagle reads source `nil` via Racket's
     ;; reader (no nil there), so the corpus convention is kind="symbol" v="nil"; the
@@ -1010,7 +1031,7 @@
     (mint-datum! src (list (symbol "#%regex") (.pattern ^java.util.regex.Pattern d)))
     (set? d)
     (mint-datum! src (cons (symbol "#%set") (seq d)))
-    :else (mint-leaf! src "other" (pr-str d))))
+    :else (mint-leaf! src "other" (pr-str d)))))
 ;; the body fN edges of a defn form = the consecutive fN child claims whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
 (defn fN-claims [parent]            ; -> [[N claim-id child-node] ...] over LIVE fN edges, ordered
