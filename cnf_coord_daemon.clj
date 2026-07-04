@@ -1469,7 +1469,8 @@
   (let [cr (canon-form raw)]
     (if (:error cr)
       (update (:error cr) :at #(merge {:module module} %))
-      (let [form (:form cr)]
+      (let [form (:form cr)
+            ext-lint (when (seq? form) (resolve/extend-target-lint form))]
         (cond
           (changeset-forms form)
           (let [cf (changeset-forms form)]
@@ -1493,6 +1494,14 @@
                  :nearest (nearest-names (str (first form)) resolve/WRITABLE-DEFS :n 2 :max-dist 3))
           (< (count form) 2)
           (s-err :canon :at {:module module} :message "def has no name" :suggestion "name it: `(def <name> ...)`")
+          ;; REPAIR-GRADE lint: a LIST in extend-protocol/extend-type target position is the
+          ;; classic `(class (byte-array 0))` footgun — it silently mis-partitions and the
+          ;; oracle stays red with no error (EXP-025 p2g ring-01). Reject + teach the `extend`
+          ;; idiom. Plain `extend` with expression targets is LEGAL (extend-target-lint skips it).
+          ext-lint
+          (s-err :canon :at {:module module}
+                 :message (:message ext-lint) :got (:got ext-lint)
+                 :suggestion (:suggestion ext-lint) :nearest (:nearest ext-lint))
           :else
           (let [nm (resolve/writable-disp-name form)]
             (or (static-type-check module form corpus-types)

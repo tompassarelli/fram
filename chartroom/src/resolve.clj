@@ -252,6 +252,39 @@
 ;; differently and coexist under a shared head/name.
 (defn named-def-head? [h] (and (writable-def-head? h)
                                (not (contains? (into #{"defmethod"} EXTEND-FORMS) h))))
+;; extend-target-lint — REPAIR-GRADE canon lint for extend-protocol / extend-type.
+;; In these two macros the TARGET positions (the type/class being extended, and — for
+;; extend-protocol — each type in the type/method alternation) must be class SYMBOLS
+;; resolvable at MACROEXPANSION. The classic footgun is a LIST in target position:
+;;   (extend-protocol Foldable (class (byte-array 0)) (fold [this] ...))
+;; extend-protocol/extend-type partition their body by SYMBOL targets vs method forms; a
+;; runtime expression there silently MIS-PARTITIONS — the byte-array target never gets the
+;; impl, no error fires, the oracle stays red (EXP-025 p2g ring-01 autopsy, 3 red attempts).
+;; The correct idiom for a runtime class is a SEPARATE top-level `extend` call:
+;;   (extend (Class/forName "[B") ProtocolName {:method-name (fn [args] ...)})
+;; plain `extend` DOES take expression targets, so it is NOT linted (that's the fix, not the bug).
+;;
+;; Detection (per the b4/8d4be17 body-shape): walk everything after the head. A METHOD FORM
+;; is a seq whose SECOND element is a param VECTOR `(m [args] body)` or an arity-list
+;; `(m ([args] body) ([a b] body))`. A SYMBOL is a legal designator. A seq that is NOT a
+;; method form sitting where a designator belongs = a runtime-expression target -> reject.
+(defn- extend-method-form? [f]
+  (and (seq? f) (>= (count f) 2)
+       (let [s (second f)]
+         (or (vector? s)                               ; (m [args] body...)
+             (and (seq? s) (vector? (first s)))))))    ; (m ([args] body) ([a b] body))
+(defn extend-target-lint [form]
+  (when (and (seq? form) (#{"extend-protocol" "extend-type"} (str (first form))))
+    (let [bad (filter #(and (seq? %) (not (extend-method-form? %))) (rest form))]
+      (when (seq bad)
+        {:message (str "extend-protocol targets must be class SYMBOLS resolvable at "
+                       "macroexpansion — a runtime expression like (class (byte-array 0)) "
+                       "silently mis-partitions")
+         :got (pr-str (first bad))
+         :suggestion (str "for runtime classes (e.g. Java arrays) write a separate top-level "
+                          "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) "
+                          "form instead")
+         :nearest (mapv pr-str bad)}))))
 (def TYPE-COLON  #{":-" ":"})  ; inline type-annotation markers (`:` is legal in field/param position)
 (def LET-FORMS   #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding"
                    "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})

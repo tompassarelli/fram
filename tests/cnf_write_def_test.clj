@@ -229,6 +229,33 @@
   (check "reject does NOT prescribe the wrong `wrap it as (def ...)` medicine"
          (not (str/includes? (str (:suggestion e)) "wrap it as")) (pr-str (:suggestion e))))
 
+(println "\n=== EXTEND-TARGET LINT: (class (byte-array 0)) in target position (EXP-025 p2g ring-01) ===")
+;; The p2g autopsy: a write-def extend-protocol block with `(class (byte-array 0))` as a
+;; TARGET silently mis-partitions (extend-protocol keys targets as SYMBOLS), byte arrays
+;; never get the impl, the oracle stays red across 3 attempts. Repair-grade canon lint must
+;; REJECT the runtime-expression target and teach the `(extend (Class/forName "[B") ...)` idiom.
+(let [bad "(extend-protocol StreamableResponseBody\n  (class (byte-array 0))\n  (write-body-to-stream [body _ output-stream]\n    (.write output-stream body)\n    (.close output-stream)))"
+      resp (w M bad)
+      e (err-of resp)]
+  (check "extend-protocol w/ (class ..) target fails closed" (false? (:ok resp)) (pr-str resp))
+  (check "extend-target reject :stage :canon" (= :canon (:stage e)) (pr-str e))
+  (check "reject :message names the mis-partition footgun"
+         (str/includes? (str (:message e)) "mis-partition") (pr-str (:message e)))
+  (check "reject :suggestion teaches the (extend (Class/forName ..) ..) idiom"
+         (and (str/includes? (str (:suggestion e)) "Class/forName")
+              (str/includes? (str (:suggestion e)) "extend")) (pr-str (:suggestion e)))
+  (check "reject :got shows the offending target"
+         (str/includes? (str (:got e)) "byte-array") (pr-str (:got e))))
+;; a legal extend-protocol (SYMBOLS only) is accepted — the lint must not false-positive.
+(let [resp (w M "(extend-protocol WdLintProto WdLintType (wd-lint-m [this] 1))")]
+  (check "legal extend-protocol (symbol targets) -> :ok" (:ok resp) (pr-str resp)))
+;; the CORRECT idiom — a top-level (extend (Class/forName "[B") ...) with an EXPRESSION
+;; target — is LEGAL (plain `extend` takes runtime targets) and must apply + round-trip.
+(let [resp (w M "(extend (Class/forName \"[B\") WdLintProto {:wd-lint-m (fn [this] 2)})")]
+  (check "legal (extend (Class/forName ..) ..) -> :ok (expression target allowed)" (:ok resp) (pr-str resp)))
+(let [again (w M "(extend (Class/forName \"[B\") WdLintProto {:wd-lint-m (fn [this] 3)})")]
+  (check "re-writing the extend form replaces in place -> :ok (round-trips)" (:ok again) (pr-str again)))
+
 ;; --- A0's real t-r1 fumble corpus (thread A0) -------------------------------
 ;; Each fixture carries `:emitted` — the RAW text the model actually produced in
 ;; EXP-021 t-r1 (often a fenced EDN changeset, prose, JSON keys, or a bare form). We
