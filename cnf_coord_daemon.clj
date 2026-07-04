@@ -1535,6 +1535,91 @@
                           {:ok false :module module :written (count results) :results results :failed res
                            :version (current-seq @co)})))))))))))))
 
+;; ---- addressable-forms: the ONE surface `index` emits and `read-def` resolves ----
+;; ACCEPTANCE INVARIANT: every :name here round-trips through read-def. The old
+;; index filtered top-level forms to VALUE-DEFS heads AND named them with a
+;; meta-blind `(second children)`, so on a REAL Clojure module every non-value
+;; form (defprotocol, extend / extend-type / extend-protocol, defmulti/defmethod)
+;; AND every ^:meta / ^hint-named def (defn- ^Writer f, def ^:private x) was
+;; INVISIBLE — ring.core.protocols indexed to `defs=[]` and the model flew blind
+;; (EXP-025 p1c ring-01: 10 dead read-def lookups). This makes every top-level
+;; form addressable and each :name resolvable back to its enclosing form's text.
+(defn- addr-name-leaf [fnode]                 ; def/type/multi NAME leaf, ^meta peeled
+  (let [nl0 (resolve/unwrap-meta (second (resolve/ordered-children (resolve/unwrap-def fnode))))]
+    (if (= "list" (resolve/kind-of nl0)) (first (resolve/ordered-children nl0)) nl0)))
+(defn- target-str [node]                      ; a type/protocol target as a stable string
+  (or (resolve/sym-val node) (resolve/node->str node)))
+(defn- proto-methods [fnode]                  ; defprotocol/definterface member names
+  (keep (fn [m] (when (= "list" (resolve/kind-of m))
+                  (resolve/sym-val (first (resolve/ordered-children m)))))
+        (drop 2 (resolve/ordered-children fnode))))
+(defn- impl-list? [node]                       ; a `(method [params] body)` impl — NOT a target
+  (and (= "list" (resolve/kind-of node))
+       (let [k (resolve/ordered-children node)]
+         (and (>= (count k) 2) (resolve/brackets? (second k))))))
+(defn- addressable-forms [src]
+  (let [wrapper (resolve/wrapper-of src)
+        forms   (when wrapper (map (fn [[_ _ fnode]] fnode) (resolve/wrap-forms wrapper)))
+        entries
+        (mapcat
+         (fn [fnode]
+           (when (and fnode (= "list" (resolve/kind-of fnode)))
+             (let [h   (str (resolve/head-sym fnode))
+                   sig #(try (sig-of-form (edn/read-string (resolve/node->str fnode))) (catch Throwable _ nil))]
+               (cond
+                 (resolve/VALUE-DEFS h)
+                 (when-let [nm (resolve/sym-val (addr-name-leaf fnode))]
+                   [{:name nm :head h :fnode fnode :sig (sig)}])
+                 ;; defprotocol/definterface: the protocol name AND each member var
+                 (#{"defprotocol" "definterface"} h)
+                 (let [pn (resolve/sym-val (addr-name-leaf fnode))]
+                   (concat (when pn [{:name pn :head h :fnode fnode :sig nil}])
+                           (map (fn [mn] {:name mn :head (str h "-member") :fnode fnode :sig nil})
+                                (proto-methods fnode))))
+                 (resolve/TYPE-DEFS h)          ; defrecord/deftype/defunion (protocols handled above)
+                 (when-let [tn (resolve/sym-val (addr-name-leaf fnode))]
+                   [{:name tn :head h :fnode fnode :sig nil}])
+                 ;; (extend-protocol P T1 impl.. T2 impl.. ...) -> one entry per target block
+                 (= h "extend-protocol")
+                 (let [kids  (resolve/ordered-children fnode)
+                       proto (target-str (second kids))]
+                   (map (fn [t] {:name (str proto "@" (target-str t)) :head h :fnode fnode :sig nil})
+                        (remove impl-list? (drop 2 kids))))
+                 ;; (extend-type T P1 impl.. P2 impl.. ...) -> one entry per protocol block
+                 (= h "extend-type")
+                 (let [kids (resolve/ordered-children fnode)
+                       tn   (target-str (second kids))]
+                   (map (fn [p] {:name (str tn "@" (target-str p)) :head h :fnode fnode :sig nil})
+                        (remove impl-list? (drop 2 kids))))
+                 ;; (extend T P1 {..} P2 {..} ...) -> one entry per protocol symbol
+                 (= h "extend")
+                 (let [kids (resolve/ordered-children fnode)
+                       tn   (target-str (second kids))]
+                   (map (fn [p] {:name (str tn "@" (target-str p)) :head h :fnode fnode :sig nil})
+                        (filter #(= "symbol" (resolve/kind-of %)) (drop 2 kids))))
+                 (= h "defmulti")
+                 (when-let [nm (resolve/sym-val (addr-name-leaf fnode))]
+                   [{:name nm :head h :fnode fnode :sig nil}])
+                 (= h "defmethod")               ; (defmethod M dispatch [params] body) -> `M:dispatch`
+                 (let [kids (resolve/ordered-children fnode)
+                       mn   (resolve/sym-val (second kids))
+                       dv   (when (nth kids 2 nil) (resolve/node->str (nth kids 2 nil)))]
+                   (when mn [{:name (str mn (when dv (str ":" dv))) :head h :fnode fnode :sig nil}]))
+                 :else nil))))
+         forms)]
+    (filterv #(not (str/blank? (str (:name %)))) entries)))
+
+;; nearest addressable names: edit-distance candidates UNIONed with same-prefix
+;; ones (so `write-body` surfaces `write-body-to-stream`, which edit distance alone
+;; — dist 9 — would miss). Capped at n.
+(defn- nearest-defs [target candidates & {:keys [n] :or {n 5}}]
+  (let [t (str target)
+        by-dist (nearest-names t candidates :n n :max-dist 5)
+        pfx (when (pos? (count t)) (subs t 0 (min 4 (count t))))
+        by-prefix (when pfx (filter #(str/starts-with? (str %) pfx) candidates))
+        seen (set by-dist)]
+    (vec (take n (concat by-dist (remove seen by-prefix))))))
+
 ;; ---- read-def ---------------------------------------------------------------
 (defn- do-read-def [spec]
   (let [module (:module spec) nm (:name spec)]
@@ -1548,20 +1633,28 @@
             (s-err :lookup :at {:module module} :message (str "no such module `" module "`")
                    :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5)
                    :suggestion "run `index` to list modules")
-            (let [src (first ss) bnode (resolve/def-binding src nm)]
-              (if (nil? bnode)
-                (s-err :lookup :at {:module module :def nm} :message (str "no such def `" nm "` in `" module "`")
-                       :nearest (nearest-names nm (keys (resolve/file-modframe src)) :n 3 :max-dist 4)
-                       :suggestion "run `index` on this module to see its defs")
-                (let [fnode (resolve/form-for-victim src bnode)]
-                  (if (nil? fnode)
-                    (s-err :lookup :at {:module module :def nm} :message (str "`" nm "` has no top-level form (a variant/field?)")
-                           :suggestion "read its parent def")
-                    (let [src-text (resolve/node->str fnode)]
-                      {:ok true :module module :name nm
-                       :source src-text
-                       :sig (try (sig-of-form (edn/read-string src-text)) (catch Throwable _ nil))
-                       :version (current-seq @co)})))))))))))
+            (let [src   (first ss)
+                  addr  (addressable-forms src)
+                  ;; primary: value/type/protocol-method binding -> its top-level form.
+                  ;; fallback: any addressable name (extend blocks, defmulti/method, or a
+                  ;; protocol MEMBER whose binding has no top-level form of its own) ->
+                  ;; the enclosing form's text. Every name `index` lists resolves here.
+                  fnode (or (when-let [bnode (resolve/def-binding src nm)]
+                              (resolve/form-for-victim src bnode))
+                            (:fnode (some #(when (= nm (:name %)) %) addr)))]
+              (if (nil? fnode)
+                (let [near (nearest-defs nm (mapv :name addr) :n 5)]
+                  (s-err :lookup :at {:module module :def nm}
+                         :message (str "no such def `" nm "` in `" module "`")
+                         :nearest near
+                         :suggestion (if (seq near)
+                                       (str "did you mean `" (first near) "`? — or run `index` on this module")
+                                       "run `index` on this module to see its addressable names")))
+                (let [src-text (resolve/node->str fnode)]
+                  {:ok true :module module :name nm
+                   :source src-text
+                   :sig (try (sig-of-form (edn/read-string src-text)) (catch Throwable _ nil))
+                   :version (current-seq @co)})))))))))
 
 ;; ---- index ------------------------------------------------------------------
 (defn- do-index [spec]
@@ -1575,18 +1668,8 @@
             (s-err :lookup :at {:module want} :message (str "no such module `" want "`")
                    :nearest (nearest-names want resolve/srcs :n 3 :max-dist 5)
                    :suggestion "call `index` with no :module to list all modules")
-            (let [src (first ss)
-                  wrapper (resolve/wrapper-of src)
-                  forms (when wrapper (resolve/wrap-forms wrapper))
-                  defs (vec (keep (fn [[_ _ fnode]]
-                                    (when (and fnode (= "list" (resolve/kind-of fnode)))
-                                      (let [h (str (resolve/head-sym fnode))]
-                                        (when (resolve/VALUE-DEFS h)
-                                          (let [nm (def-node-name fnode)]
-                                            (when nm
-                                              {:name nm :head h
-                                               :sig (try (sig-of-form (edn/read-string (resolve/node->str fnode))) (catch Throwable _ nil))}))))))
-                                  forms))]
+            (let [src  (first ss)
+                  defs (mapv #(select-keys % [:name :head :sig]) (addressable-forms src))]
               {:ok true :module want :defs defs :count (count defs) :version (current-seq @co)})))))))
 
 ;; ---- phase 2: wire A2's WARM def-level check (thread A2, cnf_defcheck.clj) ---

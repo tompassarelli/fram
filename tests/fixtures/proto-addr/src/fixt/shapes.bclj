@@ -1,0 +1,12 @@
+#lang beagle/clj
+(ns fixt.shapes)
+(defrecord Dollars [amount :- Int])
+(defprotocol Show
+  (render [self :- Any] : String))
+(extend-type Dollars Show
+  (render [self :- Any] : String
+    (str "$" (dollars-amount self))))
+(defmulti area :shape)
+(defmethod area :circle [s] (* 3 (:r s) (:r s)))
+(defmethod area :square [s] (* (:side s) (:side s)))
+(defn label [d :- Dollars] :- String (render d))
