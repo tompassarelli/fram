@@ -234,6 +234,24 @@
 (def DEF-FORMS   #{"def" "def-" "defonce"})    ; module value binding: (def name :- T val)
 (def VALUE-DEFS  (into PARAM-FORMS DEF-FORMS)) ; everything that binds a value at module scope
 (def TYPE-DEFS   #{"defrecord" "deftype" "defprotocol" "definterface" "defunion"})
+;; EFFECT-DEFS — top-level forms whose effect is a REGISTRATION (a multimethod method,
+;; a defmulti dispatch table, a protocol extension) rather than a fresh value binding.
+;; They ARE addressable (read-def surfaces them: defmethod as `M:dispatch`, extensions
+;; per target block) and they MUST be writable — the fix a real Clojure issue needs is
+;; often exactly one such form (malli-01 = a new `(defmethod accept 'bytes? …)`). The old
+;; write-def gate accepted only VALUE-DEFS, so it rejected defmethod with the wrong
+;; medicine ("wrap it as (def <name> (defmethod …))" — a multimethod registration is a
+;; top-level effect, not a value, so the wrap misleads the model into churn).
+(def EXTEND-FORMS #{"extend-type" "extend-protocol" "extend"})
+(def EFFECT-DEFS  (into #{"defmulti" "defmethod"} EXTEND-FORMS))
+;; every top-level head write-def / upsert-form accepts.
+(def WRITABLE-DEFS (into (into VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
+(defn writable-def-head? [h] (contains? WRITABLE-DEFS h))
+;; a writable form whose IDENTITY is its def-name (def/defn/type/protocol/defmulti) — as
+;; opposed to defmethod (name+dispatch) and the extend forms (head+target), which key
+;; differently and coexist under a shared head/name.
+(defn named-def-head? [h] (and (writable-def-head? h)
+                               (not (contains? (into #{"defmethod"} EXTEND-FORMS) h))))
 (def TYPE-COLON  #{":-" ":"})  ; inline type-annotation markers (`:` is legal in field/param position)
 (def LET-FORMS   #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding"
                    "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})
@@ -1325,6 +1343,58 @@
     (or (seg? src) (seg? (module-name src)))))
 (defn- scope->srcs [scope] (filter #(scope-match? % scope) srcs))
 
+;; datum->canon / node->canon are defined further down; forward-declare so the upsert
+;; victim finder can compare a NEW datum's dispatch/target against an EXISTING node's —
+;; both reduce to the SAME canonical vector, so the match is representation-independent.
+(declare datum->canon node->canon)
+;; writable-victim — the existing top-level FORM node this upsert should REPLACE (nil ->
+;; APPEND). Identity is head-shaped:
+;;   named (def/defn/type/protocol/defmulti) -> the def NAME (meta/Params unwrapped),
+;;     matched by string so `def`->`defn` upsert and metadata-named defs round-trip;
+;;   defmethod -> multimethod name + dispatch value (canon-compared) — two methods on the
+;;     same M with different dispatch are DISTINCT and coexist; re-writing one replaces it;
+;;   extend-type/extend-protocol/extend -> head + primary target (the form's second child),
+;;     so re-authoring `(extend-type T …)` replaces the T block. (Multiple extend blocks on
+;;     the same target under one head collapse to one identity — a known, documented bound.)
+(defn- node-def-name [f]                       ; meta/Params-unwrapped def NAME of a node
+  (let [nl0 (unwrap-meta (second (ordered-children (unwrap-def f))))
+        nl  (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)]
+    (sym-val nl)))
+(defn- writable-victim [src datum]
+  (let [head  (str (first datum))
+        forms (rest (ordered-children (wrapper-of src)))]
+    (cond
+      (= head "defmethod")
+      (let [m  (str (second datum))
+            dv (datum->canon (nth (vec datum) 2 nil))]        ; dispatch value, canon
+        (some (fn [f] (let [d (unwrap-def f) k (ordered-children d)]
+                        (when (and (= "defmethod" (head-sym d))
+                                   (= m (sym-val (second k)))
+                                   (= dv (node->canon (nth (vec k) 2 nil))))
+                          f)))
+              forms))
+      (contains? EXTEND-FORMS head)
+      (let [tgt (datum->canon (second datum))]                ; primary target, canon
+        (some (fn [f] (let [d (unwrap-def f)]
+                        (when (and (= head (head-sym d))
+                                   (= tgt (node->canon (second (ordered-children d)))))
+                          f)))
+              forms))
+      :else                                                   ; named identity
+      (let [nm (str (second datum))]
+        (some (fn [f] (when (and (named-def-head? (head-sym (unwrap-def f)))
+                                 (= nm (node-def-name f)))
+                        f))
+              forms)))))
+;; a human label for the upserted form (author-emit + result naming). For a value def it
+;; is the name; for defmethod it is `M:dispatch`; for an extension it is `head <target>`.
+(defn writable-disp-name [datum]
+  (let [head (str (first datum))]
+    (cond
+      (= head "defmethod")      (str (second datum) ":" (pr-str (nth (vec datum) 2 nil)))
+      (contains? EXTEND-FORMS head) (str head " " (pr-str (second datum)))
+      :else                     (str (second datum)))))
+
 (defn verb-upsert-form! [scope datum]
   (let [target-srcs (scope->srcs scope)]
     (when (not= 1 (count target-srcs))
@@ -1332,17 +1402,16 @@
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
                       " source files; upsert-form needs exactly one (no claims mutated).")))
       (*reject!* 3))
-    (when (and (seq? datum) (not (VALUE-DEFS (str (first datum)))))
+    (when (and (seq? datum) (not (writable-def-head? (str (first datum)))))
       (binding [*out* *err*]
         (println (str "REJECTED — upsert-form spec head `" (first datum)
-                      "` is not a value def (def/defn/...); no claims mutated.")))
+                      "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no claims mutated.")))
       (*reject!* 3))
     (let [src (first target-srcs)
           wrap (wrapper-of src)
           forms (wrap-forms wrap)
-          new-name (when (and (seq? datum) (VALUE-DEFS (str (first datum)))) (str (second datum)))
-          existing (when new-name (def-binding src new-name))
-          victim-form (when existing (form-for-victim src existing))
+          disp-name (when (seq? datum) (writable-disp-name datum))
+          victim-form (when (seq? datum) (writable-victim src datum))
           victim-entry (when victim-form (some (fn [[k cid r]] (when (= r victim-form) [k cid r])) forms))
           new-root (mint-datum! src datum)]
       (if victim-entry
@@ -1356,7 +1425,7 @@
           (c/claim! ctx wrap (c/value! ctx (ord-str (ord-append last-path) (ord-tie))) new-root tx)))
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
-                    (str (if victim-entry "replaced" "added") " top-level def `" new-name
+                    (str (if victim-entry "replaced" "added") " top-level def `" disp-name
                          "` in \"" scope "\" (1 form minted as claims; refs resolved via refers_to)")))))
 
 ;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a CRDT

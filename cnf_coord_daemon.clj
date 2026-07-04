@@ -1471,16 +1471,19 @@
           (not (seq? form))
           (s-err :canon :at {:module module} :message (str "top-level item is not a form: " (pr-short form))
                  :got (pr-short form) :suggestion "send a `(def ...)`/`(defn ...)` form — not a bare value or prose")
-          (not (resolve/VALUE-DEFS (str (first form))))
+          (not (resolve/writable-def-head? (str (first form))))
           (s-err :canon :at {:module module}
-                 :message (str "top-level head `" (first form) "` is not a value def")
-                 :got (str (first form)) :expected "def / defn / defonce / def-"
-                 :suggestion (str "wrap it as `(def <name> " (pr-short form) ")` or `(defn <name> [..] ..)`")
-                 :nearest (nearest-names (str (first form)) resolve/VALUE-DEFS :n 2 :max-dist 3))
+                 :message (str "top-level head `" (first form) "` is not a writable top-level form")
+                 :got (str (first form))
+                 :expected "def / defn / defonce / def- / defmulti / defmethod / defrecord / deftype / defprotocol / extend-type / extend-protocol / extend"
+                 ;; A multimethod method / protocol extension is a top-level EFFECT — never
+                 ;; wrap it as (def …); send the form itself.
+                 :suggestion "send the top-level form directly (e.g. `(defmethod m dispatch [..] ..)`, `(extend-type T P (m [..] ..))`, or `(defn f [..] ..)`)"
+                 :nearest (nearest-names (str (first form)) resolve/WRITABLE-DEFS :n 2 :max-dist 3))
           (< (count form) 2)
           (s-err :canon :at {:module module} :message "def has no name" :suggestion "name it: `(def <name> ...)`")
           :else
-          (let [nm (str (second form))]
+          (let [nm (resolve/writable-disp-name form)]
             (or (static-type-check module form corpus-types)
                 (let [er (try (do-edit-min {:op "upsert-form" :module module :datum form})
                               (catch Throwable t {:ex t}))]

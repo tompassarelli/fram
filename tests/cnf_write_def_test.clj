@@ -190,6 +190,45 @@
     (check "hook reject carries a :suggestion" (not (str/blank? (str (:suggestion e)))) (pr-str e)))
   (finally (reset! def-check-hook default-def-check)))   ; restore before the fixture sweep
 
+(println "\n=== EFFECT-DEFS: defmethod / defmulti / extend-* writable (EXP-025 b4 DEFECT 1) ===")
+;; Regression: write-def of a `(defmethod …)` was rejected at the canon gate with the
+;; WRONG medicine — "wrap it as `(def <name> (defmethod …))`". A multimethod method is a
+;; top-level REGISTRATION effect, not a value; the wrap misleads the model into churn
+;; (b4 w-malli-01 toolcalls turn 2). Identity: defmethod keyed by M + dispatch value
+;; (siblings coexist, same M+dispatch replaces); defmulti/extend keyed by name/target.
+(defn- names-of [module] (set (map :name (:defs (idx module)))))
+;; -- defmulti (named identity) --
+(let [resp (w M "(defmulti wd-mm class)")]
+  (check "defmulti write -> :ok (was: rejected, not a value def)" (:ok resp) (pr-str resp)))
+(check "defmulti addressable in index" (contains? (names-of M) "wd-mm") (pr-str (names-of M)))
+;; -- defmethod: two dispatch values COEXIST (identity = M + dispatch) --
+(let [a (w M "(defmethod wd-mm :alpha [x] x)")
+      b (w M "(defmethod wd-mm :beta [x] x)")]
+  (check "defmethod :alpha write -> :ok (DEFECT 1 fix)" (:ok a) (pr-str a))
+  (check "defmethod :beta  write -> :ok" (:ok b) (pr-str b)))
+(let [ns (names-of M)]
+  (check "both defmethods coexist (M+dispatch identity, not M)"
+         (and (contains? ns "wd-mm::alpha") (contains? ns "wd-mm::beta")) (pr-str ns)))
+;; -- re-writing SAME M+dispatch REPLACES (no duplicate append) --
+(let [before (count (filter #(str/starts-with? (str %) "wd-mm") (names-of M)))
+      re     (w M "(defmethod wd-mm :alpha [x] (inc x))")
+      after  (count (filter #(str/starts-with? (str %) "wd-mm") (names-of M)))
+      rd     (r M "wd-mm::alpha")]
+  (check "re-write same M+dispatch -> :ok" (:ok re) (pr-str re))
+  (check "re-write REPLACES (count unchanged, no dup)" (= before after) (str "before=" before " after=" after))
+  (check "re-write body took (inc)" (and (:ok rd) (str/includes? (str (:source rd)) "inc")) (pr-str (:source rd))))
+;; -- extend-type (head + target identity) --
+(let [resp (w M "(extend-type WdFoo WdProto (wd-m [this] 1))")]
+  (check "extend-type write -> :ok (DEFECT 1 fix)" (:ok resp) (pr-str resp))
+  (check "extend-type addressable as Target@Proto" (contains? (names-of M) "WdFoo@WdProto") (pr-str (names-of M))))
+;; -- NEGATIVE: a genuinely non-writable head still fails, WITHOUT the wrong medicine --
+(let [resp (w M "(println \"nope\")")
+      e (err-of resp)]
+  (check "non-writable head still fails closed" (false? (:ok resp)) (pr-str resp))
+  (check "reject :stage :canon" (= :canon (:stage e)) (pr-str e))
+  (check "reject does NOT prescribe the wrong `wrap it as (def ...)` medicine"
+         (not (str/includes? (str (:suggestion e)) "wrap it as")) (pr-str (:suggestion e))))
+
 ;; --- A0's real t-r1 fumble corpus (thread A0) -------------------------------
 ;; Each fixture carries `:emitted` — the RAW text the model actually produced in
 ;; EXP-021 t-r1 (often a fenced EDN changeset, prose, JSON keys, or a bare form). We
