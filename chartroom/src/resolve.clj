@@ -206,6 +206,16 @@
                         (when (and (string? p) (re-matches #"seg\d+" p)) [(parse-long (subs p 3)) (:r cl)]))))
        (sort-by first) (mapv second)))
 (defn head-sym [e] (when (= "list" (kind-of e)) (sym-val (first (ordered-children e)))))
+;; D2: peel leading (#%meta <metadata> <target>) wrappers to reach the bound form.
+;; A metadata-annotated def NAME — `(def ^:dynamic *x* 1)` ingests its name slot as
+;; `(#%meta {:dynamic true} *x*)` — hides the symbol from a bare `sym-val`. Metas nest
+;; left (`^a ^b x` = `(#%meta a (#%meta b x))`), so loop to the innermost target (the
+;; 3rd child). nil-safe: a malformed/absent target falls through to nil (head-sym nil).
+(defn unwrap-meta [e]
+  (loop [e e n 0]
+    (if (and e (< n 64) (= "#%meta" (head-sym e)))
+      (recur (nth (ordered-children e) 2 nil) (inc n))
+      e)))
 (defn bound-target
   "The DURABLE identity target of reference `L` — the bound_to edge points at the binding's
    stable @mod#int node-id, not its spelling. nil if L carries no durable edge (legacy/unedged
@@ -528,7 +538,9 @@
     (into {} (mapcat (fn [f] (let [d (unwrap-def f)]
                                (cond
                                  (VALUE-DEFS (head-sym d))   ; def/defn — value binding
-                                 (let [nl (second (ordered-children d))] (when (sym-val nl) [[(sym-val nl) nl]]))
+                                 ;; D2: unwrap a leading (#%meta …) so a metadata-annotated NAME
+                                 ;; — (def ^:dynamic *x* …) — still enters the frame as `*x*`.
+                                 (let [nl (unwrap-meta (second (ordered-children d)))] (when (sym-val nl) [[(sym-val nl) nl]]))
                                  ;; defprotocol/definterface methods are public callable VARS — each method
                                  ;; sig (name [params] :- Ret) defines `name`; collect so it renames + resolves.
                                  (#{"defprotocol" "definterface"} (head-sym d))
@@ -1002,7 +1014,7 @@
           (recur (conj seen n) (into (pop stack) (structural-kids n))))))))
 (defn form-for-victim [src victim]       ; the top-level form whose def-NAME is victim (only the name —
   (some (fn [f]                          ; a defunion VARIANT is not its own top-level form, so it won't match)
-          (let [nl0 (second (ordered-children (unwrap-def f)))
+          (let [nl0 (unwrap-meta (second (ordered-children (unwrap-def f))))   ; D2: peel (#%meta …) off the name
                 nl (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)]   ; (Name Params) head
             (when (= victim nl) f)))
         (rest (ordered-children (wrapper-of src)))))
@@ -1287,8 +1299,24 @@
 ;; keys and BOTH land (commute). The single-writer CLI path has no race -> tie "0".
 (defn- ord-tie [] (if *capture-only?* "PENDING" "0"))
 
+;; D1: resolve a scope to its target module at a dot-SEGMENT boundary. A raw substring
+;; filter (str/includes?) collides a module with any sibling it PREFIXES — scope
+;; "cheshire.generate" matched BOTH "cheshire.generate" AND "cheshire.generate_seq" ->
+;; rejected as ambiguous (code 3), leaving the module unauthorable. But scope may
+;; legitimately be the SHORT module name ("schema" for module "fram.schema"), which the
+;; old substring also bridged, so a naive `=` over-tightens (0 matches). The right rule
+;; matches only on a `.`-delimited segment boundary: scope equals the module, or is a
+;; trailing dotted-suffix of it ("schema" ⊴ "fram.schema" ✓; "cheshire.generate" ⋬
+;; "…generate_seq" ✗). Test both the raw src string (warm store keys srcs by module name)
+;; and its ns-form module name (the EDN/CLI path keys srcs by the `@file` value) — each
+;; direction covers short↔qualified without reopening the prefix-sibling collision.
+(defn- scope-match? [src scope]
+  (letfn [(seg? [m] (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
+    (or (seg? src) (seg? (module-name src)))))
+(defn- scope->srcs [scope] (filter #(scope-match? % scope) srcs))
+
 (defn verb-upsert-form! [scope datum]
-  (let [target-srcs (filter #(str/includes? % scope) srcs)]
+  (let [target-srcs (scope->srcs scope)]
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
@@ -1405,7 +1433,7 @@
 ;; js/export-wrapped value-def (map/vector binding) with code 5 (no-victim), so
 ;; "add a field to this map" was unauthorable — the duel's F021-F024 failure.
 (defn verb-set-body! [name scope datum]
-  (let [target-srcs (filter #(str/includes? % scope) srcs)]
+  (let [target-srcs (scope->srcs scope)]
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
@@ -1425,7 +1453,7 @@
             ;; body follows the [param] vector (defn) or the NAME (plain value-def).
             anchor-n (if param?
                        (some (fn [[n _ r]] (when (brackets? r) n)) kids)
-                       (some (fn [[n _ r]] (when (= name (sym-val r)) n)) kids))
+                       (some (fn [[n _ r]] (when (= name (sym-val (unwrap-meta r))) n)) kids))
             ret?     (some (fn [[n _ r]] (and (= n (inc anchor-n)) (TYPE-COLON (sym-val r)))) kids)
             body-start (+ anchor-n (if ret? 3 1))
             body-slots (filter (fn [[n _ _]] (>= n body-start)) kids)

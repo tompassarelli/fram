@@ -63,6 +63,20 @@
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
                                  (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+;; D3: the legacy cold-render path (`racket --render`) loads claims-roundtrip's .zo,
+;; compiled for beagle's flake-pinned racket; bare "racket" risks a .zo version mismatch.
+;; Resolve the pinned racket like bin/fram-ingest-code (FRAM_RACKET overrides). NO bare
+;; fallback — fail loud rather than emit a stale-bytecode failure that looks like a bug.
+(def ^:private racket-bin
+  (or (System/getenv "FRAM_RACKET")
+      (let [r (try (proc/sh {:out :string :err :string} "direnv" "exec" beagle-home "which" "racket")
+                   (catch Exception _ nil))]
+        (when (and r (zero? (:exit r)) (not (str/blank? (:out r))))
+          (str/trim (:out r))))
+      (die (str "fram-edit-code: cannot resolve pinned racket for " beagle-home ". "
+                "Run `source " beagle-home "/bin/_beagle-racket` first, or set FRAM_RACKET "
+                "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
+                "(version mismatch with beagle's compiled .zo bytecode)."))))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
                                  (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
 (def ^:private fram-out      (or (System/getenv "FRAM_OUT") (str (System/getProperty "user.dir") "/out")))
@@ -263,7 +277,7 @@
                "(the verb may have REJECTED the edit; see stderr above)"))
 
         ;; 3. render the affected module FROM the projected EDN -> .bclj (ATOMIC).
-        (let [r (proc/sh {:out :string :err :string} "racket" roundtrip-rkt "--render" proj-edn)]
+        (let [r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--render" proj-edn)]
           (when (not (zero? (:exit r))) (die "render FAILED for" affected "\n" (:err r)))
           (let [out-file (or out (str resolve-out "/" affected ".bclj"))]
             (atomic-spit! out-file (:out r))

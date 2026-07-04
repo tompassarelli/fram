@@ -41,6 +41,20 @@
                                  (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
                                  (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
+;; D3: `--render` loads claims-roundtrip's .zo, compiled for beagle's flake-pinned
+;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve the
+;; pinned racket like bin/fram-ingest-code (FRAM_RACKET overrides, direnv fallback). NO
+;; bare fallback: a silent mismatch looks like a code bug, not a version bug — fail loud.
+(def ^:private racket-bin
+  (or (System/getenv "FRAM_RACKET")
+      (let [r (try (proc/sh {:out :string :err :string} "direnv" "exec" beagle-home "which" "racket")
+                   (catch Exception _ nil))]
+        (when (and r (zero? (:exit r)) (not (str/blank? (:out r))))
+          (str/trim (:out r))))
+      (die (str "fram-render-code: cannot resolve pinned racket for " beagle-home ". "
+                "Run `source " beagle-home "/bin/_beagle-racket` first, or set FRAM_RACKET "
+                "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
+                "(version mismatch with beagle's compiled .zo bytecode)."))))
 
 ;; NOTE: cnf_coord_daemon.clj + resolve.clj are load-file'd LAZILY in the COLD path only
 ;; (see below). The --port WARM path doesn't need them (the daemon does the projection),
@@ -71,7 +85,7 @@
     (when-not (:edn resp) (die "fram-render-code: warm :render returned no :edn —" (pr-str resp)))
     (let [edn-out (str (System/getProperty "java.io.tmpdir") "/fram-warmrender-" (System/nanoTime) ".edn")]
       (spit edn-out (:edn resp))
-      (let [r (proc/sh {:out :string :err :string} "racket" roundtrip-rkt "--render" edn-out)]
+      (let [r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--render" edn-out)]
         (when-not (zero? (:exit r)) (die "render FAILED for" module "\n" (:err r)))
         (if out
           (do (spit out (:out r))
@@ -152,7 +166,7 @@
           (resolve/extract-file! the-src edn-out)))
 
       ;; 4. racket --render the resolved EDN -> .bclj text.
-      (let [r (proc/sh {:out :string :err :string} "racket" roundtrip-rkt "--render" edn-out)]
+      (let [r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--render" edn-out)]
         (when (not (zero? (:exit r))) (die "render FAILED for" module "\n" (:err r)))
         (if out
           (do (spit out (:out r))
