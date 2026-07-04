@@ -1339,6 +1339,9 @@
     (seq? form)     (if (= 'fn* (first form)) (canon-fn* form) (doall (map canon-1 form)))
     (vector? form)  (mapv canon-1 form)
     (map? form)     (into {} (map (fn [[k v]] [(canon-1 k) (canon-1 v)]) form))
+    ;; sets recurse too — else a nested `::kw` / `#(…)` inside `#{…}` escapes the gate
+    ;; and reaches mint-time uncanonicalized. mint-datum! re-encodes the set as (#%set …).
+    (set? form)     (set (map canon-1 form))
     :else form))
 (defn- canon-form [form]
   (try {:form (canon-1 form)}

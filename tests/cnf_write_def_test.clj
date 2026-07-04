@@ -137,6 +137,40 @@
 (let [_ (w M "(def a1-sig :- String \"hi\")") rd (r M "a1-sig")]
   (check "def-form sig derived (String)" (= "String" (:sig rd)) (pr-str (:sig rd))))
 
+(println "\n=== READER-FORM ROUND-TRIP: regex / set / nested / char / ratio (EXP-025 b1 mint fix) ===")
+;; The host LispReader hands write-def OBJECTS (Pattern, PersistentHashSet, Character,
+;; Ratio) — mint-datum! must re-encode them into the SAME (#%regex …)/(#%set …) nodes
+;; --emit-edn mints so the renderer inverts them back. Regression: a bare-source `#","`
+;; was pr-str'd to the STRING "#\",\"", corrupting the def (oracle red). rt-datum reads
+;; the rendered source with the FULL reader (same production LispReader) so the assertion
+;; is reader-form identity, not a substring guess.
+(defn- rt-datum [s] (binding [*read-eval* false] (read-string s)))   ; -> (def <name> <value>)
+(let [_ (w M "(def a1-rt-regex #\",\")") rd (r M "a1-rt-regex")
+      src (str (:source rd)) d (try (rt-datum src) (catch Throwable _ nil))]
+  (check "regex #\",\" renders as a regex literal, NOT a string"
+         (and (:ok rd) (str/includes? src "#\",\"") (instance? java.util.regex.Pattern (last d)))
+         (pr-str src)))
+(let [_ (w M "(defn a1-rt-split [x] (str/split x #\",\"))") rd (r M "a1-rt-split")
+      src (str (:source rd))]
+  (check "nested (str/split x #\",\") keeps the regex arg (no leaked \"# string)"
+         (and (:ok rd) (str/includes? src "#\",\"") (not (str/includes? src "\"#")))
+         (pr-str src)))
+(let [_ (w M "(def a1-rt-set #{1 2 3})") rd (r M "a1-rt-set")
+      src (str (:source rd)) d (try (rt-datum src) (catch Throwable _ nil))]
+  (check "set #{1 2 3} renders as #{…} + re-reads to the identical set"
+         (and (:ok rd) (str/includes? src "#{") (= #{1 2 3} (last d)))
+         (pr-str src)))
+(let [_ (w M "(def a1-rt-char \\x)") rd (r M "a1-rt-char")
+      src (str (:source rd)) d (try (rt-datum src) (catch Throwable _ nil))]
+  (check "char literal \\x round-trips (backslash preserved)"
+         (and (:ok rd) (str/includes? src "\\x") (= \x (last d)))
+         (pr-str src)))
+(let [_ (w M "(def a1-rt-ratio 1/2)") rd (r M "a1-rt-ratio")
+      src (str (:source rd)) d (try (rt-datum src) (catch Throwable _ nil))]
+  (check "ratio 1/2 round-trips"
+         (and (:ok rd) (str/includes? src "1/2") (= 1/2 (last d)))
+         (pr-str src)))
+
 (println "\n=== SEAM: def-check-hook surfaces a def-level reject end-to-end (deliverable 5) ===")
 ;; Prove the swappable check seam: A2 `reset!`s a (fn [module name] -> nil | ERROR) here.
 ;; A mock stands in for A2's warm primitive to verify write-def wires it correctly.

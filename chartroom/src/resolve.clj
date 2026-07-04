@@ -977,6 +977,16 @@
       (doseq [[i x] (map-indexed vector elems)]
         (c/claim! ctx e (c/value! ctx (str "f" i)) (mint-datum! src x) tx))
       e)
+    ;; Reader forms the host LispReader hands us as OBJECTS (write-def raw-source path),
+    ;; not as `#%…`-headed lists like beagle's Racket reader emits. Re-encode them into
+    ;; the SAME `(#%regex "pat")` / `(#%set e…)` list node --emit-edn mints, so the
+    ;; renderer (claims-roundtrip datum->src + node->str) inverts them back to the reader
+    ;; literal. Without this a regex/set fell to the :else leaf and was pr-str'd — a
+    ;; `#","` became the STRING `"#\",\""`, corrupting the def. (EXP-025 b1 substrate defect.)
+    (instance? java.util.regex.Pattern d)
+    (mint-datum! src (list (symbol "#%regex") (.pattern ^java.util.regex.Pattern d)))
+    (set? d)
+    (mint-datum! src (cons (symbol "#%set") (seq d)))
     :else (mint-leaf! src "other" (pr-str d))))
 ;; the body fN edges of a defn form = the consecutive fN child claims whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
@@ -1525,6 +1535,12 @@
     (number? d)   [:leaf "number" (str d)]
     (vector? d)   (into [:list [:leaf "symbol" "#%brackets"]] (map datum->canon d))
     (map? d)      (into [:list [:leaf "symbol" "#%map"]] (map datum->canon (apply concat (seq d))))
+    ;; regex/set: SAME `#%…`-headed canon mint-datum! + node->canon produce, so anchor
+    ;; matching + :within self-validation round-trip these reader forms (mirror of the
+    ;; write-def mint fix — a bare :else pr-str leaf here mismatches the stored node).
+    (instance? java.util.regex.Pattern d)
+                  [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern ^java.util.regex.Pattern d)]]
+    (set? d)      (into [:list [:leaf "symbol" "#%set"]] (map datum->canon d))
     (or (list? d) (seq? d)) (into [:list] (map datum->canon d))
     :else         [:leaf "other" (pr-str d)]))
 ;; anchor-matches — single POST-ORDER pass over a def form's subtree that computes each
@@ -1578,11 +1594,15 @@
                (cond
                  (= hs "#%brackets") (str "[" (str/join " " (map node->str (rest kids))) "]")
                  (= hs "#%map")      (str "{" (str/join " " (map node->str (rest kids))) "}")
+                 (= hs "#%set")      (str "#{" (str/join " " (map node->str (rest kids))) "}")
+                 ;; regex child is a raw "string" leaf — emit the pattern INSIDE #"…",
+                 ;; never pr-str it (that would double-quote it into a plain string).
+                 (= hs "#%regex")    (str "#\"" (pred-val (second kids) "v") "\"")
                  :else               (str "(" (str/join " " (map node->str kids)) ")")))
     "symbol" (render-sym n)
     "string" (pr-str (pred-val n "v"))
     "number" (str (pred-val n "v"))
-    "char"   (str (pred-val n "v"))
+    "char"   (str "\\" (pred-val n "v"))
     (str (pred-val n "v"))))
 (defn node->canon [n]
   (if (= "list" (kind-of n))
