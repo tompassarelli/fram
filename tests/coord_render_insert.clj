@@ -1,7 +1,7 @@
 ;; insert a probe via the CRDT mid-insert verb, committing to a /tmp log, so the real
 ;; render CLI (bin/fram-render-code) can then render it. SAFE: /tmp copy, in-process.
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 (def log "/tmp/cnf-render-test.log")
 (io/copy (io/file ".fram/code.log") (io/file log))
 (boot-flat! log)

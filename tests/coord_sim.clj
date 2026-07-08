@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_coord_sim.clj — #11 R2 (continuous arrival) + R3 (failure-heavy).
+;; coord_sim.clj — #11 R2 (continuous arrival) + R3 (failure-heavy).
 ;; *** SIMULATION — LABELED. *** Real CI x the full arrival-rate x CI-duration sweep is
 ;; infeasible, so this is a discrete-event sim of the two coordination PROTOCOLS. The
 ;; protocol logic is faithful, not a strawman:
@@ -16,7 +16,7 @@
 ;; The comparison is LANDING LATENCY (edit-ready -> edit-in-shared-substrate). The TRADE is stated:
 ;; git keeps main continuously green (CI per batch); Fram lands cheap + defers validation to publish
 ;; (main view-locally incoherent between publishes). Different guarantees — reported, not hidden.
-;;   bb cnf_coord_sim.clj
+;;   bb coord_sim.clj
 ;; ============================================================================
 (require '[clojure.string :as str])
 
@@ -74,7 +74,7 @@
 ;; ============================================================================
 (def K 32)
 ;; CI duration ms. 3880 is MEASURED (real build-all recompile of the rendered schema module —
-;; cnf_coord_experiment.clj, 2 runs 3912/3848ms); the others bracket it (modeled, swept).
+;; coord_experiment.clj, 2 runs 3912/3848ms); the others bracket it (modeled, swept).
 (def C-family [100 1000 3880 10000])
 (def intervals [5000 1000 200 50 10])        ; inter-arrival ms: slow -> fast
 (println "=== #11 R2 — continuous arrival (K=" K "edits, evenly spaced). SIMULATION. ===")

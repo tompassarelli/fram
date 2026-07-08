@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_edit_min_smoke.clj — Build A smoke: the MINIMAL-OP authoring edit.
+;; coord_edit_min_smoke.clj — Build A smoke: the MINIMAL-OP authoring edit.
 ;; ============================================================================
 ;; Boots ONE warm code daemon over a /tmp COPY of .fram/code.log on a verified-free
 ;; high port (NEVER 7977 / tern), then drives a 1-line set-body THROUGH the
@@ -9,9 +9,9 @@
 ;; whole-module path commits ~7800 because emit-edn renumbers the whole module).
 ;;
 ;; Reuses the warm daemon for the WHOLE run (no per-op cold-boot / 101k re-fold).
-;;   bb -cp out cnf_edit_min_smoke.clj
+;;   bb -cp out coord_edit_min_smoke.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io])
 
 (def root (System/getProperty "user.dir"))
@@ -20,7 +20,7 @@
   (println "SKIP — no .fram/code.log (run bin/fram-ingest-code first)") (System/exit 0))
 
 (binding [*command-line-args* []]
-  (load-file "cnf_coord_daemon.clj"))
+  (load-file "coord_daemon.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY of the code log ----------------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-smoke-" (System/nanoTime) ".code.log"))

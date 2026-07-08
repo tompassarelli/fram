@@ -3,7 +3,7 @@
 ;; pre-materializes refers_to (ensure-refers!), the clone inherits it, the verb's
 ;; capture-check reads the inherited edges. Rename a schema def + confirm the new name
 ;; lands in render(log) and it recompiles. NEVER 7977.
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io] '[babashka.process :as proc])
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
@@ -14,7 +14,7 @@
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out") "FRAM_ROUNDTRIP" roundtrip-rkt
                "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 (doseq [p [code-log roundtrip-rkt]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-rename-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)] (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false) (catch Exception _ true)))

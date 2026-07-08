@@ -1,14 +1,14 @@
 ;; ============================================================================
-;; cnf_coord_fram_r1.clj — #11 R1, FRAM arm (REAL socket :edit-min, the #14 path).
+;; coord_fram_r1.clj — #11 R1, FRAM arm (REAL socket :edit-min, the #14 path).
 ;; Batched all-pass disjoint: ONE warm daemon, fire K disjoint set-body edits to K distinct
 ;; schema functions CONCURRENTLY through the socket. Each :edit-min is its OWN integration
 ;; unit (a commit) — Fram does NOT batch. Disjoint (te,p) ⇒ no OCC conflict; acyclicity gate
 ;; inert (AST preds only, no depends_on/part_of) ⇒ OCC-retry is the sole Fram coordination
-;; event, and here it is 0. Counterpart to git R1 (cnf_coord_experiment.clj, committed c2dae60).
+;; event, and here it is 0. Counterpart to git R1 (coord_experiment.clj, committed c2dae60).
 ;; REAL: mechanics + counts. MODELED+LABELED: validation DURATION only (not in wall-ms).
-;;   bb -cp out cnf_coord_fram_r1.clj
+;;   bb -cp out coord_fram_r1.clj
 ;; ============================================================================
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (require '[clojure.java.io :as io])
 (def code-log (str (System/getProperty "user.dir") "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no .fram/code.log") (System/exit 0))

@@ -1,4 +1,4 @@
-;; cnf_causality_test.clj — thread 019f100f-eefe: causality/as-of + first-class
+;; coord_causality_test.clj — thread 019f100f-eefe: causality/as-of + first-class
 ;; retraction + (the death of) the internal lease. The acceptance gate for thread H.
 ;;
 ;; Sections map to the thread's ACCEPTANCE criteria:
@@ -13,9 +13,9 @@
 ;;   (b) :as-of {:seq S} reconstructs the pre-collision view AND re-sees a later-
 ;;       withdrawn claim (retraction-as-append is what makes as-of EXACT).
 ;;
-;;   bb -cp out tests/cnf_causality_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord.clj")
+;;   bb -cp out tests/coord_causality_test.clj
+(require '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord.clj")
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm (boolean ok)]))

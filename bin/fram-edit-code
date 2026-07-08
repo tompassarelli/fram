@@ -51,7 +51,7 @@
          '[clojure.java.io :as io]
          '[clojure.edn :as edn]
          '[babashka.process :as proc]
-         '[fram.cnf :as c]
+         '[fram.store :as c]
          '[fram.schema :as s])
 (import '[java.nio.file Files CopyOption StandardCopyOption]
         '[java.io File FileOutputStream RandomAccessFile])
@@ -84,12 +84,12 @@
 
 ;; resolve.clj's tail runs (-main) iff (first *command-line-args*) is a recognized
 ;; MODE. Our bin's own first arg (e.g. "set-body") collides with that set, AND
-;; cnf_coord_daemon.clj itself load-files resolve.clj — so MASK the CLI args around
+;; coord_daemon.clj itself load-files resolve.clj — so MASK the CLI args around
 ;; BOTH loads. We drive resolve.clj's verbs via run-verb-warm!, never its -main.
 ;; (fram-render-code is immune: its first arg is a module name, not a MODE.)
 (def ^:private the-args (vec *command-line-args*))   ; capture before masking
 (binding [*command-line-args* []]
-  (load-file "cnf_coord_daemon.clj")          ; migrate-flat->co + warm-store machinery
+  (load-file "coord_daemon.clj")          ; migrate-flat->co + warm-store machinery
   (load-file resolve-clj))                     ; run-verb-warm! / extract-file! / out-path
 
 ;; --- B1: ATOMIC write — render to a temp file in the SAME dir, fsync, then

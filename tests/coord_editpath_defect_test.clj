@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_editpath_defect_test.clj — EXP-025 edit-path smoke regressions (D1 + D2).
+;; coord_editpath_defect_test.clj — EXP-025 edit-path smoke regressions (D1 + D2).
 ;; ============================================================================
 ;; Repro-derived from ~/code/after-text/docs/private/EXP-025-editpath-smoke-2026-07-04.md
 ;; ("Defects found"). Drives the WARM :edit-min set-body path — the SAME path the
@@ -19,13 +19,13 @@
 ;; Plus a regression: a plain defn set-body in the UNAMBIGUOUS sibling still commits.
 ;;
 ;; Runs on the JVM (clojure -M), NOT bare bb — the daemon + verbs need production's
-;; LispReader (see tests/cnf_write_def_test.clj). Needs a flake-pinned racket to ingest
+;; LispReader (see tests/coord_write_def_test.clj). Needs a flake-pinned racket to ingest
 ;; (BEAGLE_HOME / FRAM_RACKET); SKIPs cleanly if beagle can't be resolved.
 ;;
 ;;   BEAGLE_HOME=$HOME/code/beagle FRAM_RACKET=$(direnv exec $HOME/code/beagle which racket) \
-;;     clojure -M tests/cnf_editpath_defect_test.clj ; echo EXIT=$?
+;;     clojure -M tests/coord_editpath_defect_test.clj ; echo EXIT=$?
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io]
          '[clojure.java.shell :as sh])
 
@@ -68,7 +68,7 @@
     (System/exit 0)))
 
 ;; --- boot a throwaway warm daemon over the log on a verified-free port >= 49010 ---
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]
                              (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)
                            (catch Exception _ true)))
@@ -84,7 +84,7 @@
   (println "ABORT: daemon not serving claims" (pr-str status)) (shutdown!) (System/exit 1))
 (println "daemon up:" (:claims status) "claims, port=" port "\n")
 
-;; --- assertion harness (cnf_write_def_test style) ---------------------------------
+;; --- assertion harness (coord_write_def_test style) ---------------------------------
 (def failures (atom 0))
 (defn- check [label ok? detail]
   (println (format "  [%s] %s%s" (if ok? "PASS" "FAIL") label (if ok? "" (str "  <-- " detail))))

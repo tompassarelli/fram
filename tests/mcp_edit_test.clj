@@ -165,7 +165,7 @@
                                   (catch Exception _ true)))
           port (or (some #(when (port-free? %) %) [7993 7994 7991 7999 7992]) 7993)
           daemon (p/process {:extra-env base-env :out (str tmp "/code-daemon.log") :err (str tmp "/code-daemon.log")}
-                            "clojure" "-M" "cnf_coord_daemon.clj" "serve-flat" (str port) code-log)]
+                            "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) code-log)]
       (try
         (Thread/sleep 7000)
         (let [flip-env (assoc base-env "FRAM_FLIP" "1" "FRAM_CODE_PORT" (str port)

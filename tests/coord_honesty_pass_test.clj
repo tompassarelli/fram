@@ -1,16 +1,16 @@
 ;; ============================================================================
-;; cnf_honesty_pass_test.clj — proves the read-side honesty pass is a
+;; coord_honesty_pass_test.clj — proves the read-side honesty pass is a
 ;; NO-SEMANTIC-CHANGE cleanup: the selection point is now NAMED (select-main-1)
 ;; but its behavior is byte-for-byte the old implicit (first …).
 ;;
 ;; This is the UNIT half (selection point == first, by construction). The
-;; END-TO-END half (same RESOLVED outputs) is the existing suite: cnf_code_flip
+;; END-TO-END half (same RESOLVED outputs) is the existing suite: coord_code_flip
 ;; KEYSTONE-A (render(log) == render(text) BYTE-IDENTICAL — exercises
-;; pred-val/kind-of/sym-val/refers-target) + cnf_edit_min_scoped_correct
+;; pred-val/kind-of/sym-val/refers-target) + coord_edit_min_scoped_correct
 ;; (refers_to symdiff 0). Run all three; green = behavior preserved.
-;;   bb -cp out cnf_honesty_pass_test.clj
+;;   bb -cp out coord_honesty_pass_test.clj
 ;; ============================================================================
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))  ; loads ns `resolve`
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))  ; loads ns `resolve`
 
 (def fails (atom 0))
 (defn chk [name got want]

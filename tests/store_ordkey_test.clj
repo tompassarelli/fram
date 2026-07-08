@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_ordkey_test.clj — Stage A: the CRDT order-key library, unit-tested standalone
-;;   bb cnf_ordkey_test.clj
+;; store_ordkey_test.clj — Stage A: the CRDT order-key library, unit-tested standalone
+;;   bb store_ordkey_test.clj
 ;; A position = (path, tie): path = logoot int-vector (dense; a path strictly between
 ;; any two always exists), tie = the node's atomic name-int (unique -> concurrent
 ;; same-gap inserts get DISTINCT keys -> commute). Encoded in the child-edge predicate

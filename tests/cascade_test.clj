@@ -5,8 +5,8 @@
 ;; exercises do-assert -> terminal-cascade! exactly as production does).
 ;;   bb -cp out tests/cascade_test.clj      (from the repo ROOT)
 (require '[fram.kernel :as k] '[fram.rt] '[clojure.java.io :as io])
-(load-file "cnf_coord.clj")
-(load-file "cnf_coord_daemon.clj")
+(load-file "coord.clj")
+(load-file "coord_daemon.clj")
 
 (def port 7991)
 (def logf "/tmp/cascade-test.log")

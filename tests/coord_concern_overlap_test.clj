@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; cnf_concern_overlap_test.clj — thread 019f1010-2705: concern footprint as
+;; coord_concern_overlap_test.clj — thread 019f1010-2705: concern footprint as
 ;; code-graph blast joins. The daemon derives a SCOPE-CORRECT calls_defn edge set
 ;; over the warm corpus (lifting refers_to to the enclosing defn) and exposes:
 ;;   :blast {:te "@mod#id"}        -> the node's transitive callers (who breaks)
@@ -10,14 +10,14 @@
 ;;   (2) scope-correct: same-named fns in different modules are DISTINCT nodes
 ;;   (3) overlap is a closure intersection over footprint claims read LIVE; and it
 ;;       is RENAME-STABLE because footprint is keyed on @mod#int identity, not spelling.
-;;   bb -cp out tests/cnf_concern_overlap_test.clj
+;;   bb -cp out tests/coord_concern_overlap_test.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.set :as set] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no .fram/code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (def flat (str (System/getProperty "java.io.tmpdir") "/concern-overlap-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))

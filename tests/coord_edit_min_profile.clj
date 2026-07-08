@@ -1,8 +1,8 @@
 ;; profile: break corpus-from-store! into grouping vs per-src table builds; and time a SINGLE-module table build.
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.java.io :as io] '[clojure.edn :as edn])
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.java.io :as io] '[clojure.edn :as edn])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (require '[resolve :as r])
 
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-profile-" (System/nanoTime) ".code.log"))

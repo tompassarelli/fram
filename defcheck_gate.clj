@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_defcheck.clj — the incremental def-level check primitive (adapter v2, A2).
+;; defcheck_gate.clj — the incremental def-level check primitive (adapter v2, A2).
 ;; ============================================================================
 ;; ONE callable the verb layer (A1's write-def) invokes per write. Signature,
 ;; agreed with A1 over the claim feed:

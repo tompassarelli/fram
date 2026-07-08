@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_write_def_realcheck_test.clj — A1×A2 integration: write-def wired to A2's
-;; WARM def-level check (cnf_defcheck.clj) via the def-check-hook seam.
+;; coord_write_def_realcheck_test.clj — A1×A2 integration: write-def wired to A2's
+;; WARM def-level check (defcheck_gate.clj) via the def-check-hook seam.
 ;; ============================================================================
 ;; Boots a code daemon with FRAM_DEFCHECK=1 so serve wires fram.defcheck/check-def
 ;; (+ whole-tree-check for :check). Proves the FULL adapter-v2 pipeline: a def that
@@ -8,9 +8,9 @@
 ;; a valid def comes back :ok + :deep-check :ran; :check {} runs the whole-tree gate.
 ;;
 ;; SKIPS (exit 0) when the beagle sidecar can't start in this env (no racket/beagle) —
-;; the wiring + shape are still exercised by cnf_write_def_test.clj's mock seam.
+;; the wiring + shape are still exercised by coord_write_def_test.clj's mock seam.
 ;;
-;;   FRAM_DEFCHECK=1 clojure -M tests/cnf_write_def_realcheck_test.clj > out 2>&1; echo EXIT=$?
+;;   FRAM_DEFCHECK=1 clojure -M tests/coord_write_def_realcheck_test.clj > out 2>&1; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io])
 
@@ -21,7 +21,7 @@
 (when-not (= "1" (System/getenv "FRAM_DEFCHECK"))
   (println "SKIP — set FRAM_DEFCHECK=1 to run the warm def-check integration") (System/exit 0))
 
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/realchk-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (defn- pf? [p] (try (with-open [s (java.net.Socket.)] (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false) (catch Exception _ true)))

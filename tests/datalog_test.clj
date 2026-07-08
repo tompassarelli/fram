@@ -1,7 +1,7 @@
 ;; datalog_test.clj — positive + recursive Datalog, semantic conformance to the
 ;; oracle's fixtures (join, transitive closure, claim-pattern, repeated-var join).
 ;;   bb -cp out datalog_test.clj
-(require '[fram.cnf :as c] '[fram.datalog :as d])
+(require '[fram.store :as c] '[fram.datalog :as d])
 
 (def ctx (c/new-store))
 (def tx (c/begin-tx! ctx "test"))

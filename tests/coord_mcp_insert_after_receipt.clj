@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_mcp_insert_after_receipt.clj — §0.2 blocker closed: a FLUENT AGENT can now
+;; coord_mcp_insert_after_receipt.clj — §0.2 blocker closed: a FLUENT AGENT can now
 ;; reach insert-anywhere-commute.
-;;   bb -cp out cnf_mcp_insert_after_receipt.clj
+;;   bb -cp out coord_mcp_insert_after_receipt.clj
 ;;
 ;; Proves the AGENT-FACING chain (MCP tool catalog -> {:edit ...} envelope ->
 ;; CLI verb-flags -> bin/fram-edit-code -> :edit-min wire op -> do-edit-min) reaches
@@ -66,7 +66,7 @@
 
 ;; ---- boot the isolated daemon (JVM; serve-flat over the /tmp copy) ----------
 (def daemon
-  (proc/process ["clojure" "-M" "cnf_coord_daemon.clj" "serve-flat" (str port) tmp-log]
+  (proc/process ["clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) tmp-log]
                 {:dir here :out :inherit :err :inherit}))
 ;; wait until it answers :status (up to ~180s — JVM start + 9MB log migrate is slow).
 (def up?
@@ -84,9 +84,9 @@
 ;; query over triple(l,p,r): for the module's beagle-file wrapper, the position keys
 ;; are the predicates "f..." on the wrapper subject. Simpler: drive the discovery in
 ;; a SEPARATE in-process boot of the same /tmp log (read-only; no writes), exactly as
-;; cnf_crdt_insert_receipt does, so we get resolve/ord-parse for free.
+;; coord_crdt_insert_receipt does, so we get resolve/ord-parse for free.
 (binding [*command-line-args* []]
-  (load-file "cnf_coord_daemon.clj")
+  (load-file "coord_daemon.clj")
   (load-file (str here "/chartroom/src/resolve.clj")))
 
 ;; a fresh read-only boot of the SAME /tmp log (separate store; never written to).

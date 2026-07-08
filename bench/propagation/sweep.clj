@@ -15,13 +15,13 @@
 ;; SAFE: /tmp only, daemon on non-7977 port, never the canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
-         '[babashka.process :as proc] '[fram.cnf :as c] '[fram.schema :as s])
+         '[babashka.process :as proc] '[fram.store :as c] '[fram.schema :as s])
 (def root (System/getProperty "user.dir"))
 (def KS (mapv #(Integer/parseInt %) (str/split (or (System/getenv "SWEEP_KS") "1,2,4,8") #",")))
 (defn nowns [] (System/nanoTime))
 (defn ms [a b] (/ (double (- b a)) 1e6))
 (defn p [& xs] (apply println xs) (flush))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (defn mean [xs] (/ (reduce + xs) (double (count xs))))
 
 ;; ---- GIT arm: K concurrent writers to a shared bare repo, each push-with-retry ----

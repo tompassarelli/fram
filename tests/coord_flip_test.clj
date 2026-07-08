@@ -1,4 +1,4 @@
-;; cnf_flip_test.clj — Stage 7 cutover-mechanism gate: the WHOLE flip, proven on a
+;; coord_flip_test.clj — Stage 7 cutover-mechanism gate: the WHOLE flip, proven on a
 ;; COPY of the live log (touches no live file).
 ;;
 ;;   live flat log --(copy)--> flip-flat   (the projection seed, full history)
@@ -9,15 +9,15 @@
 ;; SET-EQUAL to the reified store — i.e. the flat log stays a faithful mirror, so
 ;; the cold CLI (which folds it) keeps working unchanged across the cutover. Plus
 ;; base_version contention holds end-to-end over the socket.
-;;   FRAM_LOG=/path bb -cp out cnf_flip_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s]
+;;   FRAM_LOG=/path bb -cp out coord_flip_test.clj
+(require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt] '[fram.kernel :as ck]
          '[clojure.string :as str] '[clojure.set :as set] '[clojure.java.io :as io])
-(load-file "cnf_coord_daemon.clj")   ; daemon: boot!/serve/client/do-* + reified->claims
+(load-file "coord_daemon.clj")   ; daemon: boot!/serve/client/do-* + reified->claims
 
 (def live (System/getenv "FRAM_LOG"))
 (when (or (nil? live) (not (.exists (io/file live))))
-  (println "cnf_flip_test: skipped — set FRAM_LOG") (System/exit 0))
+  (println "coord_flip_test: skipped — set FRAM_LOG") (System/exit 0))
 
 (def flip-flat "/tmp/flip-flat.log")
 (def flip-v2   "/tmp/flip-v2.log")

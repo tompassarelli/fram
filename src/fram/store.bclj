@@ -1,10 +1,10 @@
 #lang beagle/clj
 ;; ============================================================================
-;; fram.cnf — the reified CNF kernel (Stage 1).  THE one engine.
+;; fram.store — the reified CNF kernel (Stage 1).  THE one engine.
 ;; ============================================================================
 ;; DOMAIN-AGNOSTIC by construction: knows ONLY Object / Value / Claim / tx. ZERO
 ;; life-os vocabulary and ZERO code vocabulary — all domain terms are interned
-;; VALUES that live as claims, never symbols in this file. (cnf_invariant_test.)
+;; VALUES that live as claims, never symbols in this file. (store_invariant_test.)
 ;;
 ;; MULTI-STORE: no globals. Every op takes a `ctx` store handle, so one engine
 ;; hosts many stores. No small-N assumptions — interning + indexes are hash maps.
@@ -22,12 +22,12 @@
 ;; Ids are minted as Int and the typed store carries them as Int (claim l/p/r,
 ;; the indexes, tx-of). A claim VALUE is a (Map Keyword Any) {:l :p :r} (open map,
 ;; NOT a record) so it stays = to the map literal assemble-dump (.clj) feeds via
-;; load-store! and cnf_test asserts against. The store handle is a bare `Atom` —
+;; load-store! and store_test asserts against. The store handle is a bare `Atom` —
 ;; Beagle has no parametric (Atom T), so deref erases the element type; we recover
 ;; the Store record shape with (let [s :- t/Store (deref ctx)] …) at each read site.
 ;; The value interner is type-general (v :- Any) — the engine accepts arbitrary EDN.
 ;; ============================================================================
-(ns fram.cnf)
+(ns fram.store)
 (define-mode strict)
 (require fram.types :as t)
 
@@ -95,7 +95,7 @@
 ;; (the old claim) not-live — so supersession is just a claim-about-a-claim.
 ;; A claim value is a (Map Keyword Any) {:l :p :r} (NOT a record): l/p/r are Int
 ;; ids, but the value stays an open keyword-map so it is = to the map literal that
-;; assemble-dump (.clj) feeds via load-store! and that cnf_test asserts against.
+;; assemble-dump (.clj) feeds via load-store! and that store_test asserts against.
 (defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
   (let [cid (fresh-id! ctx)]
     (swap! ctx update :objects assoc cid true)

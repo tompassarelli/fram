@@ -1,13 +1,13 @@
-;; cnf_views_resolve_test.clj — thread E, read-layer half: select-main-1 is now
+;; coord_views_resolve_test.clj — thread E, read-layer half: select-main-1 is now
 ;; VIEW-RELATIVE. The resolver's single read-time selection point (the descendant of
 ;; the bare `(first …)` take-firsts, VIEWS_AND_BRANCHES §6/§8) elects the *view*'s
 ;; member of a live (l,p) group via (view selects @cid) overlay claims.
 ;;
-;; Companion to cnf_honesty_pass_test (which proves the *view*=nil default ≡ first):
+;; Companion to coord_honesty_pass_test (which proves the *view*=nil default ≡ first):
 ;; this proves a BOUND `*view*` isolates a branch's line, and silence inherits main.
-;;   bb -cp out tests/cnf_views_resolve_test.clj
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))   ; loads ns `resolve`
-(require '[fram.cnf :as c])
+;;   bb -cp out tests/coord_views_resolve_test.clj
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))   ; loads ns `resolve`
+(require '[fram.store :as c])
 
 (def fails (atom 0))
 (defn chk [name ok] (if ok (println (str "  [PASS] " name))

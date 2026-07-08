@@ -98,7 +98,7 @@ chooses, enforced for that view, *not* a substrate-global obligation. So "single
 thing: identity is global and forced; declared-single predicates are local and optional. References, in particular, assert
 **none**: on the mainline a reference is a spelling that resolves-or-fails-as-undefined, so a
 "dangling reference" is not a substrate conflict — it is a reader's traversal arriving at an
-undefined name **[today]** (measured: `cnf_gate_v2_read.clj`; refs are spelling, 0 authored
+undefined name **[today]** (measured: `coord_gate_v2_read.clj`; refs are spelling, 0 authored
 id-refs, 0 persisted derived claims).
 
 ## 5. Convergence is optional
@@ -117,7 +117,7 @@ found a clean, directional result that *confirms* this model empirically:
 - **The write side is disciplined.** Every supersession in the engine is gated on a declared
   cardinality axiom: `schema/replace!` fires only `(when (= "single" (cardinality …)))`
   (`assert!`/`link!`); `kernel/apply-assert`/`apply-retract` branch on `single?`;
-  `cnf_coord/ensure-single-cardinality!` and `commit!` consult `ck/single?` / stored
+  `coord/ensure-single-cardinality!` and `commit!` consult `ck/single?` / stored
   cardinality; an undeclared predicate defaults to `multi`. **No write imposes exclusivity it
   was not told to.**
 - **The exclusivity that *is* un-axiomed lives entirely on the read side** — "take-first"

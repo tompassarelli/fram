@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_write_def_test.clj — thread A1 acceptance: S-profile text-bridge verbs.
+;; coord_write_def_test.clj — thread A1 acceptance: S-profile text-bridge verbs.
 ;; ============================================================================
 ;; Boots ONE warm code daemon over a /tmp COPY of .fram/code.log on a verified-free
 ;; port >= 49010 (NEVER 7977/48942/48950 — live coordinators), then drives the new
@@ -8,12 +8,12 @@
 ;; whose :suggestion names the fix. Runs on the JVM (clojure -M) so the reader is the
 ;; SAME LispReader production uses (bb's SCI reader differs on #(..)/::).
 ;;
-;;   clojure -M tests/cnf_write_def_test.clj > /tmp/a1-selftest.out 2>&1; echo EXIT=$?
+;;   clojure -M tests/coord_write_def_test.clj > /tmp/a1-selftest.out 2>&1; echo EXIT=$?
 ;;
 ;; When tests/fixtures/authoring-fumbles.edn (thread A0) lands, this runner also folds
 ;; every fixture in (see the fixtures section at the end).
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io])
 
 (def root (System/getProperty "user.dir"))
@@ -21,7 +21,7 @@
 (when-not (.exists (io/file code-log))
   (println "SKIP — no .fram/code.log (run bin/fram-ingest-code first)") (System/exit 0))
 
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY, on a free port >= 49010 -------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/write-def-test-" (System/nanoTime) ".code.log"))

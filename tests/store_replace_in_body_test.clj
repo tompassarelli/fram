@@ -3,7 +3,7 @@
 ;; Proves: a unique anchor swaps ONE interior fN edge (mint new + supersede one), the
 ;; def is NOT re-emitted, and the three fail-closed paths (0-match / ambiguous / no-def)
 ;; refuse with NO store mutation. Uses the real schema module (emit-edn'd) as the corpus.
-(require '[resolve :as r] '[fram.cnf :as c] '[clojure.edn :as edn]
+(require '[resolve :as r] '[fram.store :as c] '[clojure.edn :as edn]
          '[clojure.java.io :as io] '[clojure.string :as str] '[babashka.process :refer [sh]])
 
 (def RT (or (System/getenv "FRAM_ROUNDTRIP")

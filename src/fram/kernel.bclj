@@ -30,7 +30,7 @@
 ;; suspect to depend on. The lifecycle DERIVATION (terminal?/terminal-i?) moved to
 ;; tern.projections; the kernel keeps only this vocab, for the two engine-side
 ;; consumers that still read it: the coordinator's the-model §9 terminal-cascade
-;; (cnf_coord_daemon) and the doctor vocab-fingerprint. Defaults are the tern
+;; (coord_daemon) and the doctor vocab-fingerprint. Defaults are the tern
 ;; lifecycle vocab; a consumer overrides via the env vars.
 (def terminal-preds :- (Vec String)
   (let [env :- Any (System/getenv "FRAM_TERMINAL_PREDS")]

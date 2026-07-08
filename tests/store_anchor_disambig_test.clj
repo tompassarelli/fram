@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; cnf_anchor_disambig_test.clj — replace-in-body ANCHOR AUTO-DISAMBIGUATION
+;; store_anchor_disambig_test.clj — replace-in-body ANCHOR AUTO-DISAMBIGUATION
 ;; (thread 019f22bd-137d). Verb-level proof over the REAL 10.7k-node make-vim!
 ;; mega-def (duel D08 corpus, module chrome.bjs.tabs.vim). Zero model calls, zero
 ;; daemon. Proves the 4 acceptance cases:
@@ -10,9 +10,9 @@
 ;;      equivalent COARSE whole-enclosing-form replace (surgical == coarse).
 ;;   3. a unique :old (no :within) lands on the unchanged fast path (1 edge swap).
 ;;   4. :within that is ambiguous OR non-matching REJECTS (fail-closed every level).
-;;   bb -cp out tests/cnf_anchor_disambig_test.clj   (from repo root; pinned racket)
+;;   bb -cp out tests/store_anchor_disambig_test.clj   (from repo root; pinned racket)
 ;; ============================================================================
-(require '[resolve :as r] '[fram.cnf :as c] '[clojure.edn :as edn]
+(require '[resolve :as r] '[fram.store :as c] '[clojure.edn :as edn]
          '[clojure.walk :as walk] '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.process :refer [sh]])
 

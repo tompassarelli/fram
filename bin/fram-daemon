@@ -7,10 +7,10 @@
 #   fram-daemon [serve|serve-flat] [port] [log]   (mode defaults to serve-flat)
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
 #   FRAM_TLS_KEYSTORE / FRAM_TLS_TRUSTSTORE / FRAM_TLS_PASS  -> mutual TLS (else plaintext)
-# cd $HERE so the daemon's relative (load-file "cnf_coord.clj") + deps.edn resolve.
+# cd $HERE so the daemon's relative (load-file "coord.clj") + deps.edn resolve.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # optional leading mode (serve | serve-flat); a numeric first arg keeps the old
 # `fram-daemon [port] [log]` shape working (mode = serve-flat).
 mode=serve-flat
 case "$1" in serve|serve-flat) mode="$1"; shift;; esac
-cd "$HERE" && exec clojure -M cnf_coord_daemon.clj "$mode" "${1:-7977}" "${2:-$HERE/claims.log}"
+cd "$HERE" && exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "${2:-$HERE/claims.log}"

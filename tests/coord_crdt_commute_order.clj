@@ -1,9 +1,9 @@
 ;; ============================================================================
-;; cnf_crdt_commute_order.clj — #36 GATE 3: do same-gap concurrent inserts CONVERGE
+;; coord_crdt_commute_order.clj — #36 GATE 3: do same-gap concurrent inserts CONVERGE
 ;; to a delivery-order-INDEPENDENT total order? (commute, demonstrated not asserted)
-;;   bb -cp out tests/cnf_crdt_commute_order.clj
+;;   bb -cp out tests/coord_crdt_commute_order.clj
 ;;
-;; Gate 2 (cnf_crdt_insert_receipt) shows two concurrent same-gap inserts BOTH LAND at
+;; Gate 2 (coord_crdt_insert_receipt) shows two concurrent same-gap inserts BOTH LAND at
 ;; distinct keys, no duplicate (no-clobber/no-loss). Gate 3 asks the STRONGER CRDT
 ;; question: is the FINAL TOTAL ORDER independent of which insert is delivered/committed
 ;; first? Final order is a pure function of (path, tie): both inserts share the same
@@ -24,8 +24,8 @@
 ;; SAFE: isolated in-process boot on a /tmp COPY of .fram/code.log; never 7977, never
 ;; the canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 (def M "kernel")
 (when-not (.exists (io/file ".fram/code.log")) (println "SKIP — no .fram/code.log") (System/exit 0))
 
@@ -108,7 +108,7 @@
       (println "execution-deterministic ordering; it is NOT strong (order-independent) CRDT convergence — that")
       (println "would require a generation-time site-id/content tie, not the receiver-side commit-order name-int.")
       (println "For sibling top-level defs the relative order is semantically free; a forward-ref BETWEEN them")
-      (println "is separately DETECTED (cnf_crdt_coupled_receipt). Gate 3 result banked as that boundary.")
+      (println "is separately DETECTED (coord_crdt_coupled_receipt). Gate 3 result banked as that boundary.")
       (System/exit 0))
 
   :else

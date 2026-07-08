@@ -1,6 +1,6 @@
 # proto-addr — S-profile addressability fixture
 
-Backs `tests/cnf_addressable_forms_test.clj`. A warm-daemon fixture proving the
+Backs `tests/coord_addressable_forms_test.clj`. A warm-daemon fixture proving the
 INDEX/READ-DEF addressability invariant on real Clojure protocol/extension shapes
 (EXP-025 p1c ring-01 defect fix).
 

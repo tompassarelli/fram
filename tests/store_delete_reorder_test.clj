@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_delete_reorder_test.clj — the `delete` + `reorder` authoring verbs are
+;; store_delete_reorder_test.clj — the `delete` + `reorder` authoring verbs are
 ;; claim-native, fail-closed, and round-trip through render-EDN → beagle --build-edn.
 ;; ============================================================================
 ;; The last two verbs wired into the claim-native authoring loop (#36 / #33):
@@ -23,10 +23,10 @@
 ;;   E   the post-delete+reorder module builds via beagle --build-edn with 0 errors and
 ;;       the `:- T` annotations survive (^T) — the verbs compose with the `:-` encode fix.
 ;;
-;;   bb -cp out tests/cnf_delete_reorder_test.clj   (from the repo root)
+;;   bb -cp out tests/store_delete_reorder_test.clj   (from the repo root)
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as proc])
 
 (def home (System/getProperty "user.home"))

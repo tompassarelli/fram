@@ -1,26 +1,26 @@
-;; cnf_coord_daemon.clj — Stage 7: the reified coordinator as a socket daemon.
+;; coord_daemon.clj — Stage 7: the reified coordinator as a socket daemon.
 ;; ============================================================================
 ;; Speaks the SAME wire protocol as coord.clj (:version/:assert/:retract/:ready/
 ;; :blocked/:leverage/:validate/:status/:subscribe), so fram.rt's socket
 ;; client + the CLI + the MCP work UNCHANGED after the cutover. Internally it
-;; commits through the reified kernel (cnf_coord) over the v2 log, and serves
+;; commits through the reified kernel (coord) over the v2 log, and serves
 ;; reads by projecting the reified live view into the EXISTING, proven projections
 ;; (fram.projections) — the read side of the cutover. The reified live view
-;; is set-equal to the flat fold (cnf_domain_test/cnf_lifecycle_test), so those
+;; is set-equal to the flat fold (store_domain_test/store_lifecycle_test), so those
 ;; projections return identical results.
 ;;
-;;   bb -cp out cnf_coord_daemon.clj serve [port] [v2-log]
-;;   bb -cp out cnf_coord_daemon.clj test  [port]
+;;   bb -cp out coord_daemon.clj serve [port] [v2-log]
+;;   bb -cp out coord_daemon.clj test  [port]
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
-         '[fram.cnf :as c] '[fram.schema :as s]
+         '[fram.store :as c] '[fram.schema :as s]
          '[fram.kernel :as ck]
          '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
         '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
         '[java.security KeyStore])
-(load-file "cnf_coord.clj")          ; the reified coordinator library
+(load-file "coord.clj")          ; the reified coordinator library
 ;; resolve.clj — the store-parameterized lexical resolver (S3.1/S3.2), loaded as a
 ;; LIBRARY: its -main is guarded behind a recognized MODES arg, and the daemon's
 ;; *command-line-args* ("serve-flat" ...) is not one, so load-file runs NOTHING — it
@@ -65,7 +65,7 @@
 ;; withdrawn_* are the first-class retraction SURFACE (thread H): claims-about-a-cid
 ;; recording who/when/why a claim was cancelled. Like cnf-supersedes they are bookkeeping
 ;; ON cid-subjects, not domain data — filter them from the warm read view / :query / index
-;; (the resolve layer reads them off the store directly via cnf_coord/withdrawal-of).
+;; (the resolve layer reads them off the store directly via coord/withdrawal-of).
 (def read-hidden-preds #{"bound_to" "withdrawn_by" "withdrawn_at" "withdrawn_reason"})
 (def refers-version (atom -1))       ; the co version refers_to was last materialized at
 
@@ -184,7 +184,7 @@
 (def ^:dynamic *flat-batch* nil)
 (defn- flat-line [op te p r seq]
   (str (pr-str {:tx seq :op op :l te :p p :r r :ts (fram.rt/now-ts) :by "coord"}) "\n"))
-;; DURABILITY (finding #13) is preserved through GROUP COMMIT (cnf_coord/enqueue-durable!):
+;; DURABILITY (finding #13) is preserved through GROUP COMMIT (coord/enqueue-durable!):
 ;; the lines are enqueued (in commit order — callers hold dlock) and the {:ok} ack only
 ;; happens after the appender thread has fsynced them (handle awaits the tickets after
 ;; releasing dlock; library callers await inline). In drop-in (serve-flat) mode the flat
@@ -1221,7 +1221,7 @@
     ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
     ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
     ;; persisted HERE before the rename so a cold re-render resolves them by IDENTITY, not by spelling
-    ;; (the old failure: cnf_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
+    ;; (the old failure: coord_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
     ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
     ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
     ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
@@ -1666,7 +1666,7 @@
                     ;; store given [module name], so the def is committed FIRST, then checked.
                     ;; A :type reject is INNER-LOOP FEEDBACK, not a transaction abort: the warm
                     ;; store is a scratchpad that tolerates in-progress type errors BY DESIGN
-                    ;; (the whole-tree gate at promotion is authoritative — cnf_defcheck.clj
+                    ;; (the whole-tree gate at promotion is authoritative — defcheck_gate.clj
                     ;; "authority split"). So we surface the error (agent fixes + re-upserts,
                     ;; replacing by name — idempotent) rather than rolling back, which would cost
                     ;; a full corpus read per write. The commit mechanics stay atomic (OCC).
@@ -1850,7 +1850,7 @@
                   defs (mapv #(select-keys % [:name :head :sig]) (addressable-forms src))]
               {:ok true :module want :defs defs :count (count defs) :version (current-seq @co)})))))))
 
-;; ---- phase 2: wire A2's WARM def-level check (thread A2, cnf_defcheck.clj) ---
+;; ---- phase 2: wire A2's WARM def-level check (thread A2, defcheck_gate.clj) ---
 ;; Opt-in via FRAM_DEFCHECK=1 so LIVE task coordinators (7977/48942/48950 — no code,
 ;; no sidecar) are untouched; the EXP-026 code daemon sets it. Graceful degrade: any
 ;; load/resolve failure leaves the advisory default in place (never breaks the daemon).
@@ -1859,7 +1859,7 @@
 (defn- maybe-wire-def-check! [port]
   (when (= "1" (System/getenv "FRAM_DEFCHECK"))
     (try
-      (load-file (str (System/getProperty "user.dir") "/cnf_defcheck.clj"))
+      (load-file (str (System/getProperty "user.dir") "/defcheck_gate.clj"))
       (let [cp  (resolve 'fram.defcheck/*coord-port*)
             cd  (some-> (resolve 'fram.defcheck/check-def) var-get)
             wtc (some-> (resolve 'fram.defcheck/whole-tree-check) var-get)]
@@ -1870,7 +1870,7 @@
             (println (str "def-check: WARM primitive wired — fram.defcheck/check-def @ coord-port " port
                           (when wtc " (+ whole-tree-check -> :check verb)"))))
           (binding [*out* *err*]
-            (println "def-check: cnf_defcheck.clj loaded but check-def/*coord-port* not found; staying advisory"))))
+            (println "def-check: defcheck_gate.clj loaded but check-def/*coord-port* not found; staying advisory"))))
       (catch Throwable t
         (binding [*out* *err*]
           (println (str "def-check: warm primitive unavailable (" (.getMessage t) "); staying advisory-deferred")))))))
@@ -1911,7 +1911,7 @@
           {:ok true :checked :whole-tree :version (current-seq @co)}
           (assoc res :version (current-seq @co))))
       {:ok true :checked :deferred
-       :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + cnf_defcheck.clj)"
+       :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + defcheck_gate.clj)"
        :version (current-seq @co)})
     (= :edit-min (:op req))
     (try (do-edit-min (:spec req))
@@ -1944,7 +1944,7 @@
       ;; The lease fn enforces mutual exclusion in its OWN (:lock co); the outer dlock just
       ;; serializes with other daemon ops. A bare :assert @lease:<res> is the UNSAFE lost-update
       ;; path the lease arm exists to close — agents MUST use these. No notify-subs! (lease
-      ;; changes are not broadcast), matching the fram-lease fork. Impl: cnf_coord.clj (load-file'd).
+      ;; changes are not broadcast), matching the fram-lease fork. Impl: coord.clj (load-file'd).
       :acquire-lease (acquire-lease! @co (:holder req) (:res req) (:ttl-ms req))
       :release-lease (release-lease! @co (:holder req) (:res req))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
@@ -2111,7 +2111,7 @@
                    :members (count vals) :ambiguous? (> (count vals) 1)
                    :values vals :version (current-seq @co)})
       ;; :as-of — time-travel READ (thread H, Part B). Reconstruct the view as of seq S
-      ;; (cnf_coord/live-as-of: born <= S, no supersede/withdraw marker <= S) and either
+      ;; (coord/live-as-of: born <= S, no supersede/withdraw marker <= S) and either
       ;; run a Datalog :query over that historical EDB (SAME q/run oracle, just fed an
       ;; as-of claims vec — the engine is untouched) or resolve one (:te,:p) group as-of.
       ;; Retraction-as-append makes this exact: a later-withdrawn claim is RE-SEEN at an
@@ -2475,7 +2475,7 @@
 ;; fold-version fingerprint: sha256 over the sources that DEFINE the folded state —
 ;; the emitted runtime modules this process actually loads (classpath `out`: fold =
 ;; keyed-latest semantics, kernel = cardinality vocab, schema/cnf = store ops, rt =
-;; log parsing), plus cnf_coord.clj (dump-log!/replay — the image format) and THIS
+;; log parsing), plus coord.clj (dump-log!/replay — the image format) and THIS
 ;; file (migrate-flat->co / apply-tail! / read-log-tail). A checkpoint written by
 ;; older fold logic self-invalidates. Over-invalidation (any daemon edit) is the
 ;; safe direction: one whole-log fold on the first post-deploy boot, then the
@@ -2483,7 +2483,7 @@
 ;; validated (fail closed).
 (def ^:private fold-fingerprint-files
   ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/cnf.clj"
-   "out/fram/rt.clj" "cnf_coord.clj" "cnf_coord_daemon.clj"])
+   "out/fram/rt.clj" "coord.clj" "coord_daemon.clj"])
 (defn fold-fingerprint []
   (try
     (let [root (System/getProperty "user.dir")
@@ -2499,7 +2499,7 @@
 ;; log identity: sha256 of the log's FIRST line — survives copies (unlike an inode),
 ;; changes on a rotated/reset log so a checkpoint of the OLD history can't apply to
 ;; a NEW one. A compaction that drops the head legitimately changes it: the
-;; compactor must re-stamp the sidecar (cnf_snapshot_test step E does).
+;; compactor must re-stamp the sidecar (coord_snapshot_test step E does).
 (defn log-identity-of [flat]
   (try
     (with-open [rdr (java.io.BufferedReader.

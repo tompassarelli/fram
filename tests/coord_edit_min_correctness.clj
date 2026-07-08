@@ -1,14 +1,14 @@
 ;; ============================================================================
-;; cnf_edit_min_correctness.clj — Build A correctness + opcount-scaling.
+;; coord_edit_min_correctness.clj — Build A correctness + opcount-scaling.
 ;; ============================================================================
 ;; ONE warm daemon over a /tmp copy of .fram/code.log. Proves:
 ;;  (A) op count SCALES with the edited body (a literal body => a HANDFUL of ops),
 ;;  (B) CORRECTNESS: render(log) after the minimal-op edit == render(log) after the
 ;;      WHOLE-MODULE path for the SAME edit (byte-identical), and recompiles 11/0...
 ;;      here we check the single edited module recompiles 1/0 and the new body landed.
-;;   bb -cp out cnf_edit_min_correctness.clj
+;;   bb -cp out coord_edit_min_correctness.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io]
          '[babashka.process :as proc])
 
@@ -23,7 +23,7 @@
 (doseq [p [code-log roundtrip-rkt]]
   (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
 
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-corr-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))

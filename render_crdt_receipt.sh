@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# cnf_render_crdt_receipt.sh — #36 render-correctness: a CRDT-keyed mid-insert
+# render_crdt_receipt.sh — #36 render-correctness: a CRDT-keyed mid-insert
 #   renders to clean consecutive INTEGER fN in the .bclj view.
 #
 # THE BUG this guards (found by running the full racket render end-to-end):
@@ -27,7 +27,7 @@ BCLJ=/tmp/cnf-render-crdt.bclj
 rm -rf "$EDNDIR"; mkdir -p "$EDNDIR"
 
 echo "=== insert a probe via the CRDT mid-insert verb (-> $LOG) ==="
-bb -cp out cnf_render_insert.clj    # writes $LOG with one inserted (def fram_render_probe 42)
+bb -cp out coord_render_insert.clj    # writes $LOG with one inserted (def fram_render_probe 42)
 
 echo "=== render the CRDT-keyed module through the real CLI (racket EDN->text) ==="
 RESOLVE_OUT="$EDNDIR" bb -cp out bin/fram-render-code kernel --log "$LOG" --out "$BCLJ"

@@ -1,5 +1,5 @@
 {
-  description = "fram — claim-engine CLIs (babashka-backed; JVM coordinator daemon)";
+  description = "fram — fact-engine CLIs (babashka-backed; JVM coordinator daemon)";
 
   # Pinned to the same nixpkgs rev the host system tracks, so `nix build` resolves
   # entirely from the local store (no fetch) on this machine.
@@ -13,7 +13,7 @@
       mkFram = pkgs:
         let
           # The bin/ scripts resolve HERE = $(dirname $0)/.. and load out/ (compiled
-          # Clojure), cnf_coord*.clj, deps.edn, tests/, src/ from there. So we ship the
+          # Clojure), coord*.clj, deps.edn, tests/, src/ from there. So we ship the
           # whole runtime tree under libexec and wrap each script with the interpreters
           # on PATH. The CLI + MCP run on babashka against the committed out/ classpath
           # (offline, no maven). The daemon uses JVM clojure + deps.edn.
@@ -43,7 +43,7 @@
             runHook preInstall
 
             mkdir -p $out/libexec/fram $out/bin
-            cp -r out bin tests src cnf_coord.clj cnf_coord_daemon.clj deps.edn \
+            cp -r out bin tests src coord.clj coord_daemon.clj deps.edn \
               $out/libexec/fram/
             chmod -R u+w $out/libexec/fram
 
@@ -62,7 +62,7 @@
           '';
 
           meta = with pkgs.lib; {
-            description = "fram claim-engine command-line tools (CLI, MCP server, code-authoring, JVM coordinator daemon)";
+            description = "fram fact-engine command-line tools (CLI, MCP server, code-authoring, JVM coordinator daemon)";
             platforms = platforms.unix;
             mainProgram = "fram";
           };

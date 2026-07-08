@@ -1,16 +1,16 @@
 ;; ============================================================================
-;; cnf_edit_min_core_test.clj — IN-PROCESS green-core proof for the minimal-op
+;; coord_edit_min_core_test.clj — IN-PROCESS green-core proof for the minimal-op
 ;; authoring path (no socket, no Beagle → no #14 flakiness). Proves do-edit-min
 ;; commits the verb's exact delta for the SAFE-on-spelling verbs (set-body /
 ;; upsert-form) and that graph RENAME is explicitly REJECTED (identity-deferred),
 ;; never silently rewriting only the def.
-;;   bb -cp out cnf_edit_min_core_test.clj
+;;   bb -cp out coord_edit_min_core_test.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-core-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (boot-flat! flat)

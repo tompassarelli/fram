@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_defcheck_untyped_e2e_test.clj — UNTYPED def-check e2e through write-def.
+;; coord_defcheck_untyped_e2e_test.clj — UNTYPED def-check e2e through write-def.
 ;; ============================================================================
 ;; Ingests a REAL untyped Clojure module (ring-core ring.middleware.cookies at the
 ;; ring-06 C0) into a scratch code coordinator, boots it with FRAM_DEFCHECK=1, and
@@ -16,7 +16,7 @@
 ;; SCRATCH port (FRAM_DEFCHECK_PORT, default 49061 here) — NEVER the live 49060.
 ;; SKIPS (exit 0) when the beagle sidecar can't start (no racket/beagle).
 ;;
-;;   FRAM_DEFCHECK=1 clojure -M tests/cnf_defcheck_untyped_e2e_test.clj ; echo EXIT=$?
+;;   FRAM_DEFCHECK=1 clojure -M tests/coord_defcheck_untyped_e2e_test.clj ; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io] '[clojure.java.shell :refer [sh]])
 
@@ -43,7 +43,7 @@
   (when-not (.exists (io/file flat)) (println "INGEST FAILED:" (:err r)) (System/exit 3)))
 
 ;; --- boot a scratch code coordinator with FRAM_DEFCHECK=1 --------------------
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (defn- pf? [p] (try (with-open [s (java.net.Socket.)] (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false) (catch Exception _ true)))
 (def port (or (some #(when (pf? %) %) (range 49010 49045)) 49010))
 (boot-flat! flat)

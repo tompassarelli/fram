@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_gate_v2_read.clj — the DISCRIMINATING read (measure, don't assert).
+;; coord_gate_v2_read.clj — the DISCRIMINATING read (measure, don't assert).
 ;;
 ;; Settles, once, for every future session: on the MAINLINE authored path, is a
 ;; cross-form reference SPELLING (v -> interned literal, refers_to derived) or
@@ -14,14 +14,14 @@
 ;;   spelling-AND-id conjunction). refers_to/markers are DERIVED — excluded from
 ;;   "authored" (they don't persist; see CELL 2).
 ;; CELL 2 is a separate grep of the committed flat log (.fram/code.log).
-;;   bb -cp out cnf_gate_v2_read.clj
+;;   bb -cp out coord_gate_v2_read.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no .fram/code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/gate-v2-read-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (boot-flat! flat)

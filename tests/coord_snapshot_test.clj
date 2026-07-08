@@ -1,12 +1,12 @@
-;; cnf_snapshot_test.clj — thread 019f100f-7fff gate.
+;; coord_snapshot_test.clj — thread 019f100f-7fff gate.
 ;; Proves the incremental head-materialization (snapshot image + tail-fold reload +
 ;; incremental boot) reconstructs EXACTLY a from-scratch whole migrate of the flat log,
 ;; and that after a snapshot the head can be COMPACTED away (boot still reconstructs it
-;; from the image). Run: bb -cp out tests/cnf_snapshot_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+;; from the image). Run: bb -cp out tests/coord_snapshot_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
+(load-file "coord_daemon.clj")
 ;; this test IS the snapshot-boot machinery's gate — enable the (default-OFF)
-;; activation flag in-process (thread 019f2190; see cnf_snapshot_boot_test.clj
+;; activation flag in-process (thread 019f2190; see coord_snapshot_boot_test.clj
 ;; for the flag/invalidation matrix itself)
 (reset! snapshot-boot-enabled? true)
 

@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_proto_upsert_test.clj — S-profile PROTOCOL-METHOD authoring (EXP-025 A).
+;; coord_proto_upsert_test.clj — S-profile PROTOCOL-METHOD authoring (EXP-025 A).
 ;; ============================================================================
 ;; Proves write-def can author a method IMPLEMENTATION living inside an existing
 ;; extend-protocol / extend-type block by taking the WHOLE block as the addressable
@@ -19,7 +19,7 @@
 ;;   3. MALLI-05 CLASS: an `extend-type T IPrintWithWriter (-pr-writer [..] (-write ..))`
 ;;      block (the -pr-writer-into-schema print-method shape) writes + renders.
 ;;
-;;   clojure -M tests/cnf_proto_upsert_test.clj > /tmp/proto.out 2>&1; echo EXIT=$?
+;;   clojure -M tests/coord_proto_upsert_test.clj > /tmp/proto.out 2>&1; echo EXIT=$?
 ;;   (needs the BEAGLE_HOME / FRAM_RACKET pin for the racket render leg; without a
 ;;    resolvable racket the render assertions SKIP loudly, write/index still run.)
 ;; ============================================================================
@@ -30,7 +30,7 @@
 (when-not (.exists (io/file fixture))
   (println "SKIP — missing fixture" fixture) (System/exit 0))
 
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY, on a free port >= 49010 -------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/proto-upsert-" (System/nanoTime) ".code.log"))

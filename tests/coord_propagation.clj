@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_propagation.clj — DEBT 1 PROPAGATION-LATENCY RECEIPT
-;;   bb -cp out cnf_propagation.clj
+;; coord_propagation.clj — DEBT 1 PROPAGATION-LATENCY RECEIPT
+;;   bb -cp out coord_propagation.clj
 ;;
 ;; Question: after client A commits, how soon can client B observe the change
 ;; through the daemon read paths? Split RAW (:query, warm cache) vs DERIVED
@@ -16,7 +16,7 @@
 ;; .fram/code.log. The daemon's tail command-dispatch no-ops (no command-line arg).
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")   ; pulls in cnf_coord + resolve; tail dispatch = nil (no args)
+(load-file "coord_daemon.clj")   ; pulls in coord + resolve; tail dispatch = nil (no args)
 
 (defn ms [t0 t1] (/ (double (- t1 t0)) 1e6))
 (defmacro timed [& body] `(let [t0# (System/nanoTime) r# (do ~@body) t1# (System/nanoTime)] [(ms t0# t1#) r#]))

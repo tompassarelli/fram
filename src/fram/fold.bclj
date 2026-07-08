@@ -14,7 +14,7 @@
 ;; coercion (fram.rt/read-log), so an EDN-valid line lacking :tx (hand-edited,
 ;; legacy, or partially-written) yields an FactOp whose :tx is nil at runtime.
 ;; tx-of defaults a missing/non-int :tx to 0 — the SAME guard the coordinator
-;; uses on the flat log (`(or (:tx %) 0)`, cnf_coord_daemon.clj) — so a bad line
+;; uses on the flat log (`(or (:tx %) 0)`, coord_daemon.clj) — so a bad line
 ;; is counted as tx 0 (oldest), never crashing the version high-water scan.
 (defn- tx-of [a :- FactOp] :- Int
   (let [t :- Any (:tx a)]

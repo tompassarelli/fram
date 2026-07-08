@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_bound_identity_receipt.clj — #(a) identity arc: bound_to is DURABLE but
+;; coord_bound_identity_receipt.clj — #(a) identity arc: bound_to is DURABLE but
 ;; FILTERED from read projections.  R1 (durable edge) + R6 (read-side unaffected).
-;;   bb -cp out cnf_bound_identity_receipt.clj
+;;   bb -cp out coord_bound_identity_receipt.clj
 ;;
 ;; After an :edit-min rename on an in-process /tmp daemon:
 ;;   R1  the flat log carries durable `bound_to` lines (count > 0).
@@ -16,12 +16,12 @@
 ;; NO socket, NEVER port 7977, NEVER the canonical tern log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
-         '[fram.cnf :as c] '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
+         '[fram.store :as c] '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — missing" code-log) (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 ;; /tmp copy — the daemon writes bound_to back into THIS file, never the source.
 (def flat (str (System/getProperty "java.io.tmpdir") "/bound-identity-" (System/nanoTime) ".code.log"))

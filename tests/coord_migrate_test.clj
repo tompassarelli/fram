@@ -1,4 +1,4 @@
-;; cnf_migrate_test.clj — Stage 7 migration gate: the LIVE flat log migrates,
+;; coord_migrate_test.clj — Stage 7 migration gate: the LIVE flat log migrates,
 ;; LOSSLESS, into the reified substrate and out to a v2 reified log that the
 ;; coordinator can boot from. Round-trip proven:
 ;;
@@ -9,19 +9,19 @@
 ;; round-trip is the identity on the store's live id-triples. This is the data
 ;; half of the cutover; it touches NO live file (writes /tmp only) and is fully
 ;; reversible (the flat log + pre-cnf tag are untouched).
-;;   FRAM_LOG=/path bb -cp out cnf_migrate_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s]
+;;   FRAM_LOG=/path bb -cp out coord_migrate_test.clj
+(require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
          '[clojure.string :as str] '[clojure.set :as set] '[clojure.java.io :as io])
 
 (def log (System/getenv "FRAM_LOG"))
 (when (or (nil? log) (not (.exists (io/file log))))
-  (println "cnf_migrate_test: skipped — set FRAM_LOG to a claims.log to run")
+  (println "coord_migrate_test: skipped — set FRAM_LOG to a claims.log to run")
   (System/exit 0))
 
-;; cnf_coord.clj is a script (dump-log!/replay live in `user`); load it for them.
+;; coord.clj is a script (dump-log!/replay live in `user`); load it for them.
 ;; run-test is guarded by command-line-args, so loading it has no side effects.
-(load-file "cnf_coord.clj")
+(load-file "coord.clj")
 
 (def flat-claims (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log log))))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))

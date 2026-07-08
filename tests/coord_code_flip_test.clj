@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_code_flip_test.clj — THE FLIP gate (CODE source-of-truth demotion).
+;; coord_code_flip_test.clj — THE FLIP gate (CODE source-of-truth demotion).
 ;; ============================================================================
-;; Sibling of cnf_flip_test.clj (which is the THREAD cutover, NOT the code flip).
+;; Sibling of coord_flip_test.clj (which is the THREAD cutover, NOT the code flip).
 ;; Drives the KEYSTONE + gates 3/4/5 over a THROWAWAY daemon booted on a /tmp COPY
 ;; of .fram/code.log (the canonical CODE log), with trap-kill and a :status sanity
 ;; assertion (the daemon's :log MUST be our code-log copy before any result is
@@ -25,11 +25,11 @@
 ;; Gates 1 (rename = one triple) and 2 (recompiles) are driven by the bin scripts +
 ;; experiments/flip/run-gates.sh; this in-process test covers K + 3/4/5.
 ;;
-;;   bb -cp out cnf_code_flip_test.clj      (run from the fram repo root)
+;;   bb -cp out coord_code_flip_test.clj      (run from the fram repo root)
 ;; Needs: racket + bb + out/ + chartroom/src/resolve.clj + beagle + .fram/code.log
 ;; (run bin/fram-ingest-code first). Skips with a clear message if a prereq is missing.
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
          '[clojure.set :as set] '[clojure.string :as str]
          '[clojure.edn :as edn] '[clojure.java.io :as io]
@@ -56,8 +56,8 @@
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))
 
-;; --- load the daemon machinery + resolver IN-PROCESS (cnf_dropin_test pattern) --
-(load-file "cnf_coord_daemon.clj")
+;; --- load the daemon machinery + resolver IN-PROCESS (coord_dropin_test pattern) --
+(load-file "coord_daemon.clj")
 (load-file (str root "/chartroom/src/resolve.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY of the code log ----------------------

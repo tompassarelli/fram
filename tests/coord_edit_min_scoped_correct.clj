@@ -1,17 +1,17 @@
 ;; ============================================================================
-;; cnf_edit_min_scoped_correct.clj — Build B CORRECTNESS: the SCOPED re-resolve
+;; coord_edit_min_scoped_correct.clj — Build B CORRECTNESS: the SCOPED re-resolve
 ;; the daemon maintains after a minimal-op edit must equal the WHOLE-CORPUS
 ;; re-resolve (refers_to set-equal). After several :edit-min edits across modules,
 ;; :refers-keyset re-resolves SCOPED (off the dirty set) and diffs it against a
 ;; fresh WHOLE-CORPUS rebuild over a clone — symdiff MUST be 0.
-;;   bb -cp out cnf_edit_min_scoped_correct.clj
+;;   bb -cp out coord_edit_min_scoped_correct.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no .fram/code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-scoped-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))

@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_rename_race_receipt.clj — #(a) rename under concurrency: the snapshot-window race.
-;;   bb -cp out cnf_rename_race_receipt.clj   (needs BEAGLE_HOME for the cold render)
+;; coord_rename_race_receipt.clj — #(a) rename under concurrency: the snapshot-window race.
+;;   bb -cp out coord_rename_race_receipt.clj   (needs BEAGLE_HOME for the cold render)
 ;;
 ;; The red-team's hazard: persist-bound-for-rename! used to snapshot references under ONE
 ;; dlock, then the rename committed under a SEPARATE dlock — a concurrent agent that adds a
@@ -19,8 +19,8 @@
 ;;
 ;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s] '[babashka.process :as proc])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s] '[babashka.process :as proc])
+(load-file "coord_daemon.clj")
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
@@ -63,7 +63,7 @@
           anc (anchor-name st)
           mk-rename #(handle {:op :edit-min :spec {:op "rename" :module "schema" :old "replace!" :new "supersede-prior!"}})
           mk-insert #(handle {:op :edit-min :spec {:op "insert-form" :module "schema" :after anc
-                                                   :datum (list 'def 'cnf_race_uses (list 'replace! 1))}})]
+                                                   :datum (list 'def 'race_uses (list 'replace! 1))}})]
       (if concurrent?
         (let [fa (future (mk-rename)) fb (future (mk-insert))] [@fa @fb])
         (do [(mk-insert) (mk-rename)]))                ; sequential: insert NEW ref first, then rename
@@ -72,18 +72,18 @@
 (println "=== #(a) rename-under-concurrency: snapshot-window race ===")
 ;; TEST 1 — sequential mechanism (decisive)
 (def log1 (run-case "seq" false))
-(def r1 (cold-render-line log1 "cnf_race_uses"))
+(def r1 (cold-render-line log1 "race_uses"))
 (println "\n[TEST 1 — sequential mechanism] new def line in cold render:")
-(println "  " (or (:line r1) "<cnf_race_uses MISSING from render>"))
+(println "  " (or (:line r1) "<race_uses MISSING from render>"))
 (def t1-identity (boolean (and (:line r1) (str/includes? (:line r1) "supersede-prior!") (not (str/includes? (:line r1) "replace!")))))
 (println "  -> resolves by IDENTITY to renamed def (supersede-prior!):" t1-identity)
 
 ;; TEST 2 — concurrent stress
 (def log2 (run-case "conc" true))
-(def r2 (cold-render-line log2 "cnf_race_uses"))
+(def r2 (cold-render-line log2 "race_uses"))
 (def t2-coherent (boolean (and (:txt r2) (= (count (re-seq #"\(" (:txt r2))) (count (re-seq #"\)" (:txt r2)))) (> (count (:txt r2)) 0))))
 (println "\n[TEST 2 — concurrent rename || insert-ref] new def line in cold render:")
-(println "  " (or (:line r2) "<cnf_race_uses MISSING (lost the race / not inserted)>"))
+(println "  " (or (:line r2) "<race_uses MISSING (lost the race / not inserted)>"))
 (println "  -> cold render coherent (parens balanced, non-empty):" t2-coherent)
 (def t2-clean (or (nil? (:line r2))                                   ; lost the race: cleanly absent is OK
                   (str/includes? (:line r2) "supersede-prior!")))     ; captured: renders new name

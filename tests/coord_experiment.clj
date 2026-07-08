@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_coord_experiment.clj — #11 R1 git arm, SAME-ARTIFACT (beagle-text-vs-beagle-graph).
+;; coord_experiment.clj — #11 R1 git arm, SAME-ARTIFACT (beagle-text-vs-beagle-graph).
 ;; HARDENED: the git arm now edits the RENDERED TEXT of the REAL `schema` module — the SAME
-;; module the Fram arm edits via the claim graph (cnf_coord_fram_r1.clj). Previously the git
+;; module the Fram arm edits via the claim graph (coord_fram_r1.clj). Previously the git
 ;; arm used a SYNTHETIC disjoint-functions stand-in; the coordination COUNTS are content-
 ;; independent (they hold), but this closes the apples-vs-oranges hole: now both arms operate
 ;; on the same beagle artifact, git as text + Fram as graph. NOT beagle-vs-clojure.
@@ -14,7 +14,7 @@
 ;;   bb -cp out bin/fram-render-code schema --log <copy-of-.fram/code.log> --out /tmp/schema.bclj
 ;; R1 ACCEPTANCE (anti-strawman): K disjoint text edits to distinct functions must 3-way
 ;; auto-merge (0 conflicts) and validation-runs ~ O(1) in K (one speculative batch), not O(K).
-;;   bb -cp out cnf_coord_experiment.clj
+;;   bb -cp out coord_experiment.clj
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as proc])
 (def schema-bclj (or (System/getenv "SCHEMA_BCLJ") "/tmp/schema.bclj"))
@@ -22,7 +22,7 @@
   (println "SKIP — render the real schema first: bb -cp out bin/fram-render-code schema --log <code.log copy> --out /tmp/schema.bclj")
   (System/exit 0))
 (def C-REAL-MS 3880)   ; MEASURED: recompile of the rendered schema module (build-all, 2 runs)
-;; the SAME functions the Fram R1 arm edits (cnf_coord_fram_r1.clj).
+;; the SAME functions the Fram R1 arm edits (coord_fram_r1.clj).
 (def schema-fns ["cardinality" "lookup" "lookup-all" "find-by" "def-predicate!" "name-of"
                  "resolve-name" "name!" "assert!" "link!" "replace!"])
 

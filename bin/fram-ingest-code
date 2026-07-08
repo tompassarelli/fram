@@ -6,7 +6,7 @@
 ;; module's AST (via `racket --emit-edn`) into a per-repo, dedicated flat claim
 ;; log (.fram/code.log), re-keying every file-local integer node id `n` to the
 ;; node NAME `@<module>#n`. The existing daemon boots from this UNCHANGED via
-;; `serve-flat <PORT> <code.log>`, because migrate-flat->co (cnf_coord_daemon.clj)
+;; `serve-flat <PORT> <code.log>`, because migrate-flat->co (coord_daemon.clj)
 ;; names every entity by its :l subject string (s/name!), producing exactly the
 ;; @mod#int names corpus-from-store! / module-of-name require, and @-prefixed
 ;; objects become links.

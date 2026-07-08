@@ -56,7 +56,7 @@ if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
   echo "  [2/3] coordinator already on :$PORT (reusing)"
 else
   echo "  [2/3] booting warm coordinator on :$PORT …"
-  ( cd "$HERE" && setsid nohup clojure -M cnf_coord_daemon.clj serve-flat "$PORT" "$CODE_LOG" \
+  ( cd "$HERE" && setsid nohup clojure -M coord_daemon.clj serve-flat "$PORT" "$CODE_LOG" \
       >"$DIR/.fram/coord-$PORT.log" 2>&1 & )
   # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
   # quadratic today). Generous cap; the loop exits the moment the daemon listens.

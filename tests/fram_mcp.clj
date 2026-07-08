@@ -131,7 +131,7 @@
 ;; renders the .bclj FROM the updated log (bin/fram-render-code). The log is the
 ;; source; the .bclj is downstream. With FRAM_FLIP unset, the legacy io/copy path is
 ;; used verbatim (conservative default — the flip is proven on schema.bclj only).
-;; (See experiments/flip/DESIGN.md §4 + cnf_code_flip_test.clj.)
+;; (See experiments/flip/DESIGN.md §4 + coord_code_flip_test.clj.)
 (def ^:private flip-on?      (= "1" (System/getenv "FRAM_FLIP")))
 (def ^:private flip-bin-dir  (env-or "FRAM_BIN" (str (System/getProperty "user.dir") "/bin")))
 (def ^:private flip-code-port (System/getenv "FRAM_CODE_PORT"))

@@ -1,8 +1,8 @@
-;; cnf_invariant_test.clj — the one-engine invariant: the CNF kernel is
+;; store_invariant_test.clj — the one-engine invariant: the CNF kernel is
 ;; DOMAIN-AGNOSTIC. Fails if any life-os or code vocabulary appears in kernel
 ;; CODE (comments stripped — the header legitimately names forbidden terms as
 ;; examples of what must not leak in).
-;;   bb cnf_invariant_test.clj
+;;   bb store_invariant_test.clj
 (require '[clojure.string :as str])
 
 (def src (slurp "src/fram/cnf.bclj"))

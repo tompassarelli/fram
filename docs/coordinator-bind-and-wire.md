@@ -6,7 +6,7 @@ wire protocol — and the configurable bind that lets the coordinator run behind
 gateway on a private network.
 
 > Originally a hand-off from the Tern multi-tenant work; the engine-side change
-> (configurable bind) is **implemented** (`cnf_coord_daemon.clj` `bind-cfg`/`serve`)
+> (configurable bind) is **implemented** (`coord_daemon.clj` `bind-cfg`/`serve`)
 > and tested (`bind_test.clj`). Kept here as the contract of record.
 
 ## The seam (who owns what)
@@ -26,7 +26,7 @@ connection, writes **one line of EDN** (the request), reads **one line of EDN**
 gateway's job, lifecycle is the consumer's. If Fram changes this protocol it is a
 **breaking change for any gateway**; version it or keep it additive.
 
-Request/response surface (`cnf_coord_daemon.clj` `handle`):
+Request/response surface (`coord_daemon.clj` `handle`):
 
 ```
 {:op :version}                          -> {:version <n>}

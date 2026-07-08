@@ -1,9 +1,9 @@
-;; cnf_replay_test.clj — Stage 1 gate: replay the live FLAT corpus into the
+;; store_replay_test.clj — Stage 1 gate: replay the live FLAT corpus into the
 ;; reified CNF kernel, then prove the reified current-view SET-EQUALS the flat
 ;; fold (no claim lost or gained). The flat->reified bridge is domain-level
 ;; (knows the @id ref convention); the kernel stays domain-agnostic.
-;;   FRAM_LOG=/path bb -cp out cnf_replay_test.clj
-(require '[fram.cnf :as c]
+;;   FRAM_LOG=/path bb -cp out store_replay_test.clj
+(require '[fram.store :as c]
          '[fram.fold :as fold]
          '[fram.rt]
          '[clojure.string :as str]
@@ -12,7 +12,7 @@
 
 (def log (System/getenv "FRAM_LOG"))
 (when (or (nil? log) (not (.exists (io/file log))))
-  (println "cnf_replay_test: skipped — set FRAM_LOG to a claims.log to run")
+  (println "store_replay_test: skipped — set FRAM_LOG to a claims.log to run")
   (System/exit 0))
 
 ;; today's flat fold: the current (l p r) string triples.

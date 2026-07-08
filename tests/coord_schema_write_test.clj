@@ -1,4 +1,4 @@
-;; cnf_schema_write_test.clj — F3: the VALIDATED schema-write gate.
+;; coord_schema_write_test.clj — F3: the VALIDATED schema-write gate.
 ;; Lane F made the engine READ log-resident `@<pred> cardinality single|multi` /
 ;; `@<pred> value_kind ref|literal` claims; F3 opens the daemon's domain WRITE boundary
 ;; so those claims can be legitimately authored. cardinality + value_kind become validated
@@ -11,9 +11,9 @@
 ;;   (d) a single->multi flip (relaxation) is accepted
 ;;   (e) name / cnf-supersedes are STILL reserved (rejected)
 ;;   (f) retracting a declaration falls back to env/fallback classification
-;; Run: bb -cp out tests/cnf_schema_write_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+;; Run: bb -cp out tests/coord_schema_write_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
+(load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? false)          ; force the deterministic cold whole-migrate boot
 
 (def LOG "/tmp/cnf-schema-write-test.log")

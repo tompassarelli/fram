@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_gate_feasibility.clj — RED-vs-YELLOW: decompose the scoped-resolve floor
-;;   bb -cp out cnf_gate_feasibility.clj
+;; coord_gate_feasibility.clj — RED-vs-YELLOW: decompose the scoped-resolve floor
+;;   bb -cp out coord_gate_feasibility.clj
 ;;
 ;; The propagation receipt found scoped re-resolve flat ~3s == whole-corpus. The
 ;; cheaper-gate fork hinges on WHERE that ~3s lives inside corpus-from-store!:
@@ -17,8 +17,8 @@
 ;; the canonical log, never the original corpus. Read-only over the store (corpus-
 ;; from-store! only set!s in-memory tables; *resolve-walk?* false skips all writes).
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")   ; loads resolve (ns resolve) + cnf_coord; tail dispatch no-ops
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")   ; loads resolve (ns resolve) + coord; tail dispatch no-ops
 
 (defn ms [t0 t1] (/ (double (- t1 t0)) 1e6))
 (defmacro timed [& body] `(let [t0# (System/nanoTime) r# (do ~@body) t1# (System/nanoTime)] [(ms t0# t1#) r#]))

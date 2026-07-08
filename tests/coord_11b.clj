@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_coord_11b.clj — #11b COUPLED-COHERENCE TRADE RECEIPT.  *** GIT WINS. ***
+;; coord_11b.clj — #11b COUPLED-COHERENCE TRADE RECEIPT.  *** GIT WINS. ***
 ;; ----------------------------------------------------------------------------
 ;; The NEGATIVE half of the #11 scoreboard — the regime where Fram's view-relative
 ;; decoupling (the same decoupling that wins #11 R2 landing-latency + R3 failure
@@ -25,7 +25,7 @@
 ;;        the combined state fails V -> REJECT -> the discardable candidate is thrown away,
 ;;        main stays green.
 ;;   FRAM neither: NO commit-time coherence gate (confirmed: commit! gates only on
-;;        base_version OCC + depends_on/part_of acyclicity, cnf_coord.clj:118-153) AND no
+;;        base_version OCC + depends_on/part_of acyclicity, coord.clj:118-153) AND no
 ;;        stage-and-discard — both disjoint edits commit straight to the shared store, so
 ;;        main is view-locally INCOHERENT until V runs at publish/validate/render time.
 ;;
@@ -40,11 +40,11 @@
 ;;
 ;; NO fix is proposed. gate-v2 is NOT reopened. identity-refs are NOT implemented.
 ;; Fram is NOT made to win. This receipt's whole job is to show git winning a regime.
-;;   bb cnf_coord_11b.clj
+;;   bb coord_11b.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as proc])
-(load-file "cnf_coord.clj")
+(load-file "coord.clj")
 
 ;; ============================================================================
 ;; FRAM ARM — real commit!/retract! OCC wire on an ISOLATED temp coordinator.

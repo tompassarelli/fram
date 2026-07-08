@@ -1,4 +1,4 @@
-;; cnf_dropin_test.clj — Stage 7 drop-in gate: the reified daemon as a reversible
+;; coord_dropin_test.clj — Stage 7 drop-in gate: the reified daemon as a reversible
 ;; DROP-IN over the EXISTING flat log (no format change). Proven on a COPY:
 ;;   - boots by migrating the flat log -> reified store (live view == flat fold);
 ;;   - socket writes commit through the reified substrate AND append the flat line;
@@ -7,15 +7,15 @@
 ;;   - base_version contention holds.
 ;; Cardinality comes from fram.kernel/single? (no hardcoded vocab); touches no
 ;; live file.
-;;   FRAM_LOG=/path bb -cp out cnf_dropin_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s]
+;;   FRAM_LOG=/path bb -cp out coord_dropin_test.clj
+(require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
          '[clojure.set :as set] '[clojure.java.io :as io] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+(load-file "coord_daemon.clj")
 
 (def live (System/getenv "FRAM_LOG"))
 (when (or (nil? live) (not (.exists (io/file live))))
-  (println "cnf_dropin_test: skipped — set FRAM_LOG") (System/exit 0))
+  (println "coord_dropin_test: skipped — set FRAM_LOG") (System/exit 0))
 
 (def flat "/tmp/dropin-flat.log")
 (io/copy (io/file live) (io/file flat))

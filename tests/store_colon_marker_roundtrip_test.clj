@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_colon_marker_roundtrip_test.clj — the `:-` type marker survives
+;; store_colon_marker_roundtrip_test.clj — the `:-` type marker survives
 ;; graph-authoring → render-EDN → beagle --build-edn.
 ;; ============================================================================
 ;; REGRESSION GUARD for the keyword-leaf encode mismatch in mint-datum!.
@@ -23,12 +23,12 @@
 ;;      EDN via extract-file!, builds via beagle --build-edn with 0 errors AND the
 ;;      type annotation survives (^String reaches the emitted Clojure).
 ;;
-;;   bb -cp out tests/cnf_colon_marker_roundtrip_test.clj   (from the repo root)
+;;   bb -cp out tests/store_colon_marker_roundtrip_test.clj   (from the repo root)
 ;; Needs: racket + bb + chartroom/src/resolve.clj + beagle (claims-roundtrip.rkt +
 ;; beagle-build-all). Skips with a clear message if a beagle prereq is missing.
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as proc])
 
 (def home (System/getProperty "user.home"))

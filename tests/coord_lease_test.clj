@@ -1,8 +1,8 @@
-;; cnf_lease_test.clj — the exclusive-lease arm (b): real mutual exclusion, fencing.
-;;   cd ~/code/fram-lease && bb -cp out tests/cnf_lease_test.clj
+;; coord_lease_test.clj — the exclusive-lease arm (b): real mutual exclusion, fencing.
+;;   cd ~/code/fram-lease && bb -cp out tests/coord_lease_test.clj
 ;; Scratch /tmp logs only; never the live coordinator.
-(require '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord.clj")
+(require '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord.clj")
 (def pass (atom 0)) (def fail (atom 0))
 (defn check [nm ok] (if ok (do (swap! pass inc) (println "  [PASS]" nm))
                             (do (swap! fail inc) (println "  [FAIL]" nm))))

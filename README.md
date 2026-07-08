@@ -165,7 +165,7 @@ agents query and assert over a localhost socket; writes serialize through one lo
 **optimistic versioning** (each assert carries a `base_version`; conflicts are rejected
 and retried); rule-breaking writes (dependency cycles, dangling refs) are **rejected at
 commit**. Backed by an adversarial concurrency + durability suite
-(`tests/cnf_coord_test.clj`).
+(`tests/coord_test.clj`).
 
 The rule-check guarantees **referential integrity** — references resolve, the vocabulary
 is closed, structure is sound. It does *not* judge whether a write is *semantically* what
@@ -328,7 +328,7 @@ Every suite lives in `tests/` and runs on babashka against the committed `out/`:
 
 ```sh
 bb -cp out tests/roundtrip_test.clj   # facts <-> files round-trip is lossless
-bb -cp out tests/cnf_coord_test.clj   # adversarial concurrency + durability
+bb -cp out tests/coord_test.clj   # adversarial concurrency + durability
 bb -cp out tests/query_test.clj       # structured Datalog query + boundary rejections
 ```
 

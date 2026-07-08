@@ -1,15 +1,15 @@
-;; cnf_domain_test.clj — Stage 2 gate: load the LIVE corpus through the schema
+;; store_domain_test.clj — Stage 2 gate: load the LIVE corpus through the schema
 ;; layer (identity as name-claims, predicate vocab + cardinality/value-kind as
 ;; claims, refs linked, dangling persons minted), and prove the reified DOMAIN
 ;; claims (excluding the schema/identity claims) SET-EQUAL the flat fold.
-;;   FRAM_LOG=/path bb -cp out cnf_domain_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s]
+;;   FRAM_LOG=/path bb -cp out store_domain_test.clj
+(require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
          '[clojure.string :as str] '[clojure.set :as set] '[clojure.java.io :as io])
 
 (def log (System/getenv "FRAM_LOG"))
 (when (or (nil? log) (not (.exists (io/file log))))
-  (println "cnf_domain_test: skipped — set FRAM_LOG to a claims.log to run")
+  (println "store_domain_test: skipped — set FRAM_LOG to a claims.log to run")
   (System/exit 0))
 (def flat-claims (:facts (fold/fold (fram.rt/read-log log))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))

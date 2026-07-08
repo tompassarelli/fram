@@ -1,13 +1,13 @@
-;; cnf_views_test.clj — thread E (views-as-claims) gate: per-branch isolation +
+;; coord_views_test.clj — thread E (views-as-claims) gate: per-branch isolation +
 ;; read-time, view-relative election. A VIEW is a first-class subject; (view selects
 ;; @cid) claims are its overlay; elect(view, cids) restricts the election to a branch's
 ;; selected rivals, inheriting main where the branch is silent. Builds on move-B
 ;; (coexist-elect): rival writes already coexist; this proves a NAMED view picks its
 ;; OWN winner without disturbing main or sibling branches — conflict dissolved into
 ;; coexistence, "merge" demoted to a per-view read-time choice (VIEWS_AND_BRANCHES §8).
-;;   bb -cp out tests/cnf_views_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord.clj")   ; new-coord/commit!/commit-on-view!/select!/view-selects/elect/live-cids-lp/store
+;;   bb -cp out tests/coord_views_test.clj
+(require '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord.clj")   ; new-coord/commit!/commit-on-view!/select!/view-selects/elect/live-cids-lp/store
 
 (let [log "/tmp/cnf-views-test.log"
       co (new-coord log)

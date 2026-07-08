@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_warm_read_receipt.clj — interface investigation #1: warm read vs cold fold
-;;   bb -cp out cnf_warm_read_receipt.clj
+;; coord_warm_read_receipt.clj — interface investigation #1: warm read vs cold fold
+;;   bb -cp out coord_warm_read_receipt.clj
 ;;
 ;; The MCP read path COLD-FOLDS the whole log per request (load-state -> fold(read-log));
 ;; the daemon's warm :query serves off the maintained in-memory store. Measures the
@@ -12,8 +12,8 @@
 ;; (fallback probe) -> connection refused -> nil.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
-         '[fram.cnf :as c] '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
-(load-file "cnf_coord_daemon.clj")
+         '[fram.store :as c] '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
+(load-file "coord_daemon.clj")
 (defn ms [t0 t1] (/ (double (- t1 t0)) 1e6))
 (defmacro timed [& b] `(let [t0# (System/nanoTime) r# (do ~@b) t1# (System/nanoTime)] [(ms t0# t1#) r#]))
 (defn med [xs] (nth (sort xs) (quot (count xs) 2)))

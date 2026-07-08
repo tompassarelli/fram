@@ -9,10 +9,10 @@
 ;;
 ;; DECISION (empirical, not the plan's first choice): the reified CLAIM value and
 ;; the TX value stay keyword-MAPS, not records. Two consumers force it:
-;;   (1) cnf_coord.clj/assemble-dump (hand-written .clj, out of scope) feeds PLAIN
+;;   (1) coord.clj/assemble-dump (hand-written .clj, out of scope) feeds PLAIN
 ;;       MAPS into load-store!, so claim-of's value is a map in the replay path —
 ;;       a CnfClaim record return type would be a runtime LIE there.
-;;   (2) cnf_test.clj asserts (= {:l e :p p :r foo} (claim-of …)) and tools_test
+;;   (2) store_test.clj asserts (= {:l e :p p :r foo} (claim-of …)) and tools_test
 ;;       asserts the write-intent map shape; a record is NOT = to a map literal in
 ;;       Clojure, so recordizing those values breaks green tests for no runtime gain
 ;;       (every real consumer uses field access, which works on a map too).

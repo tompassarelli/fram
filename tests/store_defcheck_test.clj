@@ -1,8 +1,8 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; cnf_defcheck_test.clj — the incremental def-level check selftest (A2).
+;; store_defcheck_test.clj — the incremental def-level check selftest (A2).
 ;; ============================================================================
-;; Drives cnf_defcheck.clj (check-def / whole-tree-check) + bin/fram-defcheck-server
+;; Drives defcheck_gate.clj (check-def / whole-tree-check) + bin/fram-defcheck-server
 ;; over a THROWAWAY coordinator booted on a /tmp arena log, with trap-kill and a
 ;; :status sanity assertion (the daemon's :log MUST be our selftest log before any
 ;; result is trusted). NEVER touches 7977/48942/48950. Boots its own sidecar on a
@@ -17,7 +17,7 @@
 ;;   (c) TIMING: a warm incremental check on this arena is under target
 ;;       (<5s hard, <1s ideal; measured ~0.05s).
 ;;
-;; Run:  bb tests/cnf_defcheck_test.clj  >/tmp/defcheck.out 2>&1 ; echo EXIT=$?
+;; Run:  bb tests/store_defcheck_test.clj  >/tmp/defcheck.out 2>&1 ; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
@@ -94,7 +94,7 @@
     (log! "coordinator OK —" (pr-str (select-keys st [:version :log]))))
 
   ;; load the primitive; bind it at our scratch ports + a private gwdir.
-  (load-file (str repo "/cnf_defcheck.clj"))
+  (load-file (str repo "/defcheck_gate.clj"))
   (let [ns' (find-ns 'fram.defcheck)
         gv  (fn [s] (ns-resolve ns' s))]
     (with-bindings {(gv '*coord-port*)   coord-port

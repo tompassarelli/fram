@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_defcheck_untyped_test.clj — UNTYPED-mode def-check selftest (EXP-025).
+;; store_defcheck_untyped_test.clj — UNTYPED-mode def-check selftest (EXP-025).
 ;; ============================================================================
-;; Unit-drives the in-process untyped analyzer in cnf_defcheck.clj directly on
+;; Unit-drives the in-process untyped analyzer in defcheck_gate.clj directly on
 ;; plain-Clojure source strings — NO coordinator, NO sidecar, NO beagle spawn, so
 ;; it runs anywhere `clojure -M` does and is sub-millisecond per check.
 ;;
@@ -16,10 +16,10 @@
 ;;       DISPATCH: a TYPED Beagle module (has `:-`) is NOT treated as untyped
 ;;       (routes to the typed sidecar path — unchanged) while an untyped one is.
 ;;
-;; Run:  clojure -M tests/cnf_defcheck_untyped_test.clj ; echo EXIT=$?
+;; Run:  clojure -M tests/store_defcheck_untyped_test.clj ; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str])
-(load-file (str (System/getProperty "user.dir") "/cnf_defcheck.clj"))
+(load-file (str (System/getProperty "user.dir") "/defcheck_gate.clj"))
 (alias 'dc (create-ns 'fram.defcheck))
 
 (defn- pv [s] (deref (ns-resolve 'fram.defcheck s)))

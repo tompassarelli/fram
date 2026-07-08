@@ -5,7 +5,7 @@
 ;; Conforms (positive + recursive) to the Racket oracle's datalog.rkt semantics:
 ;;   - EDB base relations projected from the LIVE claim store:
 ;;       "triple" = (l p r)        "claim" = (cid l p r)
-;;     (current view — superseded claims are excluded by fram.cnf/by-* etc.)
+;;     (current view — superseded claims are excluded by fram.store/by-* etc.)
 ;;   - rules are DATA: a rule derives a head relation from a conjunctive body;
 ;;     a body literal is a relation + args; args are vars or constants (ids).
 ;;   - joins by substitution threading; a repeated var is an equality join.
@@ -27,7 +27,7 @@
 ;; (String) to bound value (Any, since tuple elements are heterogeneous).
 ;; ============================================================================
 (ns fram.datalog)
-(require fram.cnf :as c)
+(require fram.store :as c)
 (require fram.types :as t)
 
 ;; --- rule/term constructors (rules are plain data) --------------------------

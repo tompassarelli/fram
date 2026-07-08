@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_edit_min_commute.clj — GATE 2 (THE MAKE-OR-BREAK): two edits to DIFFERENT
+;; coord_edit_min_commute.clj — GATE 2 (THE MAKE-OR-BREAK): two edits to DIFFERENT
 ;; defns in the SAME module COMMUTE through ONE warm coordinator.
 ;; ============================================================================
 ;; The thesis in miniature: disjoint same-module edits must BOTH survive — the exact
@@ -8,9 +8,9 @@
 ;; `schema` through the SAME warm :edit-min daemon. PASS = BOTH new bodies present in
 ;; render(log) AND schema recompiles 1/0 AND neither got :conflict. Then we run the
 ;; WHOLE-MODULE path on the SAME scenario and show it does NOT commute (the contrast).
-;;   bb -cp out cnf_edit_min_commute.clj
+;;   bb -cp out coord_edit_min_commute.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io]
          '[babashka.process :as proc])
 (def home (System/getProperty "user.home"))
@@ -23,7 +23,7 @@
                "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 (doseq [p [code-log roundtrip-rkt]]
   (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]
                              (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)

@@ -1,4 +1,4 @@
-;; cnf_schema_read_test.clj — F4: schema-writable facts are READ-VISIBLE.
+;; coord_schema_read_test.clj — F4: schema-writable facts are READ-VISIBLE.
 ;; F3 opened the daemon's WRITE path for cardinality/value_kind; the READ view still hid
 ;; them (the pre-F3 blanket schema-pred filter in claim->triple), so `show <pred>` returned
 ;; nothing even though the fact was in the log and the cold fold saw it — breaking the
@@ -18,9 +18,9 @@
 ;;   (c) show-path: q-by-l over the warm view for "@title" returns the cardinality fact.
 ;;   (d) acyclic (a plain domain pred) is UNAFFECTED — present, byte-identical to cold.
 ;;   (e) do-retract drops the fact from the read view (cold fold drops it too — parity holds).
-;; Run: bb -cp out tests/cnf_schema_read_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+;; Run: bb -cp out tests/coord_schema_read_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
+(load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? false)          ; force the deterministic cold whole-migrate boot
 
 (def LOG "/tmp/cnf-schema-read-test.log")

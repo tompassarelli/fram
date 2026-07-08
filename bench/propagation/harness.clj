@@ -13,13 +13,13 @@
 ;; /tmp. Never the canonical log, never 7977.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
-         '[babashka.process :as proc] '[fram.cnf :as c] '[fram.schema :as s])
+         '[babashka.process :as proc] '[fram.store :as c] '[fram.schema :as s])
 (def root (System/getProperty "user.dir"))
 (def N (Integer/parseInt (or (System/getenv "PROP_N") "1")))
 (defn nowns [] (System/nanoTime))
 (defn ms [a b] (/ (double (- b a)) 1e6))
 (defn p [& xs] (apply println xs))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))  ; boot-flat!/serve/client
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))  ; boot-flat!/serve/client
 
 ;; ---------------------------------------------------------------------------
 ;; GIT ARM — shared bare repo; A commits+pushes; a post-receive hook fetches into

@@ -68,7 +68,7 @@ if [ -f "$CODE_LOG" ]; then
     port_listening "$PORT" && COORD=alive
   else
     # no port on record (hand-run daemon): fall back to the precise process match
-    pgrep -f "cnf_coord_daemon.clj serve-flat .*$CODE_LOG" >/dev/null 2>&1 && COORD=alive
+    pgrep -f "coord_daemon.clj serve-flat .*$CODE_LOG" >/dev/null 2>&1 && COORD=alive
   fi
 fi
 

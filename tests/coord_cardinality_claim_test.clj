@@ -1,4 +1,4 @@
-;; cnf_cardinality_claim_test.clj — the finding #23 daemon-seam gate.
+;; coord_cardinality_claim_test.clj — the finding #23 daemon-seam gate.
 ;; Proves the DAEMON classifies predicate cardinality from log-resident
 ;; `@<pred> cardinality single|multi` claims IDENTICALLY to the cold CLI fold
 ;; (fram.fold), in BOTH directions:
@@ -6,9 +6,9 @@
 ;;   - a non-kernel pred forced SINGLE by a claim collapses to its latest value
 ;; across the whole-migrate path AND the incremental snapshot+tail path. This is the
 ;; CLI-vs-daemon equality gate the whole-vs-incremental snapshot-reconcile can't give.
-;; Run: bb -cp out tests/cnf_cardinality_claim_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+;; Run: bb -cp out tests/coord_cardinality_claim_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt] '[clojure.string :as str])
+(load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? true)
 
 (def LOG "/tmp/cnf-cardinality-claim-test.log")

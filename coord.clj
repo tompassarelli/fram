@@ -1,8 +1,8 @@
-;; cnf_coord.clj — Stage 6: the coordinator on the REIFIED kernel.
+;; coord.clj — Stage 6: the coordinator on the REIFIED kernel.
 ;; ============================================================================
 ;; Sole writer, serialized (one lock). The flat coord.clj's proven skeleton
 ;; (locking write-lock, optimistic base_version, rule-check, append+notify),
-;; rebuilt over the reified store (fram.cnf + fram.schema). Full Clojure
+;; rebuilt over the reified store (fram.store + fram.schema). Full Clojure
 ;; — direct, mutable access to the store map, no Beagle typing friction.
 ;;
 ;; The six concurrency/durability holes the analysis flagged, closed here:
@@ -22,9 +22,9 @@
 ;;   6. file-import optimistic concurrency — every write goes through the one
 ;;      lock; the base_version contract (C5) decides who wins.
 ;;
-;;   bb -cp out cnf_coord.clj test
+;;   bb -cp out coord.clj test
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.kernel :as ck]
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck]
          '[clojure.edn :as edn] '[clojure.java.io :as io] '[clojure.string :as str])
 
 (defn- store [co] (:store co))
@@ -508,7 +508,7 @@
 ;; holder|expiry-ms|epoch; held-ness is DERIVED (cell present AND expiry > clock).
 ;; A lapsed lease is reclaimed by the next acquirer's own commit (no sweeper).
 ;; Ported into canonical's hand-written idiom from the typed spec-of-record
-;; (fram-lease/src/fram/cnf_coord.bclj); cnf_lease_test is the gate.
+;; (fram-lease/src/fram/coord.bclj); coord_lease_test is the gate.
 (def lease-pred "lease")
 (defn- lease-subj [res] (str "@lease:" res))
 (defn- encode-lease [h exp epoch] (str h "|" exp "|" epoch))

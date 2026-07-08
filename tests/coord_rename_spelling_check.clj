@@ -1,17 +1,17 @@
 ;; ============================================================================
-;; cnf_rename_spelling_check.clj — minimal decisive CORE rename check (fast, no Beagle,
+;; coord_rename_spelling_check.clj — minimal decisive CORE rename check (fast, no Beagle,
 ;; no re-materialize). The human identifier lives as the `v` SPELLING of symbol leaves.
 ;; References resolve BY SPELLING on cold re-derive (refers_to is derived, 0-persisted).
 ;; So: after a CORE do-edit-min rename replace!->supersede-prior!, do reference leaves
 ;; still spell "replace!"? If yes, a cold render re-derives by spelling, can't match the
 ;; renamed def, and shows "replace!" => the exact FAIL, and it is a CORE bug.
-;;   bb -cp out cnf_rename_spelling_check.clj
+;;   bb -cp out coord_rename_spelling_check.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.java.io :as io])
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/rename-spell-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (boot-flat! flat)

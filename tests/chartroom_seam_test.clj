@@ -9,7 +9,7 @@
 ;; check replaces it.
 ;;
 ;; The allowlist is deliberately TIGHT — exactly what chartroom rents today
-;; ({fram.cnf, fram.datalog}, the same generic family tern pins). Widening it is a
+;; ({fram.store, fram.datalog}, the same generic family tern pins). Widening it is a
 ;; conscious seam decision (edit this list), never a silent drift. If chartroom one day
 ;; legitimately needs fram.kernel/fold, that shows up here as a failing guard prompting
 ;; the decision — which is the point.
@@ -17,7 +17,7 @@
 (require '[clojure.string :as str])
 
 (def chartroom-src "chartroom/src")
-(def allowed #{"fram.cnf" "fram.datalog"})
+(def allowed #{"fram.store" "fram.datalog"})
 
 (def src-files
   (when (.exists (clojure.java.io/file chartroom-src))

@@ -29,7 +29,7 @@
          '[clojure.java.io :as io]
          '[clojure.edn :as edn]
          '[babashka.process :as proc]
-         '[fram.cnf :as c]
+         '[fram.store :as c]
          '[fram.schema :as s])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
@@ -56,7 +56,7 @@
                 "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
                 "(version mismatch with beagle's compiled .zo bytecode)."))))
 
-;; NOTE: cnf_coord_daemon.clj + resolve.clj are load-file'd LAZILY in the COLD path only
+;; NOTE: coord_daemon.clj + resolve.clj are load-file'd LAZILY in the COLD path only
 ;; (see below). The --port WARM path doesn't need them (the daemon does the projection),
 ;; so skipping the load keeps warm render light. bb/SCI resolves the forward refs at runtime.
 
@@ -106,7 +106,7 @@
     (System/exit 0)))
 
 ;; ===== COLD path (only reached when NOT --port) — load the heavy machinery now. =====
-(load-file "cnf_coord_daemon.clj")          ; migrate-flat->co + the warm-store machinery
+(load-file "coord_daemon.clj")          ; migrate-flat->co + the warm-store machinery
 (load-file resolve-clj)                       ; extract-file! / resolve-warm-store! / out-path
 
 (let [{:keys [module log out]} (parse-args *command-line-args*)

@@ -1,13 +1,13 @@
 ;; ============================================================================
-;; cnf_edit_min_byte_identical.clj — CORRECTNESS (non-negotiable):
+;; coord_edit_min_byte_identical.clj — CORRECTNESS (non-negotiable):
 ;; the minimal-op (:edit-min) edit's render(log) must be BYTE-IDENTICAL to the
 ;; WHOLE-MODULE path's render(log) for the SAME edit. Same outcome, minimal
 ;; mechanism. Runs a non-trivial set-body (a multi-binding let body) through BOTH
 ;; paths over two independent /tmp copies of .fram/code.log, renders `schema` from
 ;; each resulting log, and diffs. ALSO checks refers_to is set-equal between paths.
-;;   bb -cp out cnf_edit_min_byte_identical.clj
+;;   bb -cp out coord_edit_min_byte_identical.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io]
          '[babashka.process :as proc])
 (def home (System/getProperty "user.home"))
@@ -19,7 +19,7 @@
                "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 (doseq [p [code-log roundtrip-rkt]]
   (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]
                              (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)

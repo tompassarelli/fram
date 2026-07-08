@@ -1,20 +1,20 @@
 ;; ============================================================================
-;; cnf_edit_min_speed.clj — Build B GATE 3 (SPEED): per-edit wall-clock on the
+;; coord_edit_min_speed.clj — Build B GATE 3 (SPEED): per-edit wall-clock on the
 ;; WARM daemon after A+B (minimal-op commit + scoped re-resolve). Boots ONE warm
 ;; code daemon over a /tmp COPY of .fram/code.log, then drives SEVERAL set-body
 ;; edits through :edit-min, reporting each edit's wall-clock. The FIRST edit pays a
 ;; one-time cold whole-corpus refers_to materialize (ensure-refers! cold); every
 ;; STEADY-STATE edit pays only a SCOPED re-resolve of the dirty module — that is
 ;; the Build B number. NEVER 7977 / tern.
-;;   bb -cp out cnf_edit_min_speed.clj
+;;   bb -cp out coord_edit_min_speed.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s]
+(require '[fram.store :as c] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log))
   (println "SKIP — no .fram/code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-speed-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))

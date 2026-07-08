@@ -1,4 +1,4 @@
-;; cnf_coexist_elect_test.clj — the Keystone (move-B) gate: cardinality-as-a-claim is
+;; coord_coexist_elect_test.clj — the Keystone (move-B) gate: cardinality-as-a-claim is
 ;; the SOLE authority + coexist-elect is the default contention regime.
 ;;
 ;; Proves the three keystone properties:
@@ -11,9 +11,9 @@
 ;;   (c) multi-valued just APPENDS (distinct values coexist; identical is idempotent).
 ;; Plus the cardinality-claim-is-authority half: the kernel single-valued list was demoted
 ;; to a one-time bootstrap SEED of cardinality CLAIMS, so commit! consults ONLY the claim.
-;;   bb -cp out tests/cnf_coexist_elect_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.kernel :as ck])
-(load-file "cnf_coord.clj")   ; new-coord/commit!/elect/live-cids-lp/register-pred!/store
+;;   bb -cp out tests/coord_coexist_elect_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck])
+(load-file "coord.clj")   ; new-coord/commit!/elect/live-cids-lp/register-pred!/store
 
 (let [log "/tmp/cnf-coexist-elect-test.log"
       co (new-coord log)

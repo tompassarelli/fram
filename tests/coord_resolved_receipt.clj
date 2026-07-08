@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_resolved_receipt.clj — interface investigation #3: resolution multiplicity
-;;   bb -cp out cnf_resolved_receipt.clj
+;; coord_resolved_receipt.clj — interface investigation #3: resolution multiplicity
+;;   bb -cp out coord_resolved_receipt.clj
 ;;
 ;; P-of / select-main-1 return (first live) — a SELECTION, not a uniqueness proof (#19):
 ;; a contested field reads as a silently-arbitrary pick with no signal. The new daemon
@@ -10,8 +10,8 @@
 ;; SAFE: fresh in-process coordinator on a /tmp scratch log; no socket, no port 7977,
 ;; never the canonical tern log.
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
+(load-file "coord_daemon.clj")
 
 (def log (str "/tmp/cnf-resolved-" (System/nanoTime) ".log"))
 (spit log "")

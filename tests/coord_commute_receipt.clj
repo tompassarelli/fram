@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_commute_receipt.clj — R1: concurrent same-module appends COMMUTE (closes #31)
-;;   bb -cp out cnf_commute_receipt.clj
+;; coord_commute_receipt.clj — R1: concurrent same-module appends COMMUTE (closes #31)
+;;   bb -cp out coord_commute_receipt.clj
 ;;
 ;; Two concurrent :edit-min upsert-form appends to ONE module, driven through the REAL
 ;; do-edit-min path. With D (atomic append-position allocation under dlock) they land at
@@ -10,8 +10,8 @@
 ;; SAFETY: isolated daemon on a /tmp COPY of .fram/code.log. Never port 7977, never the
 ;; canonical log, never the original corpus.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 
 (def tmp (str "/tmp/cnf-commute-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))

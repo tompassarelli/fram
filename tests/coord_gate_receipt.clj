@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_gate_receipt.clj — System 1 part 2 (coupling guard) + System 2 gate-core
-;;   bb -cp out cnf_gate_receipt.clj
+;; coord_gate_receipt.clj — System 1 part 2 (coupling guard) + System 2 gate-core
+;;   bb -cp out coord_gate_receipt.clj
 ;;
 ;; The coherence check: a reference whose resolved refers_to target sits at a HIGHER
 ;; top-level fN in the SAME module is a FORWARD-REF (use-before-def). This is:
@@ -16,8 +16,8 @@
 ;;
 ;; SAFETY: isolated daemon on a /tmp COPY of .fram/code.log. Never port 7977 / canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 
 (def tmp (str "/tmp/cnf-gate-rcpt-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))

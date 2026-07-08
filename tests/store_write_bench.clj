@@ -1,7 +1,7 @@
 ;; ============================================================================
-;; cnf_write_bench.clj — write-path K-sweep: writes/sec + p50/p99 vs K writers.
+;; store_write_bench.clj — write-path K-sweep: writes/sec + p50/p99 vs K writers.
 ;;
-;;   bb tests/cnf_write_bench.clj [port] [seed-log] [runtime]
+;;   bb tests/store_write_bench.clj [port] [seed-log] [runtime]
 ;;     port     — scratch daemon port (default 48995; NEVER 7977/48942)
 ;;     seed-log — optional flat log to COPY as the corpus (realistic-store run);
 ;;                omitted => empty log (isolates the pure write path)
@@ -30,14 +30,14 @@
   (io/copy (io/file seed) (io/file log))
   (spit log ""))
 
-(def fram-root (let [d (io/file "cnf_coord_daemon.clj")]
+(def fram-root (let [d (io/file "coord_daemon.clj")]
                  (if (.exists d) "." (str (System/getProperty "user.home") "/code/fram"))))
 
 ;; ---- daemon lifecycle -------------------------------------------------------
 (defn start-daemon! []
   (let [cmd (if (= runtime "bb")
-              ["bb" "-cp" "out" "cnf_coord_daemon.clj" "serve-flat" (str port) log]
-              ["clojure" "-M" "cnf_coord_daemon.clj" "serve-flat" (str port) log])
+              ["bb" "-cp" "out" "coord_daemon.clj" "serve-flat" (str port) log]
+              ["clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log])
         pb (doto (ProcessBuilder. ^java.util.List cmd)
              (.directory (io/file fram-root))
              (.redirectErrorStream true)

@@ -5,6 +5,6 @@ set -uo pipefail
 DIR="${1:?usage: fram-code-off <dir>}"; DIR="$(cd "$DIR" && pwd)"
 CODE_LOG="$DIR/.fram/code.log"
 # kill the coordinator that serves THIS code.log (matched precisely, not by port)
-pkill -f "cnf_coord_daemon.clj serve-flat .* $CODE_LOG" 2>/dev/null && echo "coordinator stopped" || echo "no coordinator running for $CODE_LOG"
+pkill -f "coord_daemon.clj serve-flat .* $CODE_LOG" 2>/dev/null && echo "coordinator stopped" || echo "no coordinator running for $CODE_LOG"
 rm -f "$DIR/.mcp.json"
 echo "fram-code-off: $DIR — .mcp.json removed. (code.log kept at $CODE_LOG; delete .fram/ to fully reset.)"

@@ -1,8 +1,8 @@
 ;; ============================================================================
-;; cnf_write_conc_test.clj — concurrent-writers CORRECTNESS gate for the
+;; store_write_conc_test.clj — concurrent-writers CORRECTNESS gate for the
 ;; group-commit write path (fsync out of dlock, batched appends).
 ;;
-;;   bb tests/cnf_write_conc_test.clj [port] [runtime]
+;;   bb tests/store_write_conc_test.clj [port] [runtime]
 ;;     port    — scratch daemon port (default 48999; NEVER 7977/48942)
 ;;     runtime — "clojure" (default) | "bb"
 ;;
@@ -31,13 +31,13 @@
 
 (def log (str "/tmp/cnf-write-conc-" port "-" (System/currentTimeMillis) ".log"))
 (spit log "")
-(def fram-root (let [d (io/file "cnf_coord_daemon.clj")]
+(def fram-root (let [d (io/file "coord_daemon.clj")]
                  (if (.exists d) "." (str (System/getProperty "user.home") "/code/fram"))))
 
 (defn start-daemon! []
   (let [cmd (if (= runtime "bb")
-              ["bb" "-cp" "out" "cnf_coord_daemon.clj" "serve-flat" (str port) log]
-              ["clojure" "-M" "cnf_coord_daemon.clj" "serve-flat" (str port) log])]
+              ["bb" "-cp" "out" "coord_daemon.clj" "serve-flat" (str port) log]
+              ["clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log])]
     (.start (doto (ProcessBuilder. ^java.util.List cmd)
               (.directory (io/file fram-root))
               (.redirectErrorStream true)

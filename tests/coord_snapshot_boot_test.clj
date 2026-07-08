@@ -1,5 +1,5 @@
-;; cnf_snapshot_boot_test.clj — thread 019f2190 plan b gate: FLAG-GATED snapshot boot.
-;; cnf_snapshot_test.clj proves the incremental reconstruction itself; THIS file proves
+;; coord_snapshot_boot_test.clj — thread 019f2190 plan b gate: FLAG-GATED snapshot boot.
+;; coord_snapshot_test.clj proves the incremental reconstruction itself; THIS file proves
 ;; the activation/invalidation contract around it:
 ;;   - default OFF (FRAM_SNAPSHOT_BOOT gates checkpoint consumption at boot);
 ;;   - a checkpoint boot reproduces the whole-log fold EXACTLY — state AND version,
@@ -7,10 +7,10 @@
 ;;   - EVERY invalidation (stale fold fingerprint, rotated/reset log, truncated log,
 ;;     torn sidecar, torn image) falls back to the whole-log fold with a reason —
 ;;     a bad checkpoint may cost a slower boot, NEVER wrong state.
-;; Run from the repo root: bb -cp out tests/cnf_snapshot_boot_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt]
+;; Run from the repo root: bb -cp out tests/coord_snapshot_boot_test.clj
+(require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt]
          '[clojure.string :as str])
-(load-file "cnf_coord_daemon.clj")
+(load-file "coord_daemon.clj")
 
 (def LOG "/tmp/cnf-snapshot-boot-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))

@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_comment_authoring_receipt.clj — #30: author a LINE comment THROUGH the graph
-;;   bb -cp out tests/cnf_comment_authoring_receipt.clj
+;; store_comment_authoring_receipt.clj — #30: author a LINE comment THROUGH the graph
+;;   bb -cp out tests/store_comment_authoring_receipt.clj
 ;;
 ;; The first incremental authoring of a comment NODE. Previously comments entered the
 ;; code graph only via whole-file text->graph ingest; the wired authoring verbs

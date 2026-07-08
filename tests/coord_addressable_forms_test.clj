@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_addressable_forms_test.clj — S-profile INDEX/READ-DEF addressability.
+;; coord_addressable_forms_test.clj — S-profile INDEX/READ-DEF addressability.
 ;; ============================================================================
 ;; Fixes the EXP-025 p1c ring-01 addressability gap: on a REAL Clojure module
 ;; (ring.core.protocols — a defprotocol + extend-protocol module) the old `index`
@@ -16,7 +16,7 @@
 ;; ingested from ring.core.protocols.bclj + a small extend-type/defmulti module)
 ;; on a verified-free port >= 49010, then drives the wire verbs through the socket.
 ;;
-;;   clojure -M tests/cnf_addressable_forms_test.clj > /tmp/addr.out 2>&1; echo EXIT=$?
+;;   clojure -M tests/coord_addressable_forms_test.clj > /tmp/addr.out 2>&1; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io])
 
@@ -25,7 +25,7 @@
 (when-not (.exists (io/file fixture))
   (println "SKIP — missing fixture" fixture) (System/exit 0))
 
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY, on a free port >= 49010 -------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/addr-test-" (System/nanoTime) ".code.log"))

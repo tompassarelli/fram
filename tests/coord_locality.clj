@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_coord_locality.clj — STRUCTURAL-POSITION CONFLICT-DETECTION RECEIPT
-;;   bb -cp out cnf_coord_locality.clj
+;; coord_locality.clj — STRUCTURAL-POSITION CONFLICT-DETECTION RECEIPT
+;;   bb -cp out coord_locality.clj
 ;;
 ;; CLAIM (verified — premise corrected by grounding + 3-lens adversarial audit):
 ;;   The engine gives commit-time conflict detection to SINGLE-VALUED fields
@@ -11,26 +11,26 @@
 ;;
 ;;   This is the OPPOSITE of the assumed failure mode. ChatGPT, claude-4.8 and I
 ;;   all assumed dense fN OVER-serializes via OCC. It UNDER-protects: fN is multi
-;;   (kernel single? excludes it), and the base_version reject at cnf_coord.clj:130
+;;   (kernel single? excludes it), and the base_version reject at coord.clj:130
 ;;   is `(and single ...)` -> never fires for positions.
 ;;
 ;; LIVE, NOT LATENT (resolved by the daemon-masking audit lens):
 ;;   Concurrent :edit-min upsert-form APPENDs to one module corrupt the index in
-;;   the live daemon. Both requests clone lock-free (cnf_coord_daemon.clj:842) and
+;;   the live daemon. Both requests clone lock-free (coord_daemon.clj:842) and
 ;;   dispatch OUTSIDE the outer dlock (:953); each computes next-n = (inc (max fN))
 ;;   on its own clone of the same base state (resolve.clj:1168) and freezes the
 ;;   literal "f3" at harvest; the dlock (:923) wraps ONLY the commit replay, with
 ;;   NO re-read of max under the lock. SMOKING GUN: the codebase fixed this exact
 ;;   clone-side race for node-name-ints with an atomic counter
-;;   (cnf_coord_daemon.clj:798-815) but LEFT THE fN INDEX UNPATCHED. The hazard is
+;;   (coord_daemon.clj:798-815) but LEFT THE fN INDEX UNPATCHED. The hazard is
 ;;   real and currently untested (existing edit-min concurrency tests use disjoint
 ;;   set-body on different defns, which commute).
 ;;
 ;; SAFETY: isolated coordinator on a /tmp log. Never touches port 7977 or the
 ;; canonical tern log (~/.local/state/tern/claims.log).
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.string :as str])
-(load-file "cnf_coord.clj")
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
+(load-file "coord.clj")
 
 (defn fresh-coord [pos-card]                ; pos-card = "multi" (real fN) | "single" (the fix)
   (let [log (str "/tmp/cnf-locality-" (System/nanoTime) ".log")
@@ -78,7 +78,7 @@
   (println "EXP 1 — single-valued field (d,title), two writers, same base:")
   (println "  A:" r-a "   B:" r-b)
   (println "  live values at (d,title):" (pos-count co "d" "title") " (single => exactly 1 survives)")
-  (println "  >>> SAFE: loser REJECTED at commit (base_version OCC, cnf_coord.clj:130)\n"))
+  (println "  >>> SAFE: loser REJECTED at commit (base_version OCC, coord.clj:130)\n"))
 
 ;; --------------------------------------------------------------------------
 ;; EXP 2 — MULTI-VALUED fN POSITION (the real ordering rep): NO conflict detection

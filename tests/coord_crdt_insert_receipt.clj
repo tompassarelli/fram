@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_crdt_insert_receipt.clj — #36 the bar: concurrent MIDDLE-INSERTS commute
-;;   bb -cp out cnf_crdt_insert_receipt.clj
+;; coord_crdt_insert_receipt.clj — #36 the bar: concurrent MIDDLE-INSERTS commute
+;;   bb -cp out coord_crdt_insert_receipt.clj
 ;;
 ;; Two concurrent :edit-min insert-form ops, BOTH "insert after <anchor>" (the SAME
 ;; gap), through the real do-edit-min path. With the CRDT rep they compute the same
@@ -10,8 +10,8 @@
 ;;
 ;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 
 (def tmp (str "/tmp/cnf-crdt-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))

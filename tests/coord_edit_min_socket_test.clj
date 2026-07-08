@@ -1,5 +1,5 @@
 ;; ============================================================================
-;; cnf_edit_min_socket_test.clj — #14: the socket :edit-min path EXPOSES the proven
+;; coord_edit_min_socket_test.clj — #14: the socket :edit-min path EXPOSES the proven
 ;; concurrency and does NOT hang. Two CONCURRENT, DISJOINT set-body edits through the
 ;; daemon socket must BOTH commit (no false-conflict) and return promptly (no hang).
 ;;
@@ -7,13 +7,13 @@
 ;; :edit-min OUTSIDE the outer dlock, so do-edit-min's compute is lock-free (concurrent)
 ;; and only its commit serializes. HARD deref timeout => a regression (re-serialization
 ;; or a true hang) FAILS FAST instead of hanging the test/CI. No Beagle, no render.
-;;   bb -cp out cnf_edit_min_socket_test.clj
+;;   bb -cp out coord_edit_min_socket_test.clj
 ;; ============================================================================
-(require '[fram.cnf :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
+(require '[fram.store :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
 (def code-log (str root "/.fram/code.log"))
 (when-not (.exists (io/file code-log)) (println "SKIP — no .fram/code.log") (System/exit 0))
-(binding [*command-line-args* []] (load-file "cnf_coord_daemon.clj"))   ; also a paren/load check on handle
+(binding [*command-line-args* []] (load-file "coord_daemon.clj"))   ; also a paren/load check on handle
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-socket-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]

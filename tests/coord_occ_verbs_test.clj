@@ -1,4 +1,4 @@
-;; cnf_occ_verbs_test.clj — the move-C gate: per-(s,p) cardinality-typed write verbs
+;; coord_occ_verbs_test.clj — the move-C gate: per-(s,p) cardinality-typed write verbs
 ;; over a base-OPTIONAL commit!. The client global-version CAS ritual is gone; the
 ;; engine now splits writes by cardinality, exercised here straight against commit!
 ;; (the wire verbs append!/put!/swap! in tern.coord are thin shells over these
@@ -10,9 +10,9 @@
 ;;   (c) swap!   — SINGLE pred WITH base: a stale base is rejected (:conflict).
 ;;   (d) base-OPTIONAL — a NO-base write to a declared-single pred whose value MOVED
 ;;       is ACCEPTED (the intended LWW: callers who want conflict-detection use swap!).
-;;   bb -cp out tests/cnf_occ_verbs_test.clj
-(require '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord.clj")   ; new-coord/commit!/live-cids-lp/register-pred!/store/elect
+;;   bb -cp out tests/coord_occ_verbs_test.clj
+(require '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord.clj")   ; new-coord/commit!/live-cids-lp/register-pred!/store/elect
 
 (let [log "/tmp/cnf-occ-verbs-test.log"
       co (new-coord log)

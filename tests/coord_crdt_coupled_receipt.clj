@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_crdt_coupled_receipt.clj — #36 bar: coupled mid-insert is DETECTED (not silent)
-;;   bb -cp out cnf_crdt_coupled_receipt.clj
+;; coord_crdt_coupled_receipt.clj — #36 bar: coupled mid-insert is DETECTED (not silent)
+;;   bb -cp out coord_crdt_coupled_receipt.clj
 ;;
 ;; Insert cpl_B after an anchor, then insert cpl_A (whose body references cpl_B) after
 ;; the SAME anchor -> cpl_A lands strictly BELOW cpl_B (both in the anchor gap). cpl_A
@@ -10,8 +10,8 @@
 ;;
 ;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 (def tmp (str "/tmp/cnf-crdtcpl-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))
 (boot-flat! tmp)

@@ -1,6 +1,6 @@
 ;; ============================================================================
-;; cnf_ksweep.clj — System 3: gate cost vs corpus size K, decomposed
-;;   bb -cp out cnf_ksweep.clj <corpus-log-path>
+;; coord_ksweep.clj — System 3: gate cost vs corpus size K, decomposed
+;;   bb -cp out coord_ksweep.clj <corpus-log-path>
 ;;
 ;; Measures, for one corpus, the gate's cost components — keeping MATERIALIZATION
 ;; (graph->resolver-tables, corpus-from-store!) SEPARATE from COORDINATION (the
@@ -15,8 +15,8 @@
 ;;
 ;; SAFETY: boots an isolated /tmp corpus (arg). Never port 7977 / canonical log.
 ;; ============================================================================
-(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.cnf :as c] '[fram.schema :as s])
-(load-file "cnf_coord_daemon.clj")
+(require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
+(load-file "coord_daemon.clj")
 (def logpath (first *command-line-args*))
 (defn ms [t0 t1] (/ (double (- t1 t0)) 1e6))
 (defmacro timed [& body] `(let [t0# (System/nanoTime) r# (do ~@body) t1# (System/nanoTime)] [(ms t0# t1#) r#]))

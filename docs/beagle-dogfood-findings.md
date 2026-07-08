@@ -83,7 +83,7 @@ multi-week type-system project with no current consumer.
 - **Map literals don't coerce to records:** `{:l 1 :p 2 :r 3}` is rejected where a record is
   expected, so adopting a record means refactoring producers to `(->Ctor …)`. We deliberately did
   **not** recordize `CnfClaim`/`Tx`/`WriteIntent`: a hand-written `.clj` consumer
-  (`cnf_coord/assemble-dump`) feeds plain maps into `load-store!`, and two suites assert whole-map
+  (`coord/assemble-dump`) feeds plain maps into `load-store!`, and two suites assert whole-map
   equality — a record `≠` a map literal in Clojure, so recordizing would break green tests for zero
   runtime gain (every real consumer uses field access). Kept as `(Map Keyword Any)`. This is the
   "willing to NOT migrate when a typed seam doesn't earn it" discipline in action.
