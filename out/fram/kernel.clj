@@ -24,10 +24,17 @@
 (defn ^String vocab-fingerprint []
   (str "single=" (sorted-join single-valued) " |terminal=" (sorted-join terminal-preds) " |withdrawn=" (sorted-join withdrawn-preds)))
 
+(defn ^String cards-fingerprint [cmap]
+  (str/join "," (vec (sort (mapv (fn [e] (str (nth e 0) "=" (if (= (nth e 1) true) "single" "multi"))) (vec (seq cmap)))))))
+
 (def single-valued-set (reduce (fn [m p] (assoc m p true)) {} single-valued))
 
 (defn ^Boolean single? [^String p]
   (or (some? (get single-valued-set p)) (and (string? p) (str/starts-with? p "emoji_"))))
+
+(defn ^Boolean single-eff? [cmap ^String p]
+  (let [v (get cmap p)]
+  (if (nil? v) (single? p) v)))
 
 (defrecord Claim [l p r])
 
@@ -70,11 +77,17 @@
   (loop [r claims]
   (if (empty? r) false (if (claim-eq? (first r) c) true (recur (rest r))))))
 
+(defn apply-assert-c [cmap claims ^Claim c]
+  (if (single-eff? cmap (:p c)) (conj (drop-lp claims (:l c) (:p c)) c) (if (has-claim? claims c) claims (conj claims c))))
+
+(defn apply-retract-c [cmap claims ^Claim c]
+  (if (single-eff? cmap (:p c)) (drop-lp claims (:l c) (:p c)) (filterv (fn [x] (not (claim-eq? x c))) claims)))
+
 (defn apply-assert [claims ^Claim c]
-  (if (single? (:p c)) (conj (drop-lp claims (:l c) (:p c)) c) (if (has-claim? claims c) claims (conj claims c))))
+  (apply-assert-c {} claims c))
 
 (defn apply-retract [claims ^Claim c]
-  (if (single? (:p c)) (drop-lp claims (:l c) (:p c)) (filterv (fn [x] (not (claim-eq? x c))) claims)))
+  (apply-retract-c {} claims c))
 
 (defn ^Boolean reachable-from? [succ frontier ^String target]
   (loop [front frontier

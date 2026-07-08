@@ -4,6 +4,7 @@
   Pure projection over assertions; the log bytes are read via fram.rt.")
 
 (require fram.kernel :as k)
+(require clojure.string :as str)
 
 (defrecord Assertion [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
@@ -30,21 +31,64 @@
 (defn max-tx [as :- (Vec Assertion)] :- Int
   (reduce (fn [m :- Int a :- Assertion] :- Int (let [t (tx-of a)] (if (> t m) t m))) 0 as))
 
+;; --- SCHEMA-AS-CLAIMS cardinality: PASS 1 ------------------------------------
+;; Predicate cardinality is DATA in the log: a claim `@<pred> cardinality single|multi`
+;; declares it (the subject is the pred entity `@<predname>`; strip the leading @ to get
+;; the pred name). The fold is TWO-PASS: pass 1 scans the assertions for these claims and
+;; builds a cardinality map (predname -> is-single); pass 2 keys the fold by it via
+;; k/single-eff? (claim > env > fallback — see fram.kernel). Deriving cardinality from the
+;; log is what lets a daemon and a CLI folding the same log classify IDENTICALLY without
+;; both booting with the same FRAM_SINGLE_VALUED (the finding #23 divergence vector).
+(defrecord Card [tx :- Int single :- Bool live :- Bool])
+
+;; The META predicates are single-valued by their own nature (mirrors fram.schema/setup!:
+;; name/cardinality/value_kind are single). Seeded so a `@<pred> cardinality X` claim is
+;; itself replaced (not accumulated) on re-declaration even when the log doesn't declare
+;; the meta-preds' own cardinality; a real claim on any of them still overrides the seed.
+(def meta-single-seed :- (Map String Bool)
+  {"cardinality" true "value_kind" true "name" true "acyclic" true})
+
+(defn- strip-at [s :- String] :- String
+  (if (str/starts-with? s "@") (subs s 1) s))
+
+;; Latest-tx-wins per declared predicate; a retracted declaration falls back to single?.
+;; Returns predname -> is-single, meta-preds seeded then overlaid by live declarations.
+(defn card-map [asserts :- (Vec Assertion)] :- (Map String Bool)
+  (let [latest (reduce
+                (fn [m :- (Map String Card) a :- Assertion] :- (Map String Card)
+                  (if (not (= (:p a) "cardinality"))
+                    m
+                    (let [pn (strip-at (:l a))
+                          atx (tx-of a)
+                          prev (get m pn)]
+                      (if (and (some? prev) (> (:tx prev) atx))
+                        m
+                        (assoc m pn (->Card atx (= (:r a) "single") (= (:op a) "assert")))))))
+                {}
+                asserts)]
+    (reduce (fn [acc :- (Map String Bool) e :- (Vec Any)] :- (Map String Bool)
+              (let [pn :- String (nth e 0) c :- Card (nth e 1)]
+                (if (:live c) (assoc acc pn (:single c)) acc)))
+            meta-single-seed
+            (vec (seq latest)))))
+
+;; --- PASS 2 ------------------------------------------------------------------
 ;; O(n) fold: collapse to the latest assertion per key in one pass (a hash map),
 ;; then emit claims. Single-valued predicates key on (l,p) — latest tx wins;
 ;; multi-valued key on (l,p,r) — latest op (assert/retract) per triple wins.
+;; Cardinality is the EFFECTIVE map from pass 1 (claim > env > fallback).
 ;; (l/p, and multi-valued r's, are clean refs that never contain the separator.)
 (defrecord Latest [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
-(defn- key-of [a :- Assertion] :- String
-  (if (k/single? (:p a))
+(defn- key-of [cmap :- (Map String Bool) a :- Assertion] :- String
+  (if (k/single-eff? cmap (:p a))
     (str (:l a) "" (:p a))
     (str (:l a) "" (:p a) "" (:r a))))
 
-(defn- keyed-latest [asserts :- (Vec Assertion)] :- (Map String Latest)
+(defn- keyed-latest [cmap :- (Map String Bool) asserts :- (Vec Assertion)] :- (Map String Latest)
   (reduce
    (fn [m :- (Map String Latest) a :- Assertion] :- (Map String Latest)
-     (let [k (key-of a)
+     (let [k (key-of cmap a)
            prev (get m k)
            atx (tx-of a)]
        (if (and (some? prev) (> (:tx prev) atx))
@@ -56,12 +100,13 @@
 (defn fold [asserts :- (Vec Assertion)] :- Fold
   ;; Drop torn/partial lines (missing l/p/r) BEFORE keying — the log is appended
   ;; without fsync, so a read caught mid-write can yield an EDN-valid but incomplete
-  ;; assertion, and key-of calls single? on :p. An incomplete line is an unfinished
+  ;; assertion, and key-of calls single-eff? on :p. An incomplete line is an unfinished
   ;; write that must not become a claim. max-tx still counts ALL :tx (version
   ;; high-water mark, kept consistent with the coordinator's seq seeding).
   (let [valid (filterv (fn [a :- Assertion] :- Bool
                          (and (some? (:l a)) (and (some? (:p a)) (some? (:r a))))) asserts)
-        keyed (keyed-latest valid)
+        cmap (card-map valid)
+        keyed (keyed-latest cmap valid)
         claims (reduce
                 (fn [acc :- (Vec k/Claim) v :- Latest] :- (Vec k/Claim)
                   (if (= (:op v) "assert")
@@ -75,7 +120,7 @@
 ;; reader can tell coordinator/agent writes from import-derived values.
 (defn fold-latest [asserts :- (Vec Assertion)] :- (Vec Latest)
   (filterv (fn [v :- Latest] :- Bool (= (:op v) "assert"))
-           (vec (vals (keyed-latest asserts)))))
+           (vec (vals (keyed-latest (card-map asserts) asserts)))))
 
 ;; Reconstruct fold's emission ORDER from a set-equal live view. The coordinator's
 ;; :claims op serves its warm store through this (cached per version), so the CLI's
@@ -90,8 +135,10 @@
 ;; CLI-computed order. (The synthetic Assertion exists only to reuse key-of
 ;; verbatim — same \001 separator bytes.)
 (defn refold-order [claims :- (Vec k/Claim)] :- (Vec k/Claim)
-  (vec (vals (reduce
-              (fn [m :- (Map String k/Claim) c :- k/Claim] :- (Map String k/Claim)
-                (assoc m (key-of (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) c))
-              {}
-              claims))))
+  (let [cmap (card-map (mapv (fn [c :- k/Claim] :- Assertion
+                               (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) claims))]
+    (vec (vals (reduce
+                (fn [m :- (Map String k/Claim) c :- k/Claim] :- (Map String k/Claim)
+                  (assoc m (key-of cmap (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) c))
+                {}
+                claims)))))

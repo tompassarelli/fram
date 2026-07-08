@@ -77,11 +77,13 @@
   :else (println (str "no claims for " te)))))
 
 (defn cmd-set [^String log ^String id ^String pred ^String value]
-  (let [f (fold/fold (fram.rt/read-log log))
+  (let [as (fram.rt/read-log log)
+   f (fold/fold as)
    claims (:claims f)
+   cmap (fold/card-map as)
    te (str "@" id)
    rv (tl/ref-value claims pred value)
-   cand (k/apply-assert claims (k/->Claim te pred rv))
+   cand (k/apply-assert-c cmap claims (k/->Claim te pred rv))
    viol (k/violations cand te)]
   (if (not (empty? viol)) (println (str "REJECTED — " (str/join "; " viol))) (let [tx (+ (fold/max-tx (fram.rt/read-log log)) 1)]
   (fram.rt/append-assertion log (fold/->Assertion tx "assert" te pred rv "cli"))
@@ -126,17 +128,22 @@
   (println (str "watching coordinator on 127.0.0.1:" port " — Ctrl-C to stop"))
   (fram.rt/coord-watch port)))
 
-(defn cmd-doctor []
+(defn cmd-doctor [^String log]
   (let [port (fram.rt/coord-port)
-   v (fram.rt/coord-version port)]
+   v (fram.rt/coord-version port)
+   as (fram.rt/read-log log)
+   cmap (fold/card-map as)
+   declared (filterv (fn [c] (= (:p c) "cardinality")) (:claims (fold/fold as)))]
   (if (>= v 0) (println (str "coordinator UP on 127.0.0.1:" port " (v" v ")")) (println (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up")))
   (println (str "vocab " (k/vocab-fingerprint)))
-  (if (k/single-valued-from-env?) (println "vocab-source: FRAM_SINGLE_VALUED (injected)") (println (str "vocab-source: TRANSITIONAL FALLBACK — FRAM_SINGLE_VALUED is UNSET in this " "process. If the daemon and this CLI disagree on it, the cold fold and the " "daemon's store classify cardinality differently (divergent live view). " "Export the SAME FRAM_SINGLE_VALUED in every process that folds/serves this log.")))))
+  (println (str "cardinality-claims: " (count declared) " claims-derived (in the log)"))
+  (println (str "cardinality-overlay " (k/cards-fingerprint cmap)))
+  (if (k/single-valued-from-env?) (println "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (env, injected) > fallback list") (println (str "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (UNSET in this process) > " "TRANSITIONAL FALLBACK list. A cardinality CLAIM (`tell <pred> cardinality " "single|multi`) overrides the env/fallback for BOTH the daemon and this CLI, so a " "predicate declared in the log classifies identically regardless of each process's " "FRAM_SINGLE_VALUED; only preds NOT declared in the log fall back to it — export the " "SAME FRAM_SINGLE_VALUED in every process that folds/serves this log for those.")))))
 
 (defn cmd-tools [^String log]
   (let [claims (:claims (fold/fold (fram.rt/read-log log)))
    cat (tl/catalog claims)]
-  (println (str (count cat) " tools (generated from the claim vocabulary):"))
+  (println (str (count cat) " tools (closed catalog; vocabulary is data — `show <pred>` reveals " "a predicate's cardinality/value_kind claims, `ask` enumerates it):"))
   (doseq [spec cat]
   (println (str "  " (:name spec) "  —  " (:desc spec))))))
 
@@ -179,7 +186,7 @@
   (= cmd "export") (if (> (count args) 1) (cmd-export threads-dir log (nth args 1) (and (> (count args) 2) (= (nth args 2) "--force"))) (println "usage: export <out-dir> [--force]"))
   (= cmd "validate") (cmd-validate log)
   (= cmd "watch") (cmd-watch)
-  (= cmd "doctor") (cmd-doctor)
+  (= cmd "doctor") (cmd-doctor log)
   (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) ""))
   (= cmd "history") (if (> (count args) 1) (fram.rt/history log (nth args 1)) (println "usage: history <id>"))
   (= cmd "tools") (cmd-tools log)

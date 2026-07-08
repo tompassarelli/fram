@@ -89,6 +89,17 @@
        " |terminal=" (sorted-join terminal-preds)
        " |withdrawn=" (sorted-join withdrawn-preds)))
 
+;; Deterministic fingerprint of the CLAIM-derived cardinality overlay (schema-as-claims):
+;; sorted "pred=single|multi" pairs from the effective cardinality map. This is the layer
+;; that makes the finding #23 divergence NON-silent AND self-healing: because the overlay
+;; is DERIVED FROM THE LOG, a daemon and a CLI folding the same log produce the SAME string
+;; here even if they booted with different FRAM_SINGLE_VALUED — the claim wins for both.
+;; Combined with vocab-fingerprint (env/fallback layer) it is the value an operator compares.
+(defn cards-fingerprint [cmap :- (Map String Bool)] :- String
+  (str/join "," (vec (sort (mapv (fn [e :- (Vec Any)] :- String
+                                   (str (nth e 0) "=" (if (= (nth e 1) true) "single" "multi")))
+                                 (vec (seq cmap)))))))
+
 ;; Map-backed membership for single?: it runs once per assertion in every
 ;; fold/refold (and per claim in the daemon's migrate/tail-fold), so the
 ;; vec-contains? linear scan over the ~23-pred vocab was a measurable slice of
@@ -104,6 +115,19 @@
   ;; so a stray/torn record can't NPE the whole cold-read path (fold already drops
   ;; torn lines; this is the belt to that suspenders).
   (or (some? (get single-valued-set p)) (and (string? p) (str/starts-with? p "emoji_"))))
+
+;; SCHEMA-AS-CLAIMS cardinality (the finding #23 fix, done properly). Predicate
+;; cardinality is data: an ordinary claim `@<pred> cardinality single|multi` in the
+;; log DECLARES it, and fram.fold projects those claims into a cardinality map
+;; (predname -> is-single) that it threads through the fold. `single-eff?` is the
+;; EFFECTIVE cardinality: the claim (via cmap) wins; absence falls back to `single?`
+;; (which is itself FRAM_SINGLE_VALUED env > the transitional hardcoded list). So the
+;; precedence is claim > env > fallback — and, crucially, it is DERIVED FROM THE LOG,
+;; so a daemon and a CLI folding the same log classify identically without both having
+;; to have booted with the same FRAM_SINGLE_VALUED (the silent-divergence vector).
+(defn single-eff? [cmap :- (Map String Bool) p :- String] :- Bool
+  (let [v :- Bool? (get cmap p)]
+    (if (nil? v) (single? p) v)))
 
 ;; --- the claim -------------------------------------------------------------
 
@@ -168,15 +192,25 @@
       false
       (if (claim-eq? (first r) c) true (recur (rest r))))))
 
-(defn apply-assert [claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
-  (if (single? (:p c))
+;; cmap-threaded variants: cardinality comes from the effective map (claim > env >
+;; fallback), so the single-writer `set` path (main/cmd-set) classifies a predicate the
+;; SAME way the fold that produced its claim set did. The bare (single?-only) arities
+;; stay for back-compat callers that carry no cardinality map.
+(defn apply-assert-c [cmap :- (Map String Bool) claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
+  (if (single-eff? cmap (:p c))
     (conj (drop-lp claims (:l c) (:p c)) c)
     (if (has-claim? claims c) claims (conj claims c))))
 
-(defn apply-retract [claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
-  (if (single? (:p c))
+(defn apply-retract-c [cmap :- (Map String Bool) claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
+  (if (single-eff? cmap (:p c))
     (drop-lp claims (:l c) (:p c))
     (filterv (fn [x :- Claim] :- Bool (not (claim-eq? x c))) claims)))
+
+(defn apply-assert [claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
+  (apply-assert-c {} claims c))
+
+(defn apply-retract [claims :- (Vec Claim) c :- Claim] :- (Vec Claim)
+  (apply-retract-c {} claims c))
 
 ;; --- cycles ----------------------------------------------------------------
 

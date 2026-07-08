@@ -1,16 +1,17 @@
 ;; fram_mcp.clj — the AI-facing edge of a Fram instance.
 ;; ============================================================================
-;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The DEFAULT surface
-;; is the TELL/ASK knowledge-base core (Russell & Norvig KB interface): tell /
-;; untell / show / ask + threads / validate + the graph-edit verbs — ~10 tools
-;; instead of the ~200 generated per-predicate ones, whose catalog was a
-;; per-session context tax. The typed per-predicate schemas bought no safety the
+;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The surface is CLOSED
+;; and O(1): exactly the ten tools of the TELL/ASK knowledge-base core (Russell &
+;; Norvig KB interface) — tell / untell / show / ask / validate + the five graph-edit
+;; verbs — served straight from fram.tools/catalog, never minted per-predicate. The
+;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
-;; coordinator, and single-vs-multi cardinality lives in the kernel (apply-assert
-;; replaces the (l,p) group for single-valued predicates), so `tell` = assert
-;; subsumes set-P AND add-P with identical semantics. FRAM_MCP_SURFACE=full
-;; serves the generated catalog (fram.tools) unchanged; tools/call accepts BOTH
-;; namings on every surface (graceful degradation, nothing unrecoverable).
+;; coordinator, and single-vs-multi cardinality is DATA in the log (a `<pred>
+;; cardinality single|multi` claim; the fold keys by it), so `tell` = assert subsumes
+;; set-P AND add-P with identical semantics. Vocabulary is discoverable, not tooled:
+;; a predicate is an entity, so `show <pred>` reveals its cardinality/value_kind claims
+;; and `ask` enumerates it. `threads` and `dependents-of` are NOT here — threads are a
+;; TERN concept (tern serves them) and a reverse edge is an `ask`.
 ;; Reads fold the current log; writes route through the coordinator.
 ;; cheshire keywordizes the JSON arguments into exactly the EDN shape fram.tools /
 ;; fram.query expect, so a model fills typed params (or, for `ask`, emits a
@@ -30,29 +31,9 @@
 
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
-;; --- surface selection --------------------------------------------------------
-;; core (default): the TELL/ASK KB interface. full: the generated per-predicate
-;; catalog. Dispatch accepts both namings regardless — the flag only shapes
-;; tools/list + instructions.
-(def ^:private full-surface? (= "full" (System/getenv "FRAM_MCP_SURFACE")))
-
-(def instructions-full
-  (str
-   "Fram is a claim engine: every claim is a triple (subject predicate object); a "
-   "thread is any @id with a `title`. Lifecycle is DERIVED from claims (committed / "
-   "outcome / abandoned / driver / depends_on), never a stored status.\n\n"
-   "These tools are GENERATED from the claim vocabulary, so they are named after "
-   "your claims. For each predicate P: `P-of`/`P-list` read it, `set-P`/`add-P`/"
-   "`remove-P` write it, and for reference predicates `P-from` walks the reverse "
-   "edge. Structural tools: threads, show, dependents-of, validate. Prefer a named "
-   "tool — you fill typed params, you can't emit a broken query.\n\n"
-   "For a multi-hop question no named tool covers, use `query`: a structured "
-   "Datalog-shaped object {:find <rel> :rules [{:head {:rel R :args [terms]} "
-   ":body [{:rel r :args [terms] :neg <bool>}]}]}. A term is {\"var\":\"x\"} or a "
-   "constant; base relations are triple(l,p,r) and claim(cid,l,p,r). Recursion and "
-   "stratified negation are supported; the query is validated before it runs."))
-
-(def instructions-core
+;; --- the closed surface -------------------------------------------------------
+;; One instructions string; the tool list is fram.tools/catalog verbatim (10 tools).
+(def instructions
   (str
    "Fram is a claim engine: every claim is a triple (subject predicate object); a "
    "thread is any @id with a `title`. Lifecycle is DERIVED from claims (committed / "
@@ -62,13 +43,12 @@
    "`untell` retracts one, `show` reads every claim on a subject, and `ask` answers "
    "multi-hop questions with a structured Datalog query (validated before it runs; "
    "recursion + stratified negation). Every write is serialized and rule-checked by "
-   "the coordinator. `threads` lists entities with a title; `validate` reports "
-   "integrity violations.\n\n"
+   "the coordinator. `validate` reports integrity violations.\n\n"
+   "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
+   "claims, and `ask` can enumerate the vocabulary — the tool surface stays closed "
+   "(ten tools) while the vocabulary lives in the graph as data.\n\n"
    "Claim-canonical Beagle modules are authored by GRAPH EDIT: add-def / set-body / "
-   "rename-def / insert-after (recompile-gated, fail-closed). "
-   "FRAM_MCP_SURFACE=full serves the generated per-predicate catalog instead."))
-
-(def instructions (if full-surface? instructions-full instructions-core))
+   "rename-def / insert-after / replace-in-body (recompile-gated, fail-closed)."))
 
 ;; --- per-request state: fold the current log fresh (sees others' writes) -----
 (defn load-state []
@@ -84,47 +64,6 @@
 
 (defn- ->tool [spec]
   {:name (:name spec) :description (:desc spec) :inputSchema (input-schema (:params spec))})
-
-;; --- the KB core (default tools/list) -----------------------------------------
-;; Hand-written descriptors for the four claim verbs; the kept structural + edit
-;; tools come from the generated catalog so their schemas stay single-sourced.
-(defn- obj-schema [props req]
-  {:type "object"
-   :properties (reduce (fn [m [n t d]] (assoc m n {:type t :description d})) {} props)
-   :required req})
-
-(def ^:private spo-props
-  [["subject" "string" "entity id (with or without @)"]
-   ["predicate" "string" "predicate name"]
-   ["object" "string" "value; bare ids for reference predicates are auto-@-prefixed"]])
-
-(def ^:private kb-tools
-  [{:name "tell"
-    :description (str "TELL/ASK knowledge-base interface: assert the claim (subject, predicate, "
-                      "object) — a single-valued predicate replaces its current value, a "
-                      "multi-valued one accumulates across repeated tells.")
-    :inputSchema (obj-schema spo-props ["subject" "predicate" "object"])}
-   {:name "untell"
-    :description "TELL/ASK knowledge-base interface: retract the exact claim (subject, predicate, object)."
-    :inputSchema (obj-schema spo-props ["subject" "predicate" "object"])}
-   {:name "show"
-    :description "All claims on <subject>."
-    :inputSchema (obj-schema [["subject" "string" "entity id (with or without @)"]] ["subject"])}
-   {:name "ask"
-    :description (str "TELL/ASK knowledge-base interface: structured Datalog query "
-                      "{:find <rel> :rules [{:head {:rel R :args [terms]} :body [{:rel r :args "
-                      "[terms] :neg <bool>}]}]} where a term is {\"var\":\"x\"} or a constant and "
-                      "base relations are triple(l,p,r) and claim(cid,l,p,r) — validated before it "
-                      "runs; recursion and stratified negation supported.")
-    :inputSchema (obj-schema [["query" "object" "the structured Datalog query object"]] ["query"])}])
-
-;; structural + graph-edit tools that survive into the core surface, by name.
-(def ^:private core-kept #{"threads" "validate" "add-def" "set-body" "rename-def" "insert-after"})
-
-(defn- core-tools [cat]
-  (into (vec kb-tools)
-        (comp (filter #(contains? core-kept (:name %))) (map ->tool))
-        cat))
 
 ;; --- writes -> through the coordinator (mirrors the CLI's route-write) -------
 (defn- route-write [w]
@@ -487,23 +426,6 @@
 (def ^:private edit-tools #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
 
-;; --- KB claim verbs: tell / untell --------------------------------------------
-;; Build the coordinator write DIRECTLY from (subject, predicate, object): unlike
-;; the generated set-P/add-P tools this asserts ANY predicate — including one not
-;; yet in the vocabulary. Value normalization (auto-@-prefix for pure-reference
-;; predicates) reuses fram.tools/ref-value, so both namings agree on the wire.
-(defn- at-subject [s]
-  (if (and (string? s) (str/starts-with? s "@")) s (str "@" s)))
-
-(defn- kb-write [op a]
-  (let [miss (vec (keep (fn [k] (when (nil? (get a k)) (str "missing required param '" (name k) "'")))
-                        [:subject :predicate :object]))]
-    (if (seq miss)
-      {:isError true :text (str/join "\n" miss)}
-      (let [{:keys [claims]} (load-state)
-            p (str (:predicate a))]
-        (route-write {:op op :l (at-subject (:subject a)) :p p :r (tl/ref-value claims p (:object a))})))))
-
 ;; --- dispatch one tools/call (catalog path) ------------------------------------
 (defn- dispatch-call [name a]
   ;; WARM READ PATH (interface investigation #1): serve `query` off the daemon's warm
@@ -527,17 +449,14 @@
         :else {:text (json/generate-string (:rows res))}))))
 
 ;; --- dispatch one tools/call ---------------------------------------------------
-;; KB-core names normalize onto the engine ops (ask -> query, show subject -> id);
-;; tell/untell route straight to kb-write. Every generated name still dispatches
-;; via the catalog path, whatever surface tools/list advertised.
+;; Every tool — tell / untell / show / ask / validate + the edit verbs — dispatches
+;; through the closed catalog (fram.tools/call): tell/untell lower to a {:write}
+;; coordinator intent, ask/show/validate to reads. The only pre-map is the `ask` KB
+;; name onto the engine's `query` op (also the warm-read fast path in dispatch-call).
 (defn handle-call [name args]
-  (let [name (if (= name "ask") "query" name)   ; KB alias for the structured Datalog op
-        a (or args {})
-        a (if (and (= name "show") (contains? a :subject)) (assoc a :id (:subject a)) a)]
-    (cond
-      (= name "tell")   (kb-write "assert" a)
-      (= name "untell") (kb-write "retract" a)
-      :else             (dispatch-call name a))))
+  (let [name (if (= name "ask") "query" name)
+        a (or args {})]
+    (dispatch-call name a)))
 
 ;; wall-clock budget on the AI-facing path: validation makes a query STRUCTURALLY
 ;; safe, but evaluation is naive, so a deeply recursive query can be slow. Bound it
@@ -607,9 +526,7 @@
                  :instructions instructions})
 
       (= method "tools/list")
-      (reply id {:tools (if full-surface?
-                          (mapv ->tool (:cat (load-state)))
-                          (core-tools (:cat (load-state))))})
+      (reply id {:tools (mapv ->tool (:cat (load-state)))})
 
       (= method "tools/call")
       ;; graph-AST edits run a multi-process recompile-gated transaction that far
@@ -624,9 +541,7 @@
 
       :else (reply-err id -32601 (str "method not found: " method)))))
 
-(log! (str "fram-mcp: ready on stdio (surface: "
-           (if full-surface? "full — per-predicate catalog generated from the log fold" "core — TELL/ASK KB")
-           ")"))
+(log! "fram-mcp: ready on stdio (closed catalog: tell/untell/show/ask/validate + 5 edit verbs)")
 (loop []
   (let [line (read-line)]
     (when (some? line)

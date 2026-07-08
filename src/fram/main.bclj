@@ -163,11 +163,13 @@
 ;; update with nothing flagging the collision. (The coordinator/tell path is
 ;; arbitrated by base_version; this is the bare single-writer `set` path.)
 (defn cmd-set [log :- String id :- String pred :- String value :- String] :- Nil
-  (let [f (fold/fold (fram.rt/read-log log))
+  (let [as (fram.rt/read-log log)
+        f (fold/fold as)
         claims (:claims f)
+        cmap (fold/card-map as)
         te (str "@" id)
         rv (tl/ref-value claims pred value)
-        cand (k/apply-assert claims (k/->Claim te pred rv))
+        cand (k/apply-assert-c cmap claims (k/->Claim te pred rv))
         viol (k/violations cand te)]
     (if (not (empty? viol))
       (println (str "REJECTED — " (str/join "; " viol)))
@@ -245,19 +247,31 @@
 ;; fallback prints a loud note instead of passing silently — the divergence is no
 ;; longer silent. (Consistency requirement: every process folding/serving one log
 ;; MUST load the same FRAM_SINGLE_VALUED — see fram.kernel.)
-(defn cmd-doctor [] :- Nil
+(defn cmd-doctor [log :- String] :- Nil
   (let [port (fram.rt/coord-port)
-        v (fram.rt/coord-version port)]
+        v (fram.rt/coord-version port)
+        as (fram.rt/read-log log)
+        cmap (fold/card-map as)
+        declared (filterv (fn [c :- k/Claim] :- Bool (= (:p c) "cardinality"))
+                          (:claims (fold/fold as)))]
     (if (>= v 0)
       (println (str "coordinator UP on 127.0.0.1:" port " (v" v ")"))
       (println (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up")))
     (println (str "vocab " (k/vocab-fingerprint)))
+    ;; schema-as-claims cardinality: the claim-derived overlay is the authoritative,
+    ;; log-derived layer that makes CLI-vs-daemon cardinality agreement automatic (both
+    ;; fold the same log). Report the three cardinality SOURCES + the effective overlay
+    ;; fingerprint an operator compares across processes.
+    (println (str "cardinality-claims: " (count declared) " claims-derived (in the log)"))
+    (println (str "cardinality-overlay " (k/cards-fingerprint cmap)))
     (if (k/single-valued-from-env?)
-      (println "vocab-source: FRAM_SINGLE_VALUED (injected)")
-      (println (str "vocab-source: TRANSITIONAL FALLBACK — FRAM_SINGLE_VALUED is UNSET in this "
-                    "process. If the daemon and this CLI disagree on it, the cold fold and the "
-                    "daemon's store classify cardinality differently (divergent live view). "
-                    "Export the SAME FRAM_SINGLE_VALUED in every process that folds/serves this log.")))))
+      (println "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (env, injected) > fallback list")
+      (println (str "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (UNSET in this process) > "
+                    "TRANSITIONAL FALLBACK list. A cardinality CLAIM (`tell <pred> cardinality "
+                    "single|multi`) overrides the env/fallback for BOTH the daemon and this CLI, so a "
+                    "predicate declared in the log classifies identically regardless of each process's "
+                    "FRAM_SINGLE_VALUED; only preds NOT declared in the log fall back to it — export the "
+                    "SAME FRAM_SINGLE_VALUED in every process that folds/serves this log for those.")))))
 
 ;; --- AI-facing tool surface (catalog + dispatch; see fram.tools / fram.query) -
 ;; The catalog is generated from the claim vocabulary; `query` is the structured
@@ -267,7 +281,8 @@
 (defn cmd-tools [log :- String] :- Nil
   (let [claims (:claims (fold/fold (fram.rt/read-log log)))
         cat (tl/catalog claims)]
-    (println (str (count cat) " tools (generated from the claim vocabulary):"))
+    (println (str (count cat) " tools (closed catalog; vocabulary is data — `show <pred>` reveals "
+                  "a predicate's cardinality/value_kind claims, `ask` enumerates it):"))
     (doseq [spec cat]
       (println (str "  " (:name spec) "  —  " (:desc spec))))))
 
@@ -328,7 +343,7 @@
          (println "usage: export <out-dir> [--force]"))]
       [(= cmd "validate") (cmd-validate log)]
       [(= cmd "watch")    (cmd-watch)]
-      [(= cmd "doctor")   (cmd-doctor)]
+      [(= cmd "doctor")   (cmd-doctor log)]
       [(= cmd "show")     (cmd-show log (if (> (count args) 1) (nth args 1) ""))]
       [(= cmd "history")
        (if (> (count args) 1)
