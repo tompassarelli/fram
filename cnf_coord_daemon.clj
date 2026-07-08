@@ -38,7 +38,16 @@
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
-(def schema-preds #{"name" "cardinality" "value_kind" "cnf-supersedes"})
+;; ENGINE predicates — never ordinary domain data. Split by WRITE POLICY (F3):
+;;   hard-reserved   — identity/bookkeeping; a domain tell/retract is REJECTED (as always).
+;;   schema-writable — cardinality/value_kind: VALIDATED domain writes (the schema-write
+;;                     gate at do-assert/do-retract), routed through the schema layer and
+;;                     appended VERBATIM so the cold CLI fold's card-map still sees them.
+;; schema-preds stays their UNION, so every downstream filter (materialization skips at
+;; migrate/apply-tail!, claim->triple/lp-live-triples read-view hiding) is byte-identical.
+(def hard-reserved #{"name" "cnf-supersedes"})
+(def schema-writable #{"cardinality" "value_kind"})
+(def schema-preds (clojure.set/union hard-reserved schema-writable))
 
 ;; ---- warm scope-correct code-intelligence (refers_to materialized over `co`) -
 ;; resolve.clj's lexical resolver (loadable as a library) writes refers_to + render-
@@ -430,11 +439,104 @@
 ;; do-retract + do-assert), but do-assert calls it — declare so SCI resolves it.
 (declare terminal-cascade!)
 
-;; reserved engine predicates (identity + metadata) — a DOMAIN write to one would
-;; collide with the reified schema layer and silently corrupt; reject at the boundary.
+;; --- F3: validated schema-write gate ----------------------------------------
+;; cardinality + value_kind are META-predicates ON a predicate-name (subject "@<pred>").
+;; They are NOT domain data, but unlike name/cnf-supersedes they are USER-DECLARABLE: a
+;; `tell @<pred> cardinality single` is the authoring surface for schema-as-claims. A
+;; schema-writable predicate routes through here: validate the subject shape + value,
+;; apply the multi->single DATA-LOSS guard, then write through the schema layer (s/assert!
+;; on the STRIPPED pred-name — never a raw @<pred> entity node) and append the claim
+;; VERBATIM to the flat log so the cold CLI fold's card-map sees it (daemon⇄CLI parity).
+(defn- pred-name [s] (if (and (string? s) (str/starts-with? s "@")) (subs s 1) s))
+(def ^:private schema-allowed {"cardinality" #{"single" "multi"} "value_kind" #{"ref" "literal"}})
+(def ^:private schema-allowed-msg {"cardinality" "single|multi" "value_kind" "ref|literal"})
+
+;; live (subject,pred) groups on `pname` holding >1 live value — the groups a
+;; cardinality multi->single flip would silently collapse to latest-tx (the schema-as-
+;; claims data-loss vector). O(pname's own claims) via the by-p index, NOT O(store).
+;; Returns {:count n :subjects [<=3 subject-names]} for a pointed reject.
+(defn- multivalued-groups [st pname]
+  (let [pid (c/value-id st pname)]
+    (if (nil? pid)
+      {:count 0 :subjects []}
+      (let [offending (->> (c/by-p st pid)
+                           (keep #(c/claim-of st %))
+                           (group-by :l)
+                           (filterv (fn [g] (> (count (second g)) 1))))]
+        {:count (count offending)
+         :subjects (mapv (fn [g] (or (s/name-of st (first g)) (str (first g)))) (take 3 offending))}))))
+
+;; write one schema meta-claim into the store + flat log in ONE coordinator tx. ASSERT:
+;; s/assert! on the pred-name's value-object supersedes the prior declaration (cardinality
+;; + value_kind are single-valued per setup!); only cardinality is written, so a value_kind
+;; declared earlier is preserved (invariant). RETRACT: fall back to the env/fallback
+;; classification — a kernel-single pred re-seeds "single" (so the store still matches the
+;; cold CLI fold, which falls back via ck/single?), else the declaration is cleared
+;; (default multi). The flat line records the user's op VERBATIM so the CLI fold agrees.
+(defn- schema-store-write! [op te pname p r]
+  (locking (:lock @co)
+    (let [st (:store @co)
+          tx (c/begin-tx! st "schema")
+          pid (c/value! st pname)
+          clear! (fn [pp] (doseq [old (c/by-lp st pid (c/value! st pp))]
+                            (c/claim! st old (c/value! st "cnf-supersedes") old tx)))]
+      (cond
+        (= op "assert")     (s/assert! st pid p r tx)
+        (= p "cardinality") (if (ck/single? pname)
+                              (s/assert! st pid "cardinality" "single" tx)   ; fallback single: re-seed
+                              (clear! "cardinality"))                        ; fallback multi: clear -> default
+        :else               (clear! "value_kind"))
+      (let [seq (get-in @st [:txs tx :seq])]
+        (append-flat! op te p r seq)
+        (notify-subs! {:event :commit :version seq :op op :l te :p p :r r})
+        {:ok seq}))))
+
+(defn- do-schema-assert [te p r]
+  (let [st (:store @co)]
+    (cond
+      (not (ref-shape? te))
+      {:reject [(str "schema predicate '" p "' requires an @-prefixed predicate-name subject (got '" te "')")] :version (current-seq @co)}
+      (not (contains? (schema-allowed p) r))
+      {:reject [(str "invalid " p " value '" r "' — allowed: " (schema-allowed-msg p))] :version (current-seq @co)}
+      :else
+      (let [pname (pred-name te)]
+        (if (and (= p "cardinality") (= r "single") (not= "single" (s/cardinality st pname)))
+          (let [{:keys [count subjects]} (multivalued-groups st pname)]
+            (if (pos? count)
+              {:reject [(str "cardinality multi->single on '" pname "' would collapse " count
+                             " live multi-valued group(s) to latest-tx (data loss); first: "
+                             (str/join ", " subjects) " — retract extra values first")]
+               :version (current-seq @co)}
+              (schema-store-write! "assert" te pname p r)))
+          (schema-store-write! "assert" te pname p r))))))
+
+(defn- do-schema-retract [te p r]
+  (let [st (:store @co)]
+    (if (not (ref-shape? te))
+      {:reject [(str "schema predicate '" p "' requires an @-prefixed predicate-name subject (got '" te "')")] :version (current-seq @co)}
+      (let [pname (pred-name te)]
+        (if (and (= p "cardinality")
+                 (= "multi" (s/cardinality st pname))   ; currently declared multi
+                 (ck/single? pname))                    ; fallback would flip to single
+          (let [{:keys [count subjects]} (multivalued-groups st pname)]
+            (if (pos? count)
+              {:reject [(str "retracting 'cardinality' on '" pname "' falls back to single but " count
+                             " live multi-valued group(s) would collapse to latest-tx (data loss); first: "
+                             (str/join ", " subjects) " — re-declare multi or retract extra values first")]
+               :version (current-seq @co)}
+              (schema-store-write! "retract" te pname p r)))
+          (schema-store-write! "retract" te pname p r))))))
+
+;; reserved engine predicates (identity + metadata) — a DOMAIN write to name/cnf-supersedes
+;; would collide with the reified schema layer and silently corrupt; reject at the boundary.
+;; cardinality/value_kind are validated schema writes (do-schema-assert/retract, F3).
 (defn- do-assert [te p r base]
-  (if (schema-preds p)
+  (cond
+    (hard-reserved p)
     {:reject [(str "reserved predicate '" p "' (engine-internal; use a domain predicate)")] :version (current-seq @co)}
+    (schema-writable p)
+    (do-schema-assert te p r)
+    :else
     (let [pre (current-seq @co)
           res (commit! @co "coord" te p (kind-of p r) r base)]
       (if (:ok res)
@@ -455,8 +557,12 @@
         {:reject (:reject res) :version (:version res)}))))
 
 (defn- do-retract [te p r base]
-  (if (schema-preds p)
+  (cond
+    (hard-reserved p)
     {:reject [(str "reserved predicate '" p "'")] :version (current-seq @co)}
+    (schema-writable p)
+    (do-schema-retract te p r)
+    :else
     (let [pre (current-seq @co)
           res (retract! @co "coord" te p r base)]
       (if (:ok res)
@@ -2189,7 +2295,7 @@
 ;; those exact CLI functions here (no re-derivation → no drift): `log-card-map` builds
 ;; the same map from a set of flat lines; classification is ck/single-eff?. `pred-name`
 ;; strips the leading @ from a `cardinality` claim's subject to recover the pred name.
-(defn- pred-name [s] (if (and (string? s) (str/starts-with? s "@")) (subs s 1) s))
+;; (pred-name is defined up at the F3 schema-write gate — the write path needs it too.)
 (defn- log-card-map [lines]
   (fold/card-map (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))) (vec lines))))
 ;; predicates the given lines LIVE-declare a cardinality for (subjects of `cardinality`
