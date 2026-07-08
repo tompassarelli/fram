@@ -1,7 +1,7 @@
 #lang beagle/clj
 (ns fram.tools
   "The AI-facing TOOL CATALOG — CLOSED and O(1). Exactly ten tools, never minted
-  per-predicate from the vocabulary: `tell`, `untell`, `show`, `ask`, `validate`,
+  per-predicate from the vocabulary: `tell`, `retract`, `show`, `ask`, `validate`,
   and the five graph-AST edit verbs (`add-def`, `set-body`, `rename-def`,
   `insert-after`, `replace-in-body`). Vocabulary is DATA, not tools — a predicate
   is an entity, so `show <pred>` reveals its cardinality/value_kind claims and `ask`
@@ -9,9 +9,10 @@
   claim (that catalog was a per-session context tax buying no safety the coordinator
   doesn't already give). `tell` = assert subsumes the old set-P/add-P with identical
   semantics (single-valued predicates replace their (l,p) group, multi-valued
-  accumulate); `untell` = retract; `ask` is the structured Datalog escape hatch
-  (fram.query) — its op key stays `:query` and the name `query` is accepted as an
-  alias in dispatch. `threads` and `dependents-of` are NOT in this catalog: threads
+  accumulate); `retract` removes one claim (the verb `untell` is accepted as an
+  alias in dispatch, mirroring `query`->`ask`); `ask` is the structured Datalog
+  escape hatch (fram.query) — its op key stays `:query` and the name `query` is
+  accepted as an alias in dispatch. `threads` and `dependents-of` are NOT in this catalog: threads
   are a TERN concept (tern serves them), and a reverse edge is answerable via `ask`.
 
   Reads dispatch here (pure, over the fold); WRITES return an intent
@@ -36,7 +37,7 @@
 (require fram.query :as q)
 (require clojure.string :as str)
 
-;; The op of a tool — constrains dispatch (cond/:else) and missing-req. `:tell`/`:untell`
+;; The op of a tool — constrains dispatch (cond/:else) and missing-req. `:tell`/`:retract`
 ;; are the single-triple KB writes (assert/retract of ANY predicate); `:query` backs
 ;; `ask`; `:show`/`:validate` are the reads. The trailing five are GRAPH-AST EDIT ops:
 ;; they author a claim-canonical Beagle module by minting/superseding kind/v/fN claims via
@@ -46,7 +47,7 @@
 ;; AFTER an anchor def, at a (path,tie) order-key strictly between the anchor and its
 ;; next sibling (the internal verb is "insert-form"; two concurrent inserts after the
 ;; same anchor both land at distinct ties -> commute, the thing append-only could not do).
-(defenum Op :tell :untell :show :query :validate
+(defenum Op :tell :retract :show :query :validate
             :upsert-form :set-body :rename-def :insert-after :replace-in-body)
 
 ;; row-result records (one per read arm; each producing lambda is homogeneous)
@@ -103,9 +104,9 @@
                       "(predicate cardinality itself is a claim: `tell <pred> cardinality "
                       "single|multi`).")
                  spo-params :tell "")
-     (->ToolSpec "untell"
-                 "Retract the exact claim (subject, predicate, object)."
-                 spo-params :untell "")
+     (->ToolSpec "retract"
+                 "Retract the exact claim (subject, predicate, object). The verb `untell` is an accepted alias."
+                 spo-params :retract "")
      (->ToolSpec "show"
                  (str "All claims about <subject>. Predicates are entities too: "
                       "`show <pred>` reveals its cardinality/value_kind/acyclic claims.")
@@ -191,7 +192,7 @@
 ;; required params by op — server-side enforcement (the "can't emit a broken call"
 ;; guarantee, not just an advisory schema): a missing required param is rejected.
 (defn- missing-req [op :- Op args :- (Map Keyword Any)] :- (Vec String)
-  (let [need-spo (or (= op :tell) (= op :untell))
+  (let [need-spo (or (= op :tell) (= op :retract))
         ;; graph-edit ops: module scope is always required; the rest by op.
         need-module (or (= op :upsert-form) (or (= op :set-body) (or (= op :rename-def) (or (= op :insert-after) (= op :replace-in-body)))))
         e1 (if (and need-spo (or (nil? (:subject args)) (or (nil? (:predicate args)) (nil? (:object args)))))
@@ -210,14 +211,15 @@
              ["missing required param 'name' and/or 'old' and/or 'new'"] [])]
     (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 e9)))))))))))
 
-;; READ -> {:rows [...]}.  WRITE (tell/untell) -> {:write {:op :l :p :r}} (host routes it
+;; READ -> {:rows [...]}.  WRITE (tell/retract) -> {:write {:op :l :p :r}} (host routes it
 ;; through the coordinator).  ask/query -> fram.query/run result.  bad/unknown -> {:error}.
 ;; args is a (Map Keyword Any): keyword keys -> arbitrary EDN values. The return is the
 ;; tagged result envelope (Any — open-map key-presence gap, see ns doc). The name `query`
 ;; is accepted as an alias for `ask` (same :query op) so the structured escape hatch keeps
-;; both spellings on every surface.
+;; both spellings on every surface. `untell` is likewise accepted as an alias for
+;; `retract` (same :retract op) so the retract verb keeps both spellings everywhere.
 (defn call [claims :- (Vec k/Claim) idx :- k/Index cat :- (Vec ToolSpec) tool :- String args :- (Map Keyword Any)] :- Any
-  (let [tool (if (= tool "query") "ask" tool)
+  (let [tool (if (= tool "query") "ask" (if (= tool "untell") "retract" tool))
         spec :- ToolSpec? (spec-by-name cat tool)]
     (if (nil? spec)
       {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]}
@@ -230,7 +232,7 @@
                 te (at subj)]
             (cond
               [(= op :tell)       {:write {:op "assert" :l te :p pred :r (ref-value claims pred (:object args))}}]
-              [(= op :untell)     {:write {:op "retract" :l te :p pred :r (ref-value claims pred (:object args))}}]
+              [(= op :retract)    {:write {:op "retract" :l te :p pred :r (ref-value claims pred (:object args))}}]
               [(= op :show)       {:rows (mapv (fn [c :- k/Claim] :- PredVal (->PredVal (:p c) (:r c)))
                                                (k/q-by-l claims te))}]
               [(= op :query)      (q/run claims (:query args))]

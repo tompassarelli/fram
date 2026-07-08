@@ -99,21 +99,34 @@
   :else (recur (vec (concat (rest front) (succ (first front)))) (conj seen (first front))))))
 
 (defn ^Boolean cycle? [claims ^String pred ^String te]
-  (let [succ (fn [x] (if (= pred "part_of") (let [pp (one claims x "part_of")]
-  (if (some? pp) [pp] [])) (many claims x "depends_on")))]
+  (let [succ (fn [x] (many claims x pred))]
   (reachable-from? succ (succ te) te)))
+
+(def ref-preds-fallback ["depends_on" "part_of" "relates_to" "clarifies" "amends"])
+
+(def acyclic-preds-fallback ["depends_on" "part_of"])
+
+(defn- ^String strip-at [^String s]
+  (if (str/starts-with? s "@") (subs s 1) s))
+
+(defn- preds-claiming [claims ^String mp ^String mv]
+  (uniq (mapv (fn [c] (strip-at (:l c))) (filterv (fn [c] (and (= (:p c) mp) (= (:r c) mv))) claims))))
+
+(defn ref-preds-of [claims]
+  (let [d (preds-claiming claims "value_kind" "ref")]
+  (if (empty? d) ref-preds-fallback d)))
+
+(defn acyclic-preds-of [claims]
+  (let [d (preds-claiming claims "acyclic" "true")]
+  (if (empty? d) acyclic-preds-fallback d)))
 
 (defn violations [claims ^String te]
   (let [ids (thread-ids claims)
-   v2 (reduce (fn [acc d] (if (not (vec-contains? ids d)) (conj acc (str "depends_on references missing entity " d)) acc)) [] (many claims te "depends_on"))
-   pa (one claims te "part_of")
-   v3 (if (and (some? pa) (not (vec-contains? ids pa))) (conj v2 (str "part_of references missing entity " pa)) v2)
-   v5 (if (cycle? claims "depends_on" te) (conj v3 "depends_on cycle") v3)
-   v6 (if (cycle? claims "part_of" te) (conj v5 "part_of cycle") v5)
-   v7 (reduce (fn [acc p] (reduce (fn [a rt] (if (not (vec-contains? ids rt)) (conj a (str p " references missing entity " rt)) a)) acc (many claims te p))) v6 ["relates_to" "clarifies" "amends"])]
-  v7))
+   rv (reduce (fn [acc p] (reduce (fn [a rt] (if (not (vec-contains? ids rt)) (conj a (str p " references missing entity " rt)) a)) acc (many claims te p))) [] (ref-preds-of claims))
+   cv (reduce (fn [acc p] (if (cycle? claims p te) (conj acc (str p " cycle")) acc)) rv (acyclic-preds-of claims))]
+  cv))
 
-(defrecord Index [single bypred subjects revdep])
+(defrecord Index [single bypred subjects revdep ref-preds acyclic-preds])
 
 (defn index-single [r] (:single r))
 
@@ -123,13 +136,17 @@
 
 (defn index-revdep [r] (:revdep r))
 
+(defn index-ref-preds [r] (:ref-preds r))
+
+(defn index-acyclic-preds [r] (:acyclic-preds r))
+
 (defn ^Index build-index [claims]
   (let [single (reduce (fn [m c] (assoc m (str (:l c) "\u0001" (:p c)) (:r c))) {} claims)
    bypred (reduce (fn [m c] (let [kk (str (:l c) "\u0001" (:p c))]
   (assoc m kk (conj (get m kk []) (:r c))))) {} claims)
    subjects (uniq (mapv (fn [c] (:l c)) claims))
    revdep (reduce (fn [m c] (if (= (:p c) "depends_on") (assoc m (:r c) (conj (get m (:r c) []) (:l c))) m)) {} claims)]
-  (->Index single bypred subjects revdep)))
+  (->Index single bypred subjects revdep (ref-preds-of claims) (acyclic-preds-of claims))))
 
 (defn one-i [^Index idx ^String l ^String p]
   (get (:single idx) (str l "\u0001" p)))
@@ -144,15 +161,10 @@
   (get (:revdep idx) te []))
 
 (defn ^Boolean cycle-i? [^Index idx ^String pred ^String te]
-  (let [succ (fn [x] (if (= pred "part_of") (let [pp (one-i idx x "part_of")]
-  (if (some? pp) [pp] [])) (many-i idx x "depends_on")))]
+  (let [succ (fn [x] (many-i idx x pred))]
   (reachable-from? succ (succ te) te)))
 
 (defn violations-i [^Index idx ^String te]
-  (let [v2 (reduce (fn [acc d] (if (nil? (one-i idx d "title")) (conj acc (str "depends_on references missing entity " d)) acc)) [] (many-i idx te "depends_on"))
-   pa (one-i idx te "part_of")
-   v3 (if (and (some? pa) (nil? (one-i idx pa "title"))) (conj v2 (str "part_of references missing entity " pa)) v2)
-   v5 (if (cycle-i? idx "depends_on" te) (conj v3 "depends_on cycle") v3)
-   v6 (if (cycle-i? idx "part_of" te) (conj v5 "part_of cycle") v5)
-   v7 (reduce (fn [acc p] (reduce (fn [a rt] (if (nil? (one-i idx rt "title")) (conj a (str p " references missing entity " rt)) a)) acc (many-i idx te p))) v6 ["relates_to" "clarifies" "amends"])]
-  v7))
+  (let [rv (reduce (fn [acc p] (reduce (fn [a rt] (if (nil? (one-i idx rt "title")) (conj a (str p " references missing entity " rt)) a)) acc (many-i idx te p))) [] (:ref-preds idx))
+   cv (reduce (fn [acc p] (if (cycle-i? idx p te) (conj acc (str p " cycle")) acc)) rv (:acyclic-preds idx))]
+  cv))

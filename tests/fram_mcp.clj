@@ -2,7 +2,7 @@
 ;; ============================================================================
 ;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The surface is CLOSED
 ;; and O(1): exactly the ten tools of the TELL/ASK knowledge-base core (Russell &
-;; Norvig KB interface) — tell / untell / show / ask / validate + the five graph-edit
+;; Norvig KB interface) — tell / retract / show / ask / validate + the five graph-edit
 ;; verbs — served straight from fram.tools/catalog, never minted per-predicate. The
 ;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
@@ -40,15 +40,17 @@
    "outcome / abandoned / driver / depends_on), never a stored status.\n\n"
    "TELL/ASK knowledge-base interface: `tell` asserts a claim (single-valued "
    "predicates replace their value; multi-valued ones accumulate — repeat tells), "
-   "`untell` retracts one, `show` reads every claim on a subject, and `ask` answers "
+   "`retract` removes one (the verb `untell` is an accepted alias), `show` reads "
+   "every claim on a subject, and `ask` answers "
    "multi-hop questions with a structured Datalog query (validated before it runs; "
    "recursion + stratified negation). Every write is serialized and rule-checked by "
    "the coordinator. `validate` reports integrity violations.\n\n"
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
    "claims, and `ask` can enumerate the vocabulary — the tool surface stays closed "
    "(ten tools) while the vocabulary lives in the graph as data.\n\n"
-   "Claim-canonical Beagle modules are authored by GRAPH EDIT: add-def / set-body / "
-   "rename-def / insert-after / replace-in-body (recompile-gated, fail-closed)."))
+   "Graph-owned Beagle modules (registered `claim-canonical`) are authored by GRAPH "
+   "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "
+   "(recompile-gated, fail-closed)."))
 
 ;; --- per-request state: fold the current log fresh (sees others' writes) -----
 (defn load-state []
@@ -449,9 +451,10 @@
         :else {:text (json/generate-string (:rows res))}))))
 
 ;; --- dispatch one tools/call ---------------------------------------------------
-;; Every tool — tell / untell / show / ask / validate + the edit verbs — dispatches
-;; through the closed catalog (fram.tools/call): tell/untell lower to a {:write}
-;; coordinator intent, ask/show/validate to reads. The only pre-map is the `ask` KB
+;; Every tool — tell / retract / show / ask / validate + the edit verbs — dispatches
+;; through the closed catalog (fram.tools/call): tell/retract lower to a {:write}
+;; coordinator intent, ask/show/validate to reads. tl/call also accepts `untell` as an
+;; alias for `retract` (and `query` for `ask`). The only pre-map here is the `ask` KB
 ;; name onto the engine's `query` op (also the warm-read fast path in dispatch-call).
 (defn handle-call [name args]
   (let [name (if (= name "ask") "query" name)
@@ -541,7 +544,7 @@
 
       :else (reply-err id -32601 (str "method not found: " method)))))
 
-(log! "fram-mcp: ready on stdio (closed catalog: tell/untell/show/ask/validate + 5 edit verbs)")
+(log! "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)")
 (loop []
   (let [line (read-line)]
     (when (some? line)

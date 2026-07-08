@@ -1,7 +1,7 @@
 ;; mcp_test.clj — drives the real bin/fram-mcp process over stdio and asserts the
-;; JSON-RPC contract end to end: initialize, tools/list (default = the TELL/ASK KB
-;; core; FRAM_MCP_SURFACE=full = the catalog generated from the log's vocabulary),
-;; KB and generated-name tools/call reads, and a structured `ask`/`query` call.
+;; JSON-RPC contract end to end for the CLOSED catalog: initialize, tools/list (exactly
+;; ten tools: tell/retract/show/ask/validate + 5 edit verbs), KB reads (show), a
+;; structured ask/query, the `untell`->`retract` alias, and server-side param rejection.
 ;; FRAM_PORT pins a dead port so no live coordinator can leak into the run.
 ;;   bb mcp_test.clj      (run from the repo root)
 (require '[babashka.process :as p] '[cheshire.core :as json] '[clojure.string :as str])
@@ -35,15 +35,19 @@
     [(json/generate-string {:jsonrpc "2.0" :id 1 :method "initialize" :params {}})
      (json/generate-string {:jsonrpc "2.0" :id 2 :method "tools/list" :params {}})
      (json/generate-string {:jsonrpc "2.0" :id 3 :method "tools/call"
-                            :params {:name "owner-of" :arguments {:id "a"}}})
+                            :params {:name "show" :arguments {:subject "a"}}})
      (json/generate-string {:jsonrpc "2.0" :id 4 :method "tools/call"
                             :params {:name "query" :arguments {:query reaches-query}}})
      (json/generate-string {:jsonrpc "2.0" :id 5 :method "tools/call"
-                            :params {:name "show" :arguments {:subject "a"}}})
-     (json/generate-string {:jsonrpc "2.0" :id 6 :method "tools/call"
                             :params {:name "ask" :arguments {:query reaches-query}}})
+     ;; server-side param rejection on tell (missing object)
+     (json/generate-string {:jsonrpc "2.0" :id 6 :method "tools/call"
+                            :params {:name "tell" :arguments {:subject "a" :predicate "note"}}})
+     ;; `untell` is an accepted ALIAS for `retract`: a missing-object untell must hit
+     ;; retract's server-side param check ("object"), NOT "unknown tool" — proving the
+     ;; alias resolved to the retract op rather than being rejected as unknown.
      (json/generate-string {:jsonrpc "2.0" :id 7 :method "tools/call"
-                            :params {:name "tell" :arguments {:subject "a" :predicate "note"}}})]))
+                            :params {:name "untell" :arguments {:subject "a" :predicate "owner"}}})]))
 
 (def out (:out (p/shell {:in (str requests "\n") :out :string :err :string
                          :extra-env env}
@@ -62,43 +66,34 @@
   (chk "initialize includes instructions" (seq (get-in r1 [:result :instructions]))))
 
 (let [tools (get-in (get by-id 2) [:result :tools]) names (set (map :name tools))]
-  (chk "default tools/list is the TELL/ASK KB core (10 tools)"
-       (= names #{"tell" "untell" "show" "ask" "threads" "validate"
-                  "add-def" "set-body" "rename-def" "insert-after"}))
+  (chk "tools/list is EXACTLY the closed catalog (10 tools, retract not untell, no threads)"
+       (= names #{"tell" "retract" "show" "ask" "validate"
+                  "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"}))
   (chk "each tool has an inputSchema object"
        (every? (fn [t] (= "object" (get-in t [:inputSchema :type]))) tools)))
 
-(let [r3 (get by-id 3) txt (get-in r3 [:result :content 0 :text])]
-  (chk "generated name still dispatches on the core surface (owner-of -> [\"personal\"])"
-       (= ["personal"] (json/parse-string txt))))
+(let [r3 (get by-id 3) txt (get-in r3 [:result :content 0 :text])
+      preds (set (map #(get % "pred") (json/parse-string txt)))]
+  (chk "show by subject returns @a's claims" (every? preds ["title" "owner" "depends_on"])))
 
 (let [r4 (get by-id 4) txt (get-in r4 [:result :content 0 :text])
       pairs (set (map vec (json/parse-string txt)))]
   (chk "query (transitive) returns the @a->@b edge" (contains? pairs ["@a" "@b"])))
 
 (let [r5 (get by-id 5) txt (get-in r5 [:result :content 0 :text])
-      preds (set (map #(get % "pred") (json/parse-string txt)))]
-  (chk "show by subject returns @a's claims" (every? preds ["title" "owner" "depends_on"])))
-
-(let [r6 (get by-id 6) txt (get-in r6 [:result :content 0 :text])
       pairs (set (map vec (json/parse-string txt)))]
   (chk "ask aliases the structured query op" (contains? pairs ["@a" "@b"])))
 
-(let [r7 (get by-id 7)]
+(let [r6 (get by-id 6)]
   (chk "tell missing 'object' is rejected server-side"
-       (and (get-in r7 [:result :isError])
-            (str/includes? (get-in r7 [:result :content 0 :text]) "object"))))
+       (and (get-in r6 [:result :isError])
+            (str/includes? (get-in r6 [:result :content 0 :text]) "object"))))
 
-;; the generated per-predicate catalog survives behind FRAM_MCP_SURFACE=full.
-(def full-out
-  (:out (p/shell {:in (str (json/generate-string {:jsonrpc "2.0" :id 1 :method "tools/list" :params {}}) "\n")
-                  :out :string :err :string
-                  :extra-env (assoc env "FRAM_MCP_SURFACE" "full")}
-                 "bin/fram-mcp")))
-(let [r (json/parse-string (first (remove str/blank? (str/split-lines full-out))) true)
-      names (set (map :name (get-in r [:result :tools])))]
-  (chk "FRAM_MCP_SURFACE=full has generated read/write/reverse tools + query"
-       (every? names ["owner-of" "set-owner" "depends_on-list" "depends_on-from" "query" "threads"])))
+(let [r7 (get by-id 7) txt (get-in r7 [:result :content 0 :text])]
+  (chk "untell ALIAS resolves to retract (param error mentions 'object', not 'unknown tool')"
+       (and (get-in r7 [:result :isError])
+            (str/includes? txt "object")
+            (not (str/includes? txt "unknown tool")))))
 
 ;; conformance (regression guard for the LazySeq batch crash + notification/id rules):
 ;; notification -> no reply; batch array -> one -32600 and the loop SURVIVES;

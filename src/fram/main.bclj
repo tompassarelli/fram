@@ -1,7 +1,8 @@
 #lang beagle/clj
 (ns fram.main
   "Engine CLI: generic claim operations over the log — import/export, show, set,
-  merge, tell/untell (coordinator write), validate, watch. The life domain
+  merge, tell/retract (coordinator write; `untell` is an accepted alias for
+  `retract`), validate, watch. The life domain
   (lifecycle projections, clock, capture conventions) lives in Tern."
   (:gen-class))
 
@@ -370,11 +371,13 @@
        (if (>= (count args) 4)
          (cmd-tell log "assert" (nth args 1) (nth args 2) (nth args 3))
          (println "usage: tell <id> <pred> <value>"))]
-      [(= cmd "untell")
+      ;; `retract` is the surface verb; `untell` is the accepted alias (mirrors the
+      ;; tell/ask/retract catalog + MCP naming). Both route to the coordinator retract.
+      [(or (= cmd "retract") (= cmd "untell"))
        (if (>= (count args) 4)
          (cmd-tell log "retract" (nth args 1) (nth args 2) (nth args 3))
-         (println "usage: untell <id> <pred> <value>"))]
-      [:else (println "fram (engine) usage: import | export <out-dir> | show <id> | history <id> | validate | watch | doctor | set <id> <pred> <value> | tell <id> <pred> <value> | untell <id> <pred> <value> | merge <from> <to> | tools | query <edn> | call <tool> <edn>")])))
+         (println (str "usage: " cmd " <id> <pred> <value>")))]
+      [:else (println "fram (engine) usage: import | export <out-dir> | show <id> | history <id> | validate | watch | doctor | set <id> <pred> <value> | tell <id> <pred> <value> | retract <id> <pred> <value> (alias: untell) | merge <from> <to> | tools | query <edn> | call <tool> <edn>")])))
 
 (defn -main [& args] :- Nil
   (dispatch (vec args) (fram.rt/threads-dir) (fram.rt/log-path)))

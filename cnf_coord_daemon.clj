@@ -2165,16 +2165,42 @@
 ;; the daemon is a reified-engine FRONT-END over it. Boots by migrating the flat
 ;; log into the reified store; commits go through the reified coordinator AND
 ;; append the flat line; external edits (capture/import/set append out-of-band)
-;; are absorbed by re-migrating on mtime change. Cardinality comes from
-;; fram.kernel/single? (the existing canonical vocab — NO hardcoded list, so
-;; one-engine is preserved); ref-ness follows the @-prefix convention. A true
-;; reversible drop-in for coord.clj: same log, same protocol, reified underneath.
+;; are absorbed by re-migrating on mtime change. Cardinality is SCHEMA-AS-CLAIMS:
+;; a log-resident `@<pred> cardinality single|multi` claim is authoritative, falling
+;; back to fram.kernel (env FRAM_SINGLE_VALUED > transitional list) only for preds the
+;; log doesn't declare — the SAME precedence (claim > env > fallback) the CLI fold uses
+;; (fram.fold/card-map + fram.kernel/single-eff?), so the daemon and a cold CLI fold of
+;; the same log classify a predicate's cardinality IDENTICALLY (finding #23). ref-ness
+;; follows the @-prefix convention. A true reversible drop-in for coord.clj: same log,
+;; same protocol, reified underneath.
 ;; ===========================================================================
 ;; ref-str? — a value is a node LINK iff it's a ref-shaped @-string (see ref-shape?:
 ;; "@" + ≥1 char + no whitespace). A bare "@" / "@ " literal (a comment lexeme about
 ;; the `@id` syntax) is an ASSERT, NOT a link — else migration mints a phantom "@"
 ;; node and render-from-log breaks (string-append on an entity-id). Mirrors kind-of.
 (defn- ref-str? [x] (and (string? x) (ref-shape? x)))
+
+;; --- schema-as-claims cardinality: daemon⇄CLI parity (finding #23) -----------
+;; The flat log may carry `@<pred> cardinality single|multi` claims. The CLI fold
+;; classifies cardinality from them (fram.fold/card-map builds predname->is-single —
+;; leading @ stripped, latest-:tx-wins, meta-preds seeded, a retracted declaration
+;; falls back — and fram.kernel/single-eff? applies claim > env > fallback). The daemon
+;; MUST classify IDENTICALLY or its warm live view diverges from the cold fold. We REUSE
+;; those exact CLI functions here (no re-derivation → no drift): `log-card-map` builds
+;; the same map from a set of flat lines; classification is ck/single-eff?. `pred-name`
+;; strips the leading @ from a `cardinality` claim's subject to recover the pred name.
+(defn- pred-name [s] (if (and (string? s) (str/starts-with? s "@")) (subs s 1) s))
+(defn- log-card-map [lines]
+  (fold/card-map (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))) (vec lines))))
+;; predicates the given lines LIVE-declare a cardinality for (subjects of `cardinality`
+;; asserts that survive as a live declaration in cmap) — the ones to also materialize as
+;; a store cardinality claim if they carry no domain claims, so s/cardinality (the write-
+;; path authority) agrees with the CLI map even for a not-yet-used predicate.
+(defn- card-only-preds [cmap lines]
+  (into #{} (comp (filter #(= "cardinality" (:p %)))
+                  (map #(pred-name (:l %)))
+                  (filter #(contains? cmap %)))
+        lines))
 
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
@@ -2189,21 +2215,31 @@
         ;; doctor report STALE; matching fold keeps doctor FRESH.
         flat-max-tx (reduce max 0 (map #(or (:tx %) 0) raw))
         asserts (filter #(and (:l %) (:p %) (:r %)) raw)
+        ;; schema-as-claims: predname->is-single from the log's own cardinality claims
+        ;; (CLI-parity map). Authoritative over ck/single? at every classification below.
+        cmap (log-card-map asserts)
         claims (:claims (fold/fold (vec asserts)))
         by-pred (group-by :p claims)
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]
     (s/setup! st tx)
     (doseq [p (keys by-pred) :when (not (schema-preds p))]   ; skip reserved engine preds (defensive)
-      (s/def-predicate! st p (if (ck/single? p) "single" "multi")
+      (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi")
                             (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx))
+    ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
+    ;; NO domain claims (absent from by-pred). Materialize the claim so s/cardinality (the
+    ;; write-path authority) matches the CLI map; no value claims ⇒ value_kind "literal".
+    (doseq [p (card-only-preds cmap asserts) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
+      (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi") "literal" tx))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
-    ;; present in the flat log still get their cardinality CLAIM, so a first runtime
-    ;; write supersedes (not accumulates) — the replacement for finding #12's per-write
-    ;; ensure-single pin, now a one-time seed. ck/single-valued is read ONCE here; at
-    ;; runtime commit! consults only the claim. (The loop above already seeded in-log
-    ;; preds via ck/single?, so the guard skips them and preserves their ref/literal kind.)
-    (doseq [p ck/single-valued :when (and (not (schema-preds p)) (not= "single" (s/cardinality st p)))]
+    ;; present in the flat log AND not classified by a cardinality claim still get their
+    ;; cardinality CLAIM, so a first runtime write supersedes (not accumulates) — the
+    ;; replacement for finding #12's per-write ensure-single pin, now a one-time seed.
+    ;; ck/single-valued is read ONCE here; at runtime commit! consults only the claim.
+    ;; The `cmap` guard means a log `@p cardinality multi` on a kernel-single pred is NOT
+    ;; force-seeded back to single (the claim wins). The loops above already seeded in-log
+    ;; + cardinality-only preds, so the guard skips them and preserves their ref/literal kind.
+    (doseq [p ck/single-valued :when (and (not (schema-preds p)) (not (contains? cmap p)) (not= "single" (s/cardinality st p)))]
       (s/def-predicate! st p "single" "literal" tx))
     (let [memo (atom {})
           ent! (fn [sid] (or (get @memo sid)
@@ -2360,10 +2396,13 @@
 ;; keyed-latest over flat lines, mirroring fram.fold/key-of (single -> (l,p); multi ->
 ;; (l,p,r)); the latest by :tx wins and its :op is carried so a dominating retract
 ;; removes the key. Re-derived here because fram.fold/keyed-latest is private AND drops
-;; retracts (we need them to supersede a snapshot-era claim).
-(defn- tail-keyed-latest [lines]
+;; retracts (we need them to supersede a snapshot-era claim). `cmap` is the effective
+;; cardinality map (schema-as-claims: store claims overlaid with THIS tail's cardinality
+;; declarations); ck/single-eff? applies claim > env > fallback exactly as the CLI fold's
+;; key-of does, so a pred keys IDENTICALLY warm and cold (finding #23).
+(defn- tail-keyed-latest [cmap lines]
   (reduce (fn [m a]
-            (let [k (if (ck/single? (:p a)) [(:l a) (:p a)] [(:l a) (:p a) (:r a)])
+            (let [k (if (ck/single-eff? cmap (:p a)) [(:l a) (:p a)] [(:l a) (:p a) (:r a)])
                   prev (get m k)]
               (if (and prev (>= (long (:tx prev)) (long (:tx a)))) m (assoc m k a))))
           {} lines))
@@ -2383,18 +2422,45 @@
     (when (seq valid)
       (let [tx (c/begin-tx! st "tail")
             by-pred (group-by :p valid)
+            ;; EFFECTIVE cardinality at tail time (schema-as-claims): the store's current
+            ;; cardinality claims (from the snapshot / whole-migrate) OVERLAID with THIS
+            ;; tail's own `@<pred> cardinality X` declarations, which have the higher :tx
+            ;; and therefore dominate (invariant: snapshot⇄tail cmap consistency). Built
+            ;; from the PRE-tail store, so it is a stable classifier for both the keying
+            ;; below and the declaration loop; ck/single-eff? applies claim > env > fallback.
+            tcmap (log-card-map lines)                       ; tail-declared cardinality
+            card-pid (c/value-id st "cardinality")
+            base (reduce (fn [m p]
+                           (if (and card-pid (seq (c/by-lp st (c/value! st p) card-pid)))
+                             (assoc m p (= "single" (s/cardinality st p))) m))
+                         {} (keys by-pred))
+            ecmap (merge base tcmap)                          ; tail declarations win
             memo (atom {})
             sub! (fn [sid] (or (get @memo sid)
                                (let [id (or (s/resolve-name st sid)
                                             (let [e (c/entity! st)] (s/name! st e sid tx) e))]
                                  (swap! memo assoc sid id) id)))]
-        ;; declare predicates new to the store; keep any existing cardinality claim
+        ;; declare preds new to the store; sync cardinality from the tail's own claims.
         (doseq [p (keys by-pred)]
-          (when (empty? (c/by-lp st (c/value! st p) (c/value-id st "cardinality")))
-            (s/def-predicate! st p (if (ck/single? p) "single" "multi")
-                                  (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx)))
-        (doseq [[_ a] (tail-keyed-latest valid)]
-          (let [p (:p a) r (:r a) single? (ck/single? p)
+          (let [pid (c/value! st p)
+                want (if (ck/single-eff? ecmap p) "single" "multi")]
+            (cond
+              ;; new pred: full declaration (cardinality effective, value_kind from data)
+              (empty? (c/by-lp st pid card-pid))
+              (s/def-predicate! st p want
+                                (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx)
+              ;; existing pred the tail RE-DECLARES to a different cardinality: update the
+              ;; cardinality claim ONLY (assert! supersedes; value_kind untouched — invariant).
+              (not= want (s/cardinality st p))
+              (s/assert! st pid "cardinality" want tx))))
+        ;; cardinality-only tail preds (declared, no domain claims): materialize the claim
+        ;; so s/cardinality (write-path authority) agrees; value_kind "literal" (no values).
+        (doseq [p (card-only-preds tcmap lines) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
+          (let [want (if (ck/single-eff? ecmap p) "single" "multi")]
+            (when (not= want (s/cardinality st p))
+              (s/def-predicate! st p want "literal" tx))))
+        (doseq [[_ a] (tail-keyed-latest ecmap valid)]
+          (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
                 su (sub! (:l a)) pid (c/value! st p)
                 live (c/by-lp st su pid)]      ; already live-only
             (if (= "retract" (:op a))

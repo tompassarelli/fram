@@ -229,46 +229,68 @@
       [:else (recur (vec (concat (rest front) (succ (first front))))
                     (conj seen (first front)))])))
 
+;; succ follows `pred` GENERICALLY (many edges of that pred) — so cycle? works for any
+;; acyclic-declared predicate, not just depends_on/part_of. For a single-valued pred
+;; (e.g. part_of) the fold has already collapsed it, so `many` yields its lone target;
+;; identical traversal to the old one-vs-many branch, now vocabulary-neutral.
 (defn cycle? [claims :- (Vec Claim) pred :- String te :- String] :- Bool
-  (let [succ (fn [x :- String] :- (Vec String)
-               (if (= pred "part_of")
-                 (let [pp (one claims x "part_of")] (if (some? pp) [pp] []))
-                 (many claims x "depends_on")))]
+  (let [succ (fn [x :- String] :- (Vec String) (many claims x pred))]
     (reachable-from? succ (succ te) te)))
+
+;; --- schema-as-claims validation vocab -------------------------------------
+;; WHICH predicates structural validate constrains is itself DATA: a `@<pred> value_kind
+;; ref` claim makes <pred> a reference edge whose target must be a real entity; a
+;; `@<pred> acyclic true` claim makes <pred> a partial order that must not cycle. If the
+;; log declares NONE of a kind, fall back to the transitional hardcoded set, so a log
+;; with no schema claims validates EXACTLY as before (the finding #23 pattern, now on
+;; the validate surface). The claim subject is the pred entity `@<predname>`; strip the
+;; leading @ to recover the pred name (mirrors fram.fold's card-map).
+(def ref-preds-fallback :- (Vec String) ["depends_on" "part_of" "relates_to" "clarifies" "amends"])
+(def acyclic-preds-fallback :- (Vec String) ["depends_on" "part_of"])
+
+(defn- strip-at [s :- String] :- String
+  (if (str/starts-with? s "@") (subs s 1) s))
+
+;; declared pred names (@ stripped) whose meta-predicate `mp` claims value `mv`.
+(defn- preds-claiming [claims :- (Vec Claim) mp :- String mv :- String] :- (Vec String)
+  (uniq (mapv (fn [c :- Claim] :- String (strip-at (:l c)))
+              (filterv (fn [c :- Claim] :- Bool (and (= (:p c) mp) (= (:r c) mv))) claims))))
+
+;; ref-valued preds (targets must exist) — declared via `value_kind ref`, else fallback.
+(defn ref-preds-of [claims :- (Vec Claim)] :- (Vec String)
+  (let [d (preds-claiming claims "value_kind" "ref")] (if (empty? d) ref-preds-fallback d)))
+
+;; acyclic preds (no cycle) — declared via `acyclic true`, else fallback.
+(defn acyclic-preds-of [claims :- (Vec Claim)] :- (Vec String)
+  (let [d (preds-claiming claims "acyclic" "true")] (if (empty? d) acyclic-preds-fallback d)))
 
 ;; --- obligation rules ------------------------------------------------------
 
 ;; GENERIC structural integrity only (cycles + dangling refs). The WORK rules
 ;; (depends_on→abandoned, and lead/driver/proposed_by must be a display_name
 ;; person) moved to tern.validate — the engine knows no lifecycle or
-;; person/role vocab.
+;; person/role vocab. Existence is title-based: a real thread always carries a
+;; single-valued `title`, so "titled entity" is the engine's internal existence test —
+;; a TERN convention the engine keeps as a mechanic (the surfaced tool is gone, the
+;; helper stays). The constrained pred sets are schema-as-claims (see ref-preds-of /
+;; acyclic-preds-of); with no schema claims they are the original hardcoded lists.
 (defn violations [claims :- (Vec Claim) te :- String] :- (Vec String)
   (let [ids (thread-ids claims)
-        v2 (reduce
-            (fn [acc :- (Vec String) d :- String] :- (Vec String)
-              (if (not (vec-contains? ids d))
-                (conj acc (str "depends_on references missing entity " d))
-                acc))
-            []
-            (many claims te "depends_on"))
-        pa (one claims te "part_of")
-        v3 (if (and (some? pa) (not (vec-contains? ids pa)))
-             (conj v2 (str "part_of references missing entity " pa))
-             v2)
-        v5 (if (cycle? claims "depends_on" te) (conj v3 "depends_on cycle") v3)
-        v6 (if (cycle? claims "part_of" te) (conj v5 "part_of cycle") v5)
-        ;; relates_to / clarifies / amends are all loose thread-ref edges: target
-        ;; must be a real thread (no cycle constraint).
-        v7 (reduce
+        rv (reduce
             (fn [acc :- (Vec String) p :- String] :- (Vec String)
               (reduce (fn [a :- (Vec String) rt :- String] :- (Vec String)
                         (if (not (vec-contains? ids rt))
                           (conj a (str p " references missing entity " rt))
                           a))
                       acc (many claims te p)))
-            v6
-            ["relates_to" "clarifies" "amends"])]
-    v7))
+            []
+            (ref-preds-of claims))
+        cv (reduce
+            (fn [acc :- (Vec String) p :- String] :- (Vec String)
+              (if (cycle? claims p te) (conj acc (str p " cycle")) acc))
+            rv
+            (acyclic-preds-of claims))]
+    cv))
 
 ;; --- indexed query layer (O(1) lookups, built once) -------------------------
 ;; The (Vec Claim) API above is O(n) per lookup — fine for write-time validation,
@@ -279,7 +301,9 @@
   [single :- (Map String String)        ; "lp" -> r           (single-valued one)
    bypred :- (Map String (Vec String))  ; "lp" -> [r ...]      (many)
    subjects :- (Vec String)             ; distinct subject l's
-   revdep :- (Map String (Vec String))]); r -> [l ...] for depends_on (reverse edges)
+   revdep :- (Map String (Vec String))  ; r -> [l ...] for depends_on (reverse edges)
+   ref-preds :- (Vec String)            ; preds whose targets must exist (schema-as-claims)
+   acyclic-preds :- (Vec String)])      ; preds that must not cycle (schema-as-claims)
 
 (defn build-index [claims :- (Vec Claim)] :- Index
   (let [single (reduce (fn [m :- (Map String String) c :- Claim] :- (Map String String)
@@ -295,7 +319,9 @@
                            (assoc m (:r c) (conj (get m (:r c) []) (:l c)))
                            m))
                        {} claims)]
-    (->Index single bypred subjects revdep)))
+    ;; ref-preds / acyclic-preds derived ONCE per index (whole-corpus validate calls
+    ;; violations-i per thread; deriving them here keeps that O(threads + edges)).
+    (->Index single bypred subjects revdep (ref-preds-of claims) (acyclic-preds-of claims))))
 
 (defn one-i [idx :- Index l :- String p :- String] :- String?
   (get (:single idx) (str l "" p)))
@@ -323,36 +349,28 @@
 ;; O(1): a real thread always has a single-valued `title` claim.
 
 (defn cycle-i? [idx :- Index pred :- String te :- String] :- Bool
-  (let [succ (fn [x :- String] :- (Vec String)
-               (if (= pred "part_of")
-                 (let [pp (one-i idx x "part_of")] (if (some? pp) [pp] []))
-                 (many-i idx x "depends_on")))]
+  (let [succ (fn [x :- String] :- (Vec String) (many-i idx x pred))]
     (reachable-from? succ (succ te) te)))
 
 ;; GENERIC structural integrity only (cycles + dangling refs), mirroring the flat
 ;; `violations`. The WORK rules (depends_on→abandoned, person/role refs) moved to
 ;; tern.validate/work-violations-i.
+;; Existence is title-based (a real thread carries a single-valued `title`); the
+;; constrained pred sets are the index's schema-as-claims ref-preds / acyclic-preds
+;; (derived once in build-index; the hardcoded lists when the log declares no schema).
 (defn violations-i [idx :- Index te :- String] :- (Vec String)
-  (let [v2 (reduce
-            (fn [acc :- (Vec String) d :- String] :- (Vec String)
-              (if (nil? (one-i idx d "title"))
-                (conj acc (str "depends_on references missing entity " d))
-                acc))
-            []
-            (many-i idx te "depends_on"))
-        pa (one-i idx te "part_of")
-        v3 (if (and (some? pa) (nil? (one-i idx pa "title")))
-             (conj v2 (str "part_of references missing entity " pa))
-             v2)
-        v5 (if (cycle-i? idx "depends_on" te) (conj v3 "depends_on cycle") v3)
-        v6 (if (cycle-i? idx "part_of" te) (conj v5 "part_of cycle") v5)
-        v7 (reduce
+  (let [rv (reduce
             (fn [acc :- (Vec String) p :- String] :- (Vec String)
               (reduce (fn [a :- (Vec String) rt :- String] :- (Vec String)
                         (if (nil? (one-i idx rt "title"))
                           (conj a (str p " references missing entity " rt))
                           a))
                       acc (many-i idx te p)))
-            v6
-            ["relates_to" "clarifies" "amends"])]
-    v7))
+            []
+            (:ref-preds idx))
+        cv (reduce
+            (fn [acc :- (Vec String) p :- String] :- (Vec String)
+              (if (cycle-i? idx p te) (conj acc (str p " cycle")) acc))
+            rv
+            (:acyclic-preds idx))]
+    cv))

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Fram MCP server — the AI-facing edge of one instance. Speaks MCP (JSON-RPC 2.0
-# over stdio). Default surface is the TELL/ASK knowledge-base core (tell / untell
-# / show / ask + threads / validate + the graph-edit verbs, ~10 tools);
-# FRAM_MCP_SURFACE=full serves the per-predicate catalog generated from the
-# current log's claim vocabulary (fram.tools). tools/call accepts both namings on
-# every surface. Reads fold the log; writes route through the coordinator. Point
-# a model's MCP client at this command.
+# over stdio). The surface is the CLOSED TELL/ASK knowledge-base catalog — exactly
+# ten tools: tell / retract / show / ask / validate + the five graph-edit verbs
+# (add-def / set-body / rename-def / insert-after / replace-in-body). It is never
+# minted per-predicate: the vocabulary is DATA in the graph (a predicate is an
+# entity — `show <pred>` reveals its cardinality/value_kind), so the tool count is
+# O(1). `untell` is accepted as an alias for `retract`, `query` for `ask`. Reads
+# fold the log; writes route through the coordinator. Point a model's MCP client
+# at this command.
 #
 #   FRAM_THREADS / FRAM_LOG select the corpus (same vars the CLI reads).
 HERE="$(cd "$(dirname "$0")/.." && pwd)"

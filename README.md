@@ -93,8 +93,8 @@ data. Under the hood `./demo.sh` runs the engine loop:
 ```sh
 bin/fram import           # fold the Markdown threads into the claim graph (claims.log)
 bin/fram validate         # structural integrity: cycles, dangling refs, closed vocab
-bin/fram call title-of '{:id "2026-01-01-090500"}'      # -> Deploy the site to production
-bin/fram call dependents-of '{:id "2026-01-01-090200"}' # -> @2026-01-01-090500
+bin/fram call show '{:subject "2026-01-01-090500"}'     # all claims on the thread (title, owner, deps…)
+bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "triple" :args [{:var "x"} "depends_on" "@2026-01-01-090200"}]}]}}}'  # reverse edge via ask
 bin/fram export /tmp/regen   # regenerate the Markdown from the graph (lossless round-trip)
 ```
 
@@ -177,41 +177,41 @@ bin/fram tell 2026-01-01-090700 committed 2026-06-21   # writes route through th
 ## AI-native: tools, not a query DSL
 
 The primary query author is a model, so the surface is tuned for what a model emits
-correctly with zero examples — which points *away* from a bespoke query language toward
-two surfaces, **both generated from the claim vocabulary** (point Fram at a different
-corpus and they regenerate):
+correctly with zero examples — a **CLOSED, O(1) tool catalog** plus a structured query
+escape hatch. The catalog is a fixed ten tools, never minted per-predicate: the
+vocabulary is **data in the graph**, not tools.
 
-- **A generated tool catalog.** For each predicate `P`: `P-of` / `P-list` read,
-  `set-P` / `add-P` / `remove-P` write (through the coordinator), `P-from` walks the
-  reverse edge — plus structural `threads` / `show` / `dependents-of` / `validate`, and
-  the code-authoring verbs Chartroom adds (`add-def` / `set-body` / `rename-def`). The
-  priors live in the *names*; the model fills typed params and a missing required param is
-  **rejected server-side**. The catalog is *generated*, so don't trust this prose — run
-  **`bin/fram tools`** for the live list.
-- **`query` — a structured Datalog escape hatch** for multi-hop questions no named tool
-  covers. The model emits **data**, not text (the shape *is* the engine's internal rule
-  data), so the only added layer is total validation at the boundary: it can't
-  parse-fail, reference an undefined relation, leave a head variable unbound, or smuggle
-  in unstratified negation. Same fixpoint as everything else (recursion + stratified
+- **The closed TELL/ASK catalog — exactly ten tools.** `tell` (assert a claim) /
+  `retract` (remove one) / `show` (all claims on a subject) / `ask` (structured query) /
+  `validate`, plus the five code-authoring verbs Chartroom adds (`add-def` / `set-body` /
+  `rename-def` / `insert-after` / `replace-in-body`). A single-valued predicate replaces
+  its value; a multi-valued one accumulates — and **cardinality is itself a claim**
+  (`tell <pred> cardinality single|multi`), so `tell` = assert subsumes the old
+  `set-P`/`add-P` with no per-predicate tools. Predicates are entities: `show <pred>`
+  reveals a predicate's `cardinality` / `value_kind` / `acyclic` claims, and `ask`
+  enumerates the vocabulary — so the tool count stays O(1) while the vocabulary lives in
+  the graph as data. A missing required param is **rejected server-side**.
+- **`ask` — a structured Datalog escape hatch** for multi-hop questions no read covers.
+  The model emits **data**, not text (the shape *is* the engine's internal rule data), so
+  the only added layer is total validation at the boundary: it can't parse-fail,
+  reference an undefined relation, leave a head variable unbound, or smuggle in
+  unstratified negation. Same fixpoint as everything else (recursion + stratified
   negation), no query-library dependency.
 
 ```sh
-bin/fram tools            # the live, generated catalog (count + signatures)
+bin/fram tools            # the closed catalog (count + signatures)
 bin/fram query '{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]}
                                       :body [{:rel "triple" :args [{:var "x"} "part_of" {:var "y"}]}]}]}'
 ```
 
-Both are served over **MCP** (`bin/fram-mcp`, JSON-RPC over stdio); the CLI (`fram tools`
-/ `fram call <tool> <edn>` / `fram query <edn>`) is the same surface for humans.
-
-Over MCP the *default* is the **TELL/ASK knowledge-base core** — `tell` / `untell` /
-`show` / `ask` plus `threads` / `validate` and the graph-edit verbs (~10 tools) — because
-a large generated catalog is a per-session context tax on the model, and the typed
-per-predicate schemas duplicate a guarantee the engine already gives (every write is
-serialized + rule-checked at the coordinator; single-vs-multi cardinality lives in the
-kernel, so `tell` = assert subsumes `set-P`/`add-P`). `FRAM_MCP_SURFACE=full` serves the
-generated per-predicate catalog instead, and `tools/call` accepts both namings on every
-surface.
+The catalog is served over **MCP** (`bin/fram-mcp`, JSON-RPC over stdio); the CLI
+(`fram tools` / `fram call <tool> <edn>` / `fram query <edn>`) is the same surface for
+humans. `tools/call` accepts `untell` as an alias for `retract` and `query` for `ask`.
+A large generated per-predicate catalog was a per-session context tax buying no safety
+the engine doesn't already give (every write is serialized + rule-checked at the
+coordinator; single-vs-multi cardinality is a claim in the log, so a cold CLI fold and
+the warm daemon classify identically), so the surface is closed — the vocabulary is data,
+reached through `show`/`ask`, not through the tool list.
 
 ## Identity-addressed code (Chartroom)
 
