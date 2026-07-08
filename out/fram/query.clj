@@ -6,10 +6,30 @@
 (defn claims->edb [claims]
   (loop [cs claims
    i 0
-   triple #{}
-   claim #{}]
-  (if (empty? cs) {"triple" triple "claim" claim} (let [c (first cs)]
-  (recur (rest cs) (+ i 1) (conj triple [(:l c) (:p c) (:r c)]) (conj claim [(str "c" i) (:l c) (:p c) (:r c)]))))))
+   fact #{}
+   fact-id #{}]
+  (if (empty? cs) {"fact" fact "fact-id" fact-id} (let [c (first cs)]
+  (recur (rest cs) (+ i 1) (conj fact [(:l c) (:p c) (:r c)]) (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
+
+(def rel-aliases {"triple" "fact" "claim" "fact-id"})
+
+(defn- canon-rel [r]
+  (if (and (string? r) (contains? rel-aliases r)) (get rel-aliases r) r))
+
+(defn- canon-lit [litt]
+  (if (and (map? litt) (contains? litt :rel)) (assoc litt :rel (canon-rel (:rel litt))) litt))
+
+(defn- canon-rule [r]
+  (if (map? r) (let [r1 (if (and (map? (:head r)) (contains? (:head r) :rel)) (assoc r :head (assoc (:head r) :rel (canon-rel (:rel (:head r))))) r)]
+  (if (vector? (:body r1)) (assoc r1 :body (mapv canon-lit (:body r1))) r1)) r))
+
+(defn- canon-rules [rs]
+  (if (vector? rs) (mapv canon-rule rs) rs))
+
+(defn canon-q [q]
+  (if (not (map? q)) q (let [q1 (if (contains? q :find) (assoc q :find (canon-rel (:find q))) q)
+   q2 (if (contains? q1 :rules) (assoc q1 :rules (canon-rules (:rules q1))) q1)]
+  (if (contains? q2 :strata) (assoc q2 :strata (if (vector? (:strata q2)) (mapv canon-rules (:strata q2)) (:strata q2))) q2))))
 
 (defn- ^Boolean term-ok? [t]
   (if (map? t) (and (contains? t :var) (string? (:var t))) (or (string? t) (number? t))))
@@ -51,7 +71,7 @@
   (if (>= i (count strata)) probs (let [stratum (nth strata i)
    this-rels (stratum-head-rels stratum)
    avail (reduce (fn [a rel] (conj a rel)) lower (vec this-rels))
-   bad (filterv (fn [rel] (and (contains? all-derived rel) (not (= rel "triple")) (not (= rel "claim")) (not (contains? avail rel)))) (stratum-positive-rels stratum))
+   bad (filterv (fn [rel] (and (contains? all-derived rel) (not (= rel "fact")) (not (= rel "fact-id")) (not (contains? avail rel)))) (stratum-positive-rels stratum))
    probs2 (vec (concat probs (mapv (fn [rel] (str "stratum " i ": positively references '" rel "' which is defined only in a LATER stratum — it would evaluate against an empty relation (reorder so '" rel "' is defined first)")) bad)))]
   (recur (+ i 1) avail probs2)))))
 
@@ -67,9 +87,9 @@
    args (:args litt)
    e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
    e2 (if (vector? args) [] ["literal :args must be a vector"])
-   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use triple, claim, or a :head rel you define")] [])
-   e4 (if (and (= rel "triple") (vector? args) (not (= (count args) 3))) ["relation triple takes 3 args (l p r)"] [])
-   e5 (if (and (= rel "claim") (vector? args) (not (= (count args) 4))) ["relation claim takes 4 args (cid l p r)"] [])
+   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use fact, fact-id (aliases: triple, claim), or a :head rel you define")] [])
+   e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3))) ["relation fact takes 3 args (l p r)"] [])
+   e5 (if (and (= rel "fact-id") (vector? args) (not (= (count args) 4))) ["relation fact-id takes 4 args (cid l p r)"] [])
    en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false))) ["literal :neg must be true or false"] [])
    e6 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad term " (str t) " — use {:var \"n\"} or a constant")))) [] args) [])
    e7 (if (and (= (:neg litt) true) (vector? args)) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
@@ -89,18 +109,19 @@
    body (:body r)
    head-ok (and (map? head) (string? (:rel head)) (vector? (:args head)))
    eh (if head-ok [] ["rule :head must be {:rel <string> :args [terms]}"])
-   ehrel (if (and head-ok (or (= (:rel head) "triple") (= (:rel head) "claim"))) ["rule :head :rel cannot be a base relation (triple/claim)"] [])
+   ehrel (if (and head-ok (or (= (:rel head) "fact") (= (:rel head) "fact-id"))) ["rule :head :rel cannot be a base relation (fact/fact-id)"] [])
    ehargs (if head-ok (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad head term " (str t) " — use {:var \"n\"} or a constant")))) [] (:args head)) [])
    eb (if (vector? body) (body-errors body known) ["rule :body must be a vector of literals"])
    ehsafe (if (and head-ok (vector? body)) (let [bound (positive-body-vars body)]
   (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "head var '" (str v) "' is not bound by a positive body literal")))) [] (vec (vars-of (:args head))))) [])]
   (vec (concat eh (concat ehrel (concat ehargs (concat eb ehsafe))))))))
 
-(defn validate [q]
+(defn validate [q0]
+  (let [q (canon-q q0)]
   (if (not (map? q)) ["query must be a map: {:find <rel> :rules [<rule>...]} (or :strata [[...]...])"] (if (and (contains? q :rules) (not (vector? (:rules q)))) [":rules must be a vector of rules"] (if (and (contains? q :strata) (not (and (vector? (:strata q)) (all-vectors? (:strata q))))) [":strata must be a vector of strata, each a vector of rules"] (let [rules (all-rules q)
    strata (strata-of q)
    derived (head-rels rules)
-   known (conj (conj derived "triple") "claim")
+   known (conj (conj derived "fact") "fact-id")
    find (:find q)
    ef (if (string? find) (if (contains? known find) [] [(str "unknown :find relation '" find "' — name a :head rel you define")]) [":find must be a relation name (string)"])
    er (if (empty? rules) ["provide at least one rule in :rules or :strata"] [])
@@ -108,14 +129,15 @@
    esv (d/strata-violations strata)
    efr (forward-ref-violations strata derived)
    ea (rel-arity-violations rules)]
-  (vec (concat ef (concat er (concat erules (concat esv (concat efr ea)))))))))))
+  (vec (concat ef (concat er (concat erules (concat esv (concat efr ea))))))))))))
 
 (def max-results (let [env (System/getenv "FRAM_MAX_RESULTS")
    n (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
   (if (and (some? n) (> n 0)) n 100000)))
 
-(defn run [claims q]
-  (let [errs (validate q)]
+(defn run [claims q0]
+  (let [q (canon-q q0)
+   errs (validate q)]
   (if (not (empty? errs)) {:error errs} (let [edb (claims->edb claims)
    strata (strata-of q)
    db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)

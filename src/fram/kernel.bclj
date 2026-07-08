@@ -1,6 +1,7 @@
 #lang beagle/clj
 (ns fram.kernel
-  "Claim kernel: the (l p r) claim model, query, apply/retract, obligation rules.
+  "Fact kernel: the (l p r) fact model, query, apply/retract, obligation rules.
+  (The in-memory record is still named `Claim` — that identifier renames in a later wave.)
   Ported from the proven Clojure prototype (fram.clj + coord.clj).
   Pure logic — host interop (file IO, sockets) lives in fram.rt externs.")
 

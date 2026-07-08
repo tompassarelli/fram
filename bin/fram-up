@@ -41,7 +41,7 @@ setsid "$HERE/fram-daemon" "$FRAM_PORT" "$LOG" >"/tmp/fram-daemon-$FRAM_PORT.log
 disown 2>/dev/null || true
 
 # the daemon now runs on the JVM (Clojure) — slower to boot than bb, and it reads
-# the whole claim log at startup, so give it room (and a first-ever run may resolve
+# the whole fact log at startup, so give it room (and a first-ever run may resolve
 # deps once). ~30s ceiling; it usually answers in a few seconds.
 for _ in $(seq 120); do
   if "$HERE/fram" doctor 2>/dev/null | grep -q 'coordinator UP'; then

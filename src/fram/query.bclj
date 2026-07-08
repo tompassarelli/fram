@@ -9,7 +9,7 @@
   VALIDATION at the boundary: the caller cannot parse-fail (it's data, not text),
   cannot reference an undefined relation, cannot ground an unbound head variable,
   cannot shadow a base relation, and unstratified negation is rejected — all BEFORE
-  anything runs. Runs over the current claim fold's EDB (triple/claim) — no CNF
+  anything runs. Runs over the current fact fold's EDB (fact/fact-id) — no CNF
   store, no name->id, no new dependency. The reserve surface for ad-hoc recursion;
   point/neighbor lookups are tools (fram.tools). Caveat: evaluation is naive (no
   semi-naive); a deeply recursive query can be expensive — the MCP path bounds it
@@ -29,17 +29,50 @@
 (require fram.datalog :as d)
 (require clojure.string :as str)
 
-;; --- EDB: project the current claim fold into triple/claim tuple-sets --------
+;; --- EDB: project the current fact fold into fact/fact-id tuple-sets ---------
 ;; Strings throughout — the flat fold's l/p/r are already strings, so a caller's
 ;; constant predicate/entity names match with no resolution step.
+;; Base relations: fact(l,p,r) and fact-id(cid,l,p,r). The pre-rename names
+;; triple/claim are accepted as aliases (canon-rel below), so old queries still run.
 (defn claims->edb [claims :- (Vec k/Claim)] :- (Map String (Set (Vec String)))
-  (loop [cs claims i 0 triple :- (Set (Vec String)) #{} claim :- (Set (Vec String)) #{}]
+  (loop [cs claims i 0 fact :- (Set (Vec String)) #{} fact-id :- (Set (Vec String)) #{}]
     (if (empty? cs)
-      {"triple" triple "claim" claim}
+      {"fact" fact "fact-id" fact-id}
       (let [c (first cs)]
         (recur (rest cs) (+ i 1)
-               (conj triple [(:l c) (:p c) (:r c)])
-               (conj claim [(str "c" i) (:l c) (:p c) (:r c)]))))))
+               (conj fact [(:l c) (:p c) (:r c)])
+               (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
+
+;; --- base-relation aliases: rewrite the pre-rename names at parse ------------
+;; The unit rename is claim->fact, so the base relations are `fact`/`fact-id`; the
+;; OLD names `triple`/`claim` stay accepted (a cheap map applied to every :rel and
+;; :find BEFORE validation), so existing queries never break.
+(def rel-aliases :- (Map String String) {"triple" "fact" "claim" "fact-id"})
+(defn- canon-rel [r :- Any] :- Any
+  (if (and (string? r) (contains? rel-aliases r)) (get rel-aliases r) r))
+(defn- canon-lit [litt :- Any] :- Any
+  (if (and (map? litt) (contains? litt :rel)) (assoc litt :rel (canon-rel (:rel litt))) litt))
+;; canon BOTH the head :rel and every body :rel — an alias used in HEAD position must
+;; still be caught as base-relation shadowing (e.g. head :rel "triple" -> "fact" -> rejected).
+(defn- canon-rule [r :- Any] :- Any
+  (if (map? r)
+    (let [r1 (if (and (map? (:head r)) (contains? (:head r) :rel))
+               (assoc r :head (assoc (:head r) :rel (canon-rel (:rel (:head r)))))
+               r)]
+      (if (vector? (:body r1)) (assoc r1 :body (mapv canon-lit (:body r1))) r1))
+    r))
+(defn- canon-rules [rs :- Any] :- Any (if (vector? rs) (mapv canon-rule rs) rs))
+;; Rewrite base-relation aliases everywhere the query names a relation (:find + every
+;; body literal's :rel, across :rules and :strata). Total + shape-preserving: a
+;; non-map / malformed q flows through untouched so validate still reports it.
+(defn canon-q [q :- Any] :- Any
+  (if (not (map? q))
+    q
+    (let [q1 (if (contains? q :find) (assoc q :find (canon-rel (:find q))) q)
+          q2 (if (contains? q1 :rules) (assoc q1 :rules (canon-rules (:rules q1))) q1)]
+      (if (contains? q2 :strata)
+        (assoc q2 :strata (if (vector? (:strata q2)) (mapv canon-rules (:strata q2)) (:strata q2)))
+        q2))))
 
 ;; --- the boundary: validation -----------------------------------------------
 ;; a term is {:var <string>} (a logic variable) or a scalar constant.
@@ -117,8 +150,8 @@
             avail (reduce (fn [a :- (Set String) rel :- String] :- (Set String) (conj a rel)) lower (vec this-rels))
             bad (filterv (fn [rel :- String] :- Bool
                            (and (contains? all-derived rel)            ; a relation the program derives
-                                (not (= rel "triple"))
-                                (not (= rel "claim"))
+                                (not (= rel "fact"))
+                                (not (= rel "fact-id"))
                                 (not (contains? avail rel))))           ; but not available yet (defined only later)
                          (stratum-positive-rels stratum))
             probs2 (vec (concat probs
@@ -154,12 +187,12 @@
           e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
           e2 (if (vector? args) [] ["literal :args must be a vector"])
           e3 (if (and (string? rel) (not (contains? known rel)))
-               [(str "unknown relation '" rel "' — use triple, claim, or a :head rel you define")]
+               [(str "unknown relation '" rel "' — use fact, fact-id (aliases: triple, claim), or a :head rel you define")]
                [])
-          e4 (if (and (= rel "triple") (vector? args) (not (= (count args) 3)))
-               ["relation triple takes 3 args (l p r)"] [])
-          e5 (if (and (= rel "claim") (vector? args) (not (= (count args) 4)))
-               ["relation claim takes 4 args (cid l p r)"] [])
+          e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3)))
+               ["relation fact takes 3 args (l p r)"] [])
+          e5 (if (and (= rel "fact-id") (vector? args) (not (= (count args) 4)))
+               ["relation fact-id takes 4 args (cid l p r)"] [])
           en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false)))
                ["literal :neg must be true or false"] [])
           e6 (if (vector? args)
@@ -195,8 +228,8 @@
           head-ok (and (map? head) (string? (:rel head)) (vector? (:args head)))
           eh (if head-ok [] ["rule :head must be {:rel <string> :args [terms]}"])
           ;; head :rel cannot shadow a base relation (would inject fabricated EDB facts)
-          ehrel (if (and head-ok (or (= (:rel head) "triple") (= (:rel head) "claim")))
-                  ["rule :head :rel cannot be a base relation (triple/claim)"] [])
+          ehrel (if (and head-ok (or (= (:rel head) "fact") (= (:rel head) "fact-id")))
+                  ["rule :head :rel cannot be a base relation (fact/fact-id)"] [])
           ;; head args must be valid terms (same rigor as the body)
           ehargs (if head-ok
                    (reduce (fn [acc :- (Vec String) t :- Any] :- (Vec String)
@@ -220,7 +253,8 @@
 ;; it is total — it never throws on malformed input, it reports.
 ;; q stays Any: the open-map :strata-xor-:rules discrimination needs key-presence,
 ;; which a record (all keys always present) would defeat — the open-map gap.
-(defn validate [q :- Any] :- (Vec String)
+(defn validate [q0 :- Any] :- (Vec String)
+  (let [q (canon-q q0)]
   (if (not (map? q))
     ["query must be a map: {:find <rel> :rules [<rule>...]} (or :strata [[...]...])"]
     (if (and (contains? q :rules) (not (vector? (:rules q))))
@@ -230,7 +264,7 @@
         (let [rules (all-rules q)
               strata (strata-of q)
               derived (head-rels rules)
-              known (conj (conj derived "triple") "claim")
+              known (conj (conj derived "fact") "fact-id")
               find (:find q)
               ef (if (string? find)
                    (if (contains? known find) []
@@ -246,7 +280,7 @@
               efr (forward-ref-violations strata derived)
               ;; #22: a derived head relation must be defined at a single arity.
               ea (rel-arity-violations rules)]
-          (vec (concat ef (concat er (concat erules (concat esv (concat efr ea)))))))))))
+          (vec (concat ef (concat er (concat erules (concat esv (concat efr ea))))))))))))
 
 ;; #11 — upper bound on result-set size. The query path is bounded only by the
 ;; Herbrand base (claims^k for a k-ary cross-join), so a model can ask for a result
@@ -268,8 +302,9 @@
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
 ;; q + return stay Any: q is the open-map query (above); the result is a tagged
 ;; heterogeneous envelope discriminated by key-presence.
-(defn run [claims :- (Vec k/Claim) q :- Any] :- Any
-  (let [errs (validate q)]
+(defn run [claims :- (Vec k/Claim) q0 :- Any] :- Any
+  (let [q (canon-q q0)
+        errs (validate q)]
     (if (not (empty? errs))
       {:error errs}
       (let [edb (claims->edb claims)

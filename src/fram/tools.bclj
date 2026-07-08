@@ -4,12 +4,12 @@
   per-predicate from the vocabulary: `tell`, `retract`, `show`, `ask`, `validate`,
   and the five graph-AST edit verbs (`add-def`, `set-body`, `rename-def`,
   `insert-after`, `replace-in-body`). Vocabulary is DATA, not tools — a predicate
-  is an entity, so `show <pred>` reveals its cardinality/value_kind claims and `ask`
+  is an entity, so `show <pred>` reveals its cardinality/value_kind facts and `ask`
   enumerates the vocabulary; the engine never generates a `set-owner`/`owner-of` per
-  claim (that catalog was a per-session context tax buying no safety the coordinator
+  fact (that catalog was a per-session context tax buying no safety the coordinator
   doesn't already give). `tell` = assert subsumes the old set-P/add-P with identical
   semantics (single-valued predicates replace their (l,p) group, multi-valued
-  accumulate); `retract` removes one claim (the verb `untell` is accepted as an
+  accumulate); `retract` removes one fact (the verb `untell` is accepted as an
   alias in dispatch, mirroring `query`->`ask`); `ask` is the structured Datalog
   escape hatch (fram.query) — its op key stays `:query` and the name `query` is
   accepted as an alias in dispatch. `threads` and `dependents-of` are NOT in this catalog: threads
@@ -31,7 +31,7 @@
   a record (all keys always present) would defeat — the open-map gap. {:edit ..} is the
   GRAPH-AST authoring envelope: unlike {:write} (one coordinator triple), it carries a
   whole-form/body datum the host applies OUT-OF-BAND via chartroom's resolve.clj verbs
-  (mint/supersede many claims), recompile-gated and fail-closed.")
+  (mint/supersede many facts), recompile-gated and fail-closed.")
 
 (require fram.kernel :as k)
 (require fram.query :as q)
@@ -40,7 +40,7 @@
 ;; The op of a tool — constrains dispatch (cond/:else) and missing-req. `:tell`/`:retract`
 ;; are the single-triple KB writes (assert/retract of ANY predicate); `:query` backs
 ;; `ask`; `:show`/`:validate` are the reads. The trailing five are GRAPH-AST EDIT ops:
-;; they author a claim-canonical Beagle module by minting/superseding kind/v/fN claims via
+;; they author a claim-canonical Beagle module by minting/superseding kind/v/fN facts via
 ;; chartroom's resolve.clj verbs (NOT a single coordinator triple), so they return a
 ;; distinct {:edit ...} envelope the host runs out-of-band, recompile-gated and fail-closed.
 ;; :insert-after is the CRDT insert-anywhere (commute) op — insert a NEW top-level def
@@ -66,7 +66,7 @@
 ;; ALL values are @-entities (and there is at least one) -> a pure reference
 ;; predicate, so a bare write value is auto-@-prefixed. A MIXED predicate is NOT
 ;; pure-ref, so its literal values are stored verbatim (no spurious @-prefix that
-;; would make an untell silently miss the real claim).
+;; would make an untell silently miss the real fact).
 ;; This value-driven normalization is the single write convention for both the
 ;; tool/MCP surface AND the `tell`/`set` CLI verbs (main.bclj routes through
 ;; `ref-value` below) — no hardcoded ref-pred list, so the engine stays
@@ -97,35 +97,36 @@
                                    (->Param "predicate" "string" true)
                                    (->Param "object" "string" true)]]
     [(->ToolSpec "tell"
-                 (str "Assert the claim (subject, predicate, object). A single-valued "
+                 (str "Assert the fact (subject, predicate, object). A single-valued "
                       "predicate replaces its current value; a multi-valued one accumulates "
                       "across repeated tells. A bare id for a reference predicate is auto-@-"
                       "prefixed. Asserts ANY predicate, including one not yet in the vocabulary "
-                      "(predicate cardinality itself is a claim: `tell <pred> cardinality "
+                      "(predicate cardinality itself is a fact: `tell <pred> cardinality "
                       "single|multi`).")
                  spo-params :tell "")
      (->ToolSpec "retract"
-                 "Retract the exact claim (subject, predicate, object). The verb `untell` is an accepted alias."
+                 "Retract the exact fact (subject, predicate, object). The verb `untell` is an accepted alias."
                  spo-params :retract "")
      (->ToolSpec "show"
-                 (str "All claims about <subject>. Predicates are entities too: "
-                      "`show <pred>` reveals its cardinality/value_kind/acyclic claims.")
+                 (str "All facts about <subject>. Predicates are entities too: "
+                      "`show <pred>` reveals its cardinality/value_kind/acyclic facts.")
                  subj-param :show "")
      (->ToolSpec "ask"
                  (str "Ad-hoc recursive query for multi-hop questions and vocabulary "
                       "enumeration. Pass a structured Datalog-shaped object: "
                       "{:find <rel> :rules [{:head {:rel R :args [terms]} :body [{:rel r :args [terms] :neg <bool>}]}]}. "
-                      "A term is {:var \"x\"} or a constant; base relations are triple(l,p,r) and claim(cid,l,p,r). "
+                      "A term is {:var \"x\"} or a constant; base relations are fact(l,p,r) and fact-id(cid,l,p,r) "
+                      "(the pre-rename names triple/claim are accepted as aliases). "
                       "Recursion and stratified negation are supported; the query is validated before it runs.")
                  [(->Param "query" "object" true)] :query "")
      (->ToolSpec "validate"
                  "Structural integrity violations (cycles, dangling refs) across all threads."
                  [] :validate "")
      ;; --- GRAPH-AST EDIT verbs (claim-canonical authoring) -----------------
-     ;; These author a Beagle source MODULE as a CLAIM operation on its lossless
+     ;; These author a Beagle source MODULE as a FACT operation on its lossless
      ;; AST projection, not a text splice: the agent emits the new form/body as an
      ;; EDN datum STRING (read by resolve.clj), it is minted into the module's
-     ;; claim graph (kind/v/fN claims), scope-resolved via refers_to, regenerated
+     ;; fact graph (kind/v/fN facts), scope-resolved via refers_to, regenerated
      ;; byte-stable, and recompile-gated — committed only if it builds. `module`
      ;; is the source-file scope (substring naming exactly one .bclj). The op is
      ;; carried out OUT-OF-BAND by the host (route-edit), NOT through the single-

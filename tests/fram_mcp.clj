@@ -7,9 +7,9 @@
 ;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
 ;; coordinator, and single-vs-multi cardinality is DATA in the log (a `<pred>
-;; cardinality single|multi` claim; the fold keys by it), so `tell` = assert subsumes
+;; cardinality single|multi` fact; the fold keys by it), so `tell` = assert subsumes
 ;; set-P AND add-P with identical semantics. Vocabulary is discoverable, not tooled:
-;; a predicate is an entity, so `show <pred>` reveals its cardinality/value_kind claims
+;; a predicate is an entity, so `show <pred>` reveals its cardinality/value_kind facts
 ;; and `ask` enumerates it. `threads` and `dependents-of` are NOT here — threads are a
 ;; TERN concept (tern serves them) and a reverse edge is an `ask`.
 ;; Reads fold the current log; writes route through the coordinator.
@@ -35,18 +35,20 @@
 ;; One instructions string; the tool list is fram.tools/catalog verbatim (10 tools).
 (def instructions
   (str
-   "Fram is a claim engine: every claim is a triple (subject predicate object); a "
-   "thread is any @id with a `title`. Lifecycle is DERIVED from claims (committed / "
-   "outcome / abandoned / driver / depends_on), never a stored status.\n\n"
-   "TELL/ASK knowledge-base interface: `tell` asserts a claim (single-valued "
+   "Fram is a FACT engine: every fact is a triple (subject predicate object); a "
+   "thread is any @id with a `title`. Lifecycle is DERIVED from facts (committed / "
+   "outcome / abandoned / driver / depends_on), never a stored status. Facts record "
+   "what was ASSERTED, not what is verified — supersession, retraction, and views "
+   "handle disagreement.\n\n"
+   "TELL/ASK knowledge-base interface: `tell` asserts a fact (single-valued "
    "predicates replace their value; multi-valued ones accumulate — repeat tells), "
    "`retract` removes one (the verb `untell` is an accepted alias), `show` reads "
-   "every claim on a subject, and `ask` answers "
+   "every fact on a subject, and `ask` answers "
    "multi-hop questions with a structured Datalog query (validated before it runs; "
    "recursion + stratified negation). Every write is serialized and rule-checked by "
    "the coordinator. `validate` reports integrity violations.\n\n"
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
-   "claims, and `ask` can enumerate the vocabulary — the tool surface stays closed "
+   "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
    "(ten tools) while the vocabulary lives in the graph as data.\n\n"
    "Graph-owned Beagle modules (registered `claim-canonical`) are authored by GRAPH "
    "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "

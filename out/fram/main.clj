@@ -34,14 +34,14 @@
    lost (pending-coord-count log file-sigs)]
   (if (and (> lost 0) (not force)) (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the " "files (would be lost). Run `export` first, or `import --force`.")) (do
   (fram.rt/write-log log as)
-  (println (str "imported -> " (count as) " claims -> " log))))))
+  (println (str "imported -> " (count as) " facts -> " log))))))
 
 (defn cmd-export [^String threads-dir ^String log ^String out-dir ^Boolean force]
   (let [log-claims (:claims (fold/fold (fram.rt/read-log log)))
    file-claims (:claims (fold/fold (imp/load-corpus threads-dir)))
    log-sigs (sig-member-map log-claims)
    file-ahead (filterv (fn [c] (nil? (get log-sigs (claim-sig c)))) file-claims)]
-  (if (and (not (empty? file-ahead)) (not force)) (println (str "REFUSING export: " (count file-ahead) " file claim(s) are not in the log " "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or " "`export <dir> --force` to regenerate files FROM the log (discards those edits).")) (let [idx (k/build-index log-claims)
+  (if (and (not (empty? file-ahead)) (not force)) (println (str "REFUSING export: " (count file-ahead) " file fact(s) are not in the log " "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or " "`export <dir> --force` to regenerate files FROM the log (discards those edits).")) (let [idx (k/build-index log-claims)
    tes (k/thread-ids-i idx)]
   (fram.rt/ensure-dir out-dir)
   (doseq [te tes]
@@ -74,7 +74,7 @@
   (doseq [m matches]
   (let [title (k/one claims m "title")]
   (println (str "  " (short-id m) (if (some? title) (str "  " title) ""))))))
-  :else (println (str "no claims for " te)))))
+  :else (println (str "no facts for " te)))))
 
 (defn cmd-set [^String log ^String id ^String pred ^String value]
   (let [as (fram.rt/read-log log)
@@ -102,7 +102,7 @@
    withrec (conj rewritten (k/->Claim from "merged_into" to))
    deduped (:claims (fold/fold (claims->assertions withrec "merge")))]
   (fram.rt/write-log log (claims->assertions deduped "merge"))
-  (println (str "merged " from " -> " to "  (" (count claims) " claims -> " (count deduped) ")"))))
+  (println (str "merged " from " -> " to "  (" (count claims) " facts -> " (count deduped) ")"))))
 
 (defn- ^String tell-once [port ^String op ^String te ^String pred ^String rv]
   (let [v (fram.rt/coord-version port)]
@@ -136,14 +136,14 @@
    declared (filterv (fn [c] (= (:p c) "cardinality")) (:claims (fold/fold as)))]
   (if (>= v 0) (println (str "coordinator UP on 127.0.0.1:" port " (v" v ")")) (println (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up")))
   (println (str "vocab " (k/vocab-fingerprint)))
-  (println (str "cardinality-claims: " (count declared) " claims-derived (in the log)"))
+  (println (str "cardinality-facts: " (count declared) " facts-derived (in the log)"))
   (println (str "cardinality-overlay " (k/cards-fingerprint cmap)))
-  (if (k/single-valued-from-env?) (println "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (env, injected) > fallback list") (println (str "vocab-source: claims (overlay) > FRAM_SINGLE_VALUED (UNSET in this process) > " "TRANSITIONAL FALLBACK list. A cardinality CLAIM (`tell <pred> cardinality " "single|multi`) overrides the env/fallback for BOTH the daemon and this CLI, so a " "predicate declared in the log classifies identically regardless of each process's " "FRAM_SINGLE_VALUED; only preds NOT declared in the log fall back to it — export the " "SAME FRAM_SINGLE_VALUED in every process that folds/serves this log for those.")))))
+  (if (k/single-valued-from-env?) (println "vocab-source: facts (overlay) > FRAM_SINGLE_VALUED (env, injected) > fallback list") (println (str "vocab-source: facts (overlay) > FRAM_SINGLE_VALUED (UNSET in this process) > " "TRANSITIONAL FALLBACK list. A cardinality FACT (`tell <pred> cardinality " "single|multi`) overrides the env/fallback for BOTH the daemon and this CLI, so a " "predicate declared in the log classifies identically regardless of each process's " "FRAM_SINGLE_VALUED; only preds NOT declared in the log fall back to it — export the " "SAME FRAM_SINGLE_VALUED in every process that folds/serves this log for those.")))))
 
 (defn cmd-tools [^String log]
   (let [claims (:claims (fold/fold (fram.rt/read-log log)))
    cat (tl/catalog claims)]
-  (println (str (count cat) " tools (closed catalog; vocabulary is data — `show <pred>` reveals " "a predicate's cardinality/value_kind claims, `ask` enumerates it):"))
+  (println (str (count cat) " tools (closed catalog; vocabulary is data — `show <pred>` reveals " "a predicate's cardinality/value_kind facts, `ask` enumerates it):"))
   (doseq [spec cat]
   (println (str "  " (:name spec) "  —  " (:desc spec))))))
 

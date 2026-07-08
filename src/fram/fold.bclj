@@ -1,6 +1,6 @@
 #lang beagle/clj
 (ns fram.fold
-  "Replay the append-only assertion log into the current claim set + version.
+  "Replay the append-only assertion log into the current fact set + version.
   Pure projection over assertions; the log bytes are read via fram.rt.")
 
 (require fram.kernel :as k)

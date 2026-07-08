@@ -33,22 +33,22 @@ mkdir -p "$DIR/.fram"
 
 echo "fram-code-on: $DIR (port $PORT; src $SRC)"
 
-# 1. ingest the code into claims (deterministic, no LLM) — recurse for ANY Beagle source.
+# 1. ingest the code into facts (deterministic, no LLM) — recurse for ANY Beagle source.
 #    The extension only picks the emit target (.bclj->clj .bcljs->cljs .bjs->js .bnix->nix
 #    .bgl->neutral .bodin->odin); the parsed AST is target-independent, so ingest is too.
 #    fram-ingest-code is non-recursive, so we find + feed it every Beagle file here.
-echo "  [1/3] ingesting code -> claims …"
+echo "  [1/3] ingesting code -> facts …"
 mapfile -t SRCS < <(find "$SRC" -regextype posix-extended -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' -not -path '*/.fram/*' | sort)
 [ "${#SRCS[@]}" -eq 0 ] && { echo "        no Beagle source (.bclj/.bcljs/.bjs/.bnix/.bgl/.bodin) under $SRC"; exit 1; }
 ( cd "$HERE" && BEAGLE_HOME="$BEAGLE_HOME" bin/fram-ingest-code "${SRCS[@]}" --root "$SRC" --out "$CODE_LOG" ) \
-  && echo "        ${#SRCS[@]} modules, $(wc -l <"$CODE_LOG") claims -> $CODE_LOG"
+  && echo "        ${#SRCS[@]} modules, $(wc -l <"$CODE_LOG") facts -> $CODE_LOG"
 
 # 1b. resolve AST -> reference graph (corpus) for REASONING. code.log is the editing
 #     AST (tree); the corpus is the resolved who-calls/blast-radius GRAPH (callgraph needs it).
 CORPUS="$DIR/.fram/corpus.claims"
 echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
 ( cd "$HERE/chartroom" && BEAGLE_HOME="$BEAGLE_HOME" bin/emit-corpus "$SRC" "$CORPUS" >/dev/null 2>&1 ) \
-  && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) claims -> $CORPUS" \
+  && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) facts -> $CORPUS" \
   || echo "        (corpus skipped — authoring still works; reasoning needs emit-corpus)"
 
 # 2. boot the warm coordinator (detached — survives this shell)
@@ -58,7 +58,7 @@ else
   echo "  [2/3] booting warm coordinator on :$PORT …"
   ( cd "$HERE" && setsid nohup clojure -M cnf_coord_daemon.clj serve-flat "$PORT" "$CODE_LOG" \
       >"$DIR/.fram/coord-$PORT.log" 2>&1 & )
-  # boot time scales with the log (gjoa: 429k claims ≈ 11 min — index! dedupe is
+  # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
   # quadratic today). Generous cap; the loop exits the moment the daemon listens.
   for i in $(seq 1 2400); do sleep 0.5; grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break; done
   grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null \
@@ -97,7 +97,7 @@ cat <<EOF
 
 === STACK ON ===
 Authoring: (re)start Claude Code in $DIR — you now have mcp__fram__add-def /
-  set-body / rename-def / insert-after, authoring INTO the claim graph (warm,
+  set-body / rename-def / insert-after, authoring INTO the fact graph (warm,
   no re-fold; edits type-checked + pointed Beagle errors returned for repair).
 Reason over the code graph (blast-radius / who-calls), any time:
   bb -cp $HERE/out:$HERE/chartroom/src $HERE/chartroom/src/callgraph.clj $CORPUS

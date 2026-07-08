@@ -2,7 +2,7 @@
 
 # Fram
 
-**An append-only claim engine.** Every claim is a triple `(subject predicate object)`;
+**An append-only fact engine.** Every fact is a triple `(subject predicate object)`;
 lifecycle is *derived*, never stored; every write serializes through one coordinator;
 and the text is a **view** of the graph you can always walk away with.
 
@@ -13,7 +13,7 @@ and the text is a **view** of the graph you can always walk away with.
 
 </div>
 
-Fram stores **claims** — relational triples — in a durable append-only log, folds them
+Fram stores **facts** — relational triples — in a durable append-only log, folds them
 into a queryable in-memory graph, derives over them with stratified Datalog, and
 serializes all writes through a sole-writer coordinator. You **derive** answers, you
 don't maintain them. References carry **identity, not spelling** (rename a thing once,
@@ -22,30 +22,33 @@ merge-freedom. The long argument, written to survive a skeptic with the negative
 conceded, is in **[docs/WHY_FRAM_EXISTS.md](docs/WHY_FRAM_EXISTS.md)**.
 
 > **"Isn't this just Datomic / Datahike / an RDF store?"** No — and the reason is the
-> *atom*, not the features. Fram's unit is the **claim-object**: a claim that is itself
-> addressable and reifiable at per-claim granularity. A datom isn't; an RDF store treats
+> *atom*, not the features. Fram's unit is the **fact-object**: a fact that is itself
+> addressable and reifiable at per-fact granularity. A datom isn't; an RDF store treats
 > statement-level reification as a bolt-on. Concurrency, Datalog, and schema-as-data are
 > *not* why Fram exists (off-the-shelf stores tie or win there) — the primitive is.
 
-## Terminology — it's a *claim* (never a loose "fact")
+## Terminology — it's a *fact*
 
-The substrate atom is a **claim**: an immutable, addressable triple `(subject predicate
-object)`. The graph stores claims; lifecycle is *derived* from the claim set, never stored.
-**Always call it a claim.**
+The substrate atom is a **fact**: an immutable, addressable triple `(subject predicate
+object)`. The graph stores facts; lifecycle is *derived* from the fact set, never stored.
+**Always call it a fact.** The name follows the Datalog / Datomic / Prolog prior — the stored
+unit there has always been a *fact* — so a model reaching for the word gets it right with no
+translation.
 
-Do **not** use *"fact"* as a synonym for *claim*. "Fact" connotes settled, stored, view-free
-truth — exactly the model CNF (Claim Normal Form) rejects: a claim is **asserted and
-defeasible**; it can be superseded, disputed, and coexist with its rival. The word *fact* is
-reserved for two narrow, precise senses only:
+Keep the epistemics honest: a fact here records **what was ASSERTED, not what is verified.**
+It is *asserted and defeasible*, not settled view-free truth — it can be superseded, retracted,
+disputed, and coexist with its rival. Supersession, retraction, and views (CNF, *Claim Normal
+Form* — the model the machinery still carries) hold the disagreement, so the atom stays a plain
+fact. The word keeps two extra-precise senses that don't conflict with the general one:
 
 1. **Datalog** — a ground tuple in a relation (the `d/facts` API, "delta fact", EDB/IDB).
    Strict Datalog-evaluation vocabulary.
-2. **Views model** — a claim *selected/accepted as true inside a view*
+2. **Views model** — a fact *selected/accepted as true inside a view*
    ([docs/VIEWS_AND_BRANCHES.md](docs/VIEWS_AND_BRANCHES.md) §0). Always view-relative; the
-   substrate has no view-free facts.
+   substrate has no view-free *settled* facts.
 
-Everywhere else — docs, MCP `instructions`, prompts, CLI help, lifecycle prose — the word is
-**claim**. Rule of thumb: if "claim" fits and the sentence stays true, it should have been "claim".
+Everywhere — docs, MCP `instructions`, prompts, CLI help, lifecycle prose — the word is
+**fact**.
 
 ## One engine, many consumers
 
@@ -55,17 +58,17 @@ engine answers questions for very different domains — each in its **own** grap
 - **[Tern](https://github.com/tompassarelli/tern)** — life/work coordination
   (the `ready` / `blocked` / `leverage` verbs live there, not in the engine).
 - **[Chartroom](chartroom/)** — code-as-claims (a module *inside* this repo): a Beagle
-  module's AST *is* the claims, the `.bclj` text is a view.
+  module's AST *is* the facts, the `.bclj` text is a view.
 - **[Beagle](https://github.com/Autonymy/beagle)** — the typed Lisp Fram itself is
   authored in; it projects source into the graph through Chartroom.
 
 The engine ships **no** domain verbs of its own — new domain, new graph, same engine.
-*How each consumer projects onto the claims is the [How it works](#how-it-works) section
+*How each consumer projects onto the facts is the [How it works](#how-it-works) section
 below; the deep code story is [Identity-addressed code](#identity-addressed-code-chartroom).*
 
 ## What the graph buys you: reasoning + repair
 
-These are the two reasons to put something in a claim graph instead of files.
+These are the two reasons to put something in a fact graph instead of files.
 
 **Reasoning — relational questions are cheap, exact, and always current.** "What
 depends on this? what's unused? who calls this? what unblocks the most other work?" are
@@ -91,15 +94,15 @@ The bundled threads are a fictional *"launch a personal website"* project — no
 data. Under the hood `./demo.sh` runs the engine loop:
 
 ```sh
-bin/fram import           # fold the Markdown threads into the claim graph (claims.log)
+bin/fram import           # fold the Markdown threads into the fact graph (claims.log — facts by nature, legacy filename)
 bin/fram validate         # structural integrity: cycles, dangling refs, closed vocab
-bin/fram call show '{:subject "2026-01-01-090500"}'     # all claims on the thread (title, owner, deps…)
-bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "triple" :args [{:var "x"} "depends_on" "@2026-01-01-090200"}]}]}}}'  # reverse edge via ask
+bin/fram call show '{:subject "2026-01-01-090500"}'     # all facts on the thread (title, owner, deps…)
+bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "fact" :args [{:var "x"} "depends_on" "@2026-01-01-090200"}]}]}}}'  # reverse edge via ask
 bin/fram export /tmp/regen   # regenerate the Markdown from the graph (lossless round-trip)
 ```
 
-Counts (claims, threads) are **computed from `threads/`**, never asserted here — run the
-commands and read them. The round-trip is verified claim-set-identical by
+Counts (facts, threads) are **computed from `threads/`**, never asserted here — run the
+commands and read them. The round-trip is verified fact-set-identical by
 `tests/roundtrip_test.clj`, so files are a *view*, not a competing source of truth — you
 can always walk away with your data.
 
@@ -113,39 +116,39 @@ bin/fram import
 
 ## How it works
 
-The engine is **domain-neutral**. Its only unit is the **claim** — a triple
-`(left predicate right)`, e.g. `(@X depends_on @Y)`. Claims append to a durable log; the log
+The engine is **domain-neutral**. Its only unit is the **fact** — a triple
+`(left predicate right)`, e.g. `(@X depends_on @Y)`. Facts append to a durable log; the log
 folds into an in-memory graph; consumers query and derive over that graph; every write
 serializes through one coordinator. There is **no** notion of "thread", "module", or "task" in
-the engine — only claims:
+the engine — only facts:
 
 ```
-claims ──assert──▶ claims.log (append-only) ──fold──▶ in-memory claim graph
-                                                       │
+facts ──assert──▶ claims.log (append-only) ──fold──▶ in-memory fact graph
+                                                      │
                    coordinator daemon ◀── agents query + assert concurrently
-                                                       │
-                     a consumer derives its own views over the claims (Datalog)
+                                                      │
+                     a consumer derives its own views over the facts (Datalog)
 ```
 
 - Entities referenced by `@` are **interned** — rename a thing once, not in N files.
 - **Derived state is never stored.** No `state` field exists in the engine; a consumer reads
-  `committed` / `outcome` / `ready` / blast-radius *off the claims*.
+  `committed` / `outcome` / `ready` / blast-radius *off the facts*.
 
 A **consumer** is a projection + a vocabulary onto that neutral engine. Two ship today, and
 they look nothing alike — which is the whole point:
 
 **Fram with Tern (life/work).** Tern models work as **threads** — one Markdown file
-each (`@id` header of claim triples, `---`, prose body; see
-[THREAD-FORMAT.md](THREAD-FORMAT.md)). `bin/fram import` folds those files into claims, and
+each (`@id` header of fact triples, `---`, prose body; see
+[THREAD-FORMAT.md](THREAD-FORMAT.md)). `bin/fram import` folds those files into facts, and
 Tern derives `ready` / `blocked` / `leverage` from them. The bundled `threads/` corpus is
 Tern-shaped *only because Fram was extracted from Tern* — that's the one reason
 "threads" appear in the engine repo at all. `export` is the verified-lossless inverse of
 `import` (`tests/roundtrip_test.clj`): the files are a view, not a second source of truth.
 
 **Fram with Beagle (code-as-claims).** [Chartroom](chartroom/) projects **Beagle source** into
-the graph with the claim log **canonical**: a module's AST *is* the claims; the `.bclj` text is
+the graph with the fact log **canonical**: a module's AST *is* the facts; the `.bclj` text is
 a rendered view. No threads here — the unit is the *def*, the projection is the *resolver*, and
-references carry the binding's identity (`bound_to`), so a rename is a ~2-claim edit and code
+references carry the binding's identity (`bound_to`), so a rename is a ~2-fact edit and code
 intelligence (call graphs, blast radius) is Datalog.
 
 **One engine, many memory-spaces.** Each consumer lives in its **own** graph (a separate log),
@@ -181,14 +184,14 @@ correctly with zero examples — a **CLOSED, O(1) tool catalog** plus a structur
 escape hatch. The catalog is a fixed ten tools, never minted per-predicate: the
 vocabulary is **data in the graph**, not tools.
 
-- **The closed TELL/ASK catalog — exactly ten tools.** `tell` (assert a claim) /
-  `retract` (remove one) / `show` (all claims on a subject) / `ask` (structured query) /
+- **The closed TELL/ASK catalog — exactly ten tools.** `tell` (assert a fact) /
+  `retract` (remove one) / `show` (all facts on a subject) / `ask` (structured query) /
   `validate`, plus the five code-authoring verbs Chartroom adds (`add-def` / `set-body` /
   `rename-def` / `insert-after` / `replace-in-body`). A single-valued predicate replaces
-  its value; a multi-valued one accumulates — and **cardinality is itself a claim**
+  its value; a multi-valued one accumulates — and **cardinality is itself a fact**
   (`tell <pred> cardinality single|multi`), so `tell` = assert subsumes the old
   `set-P`/`add-P` with no per-predicate tools. Predicates are entities: `show <pred>`
-  reveals a predicate's `cardinality` / `value_kind` / `acyclic` claims, and `ask`
+  reveals a predicate's `cardinality` / `value_kind` / `acyclic` facts, and `ask`
   enumerates the vocabulary — so the tool count stays O(1) while the vocabulary lives in
   the graph as data. A missing required param is **rejected server-side**.
 - **`ask` — a structured Datalog escape hatch** for multi-hop questions no read covers.
@@ -201,7 +204,7 @@ vocabulary is **data in the graph**, not tools.
 ```sh
 bin/fram tools            # the closed catalog (count + signatures)
 bin/fram query '{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]}
-                                      :body [{:rel "triple" :args [{:var "x"} "part_of" {:var "y"}]}]}]}'
+                                      :body [{:rel "fact" :args [{:var "x"} "part_of" {:var "y"}]}]}]}'
 ```
 
 The catalog is served over **MCP** (`bin/fram-mcp`, JSON-RPC over stdio); the CLI
@@ -209,20 +212,20 @@ The catalog is served over **MCP** (`bin/fram-mcp`, JSON-RPC over stdio); the CL
 humans. `tools/call` accepts `untell` as an alias for `retract` and `query` for `ask`.
 A large generated per-predicate catalog was a per-session context tax buying no safety
 the engine doesn't already give (every write is serialized + rule-checked at the
-coordinator; single-vs-multi cardinality is a claim in the log, so a cold CLI fold and
+coordinator; single-vs-multi cardinality is a fact in the log, so a cold CLI fold and
 the warm daemon classify identically), so the surface is closed — the vocabulary is data,
 reached through `show`/`ask`, not through the tool list.
 
 ## Identity-addressed code (Chartroom)
 
-[Chartroom](chartroom/) points the engine at *code*. The claim log is canonical: a
-module's AST is the claims, and the `.bclj` source text is a rendered view of the log.
+[Chartroom](chartroom/) points the engine at *code*. The fact log is canonical: a
+module's AST is the facts, and the `.bclj` source text is a rendered view of the log.
 
 - **References carry identity, not spelling.** A call site resolves to the binding's
-  stable id (`bound_to @module#int`), so renaming a definition is a ~2-claim edit and
+  stable id (`bound_to @module#int`), so renaming a definition is a ~2-fact edit and
   every reference re-points *by identity* — where a text tool must rewrite every site.
   Measured on the honeysql corpus: **238 distinct reference sites** that text must
-  re-derive and rewrite, vs a 2-claim graph edit (receipt: the `after-text`
+  re-derive and rewrite, vs a 2-fact graph edit (receipt: the `after-text`
   experiments package, `owned-resolution-forcing/`).
 - **The render is a pure function of the log.** `render(log) == render(text)`,
   byte-identical *to each other* (both derived from the graph). The general round-trip is
@@ -311,7 +314,7 @@ dependency risk, disclosed plainly.)
 ## What it isn't
 
 - **Not a database you'd pick for features.** Concurrency, Datalog, schema-as-data — an
-  off-the-shelf store ties or wins. The reason to use Fram is the claim-object atom.
+  off-the-shelf store ties or wins. The reason to use Fram is the fact-object atom.
 - **Not access control.** Isolation is process + log + network; co-mingling trust domains
   is an incident, not a mess.
 - **Not distributed consensus.** The concurrency guarantees are proven under local test
@@ -324,7 +327,7 @@ dependency risk, disclosed plainly.)
 Every suite lives in `tests/` and runs on babashka against the committed `out/`:
 
 ```sh
-bb -cp out tests/roundtrip_test.clj   # claims <-> files round-trip is lossless
+bb -cp out tests/roundtrip_test.clj   # facts <-> files round-trip is lossless
 bb -cp out tests/cnf_coord_test.clj   # adversarial concurrency + durability
 bb -cp out tests/query_test.clj       # structured Datalog query + boundary rejections
 ```
@@ -357,7 +360,7 @@ also served over MCP by `bin/fram-mcp`. The life verbs (`ready` / `blocked` / `l
 
 - **Removed, not deprecated.** No back-compat shims; correctness and the desired design
   decide, never "things depend on it."
-- **Derive, don't store.** Lifecycle and code intelligence are views over the claims, not
+- **Derive, don't store.** Lifecycle and code intelligence are views over the facts, not
   maintained fields.
 - **One graph per trust domain.** Share machinery, never data.
 

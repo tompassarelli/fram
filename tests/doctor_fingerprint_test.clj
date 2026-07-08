@@ -23,12 +23,12 @@
                          :extra-env {"FRAM_LOG" logpath "FRAM_THREADS" tmp "FRAM_PORT" "59997"}}
                         "bb" "-cp" "out" "-m" "fram.main" "doctor")))
 
-(chk "doctor reports a claims-derived cardinality count (>=1)"
-     (boolean (re-find #"cardinality-claims:\s*[1-9]\d*\s+claims-derived" out)))
-(chk "doctor's cardinality-overlay fingerprint reflects the claim (tag=single)"
+(chk "doctor reports a facts-derived cardinality count (>=1)"
+     (boolean (re-find #"cardinality-facts:\s*[1-9]\d*\s+facts-derived" out)))
+(chk "doctor's cardinality-overlay fingerprint reflects the fact (tag=single)"
      (and (str/includes? out "cardinality-overlay") (str/includes? out "tag=single")))
-(chk "doctor names the claim > env > fallback precedence (claims overlay authoritative)"
-     (str/includes? out "vocab-source: claims (overlay)"))
+(chk "doctor names the fact > env > fallback precedence (facts overlay authoritative)"
+     (str/includes? out "vocab-source: facts (overlay)"))
 
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
