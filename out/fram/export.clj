@@ -13,12 +13,12 @@
 (defn- ^String render-obj [^String p ^String v]
   (if (k/vec-contains? ref-preds p) v (if (or (str/blank? v) (str/includes? v " ") (str/includes? v "\t") (str/includes? v "\n") (str/includes? v "\r") (str/starts-with? v "@") (str/starts-with? v "\"")) (fram.rt/edn-quote v) v)))
 
-(defn ^String thread-md [claims ^String te]
-  (let [present (distinct-s (mapv (fn [c] (:p c)) (k/q-by-l claims te)))
+(defn ^String thread-md [facts ^String te]
+  (let [present (distinct-s (mapv (fn [c] (:p c)) (k/q-by-l facts te)))
    ordered (filterv (fn [p] (k/vec-contains? present p)) order)
    extra (vec (sort (filterv (fn [p] (and (not (k/vec-contains? order p)) (not (= p "body")))) present)))
    preds (vec (concat ordered extra))
-   lines (reduce (fn [acc p] (vec (concat acc (mapv (fn [v] (str p "  " (render-obj p v))) (k/many claims te p))))) [] preds)
-   b (k/one claims te "body")
+   lines (reduce (fn [acc p] (vec (concat acc (mapv (fn [v] (str p "  " (render-obj p v))) (k/many facts te p))))) [] preds)
+   b (k/one facts te "body")
    body (if (some? b) b "")]
   (str te "\n" (str/join "\n" lines) "\n---\n" body)))

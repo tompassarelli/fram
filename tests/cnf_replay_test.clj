@@ -16,7 +16,7 @@
   (System/exit 0))
 
 ;; today's flat fold: the current (l p r) string triples.
-(def flat-claims (:claims (fold/fold (fram.rt/read-log log))))
+(def flat-claims (:facts (fold/fold (fram.rt/read-log log))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
 
 ;; --- replay into the reified kernel -----------------------------------------

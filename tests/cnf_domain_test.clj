@@ -11,7 +11,7 @@
 (when (or (nil? log) (not (.exists (io/file log))))
   (println "cnf_domain_test: skipped — set FRAM_LOG to a claims.log to run")
   (System/exit 0))
-(def flat-claims (:claims (fold/fold (fram.rt/read-log log))))
+(def flat-claims (:facts (fold/fold (fram.rt/read-log log))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
 
 ;; --- resolved vocabulary table (Stage 0 cardinality decision) ---------------

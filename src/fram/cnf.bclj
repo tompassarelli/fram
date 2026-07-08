@@ -96,7 +96,7 @@
 ;; A claim value is a (Map Keyword Any) {:l :p :r} (NOT a record): l/p/r are Int
 ;; ids, but the value stays an open keyword-map so it is = to the map literal that
 ;; assemble-dump (.clj) feeds via load-store! and that cnf_test asserts against.
-(defn claim! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
+(defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
   (let [cid (fresh-id! ctx)]
     (swap! ctx update :objects assoc cid true)
     (swap! ctx update :claims assoc cid {:l l :p p :r r})
@@ -106,8 +106,19 @@
       (swap! ctx update :superseded assoc r true))
     cid))
 
-(defn claim-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
+;; claim! — back-compat alias for fact! (wave-2 rename). src/fram/schema.bclj
+;; (@claim-canonical, refuses text edits) still calls c/claim!; this thin delegate
+;; lets it compile UNCHANGED. New code should call fact!.
+(defn claim! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
+  (fact! ctx l p r tx))
+
+(defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
   (let [s :- t/Store (deref ctx)] (get (:claims s) cid)))
+
+;; claim-of — back-compat alias for fact-of (see claim! above; c/claim-of is
+;; called from the un-editable schema.bclj).
+(defn claim-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
+  (fact-of ctx cid))
 (defn claim-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
   (let [s :- t/Store (deref ctx)] (get (:tx-of s) cid)))
 

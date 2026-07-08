@@ -3,8 +3,8 @@
             [fram.datalog :as d]
             [clojure.string :as str]))
 
-(defn claims->edb [claims]
-  (loop [cs claims
+(defn facts->edb [facts]
+  (loop [cs facts
    i 0
    fact #{}
    fact-id #{}]
@@ -135,10 +135,10 @@
    n (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
   (if (and (some? n) (> n 0)) n 100000)))
 
-(defn run [claims q0]
+(defn run [facts q0]
   (let [q (canon-q q0)
    errs (validate q)]
-  (if (not (empty? errs)) {:error errs} (let [edb (claims->edb claims)
+  (if (not (empty? errs)) {:error errs} (let [edb (facts->edb facts)
    strata (strata-of q)
    db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
    find (:find q)

@@ -13,16 +13,16 @@
          '[clojure.java.io :as io])
 
 (defn claim-set [assertions]
-  (set (map (juxt :l :p :r) (:claims (fold/fold assertions)))))
+  (set (map (juxt :l :p :r) (:facts (fold/fold assertions)))))
 
 (let [src "threads"
       a-asserts (imp/load-corpus src)
       a (claim-set a-asserts)
-      idx (k/build-index (:claims (fold/fold a-asserts)))
+      idx (k/build-index (:facts (fold/fold a-asserts)))
       out (str (System/getProperty "java.io.tmpdir") "/cheln-rt-"
                (System/currentTimeMillis))]
   (.mkdirs (io/file out))
-  (let [claims (:claims (fold/fold a-asserts))]
+  (let [claims (:facts (fold/fold a-asserts))]
     (doseq [te (k/thread-ids-i idx)]
       (let [title (k/one-i idx te "title")
             fname (str (subs te 1) "-" (fram.rt/slugify (if title title "untitled")) ".md")]

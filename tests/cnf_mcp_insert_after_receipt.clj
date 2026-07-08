@@ -133,7 +133,7 @@
 ;; (1) the AGENT-SHAPED MCP lowering — verbatim from the live code surface.
 ;; ============================================================================
 ;; the model fills typed params on the generated tool; fram.tools/call lowers it.
-(def claims (:claims (fold/fold (fram.rt/read-log tmp-log))))
+(def claims (:facts (fold/fold (fram.rt/read-log tmp-log))))
 (def cat (tl/catalog claims))
 (def idx (k/build-index claims))
 (def insert-spec (first (filter #(= "insert-after" (:name %)) cat)))

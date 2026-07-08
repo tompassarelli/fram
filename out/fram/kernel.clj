@@ -36,29 +36,29 @@
   (let [v (get cmap p)]
   (if (nil? v) (single? p) v)))
 
-(defrecord Claim [l p r])
+(defrecord Fact [l p r])
 
-(defn claim-l [r] (:l r))
+(defn fact-l [r] (:l r))
 
-(defn claim-p [r] (:p r))
+(defn fact-p [r] (:p r))
 
-(defn claim-r [r] (:r r))
+(defn fact-r [r] (:r r))
 
-(defn ^Boolean claim-eq? [^Claim a ^Claim b]
+(defn ^Boolean fact-eq? [^Fact a ^Fact b]
   (and (= (:l a) (:l b)) (= (:p a) (:p b)) (= (:r a) (:r b))))
 
-(defn q-lp [claims ^String l ^String p]
-  (filterv (fn [c] (and (= (:l c) l) (= (:p c) p))) claims))
+(defn q-lp [facts ^String l ^String p]
+  (filterv (fn [c] (and (= (:l c) l) (= (:p c) p))) facts))
 
-(defn q-by-l [claims ^String l]
-  (filterv (fn [c] (= (:l c) l)) claims))
+(defn q-by-l [facts ^String l]
+  (filterv (fn [c] (= (:l c) l)) facts))
 
-(defn one [claims ^String l ^String p]
-  (let [hits (q-lp claims l p)]
+(defn one [facts ^String l ^String p]
+  (let [hits (q-lp facts l p)]
   (if (empty? hits) nil (:r (first hits)))))
 
-(defn many [claims ^String l ^String p]
-  (mapv (fn [c] (:r c)) (q-lp claims l p)))
+(defn many [facts ^String l ^String p]
+  (mapv (fn [c] (:r c)) (q-lp facts l p)))
 
 (defn- uniq [xs]
   (loop [r xs
@@ -67,27 +67,27 @@
   (if (empty? r) acc (let [x (first r)]
   (if (some? (get seen x)) (recur (rest r) seen acc) (recur (rest r) (assoc seen x true) (conj acc x)))))))
 
-(defn thread-ids [claims]
-  (filterv (fn [s] (some? (one claims s "title"))) (uniq (mapv (fn [c] (:l c)) claims))))
+(defn thread-ids [facts]
+  (filterv (fn [s] (some? (one facts s "title"))) (uniq (mapv (fn [c] (:l c)) facts))))
 
-(defn- drop-lp [claims ^String l ^String p]
-  (filterv (fn [x] (not (and (= (:l x) l) (= (:p x) p)))) claims))
+(defn- drop-lp [facts ^String l ^String p]
+  (filterv (fn [x] (not (and (= (:l x) l) (= (:p x) p)))) facts))
 
-(defn- ^Boolean has-claim? [claims ^Claim c]
-  (loop [r claims]
-  (if (empty? r) false (if (claim-eq? (first r) c) true (recur (rest r))))))
+(defn- ^Boolean has-fact? [facts ^Fact c]
+  (loop [r facts]
+  (if (empty? r) false (if (fact-eq? (first r) c) true (recur (rest r))))))
 
-(defn apply-assert-c [cmap claims ^Claim c]
-  (if (single-eff? cmap (:p c)) (conj (drop-lp claims (:l c) (:p c)) c) (if (has-claim? claims c) claims (conj claims c))))
+(defn apply-assert-c [cmap facts ^Fact c]
+  (if (single-eff? cmap (:p c)) (conj (drop-lp facts (:l c) (:p c)) c) (if (has-fact? facts c) facts (conj facts c))))
 
-(defn apply-retract-c [cmap claims ^Claim c]
-  (if (single-eff? cmap (:p c)) (drop-lp claims (:l c) (:p c)) (filterv (fn [x] (not (claim-eq? x c))) claims)))
+(defn apply-retract-c [cmap facts ^Fact c]
+  (if (single-eff? cmap (:p c)) (drop-lp facts (:l c) (:p c)) (filterv (fn [x] (not (fact-eq? x c))) facts)))
 
-(defn apply-assert [claims ^Claim c]
-  (apply-assert-c {} claims c))
+(defn apply-assert [facts ^Fact c]
+  (apply-assert-c {} facts c))
 
-(defn apply-retract [claims ^Claim c]
-  (apply-retract-c {} claims c))
+(defn apply-retract [facts ^Fact c]
+  (apply-retract-c {} facts c))
 
 (defn ^Boolean reachable-from? [succ frontier ^String target]
   (loop [front frontier
@@ -98,8 +98,8 @@
   (contains? seen (first front)) (recur (vec (rest front)) seen)
   :else (recur (vec (concat (rest front) (succ (first front)))) (conj seen (first front))))))
 
-(defn ^Boolean cycle? [claims ^String pred ^String te]
-  (let [succ (fn [x] (many claims x pred))]
+(defn ^Boolean cycle? [facts ^String pred ^String te]
+  (let [succ (fn [x] (many facts x pred))]
   (reachable-from? succ (succ te) te)))
 
 (def ref-preds-fallback ["depends_on" "part_of" "relates_to" "clarifies" "amends"])
@@ -109,21 +109,21 @@
 (defn- ^String strip-at [^String s]
   (if (str/starts-with? s "@") (subs s 1) s))
 
-(defn- preds-claiming [claims ^String mp ^String mv]
-  (uniq (mapv (fn [c] (strip-at (:l c))) (filterv (fn [c] (and (= (:p c) mp) (= (:r c) mv))) claims))))
+(defn- preds-facting [facts ^String mp ^String mv]
+  (uniq (mapv (fn [c] (strip-at (:l c))) (filterv (fn [c] (and (= (:p c) mp) (= (:r c) mv))) facts))))
 
-(defn ref-preds-of [claims]
-  (let [d (preds-claiming claims "value_kind" "ref")]
+(defn ref-preds-of [facts]
+  (let [d (preds-facting facts "value_kind" "ref")]
   (if (empty? d) ref-preds-fallback d)))
 
-(defn acyclic-preds-of [claims]
-  (let [d (preds-claiming claims "acyclic" "true")]
+(defn acyclic-preds-of [facts]
+  (let [d (preds-facting facts "acyclic" "true")]
   (if (empty? d) acyclic-preds-fallback d)))
 
-(defn violations [claims ^String te]
-  (let [ids (thread-ids claims)
-   rv (reduce (fn [acc p] (reduce (fn [a rt] (if (not (vec-contains? ids rt)) (conj a (str p " references missing entity " rt)) a)) acc (many claims te p))) [] (ref-preds-of claims))
-   cv (reduce (fn [acc p] (if (cycle? claims p te) (conj acc (str p " cycle")) acc)) rv (acyclic-preds-of claims))]
+(defn violations [facts ^String te]
+  (let [ids (thread-ids facts)
+   rv (reduce (fn [acc p] (reduce (fn [a rt] (if (not (vec-contains? ids rt)) (conj a (str p " references missing entity " rt)) a)) acc (many facts te p))) [] (ref-preds-of facts))
+   cv (reduce (fn [acc p] (if (cycle? facts p te) (conj acc (str p " cycle")) acc)) rv (acyclic-preds-of facts))]
   cv))
 
 (defrecord Index [single bypred subjects revdep ref-preds acyclic-preds])
@@ -140,13 +140,13 @@
 
 (defn index-acyclic-preds [r] (:acyclic-preds r))
 
-(defn ^Index build-index [claims]
-  (let [single (reduce (fn [m c] (assoc m (str (:l c) "\u0001" (:p c)) (:r c))) {} claims)
+(defn ^Index build-index [facts]
+  (let [single (reduce (fn [m c] (assoc m (str (:l c) "\u0001" (:p c)) (:r c))) {} facts)
    bypred (reduce (fn [m c] (let [kk (str (:l c) "\u0001" (:p c))]
-  (assoc m kk (conj (get m kk []) (:r c))))) {} claims)
-   subjects (uniq (mapv (fn [c] (:l c)) claims))
-   revdep (reduce (fn [m c] (if (= (:p c) "depends_on") (assoc m (:r c) (conj (get m (:r c) []) (:l c))) m)) {} claims)]
-  (->Index single bypred subjects revdep (ref-preds-of claims) (acyclic-preds-of claims))))
+  (assoc m kk (conj (get m kk []) (:r c))))) {} facts)
+   subjects (uniq (mapv (fn [c] (:l c)) facts))
+   revdep (reduce (fn [m c] (if (= (:p c) "depends_on") (assoc m (:r c) (conj (get m (:r c) []) (:l c))) m)) {} facts)]
+  (->Index single bypred subjects revdep (ref-preds-of facts) (acyclic-preds-of facts))))
 
 (defn one-i [^Index idx ^String l ^String p]
   (get (:single idx) (str l "\u0001" p)))

@@ -57,7 +57,7 @@
 ;; --- per-request state: fold the current log fresh (sees others' writes) -----
 (defn load-state []
   (let [log (fram.rt/log-path)
-        claims (:claims (fold/fold (fram.rt/read-log log)))]
+        claims (:facts (fold/fold (fram.rt/read-log log)))]
     {:claims claims :idx (k/build-index claims) :cat (tl/catalog claims)}))
 
 ;; --- catalog spec -> MCP tool descriptor -------------------------------------

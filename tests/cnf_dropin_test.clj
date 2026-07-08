@@ -28,7 +28,7 @@
                     (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
              (c/current-claims st))))
 (defn flat-set [f] (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)])
-                             (:claims (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log f))))))))
+                             (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log f))))))))
 
 ;; --- boot the drop-in daemon over the flat copy -----------------------------
 (boot-flat! flat)
@@ -68,7 +68,7 @@
 (def flat-lines (remove str/blank? (str/split-lines (slurp flat))))
 (def no-v2-pollution (not-any? #(str/starts-with? (str/triml %) "{:k") flat-lines))
 (def cold-fold-ok
-  (try (= (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:claims (fold/fold (fram.rt/read-log flat)))))
+  (try (= (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:facts (fold/fold (fram.rt/read-log flat)))))
           (domain-triples (:store @co)))
        (catch Throwable _ false)))
 ;; doctor computes log-v = (:version (fold (read-log flat))) over ALL parsed lines

@@ -54,7 +54,7 @@
   (swap! ctx update :idx-by-lp update [l p] (fn [o] (conj (or o []) cid)))
   (swap! ctx update :idx-by-pr update [p r] (fn [o] (conj (or o []) cid))))
 
-(defn claim! [ctx l p r tx]
+(defn fact! [ctx l p r tx]
   (let [cid (fresh-id! ctx)]
   (swap! ctx update :objects assoc cid true)
   (swap! ctx update :claims assoc cid {:l l :p p :r r})
@@ -65,9 +65,15 @@
   (swap! ctx update :superseded assoc r true)))
   cid))
 
-(defn claim-of [ctx cid]
+(defn claim! [ctx l p r tx]
+  (fact! ctx l p r tx))
+
+(defn fact-of [ctx cid]
   (let [s (deref ctx)]
   (get (:claims s) cid)))
+
+(defn claim-of [ctx cid]
+  (fact-of ctx cid))
 
 (defn claim-tx [ctx cid]
   (let [s (deref ctx)]

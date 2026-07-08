@@ -32,7 +32,7 @@
 (boot-flat! log)
 (handle {:op :query :query Q})                                  ; warm the cache
 (def warm (vec (repeatedly 9 #(first (timed (handle {:op :query :query Q}))))))
-(defn cold-read [] (q/run (:claims (fold/fold (fram.rt/read-log log))) Q))  ; what the MCP cold path does per read
+(defn cold-read [] (q/run (:facts (fold/fold (fram.rt/read-log log))) Q))  ; what the MCP cold path does per read
 (def cold (vec (repeatedly 9 #(first (timed (cold-read))))))
 
 (println "=== interface #1 — WARM READ vs COLD FOLD (synthetic" (* N 3) "claim log) ===")

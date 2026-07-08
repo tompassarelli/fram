@@ -72,8 +72,8 @@
 ;; `ref-value` below) — no hardcoded ref-pred list, so the engine stays
 ;; domain-neutral. (A value already starting with @ is kept as-is; `at` never
 ;; double-prefixes.)
-(defn- all-ref? [claims :- (Vec k/Claim) pred :- String] :- Bool
-  (loop [cs claims seen false]
+(defn- all-ref? [facts :- (Vec k/Fact) pred :- String] :- Bool
+  (loop [cs facts seen false]
     (if (empty? cs)
       seen
       (let [c (first cs)]
@@ -87,11 +87,11 @@
 ;; predicate, store verbatim otherwise (`at` keeps an already-@ value as-is). Used by
 ;; tool writes AND the CLI tell/set verbs so both surfaces agree.
 ;; GAP: value is an EDN write-value -> Any (the engine interns arbitrary EDN).
-(defn ref-value [claims :- (Vec k/Claim) pred :- String value :- Any] :- Any
-  (if (all-ref? claims pred) (at value) value))
+(defn ref-value [facts :- (Vec k/Fact) pred :- String value :- Any] :- Any
+  (if (all-ref? facts pred) (at value) value))
 
 ;; --- catalog: the CLOSED, O(1) surface (exactly ten tools) -------------------
-(defn catalog [claims :- (Vec k/Claim)] :- (Vec ToolSpec)
+(defn catalog [facts :- (Vec k/Fact)] :- (Vec ToolSpec)
   (let [subj-param :- (Vec Param) [(->Param "subject" "string" true)]
         spo-params :- (Vec Param) [(->Param "subject" "string" true)
                                    (->Param "predicate" "string" true)
@@ -219,7 +219,7 @@
 ;; is accepted as an alias for `ask` (same :query op) so the structured escape hatch keeps
 ;; both spellings on every surface. `untell` is likewise accepted as an alias for
 ;; `retract` (same :retract op) so the retract verb keeps both spellings everywhere.
-(defn call [claims :- (Vec k/Claim) idx :- k/Index cat :- (Vec ToolSpec) tool :- String args :- (Map Keyword Any)] :- Any
+(defn call [facts :- (Vec k/Fact) idx :- k/Index cat :- (Vec ToolSpec) tool :- String args :- (Map Keyword Any)] :- Any
   (let [tool (if (= tool "query") "ask" (if (= tool "untell") "retract" tool))
         spec :- ToolSpec? (spec-by-name cat tool)]
     (if (nil? spec)
@@ -232,11 +232,11 @@
                 pred :- String (str (:predicate args))
                 te (at subj)]
             (cond
-              [(= op :tell)       {:write {:op "assert" :l te :p pred :r (ref-value claims pred (:object args))}}]
-              [(= op :retract)    {:write {:op "retract" :l te :p pred :r (ref-value claims pred (:object args))}}]
-              [(= op :show)       {:rows (mapv (fn [c :- k/Claim] :- PredVal (->PredVal (:p c) (:r c)))
-                                               (k/q-by-l claims te))}]
-              [(= op :query)      (q/run claims (:query args))]
+              [(= op :tell)       {:write {:op "assert" :l te :p pred :r (ref-value facts pred (:object args))}}]
+              [(= op :retract)    {:write {:op "retract" :l te :p pred :r (ref-value facts pred (:object args))}}]
+              [(= op :show)       {:rows (mapv (fn [c :- k/Fact] :- PredVal (->PredVal (:p c) (:r c)))
+                                               (k/q-by-l facts te))}]
+              [(= op :query)      (q/run facts (:query args))]
               [(= op :validate)   {:rows (reduce (fn [acc :- (Vec ThreadViolation) t :- String] :- (Vec ThreadViolation)
                                                    (vec (concat acc (mapv (fn [v :- String] :- ThreadViolation (->ThreadViolation t v))
                                                                           (k/violations-i idx t)))))

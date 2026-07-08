@@ -4,7 +4,7 @@
 (require '[fram.kernel :as k] '[fram.fold :as fold] '[fram.export :as exp] '[fram.rt :as rt])
 (def log "/home/tom/.local/state/tern/claims.log")
 (def out "/home/tom/.local/state/tern/threads")
-(def log-claims (:claims (fold/fold (rt/read-log log))))
+(def log-claims (:facts (fold/fold (rt/read-log log))))
 (def idx (k/build-index log-claims))
 (def tes (k/thread-ids-i idx))
 (rt/ensure-dir out)

@@ -8,7 +8,7 @@
 (def N 200)
 ;; chain: @a1 -depends_on-> @a2 -> ... -> @aN
 (def claims
-  (mapv (fn [i] (k/->Claim (str "@a" i) "depends_on" (str "@a" (inc i)))) (range 1 N)))
+  (mapv (fn [i] (k/->Fact (str "@a" i) "depends_on" (str "@a" (inc i)))) (range 1 N)))
 
 (def t0 (System/currentTimeMillis))
 (def res (q/run claims

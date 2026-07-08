@@ -23,7 +23,7 @@
 ;; reconcile view, so this filter is unchanged.
 (def schema-ps #{"cardinality" "value_kind" "name" "cnf-supersedes"})
 (defn cli-domain [log]
-  (set (remove #(schema-ps (:p %)) (:claims (fold/fold (fram.rt/read-log log))))))
+  (set (remove #(schema-ps (:p %)) (:facts (fold/fold (fram.rt/read-log log))))))
 
 (let [checks (atom [])
       chk (fn [nm ok] (swap! checks conj [nm (boolean ok)]))]

@@ -43,10 +43,10 @@
 (def log1 (str (System/getProperty "java.io.tmpdir") "/fram-set-tx-race-"
                (System/currentTimeMillis) ".log"))
 ;; on-disk reality: base @t title T (tx 1) + writer A's @t owner alice (tx 2).
-(fram.rt/append-assertion log1 (fold/->Assertion 1 "assert" "@t" "title" "T" "seed"))
-(fram.rt/append-assertion log1 (fold/->Assertion 2 "assert" "@t" "owner" "alice" "cli"))
+(fram.rt/append-fact-op log1 (fold/->FactOp 1 "assert" "@t" "title" "T" "seed"))
+(fram.rt/append-fact-op log1 (fold/->FactOp 2 "assert" "@t" "owner" "alice" "cli"))
 
-(def short-log [(fold/->Assertion 1 "assert" "@t" "title" "T" "seed")])  ; B's stale entry view
+(def short-log [(fold/->FactOp 1 "assert" "@t" "title" "T" "seed")])  ; B's stale entry view
 (def reads (atom 0))
 (def real-read-log fram.rt/read-log)
 (with-redefs [fram.rt/read-log
@@ -70,7 +70,7 @@
        (and (= 2 (count owner-lines1)) (= 2 (count (set (mapv :tx owner-lines1))))))
 ;; fold stays deterministic latest-wins: highest tx (B/bob) is live, A superseded.
 (check "fold resolves @t owner deterministically to the higher-tx writer (bob)"
-       (= (k/one (:claims (fold/fold (real-read-log log1))) "@t" "owner") "bob"))
+       (= (k/one (:facts (fold/fold (real-read-log log1))) "@t" "owner") "bob"))
 
 ;; ===========================================================================
 ;; PART 2 — the SHIPPED cmd-set assigns fresh, strictly-increasing tx (no redef).
@@ -88,7 +88,7 @@
 (check "cmd-set x2: tx strictly increasing across the two sets"
        (apply < (mapv :tx owner-lines2)))
 (check "cmd-set x2: fold resolves @t owner to bob (latest), alice superseded"
-       (= (k/one (:claims (fold/fold (fram.rt/read-log log2))) "@t" "owner") "bob"))
+       (= (k/one (:facts (fold/fold (fram.rt/read-log log2))) "@t" "owner") "bob"))
 
 (if @pass
   (println "\nfinding #17 regression: PASS")

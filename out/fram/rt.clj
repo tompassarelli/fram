@@ -65,8 +65,8 @@
         m (re-find #"^(\S+)\s+(.*)$" t)]
     (if m [(nth m 1) (nth m 2)] [t ""])))
 
-;; --- claim-native triple-file value (de)serialization -----------------------
-;; A claim object in a triple file is either a ref (@id, handled by the caller)
+;; --- fact-native triple-file value (de)serialization -----------------------
+;; A fact in a triple file is either a ref (@id, handled by the caller)
 ;; or a literal. Literals are quoted/unquoted via EDN — bulletproof escaping
 ;; (the same pr-str/read-string pair the log uses), so no hand-rolled quoter can
 ;; ever emit something a real parser rejects.
@@ -85,7 +85,7 @@
                    (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss"))))
 
 ;; Advance a dashed id by one second (same fixed-width format). Used to mint a
-;; collision-free session id against the claim graph (sessions live in the log,
+;; collision-free session id against the fact graph (sessions live in the log,
 ;; not as files, so they can't use the file-based reserve-id).
 (defn bump-id [id]
   (let [fmt (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss")
@@ -149,7 +149,7 @@
 ;; wrapper) exports its own conventions via these env vars.
 (defn getenv-or [k fallback] (or (System/getenv k) fallback))
 
-;; --- the assertion log ------------------------------------------------------
+;; --- the fact-op log ------------------------------------------------------
 ;; one EDN map per line: {:tx Int :op "assert"|"retract" :l :p :r :frame :ts}.
 ;; :ts is the wall-clock commit instant — PROVENANCE ONLY, never a sort key
 ;; (:tx is the sole total order; wall-clock is non-monotonic under NTP/skew).
@@ -167,19 +167,19 @@
          (remove str/blank?)
          (keep (fn [line]
                  (try (let [m (edn/read-string line)]
-                        (fold/->Assertion (:tx m) (:op m) (:l m) (:p m) (:r m) (or (:frame m) (:by m) "legacy")))
+                        (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m) (or (:frame m) (:by m) "legacy")))
                       (catch Exception _ nil))))
          vec)
     []))
 
-(defn write-log [path assertions]
+(defn write-log [path fact-ops]
   (let [ts (now-ts)                                  ; one batch instant (this import/rewrite)
         lines (map (fn [a]
                      (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a) :ts ts}))
-                   assertions)]
+                   fact-ops)]
     (spit path (str (str/join "\n" lines) "\n"))))
 
-(defn append-assertion [path a]
+(defn append-fact-op [path a]
   (spit path (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a) :ts (now-ts)}) "\n")
         :append true))
 
@@ -221,7 +221,7 @@
 ;; --- coordinator client: write THROUGH the daemon (safe concurrent path) -----
 ;; One request/response over the local socket. The daemon serializes writes
 ;; (optimistic base_version + obligation rules), so this is the safe multi-agent
-;; write path — unlike append-assertion, which writes the log directly.
+;; write path — unlike append-fact-op, which writes the log directly.
 
 ;; client-side mutual TLS: present FRAM_TLS_KEYSTORE, verify the coordinator against
 ;; FRAM_TLS_TRUSTSTORE. Works on babashka (client SSL classes are present; only the
@@ -319,13 +319,13 @@
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
 ;; Asked with {:fmt :json} DELIBERATELY: bb parses the ~2MB payload ~12x faster as
 ;; JSON (cheshire, native) than as EDN (measured 15ms vs 186ms).
-;; Returns a (Vec kernel/Claim), or [] when the warm path is unavailable — daemon
+;; Returns a (Vec kernel/Fact), or [] when the warm path is unavailable — daemon
 ;; down, an older daemon without the op (its {"error" ...} reply has no "claims"),
 ;; or a daemon serving a DIFFERENT log than the caller's (the :log echo mismatches —
 ;; never silently read another store). [] is safe as the sentinel: a real log always
 ;; folds to a non-empty view (an empty log has no daemon serving it worth trusting).
 ;; Callers fall back to the cold fold on [].
-(defn coord-live-claims [port log]
+(defn coord-live-facts [port log]
   (try
     (with-open [s (coord-socket (connect-host) port)]
       (let [w (io/writer (.getOutputStream s))
@@ -336,7 +336,7 @@
           (if (and (map? resp)
                    (= log (get resp "log"))
                    (vector? (get resp "claims")))
-            (mapv (fn [t] (kernel/->Claim (nth t 0) (nth t 1) (nth t 2))) (get resp "claims"))
+            (mapv (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2))) (get resp "claims"))
             []))))
     (catch Exception _ [])))
 
@@ -367,7 +367,7 @@
     (.toEpochSecond (.atZone (java.time.LocalDateTime/parse normalized)
                              (java.time.ZoneId/systemDefault)))))
 
-;; tolerant int parse for claim literals (estimate_hours etc.); 0 on garbage.
+;; tolerant int parse for fact literals (estimate_hours etc.); 0 on garbage.
 (defn parse-int [s]
   (try (Integer/parseInt (str/trim s)) (catch Exception _ 0)))
 

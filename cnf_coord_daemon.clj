@@ -232,7 +232,7 @@
 (defn reified->claims [c0]
   (let [st (:store c0)]
     (->> (c/current-claims st)
-         (keep (fn [cid] (when-let [t (claim->triple st cid)] (ck/->Claim (nth t 0) (nth t 1) (nth t 2)))))
+         (keep (fn [cid] (when-let [t (claim->triple st cid)] (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))))
          vec)))
 
 ;; ---- schema-as-claims READ view (F4) ---------------------------------------
@@ -244,10 +244,10 @@
 ;; never emits. Projecting the store would leak ALL those seeds and shatter warm<->cold
 ;; parity — which is why the pre-F3 blanket filter hid every schema-pred. The AUTHORITY for
 ;; which schema facts are LIVE is the FLAT LOG (exactly what the cold fold reads): schema-view
-;; mirrors the log's live schema-writable facts as [l p] -> ck/Claim in raw @-prefixed log
+;; mirrors the log's live schema-writable facts as [l p] -> ck/Fact in raw @-prefixed log
 ;; form. It is refreshed only at the RARE log-mutation points (boot / schema-write / external
 ;; reload), so the warm read path pays nothing per version.
-(def schema-view (atom {}))   ; [l p] -> ck/Claim — live user-declared schema-writable facts
+(def schema-view (atom {}))   ; [l p] -> ck/Fact — live user-declared schema-writable facts
 
 ;; recompute schema-view from a flat log's schema-writable lines (keyed-latest via the SAME
 ;; fold the cold path uses, so the facts are byte-identical to the cold projection). Called
@@ -256,7 +256,7 @@
   (reset! schema-view
     (->> (fram.rt/read-log flat)
          (filter #(schema-writable (:p %)))
-         vec fold/fold :claims
+         vec fold/fold :facts
          (reduce (fn [m cl] (assoc m [(:l cl) (:p cl)] cl)) {}))))
 
 ;; the CLIENT read view: DOMAIN facts (store) + user-declared SCHEMA facts (log). This is
@@ -397,8 +397,8 @@
                          (reduce idx-del ix to-del)
                          (reduce idx-add ix to-add))
                   claims' (as-> (:claims c) cs
-                            (reduce (fn [s t] (disj s (ck/->Claim (nth t 0) (nth t 1) (nth t 2)))) cs to-del)
-                            (reduce (fn [s t] (conj s (ck/->Claim (nth t 0) (nth t 1) (nth t 2)))) cs to-add))]
+                            (reduce (fn [s t] (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-del)
+                            (reduce (fn [s t] (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-add))]
               {:claims claims' :idx idx' :index nil :version post})
             (assoc c :version -1)))))))
 
@@ -528,7 +528,7 @@
         ;; async, so re-reading the file here would race): assert installs the fact,
         ;; retract drops it — exactly how the cold fold's keyed-latest treats the line.
         (if (= op "assert")
-          (swap! schema-view assoc [te p] (ck/->Claim te p r))
+          (swap! schema-view assoc [te p] (ck/->Fact te p r))
           (swap! schema-view dissoc [te p]))
         ;; force the warm cache to rebuild (schema writes skip apply-commit-delta!): the
         ;; version bump alone leaves a race window where a rebuild could tag the new
@@ -951,7 +951,7 @@
 ;; EDN path uses, so the daemon and EDN agree on which node a binding name denotes.
 ;;
 ;; For the :te path we follow `ultimate` so that a node which is itself a REFERENCE
-;; (a leaf carrying refers_to, e.g. the `k/->Claim` reference @import#398) resolves to
+;; (a leaf carrying refers_to, e.g. the `k/->Fact` reference @import#398) resolves to
 ;; the BINDING it denotes (here the kernel defrecord Claim @kernel#298), chasing
 ;; re-export/alias chains. This is idempotent for binding nodes — `ultimate` returns a
 ;; binding unchanged (a binding has no refers_to) — so callers may key :callers on a
@@ -1980,7 +1980,7 @@
       ;; Computed AFTER maybe-reload! above (exactly as fresh as the flat log at
       ;; request time) and cached per version — a read storm re-serializes, never
       ;; re-orders. :log echoes which log this daemon serves so a client can refuse
-      ;; a mismatched daemon (fram.rt/coord-live-claims checks it). Clients ask with
+      ;; a mismatched daemon (fram.rt/coord-live-facts checks it). Clients ask with
       ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
       :claims   (let [v (current-seq @co)
                       cc @claims-wire-cache
@@ -2122,7 +2122,7 @@
                  (:query req)
                  (let [cids   (live-as-of @co s)
                        claims (vec (keep (fn [cid] (when-let [t (claim->triple st cid)]
-                                                     (ck/->Claim (nth t 0) (nth t 1) (nth t 2))))
+                                                     (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
                                          cids))
                        res    (q/run claims (:query req))]
                    (assoc res :as-of s :version (current-seq @co)))
@@ -2370,7 +2370,7 @@
         ;; schema-as-claims: predname->is-single from the log's own cardinality claims
         ;; (CLI-parity map). Authoritative over ck/single? at every classification below.
         cmap (log-card-map asserts)
-        claims (:claims (fold/fold (vec asserts)))
+        claims (:facts (fold/fold (vec asserts)))
         by-pred (group-by :p claims)
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]

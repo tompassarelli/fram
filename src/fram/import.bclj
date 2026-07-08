@@ -1,8 +1,8 @@
 #lang beagle/clj
 (ns fram.import
-  "Import thread files into the assertion log. A file is a block of
+  "Import thread files into the fact-op log. A file is a block of
   `@subject predicate object` lines, then `---`, then a prose body. Every line
-  IS a claim, so this is GENERIC — no per-field knowledge, no schema. Objects are
+  IS a fact, so this is GENERIC — no per-field knowledge, no schema. Objects are
   either refs (`@id`) or EDN literals. Host IO via fram.rt externs.")
 
 (require fram.kernel :as k)
@@ -16,7 +16,7 @@
 (declare-extern fram.rt/split-kv [String -> (Vec String)])
 (declare-extern fram.rt/edn-unquote [String -> String])
 
-;; --- split a file into [claim-head, prose-body] on the first `---` line -------
+;; --- split a file into [fact-head, prose-body] on the first `---` line -------
 (defrecord Doc [head :- String body :- String])
 
 (defn- split-doc [content :- String] :- Doc
@@ -42,10 +42,10 @@
 (defn- warn [msg :- String] :- Nil
   (binding [*out* *err*] (println (str "WARN import: " msg))))
 
-;; --- a file -> its claims (subject from the leading @line; body -> a claim) ---
+;; --- a file -> its facts (subject from the leading @line; body -> a fact) ---
 ;; `path` is carried only to name the file in warnings (#16: a head with no
 ;; @subject line). It does not affect the parse.
-(defn- file->claims [path :- String content :- String] :- (Vec k/Claim)
+(defn- file->facts [path :- String content :- String] :- (Vec k/Fact)
   (let [doc (split-doc content)
         lines (fram.rt/split-on (:head doc) "\n")
         n (count lines)
@@ -56,7 +56,7 @@
                [:else (recur (+ i 1))]))]
     (if (< si 0)
       ;; No @subject line — the WHOLE thread (title/owner/body/edges) would be
-      ;; dropped. Warn loudly instead of silently importing zero claims, unless
+      ;; dropped. Warn loudly instead of silently importing zero facts, unless
       ;; the head is genuinely empty (a blank/body-only file is not an error).
       (do
         (if (str/blank? (:head doc))
@@ -65,7 +65,7 @@
                      " head line(s) (a corrupted/hand-edited first line, or a stray BOM/whitespace before @?)")))
         [])
       (let [subj (str/trim (nth lines si))
-            claims (loop [i (+ si 1) acc []]
+            facts (loop [i (+ si 1) acc []]
                      (if (>= i n)
                        acc
                        (let [t (str/trim (nth lines i))]
@@ -73,34 +73,34 @@
                            (recur (+ i 1) acc)
                            (let [kv (fram.rt/split-kv t)]
                              (recur (+ i 1)
-                                    (conj acc (k/->Claim subj (nth kv 0) (parse-obj (nth kv 1))))))))))
+                                    (conj acc (k/->Fact subj (nth kv 0) (parse-obj (nth kv 1))))))))))
             body (:body doc)]
-        (if (str/blank? body) claims (conj claims (k/->Claim subj "body" body)))))))
+        (if (str/blank? body) facts (conj facts (k/->Fact subj "body" body)))))))
 
-;; --- corpus -> numbered assertions (frame "import") --------------------------
-(defn- number-assertions [claims :- (Vec k/Claim)] :- (Vec fold/Assertion)
-  (loop [cs claims i 1 acc []]
+;; --- corpus -> numbered fact-ops (frame "import") --------------------------
+(defn- number-fact-ops [facts :- (Vec k/Fact)] :- (Vec fold/FactOp)
+  (loop [cs facts i 1 acc []]
     (if (empty? cs)
       acc
       (let [c (first cs)]
         (recur (rest cs) (+ i 1)
-               (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c) "import")))))))
+               (conj acc (fold/->FactOp i "assert" (:l c) (:p c) (:r c) "import")))))))
 
-;; Parse ONE file into claims, isolating any failure to that file. A single
+;; Parse ONE file into facts, isolating any failure to that file. A single
 ;; malformed line (e.g. an unterminated quoted literal -> fram.rt/edn-unquote
 ;; throws "EOF while reading string") must skip THAT file with a warning, not
 ;; abort the whole corpus import — the same crash-vs-skip discipline read-log
 ;; already applies per log line.
-(defn- safe-file->claims [path :- String] :- (Vec k/Claim)
-  (try (file->claims path (fram.rt/slurp path))
+(defn- safe-file->facts [path :- String] :- (Vec k/Fact)
+  (try (file->facts path (fram.rt/slurp path))
        (catch Exception e
          (warn (str path " — skipped (could not parse): " (.getMessage e)))
          [])))
 
-(defn load-corpus [threads-dir :- String] :- (Vec fold/Assertion)
+(defn load-corpus [threads-dir :- String] :- (Vec fold/FactOp)
   (let [files (fram.rt/list-md threads-dir)
-        claims (reduce (fn [acc :- (Vec k/Claim) path :- String] :- (Vec k/Claim)
-                         (vec (concat acc (safe-file->claims path))))
+        facts (reduce (fn [acc :- (Vec k/Fact) path :- String] :- (Vec k/Fact)
+                         (vec (concat acc (safe-file->facts path))))
                        []
                        files)]
-    (number-assertions claims)))
+    (number-fact-ops facts)))

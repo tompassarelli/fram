@@ -13,10 +13,10 @@
 (defn chk [nm ok] (swap! checks conj [nm ok]))
 
 (def claims
-  [(k/->Claim "@x" "title" "X thread")     ; single, literal
-   (k/->Claim "@x" "owner" "personal")     ; single, literal
-   (k/->Claim "@x" "depends_on" "@y")      ; multi, ref
-   (k/->Claim "@y" "title" "Y thread")])
+  [(k/->Fact "@x" "title" "X thread")     ; single, literal
+   (k/->Fact "@x" "owner" "personal")     ; single, literal
+   (k/->Fact "@x" "depends_on" "@y")      ; multi, ref
+   (k/->Fact "@y" "title" "Y thread")])
 
 (def idx (k/build-index claims))
 (def cat (t/catalog claims))
@@ -50,7 +50,7 @@
      (= (:write (call "untell" {:subject "x" :predicate "depends_on" :object "@y"}))
         {:op "retract" :l "@x" :p "depends_on" :r "@y"}))
 ;; mixed-ref predicate: a literal write value is stored VERBATIM (no spurious @-prefix).
-(let [mc [(k/->Claim "@x" "tag" "@refnode") (k/->Claim "@x" "tag" "plainword")]
+(let [mc [(k/->Fact "@x" "tag" "@refnode") (k/->Fact "@x" "tag" "plainword")]
       mi (k/build-index mc) mcat (t/catalog mc)]
   (chk "mixed-ref retract keeps literal verbatim (no spurious @)"
        (= (:write (t/call mc mi mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))

@@ -9,7 +9,7 @@
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm (boolean ok)]))
-(defn a [tx op l p r] (fold/->Assertion tx op l p r "test"))
+(defn a [tx op l p r] (fold/->FactOp tx op l p r "test"))
 
 ;; --- pass 1: card-map -------------------------------------------------------
 ;; kernel-single 'title' forced MULTI; non-kernel 'tag' forced SINGLE; @ stripped.
@@ -44,7 +44,7 @@
                     (a 4 "assert" "@T1"    "title" "B")
                     (a 5 "assert" "@T1"    "tag"   "x")
                     (a 6 "assert" "@T1"    "tag"   "y")])
-      cl (:claims f)
+      cl (:facts f)
       titles (set (map :r (filter #(and (= (:l %) "@T1") (= (:p %) "title")) cl)))
       tags   (set (map :r (filter #(and (= (:l %) "@T1") (= (:p %) "tag"))   cl)))]
   (chk "fold: kernel-single 'title' forced MULTI keeps {A,B}" (= #{"A" "B"} titles))
@@ -55,7 +55,7 @@
                     (a 2 "assert" "@T1" "title" "B")   ; title is kernel-single -> B wins
                     (a 3 "assert" "@T1" "tag"   "x")
                     (a 4 "assert" "@T1" "tag"   "y")]) ; tag is multi -> both
-      cl (:claims f)]
+      cl (:facts f)]
   (chk "no-claim fold: kernel-single title collapses to latest B"
        (= #{"B"} (set (map :r (filter #(and (= (:l %) "@T1") (= (:p %) "title")) cl)))))
   (chk "no-claim fold: multi tag keeps {x,y}"

@@ -2,33 +2,33 @@
   (:require [fram.kernel :as k]
             [clojure.string :as str]))
 
-(defrecord Assertion [tx op l p r frame])
+(defrecord FactOp [tx op l p r frame])
 
-(defn assertion-tx [r] (:tx r))
+(defn factop-tx [r] (:tx r))
 
-(defn assertion-op [r] (:op r))
+(defn factop-op [r] (:op r))
 
-(defn assertion-l [r] (:l r))
+(defn factop-l [r] (:l r))
 
-(defn assertion-p [r] (:p r))
+(defn factop-p [r] (:p r))
 
-(defn assertion-r [r] (:r r))
+(defn factop-r [r] (:r r))
 
-(defn assertion-frame [r] (:frame r))
+(defn factop-frame [r] (:frame r))
 
-(defrecord Fold [claims version])
+(defrecord Fold [facts version])
 
-(defn fold-claims [r] (:claims r))
+(defn fold-facts [r] (:facts r))
 
 (defn fold-version [r] (:version r))
 
-(defn- tx-of [^Assertion a]
+(defn- tx-of [^FactOp a]
   (let [t (:tx a)]
   (if (int? t) t 0)))
 
-(defn max-tx [as]
+(defn max-tx [ops]
   (reduce (fn [m a] (let [t (tx-of a)]
-  (if (> t m) t m))) 0 as))
+  (if (> t m) t m))) 0 ops))
 
 (defrecord Card [tx single live])
 
@@ -43,11 +43,11 @@
 (defn- ^String strip-at [^String s]
   (if (str/starts-with? s "@") (subs s 1) s))
 
-(defn card-map [asserts]
+(defn card-map [ops]
   (let [latest (reduce (fn [m a] (if (not (= (:p a) "cardinality")) m (let [pn (strip-at (:l a))
    atx (tx-of a)
    prev (get m pn)]
-  (if (and (some? prev) (> (:tx prev) atx)) m (assoc m pn (->Card atx (= (:r a) "single") (= (:op a) "assert"))))))) {} asserts)]
+  (if (and (some? prev) (> (:tx prev) atx)) m (assoc m pn (->Card atx (= (:r a) "single") (= (:op a) "assert"))))))) {} ops)]
   (reduce (fn [acc e] (let [pn (nth e 0)
    c (nth e 1)]
   (if (:live c) (assoc acc pn (:single c)) acc))) meta-single-seed (vec (seq latest)))))
@@ -66,25 +66,25 @@
 
 (defn latest-frame [r] (:frame r))
 
-(defn- ^String key-of [cmap ^Assertion a]
+(defn- ^String key-of [cmap ^FactOp a]
   (if (k/single-eff? cmap (:p a)) (str (:l a) "\u0001" (:p a)) (str (:l a) "\u0001" (:p a) "\u0001" (:r a))))
 
-(defn- keyed-latest [cmap asserts]
+(defn- keyed-latest [cmap ops]
   (reduce (fn [m a] (let [k (key-of cmap a)
    prev (get m k)
    atx (tx-of a)]
-  (if (and (some? prev) (> (:tx prev) atx)) m (assoc m k (->Latest atx (:op a) (:l a) (:p a) (:r a) (:frame a)))))) {} asserts))
+  (if (and (some? prev) (> (:tx prev) atx)) m (assoc m k (->Latest atx (:op a) (:l a) (:p a) (:r a) (:frame a)))))) {} ops))
 
-(defn ^Fold fold [asserts]
-  (let [valid (filterv (fn [a] (and (some? (:l a)) (and (some? (:p a)) (some? (:r a))))) asserts)
+(defn ^Fold fold [ops]
+  (let [valid (filterv (fn [a] (and (some? (:l a)) (and (some? (:p a)) (some? (:r a))))) ops)
    cmap (card-map valid)
    keyed (keyed-latest cmap valid)
-   claims (reduce (fn [acc v] (if (= (:op v) "assert") (conj acc (k/->Claim (:l v) (:p v) (:r v))) acc)) [] (vec (vals keyed)))]
-  (->Fold claims (max-tx asserts))))
+   facts (reduce (fn [acc v] (if (= (:op v) "assert") (conj acc (k/->Fact (:l v) (:p v) (:r v))) acc)) [] (vec (vals keyed)))]
+  (->Fold facts (max-tx ops))))
 
-(defn fold-latest [asserts]
-  (filterv (fn [v] (= (:op v) "assert")) (vec (vals (keyed-latest (card-map asserts) asserts)))))
+(defn fold-latest [ops]
+  (filterv (fn [v] (= (:op v) "assert")) (vec (vals (keyed-latest (card-map ops) ops)))))
 
-(defn refold-order [claims]
-  (let [cmap (card-map (mapv (fn [c] (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) claims))]
-  (vec (vals (reduce (fn [m c] (assoc m (key-of cmap (->Assertion 0 "assert" (:l c) (:p c) (:r c) "live")) c)) {} claims)))))
+(defn refold-order [facts]
+  (let [cmap (card-map (mapv (fn [c] (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) facts))]
+  (vec (vals (reduce (fn [m c] (assoc m (key-of cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) c)) {} facts)))))

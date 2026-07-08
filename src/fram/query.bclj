@@ -34,8 +34,8 @@
 ;; constant predicate/entity names match with no resolution step.
 ;; Base relations: fact(l,p,r) and fact-id(cid,l,p,r). The pre-rename names
 ;; triple/claim are accepted as aliases (canon-rel below), so old queries still run.
-(defn claims->edb [claims :- (Vec k/Claim)] :- (Map String (Set (Vec String)))
-  (loop [cs claims i 0 fact :- (Set (Vec String)) #{} fact-id :- (Set (Vec String)) #{}]
+(defn facts->edb [facts :- (Vec k/Fact)] :- (Map String (Set (Vec String)))
+  (loop [cs facts i 0 fact :- (Set (Vec String)) #{} fact-id :- (Set (Vec String)) #{}]
     (if (empty? cs)
       {"fact" fact "fact-id" fact-id}
       (let [c (first cs)]
@@ -283,7 +283,7 @@
           (vec (concat ef (concat er (concat erules (concat esv (concat efr ea))))))))))))
 
 ;; #11 — upper bound on result-set size. The query path is bounded only by the
-;; Herbrand base (claims^k for a k-ary cross-join), so a model can ask for a result
+;; Herbrand base (facts^k for a k-ary cross-join), so a model can ask for a result
 ;; set that is enormous to materialize and serialize on the AI-facing path. Cap it:
 ;; env FRAM_MAX_RESULTS (a positive int), default 100000. On overflow, return a
 ;; clear over-limit signal INSTEAD of vectorizing + serializing the whole relation.
@@ -302,12 +302,12 @@
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
 ;; q + return stay Any: q is the open-map query (above); the result is a tagged
 ;; heterogeneous envelope discriminated by key-presence.
-(defn run [claims :- (Vec k/Claim) q0 :- Any] :- Any
+(defn run [facts :- (Vec k/Fact) q0 :- Any] :- Any
   (let [q (canon-q q0)
         errs (validate q)]
     (if (not (empty? errs))
       {:error errs}
-      (let [edb (claims->edb claims)
+      (let [edb (facts->edb facts)
             strata (strata-of q)
             ;; d/fixpoint returns datalog's (Vec Any)-element Db; that Any is
             ;; assignable into this stricter (Vec String) accumulator (verified).

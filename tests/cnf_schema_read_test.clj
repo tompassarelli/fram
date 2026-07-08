@@ -31,8 +31,8 @@
 ;; log-sourced schema facts, in fold-emission order — exactly the :claims op's computation.
 (defn daemon-triples [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (client-view-claims @co))))
 ;; the cold CLI fold of the SAME flat log — the parity target.
-(defn cold-triples   [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (:claims (fold/fold (fram.rt/read-log LOG))))))
-(defn has-claim? [triples l p r] (boolean (some #(= % [l p r]) triples)))
+(defn cold-triples   [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (:facts (fold/fold (fram.rt/read-log LOG))))))
+(defn has-fact? [triples l p r] (boolean (some #(= % [l p r]) triples)))
 (defn has-pred?  [triples p]     (boolean (some #(= p (nth % 1)) triples)))
 
 ;; a >8-DISTINCT-KEY log so refold-order keys a PersistentHashMap (hash-order, input-order
@@ -53,15 +53,15 @@
   (let [res (do-assert "@title" "cardinality" "single" nil)
         d   (daemon-triples) cf (cold-triples)]
     (chk "(a) do-assert @title cardinality single -> :ok" (:ok res))
-    (chk "(a) daemon read view INCLUDES @title cardinality single" (has-claim? d "@title" "cardinality" "single"))
-    (chk "(a) cold fold INCLUDES it too (the parity target)"       (has-claim? cf "@title" "cardinality" "single"))
+    (chk "(a) daemon read view INCLUDES @title cardinality single" (has-fact? d "@title" "cardinality" "single"))
+    (chk "(a) cold fold INCLUDES it too (the parity target)"       (has-fact? cf "@title" "cardinality" "single"))
     (chk "(a) daemon read view SET-equals the cold fold"           (= (set d) (set cf)))
     (chk "(a) daemon read view VECTOR-equals cold (byte-identical, hash-order regime)" (= d cf)))
   ;; value_kind is likewise a read-visible fact, parity preserved
   (let [res (do-assert "@title" "value_kind" "literal" nil)
         d   (daemon-triples) cf (cold-triples)]
     (chk "(a) do-assert @title value_kind literal -> :ok" (:ok res))
-    (chk "(a) value_kind fact visible in read view" (has-claim? d "@title" "value_kind" "literal"))
+    (chk "(a) value_kind fact visible in read view" (has-fact? d "@title" "value_kind" "literal"))
     (chk "(a) parity still holds after value_kind write" (= d cf)))
 
   ;; ---- (b) name / cnf-supersedes (hard-reserved) stay HIDDEN ----
@@ -73,7 +73,7 @@
     ;; the seed cardinality/value_kind pairs (one per pred) must NOT appear either:
     ;; only the log-declared schema fact is visible, never migrate's def-predicate! seeds.
     (chk "(b) no seed cardinality fact (e.g. @note) leaks — only log-declared show"
-         (not (has-claim? d "@note" "cardinality" "single")))
+         (not (has-fact? d "@note" "cardinality" "single")))
     (chk "(b) read view SET-equals cold fold with NO schema facts (all seeds hidden)"
          (= (set d) (set (cold-triples)))))
 
@@ -87,7 +87,7 @@
 
   ;; ---- (d) acyclic (plain domain pred) UNAFFECTED, byte-identical to cold ----
   (let [d (daemon-triples)]
-    (chk "(d) acyclic fact present in read view"          (has-claim? d "@depends_on" "acyclic" "true"))
+    (chk "(d) acyclic fact present in read view"          (has-fact? d "@depends_on" "acyclic" "true"))
     (chk "(d) acyclic fact byte-identical to cold fold"   (= (some #(= % ["@depends_on" "acyclic" "true"]) d)
                                                              (some #(= % ["@depends_on" "acyclic" "true"]) (cold-triples)))))
 
@@ -98,8 +98,8 @@
   (let [res (do-retract "@title" "cardinality" "single" nil)
         d   (daemon-triples) cf (cold-triples)]
     (chk "(e) do-retract @title cardinality -> :ok" (:ok res))
-    (chk "(e) read view no longer shows the cardinality fact" (not (has-claim? d "@title" "cardinality" "single")))
-    (chk "(e) cold fold dropped it too (retract line keyed-latest)" (not (has-claim? cf "@title" "cardinality" "single")))
+    (chk "(e) read view no longer shows the cardinality fact" (not (has-fact? d "@title" "cardinality" "single")))
+    (chk "(e) cold fold dropped it too (retract line keyed-latest)" (not (has-fact? cf "@title" "cardinality" "single")))
     (chk "(e) parity holds after retract" (= d cf)))
 
   (let [cs @checks fails (filter (fn [e] (not (second e))) cs)]

@@ -15,9 +15,9 @@
 (require fram.query :as q)
 (require fram.rt)   ; load the clj runtime the externs below bind to
 
-(declare-extern fram.rt/read-log [String -> (Vec fold/Assertion)])
-(declare-extern fram.rt/write-log [String (Vec fold/Assertion) -> Nil])
-(declare-extern fram.rt/append-assertion [String fold/Assertion -> Nil])
+(declare-extern fram.rt/read-log [String -> (Vec fold/FactOp)])
+(declare-extern fram.rt/write-log [String (Vec fold/FactOp) -> Nil])
+(declare-extern fram.rt/append-fact-op [String fold/FactOp -> Nil])
 (declare-extern fram.rt/threads-dir [-> String])
 (declare-extern fram.rt/log-path [-> String])
 (declare-extern fram.rt/ensure-dir [String -> Nil])
@@ -28,7 +28,7 @@
 (declare-extern fram.rt/coord-retract [Int String String String Int -> String])
 (declare-extern fram.rt/coord-port [-> Int])
 (declare-extern fram.rt/coord-status [Int -> String])
-(declare-extern fram.rt/coord-live-claims [Int String -> (Vec k/Claim)])
+(declare-extern fram.rt/coord-live-facts [Int String -> (Vec k/Fact)])
 (declare-extern fram.rt/coord-watch [Int -> Nil])
 (declare-extern fram.rt/history [String String -> Nil])
 (declare-extern fram.rt/parse-edn [String -> Any])
@@ -39,25 +39,25 @@
   (if (str/starts-with? te "@") (subs te 1) te))
 
 ;; --- daemon-first read (thread 019f2190) -------------------------------------
-;; The current claim set: the coordinator's warm live view when a daemon serves
+;; The current fact set: the coordinator's warm live view when a daemon serves
 ;; THIS log (served in fold emission order — the :claims op contract — so
 ;; downstream output is byte-identical to the cold fold's), else the cold fold.
-;; [] from coord-live-claims is the whole capability handshake — daemon down /
+;; [] from coord-live-facts is the whole capability handshake — daemon down /
 ;; old daemon / different log.
-(defn- live-claims [log :- String] :- (Vec k/Claim)
-  (let [warm (fram.rt/coord-live-claims (fram.rt/coord-port) log)]
+(defn- live-facts [log :- String] :- (Vec k/Fact)
+  (let [warm (fram.rt/coord-live-facts (fram.rt/coord-port) log)]
     (if (empty? warm)
-      (:claims (fold/fold (fram.rt/read-log log)))
+      (:facts (fold/fold (fram.rt/read-log log)))
       warm)))
 
-;; --- claim-set signatures (divergence detection for the import/export guards) -
-(defn- claim-sig [c :- k/Claim] :- String (str (:l c) "|" (:p c) "|" (:r c)))
-(defn- sig-set [claims :- (Vec k/Claim)] :- (Vec String) (vec (sort (mapv claim-sig claims))))
-(defn- sig-member-map [claims :- (Vec k/Claim)] :- (Map String Bool)
-  (reduce (fn [m :- (Map String Bool) c :- k/Claim] :- (Map String Bool)
-            (assoc m (claim-sig c) true))
-          {} claims))
-;; count of CURRENT coordinator/agent-written claims (by frame) absent from the
+;; --- fact-set signatures (divergence detection for the import/export guards) -
+(defn- fact-sig [c :- k/Fact] :- String (str (:l c) "|" (:p c) "|" (:r c)))
+(defn- sig-set [facts :- (Vec k/Fact)] :- (Vec String) (vec (sort (mapv fact-sig facts))))
+(defn- sig-member-map [facts :- (Vec k/Fact)] :- (Map String Bool)
+  (reduce (fn [m :- (Map String Bool) c :- k/Fact] :- (Map String Bool)
+            (assoc m (fact-sig c) true))
+          {} facts))
+;; count of CURRENT coordinator/agent-written facts (by frame) absent from the
 ;; files — i.e. pending writes an import would clobber.
 (defn- pending-coord-count [log :- String file-sigs :- (Map String Bool)] :- Int
   (count (filterv (fn [v :- fold/Latest] :- Bool
@@ -68,11 +68,11 @@
 ;; --- commands ---------------------------------------------------------------
 
 ;; SAFETY (concurrent agents): import rewrites the log FROM the files, so it would
-;; drop any claims in the log that aren't in the files — i.e. pending coordinator
+;; drop any facts in the log that aren't in the files — i.e. pending coordinator
 ;; writes. Refuse if that would lose data; `export` first, or `--force` to overwrite.
 (defn cmd-import [threads-dir :- String log :- String force :- Bool] :- Nil
   (let [as (imp/load-corpus threads-dir)
-        file-sigs (sig-member-map (:claims (fold/fold as)))
+        file-sigs (sig-member-map (:facts (fold/fold as)))
         lost (pending-coord-count log file-sigs)]
     (if (and (> lost 0) (not force))
       (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the "
@@ -83,20 +83,20 @@
 ;; Inverse of import: fold the log -> write each thread as markdown into out-dir.
 ;; SAFETY: refuse if threads/ holds edits not yet in the log (would clobber).
 (defn cmd-export [threads-dir :- String log :- String out-dir :- String force :- Bool] :- Nil
-  (let [log-claims (:claims (fold/fold (fram.rt/read-log log)))
-        file-claims (:claims (fold/fold (imp/load-corpus threads-dir)))
-        log-sigs (sig-member-map log-claims)
-        ;; file-ahead = a thread .md holds a claim the log LACKS (a hand edit) — the
-        ;; ONLY thing export could clobber. Log-ahead (claims in the log not yet in
+  (let [log-facts (:facts (fold/fold (fram.rt/read-log log)))
+        file-facts (:facts (fold/fold (imp/load-corpus threads-dir)))
+        log-sigs (sig-member-map log-facts)
+        ;; file-ahead = a thread .md holds a fact the log LACKS (a hand edit) — the
+        ;; ONLY thing export could clobber. Log-ahead (facts in the log not yet in
         ;; files) is the normal case export EXISTS to flush, NEVER a reason to refuse.
         ;; (The old guard demanded full set-equality, so it refused on log-ahead and
         ;; deadlocked with import — each refused, pointing at the other.)
-        file-ahead (filterv (fn [c :- k/Claim] :- Bool (nil? (get log-sigs (claim-sig c)))) file-claims)]
+        file-ahead (filterv (fn [c :- k/Fact] :- Bool (nil? (get log-sigs (fact-sig c)))) file-facts)]
     (if (and (not (empty? file-ahead)) (not force))
       (println (str "REFUSING export: " (count file-ahead) " file fact(s) are not in the log "
                     "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or "
                     "`export <dir> --force` to regenerate files FROM the log (discards those edits)."))
-      (let [idx (k/build-index log-claims)
+      (let [idx (k/build-index log-facts)
             tes (k/thread-ids-i idx)]
         (fram.rt/ensure-dir out-dir)
         (doseq [te tes]
@@ -105,11 +105,11 @@
                 id (if (str/starts-with? te "@") (subs te 1) te)
                 fname (str id "-"
                            (fram.rt/slugify (if (some? title) title "untitled")) ".md")]
-            (fram.rt/spit-file (str out-dir "/" fname) (exp/thread-md log-claims te))))
+            (fram.rt/spit-file (str out-dir "/" fname) (exp/thread-md log-facts te))))
         (println (str "exported " (count tes) " threads -> " out-dir))))))
 
 (defn cmd-validate [log :- String] :- Nil
-  (let [idx (k/build-index (:claims (fold/fold (fram.rt/read-log log))))
+  (let [idx (k/build-index (:facts (fold/fold (fram.rt/read-log log))))
         problems (reduce
                   (fn [acc :- (Vec String) te :- String] :- (Vec String)
                     (reduce (fn [a :- (Vec String) v :- String] :- (Vec String)
@@ -123,33 +123,33 @@
           (println (str "\n" (count problems) " violation(s)."))))))
 
 ;; show is full-fidelity: values print WHOLE, never elided — the handoff protocol
-;; reads note/learning claims in full. Resolution: exact @id first, then a UNIQUE
+;; reads note/learning facts in full. Resolution: exact @id first, then a UNIQUE
 ;; uuidv7 id-PREFIX (the short form people paste); a blank token never prefix-matches
 ;; (it would match every thread), and an ambiguous prefix lists the candidates and
 ;; picks none.
 (defn cmd-show [log :- String id :- String] :- Nil
-  (let [claims (live-claims log)
+  (let [facts (live-facts log)
         te (str "@" id)
-        exact (k/q-by-l claims te)
+        exact (k/q-by-l facts te)
         matches (if (or (not (empty? exact)) (str/blank? id))
                   []
-                  ;; prefix resolution over the INDEX: (k/thread-ids claims) is a
-                  ;; flat one-per-subject scan — O(subjects × claims), ~2s on the
-                  ;; 10.7k-claim log — while thread-ids-i over build-index is
-                  ;; O(claims). Same subjects, same uniq claim order, so the match
+                  ;; prefix resolution over the INDEX: (k/thread-ids facts) is a
+                  ;; flat one-per-subject scan — O(subjects × facts), ~2s on the
+                  ;; 10.7k-fact log — while thread-ids-i over build-index is
+                  ;; O(facts). Same subjects, same uniq fact order, so the match
                   ;; list (and the ambiguous-prefix listing) is byte-identical.
                   (filterv (fn [t :- String] :- Bool (str/starts-with? (short-id t) id))
-                           (k/thread-ids-i (k/build-index claims))))]
+                           (k/thread-ids-i (k/build-index facts))))]
     (cond
       [(not (empty? exact))
        (doseq [c exact] (println (str "  " (:p c) "  " (:r c))))]
       [(= (count matches) 1)
-       (doseq [c (k/q-by-l claims (first matches))]
+       (doseq [c (k/q-by-l facts (first matches))]
          (println (str "  " (:p c) "  " (:r c))))]
       [(> (count matches) 1)
        (do (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
            (doseq [m matches]
-             (let [title (k/one claims m "title")]
+             (let [title (k/one facts m "title")]
                (println (str "  " (short-id m) (if (some? title) (str "  " title) ""))))))]
       [:else (println (str "no facts for " te))])))
 
@@ -166,40 +166,40 @@
 (defn cmd-set [log :- String id :- String pred :- String value :- String] :- Nil
   (let [as (fram.rt/read-log log)
         f (fold/fold as)
-        claims (:claims f)
+        facts (:facts f)
         cmap (fold/card-map as)
         te (str "@" id)
-        rv (tl/ref-value claims pred value)
-        cand (k/apply-assert-c cmap claims (k/->Claim te pred rv))
+        rv (tl/ref-value facts pred value)
+        cand (k/apply-assert-c cmap facts (k/->Fact te pred rv))
         viol (k/violations cand te)]
     (if (not (empty? viol))
       (println (str "REJECTED — " (str/join "; " viol)))
       (let [tx (+ (fold/max-tx (fram.rt/read-log log)) 1)]
-        (fram.rt/append-assertion log (fold/->Assertion tx "assert" te pred rv "cli"))
+        (fram.rt/append-fact-op log (fold/->FactOp tx "assert" te pred rv "cli"))
         (println (str "ok — " id " " pred " = " rv " (v" tx ")"))))))
 
 ;; --- entity merge (the dedup-sweep "fix" half) ---
-(defn- claims->assertions [claims :- (Vec k/Claim) frame :- String] :- (Vec fold/Assertion)
-  (loop [cs claims i 1 acc []]
+(defn- facts->fact-ops [facts :- (Vec k/Fact) frame :- String] :- (Vec fold/FactOp)
+  (loop [cs facts i 1 acc []]
     (if (empty? cs)
       acc
       (let [c (first cs)]
         (recur (rest cs) (+ i 1)
-               (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c) frame)))))))
+               (conj acc (fold/->FactOp i "assert" (:l c) (:p c) (:r c) frame)))))))
 
 ;; Consolidate entity `from` into `to`: rewrite every l/r occurrence, dedup via a
 ;; re-fold, leave a `(from merged_into to)` tombstone. Run `export` afterward.
 (defn cmd-merge [log :- String from :- String to :- String] :- Nil
-  (let [claims (:claims (fold/fold (fram.rt/read-log log)))
-        rewritten (mapv (fn [c :- k/Claim] :- k/Claim
-                          (k/->Claim (if (= (:l c) from) to (:l c))
+  (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+        rewritten (mapv (fn [c :- k/Fact] :- k/Fact
+                          (k/->Fact (if (= (:l c) from) to (:l c))
                                      (:p c)
                                      (if (= (:r c) from) to (:r c))))
-                        claims)
-        withrec (conj rewritten (k/->Claim from "merged_into" to))
-        deduped (:claims (fold/fold (claims->assertions withrec "merge")))]
-    (fram.rt/write-log log (claims->assertions deduped "merge"))
-    (println (str "merged " from " -> " to "  (" (count claims) " facts -> " (count deduped) ")"))))
+                        facts)
+        withrec (conj rewritten (k/->Fact from "merged_into" to))
+        deduped (:facts (fold/fold (facts->fact-ops withrec "merge")))]
+    (fram.rt/write-log log (facts->fact-ops deduped "merge"))
+    (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")"))))
 
 ;; --- write THROUGH the coordinator (safe under concurrent agents) ------------
 (defn- tell-once [port :- Int op :- String te :- String pred :- String rv :- String] :- String
@@ -217,9 +217,9 @@
       resp)))
 
 (defn cmd-tell [log :- String op :- String id :- String pred :- String value :- String] :- Nil
-  (let [claims (:claims (fold/fold (fram.rt/read-log log)))
+  (let [facts (:facts (fold/fold (fram.rt/read-log log)))
         te (str "@" id)
-        rv (tl/ref-value claims pred value)
+        rv (tl/ref-value facts pred value)
         resp (tell-retry (fram.rt/coord-port) op te pred rv 5)]
     (cond
       [(= resp "nodaemon")
@@ -253,13 +253,13 @@
         v (fram.rt/coord-version port)
         as (fram.rt/read-log log)
         cmap (fold/card-map as)
-        declared (filterv (fn [c :- k/Claim] :- Bool (= (:p c) "cardinality"))
-                          (:claims (fold/fold as)))]
+        declared (filterv (fn [c :- k/Fact] :- Bool (= (:p c) "cardinality"))
+                          (:facts (fold/fold as)))]
     (if (>= v 0)
       (println (str "coordinator UP on 127.0.0.1:" port " (v" v ")"))
       (println (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up")))
     (println (str "vocab " (k/vocab-fingerprint)))
-    ;; schema-as-claims cardinality: the claim-derived overlay is the authoritative,
+    ;; schema-as-facts cardinality: the fact-derived overlay is the authoritative,
     ;; log-derived layer that makes CLI-vs-daemon cardinality agreement automatic (both
     ;; fold the same log). Report the three cardinality SOURCES + the effective overlay
     ;; fingerprint an operator compares across processes.
@@ -275,13 +275,13 @@
                     "SAME FRAM_SINGLE_VALUED in every process that folds/serves this log for those.")))))
 
 ;; --- AI-facing tool surface (catalog + dispatch; see fram.tools / fram.query) -
-;; The catalog is generated from the claim vocabulary; `query` is the structured
+;; The catalog is generated from the fact vocabulary; `query` is the structured
 ;; Datalog escape hatch (fram.query). The MCP server (bin/fram-mcp) serves the
 ;; SAME catalog + dispatch over JSON; this CLI is the human/test path (EDN args).
 
 (defn cmd-tools [log :- String] :- Nil
-  (let [claims (:claims (fold/fold (fram.rt/read-log log)))
-        cat (tl/catalog claims)]
+  (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+        cat (tl/catalog facts)]
     (println (str (count cat) " tools (closed catalog; vocabulary is data — `show <pred>` reveals "
                   "a predicate's cardinality/value_kind facts, `ask` enumerates it):"))
     (doseq [spec cat]
@@ -310,10 +310,10 @@
   (let [args (fram.rt/parse-edn edn)]
     (if (nil? args)
       (println (str "bad EDN args: " edn))
-      (let [claims (:claims (fold/fold (fram.rt/read-log log)))
-            idx (k/build-index claims)
-            cat (tl/catalog claims)
-            res (tl/call claims idx cat tool args)]
+      (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+            idx (k/build-index facts)
+            cat (tl/catalog facts)
+            res (tl/call facts idx cat tool args)]
         (cond
           [(some? (:error res)) (doseq [e (:error res)] (println (str "  error: " e)))]
           [(some? (:write res)) (route-write (:write res))]
@@ -324,8 +324,8 @@
   (let [qd (fram.rt/parse-edn edn)]
     (if (nil? qd)
       (println (str "bad EDN query: " edn))
-      (let [claims (:claims (fold/fold (fram.rt/read-log log)))
-            res (q/run claims qd)]
+      (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+            res (q/run facts qd)]
         (if (some? (:error res))
           (doseq [e (:error res)] (println (str "  error: " e)))
           (print-rows (:ok res)))))))

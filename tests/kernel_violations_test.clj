@@ -14,22 +14,22 @@
 
 ;; @w1 -> @w2 (a real thread); clean.
 (def ok-claims
-  [(k/->Claim "@w1" "title" "W1")
-   (k/->Claim "@w2" "title" "W2")
-   (k/->Claim "@w1" "depends_on" "@w2")])
+  [(k/->Fact "@w1" "title" "W1")
+   (k/->Fact "@w2" "title" "W2")
+   (k/->Fact "@w1" "depends_on" "@w2")])
 
 ;; a non-existent target (no `title`) is a dangling entity ref.
-(def dangling-dep  [(k/->Claim "@w" "title" "W") (k/->Claim "@w" "depends_on" "@ghost")])
-(def dangling-part [(k/->Claim "@w" "title" "W") (k/->Claim "@w" "part_of" "@ghost")])
-(def dangling-rel  [(k/->Claim "@w" "title" "W") (k/->Claim "@w" "relates_to" "@ghost")])
+(def dangling-dep  [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "depends_on" "@ghost")])
+(def dangling-part [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "part_of" "@ghost")])
+(def dangling-rel  [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "relates_to" "@ghost")])
 
 ;; @a depends_on @b, @b depends_on @a => cycle.
 (def dep-cycle
-  [(k/->Claim "@a" "title" "A") (k/->Claim "@b" "title" "B")
-   (k/->Claim "@a" "depends_on" "@b") (k/->Claim "@b" "depends_on" "@a")])
+  [(k/->Fact "@a" "title" "A") (k/->Fact "@b" "title" "B")
+   (k/->Fact "@a" "depends_on" "@b") (k/->Fact "@b" "depends_on" "@a")])
 
 ;; the engine must NOT derive a person/role violation (that moved to tern).
-(def role-claims [(k/->Claim "@w" "title" "W") (k/->Claim "@w" "driver" "@ghost")])
+(def role-claims [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "driver" "@ghost")])
 
 (def checks
   [["(i) clean graph => no violations" (empty? (vi ok-claims "@w1"))]

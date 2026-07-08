@@ -12,11 +12,11 @@
 ;; a tiny graph as CLAIMS (strings, exactly the flat fold's shape):
 ;;   a -depends_on-> b -depends_on-> c   ; b,c are "hub"
 (def claims
-  [(k/->Claim "@a" "depends_on" "@b")
-   (k/->Claim "@b" "depends_on" "@c")
-   (k/->Claim "@b" "kind" "hub")
-   (k/->Claim "@c" "kind" "hub")
-   (k/->Claim "@a" "title" "Alpha")])
+  [(k/->Fact "@a" "depends_on" "@b")
+   (k/->Fact "@b" "depends_on" "@c")
+   (k/->Fact "@b" "kind" "hub")
+   (k/->Fact "@c" "kind" "hub")
+   (k/->Fact "@a" "title" "Alpha")])
 
 ;; (1) positive 2-literal join: hubdep(X,H) :- triple(X,depends_on,H), triple(H,kind,hub)
 (let [r (q/run claims
@@ -113,9 +113,9 @@
 ;; p -(neg)-> q -> p was accepted as stratifiable (strata-violations returned []);
 ;; NOT p was evaluated against a still-growing p (eval-order-dependent, inconsistent
 ;; — q(@b) asserted because ¬p(@b) held, yet p(@b) then derived). Now REJECTED.
-(let [seed-claims [(k/->Claim "@a" "seed" "yes")
-                   (k/->Claim "@a" "node" "yes")
-                   (k/->Claim "@b" "node" "yes")]
+(let [seed-claims [(k/->Fact "@a" "seed" "yes")
+                   (k/->Fact "@a" "node" "yes")
+                   (k/->Fact "@b" "node" "yes")]
       r (q/run seed-claims
           {:find "p"
            :strata [[{:head {:rel "p" :args [{:var "x"}]}
@@ -145,7 +145,7 @@
 ;; references `b`, which is defined only in stratum 1. run evaluates strata in
 ;; order, so `b` is still empty when stratum 0 runs -> `a` is silently empty.
 ;; validate's `known` (all heads everywhere) let it pass. Now REJECTED.
-(let [r (q/run [(k/->Claim "@x" "title" "T")]
+(let [r (q/run [(k/->Fact "@x" "title" "T")]
           {:find "a"
            :strata [[{:head {:rel "a" :args [{:var "x"}]}
                       :body [{:rel "b" :args [{:var "x"}]}]}]
@@ -158,7 +158,7 @@
 
 ;; #18 the CORRECTLY-ordered program (b first, a after) must still RUN non-empty —
 ;; the fix rejects only the bad order, it does not break legitimate layering.
-(let [r (q/run [(k/->Claim "@x" "title" "T")]
+(let [r (q/run [(k/->Fact "@x" "title" "T")]
           {:find "a"
            :strata [[{:head {:rel "b" :args [{:var "x"}]}
                       :body [{:rel "triple" :args [{:var "x"} "title" {:var "t"}]}]}]
@@ -170,7 +170,7 @@
 ;; #22 (LOW) a head relation defined at inconsistent arities -> ragged tuples.
 ;; `r` derived at arity 1 AND 2 previously validated clean and emitted mixed-shape
 ;; rows. Now REJECTED.
-(let [r (q/run [(k/->Claim "@a" "p" "@b") (k/->Claim "@c" "p" "@d")]
+(let [r (q/run [(k/->Fact "@a" "p" "@b") (k/->Fact "@c" "p" "@d")]
           {:find "r"
            :rules [{:head {:rel "r" :args [{:var "x"}]}
                     :body [{:rel "triple" :args [{:var "x"} "p" {:var "z"}]}]}
@@ -199,7 +199,7 @@
 ;; signal is returned INSTEAD of the (huge) result. Self-calibrates to the cap.
 (let [cap q/max-results
       m (inc (long (Math/ceil (Math/sqrt (double cap)))))   ; m^2 > cap
-      big-claims (mapv (fn [i] (k/->Claim (str "@s" i) "p" (str "@o" i))) (range m))
+      big-claims (mapv (fn [i] (k/->Fact (str "@s" i) "p" (str "@o" i))) (range m))
       r (q/run big-claims
           {:find "pair"
            :rules [{:head {:rel "pair" :args [{:var "a"} {:var "b"}]}

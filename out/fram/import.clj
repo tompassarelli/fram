@@ -29,7 +29,7 @@
   (binding [*out* *err*]
   (println (str "WARN import: " msg))))
 
-(defn- file->claims [^String path ^String content]
+(defn- file->facts [^String path ^String content]
   (let [doc (split-doc content)
    lines (fram.rt/split-on (:head doc) "\n")
    n (count lines)
@@ -41,29 +41,29 @@
   (if (< si 0) (do
   (if (str/blank? (:head doc)) nil (warn (str path " — no @subject line found in head; dropping " n " head line(s) (a corrupted/hand-edited first line, or a stray BOM/whitespace before @?)")))
   []) (let [subj (str/trim (nth lines si))
-   claims (loop [i (+ si 1)
+   facts (loop [i (+ si 1)
    acc []]
   (if (>= i n) acc (let [t (str/trim (nth lines i))]
   (if (str/blank? t) (recur (+ i 1) acc) (let [kv (fram.rt/split-kv t)]
-  (recur (+ i 1) (conj acc (k/->Claim subj (nth kv 0) (parse-obj (nth kv 1))))))))))
+  (recur (+ i 1) (conj acc (k/->Fact subj (nth kv 0) (parse-obj (nth kv 1))))))))))
    body (:body doc)]
-  (if (str/blank? body) claims (conj claims (k/->Claim subj "body" body)))))))
+  (if (str/blank? body) facts (conj facts (k/->Fact subj "body" body)))))))
 
-(defn- number-assertions [claims]
-  (loop [cs claims
+(defn- number-fact-ops [facts]
+  (loop [cs facts
    i 1
    acc []]
   (if (empty? cs) acc (let [c (first cs)]
-  (recur (rest cs) (+ i 1) (conj acc (fold/->Assertion i "assert" (:l c) (:p c) (:r c) "import")))))))
+  (recur (rest cs) (+ i 1) (conj acc (fold/->FactOp i "assert" (:l c) (:p c) (:r c) "import")))))))
 
-(defn- safe-file->claims [^String path]
+(defn- safe-file->facts [^String path]
   (try
-  (file->claims path (fram.rt/slurp path))
+  (file->facts path (fram.rt/slurp path))
   (catch Exception e
     (warn (str path " — skipped (could not parse): " (.getMessage e)))
     [])))
 
 (defn load-corpus [^String threads-dir]
   (let [files (fram.rt/list-md threads-dir)
-   claims (reduce (fn [acc path] (vec (concat acc (safe-file->claims path)))) [] files)]
-  (number-assertions claims)))
+   facts (reduce (fn [acc path] (vec (concat acc (safe-file->facts path)))) [] files)]
+  (number-fact-ops facts)))
