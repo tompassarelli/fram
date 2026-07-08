@@ -14,7 +14,7 @@ relates_to  @topic-web
 relates_to  @topic-writing
 ---
 
-## Claim
+## Fact
 
 Write the landing copy, an about page, and a short now-page.
 

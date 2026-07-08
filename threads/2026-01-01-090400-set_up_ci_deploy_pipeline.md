@@ -14,7 +14,7 @@ relates_to  @topic-web
 relates_to  @topic-infra
 ---
 
-## Claim
+## Fact
 
 Auto-build and deploy on push to the registered domain.
 

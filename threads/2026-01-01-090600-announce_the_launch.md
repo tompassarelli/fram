@@ -13,7 +13,7 @@ depends_on  @2026-01-01-090500
 relates_to  @topic-web
 ---
 
-## Claim
+## Fact
 
 Post about the site once it's live.
 

@@ -1,14 +1,14 @@
 # Thread format
 
-A **thread** is one Markdown file in `threads/`: a header of claim triples, a
+A **thread** is one Markdown file in `threads/`: a header of fact triples, a
 `---` separator, then a free Markdown body. The filename is
 `<id>-<snake_name>.md`; the first line, `@<id>`, is the canonical identity (the
 filename is just for navigation).
 
 To the engine there is no "thread" type — a thread is simply an entity id that
-has a `title` claim. A "project" isn't a separate type either; it's just a thread
-other threads point at with `part_of`. `import` folds these files into the claim
-graph; `export` regenerates them from the graph, **claim-identically**
+has a `title` fact. A "project" isn't a separate type either; it's just a thread
+other threads point at with `part_of`. `import` folds these files into the fact
+graph; `export` regenerates them from the graph, **fact-identically**
 (`roundtrip_test.clj`), so the files are a *view*, not a competing source of
 truth.
 
@@ -31,7 +31,7 @@ relates_to  @topic-web
 relates_to  @topic-infra
 ---
 
-## Claim
+## Fact
 
 Ship the finished site behind the custom domain over HTTPS.
 
@@ -42,25 +42,25 @@ Ship the finished site behind the custom domain over HTTPS.
 
 - **`@<id>`** — first line, the entity. ids are `YYYY-MM-DD-HHMMSS` (collision-safe,
   never change); named entities like `@topic-web` are also valid ids.
-- **`predicate  object`** — one claim per line. The **object** is either a ref
+- **`predicate  object`** — one fact per line. The **object** is either a ref
   (`@some-id`, an edge to another entity) or an **EDN literal** (`"quoted strings"`,
   bare symbols like `personal`, numbers, dates). Entities referenced by `@` are
   **interned** — rename a person/topic/repo *once*, not in N files.
 - **Multi-valued predicates repeat** — `depends_on` and `relates_to` above each
   appear twice. Single-valued predicates (e.g. `title`, `owner`) appear once;
   the cardinality vocabulary is configurable via `FRAM_SINGLE_VALUED`.
-- **`---`** — separates the claim header from the prose body. The body is stored
-  as the `body` claim and round-trips verbatim.
+- **`---`** — separates the fact header from the prose body. The body is stored
+  as the `body` fact and round-trips verbatim.
 
 ## Lifecycle is *derived*, never stored
 
-There is **no `state` field**. Lifecycle is read from the claims:
+There is **no `state` field**. Lifecycle is read from the facts:
 
 | condition | how it's derived |
 |---|---|
-| committed (accepted / in play) | has a `committed` claim |
-| done (terminal) | has an `outcome` claim |
-| abandoned (terminal) | has an `abandoned` claim |
+| committed (accepted / in play) | has a `committed` fact |
+| done (terminal) | has an `outcome` fact |
+| abandoned (terminal) | has an `abandoned` fact |
 | active now | has a `driver` (a person/agent currently pushing it) |
 | blocked | a `depends_on` target that isn't terminal |
 
@@ -92,9 +92,9 @@ remaining domain defaults being genericized — see the README.)
 `depends_on` and `part_of` must both be **acyclic**, and every `@`-ref must
 resolve — `fram validate` rejects cycles and dangling refs.
 
-## How it becomes claims
+## How it becomes facts
 
-`import` turns each line into a `(left predicate right)` claim, minting interned
+`import` turns each line into a `(left predicate right)` fact, minting interned
 entities so a thing referenced by many threads is one object:
 
 ```

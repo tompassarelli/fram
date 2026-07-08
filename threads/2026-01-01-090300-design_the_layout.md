@@ -15,7 +15,7 @@ relates_to  @topic-web
 relates_to  @topic-design
 ---
 
-## Claim
+## Fact
 
 A clean single-column layout that reads well on phones.
 

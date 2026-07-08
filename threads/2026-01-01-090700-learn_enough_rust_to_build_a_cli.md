@@ -11,7 +11,7 @@ relates_to  @topic-learning
 relates_to  @topic-someday
 ---
 
-## Claim
+## Fact
 
 A someday/maybe: work through the Rust book far enough to ship a small CLI.
 

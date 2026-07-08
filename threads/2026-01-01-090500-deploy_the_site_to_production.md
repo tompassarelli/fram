@@ -15,7 +15,7 @@ relates_to  @topic-web
 relates_to  @topic-infra
 ---
 
-## Claim
+## Fact
 
 Ship the finished site behind the custom domain over HTTPS.
 

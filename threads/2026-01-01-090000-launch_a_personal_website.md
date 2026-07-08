@@ -12,7 +12,7 @@ driver  @you
 relates_to  @topic-web
 ---
 
-## Claim
+## Fact
 
 Get a simple personal site live on a custom domain.
 

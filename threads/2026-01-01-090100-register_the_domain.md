@@ -13,7 +13,7 @@ part_of  @2026-01-01-090000
 relates_to  @topic-web
 ---
 
-## Claim
+## Fact
 
 Buy and configure the custom domain.
 
