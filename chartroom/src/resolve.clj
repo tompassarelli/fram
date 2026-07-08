@@ -1325,13 +1325,13 @@
       (when (and (def-binding src old) (def-binding src new))
         (binding [*out* *err*]
           (println (str "REJECTED — `" new "` already names a binding in " src
-                        " (rename-doesn't-collide; no claims mutated).")))
+                        " (rename-doesn't-collide; no facts mutated).")))
         (*reject!* 3)))
     (doseq [src target-srcs]
       (when (and (get (file-typeframe src) old) (not (re-find #"^[A-Z]" new)))
         (binding [*out* *err*]
           (println (str "REJECTED — `" new "` is not a valid (Capitalized) type name "
-                        "(beagle type-name shape; no claims mutated).")))
+                        "(beagle type-name shape; no facts mutated).")))
         (*reject!* 3)))
     (doseq [src target-srcs]
       (when-let [B (def-binding src old)]
@@ -1340,7 +1340,7 @@
           (when (seq caps)
             (binding [*out* *err*]
               (println (str "REJECTED — renaming `" old "` -> `" new "` would be CAPTURED by a local `"
-                            new "` in scope at " (count caps) " reference(s) (no-capture; no claims mutated).")))
+                            new "` in scope at " (count caps) " reference(s) (no-capture; no facts mutated).")))
             (*reject!* 4)))))
     (let [target-mods (set (keep module-name target-srcs))]
       (doseq [src srcs :when (not (some #{src} target-srcs))]
@@ -1349,7 +1349,7 @@
                      (or (def-binding src new) (get refer new) (get rename new)))
             (binding [*out* *err*]
               (println (str "REJECTED — renaming `" old "` -> `" new "` would DUPLICATE a binding in consumer "
-                            src " (it already binds `" new "`; no-import-collision; no claims mutated).")))
+                            src " (it already binds `" new "`; no-import-collision; no facts mutated).")))
             (*reject!* 3)))))
     (doseq [src target-srcs]
       (when-let [B (def-binding src old)]
@@ -1359,7 +1359,7 @@
     (when (zero? @edits)
       (binding [*out* *err*]
         (println (str "REJECTED — no binding named `" old "` found in \"" target
-                      "\" (nothing to rename; no claims mutated).")))
+                      "\" (nothing to rename; no facts mutated).")))
       (*reject!* 5))
     ;; capture-only (daemon :edit-min): the name claim is mutated above; SKIP the
     ;; whole-corpus projection — the daemon commits the captured op + re-resolves scoped.
@@ -1459,12 +1459,12 @@
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
-                      " source files; upsert-form needs exactly one (no claims mutated).")))
+                      " source files; upsert-form needs exactly one (no facts mutated).")))
       (*reject!* 3))
     (when (and (seq? datum) (not (writable-def-head? (str (first datum)))))
       (binding [*out* *err*]
         (println (str "REJECTED — upsert-form spec head `" (first datum)
-                      "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no claims mutated.")))
+                      "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated.")))
       (*reject!* 3))
     (let [src (first target-srcs)
           wrap (wrapper-of src)
@@ -1537,7 +1537,7 @@
                                            (count target-srcs) " files (need 1).")))
       (*reject!* 3))
     (when (str/blank? text)
-      (binding [*out* *err*] (println "REJECTED — insert-comment needs non-empty --text; no claims mutated."))
+      (binding [*out* *err*] (println "REJECTED — insert-comment needs non-empty --text; no facts mutated."))
       (*reject!* 3))
     (let [src  (first target-srcs)
           plc  (if (#{"leading" "trailing"} placement) placement "leading")
@@ -1575,7 +1575,7 @@
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
-                      " source files; set-body needs exactly one (no claims mutated).")))
+                      " source files; set-body needs exactly one (no facts mutated).")))
       (*reject!* 3))
     (let [src (first target-srcs)
           B (def-binding src name)
@@ -1584,7 +1584,7 @@
       (when (or (nil? form) (not (VALUE-DEFS (head-sym d))))
         (binding [*out* *err*]
           (println (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope
-                        "\" (set-body needs a value binding; no claims mutated).")))
+                        "\" (set-body needs a value binding; no facts mutated).")))
         (*reject!* 5))
       (let [kids     (fN-claims d)
             param?   (PARAM-FORMS (head-sym d))
@@ -1598,7 +1598,7 @@
             new-root (mint-datum! src datum)]
         (when (empty? body-slots)
           (binding [*out* *err*]
-            (println (str "REJECTED — `" name "` has no body fN edges to replace; no claims mutated.")))
+            (println (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated.")))
           (*reject!* 5))
         (doseq [[_ cid _] body-slots] (retire-claim! cid))
         (c/fact! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
@@ -1790,9 +1790,9 @@
                                 (take DISAMBIG-CAP sites)))
         head  (case reason
                 :ambiguous-old   (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                      total " matches; no claims mutated).")
+                                      total " matches; no facts mutated).")
                 :ambiguous-within (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                       total " matches; no claims mutated). It must match exactly one enclosing form."))
+                                       total " matches; no facts mutated). It must match exactly one enclosing form."))
         lines (map (fn [c]
                      (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c))
                           (when (:within c) (str "\n      within: " (:within c)))))
@@ -1819,7 +1819,7 @@
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*]
         (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
-                      " source files; replace-in-body needs exactly one (no claims mutated).")))
+                      " source files; replace-in-body needs exactly one (no facts mutated).")))
       (*reject!* 3))
     (let [src  (first target-srcs)
           B    (def-binding src name)
@@ -1827,7 +1827,7 @@
       (when (nil? form)
         (binding [*out* *err*]
           (println (str "REJECTED — no def named `" name "` found in \"" scope
-                        "\" (nothing to edit; no claims mutated).")))
+                        "\" (nothing to edit; no facts mutated).")))
         (*reject!* 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope
                       :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")}))
       ;; (2) :within scope-narrowing — resolve the enclosing anchor to EXACTLY ONE node
@@ -1841,13 +1841,13 @@
                   (zero? (count wsites))
                   (do (binding [*out* *err*]
                         (println (str "REJECTED — `within` form not found inside `" name "` in \"" scope
-                                      "\" (0 matches; no claims mutated).")))
+                                      "\" (0 matches; no facts mutated).")))
                       (*reject!* 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope
                                     :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
                   (> (count wsites) 1)
                   (do (binding [*out* *err*]
                         (println (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                      (count wsites) " matches; no claims mutated).")))
+                                      (count wsites) " matches; no facts mutated).")))
                       (*reject!* 5 (disambig-payload :ambiguous-within name scope form wsites)))
                   :else (:child (first wsites)))))
             target-canon (datum->canon old-datum)
@@ -1857,7 +1857,7 @@
           (do (binding [*out* *err*]
                 (println (str "REJECTED — anchor `old` not found inside "
                               (if within-datum "the `within` form" (str "`" name "`"))
-                              " in \"" scope "\" (0 matches; no claims mutated). The old form must match "
+                              " in \"" scope "\" (0 matches; no facts mutated). The old form must match "
                               "an interior form structurally (head + spelling + child shape).")))
               (*reject!* 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope
                             :within (some? within-datum)
@@ -1868,7 +1868,7 @@
           (do (binding [*out* *err*]
                 (println (str "REJECTED — anchor `old` is AMBIGUOUS inside "
                               (if within-datum "the `within` form" (str "`" name "`"))
-                              " in \"" scope "\" (" (count matches) " matches; no claims mutated).")))
+                              " in \"" scope "\" (" (count matches) " matches; no facts mutated).")))
               (*reject!* 5 (disambig-payload :ambiguous-old name scope search-root matches)))
           :else
           (let [{:keys [parent pos cid]} (first matches)
@@ -1908,20 +1908,20 @@
                                  (subtree (ultimate (refers-target e))))] e)]   ; ref to a deleted binding
     (when (zero? (count victims))
       (binding [*out* *err*]
-        (println (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no claims mutated).")))
+        (println (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no facts mutated).")))
       (*reject!* 5))
     ;; matched a binding but no independently-deletable top-level form (e.g. a defunion
     ;; variant lives nested inside its union) — refuse, don't report a no-op as success.
     (when (empty? all-forms)
       (binding [*out* *err*]
         (println (str "REJECTED — `" name "` is not an independently-deletable top-level form "
-                      "(a defunion variant / nested binding); no claims mutated.")))
+                      "(a defunion variant / nested binding); no facts mutated.")))
       (*reject!* 5))
     ;; INVARIANT (no-orphaned-refs): refuse if any SURVIVING reference points at a victim.
     (when (pos? (count orphans))
       (binding [*out* *err*]
         (println "================ delete + orphaned-reference invariant ================")
-        (println (str "REJECTED — " (count orphans) " reference(s) would be ORPHANED (no-orphaned-refs; no claims mutated):"))
+        (println (str "REJECTED — " (count orphans) " reference(s) would be ORPHANED (no-orphaned-refs; no facts mutated):"))
         (doseq [o (take 5 orphans)] (println (str "  orphan: reference node " o " (`" (sym-val o) "`)"))))
       (*reject!* 6))
     ;; SAFE: retire each wrapper fN edge that points at a deleted form root. by-l filters
@@ -1950,7 +1950,7 @@
   (let [target-srcs (filter #(str/includes? % scope) srcs)]
     (when (not= 1 (count target-srcs))
       (binding [*out* *err*] (println (str "REJECTED — reorder scope \"" scope "\" matches "
-                                           (count target-srcs) " files (need 1); no claims mutated.")))
+                                           (count target-srcs) " files (need 1); no facts mutated.")))
       (*reject!* 3))
     (let [src (first target-srcs)
           wrap (wrapper-of src)
@@ -1963,13 +1963,13 @@
           anchor-form (when anchor-bind (form-for-victim src anchor-bind))
           anchor-idx (when anchor-form (first (keep-indexed (fn [i [_ _ r]] (when (= r anchor-form) i)) forms)))]
       (when (nil? mover-entry)
-        (binding [*out* *err*] (println (str "REJECTED — reorder target `" name "` not found in \"" scope "\"; no claims mutated.")))
+        (binding [*out* *err*] (println (str "REJECTED — reorder target `" name "` not found in \"" scope "\"; no facts mutated.")))
         (*reject!* 5))
       (when (and (not front?) (nil? anchor-idx))
-        (binding [*out* *err*] (println (str "REJECTED — reorder anchor `" after-name "` not found in \"" scope "\"; no claims mutated.")))
+        (binding [*out* *err*] (println (str "REJECTED — reorder anchor `" after-name "` not found in \"" scope "\"; no facts mutated.")))
         (*reject!* 3))
       (when (and (not front?) (= (nth (nth forms anchor-idx) 2) mover-form))
-        (binding [*out* *err*] (println (str "REJECTED — reorder `" name "` :after itself is a no-op; no claims mutated.")))
+        (binding [*out* *err*] (println (str "REJECTED — reorder `" name "` :after itself is a no-op; no facts mutated.")))
         (*reject!* 3))
       ;; the gap to land in: between the anchor and its next sibling, SKIPPING the mover
       ;; itself (so moving X just past its current neighbour computes the right gap).

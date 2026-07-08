@@ -81,7 +81,7 @@
     (binding [*out* *err*]
       (println (str "REJECTED — `" new-name "` is already a binding in " m ".\n"
                     "  A rename onto an existing binding would shadow/collide; the store refuses the write.\n"
-                    "  (Turtle #5 invariant: rename-doesn't-collide. No claims were mutated.)")))
+                    "  (Turtle #5 invariant: rename-doesn't-collide. No facts were mutated.)")))
     (System/exit 3)))
 
 (def renamed (atom 0))
