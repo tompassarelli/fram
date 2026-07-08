@@ -224,11 +224,47 @@
        (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
 
 ;; read-bridge: reified live view -> the flat (l p r) Claim vec build-index wants.
+;; PURE over its store: DOMAIN facts only (claim->triple hides every schema-pred). This is
+;; the STORE-MATERIALIZATION view — the snapshot-reconcile gate compares two stores of the
+;; same log through it, and it must stay byte-identical to pre-F4 (analyst invariant 3:
+;; schema facts are NOT store-materialized as domain triples). The client READ view adds
+;; the log-sourced schema facts on top — see client-view-claims below.
 (defn reified->claims [c0]
   (let [st (:store c0)]
     (->> (c/current-claims st)
          (keep (fn [cid] (when-let [t (claim->triple st cid)] (ck/->Claim (nth t 0) (nth t 1) (nth t 2)))))
          vec)))
+
+;; ---- schema-as-claims READ view (F4) ---------------------------------------
+;; cardinality/value_kind are USER-DECLARABLE schema facts (F3 opened the write path), and
+;; the "predicates are entities" promise says `show <pred>` must reveal them. But the STORE
+;; cannot host their read view: migrate's def-predicate! seeds a cardinality + value_kind
+;; claim for EVERY predicate (subject = the pred-name's value-object, so name-of => nil), so
+;; the reified store holds ~1 seed pair per pred that the cold fold (log-resident lines only)
+;; never emits. Projecting the store would leak ALL those seeds and shatter warm<->cold
+;; parity — which is why the pre-F3 blanket filter hid every schema-pred. The AUTHORITY for
+;; which schema facts are LIVE is the FLAT LOG (exactly what the cold fold reads): schema-view
+;; mirrors the log's live schema-writable facts as [l p] -> ck/Claim in raw @-prefixed log
+;; form. It is refreshed only at the RARE log-mutation points (boot / schema-write / external
+;; reload), so the warm read path pays nothing per version.
+(def schema-view (atom {}))   ; [l p] -> ck/Claim — live user-declared schema-writable facts
+
+;; recompute schema-view from a flat log's schema-writable lines (keyed-latest via the SAME
+;; fold the cold path uses, so the facts are byte-identical to the cold projection). Called
+;; at boot + on external reload, when the log file is quiescent (safe to re-read).
+(defn- seed-schema-view! [flat]
+  (reset! schema-view
+    (->> (fram.rt/read-log flat)
+         (filter #(schema-writable (:p %)))
+         vec fold/fold :claims
+         (reduce (fn [m cl] (assoc m [(:l cl) (:p cl)] cl)) {}))))
+
+;; the CLIENT read view: DOMAIN facts (store) + user-declared SCHEMA facts (log). This is
+;; what the daemon serves to CLI reads (:claims op, warm cache, :query/show). It is NOT the
+;; reconcile/materialization view (that stays domain-pure, reified->claims). Every schema
+;; fact here is hidden from the store projection, so there is no double-count.
+(defn client-view-claims [c0]
+  (into (reified->claims c0) (vals @schema-view)))
 
 ;; The live (l p r) triples on ONE (te-name, p-str) group, projected exactly as
 ;; reified->claims would — the authoritative post-commit state of just that group.
@@ -328,7 +364,7 @@
 (defn warm! []
   (let [v (current-seq @co)]
     (when (not= v (:version @cache))
-      (let [claims (reified->claims @co)]
+      (let [claims (client-view-claims @co)]        ; F4: client read view = domain + schema facts
         (reset! cache {:claims (set claims) :idx (idx-build claims) :index nil :version v})))
     @cache))
 (defn index! []
@@ -488,6 +524,16 @@
         :else               (clear! "value_kind"))
       (let [seq (get-in @st [:txs tx :seq])]
         (append-flat! op te p r seq)
+        ;; mirror the log fact into the READ view directly from the op (append-flat! is
+        ;; async, so re-reading the file here would race): assert installs the fact,
+        ;; retract drops it — exactly how the cold fold's keyed-latest treats the line.
+        (if (= op "assert")
+          (swap! schema-view assoc [te p] (ck/->Claim te p r))
+          (swap! schema-view dissoc [te p]))
+        ;; force the warm cache to rebuild (schema writes skip apply-commit-delta!): the
+        ;; version bump alone leaves a race window where a rebuild could tag the new
+        ;; version with the pre-swap schema-view. Invalidate so the next warm! re-projects.
+        (swap! cache assoc :version -1)
         (notify-subs! {:event :commit :version seq :op op :l te :p p :r r})
         {:ok seq}))))
 
@@ -1914,7 +1960,7 @@
                       res (if use-idx (idx-run (warm-idx) qy) (q/run (warm-claims) qy))]
                   (assoc res :version (current-seq @co) :engine (if use-idx "index" "scan")))
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
-      :warm-check (let [inc (warm!) fresh (reified->claims @co) fidx (idx-build fresh)]
+      :warm-check (let [inc (warm!) fresh (client-view-claims @co) fidx (idx-build fresh)]
                     {:consistent (and (= (:triples (:idx inc)) (:triples fidx))
                                       (= (:by-pr (:idx inc)) (:by-pr fidx))
                                       (= (:by-lp (:idx inc)) (:by-lp fidx))
@@ -1941,7 +1987,7 @@
                       triples (if (= v (:version cc))
                                 (:triples cc)
                                 (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
-                                               (fold/refold-order (reified->claims @co)))]
+                                               (fold/refold-order (client-view-claims @co)))]
                                   (reset! claims-wire-cache {:version v :triples ts})
                                   ts))]
                   {:version v
@@ -2659,6 +2705,7 @@
         (reset! built-through (or (:next-seq @(:store c0)) 0))))
     (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
     (reset! flat-log flat)
+    (seed-schema-view! flat)               ; F4: log-resident schema-writable facts for the read view
     (reset! flat-mtime (stamp flat))
     (reset! flat-bytes (.length (java.io.File. (str flat))))
     (reset! cache {:index nil :version -1})
@@ -2717,6 +2764,7 @@
                   (reset! built-through (or (:next-seq @(:store c0)) 0)))))))
         (reset! flat-mtime st)
         (reset! flat-bytes (.length (java.io.File. (str @flat-log))))
+        (seed-schema-view! @flat-log)      ; F4: external edits may add/drop schema-writable lines
         (reset! cache {:index nil :version -1})
         (reset-refers-state!)
         (index!))))))

@@ -16,8 +16,11 @@
 (defn write-lines! [path lines] (spit path (str (str/join "\n" lines) "\n")))
 (defn append-lines! [path lines] (spit path (str (str/join "\n" lines) "\n") :append true))
 
-;; the schema/meta predicates the daemon never surfaces as domain triples — filter them
-;; from the CLI fold so it compares like-for-like against the daemon's live-name-triples.
+;; the schema/meta predicates the daemon never MATERIALIZES as domain triples — filter them
+;; from the CLI fold so it compares like-for-like against the daemon's live-name-triples
+;; (the store-materialization view). NB (F4): schema-writable facts ARE surfaced in the
+;; daemon's CLIENT read view (client-view-claims), but live-name-triples is the domain-pure
+;; reconcile view, so this filter is unchanged.
 (def schema-ps #{"cardinality" "value_kind" "name" "cnf-supersedes"})
 (defn cli-domain [log]
   (set (remove #(schema-ps (:p %)) (:claims (fold/fold (fram.rt/read-log log))))))
