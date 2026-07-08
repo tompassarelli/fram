@@ -1,13 +1,13 @@
 #lang beagle/clj
 
+;; @graph-owned — source of truth is the Fram fact graph, not this text.
+;; Author via the fram MCP graph-edit verbs (add-def / set-body / rename-def /
+;; insert-after / replace-in-body), never Edit/Write — a text edit would desync
+;; the graph. De-adopt (drop this sentinel + the registry entry) to edit as
+;; text; that is a deliberate workflow change. RE-ADOPTED 2026-07-09 after the
+;; store-rename re-ingest (render(log) verified structurally identical).
 ;; ============================================================================
 ;; fram.schema — the store schema/identity layer over the kernel.
-;; ============================================================================
-;; DE-ADOPTED (lane X-A): was graph-owned (rendered from the fact graph; text edits
-;; refused). De-adopted for the lane X-A fact/store rename because the backing
-;; graph still holds the OLD names — re-adopt only after the graph is re-synced to the
-;; new store names, else a graph render would overwrite this text. See
-;; docs/private/lane-xa-report.md.
 ;; ============================================================================
 ;; Still DOMAIN-AGNOSTIC: this is the META-model (name/identity, predicate
 ;; cardinality + value-kind, cardinality-driven supersession) — NOT life-os
