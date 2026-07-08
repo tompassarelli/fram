@@ -26,7 +26,7 @@
 (require '[clojure.string :as str] '[clojure.java.io :as io] '[clojure.java.shell :as sh])
 
 (def root (System/getProperty "user.dir"))
-(def fixture (str root "/tests/fixtures/proto-addr/code.claimlog"))
+(def fixture (str root "/tests/fixtures/proto-addr/code.factlog"))
 (when-not (.exists (io/file fixture))
   (println "SKIP — missing fixture" fixture) (System/exit 0))
 

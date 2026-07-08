@@ -29,7 +29,7 @@
                                            (when (string? nm) (second (re-matches #"@([^#]+)#\d+" nm)))) name-cids))))
 (def K (count mods))
 (def one (first mods))
-(def nclaims (count (c/current-facts st)))
+(def nfacts (count (c/current-facts st)))
 
 (def scan-floor (first (timed (doall (map #(c/fact-of st %) name-cids)))))
 (def whole-frame (nth (sort (repeatedly 3 #(first (timed (binding [resolve/*resolve-walk?* false]
@@ -51,4 +51,4 @@
 (def coh (timed (fref-count)))
 
 (println (format "KSWEEP K=%d facts=%d scan_floor=%.0f whole_frame=%.0f scoped_frame=%.0f coh_scan=%.0f fwd_refs=%d"
-                 K nclaims scan-floor whole-frame scoped-frame (first coh) (second coh)))
+                 K nfacts scan-floor whole-frame scoped-frame (first coh) (second coh)))

@@ -3,14 +3,14 @@
 ;;
 ;; Settles, once, for every future session: on the MAINLINE authored path, is a
 ;; cross-form reference SPELLING (v -> interned literal, refers_to derived) or
-;; IDENTITY (an authored claim whose r-slot is an entity-id pointing at the def)?
+;; IDENTITY (an authored fact whose r-slot is an entity-id pointing at the def)?
 ;;
 ;; CELL 1: for a committed cross-form reference (call-site S -> definition B in a
-;;   DIFFERENT module), dump EVERY authored claim with l=S, and classify each r-slot:
+;;   DIFFERENT module), dump EVERY authored fact with l=S, and classify each r-slot:
 ;;     :literal  = r is a value-object (interned string)  -> spelling
 ;;     :entity   = r is an entity-id (points at a node)    -> identity
-;;   Decisive: is the ONLY identifying authored claim `v -> "foo"` (:literal), or is
-;;   there ALSO an authored claim with an :entity r pointing at B? (rules out the
+;;   Decisive: is the ONLY identifying authored fact `v -> "foo"` (:literal), or is
+;;   there ALSO an authored fact with an :entity r pointing at B? (rules out the
 ;;   spelling-AND-id conjunction). refers_to/markers are DERIVED — excluded from
 ;;   "authored" (they don't persist; see CELL 2).
 ;; CELL 2 is a separate grep of the committed flat log (.fram/code.log).
@@ -43,7 +43,7 @@
        (take 3) vec))
 (println "cross-form references located (via derived refers_to):" (count cross))
 
-;; CELL 1 — for each, dump every AUTHORED claim with l=S, classify r-slot.
+;; CELL 1 — for each, dump every AUTHORED fact with l=S, classify r-slot.
 (defn dump [s b]
   (->> (c/by-l st s)
        (map (fn [cid]
@@ -76,6 +76,6 @@
   (some (fn [{:keys [s b]}]
           (some :points-at-def? (remove :derived? (dump s b)))) cross))
 (println (if any-identity
-           "IDENTITY PRESENT — an AUTHORED claim's r-slot is an entity-id pointing at the definition. References carry identity on the mainline TODAY → gate-v2 is a PRESENT obligation."
-           "SPELLING ONLY — every authored claim's identifying r-slot is a LITERAL (v -> interned string); the only entity-id link to the def is the DERIVED refers_to. References are spelling+derived → dangling-pointer hazard does NOT exist on the authored path."))
+           "IDENTITY PRESENT — an AUTHORED fact's r-slot is an entity-id pointing at the definition. References carry identity on the mainline TODAY → gate-v2 is a PRESENT obligation."
+           "SPELLING ONLY — every authored fact's identifying r-slot is a LITERAL (v -> interned string); the only entity-id link to the def is the DERIVED refers_to. References are spelling+derived → dangling-pointer hazard does NOT exist on the authored path."))
 (System/exit 0)

@@ -1,7 +1,7 @@
 ;; ============================================================================
 ;; coord_experiment.clj — #11 R1 git arm, SAME-ARTIFACT (beagle-text-vs-beagle-graph).
 ;; HARDENED: the git arm now edits the RENDERED TEXT of the REAL `schema` module — the SAME
-;; module the Fram arm edits via the claim graph (coord_fram_r1.clj). Previously the git
+;; module the Fram arm edits via the fact graph (coord_fram_r1.clj). Previously the git
 ;; arm used a SYNTHETIC disjoint-functions stand-in; the coordination COUNTS are content-
 ;; independent (they hold), but this closes the apples-vs-oranges hole: now both arms operate
 ;; on the same beagle artifact, git as text + Fram as graph. NOT beagle-vs-clojure.
@@ -78,6 +78,6 @@
 (println "  all K disjoint edits applied to distinct REAL schema fns + auto-merged + landed:" clean)
 (println (format "\nC_REAL (measured recompile of rendered schema) = %dms  => git landing latency ~%d..%dms/edit (validate-on-land); Fram = 70ms (defer)" C-REAL-MS C-REAL-MS (* 2 C-REAL-MS)))
 (println (if (and o1 clean)
-           ">>> SAME-ARTIFACT R1 PASS — git edits the REAL rendered schema (same module Fram edits via graph),\n    disjoint edits 3-way auto-merge (0 conflicts), validation-runs O(1). Comparison is now\n    beagle-text-vs-beagle-graph. Counts UNCHANGED from the synthetic arm (content-independent, as claimed)."
+           ">>> SAME-ARTIFACT R1 PASS — git edits the REAL rendered schema (same module Fram edits via graph),\n    disjoint edits 3-way auto-merge (0 conflicts), validation-runs O(1). Comparison is now\n    beagle-text-vs-beagle-graph. Counts UNCHANGED from the synthetic arm (content-independent, as asserted)."
            ">>> SAME-ARTIFACT R1 anomaly — see rows."))
 (System/exit (if (and o1 clean) 0 1))

@@ -292,7 +292,7 @@
 
 (defn coord-status [port]
   (try (let [r (coord-rt port {:op :status})]
-         (str "up|" (:version r) "|" (:claims r) "|" (:log r)))
+         (str "up|" (:version r) "|" (:facts r) "|" (:log r)))
        (catch Exception _ "down")))
 
 ;; warm READ ops — served off the daemon's in-memory warm store / index, avoiding the
@@ -311,7 +311,7 @@
 (defn coord-callers  [port te]      (warm-read port {:op :callers :te te}))   ; -> {:callers [...]} | nil
 (defn coord-resolved [port te pred] (warm-read port {:op :resolved :te te :p pred})) ; -> {:value :members :ambiguous? :values} | nil — surfaces multiplicity (#3)
 
-;; :claims — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
+;; :facts — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
 ;; path (thread 019f2190). The CLI rebuilds its kernel index from this instead of
 ;; paying the per-process cold fold (read-log EDN parse + fold ≈ 700ms on the 11k-line
 ;; tern log). The daemon serves the triples IN FOLD EMISSION ORDER (its contract —
@@ -320,7 +320,7 @@
 ;; Asked with {:fmt :json} DELIBERATELY: bb parses the ~2MB payload ~12x faster as
 ;; JSON (cheshire, native) than as EDN (measured 15ms vs 186ms).
 ;; Returns a (Vec kernel/Fact), or [] when the warm path is unavailable — daemon
-;; down, an older daemon without the op (its {"error" ...} reply has no "claims"),
+;; down, an older daemon without the op (its {"error" ...} reply has no "facts"),
 ;; or a daemon serving a DIFFERENT log than the caller's (the :log echo mismatches —
 ;; never silently read another store). [] is safe as the sentinel: a real log always
 ;; folds to a non-empty view (an empty log has no daemon serving it worth trusting).
@@ -330,13 +330,13 @@
     (with-open [s (coord-socket (connect-host) port)]
       (let [w (io/writer (.getOutputStream s))
             r (io/reader (.getInputStream s))]
-        (.write w (str (pr-str {:op :claims :fmt :json}) "\n"))
+        (.write w (str (pr-str {:op :facts :fmt :json}) "\n"))
         (.flush w)
         (let [resp (cheshire/parse-string (.readLine r))]
           (if (and (map? resp)
                    (= log (get resp "log"))
-                   (vector? (get resp "claims")))
-            (mapv (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2))) (get resp "claims"))
+                   (vector? (get resp "facts")))
+            (mapv (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2))) (get resp "facts"))
             []))))
     (catch Exception _ [])))
 

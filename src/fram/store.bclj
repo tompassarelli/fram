@@ -1,8 +1,8 @@
 #lang beagle/clj
 ;; ============================================================================
-;; fram.store — the reified CNF kernel (Stage 1).  THE one engine.
+;; fram.store — the reified store kernel (Stage 1).  THE one engine.
 ;; ============================================================================
-;; DOMAIN-AGNOSTIC by construction: knows ONLY Object / Value / Claim / tx. ZERO
+;; DOMAIN-AGNOSTIC by construction: knows ONLY Object / Value / Fact / tx. ZERO
 ;; life-os vocabulary and ZERO code vocabulary — all domain terms are interned
 ;; VALUES that live as facts, never symbols in this file. (store_invariant_test.)
 ;;
@@ -14,13 +14,13 @@
 ;;     it but are NOT objects (so provenance can be facts-about-tx).
 ;;   - value! interns by equality, TYPE-GENERAL; re-intern returns the same id.
 ;;   - facts are NOT interned: fact! mints a fresh id even for identical (l p r),
-;;     and a claim id is itself an object usable in l/p/r (reification, any depth).
-;;   - live view = facts − superseded; supersession is DATA-DRIVEN: a claim whose
-;;     p == the registered supersedes-pred marks its r (the old claim) not-live.
+;;     and a fact id is itself an object usable in l/p/r (reification, any depth).
+;;   - live view = facts − superseded; supersession is DATA-DRIVEN: a fact whose
+;;     p == the registered supersedes-pred marks its r (the old fact) not-live.
 ;;   - provenance = tx entities (seq, agent) + facts; never denormalized fields.
 ;;
-;; Ids are minted as Int and the typed store carries them as Int (claim l/p/r,
-;; the indexes, tx-of). A claim VALUE is a (Map Keyword Any) {:l :p :r} (open map,
+;; Ids are minted as Int and the typed store carries them as Int (fact l/p/r,
+;; the indexes, tx-of). A fact VALUE is a (Map Keyword Any) {:l :p :r} (open map,
 ;; NOT a record) so it stays = to the map literal assemble-dump (.clj) feeds via
 ;; load-store! and store_test asserts against. The store handle is a bare `Atom` —
 ;; Beagle has no parametric (Atom T), so deref erases the element type; we recover
@@ -91,9 +91,9 @@
   (swap! ctx update :idx-by-lp update [l p] (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
   (swap! ctx update :idx-by-pr update [p r] (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid))))
 
-;; Assert a claim. If p is the registered supersedes-pred, this claim marks its r
-;; (the old claim) not-live — so supersession is just a claim-about-a-claim.
-;; A claim value is a (Map Keyword Any) {:l :p :r} (NOT a record): l/p/r are Int
+;; Assert a fact. If p is the registered supersedes-pred, this fact marks its r
+;; (the old fact) not-live — so supersession is just a fact-about-a-fact.
+;; A fact value is a (Map Keyword Any) {:l :p :r} (NOT a record): l/p/r are Int
 ;; ids, but the value stays an open keyword-map so it is = to the map literal that
 ;; assemble-dump (.clj) feeds via load-store! and that store_test asserts against.
 (defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int

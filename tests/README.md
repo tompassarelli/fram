@@ -1,7 +1,7 @@
 # tests/ — dev tests, receipts, and experiment harnesses
 
 Moved here from the repo root 2026-06-21 to declutter (was ~57 `.clj` files at root).
-These are the CNF/coordinator dev scripts: `*_test.clj` (tests), `*_receipt.clj` (banked
+These are the store/coordinator dev scripts: `*_test.clj` (tests), `*_receipt.clj` (banked
 experiment evidence), and `*_experiment.clj` / `*_sim.clj` / `*_ksweep.clj` (experiment harnesses).
 
 ## How to run (IMPORTANT: from the repo ROOT)
@@ -16,7 +16,7 @@ Run from the **repo root** (`~/code/fram`), not from inside `tests/`. Each scrip
 current working directory** — those two coordinator files intentionally stay at the repo root (the
 bins `bin/fram-daemon` / `fram-edit-code` / `fram-render-code` also `load-file` them by relative
 path). Running from root makes the relative load resolve correctly. (Some in-file usage comments
-still show the old pre-move `bb -cp out cnf_<file>.clj` path — prefix `tests/`.)
+still show the old pre-move `bb -cp out store_<file>.clj` path — prefix `tests/`.)
 
 ## What stays at the root (do NOT move)
 

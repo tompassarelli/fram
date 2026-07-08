@@ -10,7 +10,7 @@
 ;; for the flag/invalidation matrix itself)
 (reset! snapshot-boot-enabled? true)
 
-(def LOG "/tmp/cnf-snapshot-test.log")
+(def LOG "/tmp/store-snapshot-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
 (defn write-lines! [path lines] (spit path (str (str/join "\n" lines) "\n")))
 (defn append-lines! [path lines] (spit path (str (str/join "\n" lines) "\n") :append true))

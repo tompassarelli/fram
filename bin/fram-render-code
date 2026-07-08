@@ -2,7 +2,7 @@
 ;; ============================================================================
 ;; fram-render-code — THE FLIP, stage 2: canonical CODE log -> .bclj (a VIEW).
 ;; ============================================================================
-;; The .bclj is a PURE FUNCTION of the claim log. This boots the reified store
+;; The .bclj is a PURE FUNCTION of the fact log. This boots the reified store
 ;; over .fram/code.log (the SAME migrate-flat->co the daemon uses — IN-PROCESS,
 ;; no socket; a pure render needs no coordinator), materializes refers_to over the
 ;; warm store (so references render via identity), projects the module's facts to
@@ -118,14 +118,14 @@
   ;; 1. boot the reified store over the code log (IN-PROCESS migrate-flat->co).
   (let [coord (migrate-flat->co log-path)
         st    (:store coord)
-        ;; the module's source path from the @<mod>#root file claim (the @file analogue).
+        ;; the module's source path from the @<mod>#root file fact (the @file analogue).
         root-id (s/resolve-name st (str "@" module "#root"))
         file-pred (c/value-id st "file")
         src-path (when (and root-id file-pred)
                    (let [cs (c/by-lp st root-id file-pred)]
                      (when (seq cs) (c/literal st (:r (c/fact-of st (first cs)))))))]
     (when-not src-path
-      (die "module" module "has no @" module "#root file claim in" log-path
+      (die "module" module "has no @" module "#root file fact in" log-path
            "(was it ingested?)"))
 
     ;; 2. materialize refers_to over the warm store (resolver writes refers_to for

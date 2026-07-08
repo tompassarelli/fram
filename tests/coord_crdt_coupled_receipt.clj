@@ -12,7 +12,7 @@
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord_daemon.clj")
-(def tmp (str "/tmp/cnf-crdtcpl-" (System/nanoTime) ".log"))
+(def tmp (str "/tmp/store-crdtcpl-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))
 (boot-flat! tmp)
 (def st (:store @co))

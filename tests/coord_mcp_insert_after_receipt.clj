@@ -43,7 +43,7 @@
                      :else (die "no .fram/code.log found at" a "or" b))))
 ;; name the COPY "*code.log" so the CLI safety gate (requires the daemon's :log to
 ;; contain "code.log") passes against this isolated daemon.
-(def tmp-log (str "/tmp/cnf-mcp-insert-" (System/nanoTime) "-code.log"))
+(def tmp-log (str "/tmp/store-mcp-insert-" (System/nanoTime) "-code.log"))
 (io/copy (io/file src-log) (io/file tmp-log))
 
 ;; pick a verified-free non-7977 port.
@@ -148,7 +148,7 @@
 ;; (re-implemented here only because flip-verb-flags is a private defn in the MCP ns;
 ;; this is byte-identical to fram_mcp.clj's "insert-form" arm.)
 (def e (:edit edit-env))
-(def work (str "/tmp/cnf-mcp-insert-work-" (System/nanoTime)))
+(def work (str "/tmp/store-mcp-insert-work-" (System/nanoTime)))
 (.mkdirs (io/file work))
 (def spec-file (str work "/spec.edn"))
 (spit spec-file (:form e))

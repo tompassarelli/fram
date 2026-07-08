@@ -1,4 +1,4 @@
-(ns fram.cnf
+(ns fram.store
   (:require [fram.types :as t]))
 
 (defn new-store []
@@ -47,7 +47,7 @@
 (defn set-supersedes-pred! [ctx pid]
   (swap! ctx assoc :supersedes-pred pid))
 
-(defn- index-claim! [ctx cid l p r]
+(defn- index-fact! [ctx cid l p r]
   (swap! ctx update :idx-by-l update l (fn [o] (conj (or o []) cid)))
   (swap! ctx update :idx-by-p update p (fn [o] (conj (or o []) cid)))
   (swap! ctx update :idx-by-r update r (fn [o] (conj (or o []) cid)))
@@ -57,25 +57,19 @@
 (defn fact! [ctx l p r tx]
   (let [cid (fresh-id! ctx)]
   (swap! ctx update :objects assoc cid true)
-  (swap! ctx update :claims assoc cid {:l l :p p :r r})
+  (swap! ctx update :facts assoc cid {:l l :p p :r r})
   (swap! ctx update :tx-of assoc cid tx)
-  (index-claim! ctx cid l p r)
+  (index-fact! ctx cid l p r)
   (if (= p (let [s (deref ctx)]
   (:supersedes-pred s))) (do
   (swap! ctx update :superseded assoc r true)))
   cid))
 
-(defn claim! [ctx l p r tx]
-  (fact! ctx l p r tx))
-
 (defn fact-of [ctx cid]
   (let [s (deref ctx)]
-  (get (:claims s) cid)))
+  (get (:facts s) cid)))
 
-(defn claim-of [ctx cid]
-  (fact-of ctx cid))
-
-(defn claim-tx [ctx cid]
+(defn fact-tx [ctx cid]
   (let [s (deref ctx)]
   (get (:tx-of s) cid)))
 
@@ -106,13 +100,13 @@
   (live-only ctx (let [s (deref ctx)]
   (get (:idx-by-pr s) [p r] []))))
 
-(defn current-claims [ctx]
+(defn current-facts [ctx]
   (live-only ctx (let [s (deref ctx)]
-  (vec (keys (:claims s))))))
+  (vec (keys (:facts s))))))
 
 (defn dump-store [ctx]
   (let [s (deref ctx)]
-  {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s) :objects (vec (keys (:objects s))) :values (vec (:values s)) :claims (vec (:claims s)) :tx-of (vec (:tx-of s)) :txs (vec (:txs s)) :superseded (vec (keys (:superseded s)))}))
+  {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s) :objects (vec (keys (:objects s))) :values (vec (:values s)) :facts (vec (:facts s)) :tx-of (vec (:tx-of s)) :txs (vec (:txs s)) :superseded (vec (keys (:superseded s)))}))
 
 (defn load-store! [ctx data]
   (swap! ctx (fn [old] (t/->Store (:next-id data) (:next-seq data) (:supersedes-pred data) {} {} {} {} {} {} {} {} {} {} {} {})))
@@ -123,11 +117,11 @@
    v (nth e 1)]
   (swap! ctx update :values assoc id v)
   (swap! ctx update :val-intern assoc v id)))
-  (doseq [e (:claims data)]
+  (doseq [e (:facts data)]
   (let [cid (first e)
    m (nth e 1)]
-  (swap! ctx update :claims assoc cid m)
-  (index-claim! ctx cid (:l m) (:p m) (:r m))))
+  (swap! ctx update :facts assoc cid m)
+  (index-fact! ctx cid (:l m) (:p m) (:r m))))
   (doseq [e (:tx-of data)]
   (swap! ctx update :tx-of assoc (first e) (nth e 1)))
   (doseq [e (:txs data)]

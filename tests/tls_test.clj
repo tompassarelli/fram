@@ -55,7 +55,7 @@
 (defn rejected? [thunk] (try (not (map? (thunk))) (catch Exception _ true)))
 
 ;; --- start the JVM daemon with mTLS on ---
-(def log (path "claims.log")); (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"t\"}\n")
+(def log (path "facts.log")); (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"t\"}\n")
 (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"t\"}\n")
 (def proc (p/process ["bin/fram-daemon" (str PORT) log]
                      {:out (io/file (path "d.out")) :err (io/file (path "d.err"))

@@ -3,7 +3,7 @@
 ;;
 ;; core_code_blind_test.clj guards ONE direction (fram-core must not learn beagle-as-
 ;; subject). This guards the OTHER: the folded chartroom module (beagle source
-;; code-intelligence) may rent ONLY fram's small, stable, PUBLIC claim+Datalog surface
+;; code-intelligence) may rent ONLY fram's small, stable, PUBLIC fact+Datalog surface
 ;; — it must not reach into engine internals. Co-locating the repos removes the
 ;; cross-classpath friction that used to make a deep reach cost something, so a CI
 ;; check replaces it.
@@ -45,7 +45,7 @@
 (println "== chartroom-seam guard ==")
 (println (str "  chartroom rents (allowed): " allowed))
 (if (empty? violations)
-  (println (str "  PASS — chartroom/src rents only fram's public claim+Datalog surface across "
+  (println (str "  PASS — chartroom/src rents only fram's public fact+Datalog surface across "
                 (count src-files) " files."))
   (do
     (println "  FAIL — chartroom reached into fram beyond the allowed public surface:")

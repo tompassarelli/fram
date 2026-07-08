@@ -29,7 +29,7 @@
 (def M "kernel")
 (when-not (.exists (io/file ".fram/code.log")) (println "SKIP — no .fram/code.log") (System/exit 0))
 
-(def tmp (str "/tmp/cnf-g3-" (System/nanoTime) ".log"))
+(def tmp (str "/tmp/store-g3-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))
 (boot-flat! tmp)
 (def st (:store @co))
@@ -113,5 +113,5 @@
 
   :else
   (do (println "UNEXPECTED — ties are NOT the commit-order name-int (tieA=%s niA=%s tieB=%s niB=%s)." tieA niA tieB niB)
-      (println "The order may be order-independent after all; re-examine the tie source before claiming the boundary.")
+      (println "The order may be order-independent after all; re-examine the tie source before asserting the boundary.")
       (System/exit 2)))

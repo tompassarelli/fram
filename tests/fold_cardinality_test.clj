@@ -1,8 +1,8 @@
 ;; fold_cardinality_test.clj — schema-as-facts cardinality, the TWO-PASS fold.
 ;; Proves pass 1 (fram.fold/card-map) reads `@<pred> cardinality single|multi` facts —
 ;; @-prefix stripped, latest-:tx-wins per predicate, meta-preds seeded — and pass 2 keys
-;; the fold by the EFFECTIVE cardinality (claim > env > fallback, via k/single-eff?), so
-;; a cardinality claim overrides the env/fallback classification in BOTH directions and a
+;; the fold by the EFFECTIVE cardinality (fact > env > fallback, via k/single-eff?), so
+;; a cardinality fact overrides the env/fallback classification in BOTH directions and a
 ;; log with no cardinality facts folds identically to before.
 ;;   bb -cp out tests/fold_cardinality_test.clj
 (require '[fram.fold :as fold] '[fram.kernel :as k])
@@ -29,10 +29,10 @@
                          (a 2 "retract" "@bar" "cardinality" "single")])]
   (chk "retracted declaration falls back (bar absent from map)" (nil? (get cm "bar"))))
 
-;; --- single-eff?: claim > env > fallback ------------------------------------
+;; --- single-eff?: fact > env > fallback ------------------------------------
 (let [cm {"title" false "tag" true}]
-  (chk "single-eff?: claim forces kernel-single 'title' -> NOT single" (= false (k/single-eff? cm "title")))
-  (chk "single-eff?: claim forces non-kernel 'tag' -> single"          (= true  (k/single-eff? cm "tag")))
+  (chk "single-eff?: fact forces kernel-single 'title' -> NOT single" (= false (k/single-eff? cm "title")))
+  (chk "single-eff?: fact forces non-kernel 'tag' -> single"          (= true  (k/single-eff? cm "tag")))
   (chk "single-eff?: undeclared pred falls back to single? (title kernel-single)"
        (= (k/single? "title") (k/single-eff? {} "title"))))
 
@@ -56,9 +56,9 @@
                     (a 3 "assert" "@T1" "tag"   "x")
                     (a 4 "assert" "@T1" "tag"   "y")]) ; tag is multi -> both
       cl (:facts f)]
-  (chk "no-claim fold: kernel-single title collapses to latest B"
+  (chk "no-fact fold: kernel-single title collapses to latest B"
        (= #{"B"} (set (map :r (filter #(and (= (:l %) "@T1") (= (:p %) "title")) cl)))))
-  (chk "no-claim fold: multi tag keeps {x,y}"
+  (chk "no-fact fold: multi tag keeps {x,y}"
        (= #{"x" "y"} (set (map :r (filter #(and (= (:l %) "@T1") (= (:p %) "tag")) cl))))))
 
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]

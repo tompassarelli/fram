@@ -1,6 +1,6 @@
 ;; query_test.clj — the structured/validated Datalog-shaped query surface.
 ;; Proves: (1) positive join + transitive closure return correct tuples over a
-;; flat claim fold; (2) the boundary REJECTS malformed/unsafe queries (unknown
+;; flat fact fold; (2) the boundary REJECTS malformed/unsafe queries (unknown
 ;; relation, bad term, unstratified negation) instead of running them — the
 ;; "can't emit broken" property; (3) stratified negation runs when well-formed.
 ;;   bb -cp out query_test.clj
@@ -9,7 +9,7 @@
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
 
-;; a tiny graph as CLAIMS (strings, exactly the flat fold's shape):
+;; a tiny graph as FACTS (strings, exactly the flat fold's shape):
 ;;   a -depends_on-> b -depends_on-> c   ; b,c are "hub"
 (def facts
   [(k/->Fact "@a" "depends_on" "@b")

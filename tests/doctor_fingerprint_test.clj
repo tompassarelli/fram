@@ -1,8 +1,8 @@
-;; doctor_fingerprint_test.clj — `fram doctor` surfaces the CLAIMS-DERIVED cardinality
+;; doctor_fingerprint_test.clj — `fram doctor` surfaces the FACTS-DERIVED cardinality
 ;; source (the finding #23 operator cross-check). Drives the real CLI over a synthetic
-;; log with a `@<pred> cardinality single` claim (FRAM_PORT points at a dead port so the
+;; log with a `@<pred> cardinality single` fact (FRAM_PORT points at a dead port so the
 ;; live coordinator can't leak in) and asserts doctor reports the facts-derived count,
-;; the cardinality-overlay fingerprint (which reflects the claim), and the claim > env >
+;; the cardinality-overlay fingerprint (which reflects the fact), and the fact > env >
 ;; fallback precedence note.
 ;;   bb -cp out tests/doctor_fingerprint_test.clj
 (require '[babashka.process :as p] '[clojure.string :as str])
@@ -12,7 +12,7 @@
 
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-doctor-test-" (System/nanoTime)))
 (.mkdirs (java.io.File. tmp))
-(def logpath (str tmp "/claims.log"))
+(def logpath (str tmp "/facts.log"))
 (spit logpath
   (str/join "\n"
     ['{:tx 1 :op "assert" :l "@tag" :p "cardinality" :r "single" :frame "test"}

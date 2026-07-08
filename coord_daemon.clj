@@ -63,7 +63,7 @@
 ;; (:query/datalog/warm-cache/tripwire) — render+resolve read it off the store directly. Filtered
 ;; HERE (read view) WITHOUT being a resolve-pred (which would strip it from the store + roll back seq).
 ;; withdrawn_* are the first-class retraction SURFACE (thread H): facts-about-a-cid
-;; recording who/when/why a claim was cancelled. Like store-supersedes they are bookkeeping
+;; recording who/when/why a fact was cancelled. Like store-supersedes they are bookkeeping
 ;; ON cid-subjects, not domain data — filter them from the warm read view / :query / index
 ;; (the resolve layer reads them off the store directly via coord/withdrawal-of).
 (def read-hidden-preds #{"bound_to" "withdrawn_by" "withdrawn_at" "withdrawn_reason"})
@@ -74,7 +74,7 @@
 ;; write-ceiling. S3.3 makes re-resolve MODULE-GRANULAR: track which modules an
 ;; edit touched (dirty), classify by EXPORT-SET delta (not syntactic site), and
 ;; re-resolve ONLY the affected module set (dirty ∪ export-changed consumers).
-;; dirty-modules  : modules with an asserted/retracted AST claim since last materialize.
+;; dirty-modules  : modules with an asserted/retracted AST fact since last materialize.
 ;; export-snapshot: {module -> #{exported/top-level name}} captured at the last
 ;;                  materialize — the classifier diffs the live set against it.
 ;; materialized?  : has refers_to been fully materialized at least once (cold gate —
@@ -178,8 +178,8 @@
 ;; line the CLI's cold fold reads — so "files are pure projections of the reified
 ;; store" (Stage 7) and existing reads keep working UNCHANGED across the cutover.
 ;; Refreshes flat-mtime so our OWN write isn't mistaken for an external edit.
-;; flat-log batching: a multi-claim commit collects its lines and writes+fsyncs ONCE (1 fsync per
-;; commit, NOT per claim — the per-claim fsync was the dominant authoring cost, ~13 fsyncs/def).
+;; flat-log batching: a multi-fact commit collects its lines and writes+fsyncs ONCE (1 fsync per
+;; commit, NOT per fact — the per-fact fsync was the dominant authoring cost, ~13 fsyncs/def).
 ;; *flat-batch* (an atom of line-strings) is bound around a commit; nil => write immediately.
 (def ^:dynamic *flat-batch* nil)
 (defn- flat-line [op te p r seq]
@@ -209,9 +209,9 @@
       (when (= "1" (System/getenv "FRAM_PROF"))
         (binding [*out* *err*] (println (format "  flush(enqueue) n=%d %.1fms" (count lines) (/ (- (System/nanoTime) t0) 1e6))))))))
 
-;; render one live claim cid into the SAME (l-name p-str r-rendered) shape build-index
+;; render one live fact cid into the SAME (l-name p-str r-rendered) shape build-index
 ;; wants: subject -> name, predicate -> literal, object -> literal (value) | name (ref).
-;; Returns nil for a schema-pred OR resolve-pred claim (both excluded from the read view).
+;; Returns nil for a schema-pred OR resolve-pred fact (both excluded from the read view).
 ;; The single filter point: reified->facts, lp-live-triples, AND the warm cache all
 ;; funnel through here, so filtering BOTH sets here is what keeps the DERIVED refers_to
 ;; + render markers (materialized over `co` for :callers) invisible to :query, the
@@ -223,7 +223,7 @@
       [(s/name-of st (:l cl)) pstr
        (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
 
-;; read-bridge: reified live view -> the flat (l p r) Claim vec build-index wants.
+;; read-bridge: reified live view -> the flat (l p r) Fact vec build-index wants.
 ;; PURE over its store: DOMAIN facts only (fact->triple hides every schema-pred). This is
 ;; the STORE-MATERIALIZATION view — the snapshot-reconcile gate compares two stores of the
 ;; same log through it, and it must stay byte-identical to pre-F4 (analyst invariant 3:
@@ -239,7 +239,7 @@
 ;; cardinality/value_kind are USER-DECLARABLE schema facts (F3 opened the write path), and
 ;; the "predicates are entities" promise says `show <pred>` must reveal them. But the STORE
 ;; cannot host their read view: migrate's def-predicate! seeds a cardinality + value_kind
-;; claim for EVERY predicate (subject = the pred-name's value-object, so name-of => nil), so
+;; fact for EVERY predicate (subject = the pred-name's value-object, so name-of => nil), so
 ;; the reified store holds ~1 seed pair per pred that the cold fold (log-resident lines only)
 ;; never emits. Projecting the store would leak ALL those seeds and shatter warm<->cold
 ;; parity — which is why the pre-F3 blanket filter hid every schema-pred. The AUTHORITY for
@@ -359,7 +359,7 @@
 ;; warm read cache kept CONSISTENT with the coordinator under writes (the live write
 ;; path): whole-rebuild on a cold/divergent version, then O(1) incremental delta-apply
 ;; on each in-lockstep commit — so a write no longer forces an O(corpus) reprojection
-;; (the swarm write-ceiling). :facts is a SET of Claims (O(1) add/remove); :idx is the
+;; (the swarm write-ceiling). :facts is a SET of Facts (O(1) add/remove); :idx is the
 ;; triple-set + by-[p r]; :index (kernel, for :validate) is lazy/whole, off the hot path.
 (defn warm! []
   (let [v (current-seq @co)]
@@ -412,7 +412,7 @@
 (def ^:private notify-exec
   (java.util.concurrent.Executors/newSingleThreadExecutor
    (reify java.util.concurrent.ThreadFactory
-     (newThread [_ r] (doto (Thread. r "cnf-notify") (.setDaemon true))))))
+     (newThread [_ r] (doto (Thread. r "store-notify") (.setDaemon true))))))
 
 ;; P5 — scoped subscribe. A subscriber MAY register a filter so the daemon pushes only
 ;; relevant commits instead of the firehose (efficiency at scale). Backward-compatible:
@@ -481,7 +481,7 @@
 ;; `tell @<pred> cardinality single` is the authoring surface for schema-as-facts. A
 ;; schema-writable predicate routes through here: validate the subject shape + value,
 ;; apply the multi->single DATA-LOSS guard, then write through the schema layer (s/assert!
-;; on the STRIPPED pred-name — never a raw @<pred> entity node) and append the claim
+;; on the STRIPPED pred-name — never a raw @<pred> entity node) and append the fact
 ;; VERBATIM to the flat log so the cold CLI fold's card-map sees it (daemon⇄CLI parity).
 (defn- pred-name [s] (if (and (string? s) (str/starts-with? s "@")) (subs s 1) s))
 (def ^:private schema-allowed {"cardinality" #{"single" "multi"} "value_kind" #{"ref" "literal"}})
@@ -502,7 +502,7 @@
         {:count (count offending)
          :subjects (mapv (fn [g] (or (s/name-of st (first g)) (str (first g)))) (take 3 offending))}))))
 
-;; write one schema meta-claim into the store + flat log in ONE coordinator tx. ASSERT:
+;; write one schema meta-fact into the store + flat log in ONE coordinator tx. ASSERT:
 ;; s/assert! on the pred-name's value-object supersedes the prior declaration (cardinality
 ;; + value_kind are single-valued per setup!); only cardinality is written, so a value_kind
 ;; declared earlier is preserved (invariant). RETRACT: fall back to the env/fallback
@@ -685,18 +685,18 @@
 ;; ============================================================================
 ;; :callers — warm scope-correct callers of a binding, from refers_to over `co`.
 ;; ============================================================================
-;; clean slate: surgically drop EVERY live resolve-pred claim (refers_to + render
-;; markers) from the cnf STORE's facts + all five indexes (idx-by-l/p/r/lp/pr) + the
+;; clean slate: surgically drop EVERY live resolve-pred fact (refers_to + render
+;; markers) from the store STORE's facts + all five indexes (idx-by-l/p/r/lp/pr) + the
 ;; superseded set. (Independent of the S1-fix cache's :by-lp index — this is the store,
 ;; not the warm cache.) The resolver assumes a clean slate, else a re-resolve over an
 ;; existing edge set doubles the refers_to edges. These facts are derived/in-memory
 ;; only, so dropping them from the map (rather than appending a supersede) is exactly
 ;; right — nothing durable references them, and they were never written to the flat log.
 ;; subj-keep? : an optional predicate on the SUBJECT node-id (:l of the resolve-pred
-;; claim). nil => strip every resolve-pred claim (whole-corpus, the S3.2 behavior).
+;; fact). nil => strip every resolve-pred fact (whole-corpus, the S3.2 behavior).
 ;; A set/fn => strip only those whose subject is in scope (S3.3 scoped strip: clear
 ;; just the affected modules' derived edges before re-walking them). Correctness:
-;; a resolve-pred claim's subject IS the referencing/binding leaf, and every leaf
+;; a resolve-pred fact's subject IS the referencing/binding leaf, and every leaf
 ;; belongs to exactly one module (its @<mod># name), so scoping by subject scopes by
 ;; module exactly — the untouched modules' edges are left intact.
 (defn- strip-resolve-facts!
@@ -889,7 +889,7 @@
 ;; modules are distinct @mod#int nodes, never merged) and rename-stable (keyed on node
 ;; identity, not spelling). The edge set + its transitive blast closure are VERSION-
 ;; CACHED on refers-version, so they are re-derived only when CODE actually changed —
-;; never on a footprint declare (a @concern->@node claim leaves the call graph alone) nor
+;; never on a footprint declare (a @concern->@node fact leaves the call graph alone) nor
 ;; per overlap query. blast(D) = D's transitive callers (who breaks if D changes), shared
 ;; with who-calls via resolve/blast-closure. (v1: call-edges re-derives whole-corpus on a
 ;; code edit; an O(delta) calls_defn — thread D's discipline — is the scale follow-up.)
@@ -916,7 +916,7 @@
   (reduce (fn [acc n] (into (conj acc n) (get blast n))) #{} nodes))
 
 ;; {concern-name -> #{footprint node-name}} read LIVE from the warm store — sees a peer's
-;; committed-but-unrendered footprint claim with no render and no merge.
+;; committed-but-unrendered footprint fact with no render and no merge.
 (defn- footprint-by-concern [st]
   (when-let [FP (c/value-id st "footprint")]
     (reduce (fn [m cid]
@@ -930,7 +930,7 @@
 ;; ============================================================================
 ;; INCREMENTAL CORPUS CACHE (per-verb O(edited-module), not O(total-app))
 ;; ============================================================================
-;; corpus-from-store! otherwise reduces over EVERY name claim in the whole store on EVERY commit
+;; corpus-from-store! otherwise reduces over EVERY name fact in the whole store on EVERY commit
 ;; (O(total-app)) — the dominant per-op authoring cost for medium/large apps. But module-defs /
 ;; forms-of / wrapper-of only read each module's STABLE `beagle-file` wrapper eid (which never
 ;; changes across commits) plus that wrapper's children FROM THE STORE (always current). So the
@@ -952,7 +952,7 @@
 ;;
 ;; For the :te path we follow `ultimate` so that a node which is itself a REFERENCE
 ;; (a leaf carrying refers_to, e.g. the `k/->Fact` reference @import#398) resolves to
-;; the BINDING it denotes (here the kernel defrecord Claim @kernel#298), chasing
+;; the BINDING it denotes (here the kernel defrecord Fact @kernel#298), chasing
 ;; re-export/alias chains. This is idempotent for binding nodes — `ultimate` returns a
 ;; binding unchanged (a binding has no refers_to) — so callers may key :callers on a
 ;; reference site and have the daemon perform reference->ultimate->reverse-lookup in
@@ -978,7 +978,7 @@
 (defn callers-of-in-store [st B]
   (when B
     (with-resolve-read st
-      (->> (c/by-p resolve/ctx resolve/REFERS)          ; every live refers_to claim
+      (->> (c/by-p resolve/ctx resolve/REFERS)          ; every live refers_to fact
            (map #(c/fact-of resolve/ctx %))
            (keep (fn [cl]
                    (let [L (:l cl)]
@@ -1085,7 +1085,7 @@
 ;;
 ;; :edit-min instead commits exactly the verb's OWN mint/supersede ops. The authoring
 ;; verb (resolve.clj verb-set-body!/verb-rename!/verb-upsert-form!) already writes a
-;; SMALL claim delta: it mints a new body subtree (kind/v/fN facts on fresh nodes),
+;; SMALL fact delta: it mints a new body subtree (kind/v/fN facts on fresh nodes),
 ;; points the parent's body fN edge at the new root, and SUPERSEDES the old body fN
 ;; edges. We:
 ;;   1. CLONE the warm store ((atom @st) — persistent map, O(1), swap!s don't touch
@@ -1102,7 +1102,7 @@
 ;;          (l p r) to wire NAMES (subject + ref object via the name map; literal
 ;;          object verbatim) -> :assert ops.
 ;;        - NEW supersede markers (cid >= since, p == supersedes-pred): each victim
-;;          (the marker's :r) is an OLD AST claim; translate its (l p r) to names ->
+;;          (the marker's :r) is an OLD AST fact; translate its (l p r) to names ->
 ;;          :retract op. (Derived resolve-pred facts the verb's re-resolve! wrote on
 ;;          the clone are NOT committed — the log carries 0 derived lines.)
 ;;   4. apply the harvested asserts + retracts to the REAL `co` THROUGH do-assert/
@@ -1245,7 +1245,7 @@
           scope  (when scope? (fn [s] (str/includes? s module)))
           ;; the supersedes pred the migrate store uses (set by s/setup!); the verb's
           ;; resolve-warm-store! re-points :supersedes-pred at "supersedes", but the
-          ;; clone-local marker CLAIMS it writes carry whatever pred-id it used. We
+          ;; clone-local marker FACTS it writes carry whatever pred-id it used. We
           ;; harvest by re-reading the clone's :supersedes-pred AFTER the run.
           ;; A REJECTED edit must NOT kill the daemon: bind *reject!* to THROW (the CLI
           ;; default exits the process). The throw unwinds the verb + is caught by the
@@ -1279,7 +1279,7 @@
           ;; scanning the whole ~78k-entry :facts map three times (old O(corpus) cost).
           since-ids (range (inc since) (inc (:next-id m)))
           ;; clone-local entity-id -> wire NAME. Existing nodes already carry a `name`
-          ;; claim (inherited from the real store); new nodes (eid >= since with no
+          ;; fact (inherited from the real store); new nodes (eid >= since with no
           ;; name) get a fresh @<mod>#<int>, numbered above every existing int.
           name-of* (fn [eid] (s/name-of clone eid))
           new-eids (->> since-ids
@@ -1292,24 +1292,24 @@
           name-ints (reserve-name-ints! (count new-eids))   ; SERIALIZED atomic alloc — concurrent-safe; replaces clone-side next-module-int (which raced)
           eid->name (into {} (map (fn [eid i] [eid (str "@" module "#" i)]) new-eids name-ints))
           wire-name (fn [eid] (or (eid->name eid) (name-of* eid)))
-          ;; render a claim's (l p r) into wire (te p r-spec): subject -> name; object
+          ;; render a fact's (l p r) into wire (te p r-spec): subject -> name; object
           ;; -> name if it's an entity (a ref/link), else the literal value verbatim.
           ->wire (fn [cl]
                    (let [l (:l cl) p (c/literal clone (:p cl)) r (:r cl)
                          te (wire-name l)
                          rs (if (c/value-object? clone r) (c/literal clone r) (wire-name r))]
                      (when (and te (some? rs)) [te p rs])))
-          ;; the verb's NEW facts = the claim ids in [since, next-id) (O(delta)).
+          ;; the verb's NEW facts = the fact ids in [since, next-id) (O(delta)).
           new-cid-facts (keep (fn [cid] (when-let [cl (get (:facts m) cid)] [cid cl])) since-ids)
-          ;; ASSERTS: every NEW AST claim (kind/v/fN/... ; skip derived + schema preds).
+          ;; ASSERTS: every NEW AST fact (kind/v/fN/... ; skip derived + schema preds).
           new-facts (->> new-cid-facts
                           (map second)
                           (filter (fn [cl] (let [p (c/literal clone (:p cl))]
                                              (ast-pred-str? p)))))
           asserts (vec (keep ->wire new-facts))
           ;; RETRACTS: every NEW supersede marker's VICTIM, as its (l p r) by name.
-          ;; A marker is a claim (cid >= since) whose pred == the supersedes pred; its
-          ;; :r is the OLD (superseded) claim id. We retract that old claim's AST edge.
+          ;; A marker is a fact (cid >= since) whose pred == the supersedes pred; its
+          ;; :r is the OLD (superseded) fact id. We retract that old fact's AST edge.
           victim-cids (->> new-cid-facts
                            (filter (fn [[_ cl]] (= (:p cl) sup-pid)))
                            (map (fn [[_ cl]] (:r cl))))
@@ -1338,8 +1338,8 @@
        (let [v0 (current-seq @co)
              asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
              rej (atom nil)]
-        ;; BATCH the flat-log appends: collect every claim's line, write+fsync ONCE at the end
-        ;; (1 fsync per commit, not per claim). do-assert/do-retract still update the warm store
+        ;; BATCH the flat-log appends: collect every fact's line, write+fsync ONCE at the end
+        ;; (1 fsync per commit, not per fact). do-assert/do-retract still update the warm store
         ;; per op; only the durable-log fsync is batched — same durable-before-ack guarantee.
         (binding [*flat-batch* (atom [])]
          (doseq [[te p r] retracts :while (nil? @rej)]
@@ -2114,7 +2114,7 @@
       ;; (coord/live-as-of: born <= S, no supersede/withdraw marker <= S) and either
       ;; run a Datalog :query over that historical EDB (SAME q/run oracle, just fed an
       ;; as-of facts vec — the engine is untouched) or resolve one (:te,:p) group as-of.
-      ;; Retraction-as-append makes this exact: a later-withdrawn claim is RE-SEEN at an
+      ;; Retraction-as-append makes this exact: a later-withdrawn fact is RE-SEEN at an
       ;; earlier S. Bounded by the snapshot floor (live-as-of folds the in-store tail).
       :as-of (let [s (:seq req) st (:store @co)]
                (cond
@@ -2317,10 +2317,10 @@
 ;; the daemon is a reified-engine FRONT-END over it. Boots by migrating the flat
 ;; log into the reified store; commits go through the reified coordinator AND
 ;; append the flat line; external edits (capture/import/set append out-of-band)
-;; are absorbed by re-migrating on mtime change. Cardinality is SCHEMA-AS-CLAIMS:
-;; a log-resident `@<pred> cardinality single|multi` claim is authoritative, falling
+;; are absorbed by re-migrating on mtime change. Cardinality is SCHEMA-AS-FACTS:
+;; a log-resident `@<pred> cardinality single|multi` fact is authoritative, falling
 ;; back to fram.kernel (env FRAM_SINGLE_VALUED > transitional list) only for preds the
-;; log doesn't declare — the SAME precedence (claim > env > fallback) the CLI fold uses
+;; log doesn't declare — the SAME precedence (fact > env > fallback) the CLI fold uses
 ;; (fram.fold/card-map + fram.kernel/single-eff?), so the daemon and a cold CLI fold of
 ;; the same log classify a predicate's cardinality IDENTICALLY (finding #23). ref-ness
 ;; follows the @-prefix convention. A true reversible drop-in for coord.clj: same log,
@@ -2336,17 +2336,17 @@
 ;; The flat log may carry `@<pred> cardinality single|multi` facts. The CLI fold
 ;; classifies cardinality from them (fram.fold/card-map builds predname->is-single —
 ;; leading @ stripped, latest-:tx-wins, meta-preds seeded, a retracted declaration
-;; falls back — and fram.kernel/single-eff? applies claim > env > fallback). The daemon
+;; falls back — and fram.kernel/single-eff? applies fact > env > fallback). The daemon
 ;; MUST classify IDENTICALLY or its warm live view diverges from the cold fold. We REUSE
 ;; those exact CLI functions here (no re-derivation → no drift): `log-card-map` builds
 ;; the same map from a set of flat lines; classification is ck/single-eff?. `pred-name`
-;; strips the leading @ from a `cardinality` claim's subject to recover the pred name.
+;; strips the leading @ from a `cardinality` fact's subject to recover the pred name.
 ;; (pred-name is defined up at the F3 schema-write gate — the write path needs it too.)
 (defn- log-card-map [lines]
   (fold/card-map (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))) (vec lines))))
 ;; predicates the given lines LIVE-declare a cardinality for (subjects of `cardinality`
 ;; asserts that survive as a live declaration in cmap) — the ones to also materialize as
-;; a store cardinality claim if they carry no domain facts, so s/cardinality (the write-
+;; a store cardinality fact if they carry no domain facts, so s/cardinality (the write-
 ;; path authority) agrees with the CLI map even for a not-yet-used predicate.
 (defn- card-only-preds [cmap lines]
   (into #{} (comp (filter #(= "cardinality" (:p %)))
@@ -2379,17 +2379,17 @@
       (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi")
                             (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx))
     ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
-    ;; NO domain facts (absent from by-pred). Materialize the claim so s/cardinality (the
+    ;; NO domain facts (absent from by-pred). Materialize the fact so s/cardinality (the
     ;; write-path authority) matches the CLI map; no value facts ⇒ value_kind "literal".
     (doseq [p (card-only-preds cmap asserts) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
       (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi") "literal" tx))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
-    ;; present in the flat log AND not classified by a cardinality claim still get their
-    ;; cardinality CLAIM, so a first runtime write supersedes (not accumulates) — the
+    ;; present in the flat log AND not classified by a cardinality fact still get their
+    ;; cardinality FACT, so a first runtime write supersedes (not accumulates) — the
     ;; replacement for finding #12's per-write ensure-single pin, now a one-time seed.
-    ;; ck/single-valued is read ONCE here; at runtime commit! consults only the claim.
+    ;; ck/single-valued is read ONCE here; at runtime commit! consults only the fact.
     ;; The `cmap` guard means a log `@p cardinality multi` on a kernel-single pred is NOT
-    ;; force-seeded back to single (the claim wins). The loops above already seeded in-log
+    ;; force-seeded back to single (the fact wins). The loops above already seeded in-log
     ;; + cardinality-only preds, so the guard skips them and preserves their ref/literal kind.
     (doseq [p ck/single-valued :when (and (not (schema-preds p)) (not (contains? cmap p)) (not= "single" (s/cardinality st p)))]
       (s/def-predicate! st p "single" "literal" tx))
@@ -2474,7 +2474,7 @@
 
 ;; fold-version fingerprint: sha256 over the sources that DEFINE the folded state —
 ;; the emitted runtime modules this process actually loads (classpath `out`: fold =
-;; keyed-latest semantics, kernel = cardinality vocab, schema/cnf = store ops, rt =
+;; keyed-latest semantics, kernel = cardinality vocab, schema/store = store ops, rt =
 ;; log parsing), plus coord.clj (dump-log!/replay — the image format) and THIS
 ;; file (migrate-flat->co / apply-tail! / read-log-tail). A checkpoint written by
 ;; older fold logic self-invalidates. Over-invalidation (any daemon edit) is the
@@ -2482,7 +2482,7 @@
 ;; writer re-stamps. nil when a source is unreadable -> never stamped, never
 ;; validated (fail closed).
 (def ^:private fold-fingerprint-files
-  ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/cnf.clj"
+  ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/store.clj"
    "out/fram/rt.clj" "coord.clj" "coord_daemon.clj"])
 (defn fold-fingerprint []
   (try
@@ -2514,7 +2514,7 @@
   (loop [left n] (when (pos? left) (let [s (.skip is left)] (if (pos? s) (recur (- left s)) nil)))))
 
 ;; flat-log lines (raw maps) with :tx > from-tx, read from byte `from-byte` forward.
-;; UTF-8 decode (claim values carry unicode — so NOT RandomAccessFile.readLine, which
+;; UTF-8 decode (fact values carry unicode — so NOT RandomAccessFile.readLine, which
 ;; is ISO-8859-1 and corrupts multibyte). from-byte is a seek hint: too-low only costs
 ;; extra parsing, a torn first line is dropped, and the :tx filter is the real boundary.
 ;; Returns {:lines [...] :max-tx n} — :max-tx counts EVERY EDN-parsed line carrying an
@@ -2548,9 +2548,9 @@
 ;; keyed-latest over flat lines, mirroring fram.fold/key-of (single -> (l,p); multi ->
 ;; (l,p,r)); the latest by :tx wins and its :op is carried so a dominating retract
 ;; removes the key. Re-derived here because fram.fold/keyed-latest is private AND drops
-;; retracts (we need them to supersede a snapshot-era claim). `cmap` is the effective
+;; retracts (we need them to supersede a snapshot-era fact). `cmap` is the effective
 ;; cardinality map (schema-as-facts: store facts overlaid with THIS tail's cardinality
-;; declarations); ck/single-eff? applies claim > env > fallback exactly as the CLI fold's
+;; declarations); ck/single-eff? applies fact > env > fallback exactly as the CLI fold's
 ;; key-of does, so a pred keys IDENTICALLY warm and cold (finding #23).
 (defn- tail-keyed-latest [cmap lines]
   (reduce (fn [m a]
@@ -2564,7 +2564,7 @@
 ;; as-of. New predicates are declared (existing cardinality untouched). Then per
 ;; keyed-latest key: assert/link (single supersedes the cell via s/assert!/s/link!'s
 ;; replace!; multi adds the edge IFF not already live — idempotent), or retract
-;; (mark the matching live claim cnf-superseded). One migrate-style tx; the seq space
+;; (mark the matching live fact store-superseded). One migrate-style tx; the seq space
 ;; is advanced to the tail's max :tx so :version stays == the flat fold version.
 ;; Mutates (:store co) in place — callers that need atomicity vs lock-free readers
 ;; clone the store first (see maybe-reload!). Returns co.
@@ -2579,7 +2579,7 @@
             ;; tail's own `@<pred> cardinality X` declarations, which have the higher :tx
             ;; and therefore dominate (invariant: snapshot⇄tail cmap consistency). Built
             ;; from the PRE-tail store, so it is a stable classifier for both the keying
-            ;; below and the declaration loop; ck/single-eff? applies claim > env > fallback.
+            ;; below and the declaration loop; ck/single-eff? applies fact > env > fallback.
             tcmap (log-card-map lines)                       ; tail-declared cardinality
             card-pid (c/value-id st "cardinality")
             base (reduce (fn [m p]
@@ -2602,10 +2602,10 @@
               (s/def-predicate! st p want
                                 (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx)
               ;; existing pred the tail RE-DECLARES to a different cardinality: update the
-              ;; cardinality claim ONLY (assert! supersedes; value_kind untouched — invariant).
+              ;; cardinality fact ONLY (assert! supersedes; value_kind untouched — invariant).
               (not= want (s/cardinality st p))
               (s/assert! st pid "cardinality" want tx))))
-        ;; cardinality-only tail preds (declared, no domain facts): materialize the claim
+        ;; cardinality-only tail preds (declared, no domain facts): materialize the fact
         ;; so s/cardinality (write-path authority) agrees; value_kind "literal" (no values).
         (doseq [p (card-only-preds tcmap lines) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
           (let [want (if (ck/single-eff? ecmap p) "single" "multi")]
@@ -2750,12 +2750,12 @@
               (reset! built-through (reduce max (long @built-through) (map :tx tail))))
             ;; mtime moved, no new tx from the live offset. A legit compaction keeps the
             ;; head (log max-tx >= built-through); a REGRESSION (revert/truncation — e.g.
-            ;; a `git checkout` of the tracked claims.log) drops it BELOW our live state.
+            ;; a `git checkout` of the tracked facts.log) drops it BELOW our live state.
             ;; NEVER silently adopt a log that lost our facts.
             (let [logmax (reduce max -1 (map :tx (read-log-tail @flat-log 0 -1)))]
               (if (< logmax (long @built-through))
                 (binding [*out* *err*]
-                  (println (str "[fram] REFUSED reload: claims.log regressed (max-tx "
+                  (println (str "[fram] REFUSED reload: facts.log regressed (max-tx "
                                 logmax " < live built-through " @built-through ") — a"
                                 " revert/truncation, NOT an append. Kept the in-memory"
                                 " state; the log file is STALE — restore before restart.")))
@@ -2772,7 +2772,7 @@
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------
 ;; dump-log! writes the live store as a v2 image the EXISTING replay consumes (reuse,
 ;; not new fold code). covers_through = the live seq at dump time; byte_offset = the
-;; flat-log length at dump time (= tail start). The metadata becomes CLAIMS so "latest
+;; flat-log length at dump time (= tail start). The metadata becomes FACTS so "latest
 ;; snapshot" / "which covers seq N" / "GC candidates" are queries; a tiny sidecar
 ;; mirrors the latest pointer for O(1) boot discovery (facts are the source of truth).
 ;; Snapshot is view-relative: of_view @view:main. The @snapshot:<seq> facts land in
@@ -2791,7 +2791,7 @@
           ccount (count (c/current-facts st))
           subj (str "@snapshot:" sq)]
       (doseq [[p v] [["covers_through" (str sq)] ["byte_offset" (str byteoff)]
-                     ["claim_count" (str ccount)] ["image_path" image]
+                     ["fact_count" (str ccount)] ["image_path" image]
                      ["snapshot_hash" h] ["of_view" "@view:main"]]]
         (do-assert subj p v nil))
       ;; log identity read AFTER the @snapshot:* appends: on a previously-EMPTY log the
@@ -2801,7 +2801,7 @@
       ;; read, or log-identity-of could see an empty/stale file and stamp a nil identity
       ;; (boot would then fail closed to a whole fold — safe, but silently slower).
       (durable-barrier!)
-      (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :claim_count ccount :hash h
+      (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :fact_count ccount :hash h
                             :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
                             :written_at (fram.rt/now-iso)})
       ;; the snapshot's own @snapshot:<seq> facts were appended inline (do-assert),
@@ -2810,7 +2810,7 @@
       (reset! built-through (current-seq co))
       (reset! flat-mtime (stamp flat))
       (reset! flat-bytes (.length (java.io.File. (str flat))))
-      {:ok sq :image image :byte_offset byteoff :claim_count ccount :hash h})))
+      {:ok sq :image image :byte_offset byteoff :fact_count ccount :hash h})))
 
 ;; ---- as-of: read the graph AS IT STOOD at flat seq N ----------------------------
 ;; nearest snapshot with covers_through <= N, then tail-apply the lines in
@@ -2901,8 +2901,8 @@
 
 ;; ---- adversarial socket test (mirrors coord.clj's run-test) ----------------
 (defn run-test [port]
-  (spit "/tmp/cnf-coord-daemon-test.log" "")     ; start clean (boot! replays a non-empty log)
-  (boot! "/tmp/cnf-coord-daemon-test.log")
+  (spit "/tmp/store-coord-daemon-test.log" "")     ; start clean (boot! replays a non-empty log)
+  (boot! "/tmp/store-coord-daemon-test.log")
   (register-pred! @co "owner" "single" "literal")
   (register-pred! @co "title" "single" "literal")
   (register-pred! @co "part_of" "single" "ref")
@@ -2954,8 +2954,8 @@
                                (or log (str (System/getProperty "user.dir") "/data/facts-v2.log"))
                                flat)
     ;; DROP-IN: flat log canonical, reified engine over it (design B) — the safe
-    ;; reversible swap for coord.clj: `serve-flat 7977 <claims.log>`
+    ;; reversible swap for coord.clj: `serve-flat 7977 <facts.log>`
     "serve-flat" (serve-flat-daemon (Integer/parseInt (or p "7977"))
-                                    (or log (str (System/getProperty "user.dir") "/data/claims.log")))
+                                    (or log (str (System/getProperty "user.dir") "/data/facts.log")))
     "test"       (run-test (Integer/parseInt (or p "7988")))
     nil))

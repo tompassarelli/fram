@@ -15,7 +15,7 @@ The two repos meet at **exactly one interface: the coordinator's wire protocol.*
 
 | Concern | Owner |
 |---|---|
-| Claim kernel, fold, Datalog, structural integrity (`validate`) | **Fram** |
+| Fact kernel, fold, Datalog, structural integrity (`validate`) | **Fram** |
 | Coordinator daemon: socket, **bind address**, wire protocol, sole-writer lock | **Fram** |
 | Authentication, tenant routing, rate limit, audit, body caps | **Consumer gateway** (e.g. Tern) |
 | Tenant provisioning, lifecycle projections, time/billing | **Consumer** |

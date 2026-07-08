@@ -1,4 +1,4 @@
-# ADR 0001 — Claims are the universal substrate; SQL is optional interop
+# ADR 0001 — Facts are the universal substrate; SQL is optional interop
 
 **Status:** Accepted — 2026-06-18
 **Supersedes the recurring "where do the boundaries go?" debate.** If you are about
@@ -6,7 +6,7 @@ to re-open the project-boundary or "is eddy real?" question, read this first.
 
 ## Context
 
-Fram is a generic claim engine (append-only `subject predicate object` log →
+Fram is a generic fact engine (append-only `subject predicate object` log →
 in-memory graph + stratified Datalog + sole-writer coordinator). Over the last
 ~100 commits the code lane converged (repair + reasoning, one resolver), and the
 recurring strategic churn has been *boundaries*: should chartroom be its own
@@ -22,7 +22,7 @@ structure live as facts**, so each is *reasoned* (blast radius, Datalog) and
 *repaired* (graph edits) the same way. Text and SQL are projections/printouts,
 never the source of truth.
 
-| Domain | Claims customer | Status |
+| Domain | Facts customer | Status |
 |---|---|---|
 | Code | **chartroom** (beagle source → facts; rename/delete/who-calls/blast) | shipped, folded into fram |
 | Work / thought | **tern** (threads/clock as facts) | shipped, in daily use |
@@ -35,7 +35,7 @@ never the source of truth.
 by lockstep cadence + cross-repo friction relief, *not* dependency-direction. The
 seam is enforced structurally: `core_code_blind_test` (fram-core stays blind to
 beagle-*as-subject*; authored-in-beagle is fine) + `chartroom_seam_test` (chartroom
-rents only fram's public `{cnf,datalog}` surface).
+rents only fram's public `{store,datalog}` surface).
 
 ### 3. SQL is demoted, not banished
 For **greenfield**, fram facts are the backend — **not SQL**. Persisting to SQL
@@ -44,24 +44,24 @@ tax the engine exists to kill (the CodeQL/Glean problem, in the app domain). SQL
 (`emit-sql`/`emit-server`) remains a legitimate **optional** emit target for
 interop (existing SQL systems) and scale/ops — never the default, never the point.
 
-### 4. eddy's aligned form is a **claim-backed app compiler**
+### 4. eddy's aligned form is a **fact-backed app compiler**
 Eddy today emits a SQL/REST backend and emits its entity-graph as facts only as a
 *static projection for reasoning* (`emit-facts-ir`). Its aligned form is the
 inverse: app **data lives in fram facts at runtime**. eddy-on-fram-facts *is* the
-apps pillar — not a bridge or a hedge. The gap is one bounded build: a claim-backed
+apps pillar — not a bridge or a hedge. The gap is one bounded build: a fact-backed
 persistence runtime (a fram adapter / emit target) parallel to `emit-sql`, wiring
-the client `gen-store` CRUD seam (`add/update/remove/load`) to claim operations and
+the client `gen-store` CRUD seam (`add/update/remove/load`) to fact operations and
 queries to `by-lp`/Datalog. eddy stays its own repo (cleanly decoupled — core
 imports fram in zero files); this build is what earns it its first real consumer.
 
 ### 5. Count stable interfaces, not folders
 The mature system has **two** load-bearing interfaces, independent of repo count:
-(1) the fram-core library API; (2) the AST/IR → facts CNF triple format (chartroom
+(1) the fram-core library API; (2) the AST/IR → facts store triple format (chartroom
 and eddy *produce*, fram Datalog *consumes*). Repo count and the chartroom fold are
 orthogonal to those two.
 
 ## Non-goals / parked
-- **"Every app's logic as Datalog" is a tax**, rejected. Claim-native logic wins
+- **"Every app's logic as Datalog" is a tax**, rejected. Fact-native logic wins
   only for recursive/relational derivation (leverage/reaches); it is net-negative
   for flat filters (measured: `leverage_probe`, ~2.3× more code + a rotting predicate
   schema). ready/blocked-as-Datalog is a **decided non-goal**.
@@ -69,7 +69,7 @@ orthogonal to those two.
   move of tern's projection layer onto the reified store, never standalone.
 
 ## Next move
-**eddy-on-facts**, greenfield: back the smallest eddy demo with a fram claim store
+**eddy-on-facts**, greenfield: back the smallest eddy demo with a fram fact store
 instead of SQL. Falsifiable question: is it less ceremony than eddy-on-SQL, and does
 reasoning (blast/Datalog over live app data) fall out for free? No tern bridge,
 no new API — greenfield removes the preconditions.

@@ -19,7 +19,7 @@
 (defn med [xs] (nth (sort xs) (quot (count xs) 2)))
 
 ;; synthetic flat log ~ canonical thread-graph profile (N threads x 3 facts)
-(def log "/tmp/cnf-warmread-synth.log")
+(def log "/tmp/store-warmread-synth.log")
 (def N 1200)
 (spit log (str/join "\n"
   (mapcat (fn [k] [(pr-str {:tx (* k 3) :op "assert" :l (str "@t" k) :p "title" :r (str "thread " k)})
@@ -35,7 +35,7 @@
 (defn cold-read [] (q/run (:facts (fold/fold (fram.rt/read-log log))) Q))  ; what the MCP cold path does per read
 (def cold (vec (repeatedly 9 #(first (timed (cold-read))))))
 
-(println "=== interface #1 — WARM READ vs COLD FOLD (synthetic" (* N 3) "claim log) ===")
+(println "=== interface #1 — WARM READ vs COLD FOLD (synthetic" (* N 3) "fact log) ===")
 (def wq (count (:ok (handle {:op :query :query Q}))))
 (println "query result rows (both paths):" wq "(committed threads)")
 (println (format "WARM :query  (daemon warm store, no fold): median %.1f ms  [%.1f..%.1f]" (med warm) (apply min warm) (apply max warm)))

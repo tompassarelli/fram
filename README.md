@@ -37,7 +37,7 @@ translation.
 
 Keep the epistemics honest: a fact here records **what was ASSERTED, not what is verified.**
 It is *asserted and defeasible*, not settled view-free truth — it can be superseded, retracted,
-disputed, and coexist with its rival. Supersession, retraction, and views (CNF, *Claim Normal
+disputed, and coexist with its rival. Supersession, retraction, and views (store, *Fact Normal
 Form* — the model the machinery still carries) hold the disagreement, so the atom stays a plain
 fact. The word keeps two extra-precise senses that don't conflict with the general one:
 
@@ -94,7 +94,7 @@ The bundled threads are a fictional *"launch a personal website"* project — no
 data. Under the hood `./demo.sh` runs the engine loop:
 
 ```sh
-bin/fram import           # fold the Markdown threads into the fact graph (claims.log — facts by nature, legacy filename)
+bin/fram import           # fold the Markdown threads into the fact graph (facts.log — facts by nature, legacy filename)
 bin/fram validate         # structural integrity: cycles, dangling refs, closed vocab
 bin/fram call show '{:subject "2026-01-01-090500"}'     # all facts on the thread (title, owner, deps…)
 bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "fact" :args [{:var "x"} "depends_on" "@2026-01-01-090200"}]}]}}}'  # reverse edge via ask
@@ -110,7 +110,7 @@ Point it at your own corpus:
 
 ```sh
 export FRAM_THREADS=/path/to/threads
-export FRAM_LOG=/path/to/claims.log
+export FRAM_LOG=/path/to/facts.log
 bin/fram import
 ```
 
@@ -123,7 +123,7 @@ serializes through one coordinator. There is **no** notion of "thread", "module"
 the engine — only facts:
 
 ```
-facts ──assert──▶ claims.log (append-only) ──fold──▶ in-memory fact graph
+facts ──assert──▶ facts.log (append-only) ──fold──▶ in-memory fact graph
                                                       │
                    coordinator daemon ◀── agents query + assert concurrently
                                                       │
@@ -251,7 +251,7 @@ possible — the engine and its generators are the truth:
 |---|---|
 | the engine verbs | `bin/fram` (no args prints the full usage) |
 | the AI tool catalog | `bin/fram tools` (generated from the vocabulary) |
-| the claim-authoring API + signatures | `bb bin/fram-primer` (generated from `src/fram/*.bclj`) |
+| the fact-authoring API + signatures | `bb bin/fram-primer` (generated from `src/fram/*.bclj`) |
 | the predicate vocabulary | `bin/fram doctor` (with `FRAM_SINGLE_VALUED` to override) |
 | what's tested | `tests/` + [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
@@ -294,7 +294,7 @@ separate processes*, never one. Share *machinery* across domains freely; never s
 *data*.
 
 - **Your data is two plain-text things you can `grep`:** your Markdown and an append-only
-  `claims.log`. No proprietary format, no telemetry, no lock-in.
+  `facts.log`. No proprietary format, no telemetry, no lock-in.
 - **The log is the recoverable history.** Each line records *who* and *when*;
   `fram history <id>` replays an entity's timeline in `tx` order.
 - **Nothing to build.** Compiled Clojure is committed under `out/`. The **CLI + MCP run

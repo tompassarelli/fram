@@ -26,12 +26,12 @@
     (check "plain single-valued = lost-update (both writers :ok, 2nd stomps)" (and (:ok pa) (:ok pb)))
     (check "lease CLOSES the stomp (2nd acquirer :held, not a stomp)" (and (:ok la) (= :held (:reject lb))))))
 
-;; 3. a lapsed lease is reclaimed by the next acquirer's own commit (no sweeper), epoch bumps
+;; 3. a lapsed lease is reacquired by the next acquirer's own commit (no sweeper), epoch bumps
 (let [co (new-coord (log "t3"))
       a (acquire-lease! co "A" "R" 1)]            ; 1ms ttl
   (Thread/sleep 25)
   (let [b (acquire-lease! co "B" "R" 10000)]
-    (check "lapsed lease reclaimed by next acquirer; epoch monotonic"
+    (check "lapsed lease reacquired by next acquirer; epoch monotonic"
            (and (:ok a) (:ok b) (= "B" (:holder b)) (> (:epoch b) (:epoch a))))))
 
 ;; 4a. fencing while held: current holder+epoch ok; stale epoch or wrong holder rejected
@@ -46,7 +46,7 @@
 (let [co (new-coord (log "t4b"))
       a (acquire-lease! co "A" "R" 1)]            ; A holds epoch e1, lapses fast
   (Thread/sleep 25)
-  (let [b (acquire-lease! co "B" "R" 10000)]      ; B reclaims -> epoch bumps
+  (let [b (acquire-lease! co "B" "R" 10000)]      ; B reacquires -> epoch bumps
     (check "fence REJECTS woken A's stale token after B re-acquired" (not (fence-ok? co "R" "A" (:epoch a))))
     (check "fence ok for B's fresh token" (fence-ok? co "R" "B" (:epoch b)))))
 
@@ -60,5 +60,5 @@
   (check (str "concurrent acquire of one resource: EXACTLY ONE winner (" oks " ok / " held " held / N=" N ")")
          (and (= 1 oks) (= (dec N) held))))
 
-(println (str "\ncnf-lease: " @pass " / " (+ @pass @fail) " PASS"))
+(println (str "\nstore-lease: " @pass " / " (+ @pass @fail) " PASS"))
 (when (pos? @fail) (System/exit 1))

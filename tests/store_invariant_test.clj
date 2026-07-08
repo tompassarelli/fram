@@ -1,11 +1,11 @@
-;; store_invariant_test.clj — the one-engine invariant: the CNF kernel is
+;; store_invariant_test.clj — the one-engine invariant: the store kernel is
 ;; DOMAIN-AGNOSTIC. Fails if any life-os or code vocabulary appears in kernel
 ;; CODE (comments stripped — the header legitimately names forbidden terms as
 ;; examples of what must not leak in).
 ;;   bb store_invariant_test.clj
 (require '[clojure.string :as str])
 
-(def src (slurp "src/fram/cnf.bclj"))
+(def src (slurp "src/fram/store.bclj"))
 ;; strip each line from its first `;` (beagle comment) — no `;` occurs in code strings here.
 (def code (->> (str/split-lines src)
                (map (fn [l] (let [i (str/index-of l ";")] (if i (subs l 0 i) l))))
@@ -22,5 +22,5 @@
 (def hits (filterv (fn [w] (str/includes? code w)) forbidden))
 
 (if (empty? hits)
-  (println "cnf domain-agnostic invariant: PASS — kernel code mentions no domain vocabulary")
-  (do (println "cnf domain-agnostic invariant: FAIL — leaked:" hits) (System/exit 1)))
+  (println "store domain-agnostic invariant: PASS — kernel code mentions no domain vocabulary")
+  (do (println "store domain-agnostic invariant: FAIL — leaked:" hits) (System/exit 1)))

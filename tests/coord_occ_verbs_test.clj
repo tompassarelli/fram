@@ -14,9 +14,9 @@
 (require '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord.clj")   ; new-coord/commit!/live-cids-lp/register-pred!/store/elect
 
-(let [log "/tmp/cnf-occ-verbs-test.log"
+(let [log "/tmp/store-occ-verbs-test.log"
       co (new-coord log)
-      _ (register-pred! co "status" "single" "literal")   ; declared-single via a cardinality CLAIM
+      _ (register-pred! co "status" "single" "literal")   ; declared-single via a cardinality FACT
       _ (register-pred! co "tag" "multi" "ref")            ; declared multi
       checks (atom [])
       chk (fn [nm ok] (swap! checks conj [nm ok]))

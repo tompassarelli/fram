@@ -5,7 +5,7 @@
 ;; The propagation receipt found scoped re-resolve flat ~3s == whole-corpus. The
 ;; cheaper-gate fork hinges on WHERE that ~3s lives inside corpus-from-store!:
 ;;   - if the `by-p NAME` whole-corpus scan (always runs, unscopable) ~= 3s -> RED
-;;     (need claim-store restructuring; the *corpus-scope* fix won't help)
+;;     (need fact-store restructuring; the *corpus-scope* fix won't help)
 ;;   - if the per-module FRAME builds (scopable via *corpus-scope*) ~= 3s   -> YELLOW
 ;;     (bind *corpus-scope* in resolve-modules! and the gate gets cheap)
 ;;
@@ -24,7 +24,7 @@
 (defmacro timed [& body] `(let [t0# (System/nanoTime) r# (do ~@body) t1# (System/nanoTime)] [(ms t0# t1#) r#]))
 (defn parse-mod [nm] (when (string? nm) (second (re-matches #"@([^#]+)#\d+" nm))))
 
-(def tmp (str "/tmp/cnf-gate-" (System/nanoTime) ".log"))
+(def tmp (str "/tmp/store-gate-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp))
 (println "=== RED-vs-YELLOW — decompose the scoped corpus-from-store! floor ===")
 (println "corpus: COPY of .fram/code.log ->" tmp)
@@ -73,7 +73,7 @@
         scoped-ratio (/ msx (max 0.001 mw))]
     (cond
       (> scoped-ratio 0.75)
-      (println "\n  >>> RED: scoping frames did NOT help (scoped ~= whole). The unscopable by-p NAME\n      scan is the floor. A cheaper gate needs claim-store restructuring, not *corpus-scope*.")
+      (println "\n  >>> RED: scoping frames did NOT help (scoped ~= whole). The unscopable by-p NAME\n      scan is the floor. A cheaper gate needs fact-store restructuring, not *corpus-scope*.")
       (< scoped-ratio 0.5)
       (println (format "\n  >>> YELLOW: scoping frames CUT the cost %.0f%% (scoped %.2f x whole). The frame\n      builds were the bottleneck; the by-p scan is only %.0f%% of whole. Binding\n      *corpus-scope* in resolve-modules! (one change) makes the gate cheap. Build it."
                        (* 100.0 (- 1.0 scoped-ratio)) scoped-ratio (* 100.0 scan-frac)))

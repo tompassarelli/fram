@@ -2,7 +2,7 @@
 ;; ============================================================================
 ;; fram-code-author — WATCH AN AGENT WRITE A PROGRAM AS A GRAPH.
 ;; ============================================================================
-;; The agent-authoring endgame. fram-replay-code streams pre-baked CLAIMS into a
+;; The agent-authoring endgame. fram-replay-code streams pre-baked FACTS into a
 ;; daemon with timing (a program MATERIALIZING); this streams authoring VERBS with
 ;; timing (a program being WRITTEN). Each step is a rename / set-body / upsert-form
 ;; / insert-form / insert-comment that lands as a MINIMAL-OP :edit-min delta through

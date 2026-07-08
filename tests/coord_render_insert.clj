@@ -2,7 +2,7 @@
 ;; render CLI (bin/fram-render-code) can then render it. SAFE: /tmp copy, in-process.
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord_daemon.clj")
-(def log "/tmp/cnf-render-test.log")
+(def log "/tmp/store-render-test.log")
 (io/copy (io/file ".fram/code.log") (io/file log))
 (boot-flat! log)
 (def st (:store @co))
@@ -28,5 +28,5 @@
 (def anchor-name (def-name (:child (nth pre ai))))
 (def after-name (def-name (:child (nth pre (inc ai)))))
 (def r (handle {:op :edit-min :spec {:op "insert-form" :module "kernel" :after anchor-name :datum (list 'def 'fram_render_probe 42)}}))
-(spit "/tmp/cnf-render-anchor.txt" (str anchor-name "\n" after-name "\n"))
+(spit "/tmp/store-render-anchor.txt" (str anchor-name "\n" after-name "\n"))
 (println "INSERT after" anchor-name "(before" after-name ") ->" (select-keys r [:ok :reject]))

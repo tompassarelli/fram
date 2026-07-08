@@ -84,7 +84,7 @@ cat > "$DIR/.mcp.json" <<JSON
         "FRAM_BIN": "$HERE/bin",
         "FRAM_RESOLVE": "$HERE/chartroom/src/resolve.clj",
         "FRAM_ROUNDTRIP": "$BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt",
-        "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/claims-check-emit.rkt",
+        "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
         "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
         "BEAGLE_HOME": "$BEAGLE_HOME"
       }

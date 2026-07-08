@@ -21,9 +21,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
-LOG=/tmp/cnf-render-test.log
-EDNDIR=/tmp/cnf-render-crdt-edn
-BCLJ=/tmp/cnf-render-crdt.bclj
+LOG=/tmp/store-render-test.log
+EDNDIR=/tmp/store-render-crdt-edn
+BCLJ=/tmp/store-render-crdt.bclj
 rm -rf "$EDNDIR"; mkdir -p "$EDNDIR"
 
 echo "=== insert a probe via the CRDT mid-insert verb (-> $LOG) ==="

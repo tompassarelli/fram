@@ -4,7 +4,7 @@
 (require '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord.clj")   ; side-effect-free library: new-coord/commit!/replay/...
 
-(let [log "/tmp/cnf-coord-test.log"
+(let [log "/tmp/store-coord-test.log"
       co (new-coord log)
       _ (register-pred! co "status" "single" "literal")
       _ (register-pred! co "tag" "multi" "ref")
@@ -16,7 +16,7 @@
   ;; THIS IS THE single-valued same-key write-write SAFETY RECEIPT (#16): the true-conflict
   ;; OCC path (not the disjoint commute path). 24 racers set DIFFERENT values for one
   ;; single-valued (te,p) at the same base -> exactly one wins, the rest :conflict, exactly
-  ;; one live claim. commit! is the sole OCC site (uniform: `single` is a per-pred flag, the
+  ;; one live fact. commit! is the sole OCC site (uniform: `single` is a per-pred flag, the
   ;; base_version check is one branch), so this generalizes across all single-valued preds.
   ;; Distinct from name-allocation (the node-name-seq atomic counter). Mainline safety = closed.
   (let [seed (commit! co "seed" "T" "status" :assert "init" 0)
@@ -30,7 +30,7 @@
         live (live-cids-lp co (s/resolve-name (store co) "T") (c/value-id (store co) "status"))]
     (chk "base_version: exactly one racer wins" (= 1 (count wins)))
     (chk "base_version: the rest are :conflict" (= (dec n) (count conflicts)))
-    (chk "single-valued: exactly one live (T,status) claim" (= 1 (count live))))
+    (chk "single-valued: exactly one live (T,status) fact" (= 1 (count live))))
 
   ;; ---- (B) multi-valued idempotency: identical link! twice = one edge --------
   (let [_ (commit! co "a" "T" "tag" :link "X" 0)
@@ -65,8 +65,8 @@
   (let [before (live-triples (store co))]
     (with-open [os (java.io.FileOutputStream. log true)]   ; simulate a crash mid-append
       (.write os (.getBytes (str (pr-str {:k :value :id 99999 :v "torn"}) "\n"
-                                 (pr-str {:k :claim :cid 99998 :l 0 :p 0 :r 99999 :tx 99997}) "\n"
-                                 "{:k :claim :cid 99996 :l 0 :p ")        ; torn mid-line
+                                 (pr-str {:k :fact :cid 99998 :l 0 :p 0 :r 99999 :tx 99997}) "\n"
+                                 "{:k :fact :cid 99996 :l 0 :p ")        ; torn mid-line
                             "UTF-8")))
     (let [rp (replay log)]
       (chk "atomicity: torn trailing tx dropped on replay" (= before (live-triples rp)))

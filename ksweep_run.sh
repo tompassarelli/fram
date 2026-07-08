@@ -14,7 +14,7 @@ echo "available .bclj modules: $TOT"
 echo "scan_floor=O(K) by-p NAME (unscopable) | whole_frame=O(K) MATERIALIZATION | scoped_frame=O(affected) MATERIALIZATION | coh_scan=COORDINATION/gate"
 echo
 for K in 2 4 8 "$TOT"; do
-  LOG="/tmp/cnf-ksweep-K${K}.log"
+  LOG="/tmp/store-ksweep-K${K}.log"
   SUB=("${ALL[@]:0:$K}")
   if ! bb bin/fram-ingest-code "${SUB[@]}" --out "$LOG" >/tmp/ingest-K${K}.log 2>&1; then
     echo "K=$K ingest FAILED:"; tail -3 /tmp/ingest-K${K}.log; continue

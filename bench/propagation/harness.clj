@@ -79,10 +79,10 @@
     (let [server (future (serve port))]
       (Thread/sleep 600)
       (try
-        ;; B's read = a CHEAP warm read off `co` (:status claim-count — corpus-from-store,
+        ;; B's read = a CHEAP warm read off `co` (:status fact-count — corpus-from-store,
         ;; NO re-resolve, NO racket). The store updates EAGERLY inside commit, so one read
         ;; after :ok already reflects A's write (no poll loop needed). Visibility = the
-        ;; warm store's claim count advanced to include A's upsert.
+        ;; warm store's fact count advanced to include A's upsert.
         (let [marker (str "prop_g_" trial "_" (System/nanoTime))
               status-facts (fn [] (:facts (client port {:op :status})))
               c0 (status-facts)

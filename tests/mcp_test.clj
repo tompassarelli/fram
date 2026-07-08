@@ -12,7 +12,7 @@
 ;; a tiny self-contained log: @a -depends_on-> @b
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-mcp-test-" (System/nanoTime)))
 (.mkdirs (java.io.File. tmp))
-(def logpath (str tmp "/claims.log"))
+(def logpath (str tmp "/facts.log"))
 (spit logpath
   (str/join "\n"
     ['{:tx 1 :op "assert" :l "@a" :p "title" :r "A" :frame "test"}

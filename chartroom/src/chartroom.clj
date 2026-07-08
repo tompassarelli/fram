@@ -15,7 +15,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [callgraph :as cg]                 ; the scope-correct call-graph engine (shared, single source)
-            [fram.cnf :as c]
+            [fram.store :as c]
             [fram.datalog :as d]))
 
 (def corpus-path (or (first *command-line-args*) "build/gjoa.claims"))
@@ -84,7 +84,7 @@
           k->id (volatile! {})
           ent  (fn [k] (or (get @k->id k)
                            (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
-          _ (doseq [[a b] edges] (c/claim! ctx (ent a) EDGE (ent b) tx))
+          _ (doseq [[a b] edges] (c/fact! ctx (ent a) EDGE (ent b) tx))
           t0 (System/currentTimeMillis)
           db (d/run-rules ctx
                [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])

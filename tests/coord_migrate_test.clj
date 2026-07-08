@@ -8,7 +8,7 @@
 ;; Gate: reified' domain view (names) SET-EQUAL to the flat fold, AND the v2-log
 ;; round-trip is the identity on the store's live id-triples. This is the data
 ;; half of the cutover; it touches NO live file (writes /tmp only) and is fully
-;; reversible (the flat log + pre-cnf tag are untouched).
+;; reversible (the flat log + pre-store tag are untouched).
 ;;   FRAM_LOG=/path bb -cp out coord_migrate_test.clj
 (require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
@@ -16,7 +16,7 @@
 
 (def log (System/getenv "FRAM_LOG"))
 (when (or (nil? log) (not (.exists (io/file log))))
-  (println "coord_migrate_test: skipped — set FRAM_LOG to a claims.log to run")
+  (println "coord_migrate_test: skipped — set FRAM_LOG to a facts.log to run")
   (System/exit 0))
 
 ;; coord.clj is a script (dump-log!/replay live in `user`); load it for them.
@@ -46,7 +46,7 @@
     (if (ref? r) (s/link! ctx subj p (ent-for! r) tx) (s/assert! ctx subj p r tx))))
 
 ;; --- the migration round-trip: dump to a v2 log, boot a fresh store from it --
-(def mlog "/tmp/cnf-migrate.log")
+(def mlog "/tmp/store-migrate.log")
 (dump-log! ctx mlog)
 (def ctx2 (replay mlog))
 

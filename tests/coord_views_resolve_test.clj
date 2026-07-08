@@ -31,7 +31,7 @@
 
 (binding [resolve/ctx st]
   ;; default-main view (*view*=nil): elect the whole group — earliest cid = the bare base.
-  (chk "main (*view* nil): elects earliest-cid bare claim"
+  (chk "main (*view* nil): elects earliest-cid bare fact"
        (= "base" (val-of (resolve/select-main-1 grp))))
   ;; per-branch isolation: each bound view elects ONLY its own selected rival.
   (binding [resolve/*view* "@view:b1"]

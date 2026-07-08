@@ -45,7 +45,7 @@
 ;; ONE appender thread drains the queue, appends every pending item's lines in
 ;; enqueue order, fsyncs ONCE per file per batch, then delivers every ticket.
 ;; Durability contract UNCHANGED: an ack (ticket delivery / fn return) happens
-;; only after the claim's bytes are fsynced; an append/fsync failure is delivered
+;; only after the fact's bytes are fsynced; an append/fsync failure is delivered
 ;; as the Throwable and rethrown on the awaiting thread (fail closed). A crash
 ;; before the fsync loses only UN-acked commits, exactly as before; v2 torn-tx
 ;; replay and the flat fold's keyed-latest already tolerate a torn tail.
@@ -133,7 +133,7 @@
                       (not (contains? (:facts m) id)))]
        {:k :entity :id id})
      (for [[cid mm] (:facts m) :when (>= cid since)]
-       {:k :claim :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
+       {:k :fact :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
      [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])
        :observed (get-in m [:txs txid :observed])}        ; causality (thread H): the global seq the writer had SEEN when it decided
       {:k :commit :tx txid}])))
@@ -154,10 +154,10 @@
   (or (:next-seq @(store co)) 0))
 
 ;; --- coexist-elect: the default read-time election (move-B keystone) ---------
-;; Under coexist-elect a live (l,p) group MAY hold >1 coexisting claim: rival writes
+;; Under coexist-elect a live (l,p) group MAY hold >1 coexisting fact: rival writes
 ;; both LAND (no writer blocks, none is rejected). Choosing the main one is a READ-time
 ;; decision every reader computes IDENTICALLY with zero coordination — the winner is
-;; the EARLIEST claim by the total key [cid, writing-agent]. cids are monotonic under
+;; the EARLIEST fact by the total key [cid, writing-agent]. cids are monotonic under
 ;; the single allocator, so earliest-cid IS the winner today; `agent` is the documented
 ;; secondary key that keeps the order total IF cid allocation is ever sharded (the
 ;; moment that happens, earliest-cid alone stops being a total order — coexist-elect is
@@ -174,14 +174,14 @@
 ;; retract! used it ONLY for the single-valued staleness reject, then dropped it). We now
 ;; THREAD that base into the tx record as :observed — one int per tx, recovered through
 ;; replay exactly like :seq/:agent. This turns happens-before into a recorded fact:
-;; "did peer B's claim exist in the view A read before A acted?" == (<= seq(B) observed(A)).
+;; "did peer B's fact exist in the view A read before A acted?" == (<= seq(B) observed(A)).
 ;; observed-of reads it; nil for legacy/non-causal writes -> callers fall back to seq-of
 ;; (commit order), so the causal election degrades to cid-order, never throws.
-;; RISK GUARD: the writer cannot claim to have observed the FUTURE — observed is clamped
+;; RISK GUARD: the writer cannot fact to have observed the FUTURE — observed is clamped
 ;; to the pre-commit current-seq at the write site (a backdated stamp only LOSES elections).
 (defn observed-of [co cid]
   (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :observed])))
-;; the causal key of a live claim: [observed-or-seq, cid, agent]. observed orders by
+;; the causal key of a live fact: [observed-or-seq, cid, agent]. observed orders by
 ;; DECISION time (who saw the empty group first), cid/agent keep it a total order. A LATER
 ;; commit (higher cid) that DECIDED earlier (lower observed) wins — this is the whole point:
 ;; election by causal view, not by commit order. Pure fn of recorded facts -> every reader
@@ -190,9 +190,9 @@
   [(or (observed-of co cid) (seq-of co cid)) cid (str (agent-of co cid))])
 
 ;; --- as-of: the history fold (thread H, Part B) ------------------------------
-;; "What was live AS OF seq S?" A claim is live-as-of-S iff it was BORN at a seq <= S
+;; "What was live AS OF seq S?" A fact is live-as-of-S iff it was BORN at a seq <= S
 ;; AND no store-supersedes marker for it was committed at a seq <= S. Because retraction is
-;; append-only (a marker, never a delete), this is EXACT: a claim later superseded/withdrawn
+;; append-only (a marker, never a delete), this is EXACT: a fact later superseded/withdrawn
 ;; is naturally RE-SEEN at an earlier S — its tombstone hadn't been written yet (acceptance
 ;; b). Folds the in-store tail, so it is bounded by thread D's snapshot floor (history
 ;; compacted below a snapshot is gone: as-of before the floor is unavailable, not wrong) —
@@ -254,9 +254,9 @@
 
 ;; --- views-as-facts (thread E): per-branch isolation over the same log ------
 ;; A VIEW is a first-class subject; (view selects @cid) facts are its OVERLAY —
-;; the cids it treats as facts. The object IS a claim id: cids live in the same
-;; flat content-interned id-space, so a claim is itself addressable (the most
-;; CNF-native of VIEWS_AND_BRANCHES §8's three encodings). view-selects returns
+;; the cids it treats as facts. The object IS a fact id: cids live in the same
+;; flat content-interned id-space, so a fact is itself addressable (the most
+;; store-native of VIEWS_AND_BRANCHES §8's three encodings). view-selects returns
 ;; the live overlay; nil when the view subject or `selects` predicate was never
 ;; minted (an unknown view selects nothing -> it inherits main).
 (defn view-selects [co view]
@@ -311,8 +311,8 @@
       (let [e (c/entity! (store co))] (s/name! (store co) e nm tx) e)))
 
 ;; Bootstrap SEED (move-B keystone): the kernel single-valued LIST, read ONCE at
-;; coord creation and turned into per-predicate `cardinality` CLAIMS. After this the
-;; CLAIM is the SOLE runtime authority for single-ness — commit!/retract! consult
+;; coord creation and turned into per-predicate `cardinality` FACTS. After this the
+;; FACT is the SOLE runtime authority for single-ness — commit!/retract! consult
 ;; only (s/cardinality …), never ck/single? (the old per-write ensure-single pin +
 ;; the L128/L167 OR-arm are gone). This is the replacement for finding #12's
 ;; "infer-single-on-first-write": seeding the WHOLE list up front (even predicates
@@ -343,7 +343,7 @@
         tx0 (c/begin-tx! st "bootstrap")
         co {:store st :log log-path :lock (Object.)}]
     (s/setup! st tx0)
-    (seed-kernel-cardinality! st tx0)            ; demote ck/single-valued to one-time cardinality CLAIMS
+    (seed-kernel-cardinality! st tx0)            ; demote ck/single-valued to one-time cardinality FACTS
     (append-tx! co (delta-records co 0 tx0))     ; the bootstrap is the first committed tx
     co))
 
@@ -365,9 +365,9 @@
           te0    (s/resolve-name (store co) te-name)
           tgt0   (when (= kind :link) (s/resolve-name (store co) r-spec))
           vid    (when (= kind :assert) (c/value-id (store co) r-spec))
-          ;; single-ness from the cardinality CLAIM ALONE (move-B keystone): the
-          ;; ck/single? kernel-list OR-arm is gone — the claim, seeded once at boot,
-          ;; is the sole runtime authority. No claim => "multi" => coexist-elect.
+          ;; single-ness from the cardinality FACT ALONE (move-B keystone): the
+          ;; ck/single? kernel-list OR-arm is gone — the fact, seeded once at boot,
+          ;; is the sole runtime authority. No fact => "multi" => coexist-elect.
           single (= "single" (s/cardinality (store co) pred))
           bv     (if (and te0 pid) (base-version co te0 pid) 0)
           live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
@@ -409,7 +409,7 @@
           {:ok (get-in @(store co) [:txs tx :seq])})))))
 
 ;; --- views-as-facts writers (thread E) -------------------------------------
-;; select! asserts (view selects @cid): `view` now treats claim `cid` as a fact. Multi
+;; select! asserts (view selects @cid): `view` now treats fact `cid` as a fact. Multi
 ;; (a view selects many facts); idempotent when it already selects cid. This ONE write
 ;; is the whole branch-membership surface — per-branch isolation is otherwise pure
 ;; read-time election (elect above), no writer ever blocked.
@@ -426,15 +426,15 @@
               tx    (c/begin-tx! (store co) view)
               ve    (ent! co tx view)
               sp    (c/value! (store co) "selects")]
-          (c/fact! (store co) ve sp cid tx)            ; object IS the selected claim's cid
+          (c/fact! (store co) ve sp cid tx)            ; object IS the selected fact's cid
           (append-tx! co (delta-records co since tx))
           {:ok (get-in @(store co) [:txs tx :seq]) :cid cid})))))
 
-;; commit-on-view! — write a rival claim AND select it into `view` in one breath: the
+;; commit-on-view! — write a rival fact AND select it into `view` in one breath: the
 ;; "write on a branch" verb. Always coexists (no base -> never staleness-rejected); the
 ;; new rival is the highest live cid on (te,pred), so THAT cid is selected into the branch.
 ;; Reentrant lock (commit!/select! re-enter — JVM monitors are reentrant, as release-lease!
-;; already relies on). Returns the new claim's cid. The lock spans both writes so a
+;; already relies on). Returns the new fact's cid. The lock spans both writes so a
 ;; concurrent reader never sees the rival un-selected (committed but not yet on its branch).
 (defn commit-on-view! [co view agent te-name pred kind r-spec]
   (locking (:lock co)
@@ -452,7 +452,7 @@
 ;; from under an active thread races safely.
 ;;
 ;; FIRST-CLASS RETRACTION (thread H, Part D): cancellation is now an ATTRIBUTABLE,
-;; QUERYABLE claim-ABOUT-the-victim-cid — (@cid withdrawn_by <agent>), (@cid
+;; QUERYABLE fact-ABOUT-the-victim-cid — (@cid withdrawn_by <agent>), (@cid
 ;; withdrawn_at <seq>), (@cid withdrawn_reason "<why>") — emitted ALONGSIDE (not
 ;; instead of) the anonymous store-supersedes marker. The supersedes marker stays the
 ;; internal live-fold mechanism (it drives live-cids-lp == remove-wins, the default);
@@ -460,14 +460,14 @@
 ;; the discriminator that lets an ADD-WINS view resurrect a withdrawal (live-members)
 ;; while a genuine overwrite still wins. `reason` is optional (older 6-arg callers
 ;; keep working). cids are first-class subjects (same flat id-space — VIEWS §8), so a
-;; claim-about-a-cid is just a claim.
+;; fact-about-a-cid is just a fact.
 (defn retract!
   ([co agent te-name pred r-spec base] (retract! co agent te-name pred r-spec base nil))
   ([co agent te-name pred r-spec base reason]
   (locking (:lock co)
     (let [pid    (c/value-id (store co) pred)
           te0    (s/resolve-name (store co) te-name)
-          single (= "single" (s/cardinality (store co) pred))]   ; claim is sole authority (move-B)
+          single (= "single" (s/cardinality (store co) pred))]   ; fact is sole authority (move-B)
       (if (or (nil? te0) (nil? pid))
         {:ok (current-seq co)}                              ; nothing to retract
         (let [bv (base-version co te0 pid)]
@@ -506,7 +506,7 @@
 ;; overwrite, NOT two acquirers that each read a FRESH base. acquire reads holder
 ;; LIVENESS fresh IN-lock. One single-valued cell on @lease:<R> co-encodes
 ;; holder|expiry-ms|epoch; held-ness is DERIVED (cell present AND expiry > clock).
-;; A lapsed lease is reclaimed by the next acquirer's own commit (no sweeper).
+;; A lapsed lease is reacquired by the next acquirer's own commit (no sweeper).
 ;; Ported into canonical's hand-written idiom from the typed spec-of-record
 ;; (fram-lease/src/fram/coord.bclj); coord_lease_test is the gate.
 (def lease-pred "lease")
@@ -603,8 +603,8 @@
 (defn- assemble-dump [recs]
   (let [vals   (vec (for [r recs :when (= (:k r) :value)]  [(:id r) (:v r)]))
         ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
-        facts (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
-        tx-of  (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) (:tx r)]))
+        facts (vec (for [r recs :when (= (:k r) :fact)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
+        tx-of  (vec (for [r recs :when (= (:k r) :fact)]  [(:cid r) (:tx r)]))
         txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r) :observed (:observed r)}]))   ; recover the causal stamp through replay (acceptance d)
         sup    (some (fn [[id v]] (when (= v "store-supersedes") id)) vals)
         superd (vec (for [[_ m] facts :when (= (:p m) sup)] (:r m)))
@@ -637,7 +637,7 @@
                 :when (and (not (contains? (:values m) id)) (not (contains? (:facts m) id)))]
           (emit {:k :entity :id id}))
         (doseq [[cid cl] (:facts m)]
-          (emit {:k :claim :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
+          (emit {:k :fact :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
         (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t)}))
         (emit {:k :commit :tx :migration}))
       (.force (.getChannel os) true))))

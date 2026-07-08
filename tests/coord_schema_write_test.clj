@@ -16,7 +16,7 @@
 (load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? false)          ; force the deterministic cold whole-migrate boot
 
-(def LOG "/tmp/cnf-schema-write-test.log")
+(def LOG "/tmp/store-schema-write-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
 (defn write-lines! [path lines] (spit path (str (str/join "\n" lines) "\n")))
 ;; predname->is-single as the COLD CLI fold derives it from the (now-appended) flat log.
@@ -67,7 +67,7 @@
     (chk "(c) reject names @P2" (str/includes? (msg-of res) "@P2"))
     (chk "(c) store UNCHANGED: rel still multi (both values live)"
          (= #{"A" "B"} (set (s/lookup-all st p1 "rel"))))
-    (chk "(c) CLI fold: rel NOT collapsed (no cardinality claim landed)"
+    (chk "(c) CLI fold: rel NOT collapsed (no cardinality fact landed)"
          (nil? (get (cmap-of LOG) "rel"))))
 
   ;; ---- (d) single->multi accepted (relaxation is always safe) ----
@@ -108,5 +108,5 @@
   (let [cs @checks fails (filter (fn [e] (not (second e))) cs)]
     (doseq [e cs] (println (if (second e) "  [PASS] " "  [FAIL] ") (first e)))
     (if (empty? fails)
-      (println "\ncnf-schema-write:" (count cs) "/" (count cs) "PASS")
-      (do (println "\ncnf-schema-write:" (count fails) "/" (count cs) "FAILED") (System/exit 1)))))
+      (println "\nstore-schema-write:" (count cs) "/" (count cs) "PASS")
+      (do (println "\nstore-schema-write:" (count fails) "/" (count cs) "FAILED") (System/exit 1)))))

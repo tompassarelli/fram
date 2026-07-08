@@ -9,7 +9,7 @@
   VALIDATION at the boundary: the caller cannot parse-fail (it's data, not text),
   cannot reference an undefined relation, cannot ground an unbound head variable,
   cannot shadow a base relation, and unstratified negation is rejected — all BEFORE
-  anything runs. Runs over the current fact fold's EDB (fact/fact-id) — no CNF
+  anything runs. Runs over the current fact fold's EDB (fact/fact-id) — no store
   store, no name->id, no new dependency. The reserve surface for ad-hoc recursion;
   point/neighbor lookups are tools (fram.tools). Caveat: evaluation is naive (no
   semi-naive); a deeply recursive query can be expensive — the MCP path bounds it
@@ -33,7 +33,7 @@
 ;; Strings throughout — the flat fold's l/p/r are already strings, so a caller's
 ;; constant predicate/entity names match with no resolution step.
 ;; Base relations: fact(l,p,r) and fact-id(cid,l,p,r). The pre-rename names
-;; triple/claim are accepted as aliases (canon-rel below), so old queries still run.
+;; triple/fact are accepted as aliases (canon-rel below), so old queries still run.
 (defn facts->edb [facts :- (Vec k/Fact)] :- (Map String (Set (Vec String)))
   (loop [cs facts i 0 fact :- (Set (Vec String)) #{} fact-id :- (Set (Vec String)) #{}]
     (if (empty? cs)
@@ -44,10 +44,10 @@
                (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
 
 ;; --- base-relation aliases: rewrite the pre-rename names at parse ------------
-;; The unit rename is claim->fact, so the base relations are `fact`/`fact-id`; the
-;; OLD names `triple`/`claim` stay accepted (a cheap map applied to every :rel and
+;; The unit rename is fact->fact, so the base relations are `fact`/`fact-id`; the
+;; OLD names `triple`/`fact` stay accepted (a cheap map applied to every :rel and
 ;; :find BEFORE validation), so existing queries never break.
-(def rel-aliases :- (Map String String) {"triple" "fact" "claim" "fact-id"})
+(def rel-aliases :- (Map String String) {"triple" "fact" "fact" "fact-id"})
 (defn- canon-rel [r :- Any] :- Any
   (if (and (string? r) (contains? rel-aliases r)) (get rel-aliases r) r))
 (defn- canon-lit [litt :- Any] :- Any
@@ -187,7 +187,7 @@
           e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
           e2 (if (vector? args) [] ["literal :args must be a vector"])
           e3 (if (and (string? rel) (not (contains? known rel)))
-               [(str "unknown relation '" rel "' — use fact, fact-id (aliases: triple, claim), or a :head rel you define")]
+               [(str "unknown relation '" rel "' — use fact, fact-id (aliases: triple, fact), or a :head rel you define")]
                [])
           e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3)))
                ["relation fact takes 3 args (l p r)"] [])
@@ -298,7 +298,7 @@
         n :- (U Int Nil) (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
     (if (and (some? n) (> n 0)) n 100000)))
 
-;; run the validated query over the claim fold; {:ok [tuple...]} | {:error [msg...]}
+;; run the validated query over the fact fold; {:ok [tuple...]} | {:error [msg...]}
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
 ;; q + return stay Any: q is the open-map query (above); the result is a tagged
 ;; heterogeneous envelope discriminated by key-presence.

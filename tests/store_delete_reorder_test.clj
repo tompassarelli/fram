@@ -1,11 +1,11 @@
 ;; ============================================================================
 ;; store_delete_reorder_test.clj — the `delete` + `reorder` authoring verbs are
-;; claim-native, fail-closed, and round-trip through render-EDN → beagle --build-edn.
+;; fact-native, fail-closed, and round-trip through render-EDN → beagle --build-edn.
 ;; ============================================================================
-;; The last two verbs wired into the claim-native authoring loop (#36 / #33):
+;; The last two verbs wired into the fact-native authoring loop (#36 / #33):
 ;;
 ;;   delete   — remove a top-level def by name. EFFECT = supersede the wrapper's
-;;              fN form-edge claim pointing at the form (NOT a render-time omission
+;;              fN form-edge fact pointing at the form (NOT a render-time omission
 ;;              flag), so the form drops out of the wrapper's live children: the
 ;;              minimal-op harvest sees ONE retract; the render reachability filter
 ;;              drops the orphaned subtree. FAIL-CLOSED: a delete that would orphan
@@ -81,7 +81,7 @@
                 res (caught? (resolve/verb-delete! "base" "demo"))   ; greet references base -> orphan
                 v-after (count (filter #(seq (c/by-lp resolve/ctx % resolve/Vp)) (@resolve/file->ents src)))]
             (chk "D2a: delete of still-referenced `base` is REFUSED (orphan invariant)" (= :rejected res))
-            (chk "D2b: the refused delete mutated NOTHING (live v-claim count unchanged)" (= v-before v-after))))))
+            (chk "D2b: the refused delete mutated NOTHING (live v-fact count unchanged)" (= v-before v-after))))))
 
     ;; --- D1 + R1 + E: delete an UNREFERENCED def, reorder a def, render, build -----
     (def out-edn (str work "/rendered.edn"))
@@ -100,7 +100,7 @@
               ;; delete the UNREFERENCED def `dead` (safe: nothing refers to it).
               (chk "D1a: the to-delete def `dead` exists pre-delete" (some? (resolve/def-binding src "dead")))
               (resolve/verb-delete! "dead" "demo")
-              ;; the EFFECT is claim-native: `dead`'s wrapper form-edge is no longer LIVE
+              ;; the EFFECT is fact-native: `dead`'s wrapper form-edge is no longer LIVE
               ;; (def-binding reads the stale frame table, so we query live wrapper edges).
               (chk "D1b: `dead`'s wrapper form-edge is no longer live post-delete"
                    (not (some (fn [[_ _ r]] (= r dead-form)) (resolve/wrap-forms wrap))))
@@ -133,7 +133,7 @@
                  (not (str/includes? emitted "dead")))))))))
 
 ;; --- verdict ----------------------------------------------------------------
-(println "\n=== delete + reorder verbs: claim-native, fail-closed, build-clean ===")
+(println "\n=== delete + reorder verbs: fact-native, fail-closed, build-clean ===")
 (let [cs @checks fails (remove second cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)

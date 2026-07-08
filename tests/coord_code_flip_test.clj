@@ -7,7 +7,7 @@
 ;; assertion (the daemon's :log MUST be our code-log copy before any result is
 ;; trusted). NEVER touches port 7977 or the tern log.
 ;;
-;; PROVES (the flip thesis: the .bclj is a pure function of the CODE claim log):
+;; PROVES (the flip thesis: the .bclj is a pure function of the CODE fact log):
 ;;   K  KEYSTONE  render(log) == render(text-path) BYTE-IDENTICAL (the documented
 ;;               normalization: the renderer canonicalizes #lang -> (define-target)
 ;;               and reflows comments, so byte-identity is vs render(TEXT), which is
@@ -16,7 +16,7 @@
 ;;               render(log) recompiles '0 error'.
 ;;   3  INGEST (lossless)  emit-edn(schema) re-keyed @schema#n == the warm store's
 ;;               @schema#* AST facts (read off the daemon); symdiff 0.
-;;   4  CROSS-FRAME  a bridge claim @schema#<node> relates_to @<foreign-thread>
+;;   4  CROSS-FRAME  a bridge fact @schema#<node> relates_to @<foreign-thread>
 ;;               (code-owned subject, foreign-thread object) commits through the ONE
 ;;               coordinator and reads back — proof the code + thread frames compose.
 ;;   5  WARM READS  ensure-refers! then :callers / :query off the warm materialized
@@ -115,7 +115,7 @@
 
 (def emit-set (emit-edn-triples (str root "/src/fram/schema.bclj") "schema"))
 (def warm-set (warm-ast-triples "schema"))
-;; the warm set lacks the @schema#root file claim's churn; compare AST only (drop root).
+;; the warm set lacks the @schema#root file fact's churn; compare AST only (drop root).
 (def emit-ast (set (remove (fn [[l _ _]] (= l "@schema#root")) emit-set)))
 (def warm-ast (set (remove (fn [[l _ _]] (= l "@schema#root")) warm-set)))
 (def only-emit (set/difference emit-ast warm-ast))
@@ -152,7 +152,7 @@
      (and (:ok q-resp) (pos? (count (:ok q-resp)))))
 
 ;; ===========================================================================
-;; GATE 4 — CROSS-FRAME: a bridge claim composes through the ONE coordinator.
+;; GATE 4 — CROSS-FRAME: a bridge fact composes through the ONE coordinator.
 ;; ===========================================================================
 ;; code-owned subject (@schema#<a node>), foreign-thread object (@flip-foreign-thread).
 ;; relates_to is a domain ref pred — not schema/resolve reserved — so do-assert lands
@@ -173,19 +173,19 @@
                                     :rules [{:head {:rel "out" :args [{:var "r"}]}
                                              :body [{:rel "triple" :args [bridge-subj "relates_to" {:var "r"}]}]}]}}))
 (def bridge-read (and (:ok bridge-q) (some #(= [foreign] (mapv str %)) (:ok bridge-q))))
-(chk "GATE 4 CROSS-FRAME: bridge claim reads back over the warm view" bridge-read)
+(chk "GATE 4 CROSS-FRAME: bridge fact reads back over the warm view" bridge-read)
 ;; and it landed in the code log (durable).
 (def bridge-in-log
   (some (fn [ln] (and (str/includes? ln (str ":l \"" bridge-subj "\""))
                       (str/includes? ln ":p \"relates_to\"")
                       (str/includes? ln (str ":r \"" foreign "\"")))) (str/split-lines (slurp flat))))
-(chk "GATE 4 CROSS-FRAME: bridge claim is durable in the code log" bridge-in-log)
+(chk "GATE 4 CROSS-FRAME: bridge fact is durable in the code log" bridge-in-log)
 
 ;; ===========================================================================
 ;; KEYSTONE — render(log) == render(text), + delta-commit recompiles.
 ;; ===========================================================================
 ;; K-A: render(log) byte-identical to render(text-path). We render BOTH off a CLEAN
-;; copy of the log (the bridge claim above is a domain claim, filtered out of the AST
+;; copy of the log (the bridge fact above is a domain fact, filtered out of the AST
 ;; render — but to be hermetic we render from the original committed log copy here).
 (def kbuild (str (System/getProperty "java.io.tmpdir") "/code-flip-k-" (System/nanoTime)))
 (.mkdirs (io/file kbuild))
@@ -193,7 +193,7 @@
 (def rft (str kbuild "/render-from-text.bclj"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
                "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
-;; render-from-log over a FRESH copy of the committed code log (no bridge claim).
+;; render-from-log over a FRESH copy of the committed code log (no bridge fact).
 (def klog (str kbuild "/code.log")) (io/copy (io/file code-log) (io/file klog))
 (proc/shell {:extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" klog "--out" rfl)
 ;; render-from-text: emit-edn -> resolve -> render (the existing authoring projection).
@@ -241,7 +241,7 @@
                       "bb" "-cp" "out" "chartroom/src/resolve.clj" "set-body" "cardinality" "schema" kc-body
                       (str kc-resolve "/schema-emit.edn")))
 (def kc-verb-ok (zero? (:exit kc-verb)))
-(chk "KEYSTONE-C: set-body verb produced a render (claim op)" kc-verb-ok)
+(chk "KEYSTONE-C: set-body verb produced a render (fact op)" kc-verb-ok)
 ;; render the verb's output to the new .bclj.
 (def kc-newbclj (str kc-work "/schema-new.bclj"))
 (when kc-verb-ok
@@ -278,6 +278,6 @@
 (let [cs @checks fails (remove second cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (do (println "\nTHE FLIP:" (count cs) "/" (count cs) "PASS — the .bclj is a pure function of the CODE claim log.")
+    (do (println "\nTHE FLIP:" (count cs) "/" (count cs) "PASS — the .bclj is a pure function of the CODE fact log.")
         (System/exit 0))
     (do (println "\nTHE FLIP:" (count fails) "FAILED") (System/exit 1))))

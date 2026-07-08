@@ -9,7 +9,7 @@
 
 (def log (System/getenv "FRAM_LOG"))
 (when (or (nil? log) (not (.exists (io/file log))))
-  (println "store_domain_test: skipped — set FRAM_LOG to a claims.log to run")
+  (println "store_domain_test: skipped — set FRAM_LOG to a facts.log to run")
   (System/exit 0))
 (def flat-facts (:facts (fold/fold (fram.rt/read-log log))))
 (def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-facts)))

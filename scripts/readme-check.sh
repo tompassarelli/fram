@@ -10,7 +10,7 @@
 #   (3) bin entrypoints   — every `bin/fram-*` named in README must exist + be executable.
 #   (4) referenced paths  — every relative link/path in README must exist.
 #   (5) the core loop runs — import / validate / call / query / export on a SCRATCH copy
-#                            of threads/ (the canonical claims.log is never touched).
+#                            of threads/ (the canonical facts.log is never touched).
 #   --local additionally checks the toolchain (bb / clojure / java) is on PATH.
 set -uo pipefail
 cd "$(dirname "$0")/.."                      # repo root
@@ -47,12 +47,12 @@ for p in $(grep -oE '\]\(([^)#]+)\)' "$README" | sed -E 's/^\]\(//; s/\)$//' \
   if [ -e "$p" ]; then note "ok — $p"; else bad "README links a missing path: $p"; fi
 done
 
-# (5) the core loop runs — on a scratch copy; canonical claims.log untouched.
+# (5) the core loop runs — on a scratch copy; canonical facts.log untouched.
 echo "== (5) core engine loop (scratch copy) =="
 WD=$(mktemp -d)
 trap 'rm -rf "$WD"' EXIT
 cp -r threads "$WD/threads"
-export FRAM_THREADS="$WD/threads" FRAM_LOG="$WD/claims.log"
+export FRAM_THREADS="$WD/threads" FRAM_LOG="$WD/facts.log"
 run() { echo "   \$ $*"; if "$@" >/dev/null 2>&1; then note "ok"; else bad "command failed: $*"; fi; }
 run bin/fram import
 run bin/fram validate

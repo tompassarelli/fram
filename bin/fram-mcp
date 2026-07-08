@@ -12,7 +12,7 @@
 #   FRAM_THREADS / FRAM_LOG select the corpus (same vars the CLI reads).
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-export FRAM_LOG="${FRAM_LOG:-$HERE/claims.log}"
+export FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
 # Pin beagle's racket (matches the emit-edn .zo bytecode) onto PATH so the
 # facts-roundtrip --emit-edn/--render calls in the edit channel never hit an
 # ambient version-skewed racket (-> .zo "version mismatch"). FRAM_RACKET

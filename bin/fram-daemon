@@ -13,4 +13,4 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # `fram-daemon [port] [log]` shape working (mode = serve-flat).
 mode=serve-flat
 case "$1" in serve|serve-flat) mode="$1"; shift;; esac
-cd "$HERE" && exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "${2:-$HERE/claims.log}"
+cd "$HERE" && exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "${2:-$HERE/facts.log}"

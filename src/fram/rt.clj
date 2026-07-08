@@ -3,7 +3,7 @@
   layer (file IO, log read/write, string ops) the .bclj `declare-extern`s bind
   to. Beagle owns the typed logic; this owns the host calls.
 
-  Paths default to the current working directory (./threads, ./claims.log) and
+  Paths default to the current working directory (./threads, ./facts.log) and
   are overridable via FRAM_THREADS / FRAM_LOG."
   (:refer-clojure :exclude [slurp])   ; fram.rt/slurp wraps clojure.core/slurp; keep the JVM daemon's stderr clean
   (:require [clojure.string :as str]
@@ -102,7 +102,7 @@
              (map #(.getName ^java.io.File %) (.listFiles f)))))))
 
 ;; Atomically reserve a free id ACROSS concurrent capture processes: bump past
-;; any id already claimed by a file (id-taken?) AND any in-flight reservation —
+;; any id already asserted by a file (id-taken?) AND any in-flight reservation —
 ;; the latter via an exclusive CREATE_NEW of a per-id lock dotfile, which two
 ;; racers in the same second cannot both win. Caller writes <id>-<slug>.md then
 ;; release-id. (A scan-then-write alone has a TOCTOU window two distinct-slug
@@ -140,7 +140,7 @@
       (str (System/getProperty "user.dir") "/threads")))
 (defn log-path []
   (or (System/getenv "FRAM_LOG")
-      (str (System/getProperty "user.dir") "/claims.log")))
+      (str (System/getProperty "user.dir") "/facts.log")))
 (defn time-dir []
   (or (System/getenv "FRAM_TIME_DIR")
       (str (System/getProperty "user.dir") "/time")))

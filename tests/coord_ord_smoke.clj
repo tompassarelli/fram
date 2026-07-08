@@ -1,11 +1,11 @@
 ;; Stage B smoke — resolver compiles with the ord-lib + old-format reads unchanged.
-;;   bb -cp out coord_ord_smoke.clj    (uses an OLD f<int> corpus: /tmp/cnf-ksweep-K2.log)
+;;   bb -cp out coord_ord_smoke.clj    (uses an OLD f<int> corpus: /tmp/store-ksweep-K2.log)
 ;; SAFE: /tmp copy, in-process.
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord_daemon.clj")            ; loads chartroom/src/resolve.clj (the ord-lib)
-(def src "/tmp/cnf-ksweep-K2.log")
+(def src "/tmp/store-ksweep-K2.log")
 (when-not (.exists (io/file src)) (println "need" src "— run ksweep first") (System/exit 1))
-(def tmp (str "/tmp/cnf-ordsmoke-" (System/nanoTime) ".log"))
+(def tmp (str "/tmp/store-ordsmoke-" (System/nanoTime) ".log"))
 (io/copy (io/file src) (io/file tmp))
 (boot-flat! tmp)
 (def st (:store @co))

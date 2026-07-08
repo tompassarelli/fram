@@ -1,5 +1,5 @@
 ;; datalog_test.clj — positive + recursive Datalog, semantic conformance to the
-;; oracle's fixtures (join, transitive closure, claim-pattern, repeated-var join).
+;; oracle's fixtures (join, transitive closure, fact-pattern, repeated-var join).
 ;;   bb -cp out datalog_test.clj
 (require '[fram.store :as c] '[fram.datalog :as d])
 
@@ -25,9 +25,9 @@
                                     (d/lit "reaches" [(d/v :y) (d/v :z)])])]))
 (def reaches (set (d/facts dbB "reaches")))
 
-;; Fixture C — rule over claim(Cid,L,P,R): ec(Cid,X,Y) :- claim(Cid,X,edge,Y)
+;; Fixture C — rule over fact(Cid,L,P,R): ec(Cid,X,Y) :- fact(Cid,X,edge,Y)
 (def dbC (d/run-rules ctx [(d/rule "ec" [(d/v :cid) (d/v :x) (d/v :y)]
-                                   [(d/lit "claim" [(d/v :cid) (d/v :x) edge (d/v :y)])])]))
+                                   [(d/lit "fact" [(d/v :cid) (d/v :x) edge (d/v :y)])])]))
 (def ec-pairs (set (map (fn [t] [(nth t 1) (nth t 2)]) (d/facts dbC "ec"))))
 
 ;; repeated-var equality join: selfloop(N) :- triple(N,edge,N)  (after adding a->a)
@@ -60,8 +60,8 @@
   [["[A] 2-literal positive join"          (= #{[a b] [b cc]} pth)]
    ["[B] transitive closure (6 pairs)"     (= #{[a b] [a cc] [a dd] [b cc] [b dd] [cc dd]} reaches)]
    ["[B] closure size correct"             (= 6 (count reaches))]
-   ["[C] rule over claim() 4-ary pattern"  (= #{[a b] [b cc] [cc dd]} ec-pairs)]
-   ["[C] one derived per edge claim"       (= 3 (count (d/facts dbC "ec")))]
+   ["[C] rule over fact() 4-ary pattern"  (= #{[a b] [b cc] [cc dd]} ec-pairs)]
+   ["[C] one derived per edge fact"       (= 3 (count (d/facts dbC "ec")))]
    ["repeated var = equality join"         (= #{[a]} loops)]
    ["[neg] terminal (positive, lower stratum)" (= #{[na] [nb]} terminal)]
    ["[neg] not-terminal finite-complement"     (= #{[ncc] [ndd]} active)]
@@ -71,5 +71,5 @@
 (let [fails (remove second checks)]
   (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (println "\ncnf datalog (positive+recursive):" (count checks) "/" (count checks) "PASS")
-    (do (println "\ncnf datalog:" (count fails) "FAILED") (System/exit 1))))
+    (println "\nstore datalog (positive+recursive):" (count checks) "/" (count checks) "PASS")
+    (do (println "\nstore datalog:" (count fails) "FAILED") (System/exit 1))))

@@ -9,7 +9,7 @@
 
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-bind-test-" (System/nanoTime)))
 (.mkdirs (io/file tmp))
-(def log (str tmp "/claims.log"))
+(def log (str tmp "/facts.log"))
 (spit log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n")
 (def PORT-LO 39811)   ; default bind (loopback)
 (def PORT-ALL 39812)  ; FRAM_BIND=0.0.0.0

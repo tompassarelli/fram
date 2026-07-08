@@ -9,7 +9,7 @@
 (require '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord.clj")   ; new-coord/commit!/commit-on-view!/select!/view-selects/elect/live-cids-lp/store
 
-(let [log "/tmp/cnf-views-test.log"
+(let [log "/tmp/store-views-test.log"
       co (new-coord log)
       checks (atom [])
       chk (fn [nm ok] (swap! checks conj [nm ok]))
@@ -29,13 +29,13 @@
          (= 3 (count live)))
 
     ;; ---- (2) per-branch isolation: each view elects its OWN rival ----
-    (chk "main (default view) elects the EARLIEST-cid bare base claim"
+    (chk "main (default view) elects the EARLIEST-cid bare base fact"
          (= "base" (val-of (elect co live))))
     (chk "main: 2-arity == 3-arity nil view (byte-identical default election)"
          (= (elect co live) (elect co nil live)))
     (chk "branch b1 elects b1's OWN selected rival" (= "b1val" (val-of (elect co "@view:b1" live))))
     (chk "branch b2 elects b2's OWN selected rival" (= "b2val" (val-of (elect co "@view:b2" live))))
-    (chk "isolation: b1, b2, main each elect a DISTINCT claim"
+    (chk "isolation: b1, b2, main each elect a DISTINCT fact"
          (apply distinct? (map #(elect co % live) ["@view:b1" "@view:b2" nil])))
     (chk "isolation: a branch write NEVER changes main's election"
          (= "base" (val-of (elect co nil live))))

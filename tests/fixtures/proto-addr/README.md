@@ -4,9 +4,9 @@ Backs `tests/coord_addressable_forms_test.clj`. A warm-daemon fixture proving th
 INDEX/READ-DEF addressability invariant on real Clojure protocol/extension shapes
 (EXP-025 p1c ring-01 defect fix).
 
-- `code.claimlog` — the ingested claim log (booted by the test on a scratch port).
-  Named `.claimlog`, not `.log`, so `.gitignore`'s `*.log` doesn't drop it.
-  Regenerate: `bin/fram-ingest-code src/ring/core/protocols.bclj src/fixt/shapes.bclj --root src --out code.claimlog`
+- `code.factlog` — the ingested fact log (booted by the test on a scratch port).
+  Named `.factlog`, not `.log`, so `.gitignore`'s `*.log` doesn't drop it.
+  Regenerate: `bin/fram-ingest-code src/ring/core/protocols.bclj src/fixt/shapes.bclj --root src --out code.factlog`
   (with the BEAGLE_HOME / FRAM_RACKET pin from `docs/private/`).
 - `src/fixt/shapes.bclj` — hand-written; covers defrecord / defprotocol+member /
   extend-type / defmulti / defmethod.

@@ -1,6 +1,6 @@
 (ns fram.types)
 
-(defrecord Store [next-id next-seq supersedes-pred objects values val-intern claims tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr])
+(defrecord Store [next-id next-seq supersedes-pred objects values val-intern facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr])
 
 (defn store-next-id [r] (:next-id r))
 
@@ -14,7 +14,7 @@
 
 (defn store-val-intern [r] (:val-intern r))
 
-(defn store-claims [r] (:claims r))
+(defn store-facts [r] (:facts r))
 
 (defn store-tx-of [r] (:tx-of r))
 

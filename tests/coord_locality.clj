@@ -2,7 +2,7 @@
 ;; coord_locality.clj — STRUCTURAL-POSITION CONFLICT-DETECTION RECEIPT
 ;;   bb -cp out coord_locality.clj
 ;;
-;; CLAIM (verified — premise corrected by grounding + 3-lens adversarial audit):
+;; FACT (verified — premise corrected by grounding + 3-lens adversarial audit):
 ;;   The engine gives commit-time conflict detection to SINGLE-VALUED fields
 ;;   (stale concurrent write -> :reject :conflict). It gives NONE to the dense
 ;;   MULTI-VALUED `fN` structural-ordering positions. So two overlapping
@@ -27,13 +27,13 @@
 ;;   set-body on different defns, which commute).
 ;;
 ;; SAFETY: isolated coordinator on a /tmp log. Never touches port 7977 or the
-;; canonical tern log (~/.local/state/tern/claims.log).
+;; canonical tern log (~/.local/state/tern/facts.log).
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
 (load-file "coord.clj")
 
 (defn fresh-coord [pos-card]                ; pos-card = "multi" (real fN) | "single" (the fix)
-  (let [log (str "/tmp/cnf-locality-" (System/nanoTime) ".log")
+  (let [log (str "/tmp/store-locality-" (System/nanoTime) ".log")
         co  (new-coord log)]
     (register-pred! co "title" "single" "literal")     ; a single-valued field, for contrast
     (doseq [p ["p0" "p1" "p2" "p3"]] (register-pred! co p pos-card "ref"))  ; ordering positions

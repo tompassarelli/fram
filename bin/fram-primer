@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 ;; fram-primer — GENERATED reference for fram, from fram's own source. Two modes:
 ;;
-;;   bb bin/fram-primer                  # human cheatsheet (claim-authoring primer)
+;;   bb bin/fram-primer                  # human cheatsheet (fact-authoring primer)
 ;;   bb bin/fram-primer --beagle-catalog # the typed fram API as a beagle stdlib catalog
 ;;
 ;; Both EXTRACT from src/fram/*.bclj so they never go stale (the beagle-authoring
@@ -69,12 +69,12 @@
   (println ";;   ~/code/beagle/beagle-lib/private/stdlib-fram.rkt")
   (println ";;")
   (println ";; The typed fram API for beagle CONSUMERS: a .bclj that (require fram.store :as c)")
-  (println ";; types its claim calls as the real fram types (Int ids, Bool, ...) not Any.")
+  (println ";; types its fact calls as the real fram types (Int ids, Bool, ...) not Any.")
   (println "#lang racket/base")
   (println "(require \"types.rkt\" \"stdlib-helpers.rkt\")")
   (println "(define STDLIB-FRAM")
   (println "  (hash")
-  (println (entries "cnf" (src "cnf.bclj")))
+  (println (entries "store" (src "store.bclj")))
   (println (entries "datalog" (src "datalog.bclj")))
   (println (entries "schema" (src "schema.bclj")))
   (println "   ))")
@@ -88,15 +88,15 @@
       (println (str "  " sig (when doc (str "\n      ; " doc)))))))
 
 (defn emit-cheatsheet []
-  (println "# Fram claim-authoring primer (GENERATED from src/fram/*.bclj — `bb bin/fram-primer`)")
-  (println "\nThe program/app/work IS a claim graph (subject predicate object). You DON'T mutate —")
-  (println "you assert; an update is a SUPERSEDING claim (old value stays, marked not-live);")
+  (println "# Fram fact-authoring primer (GENERATED from src/fram/*.bclj — `bb bin/fram-primer`)")
+  (println "\nThe program/app/work IS a fact graph (subject predicate object). You DON'T mutate —")
+  (println "you assert; an update is a SUPERSEDING fact (old value stays, marked not-live);")
   (println "you reason with Datalog (relational/recursive), not imperative walks. Rent from bb:")
   (println "  bb -cp \"$FRAM_OUT\" your-script.clj      # FRAM_OUT defaults to ~/code/fram/out")
   (println "  (require '[fram.store :as c] '[fram.datalog :as d] '[fram.schema :as s])")
   (println "  (when authoring in BEAGLE: fram's API is typed via stdlib-fram.rkt — calls are NOT Any.)")
   (println "\n## API surface (live signatures)")
-  (section "Store + identity + write — fram.store" (src "cnf.bclj"))
+  (section "Store + identity + write — fram.store" (src "store.bclj"))
   (section "Datalog — fram.datalog"              (src "datalog.bclj"))
   (section "Typed schema loader — fram.schema"   (src "schema.bclj"))
   (println "\n## Canonical patterns (the idioms, with where they're proven)")
@@ -106,15 +106,15 @@
      "  (defn V [s] (let [id (c/value! ctx (str s))] (vswap! vrev assoc id (str s)) id))"
      "  (defn vstr [id] (get @vrev id))                 ; ground truth: web/spike/eddy-on-facts/store.clj"
      ""
-     "  ;; 2. UPDATE = a SUPERSEDING claim (history is FREE — old claim stays, not-live)"
+     "  ;; 2. UPDATE = a SUPERSEDING fact (history is FREE — old fact stays, not-live)"
      "  (def SUPS (c/value! ctx \"supersedes\")) (c/set-supersedes-pred! ctx SUPS)"
      "  (let [new (c/fact! ctx e attr-pid (V v) tx)]   ; assert the new value"
      "    (c/fact! ctx new SUPS old-cid tx))           ; marks old-cid not-live; `new` is the superseder"
      ""
      "  ;; 3. QUERY the LIVE view (by-* / current-facts auto-filter superseded)"
-     "  (c/by-lp ctx e attr-pid)    ; live claim-ids for (subject e, predicate attr)"
+     "  (c/by-lp ctx e attr-pid)    ; live fact-ids for (subject e, predicate attr)"
      "  (c/by-pr ctx KIND tval)     ; subjects with predicate=KIND value=tval  (e.g. all entities of a kind)"
-     "  (:r (c/fact-of ctx cid))   ; a claim's value id      (c/live? ctx cid) -> still current?"
+     "  (:r (c/fact-of ctx cid))   ; a fact's value id      (c/live? ctx cid) -> still current?"
      ""
      "  ;; 4. REASON: transitive closure = 2 Datalog rules (NOT an imperative loop)"
      "  (d/run-rules ctx"

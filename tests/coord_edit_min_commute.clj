@@ -49,7 +49,7 @@
 (def lookup-marker "(first (lookup-all ctx subj pname))")
 
 ;; ============================================================================
-;; PATH 1 — :edit-min through ONE warm daemon (the claim path).
+;; PATH 1 — :edit-min through ONE warm daemon (the fact path).
 ;; ============================================================================
 (def flat (str (System/getProperty "java.io.tmpdir") "/commute-min-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
@@ -130,15 +130,15 @@
 
 ;; ============================================================================
 (println "\n=== GATE 2 — COMMUTATION (two disjoint same-module edits) ===")
-(println (format "  [claim/:edit-min] edit A ok=%s  edit B ok=%s  no-conflict=%s"
+(println (format "  [fact/:edit-min] edit A ok=%s  edit B ok=%s  no-conflict=%s"
                  (boolean (:ok edit-a)) (boolean (:ok edit-b)) no-conflict))
-(println (format "  [claim/:edit-min] BOTH bodies present in render(log): %s" both-present))
-(println (format "  [claim/:edit-min] render(log) recompiles 1/0:        %s" min-recompiles))
+(println (format "  [fact/:edit-min] BOTH bodies present in render(log): %s" both-present))
+(println (format "  [fact/:edit-min] render(log) recompiles 1/0:        %s" min-recompiles))
 (println (format "  [whole-module]    BOTH bodies present (contrast):     %s   <- expect FALSE (clobber/conflict)" whole-both))
 
 (def pass (and no-conflict both-present min-recompiles))
 (if pass
-  (do (println "\nGATE 2 PASS — disjoint same-module edits COMMUTE on the claim graph "
+  (do (println "\nGATE 2 PASS — disjoint same-module edits COMMUTE on the fact graph "
                "(both survive, recompiles). The whole-module path " (if whole-both "ALSO kept both (no contrast)" "did NOT (it clobbered/conflicted) — the contrast holds") ".")
       (System/exit 0))
   (do (println "\nGATE 2 FAIL — the crown jewel is dead: disjoint same-module edits did NOT both survive.")

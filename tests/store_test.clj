@@ -1,5 +1,5 @@
-;; store_test.clj — reified CNF kernel: smoke + the app-B checks + SEMANTIC
-;; conformance to the Racket oracle's real fixtures (cnf-experiments).
+;; store_test.clj — reified store kernel: smoke + the app-B checks + SEMANTIC
+;; conformance to the Racket oracle's real fixtures (store-experiments).
 ;;   bb -cp out store_test.clj
 (require '[fram.store :as k])
 
@@ -63,18 +63,18 @@
    ["fact! returns a fresh object id"                (and (integer? c1) (not= c1 e))]
    ["fact-of resolves the triple"                    (= {:l e :p p-title :r foo} (k/fact-of ctx c1))]
    ["fact-tx records the tx"                         (= tx (k/fact-tx ctx c1))]
-   ["[check3/D] claim-id usable as l (reification)"   (= [c-meta] (k/by-lp ctx c1 p-noted))]
-   ["[check3/D] meta-claim resolves with claim as l"  (= {:l c1 :p p-noted :r who} (k/fact-of ctx c-meta))]
+   ["[check3/D] fact-id usable as l (reification)"   (= [c-meta] (k/by-lp ctx c1 p-noted))]
+   ["[check3/D] meta-fact resolves with fact as l"  (= {:l c1 :p p-noted :r who} (k/fact-of ctx c-meta))]
    ["facts are NOT interned (2 distinct cids)"        (and (not= d1 d2) (= [d1 d2] (k/by-lp ctx e2 p-tag)))]
    ["[check2/E] insertion order preserved"            (= [cx cy cz] (k/by-lp ctx e3 p-child))]
-   ["[C] supersedes-claim marks old not-live"         (not (k/live? ctx old))]
-   ["[C] new claim stays live"                        (k/live? ctx newc)]
-   ["[C] live view excludes the superseded claim"     (= [newc] (k/by-lp ctx e4 p-name))]
-   ["[C] the supersedes-claim itself is live"         (k/live? ctx sup)]
+   ["[C] supersedes-fact marks old not-live"         (not (k/live? ctx old))]
+   ["[C] new fact stays live"                        (k/live? ctx newc)]
+   ["[C] live view excludes the superseded fact"     (= [newc] (k/by-lp ctx e4 p-name))]
+   ["[C] the supersedes-fact itself is live"         (k/live? ctx sup)]
    ["[check4] single monotonic id space, all distinct" (apply distinct? [e e2 e3 e4 c1 c-meta d1 d2 foo p-title])]])
 
 (let [fails (remove second checks)]
   (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (println "\ncnf kernel conformance:" (count checks) "/" (count checks) "PASS")
-    (do (println "\ncnf kernel:" (count fails) "FAILED") (System/exit 1))))
+    (println "\nstore kernel conformance:" (count checks) "/" (count checks) "PASS")
+    (do (println "\nstore kernel:" (count fails) "FAILED") (System/exit 1))))

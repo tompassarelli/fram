@@ -1,5 +1,5 @@
 # generated data — regenerate with `fram import`
-/claims.log
+/facts.log
 *.log
 
 # native build artifacts (build with native/build.sh)

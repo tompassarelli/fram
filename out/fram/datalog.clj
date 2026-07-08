@@ -1,5 +1,5 @@
 (ns fram.datalog
-  (:require [fram.cnf :as c]
+  (:require [fram.store :as c]
             [fram.types :as t]))
 
 (defn v [name]
@@ -18,12 +18,12 @@
   (and (map? t) (contains? t :var)))
 
 (defn edb [ctx]
-  (reduce (fn [db cid] (let [cl (c/claim-of ctx cid)
+  (reduce (fn [db cid] (let [cl (c/fact-of ctx cid)
    l (:l cl)
    p (:p cl)
    r (:r cl)
    db1 (update db "triple" (fn [s] (conj (or s #{}) [l p r])))]
-  (update db1 "claim" (fn [s] (conj (or s #{}) [cid l p r]))))) {} (c/current-claims ctx)))
+  (update db1 "claim" (fn [s] (conj (or s #{}) [cid l p r]))))) {} (c/current-facts ctx)))
 
 (defn- unify [term val subst]
   (if (var? term) (let [n (:var term)]

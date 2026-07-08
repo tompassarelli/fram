@@ -32,7 +32,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [callgraph :as cg]
-            [fram.cnf :as c]
+            [fram.store :as c]
             [fram.datalog :as d]))
 
 (def rep-path (first *command-line-args*))
@@ -84,7 +84,7 @@
                                (let [e (c/entity! ctx)] (vswap! n->ent assoc nm e) e)))
           ;; assert one claim per def: (def-entity rep-regime <"native"|"hamt"|"mixed">)
           _ (doseq [d rep-defs]
-              (c/claim! ctx (ent (:name d)) REGIME (c/value! ctx (:regime d)) tx))
+              (c/fact! ctx (ent (:name d)) REGIME (c/value! ctx (:regime d)) tx))
           ent->n (into {} (map (fn [[k v]] [v k]) @n->ent))]
 
       ;; ---- Q1/Q2/Q3: jurisdiction filters via the live (p,r) index --------
@@ -92,7 +92,7 @@
             (fn [reg]
               (let [R (c/value! ctx reg)]
                 (->> (c/by-pr ctx REGIME R)             ; live claims with this regime
-                     (map #(c/claim-of ctx %))
+                     (map #(c/fact-of ctx %))
                      (map #(ent->n (:l %)))
                      sort vec)))]
         (println "\n---- Q1. defs that SHIP THE HAMT (pull persistent runtime) ----")
@@ -132,8 +132,8 @@
               ;; def like `run` has no rep-def claim but still forces a HAMT if it CALLS
               ;; one. Seed every defn so its entity exists in the reverse map.
               _ (doseq [d defns] (when (:name d) (gent (:name d))))
-              _ (doseq [[a b] name-edges] (c/claim! gctx (gent a) CALLS (gent b) gtx))
-              _ (doseq [nm hamt-names] (c/claim! gctx (gent nm) HAMT MARK gtx))
+              _ (doseq [[a b] name-edges] (c/fact! gctx (gent a) CALLS (gent b) gtx))
+              _ (doseq [nm hamt-names] (c/fact! gctx (gent nm) HAMT MARK gtx))
               ent->name  (into {} (map (fn [[k v]] [v k]) @gname->ent*))
               db (d/run-rules gctx
                    [;; forces(X) :- calls(X,Y), ships-hamt(Y,yes).   (direct)

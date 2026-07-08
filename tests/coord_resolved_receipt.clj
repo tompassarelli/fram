@@ -13,7 +13,7 @@
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
 (load-file "coord_daemon.clj")
 
-(def log (str "/tmp/cnf-resolved-" (System/nanoTime) ".log"))
+(def log (str "/tmp/store-resolved-" (System/nanoTime) ".log"))
 (spit log "")
 (boot! log)
 ;; "owner"/"title" are in the kernel single-valued list (ck/single?), so a 2nd write

@@ -1,10 +1,10 @@
 #lang beagle/clj
 ;; ============================================================================
-;; fram.datalog — pure Datalog over the reified claim store (Stage 3).
+;; fram.datalog — pure Datalog over the reified fact store (Stage 3).
 ;; ============================================================================
 ;; Conforms (positive + recursive) to the Racket oracle's datalog.rkt semantics:
-;;   - EDB base relations projected from the LIVE claim store:
-;;       "triple" = (l p r)        "claim" = (cid l p r)
+;;   - EDB base relations projected from the LIVE fact store:
+;;       "triple" = (l p r)        "fact" = (cid l p r)
 ;;     (current view — superseded facts are excluded by fram.store/by-* etc.)
 ;;   - rules are DATA: a rule derives a head relation from a conjunctive body;
 ;;     a body literal is a relation + args; args are vars or constants (ids).
@@ -20,7 +20,7 @@
 ;; upgrade). Stratified negation is added next (fram.datalog/strata).
 ;;
 ;; TYPES: Db = (Map String (Set (Vec Any))) — relation name -> set of tuples;
-;; tuples are domain-agnostic (a "claim" tuple holds an Int cid + ids), so the
+;; tuples are domain-agnostic (a "fact" tuple holds an Int cid + ids), so the
 ;; element is (Vec Any) — Beagle has no heterogeneous HVec (Tuple gap). A rule/lit
 ;; is an open keyword-map (Map Keyword Any): head-vs-body lits differ structurally,
 ;; so they are NOT a single record. A substitution is (Map String Any) — var name
@@ -43,12 +43,12 @@
 ;; The open-map discriminator (contains? t :var) can't be a record, so t stays Any.
 (defn- var? [t :- Any] :- Bool (and (map? t) (contains? t :var)))
 
-;; --- EDB: project the LIVE claim store into triple/claim tuple-sets ----------
+;; --- EDB: project the LIVE fact store into triple/fact tuple-sets ----------
 (defn edb [ctx :- (Atom t/Store)] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) cid :- Int] :- (Map String (Set (Vec Any)))
             (let [cl (c/fact-of ctx cid) l (:l cl) p (:p cl) r (:r cl)
                   db1 (update db "triple" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [l p r])))]
-              (update db1 "claim" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [cid l p r])))))
+              (update db1 "fact" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [cid l p r])))))
           {} (c/current-facts ctx)))
 
 ;; --- unification (positional, substitution = var-name -> value) -------------
@@ -216,7 +216,7 @@
             ;; (1) negated rel is not EDB and not a lower stratum's head
             bad-fwd (filterv (fn [nl :- (Map Keyword Any)] :- Bool
                                (not (or (= "triple" (:rel nl))
-                                        (or (= "claim" (:rel nl)) (contains? lower (:rel nl))))))
+                                        (or (= "fact" (:rel nl)) (contains? lower (:rel nl))))))
                              (neg-lits stratum))
             ;; (2) negated rel is (also) re-derived in THIS stratum -> negative cycle
             bad-self (filterv (fn [nl :- (Map Keyword Any)] :- Bool (contains? this-rels (:rel nl)))

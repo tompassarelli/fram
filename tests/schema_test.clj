@@ -1,4 +1,4 @@
-;; schema_test.clj — the CNF schema layer: cardinality-driven supersession,
+;; schema_test.clj — the store schema layer: cardinality-driven supersession,
 ;; refs, find-by, identity (name/rename/resolve). Mirrors the oracle's
 ;; schema.rkt/graph.rkt semantics.
 ;;   bb -cp out schema_test.clj
@@ -50,5 +50,5 @@
 (let [fails (remove second checks)]
   (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (println "\ncnf schema:" (count checks) "/" (count checks) "PASS")
-    (do (println "\ncnf schema:" (count fails) "FAILED") (System/exit 1))))
+    (println "\nstore schema:" (count checks) "/" (count checks) "PASS")
+    (do (println "\nstore schema:" (count fails) "FAILED") (System/exit 1))))

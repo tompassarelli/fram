@@ -3,7 +3,7 @@
 ;; ============================================================================
 ;; Boots ONE warm code daemon over a /tmp COPY of .fram/code.log on a verified-free
 ;; high port (NEVER 7977 / tern), then drives a 1-line set-body THROUGH the
-;; daemon's NEW :edit-min wire op and reports HOW MANY claim ops it committed.
+;; daemon's NEW :edit-min wire op and reports HOW MANY fact ops it committed.
 ;;
 ;; GATE 1 (OPCOUNT): a 1-line set-body must commit a HANDFUL of ops (contrast: the
 ;; whole-module path commits ~7800 because emit-edn renumbers the whole module).

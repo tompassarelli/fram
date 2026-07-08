@@ -3,7 +3,7 @@
 ;;
 ;; Sections map to the thread's ACCEPTANCE criteria:
 ;;   (d) the causal STAMP (:observed) survives a log replay round-trip + is clamped
-;;       to the pre-commit head (a writer cannot claim to have observed the future).
+;;       to the pre-commit head (a writer cannot fact to have observed the future).
 ;;   (a) causal ELECTION: two agents assert rival multi-valued facts, BOTH land (no
 ;;       reject, no block), and select-causal-1 elects an IDENTICAL winner across all
 ;;       readers purely from recorded observed/cid — and it picks by DECISION order
@@ -11,7 +11,7 @@
 ;;   (c) first-class RETRACTION: a withdrawn multi-valued member drops under remove-wins
 ;;       and RESURRECTS under an add-wins view — the policy is view-relative, not kernel.
 ;;   (b) :as-of {:seq S} reconstructs the pre-collision view AND re-sees a later-
-;;       withdrawn claim (retraction-as-append is what makes as-of EXACT).
+;;       withdrawn fact (retraction-as-append is what makes as-of EXACT).
 ;;
 ;;   bb -cp out tests/coord_causality_test.clj
 (require '[fram.store :as c] '[fram.schema :as s])
@@ -25,7 +25,7 @@
 ;; ============================================================================
 ;; (d) the causal stamp survives replay + is clamped to the head
 ;; ============================================================================
-(let [log "/tmp/cnf-causality-d.log"
+(let [log "/tmp/store-causality-d.log"
       co  (new-coord log)
       _   (commit! co "w" "T0" "note"  :assert "x" nil)   ; advance the global seq
       _   (commit! co "w" "T0" "note2" :assert "y" nil)
@@ -49,7 +49,7 @@
 ;; (a) causal election — rivals coexist; the EARLIEST-DECIDER wins (observed),
 ;;     which can differ from earliest-COMMITTER (cid).
 ;; ============================================================================
-(let [log "/tmp/cnf-causality-a.log"
+(let [log "/tmp/store-causality-a.log"
       co  (new-coord log)
       ;; advance the global head so the two rivals can carry distinct observed stamps
       _   (dotimes [i 50] (commit! co "w" "Tseq" "n" :assert (str i) nil))
@@ -73,9 +73,9 @@
        (= "B" (c/literal (store co) (:r (c/fact-of (store co) causal-win))))))
 
 ;; ============================================================================
-;; (b) as-of — reconstruct a historical view; a later-superseded claim is RE-SEEN.
+;; (b) as-of — reconstruct a historical view; a later-superseded fact is RE-SEEN.
 ;; ============================================================================
-(let [log "/tmp/cnf-causality-b.log"
+(let [log "/tmp/store-causality-b.log"
       co  (new-coord log)
       _   (register-pred! co "status" "single" "literal")   ; single -> overwrite supersedes
       pid (c/value-id (store co) "status")
@@ -101,7 +101,7 @@
 ;; (c) first-class retraction — a withdrawn MULTI member drops under remove-wins
 ;;     and RESURRECTS under an add-wins view; the tombstone is attributable.
 ;; ============================================================================
-(let [log "/tmp/cnf-causality-c.log"
+(let [log "/tmp/store-causality-c.log"
       co  (new-coord log)
       pid (fn [] (c/value-id (store co) "done_worker"))
       tid (fn [] (s/resolve-name (store co) "@barrier"))
@@ -147,5 +147,5 @@
 (let [cs @checks fails (remove second cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (println "\ncnf-causality:" (count cs) "/" (count cs) "PASS")
-    (do (println "\ncnf-causality:" (count fails) "FAILED of" (count cs)) (System/exit 1))))
+    (println "\nstore-causality:" (count cs) "/" (count cs) "PASS")
+    (do (println "\nstore-causality:" (count fails) "FAILED of" (count cs)) (System/exit 1))))

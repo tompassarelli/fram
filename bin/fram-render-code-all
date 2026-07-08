@@ -2,10 +2,10 @@
 # ============================================================================
 # fram-render-code-all — THE FLIP build step (GENERATED-MARKER regeneration).
 # ============================================================================
-# Regenerate the .bclj of every CLAIM-CANONICAL (sentinel'd) module FROM the code
+# Regenerate the .bclj of every GRAPH-OWNED (sentinel'd) module FROM the code
 # log — the build step that keeps the generated .bclj in sync with its canonical
-# source (the claim log). A module is claim-canonical iff its src/.bclj carries the
-# `;; @claim-canonical` sentinel. For each such module it runs bin/fram-render-code
+# source (the fact log). A module is graph-owned iff its src/.bclj carries the
+# `;; @graph-owned` sentinel. For each such module it runs bin/fram-render-code
 # and writes the result back to src/fram/<module>.bclj.
 #
 # In THIS experiment only schema.bclj carries the sentinel, so this regenerates
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do case "$1" in
 
 changed=0
 for f in src/fram/*.bclj; do
-  grep -q '@claim-canonical' "$f" || continue            # adopted modules only
+  grep -q '@graph-owned' "$f" || continue            # adopted modules only
   m="$(basename "$f" .bclj)"
   tmp="$(mktemp)"
   if ! bb -cp out bin/fram-render-code "$m" --log "$LOG" --out "$tmp" 2>/tmp/render-all.err; then

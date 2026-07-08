@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Fram CLI (runs the compiled Clojure on babashka).
 #   fram import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <val>
-# Defaults to <repo>/threads and <repo>/claims.log; override with
+# Defaults to <repo>/threads and <repo>/facts.log; override with
 # FRAM_THREADS / FRAM_LOG.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-export FRAM_LOG="${FRAM_LOG:-$HERE/claims.log}"
+export FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
 exec bb -cp "$HERE/out" -m fram.main "$@"

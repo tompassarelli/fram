@@ -51,7 +51,7 @@
 ;; (NEVER the canonical tern log — a fresh new-coord on a /tmp path.)
 ;; ============================================================================
 (defn fresh-coord []
-  (let [log (str "/tmp/cnf-11b-" (System/nanoTime) ".log")
+  (let [log (str "/tmp/store-11b-" (System/nanoTime) ".log")
         co (new-coord log)]
     (register-pred! co "depends_on" "multi" "ref")     ; ref edge, acyclicity-gated
     (register-pred! co "title" "single" "literal")      ; a thread is "defined" iff it has a title

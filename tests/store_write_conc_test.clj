@@ -29,7 +29,7 @@
 (def runtime (or (second *command-line-args*) "clojure"))
 (when (#{7977 48942} port) (println "refusing live port" port) (System/exit 2))
 
-(def log (str "/tmp/cnf-write-conc-" port "-" (System/currentTimeMillis) ".log"))
+(def log (str "/tmp/store-write-conc-" port "-" (System/currentTimeMillis) ".log"))
 (spit log "")
 (def fram-root (let [d (io/file "coord_daemon.clj")]
                  (if (.exists d) "." (str (System/getProperty "user.home") "/code/fram"))))
@@ -90,7 +90,7 @@
   (let [lines (keep #(try (edn/read-string %) (catch Exception _ nil))
                     (str/split-lines (slurp log)))
         mine (group-by :l (filter #(and (= "note" (:p %)) (= "assert" (:op %))) lines))]
-    (check! "A: flat log holds each acked claim exactly once (no dup lines)"
+    (check! "A: flat log holds each acked fact exactly once (no dup lines)"
             (every? (fn [w] (let [rs (map :r (get mine (str "@cw" w)))]
                               (and (= N (count rs)) (= N (count (distinct rs))))))
                     (range K)))

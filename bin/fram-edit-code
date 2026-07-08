@@ -10,7 +10,7 @@
 ;;   1. boot a reified store FROM .fram/code.log (migrate-flat->co — the SAME boot
 ;;      fram-render-code uses; in-process, no socket). This store IS the corpus.
 ;;   2. run the authoring verb (rename / set-body / upsert-form) over THAT store
-;;      via resolve.clj run-verb-warm! — the verb mints/supersedes claim ops
+;;      via resolve.clj run-verb-warm! — the verb mints/supersedes fact ops
 ;;      against LOG-RESIDENT node identity (@<mod>#int), never reading any .bclj.
 ;;      corpus-from-store! derives srcs/frames from the store's `name` facts, so
 ;;      the verb resolves cross-module references against the WHOLE-LOG corpus.
@@ -264,7 +264,7 @@
       ;; confirm the module is in the log before mutating (fail-fast, clear message).
       (let [root-id (s/resolve-name st (str "@" module "#root"))]
         (when-not root-id
-          (die "module" module "has no @" module "#root claim in" log-path "(was it ingested?)")))
+          (die "module" module "has no @" module "#root fact in" log-path "(was it ingested?)")))
 
       ;; 2. run the verb over the warm store. :resolve-out routes the verb's
       ;;    extract-file! projection into resolve-out (in-process, no env needed);

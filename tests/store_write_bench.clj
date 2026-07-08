@@ -25,7 +25,7 @@
 (def runtime (or (nth *command-line-args* 2 nil) "clojure"))
 (when (#{7977 48942} port) (println "refusing live port" port) (System/exit 2))
 
-(def log (str "/tmp/cnf-write-bench-" port "-" (System/currentTimeMillis) ".log"))
+(def log (str "/tmp/store-write-bench-" port "-" (System/currentTimeMillis) ".log"))
 (if (and seed (.exists (io/file seed)))
   (io/copy (io/file seed) (io/file log))
   (spit log ""))

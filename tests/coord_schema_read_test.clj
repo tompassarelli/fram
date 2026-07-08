@@ -6,7 +6,7 @@
 ;; read path is contracted to render byte-identical to the cold fold).
 ;;
 ;; The store CANNOT host the schema read view: migrate's def-predicate! seeds a cardinality
-;; + value_kind claim for EVERY predicate (subject = the pred-name's value-object), so the
+;; + value_kind fact for EVERY predicate (subject = the pred-name's value-object), so the
 ;; reified store holds ~1 seed pair per pred that the cold fold (log lines only) never emits.
 ;; So the read view sources schema-writable facts from the LOG (schema-view), exactly what
 ;; the cold fold reads. Proves, hermetically (synthetic store via boot-flat!, NEVER the live
@@ -23,7 +23,7 @@
 (load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? false)          ; force the deterministic cold whole-migrate boot
 
-(def LOG "/tmp/cnf-schema-read-test.log")
+(def LOG "/tmp/store-schema-read-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
 (defn write-lines! [path lines] (spit path (str (str/join "\n" lines) "\n")))
 
@@ -105,5 +105,5 @@
   (let [cs @checks fails (filter (fn [e] (not (second e))) cs)]
     (doseq [e cs] (println (if (second e) "  [PASS] " "  [FAIL] ") (first e)))
     (if (empty? fails)
-      (println "\ncnf-schema-read:" (count cs) "/" (count cs) "PASS")
-      (do (println "\ncnf-schema-read:" (count fails) "/" (count cs) "FAILED") (System/exit 1)))))
+      (println "\nstore-schema-read:" (count cs) "/" (count cs) "PASS")
+      (do (println "\nstore-schema-read:" (count fails) "/" (count cs) "FAILED") (System/exit 1)))))

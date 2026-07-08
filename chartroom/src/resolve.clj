@@ -19,7 +19,7 @@
 ;;   bb -cp ~/code/fram/out src/resolve.clj delete <name> <target> <edn>...
 ;; ============================================================================
 (ns resolve
-  (:require [clojure.edn :as edn] [clojure.string :as str] [fram.cnf :as c]
+  (:require [clojure.edn :as edn] [clojure.string :as str] [fram.store :as c]
             [fram.datalog :as d] [cheshire.core :as json]))   ; datalog+json: the `callgraph` mode
 
 (def mode (first *command-line-args*))
@@ -82,7 +82,7 @@
                                  (swap! file->ents update src (fnil conj []) e) e)))]
     (doseq [line lines :when (str/starts-with? line "[")]
       (let [[s p o] (edn/read-string line)]
-        (c/claim! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
+        (c/fact! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
     src))
 
 ;; --- claim-graph accessors --------------------------------------------------
@@ -115,7 +115,7 @@
   [v cids]
   (let [SEL (c/value-id ctx "selects") ve (c/value-id ctx v)]
     (when (and SEL ve)
-      (let [sel (set (keep (fn [scid] (:r (c/claim-of ctx scid))) (c/by-lp ctx ve SEL)))]
+      (let [sel (set (keep (fn [scid] (:r (c/fact-of ctx scid))) (c/by-lp ctx ve SEL)))]
         (filter sel cids)))))
 (defn select-main-1
   "Coexist-elect, VIEW-RELATIVE read-time election of the `*view*` member of a (live) (l,p)
@@ -163,7 +163,7 @@
   [e pname]
   (let [P (c/value-id ctx pname)]
     (when P (let [cs (c/by-lp ctx e P)]
-              (when-let [cid (select-main-1 cs)] (c/literal ctx (:r (c/claim-of ctx cid))))))))
+              (when-let [cid (select-main-1 cs)] (c/literal ctx (:r (c/fact-of ctx cid))))))))
 (defn kind-of [e] (pred-val e "kind"))                                  ; default-main kind of node e
 (defn sym-val [e] (when (= "symbol" (kind-of e)) (pred-val e "v")))     ; default-main spelling of a symbol
 ;; ---- CRDT order keys (#36): positions as DATA, insert-anywhere commute ----------
@@ -197,11 +197,11 @@
                     (if (> (- b a) 1) (conj acc (quot (+ a b) 2)) (recur (inc i) (conj acc a))))))))
 
 (defn ordered-children [e]                     ; fN children, in CRDT-key (path,tie) order
-  (->> (c/by-l ctx e) (map #(c/claim-of ctx %))
+  (->> (c/by-l ctx e) (map #(c/fact-of ctx %))
        (keep (fn [cl] (when-let [k (ord-parse (c/literal ctx (:p cl)))] [k (:r cl)])))
        (sort-by first ord-cmp) (mapv second)))
 (defn ordered-segs [e]                         ; Turtle #6: a comment node's segN children, in order
-  (->> (c/by-l ctx e) (map #(c/claim-of ctx %))
+  (->> (c/by-l ctx e) (map #(c/fact-of ctx %))
        (keep (fn [cl] (let [p (c/literal ctx (:p cl))]
                         (when (and (string? p) (re-matches #"seg\d+" p)) [(parse-long (subs p 3)) (:r cl)]))))
        (sort-by first) (mapv second)))
@@ -220,13 +220,13 @@
   "The DURABLE identity target of reference `L` — the bound_to edge points at the binding's
    stable @mod#int node-id, not its spelling. nil if L carries no durable edge (legacy/unedged
    refs fall back to the spelling-derived refers_to)."
-  [L] (when BOUND (let [cs (c/by-lp ctx L BOUND)] (when-let [cid (select-main-1 cs)] (:r (c/claim-of ctx cid))))))
+  [L] (when BOUND (let [cs (c/by-lp ctx L BOUND)] (when-let [cid (select-main-1 cs)] (:r (c/fact-of ctx cid))))))
 (defn refers-target
   "The binding node reference `L` resolves to (default-main view). Prefers the DURABLE bound_to
    identity edge; falls back to the derived refers_to (spelling-walk) for unedged/legacy refs.
    Not a uniqueness proof (select-main-1)."
   [L] (or (bound-target L)
-          (let [cs (c/by-lp ctx L REFERS)] (when-let [cid (select-main-1 cs)] (:r (c/claim-of ctx cid))))))
+          (let [cs (c/by-lp ctx L REFERS)] (when-let [cid (select-main-1 cs)] (:r (c/fact-of ctx cid))))))
 (defn live-node? [e] (seq (c/by-lp ctx e KIND)))
 
 ;; --- binding extraction -----------------------------------------------------
@@ -379,16 +379,16 @@
 (def ^:dynamic *xresolve* (fn [_] nil))          ; cross-module value resolver: name -> {:node :mode :alias}
 (def ^:dynamic *tresolve* (fn [_] nil))          ; type-name -> type-def node (module-local)
 (def ^:dynamic *aresolve* (fn [_] nil))          ; accessor-name `point-x` -> [type-def-leaf field-string]
-(defn bind! [L target] (c/claim! ctx L REFERS target tx) (swap! n-resolved inc))
+(defn bind! [L target] (c/fact! ctx L REFERS target tx) (swap! n-resolved inc))
 (defn bind-xmod! [node x]   ; x = {:target :mode :alias :accessor} from *xresolve*; refers_to + render markers
   (when (and x (:target x))
     (bind! node (:target x))
     (case (:mode x)
-      :fixed (c/claim! ctx node FIXED (c/value! ctx "1") tx)   ; :rename — keep own spelling
-      :qual  (c/claim! ctx node QUAL (c/value! ctx (:alias x)) tx) ; x/name — show alias/newname
+      :fixed (c/fact! ctx node FIXED (c/value! ctx "1") tx)   ; :rename — keep own spelling
+      :qual  (c/fact! ctx node QUAL (c/value! ctx (:alias x)) tx) ; x/name — show alias/newname
       nil)                                                      ; :tracking — render def's current name
     (when (:accessor x)                                         ; cross-module synth accessor: render <lower(name)>-field
-      (c/claim! ctx node ACC (c/value! ctx (:accessor x)) tx))
+      (c/fact! ctx node ACC (c/value! ctx (:accessor x)) tx))
     (swap! n-xmod inc)
     true))
 (declare walk walk-quasi walk-quasi-seq walk-fn-arity walk-pat-heads)
@@ -456,13 +456,13 @@
                              :else nil)]
           (let [stripped (str/replace nm pfx "")]    ; a/map->Point -> a/Point ; ->Point -> Point
             (or (when-let [b (*tresolve* stripped)]
-                  (bind! node b) (c/claim! ctx node CTOR (c/value! ctx pfx) tx) (swap! n-type inc) true)
+                  (bind! node b) (c/fact! ctx node CTOR (c/value! ctx pfx) tx) (swap! n-type inc) true)
                 (when (bind-xmod! node (*xresolve* stripped))
-                  (c/claim! ctx node CTOR (c/value! ctx pfx) tx) true)))) nil
+                  (c/fact! ctx node CTOR (c/value! ctx pfx) tx) true)))) nil
         ;; synthesized field accessor `<lower(Record)>-<field>` — bind to the record, store the field so
         ;; render reconstructs `<lower(newName)>-<field>` when the record is renamed.
         (when-let [a (*aresolve* nm)]
-          (bind! node (first a)) (c/claim! ctx node ACC (c/value! ctx (second a)) tx) (swap! n-type inc) true) nil
+          (bind! node (first a)) (c/fact! ctx node ACC (c/value! ctx (second a)) tx) (swap! n-type inc) true) nil
         :else (swap! n-unresolved inc)))         ; builtin/native — correctly NO refers_to
     "list"
     (let [kids (ordered-children node) h (head-sym node)]
@@ -740,7 +740,7 @@
 ;; it, exactly like code. A `red-zone` token is one symbol (≠ `red`) and a quoted
 ;; `"red"` was demoted to text by beagle's lexer, so neither resolves: the rename
 ;; win without the sed corruption. Module scope (comments-in-bodies are a follow-up).
-(defn cbind! [L target] (c/claim! ctx L REFERS target tx) (swap! n-comment inc))
+(defn cbind! [L target] (c/fact! ctx L REFERS target tx) (swap! n-comment inc))
 (defn resolve-comment [e src]
   (doseq [seg (ordered-segs e) :when (= "symbol" (kind-of seg))]
     (let [nm (sym-val seg)
@@ -840,7 +840,7 @@
                  ;; supplies the maintained module->entity-ids map (the dominant per-verb cost).
                  (some? *corpus-cache*) *corpus-cache*
                  NAME (reduce (fn [acc cid]
-                                (let [cl (c/claim-of ctx cid)
+                                (let [cl (c/fact-of ctx cid)
                                       nm (c/literal ctx (:r cl))
                                       m  (name->module nm)]
                                   (if m (update acc m (fnil conj []) (:l cl)) acc)))
@@ -997,8 +997,8 @@
 ;; what --emit-edn produces, keeping the projection lossless.
 (defn mint-leaf! [src kind v]
   (let [e (register! src (c/entity! ctx))]
-    (c/claim! ctx e KIND (c/value! ctx kind) tx)
-    (c/claim! ctx e Vp (c/value! ctx v) tx)
+    (c/fact! ctx e KIND (c/value! ctx kind) tx)
+    (c/fact! ctx e Vp (c/value! ctx v) tx)
     e))
 ;; Reader metadata (`^Type` / `^:flag` / `^{..}`) rides on the datum as Clojure meta —
 ;; the host LispReader normalizes `^Type`→{:tag Type}, `^:dynamic`→{:dynamic true}. The
@@ -1050,9 +1050,9 @@
     (let [head  (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else [])
           elems (concat head (if (map? d) (apply concat (seq d)) (seq d)))
           e     (register! src (c/entity! ctx))]
-      (c/claim! ctx e KIND (c/value! ctx "list") tx)
+      (c/fact! ctx e KIND (c/value! ctx "list") tx)
       (doseq [[i x] (map-indexed vector elems)]
-        (c/claim! ctx e (c/value! ctx (str "f" i)) (mint-datum! src x) tx))
+        (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! src x) tx))
       e)
     ;; Reader forms the host LispReader hands us as OBJECTS (write-def raw-source path),
     ;; not as `#%…`-headed lists like beagle's Racket reader emits. Re-encode them into
@@ -1068,7 +1068,7 @@
 ;; the body fN edges of a defn form = the consecutive fN child claims whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
 (defn fN-claims [parent]            ; -> [[N claim-id child-node] ...] over LIVE fN edges, ordered
-  (->> (c/by-l ctx parent) (map (fn [cid] [cid (c/claim-of ctx cid)]))
+  (->> (c/by-l ctx parent) (map (fn [cid] [cid (c/fact-of ctx cid)]))
        (keep (fn [[cid cl]] (let [p (c/literal ctx (:p cl))]
                               (when (and (string? p) (re-matches #"f\d+" p))
                                 [(parse-long (subs p 1)) cid (:r cl)]))))
@@ -1076,7 +1076,7 @@
 ;; supersede a claim WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
 ;; The supersedes edge needs a subject; a fresh entity is fine — the live-view filter
 ;; keys off the superseded :r (the old claim id), not the subject (cnf.bclj:105-106,116).
-(defn retire-claim! [oldc] (c/claim! ctx (c/entity! ctx) SUP oldc tx))
+(defn retire-claim! [oldc] (c/fact! ctx (c/entity! ctx) SUP oldc tx))
 
 ;; --- delete projection: omit a top-level form + its subtree, renumber siblings ---
 ;; The renderer reads fN children CONSECUTIVELY and includes only nodes reachable from
@@ -1087,7 +1087,7 @@
 (def ^:dynamic *deleted-subtree* #{})    ; all entity ids under deleted forms — skipped on emit
 (defn wrapper-of [src] (some (fn [e] (when (= "beagle-file" (head-sym e)) e)) (@file->ents src)))
 (defn structural-kids [n]                ; child node ids via fN/segN/commentN/tail edges
-  (->> (c/by-l ctx n) (map #(c/claim-of ctx %))
+  (->> (c/by-l ctx n) (map #(c/fact-of ctx %))
        (keep (fn [cl] (let [p (c/literal ctx (:p cl)) r (:r cl)]
                         (when (and (integer? r) (string? p)
                                    (or (ord-pos? p) (re-matches #"seg\d+" p)         ; #36: ord-pos? = old f<int> OR new CRDT key
@@ -1128,7 +1128,7 @@
             live  (when root (descendants root))
             keep? (fn [e] (or (nil? live) (contains? live e)))]
         (doseq [e (@file->ents src) :when (and (not (*deleted-subtree* e)) (keep? e)), cid (c/by-l ctx e)]
-          (let [cl (c/claim-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
+          (let [cl (c/fact-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
             (cond
               ;; wrapper form-edges: drop them all (except f0, the beagle-file head); the
               ;; surviving forms are re-emitted at consecutive integer fN below.
@@ -1289,7 +1289,7 @@
 ;; resolve-edn! of emit-edn(text)) AND the GRAPH path (run-verb-warm!, over a
 ;; LOG-booted warm store via resolve-warm-store!). They are store-agnostic by
 ;; construction — they read the dynamic ctx/tx/SUP/srcs/frame tables and write
-;; via c/claim!/retire-claim!/mint-datum!, never touching text — so the same code
+;; via c/fact!/retire-claim!/mint-datum!, never touching text — so the same code
 ;; runs unchanged under either binding scope.
 ;;
 ;; *project-srcs* selects which module(s) author-emit! / extract-file! project.
@@ -1353,9 +1353,9 @@
             (*reject!* 3)))))
     (doseq [src target-srcs]
       (when-let [B (def-binding src old)]
-        (let [oldc (first (filter #(= Vp (:p (c/claim-of ctx %))) (c/by-l ctx B)))
-              nc (c/claim! ctx B Vp (c/value! ctx new) tx)]
-          (c/claim! ctx nc SUP oldc tx) (swap! edits inc))))
+        (let [oldc (first (filter #(= Vp (:p (c/fact-of ctx %))) (c/by-l ctx B)))
+              nc (c/fact! ctx B Vp (c/value! ctx new) tx)]
+          (c/fact! ctx nc SUP oldc tx) (swap! edits inc))))
     (when (zero? @edits)
       (binding [*out* *err*]
         (println (str "REJECTED — no binding named `" old "` found in \"" target
@@ -1376,7 +1376,7 @@
 ;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
 (defn wrap-forms [parent]
   (->> (c/by-l ctx parent)
-       (keep (fn [cid] (let [cl (c/claim-of ctx cid)
+       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
                              k (ord-parse (c/literal ctx (:p cl)))]
                          (when k [k cid (:r cl)]))))
        (sort-by first ord-cmp) vec))
@@ -1477,11 +1477,11 @@
         ;; REPLACE in place: reuse the victim's PATH (new tie), retire the victim.
         (let [[k cid _] victim-entry]
           (retire-claim! cid)
-          (c/claim! ctx wrap (c/value! ctx (ord-str (:path k) (ord-tie))) new-root tx))
+          (c/fact! ctx wrap (c/value! ctx (ord-str (:path k) (ord-tie))) new-root tx))
         ;; APPEND: a path strictly after the last form (CRDT). Concurrent appends compute
         ;; the same path on identical clones -> distinct tie (name-int) -> both land (commute).
         (let [last-path (when (seq forms) (:path (first (peek forms))))]
-          (c/claim! ctx wrap (c/value! ctx (ord-str (ord-append last-path) (ord-tie))) new-root tx)))
+          (c/fact! ctx wrap (c/value! ctx (ord-str (ord-append last-path) (ord-tie))) new-root tx)))
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
                     (str (if victim-entry "replaced" "added") " top-level def `" disp-name
@@ -1512,7 +1512,7 @@
       (let [anchor-path (:path (first (nth forms idx)))
             next-path (when (< (inc idx) (count forms)) (:path (first (nth forms (inc idx)))))
             new-root (mint-datum! src datum)]
-        (c/claim! ctx wrap (c/value! ctx (ord-str (ord-between anchor-path next-path) (ord-tie))) new-root tx)
+        (c/fact! ctx wrap (c/value! ctx (ord-str (ord-between anchor-path next-path) (ord-tie))) new-root tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "insert-form"
                       (str "inserted def after `" after-name "` in \"" scope "\" (CRDT mid-insert)"))))))
@@ -1526,7 +1526,7 @@
 ;; segs (rename-tracked identifier mentions) are a follow-up — a text seg is correct and
 ;; lossless for an authored note.
 (defn- next-comment-idx [form]            ; next free commentN slot on a form (0 if none)
-  (->> (c/by-l ctx form) (map #(c/claim-of ctx %))
+  (->> (c/by-l ctx form) (map #(c/fact-of ctx %))
        (keep (fn [cl] (let [p (c/literal ctx (:p cl))]
                         (when (and (string? p) (re-matches #"comment\d+" p)) (parse-long (subs p 7))))))
        (reduce max -1) inc))
@@ -1550,13 +1550,13 @@
       (let [k     (next-comment-idx anchor-form)
             cnode (register! src (c/entity! ctx))
             seg   (register! src (c/entity! ctx))]
-        (c/claim! ctx cnode KIND (c/value! ctx "comment") tx)
-        (c/claim! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
-        (c/claim! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
-        (c/claim! ctx seg  KIND (c/value! ctx "text") tx)
-        (c/claim! ctx seg  Vp   (c/value! ctx lex) tx)
-        (c/claim! ctx cnode (c/value! ctx "seg0") seg tx)
-        (c/claim! ctx anchor-form (c/value! ctx (str "comment" k)) cnode tx)
+        (c/fact! ctx cnode KIND (c/value! ctx "comment") tx)
+        (c/fact! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
+        (c/fact! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
+        (c/fact! ctx seg  KIND (c/value! ctx "text") tx)
+        (c/fact! ctx seg  Vp   (c/value! ctx lex) tx)
+        (c/fact! ctx cnode (c/value! ctx "seg0") seg tx)
+        (c/fact! ctx anchor-form (c/value! ctx (str "comment" k)) cnode tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "insert-comment"
                       (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)"))))))
@@ -1601,7 +1601,7 @@
             (println (str "REJECTED — `" name "` has no body fN edges to replace; no claims mutated.")))
           (*reject!* 5))
         (doseq [[_ cid _] body-slots] (retire-claim! cid))
-        (c/claim! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
+        (c/fact! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "set-body"
                       (str "replaced body of `" name "` in \"" scope "\" ("
@@ -1680,7 +1680,7 @@
 ;; a whole top-level def is upsert-form's job, not this verb's.
 (defn ord-edges [n]                     ; [ord-key pos-lit cid child] fN edges of n, CRDT-ordered
   (->> (c/by-l ctx n)
-       (keep (fn [cid] (let [cl (c/claim-of ctx cid) p (c/literal ctx (:p cl))]
+       (keep (fn [cid] (let [cl (c/fact-of ctx cid) p (c/literal ctx (:p cl))]
                          (when (and (string? p) (ord-pos? p) (integer? (:r cl)))
                            [(ord-parse p) p cid (:r cl)]))))
        (sort-by first ord-cmp)))
@@ -1877,7 +1877,7 @@
             ;; freshly-minted form — by-l filters superseded, so reads see only the new
             ;; child; the integer fN is reused verbatim -> byte-stable outside the edit.
             (retire-claim! cid)
-            (c/claim! ctx parent (c/value! ctx pos) new-root tx)
+            (c/fact! ctx parent (c/value! ctx pos) new-root tx)
             (when-not *capture-only?* (re-resolve!))
             (author-emit-scoped! "replace-in-body"
                           (str "replaced 1 interior form inside `" name "` in \"" scope
@@ -1981,7 +1981,7 @@
                          (when (< (inc a-pos) (count others)) (:path (first (nth others (inc a-pos)))))]))
             [_ mover-cid _] mover-entry]
         (retire-claim! mover-cid)
-        (c/claim! ctx wrap (c/value! ctx (ord-str (ord-between lo hi) (ord-tie))) mover-form tx)
+        (c/fact! ctx wrap (c/value! ctx (ord-str (ord-between lo hi) (ord-tie))) mover-form tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "reorder"
                       (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`"))
@@ -2093,7 +2093,7 @@
         k->id (volatile! {})
         ent   (fn [k] (or (get @k->id k)
                           (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
-        _     (doseq [[a b] edges] (c/claim! ctx (ent a) EDGE (ent b) tx))
+        _     (doseq [[a b] edges] (c/fact! ctx (ent a) EDGE (ent b) tx))
         id->k (into {} (map (fn [[k v]] [v k]) @k->id))
         db    (d/run-rules ctx
                 [(d/rule "reaches" [(d/v :x) (d/v :y)]

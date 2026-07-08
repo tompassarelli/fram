@@ -50,7 +50,7 @@
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
    "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
    "(ten tools) while the vocabulary lives in the graph as data.\n\n"
-   "Graph-owned Beagle modules (registered `claim-canonical`) are authored by GRAPH "
+   "Graph-owned Beagle modules (registered `graph-owned`) are authored by GRAPH "
    "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "
    "(recompile-gated, fail-closed)."))
 
@@ -89,10 +89,10 @@
 ;; subtree of kind/v/fN facts. The coordinator wire is single-(te,p,r) ONLY, so
 ;; this runs the SAME loop the code-as-facts gate proves (authoring-verbs.sh):
 ;;   project .bclj -> AST facts (facts-roundtrip --emit-edn)
-;;   apply the verb as a CLAIM OP (chartroom resolve.clj <mode>) -> $RESOLVE_OUT EDN
+;;   apply the verb as a FACT OP (chartroom resolve.clj <mode>) -> $RESOLVE_OUT EDN
 ;;   regenerate byte-stable text (--render)
 ;;   recompile-gate (beagle-build-all '0 error') over the regenerated tree
-;; On PASS: overwrite the source .bclj (claim-canonical text is a downstream view).
+;; On PASS: overwrite the source .bclj (graph-owned text is a downstream view).
 ;; On the engine REFUSING the edit (nonzero exit; resolve.clj fail-closes with
 ;; "REJECTED ... no facts mutated") OR the regen NOT recompiling: return
 ;; {:isError true :text <diagnostic>} and write NOTHING. Fail-closed throughout.
@@ -106,10 +106,10 @@
 ;; its facts (facts->AST->type-check->emit clj), instead of rendering + building
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
 ;; refs), so unchanged modules need no work. Kills the .bclj round-trip handicap.
-(def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/claims-check-emit.rkt")))
+(def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")))
 (def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
 (def ^:private fram-out      (env-or "FRAM_OUT"       (str (System/getProperty "user.dir") "/out")))
-;; the source tree claim-canonical modules live in (the .bclj scope is resolved here).
+;; the source tree graph-owned modules live in (the .bclj scope is resolved here).
 (def ^:private fram-src      (env-or "FRAM_SRC"       (str (System/getProperty "user.dir") "/src/fram")))
 
 (defn- bclj-files [dir]
@@ -126,7 +126,7 @@
 ;; ============================================================================
 ;; When FRAM_FLIP=1 AND a CODE coordinator is reachable (FRAM_CODE_PORT, serving
 ;; .fram/code.log), the PASS arm below does NOT io/copy-overwrite the .bclj. Instead
-;; it COMMITS the AST claim delta of the edited module THROUGH the coordinator
+;; it COMMITS the AST fact delta of the edited module THROUGH the coordinator
 ;; (bin/fram-commit-code: single-(te,p,r) :assert/:retract at base version), THEN
 ;; renders the .bclj FROM the updated log (bin/fram-render-code). The log is the
 ;; source; the .bclj is downstream. With FRAM_FLIP unset, the legacy io/copy path is
@@ -155,7 +155,7 @@
 ;; The inversion (replaces the emit-edn(text) front of the old flip arm):
 ;;   1. enumerate modules FROM THE LOG (@<mod>#root facts) — not by globbing src.
 ;;   2. apply the verb over the LOG-booted warm store (bin/fram-edit-code
-;;      --no-commit): mint/supersede claim ops against log-resident identity, then
+;;      --no-commit): mint/supersede fact ops against log-resident identity, then
 ;;      render the AFFECTED module from the edited store (atomic write). NO text read.
 ;;   3. recompile-gate: render EVERY OTHER module from the log into the same tree
 ;;      (so cross-module refs resolve), drop in the edited module, beagle-build-all,
@@ -199,7 +199,7 @@
                       (when (not (zero? (:exit ee))) (str "emit-edn of edited module failed: " (str/trim (:err ee)))))]
                 (if render-fail
                   (do (sh {} "rm" "-rf" work) {:isError true :text (str "FLIP — " render-fail)})
-                  ;; 4. INCREMENTAL GATE: claims-check-emit the edited module (facts->AST->type-check
+                  ;; 4. INCREMENTAL GATE: facts-check-emit the edited module (facts->AST->type-check
                   ;;    ->clj), fail-closed on exit. No whole-tree build-all (the .bclj round-trip handicap).
                   (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt ednf)
                         built (str (:out bg) (:err bg))]
@@ -367,7 +367,7 @@
         (if emit-fail
           (do (sh {} "rm" "-rf" work) {:isError true :text emit-fail})
           (let [edn-paths (mapv #(nth % 2) edns)
-                ;; 2. apply the verb as a CLAIM OP. Spec/body datum strings go to temp files,
+                ;; 2. apply the verb as a FACT OP. Spec/body datum strings go to temp files,
                 ;; exactly how the gate passes them (resolve.clj slurps + edn/read-string).
                 spec-file (str work "/spec.edn")
                 resolve-args
@@ -419,7 +419,7 @@
                             (io/copy (io/file (str regen "/" tb)) (io/file tf))
                             (sh {} "rm" "-rf" work)
                             {:text (str "committed: " op " on " tb
-                                        " (claim op, recompiled, byte-stable text regenerated)")})
+                                        " (fact op, recompiled, byte-stable text regenerated)")})
                           ;; FAIL — does not recompile; mutate nothing, return the diagnostic.
                           (do (sh {} "rm" "-rf" work)
                               {:isError true :text (str "REJECTED — regenerated module does not recompile (no source written):\n"

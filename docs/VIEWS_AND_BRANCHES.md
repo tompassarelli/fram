@@ -4,7 +4,7 @@
 Unlike `WHY_FRAM_EXISTS.md`, which describes the *running* engine, this note describes the
 *model the substrate is heading toward*. Nothing here is a task; nothing gets implemented from
 it yet. It exists so the idea is preserved precisely and the present codebase can be measured
-against it. Where it makes a claim about today's code, that claim is marked **[today]** and is
+against it. Where it makes a fact about today's code, that fact is marked **[today]** and is
 backed by the apple-sweep in §6.
 
 ---
@@ -14,28 +14,28 @@ backed by the apple-sweep in §6.
 Use these words precisely — they are what make the rest of this note unambiguous:
 
 - **Assertion** — the *operation/event* of asserting (`do-assert` / `commit!`). An act, not a stored thing.
-- **Claim** — the durable, immutable, **addressable object** an assertion mints (a `cid`). **This is the
-  substrate atom:** a claim can be referenced, owned, selected, superseded, disputed, and cited. *The graph
+- **Fact** — the durable, immutable, **addressable object** an assertion mints (a `cid`). **This is the
+  substrate atom:** a fact can be referenced, owned, selected, superseded, disputed, and cited. *The graph
   stores facts* — not assertions (acts vanish) and not facts (facts are view-relative, below).
-- **Triple** — a claim's `(l p r)` payload.
-- **Fact** — a claim *selected/accepted as true inside a view*. "Fact" is therefore always relative to a view;
+- **Triple** — a fact's `(l p r)` payload.
+- **Fact** — a fact *selected/accepted as true inside a view*. "Fact" is therefore always relative to a view;
   the substrate has no view-free facts.
 - **View** — a selection predicate over facts (§8). `main` is the privileged default view.
 
 > **The graph is an ocean of facts, not facts.** A program/view *selects* facts and treats them as facts.
-> Assertions are operations that mint facts; provenance lives on the claim — or on facts-about-facts, e.g.
+> Assertions are operations that mint facts; provenance lives on the fact — or on facts-about-facts, e.g.
 > `(C123 asserted-by agent-7)`, `(view-main selects C123)`. (Today provenance is recorded at transaction
-> granularity — the claim's tx carries who/when — with per-claim `asserted-by` available as the CNF capability.)
+> granularity — the fact's tx carries who/when — with per-fact `asserted-by` available as the store capability.)
 >
 > ⚠️ **"Fact" here means exactly one of the two precise senses above (Datalog ground tuple, or
-> a claim accepted-true in a view) — never a loose synonym for "claim."** Canonical rule:
+> a fact accepted-true in a view) — never a loose synonym for "fact."** Canonical rule:
 > [README → Terminology](../README.md).
 
 ---
 
 ## Verdict (one sentence)
 
-On an append-only claim graph, **writes do not conflict** — a program is a coherent *traversal*
+On an append-only fact graph, **writes do not conflict** — a program is a coherent *traversal*
 of the graph under a chosen view, divergent facts may coexist indefinitely, and the only thing
 that ever forces two writers to disagree is a **cardinality axiom**. Identity (distinct things
 have distinct ids) is the one cardinality axiom the substrate *must* assert; every other
@@ -46,14 +46,14 @@ path-selection obligations.**
 
 ## 1. The model
 
-- **The graph is append-only.** Claims are immutable; the log only grows. (Proven today; see
+- **The graph is append-only.** Facts are immutable; the log only grows. (Proven today; see
   `WHY_FRAM_EXISTS.md` and the immutability analysis.)
 - **An edit is a re-pointing, not a mutation.** To "change" a thing you assert new facts; the
   old facts are not erased. What is "current" is a *selection* over the facts (i.e. which
   facts are facts in this view), not a property stamped on them.
 - **Divergent facts may coexist indefinitely.** Two rival writes are, at the substrate level,
   just two facts. The substrate is not obligated to pick one (that is a view's job — selecting a
-  claim makes it a fact). It can hold both, forever, without being wrong.
+  fact makes it a fact). It can hold both, forever, without being wrong.
 - **A program is a traversal under a view.** "What is the code" is the answer to a query —
   *which coherent set of facts do I select and walk?* — not a single privileged mutable state.
   Different views can select differently from the same graph.
@@ -68,7 +68,7 @@ traverses the graph and reaches a point where two divergent facts both apply, *i
 which to follow. That selection is an obligation of the **reader**, deferred to **use-time**,
 not a conflict resolved at write-time. (This is the precise antidote to the "but eventually you
 must merge" objection: no — eventually some *consumer must choose a traversal*, which is a
-different and smaller claim.)
+different and smaller fact.)
 
 ## 3. Conflict is the shadow of a cardinality axiom
 
@@ -149,7 +149,7 @@ it *does* assert: identity (closed) and whatever single-valued predicates a doma
 distinguish two surfaces. The `:edit-min` *verb* surface is guarded (rename rejects; set-body/upsert
 are name-stable/name-keyed — §6, and verb dispatch is exhaustively `{set-body, upsert-form, rename}`).
 The lower-level raw `:assert`/`:retract` op surface is **not** guarded and does **not** reject: a raw
-`:retract` that drops a referenced binding's claim **commits**, and `main` becomes *view-locally
+`:retract` that drops a referenced binding's fact **commits**, and `main` becomes *view-locally
 incoherent* (its references re-derive to an undefined name) until someone cold-renders/recompiles main.
 There is no global gate forcing that recompile (the convergence gate was deliberately not built), so the
 incoherence is **latent until observed**. This is **intended** under §2 (no write-time conflicts), §4
@@ -163,19 +163,19 @@ not file a corruption bug.
 ## 8. Verified findings + the minimal "view" representation
 
 A 4-perspective adversarial check (steelman each invariant, code-ground, hunt failure modes; each
-load-bearing claim then adversarially verified) settled the empirics:
+load-bearing fact then adversarially verified) settled the empirics:
 
 - **The substrate is already view-capable; single-head lives entirely in the read/resolve layer.**
   *Verified true:* the append-only log holds divergent facts (multi-valued AST preds; supersession
-  is an appended claim, not a delete). "Current" is **one global subtraction** — `live? = (not
-  (superseded? cid))` over a single `:superseded` set (`cnf.bclj:115`), with **no second selector
+  is an appended fact, not a delete). "Current" is **one global subtraction** — `live? = (not
+  (superseded? cid))` over a single `:superseded` set (`store.bclj:115`), with **no second selector
   anywhere** in the read layer. So global-head is **not a designed invariant** — it is the only
   shape single-storage can represent, materialized in the read layer (`live?`, one `current-seq`,
   one warm cache, the take-firsts).
 - **Global-head is not even an *enforced* invariant.** *Verified:* there is **no in-commit
   whole-graph resolution gate** in the running engine. "The committed corpus resolves" is emergent
   from single-storage, not checked. (So there is nothing to *remove* — only a gate to *not add*.)
-- **`*corpus-scope*` / `resolve-modules!` is NOT a proto-view.** *Verified (a steelman claim to the
+- **`*corpus-scope*` / `resolve-modules!` is NOT a proto-view.** *Verified (a steelman fact to the
   contrary was refuted):* it is a **performance scope**, proven set-**equal** to the whole-corpus
   walk (sym-diff 0) — it selects the *same* answer faster, never a *different* answer. It is the
   **seam** a view system would reuse, not a view.
@@ -190,16 +190,16 @@ the warm-`refers_to` materialization for views nobody is reading (the real imple
 failure-mode pass surfaced). Convergence is then a **policy on a chosen view** (`main`, the build
 view), not a substrate axiom — git's branch/main social layer, recovered as policy.
 
-**The minimal "view" in CNF terms** = a **selection predicate over facts**, generalizing the one
+**The minimal "view" in store terms** = a **selection predicate over facts**, generalizing the one
 selector that already exists: replace the global `live?` with `select? : view → cid → Bool`. The
-engine today is the special case *view = the global superseded-fold*. Three CNF-native encodings,
+engine today is the special case *view = the global superseded-fold*. Three store-native encodings,
 cheapest first:
 1. **Per-view superseded-set** — a view chooses which `supersedes` facts to honor. Cheapest:
    supersession is already append-only data.
-2. **Root + reachability** — a view = a root claim plus its coherent closure. Matches "a program is
+2. **Root + reachability** — a view = a root fact plus its coherent closure. Matches "a program is
    a traversal under a view"; reuses the renderer's existing reachability filter.
-3. **View-as-claim** — `(view selects @claim)` triples; views become first-class subjects in the
-   same graph (the exact pattern tern threads/topics/`@ui` already use). Most CNF-native — no
+3. **View-as-fact** — `(view selects @fact)` triples; views become first-class subjects in the
+   same graph (the exact pattern tern threads/topics/`@ui` already use). Most store-native — no
    new atom, consistent with `WHY_FRAM_EXISTS` ("a view is just more facts about which facts count").
 
 **The read-side take-firsts (§6) are the attach points.** Each `(first …)` becomes

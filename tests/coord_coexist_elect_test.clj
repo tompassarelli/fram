@@ -1,4 +1,4 @@
-;; coord_coexist_elect_test.clj — the Keystone (move-B) gate: cardinality-as-a-claim is
+;; coord_coexist_elect_test.clj — the Keystone (move-B) gate: cardinality-as-a-fact is
 ;; the SOLE authority + coexist-elect is the default contention regime.
 ;;
 ;; Proves the three keystone properties:
@@ -6,18 +6,18 @@
 ;;       UNDECLARED predicate both LAND (no writer blocks/rejected) and coexist as multi;
 ;;       a read ELECTS one deterministically — earliest by [cid, agent], input-order-
 ;;       independent — and (lowest-agent tiebreak documented for a future sharded allocator).
-;;   (b) declared-single (a cardinality=single CLAIM) STILL rejects a stale single-valued
+;;   (b) declared-single (a cardinality=single FACT) STILL rejects a stale single-valued
 ;;       write — the per-(s,p) base-version axiom is RETAINED (the substrate's minimal lock).
 ;;   (c) multi-valued just APPENDS (distinct values coexist; identical is idempotent).
-;; Plus the cardinality-claim-is-authority half: the kernel single-valued list was demoted
-;; to a one-time bootstrap SEED of cardinality CLAIMS, so commit! consults ONLY the claim.
+;; Plus the cardinality-fact-is-authority half: the kernel single-valued list was demoted
+;; to a one-time bootstrap SEED of cardinality FACTS, so commit! consults ONLY the fact.
 ;;   bb -cp out tests/coord_coexist_elect_test.clj
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck])
 (load-file "coord.clj")   ; new-coord/commit!/elect/live-cids-lp/register-pred!/store
 
-(let [log "/tmp/cnf-coexist-elect-test.log"
+(let [log "/tmp/store-coexist-elect-test.log"
       co (new-coord log)
-      _ (register-pred! co "status" "single" "literal")   ; declared-single via a cardinality CLAIM
+      _ (register-pred! co "status" "single" "literal")   ; declared-single via a cardinality FACT
       _ (register-pred! co "tag" "multi" "ref")            ; declared multi
       checks (atom [])
       chk (fn [nm ok] (swap! checks conj [nm ok]))
@@ -25,10 +25,10 @@
                 (vec (live-cids-lp co (s/resolve-name (store co) te-name)
                                    (c/value-id (store co) pred))))]
 
-  ;; ---- cardinality-claim is the SOLE authority (the OR-arm is gone, list demoted to a seed) ----
-  (chk "seed: EVERY kernel single-valued pred is now declared single via a cardinality CLAIM"
+  ;; ---- cardinality-fact is the SOLE authority (the OR-arm is gone, list demoted to a seed) ----
+  (chk "seed: EVERY kernel single-valued pred is now declared single via a cardinality FACT"
        (every? #(= "single" (s/cardinality (store co) %)) ck/single-valued))
-  (chk "coexist default: an UNDECLARED predicate is multi (no cardinality claim)"
+  (chk "coexist default: an UNDECLARED predicate is multi (no cardinality fact)"
        (= "multi" (s/cardinality (store co) "zzz_coexist")))
 
   ;; ---- (a) coexist-elect: rivals to one (s,p) COEXIST; a read elects deterministically ----
@@ -41,7 +41,7 @@
          (and (:ok r1) (:ok r2)))
     (chk "coexist: BOTH facts live as multi (no supersede, no idempotent no-op)"
          (= 2 (count live)))
-    (chk "elect: winner is the EARLIEST-cid claim"
+    (chk "elect: winner is the EARLIEST-cid fact"
          (= winner (apply min live)))
     (chk "elect: deterministic — input-order-INDEPENDENT (reversed input, same winner)"
          (= winner (elect co (vec (reverse live)))))

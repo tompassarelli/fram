@@ -28,7 +28,7 @@
                                            label (:n d) (/ (:min d) 100.0) (/ (:median d) 100.0) (/ (:max d) 100.0))))
 
 ;; ---- isolated corpus copy + boot ------------------------------------------
-(def tmp-log (str "/tmp/cnf-prop-" (System/nanoTime) ".log"))
+(def tmp-log (str "/tmp/store-prop-" (System/nanoTime) ".log"))
 (io/copy (io/file ".fram/code.log") (io/file tmp-log))
 (println "=== DEBT 1 — PROPAGATION LATENCY RECEIPT ===")
 (println "corpus: COPY of .fram/code.log ->" tmp-log)
@@ -44,7 +44,7 @@
 (println)
 
 ;; ---- RAW propagation: write then :query reflects it (synchronous) ----------
-;; assert a fresh claim, then read it back via the daemon's :query. Measures the
+;; assert a fresh fact, then read it back via the daemon's :query. Measures the
 ;; read latency AND confirms ONE read suffices (no polling) — i.e. propagation ~0.
 (println "### RAW propagation — :assert then :query (warm cache, synchronous)")
 (let [reps 12
@@ -112,7 +112,7 @@
 
 (println)
 (println "=== VERDICT ===")
-(println "RAW (committed claim, :query):  SYNCHRONOUS — visible to B's first read, ~0 (sub-ms). Solid.")
+(println "RAW (committed fact, :query):  SYNCHRONOUS — visible to B's first read, ~0 (sub-ms). Solid.")
 (println "DERIVED (refers_to, :callers):  LAZY-ON-READ — the FIRST reader after a write pays the")
 (println "  resolve walk; NO-OP repeats are ~0; no background re-resolve (lazy until someone reads).")
 (println "")

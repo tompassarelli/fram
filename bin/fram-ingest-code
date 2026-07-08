@@ -3,7 +3,7 @@
 ;; fram-ingest-code — THE FLIP, stage 1: Beagle source tree -> canonical CODE log.
 ;; ============================================================================
 ;; Demotes .bclj TEXT from source-of-truth to a generated view: ingest each
-;; module's AST (via `racket --emit-edn`) into a per-repo, dedicated flat claim
+;; module's AST (via `racket --emit-edn`) into a per-repo, dedicated flat fact
 ;; log (.fram/code.log), re-keying every file-local integer node id `n` to the
 ;; node NAME `@<module>#n`. The existing daemon boots from this UNCHANGED via
 ;; `serve-flat <PORT> <code.log>`, because migrate-flat->co (coord_daemon.clj)
@@ -12,7 +12,7 @@
 ;; objects become links.
 ;;
 ;; The log carries ONLY the AST (kind/v/fN/child/segN/commentN/tail + a per-module
-;; @<mod>#root file "<path>" bookkeeping claim). refers_to + render markers are
+;; @<mod>#root file "<path>" bookkeeping fact). refers_to + render markers are
 ;; DERIVED — they are materialized in-memory over the warm store at resolution
 ;; time (resolve-preds), never persisted. (See DESIGN.md §2.)
 ;;
@@ -128,10 +128,10 @@
 ;; --- the flip's re-key: file-local int n -> "@<mod>#n" -----------------------
 (defn- nodename [module n] (str "@" module "#" n))
 
-;; one module's emit-edn -> flat-log claim maps (kept as data; :tx assigned later).
+;; one module's emit-edn -> flat-log fact maps (kept as data; :tx assigned later).
 ;; Subject int s -> :l "@mod#s". Integer object o -> :r "@mod#o" (a LINK). String
 ;; object -> :r the string (a LITERAL). Predicate passes through verbatim.
-;; PLUS one bookkeeping claim @<mod>#root file "<path>" so render-from-log knows the
+;; PLUS one bookkeeping fact @<mod>#root file "<path>" so render-from-log knows the
 ;; source path (the @file wrapper analogue; "root" never collides with an int id).
 (defn- module->facts [root-segs path]
   (let [module (module-of root-segs path)

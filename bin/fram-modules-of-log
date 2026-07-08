@@ -6,7 +6,7 @@
 ;; on disk, so module enumeration MUST come from the log, not from globbing the
 ;; source tree (fram-render-code-all globs src/fram/*.bclj — a .bclj-presence
 ;; dependency that breaks the zero-.bclj gate). This lists every module that has a
-;; `@<mod>#root file ...` bookkeeping claim in the log — the ingest sentinel — one
+;; `@<mod>#root file ...` bookkeeping fact in the log — the ingest sentinel — one
 ;; name per line, sorted.
 ;;
 ;;   bin/fram-modules-of-log [--log <code.log>]   (default $PWD/.fram/code.log)

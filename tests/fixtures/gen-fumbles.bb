@@ -180,8 +180,8 @@
    {:id "EXP-021-t-r1-cascade2/T3.1/0"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w2" "T3.1" 0)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
-    :diagnosis "All three emitted functions (has-claim?, get-claim, classify) have untyped parameters — no `:-` annotations on any parameter"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
+    :diagnosis "All three emitted functions (has-fact?, get-fact, classify) have untyped parameters — no `:-` annotations on any parameter"
     :expected-fix "Add `(param :- Type)` to every parameter; use `(Vec (Vec String))` for triples, `String` for te/pred, `Any` for opts"}
 
    {:id "EXP-021-t-r1-cascade2/T3.1/1"
@@ -194,14 +194,14 @@
    {:id "EXP-021-t-r1-cascade2/T3.1/2"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w2" "T3.1" 2)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn preds-of has untyped parameter(s): triples, te, pred"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn preds-of has untyped parameter(s): triples, te, pred"
     :diagnosis "Model re-emitted untyped functions again (triples, te, pred without `:-`), plus added a new untyped `preds-of` function"
     :expected-fix "Every parameter of every `defn` must have `(name :- Type)` form; unannotated params fail the lint gate"}
 
    {:id "EXP-021-t-r1-cascade2/T1.2/0"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w0" "T1.2" 0)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
     :diagnosis "Model emitted well-structured wire functions but world gate blocked on gw.derive untyped functions settled from cascade2/T3.1/0"
     :expected-fix "Adapter def-level incremental check would pass this changeset; root cause is prior task's untyped gw.derive emit"}
 
@@ -216,35 +216,35 @@
    {:id "EXP-021-t-r1-cascade2/T1.2/2"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w0" "T1.2" 2)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
     :diagnosis "Model emitted correct unfenced EDN but world gate blocked again on same gw.derive cross-pollution"
     :expected-fix "Adapter def-level incremental check would pass this changeset; cross-task pollution is the blocker"}
 
    {:id "EXP-021-t-r1-cascade2/T4.2/0"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w3" "T4.2" 0)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
     :diagnosis "Model emitted correctly-typed http/wire functions but world gate blocked on gw.derive cross-pollution from cascade2/T3.1"
     :expected-fix "Adapter def-level incremental check would pass this changeset; inherited world state is the blocker"}
 
    {:id "EXP-021-t-r1-cascade2/T4.2/1"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w3" "T4.2" 1)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
     :diagnosis "Same world gate pollution; now preds-of also appeared as untyped (from cascade2/T3.1/2 settling)"
     :expected-fix "Adapter def-level incremental check needed; model's own http handlers were correctly typed"}
 
    {:id "EXP-021-t-r1-cascade2/T4.2/2"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w3" "T4.2" 2)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
     :diagnosis "Model revised dispatch/handler design but world gate still blocked on same cross-task untyped functions in gw.derive"
     :expected-fix "Adapter def-level incremental check needed to unblock this task's correctly-typed handlers from cross-task pollution"}
 
    {:id "EXP-021-t-r1-cascade2/T5.2/0"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w4" "T5.2" 0)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts"
     :diagnosis "Model emitted correctly-typed presence functions using `Long/parseLong` interop but world gate blocked on gw.derive cross-pollution"
     :expected-fix "Adapter def-level incremental check would pass this changeset; own functions are well-typed"}
 
@@ -279,7 +279,7 @@
    {:id "EXP-021-t-r1-cascade2/T2.1/2"
     :emitted (slurp-output "EXP-021-t-r1-cascade2" "w5" "T2.1" 2)
     :failure-stage :gate
-    :harness-error "build-all exit 1: beagle [lint]: defn has-claim? has untyped parameter(s): triples, te, pred; defn get-claim has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
+    :harness-error "build-all exit 1: beagle [lint]: defn has-fact? has untyped parameter(s): triples, te, pred; defn get-fact has untyped parameter(s): triples, te, pred; defn classify has untyped parameter(s): triples, te, opts; defn preds-of has untyped parameter(s): triples, te, pred"
     :diagnosis "Model finally emitted unfenced EDN with correctly-typed occ functions but world gate blocked on gw.derive cross-pollution"
     :expected-fix "Adapter def-level incremental check would pass this changeset; own occ functions are correctly typed"}
    ])

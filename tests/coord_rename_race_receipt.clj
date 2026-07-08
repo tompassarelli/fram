@@ -56,7 +56,7 @@
       {:txt txt :line (some #(when (str/includes? % marker) %) (some-> txt str/split-lines))})))
 
 (defn run-case [tag concurrent?]
-  (let [log (str "/tmp/cnf-rename-race-" tag "-" (System/nanoTime) ".log")]
+  (let [log (str "/tmp/store-rename-race-" tag "-" (System/nanoTime) ".log")]
     (io/copy (io/file ".fram/code.log") (io/file log))
     (boot-flat! log)
     (let [st (:store @co)

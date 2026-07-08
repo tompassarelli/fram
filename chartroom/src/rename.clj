@@ -13,7 +13,7 @@
 (ns rename
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [fram.cnf :as c]))
+            [fram.store :as c]))
 
 (def argv *command-line-args*)
 (def old-name (nth argv 0))
@@ -41,7 +41,7 @@
       (let [[s p o] (edn/read-string line)
             L (ent s) P (c/value! ctx p)
             R (if (integer? o) (ent o) (c/value! ctx o))]
-        (c/claim! ctx L P R tx)))
+        (c/fact! ctx L P R tx)))
     src))
 
 (def srcs (mapv load-edn edn-files))
@@ -54,7 +54,7 @@
 (def NEWv (c/value! ctx new-name))
 
 (defn symbol-leaf? [e]
-  (some #(= SYM (:r (c/claim-of ctx %))) (c/by-lp ctx e KIND)))
+  (some #(= SYM (:r (c/fact-of ctx %))) (c/by-lp ctx e KIND)))
 
 (def target-modules (filter #(str/includes? % target-substr) (keys @file->ents)))
 (def target-ents (set (mapcat @file->ents target-modules)))
@@ -66,11 +66,11 @@
 (def DEFHEADS #{"def" "defn" "defn-" "def-" "defonce" "definline"})
 (defn field-child [e fname]                         ; entity that is e's fname child
   (let [P (c/value-id ctx fname)]
-    (when P (let [cids (c/by-lp ctx e P)] (when (seq cids) (:r (c/claim-of ctx (first cids))))))))
+    (when P (let [cids (c/by-lp ctx e P)] (when (seq cids) (:r (c/fact-of ctx (first cids))))))))
 (defn sym-val [e]                                   ; if e is a symbol leaf, its name string
   (when (and e (symbol-leaf? e))
-    (let [vc (filter #(= Vp (:p (c/claim-of ctx %))) (c/by-l ctx e))]
-      (when (seq vc) (c/literal ctx (:r (c/claim-of ctx (first vc))))))))
+    (let [vc (filter #(= Vp (:p (c/fact-of ctx %))) (c/by-l ctx e))]
+      (when (seq vc) (c/literal ctx (:r (c/fact-of ctx (first vc))))))))
 (defn binding-name [e]                              ; if e is a (def|defn ...) list node, the bound name
   (let [h (sym-val (field-child e "f0"))]
     (when (and h (DEFHEADS h)) (sym-val (field-child e "f1")))))
@@ -87,16 +87,16 @@
 (def renamed (atom 0))
 (when OLDv
   (doseq [cid (vec (c/by-pr ctx Vp OLDv))]          ; every [e v old] claim
-    (let [e (:l (c/claim-of ctx cid))]
+    (let [e (:l (c/fact-of ctx cid))]
       (when (and (target-ents e) (symbol-leaf? e))
-        (let [ncid (c/claim! ctx e Vp NEWv tx)]     ; assert new value
-          (c/claim! ctx ncid SUP cid tx))           ; supersede the old value-claim
+        (let [ncid (c/fact! ctx e Vp NEWv tx)]     ; assert new value
+          (c/fact! ctx ncid SUP cid tx))           ; supersede the old value-claim
         (swap! renamed inc)))))
 
 ;; occurrences of `old` left untouched in OTHER files (proof of scope-correctness)
 (def preserved
   (if OLDv
-    (count (filter (fn [cid] (let [e (:l (c/claim-of ctx cid))]
+    (count (filter (fn [cid] (let [e (:l (c/fact-of ctx cid))]
                                (and (not (target-ents e)) (symbol-leaf? e))))
                    (c/by-pr ctx Vp OLDv)))
     0))
@@ -108,7 +108,7 @@
       (println (str "@file " src))
       (doseq [e (@file->ents src)
               cid (c/by-l ctx e)]                    ; LIVE claims only (superseded excluded)
-        (let [cl (c/claim-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
+        (let [cl (c/fact-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
           (when (not= ps "supersedes")
             (if (c/value-object? ctx r)
               (println (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]"))
@@ -124,5 +124,5 @@
   (println (str "renamed (target file): " @renamed " symbol occurrences"))
   (println (str "preserved (other files, same name, untouched): " preserved " occurrences"))
   (println (str "superseded claims (recoverable, nothing deleted): " @renamed))
-  (println (str "live claims in store: " (count (c/current-claims ctx))))
+  (println (str "live claims in store: " (count (c/current-facts ctx))))
   (doseq [src srcs] (println (str "projected -> " (outs src) "   <- " src))))
