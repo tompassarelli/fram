@@ -49,7 +49,7 @@
          (= winner (elect co live) (elect co live)))
     ;; the elected value renders to the earliest writer's value (agentB wrote first -> earlier cid)
     (chk "elect: the elected member's VALUE is the earliest writer's"
-         (= "alice" (c/literal (store co) (:r (c/claim-of (store co) winner))))))
+         (= "alice" (c/literal (store co) (:r (c/fact-of (store co) winner))))))
 
   ;; the documented SECONDARY key: on a cid TIE (a future sharded allocator), the [cid, agent]
   ;; election key breaks the tie by LOWEST agent. cids are unique under the single allocator, so
@@ -67,7 +67,7 @@
     (chk "declared-single: a STALE single write is REJECTED (:conflict)" (= :conflict (:reject stale)))
     (chk "declared-single: exactly ONE live value (supersede, NOT coexist)" (= 1 (count live)))
     (chk "declared-single: the live value is the winner's, not the stale write's"
-         (= "wip" (c/literal (store co) (:r (c/claim-of (store co) (first live)))))))
+         (= "wip" (c/literal (store co) (:r (c/fact-of (store co) (first live)))))))
 
   ;; ---- (c) multi-valued just APPENDS ----
   (let [a   (commit! co "w" "T3" "tag" :link "X" 0)

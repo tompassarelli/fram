@@ -15,7 +15,7 @@
       chk (fn [nm ok] (swap! checks conj [nm ok]))
       live-of (fn [te p] (vec (live-cids-lp co (s/resolve-name (store co) te)
                                             (c/value-id (store co) p))))
-      val-of  (fn [cid] (c/literal (store co) (:r (c/claim-of (store co) cid))))]
+      val-of  (fn [cid] (c/literal (store co) (:r (c/fact-of (store co) cid))))]
 
   ;; ---- (1) coexist base: three rivals to one UNDECLARED (multi) (s,p) ----
   ;; main's bare write + two branch writes — all coexist (move-B), none rejected.
@@ -67,9 +67,9 @@
         co2  {:store st2 :log nil :lock (Object.)}
         live (vec (live-cids-lp co2 (s/resolve-name st2 "T") (c/value-id st2 "color")))]
     (chk "replay: branch b1 still elects b1val after a cold log replay"
-         (= "b1val" (c/literal st2 (:r (c/claim-of st2 (elect co2 "@view:b1" live))))))
+         (= "b1val" (c/literal st2 (:r (c/fact-of st2 (elect co2 "@view:b1" live))))))
     (chk "replay: main still elects base after a cold log replay"
-         (= "base" (c/literal st2 (:r (c/claim-of st2 (elect co2 live)))))))
+         (= "base" (c/literal st2 (:r (c/fact-of st2 (elect co2 live)))))))
 
   (let [cs @checks fails (remove second cs)]
     (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))

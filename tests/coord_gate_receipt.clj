@@ -35,7 +35,7 @@
                               (when-let [s (first p)]
                                 (when (re-matches #"f\d+" s) (parse-long (subs s 1))))))]
       (->> (c/by-p resolve/ctx resolve/REFERS)
-           (map #(c/claim-of resolve/ctx %))
+           (map #(c/fact-of resolve/ctx %))
            (keep (fn [cl]
                    (let [L (:l cl) D (resolve/ultimate (:r cl))
                          lm (resolve/name->module (s/name-of resolve/ctx L))

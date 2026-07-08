@@ -92,24 +92,24 @@
 ;; a fresh read-only boot of the SAME /tmp log (separate store; never written to).
 (def ro (migrate-flat->co tmp-log))
 (def rst (:store ro))
-(defn- vof [e] (let [Vp (c/value-id rst "v")] (some->> (c/by-lp rst e Vp) first (c/claim-of rst) :r (c/literal rst))))
+(defn- vof [e] (let [Vp (c/value-id rst "v")] (some->> (c/by-lp rst e Vp) first (c/fact-of rst) :r (c/literal rst))))
 (defn- forms-of [wrap]
   (->> (c/by-l rst wrap)
-       (keep (fn [cid] (let [cl (c/claim-of rst cid) ks (c/literal rst (:p cl)) key (resolve/ord-parse ks)]
+       (keep (fn [cid] (let [cl (c/fact-of rst cid) ks (c/literal rst (:p cl)) key (resolve/ord-parse ks)]
                          (when key {:key key :keystr ks :child (:r cl)}))))
        (sort-by :key resolve/ord-cmp) vec))
 (defn- def-name [child]
   (let [kids (->> (c/by-l rst child)
-                  (keep (fn [cid] (let [key (resolve/ord-parse (c/literal rst (:p (c/claim-of rst cid))))]
-                                    (when key [key (c/claim-of rst cid)]))))
+                  (keep (fn [cid] (let [key (resolve/ord-parse (c/literal rst (:p (c/fact-of rst cid))))]
+                                    (when key [key (c/fact-of rst cid)]))))
                   (sort-by first resolve/ord-cmp))]
     (when (>= (count kids) 2) (vof (:r (second (nth kids 1)))))))
 (defn- head-of [child] (vof (:child (first (forms-of child)))))
 (defn- wrapper [m]
   (let [NAME (c/value-id rst "name") pfx (str "@" m "#")]
     (->> (c/by-p rst NAME)
-         (keep (fn [cid] (let [nm (c/literal rst (:r (c/claim-of rst cid)))]
-                           (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/claim-of rst cid))))))
+         (keep (fn [cid] (let [nm (c/literal rst (:r (c/fact-of rst cid)))]
+                           (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/fact-of rst cid))))))
          (filter (fn [e] (let [fs (forms-of e)] (and (seq fs) (= "beagle-file" (vof (:child (first fs))))))))
          first)))
 
@@ -173,23 +173,23 @@
 ;; A fresh read-only re-boot of the /tmp log reflects the committed flat append.
 (def ro2 (migrate-flat->co tmp-log))
 (def rst2 (:store ro2))
-(defn- vof2 [e] (let [Vp (c/value-id rst2 "v")] (some->> (c/by-lp rst2 e Vp) first (c/claim-of rst2) :r (c/literal rst2))))
+(defn- vof2 [e] (let [Vp (c/value-id rst2 "v")] (some->> (c/by-lp rst2 e Vp) first (c/fact-of rst2) :r (c/literal rst2))))
 (defn- forms-of2 [wrap]
   (->> (c/by-l rst2 wrap)
-       (keep (fn [cid] (let [cl (c/claim-of rst2 cid) ks (c/literal rst2 (:p cl)) key (resolve/ord-parse ks)]
+       (keep (fn [cid] (let [cl (c/fact-of rst2 cid) ks (c/literal rst2 (:p cl)) key (resolve/ord-parse ks)]
                          (when key {:key key :keystr ks :child (:r cl)}))))
        (sort-by :key resolve/ord-cmp) vec))
 (defn- def-name2 [child]
   (let [kids (->> (c/by-l rst2 child)
-                  (keep (fn [cid] (let [key (resolve/ord-parse (c/literal rst2 (:p (c/claim-of rst2 cid))))]
-                                    (when key [key (c/claim-of rst2 cid)]))))
+                  (keep (fn [cid] (let [key (resolve/ord-parse (c/literal rst2 (:p (c/fact-of rst2 cid))))]
+                                    (when key [key (c/fact-of rst2 cid)]))))
                   (sort-by first resolve/ord-cmp))]
     (when (>= (count kids) 2) (vof2 (:r (second (nth kids 1)))))))
 (defn- wrapper2 [m]
   (let [NAME (c/value-id rst2 "name") pfx (str "@" m "#")]
     (->> (c/by-p rst2 NAME)
-         (keep (fn [cid] (let [nm (c/literal rst2 (:r (c/claim-of rst2 cid)))]
-                           (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/claim-of rst2 cid))))))
+         (keep (fn [cid] (let [nm (c/literal rst2 (:r (c/fact-of rst2 cid)))]
+                           (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/fact-of rst2 cid))))))
          (filter (fn [e] (let [fs (forms-of2 e)] (and (seq fs) (= "beagle-file" (vof2 (:child (first fs))))))))
          first)))
 (def wrap2 (wrapper2 MOD))

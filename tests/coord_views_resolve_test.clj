@@ -18,16 +18,16 @@
 (def tx  (c/begin-tx! st "w"))
 (def P   (c/value! st "color"))
 (def T   (c/entity! st))
-(def c0  (c/claim! st T P (c/value! st "base")  tx))   ; bare (no overlay) — main's
-(def c1  (c/claim! st T P (c/value! st "b1val") tx))   ; branch b1's rival
-(def c2  (c/claim! st T P (c/value! st "b2val") tx))   ; branch b2's rival
+(def c0  (c/fact! st T P (c/value! st "base")  tx))   ; bare (no overlay) — main's
+(def c1  (c/fact! st T P (c/value! st "b1val") tx))   ; branch b1's rival
+(def c2  (c/fact! st T P (c/value! st "b2val") tx))   ; branch b2's rival
 (def SEL (c/value! st "selects"))
 (def Vb1 (c/value! st "@view:b1"))
 (def Vb2 (c/value! st "@view:b2"))
-(c/claim! st Vb1 SEL c1 tx)                            ; (b1 selects @c1)
-(c/claim! st Vb2 SEL c2 tx)                            ; (b2 selects @c2)
+(c/fact! st Vb1 SEL c1 tx)                            ; (b1 selects @c1)
+(c/fact! st Vb2 SEL c2 tx)                            ; (b2 selects @c2)
 (def grp [c0 c1 c2])
-(defn val-of [cid] (c/literal st (:r (c/claim-of st cid))))
+(defn val-of [cid] (c/literal st (:r (c/fact-of st cid))))
 
 (binding [resolve/ctx st]
   ;; default-main view (*view*=nil): elect the whole group — earliest cid = the bare base.

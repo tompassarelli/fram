@@ -17,7 +17,7 @@
 (boot-flat! flat)
 (def st (:store @co))
 (def Vp (c/value-id st "v"))
-(defn spell-count [s] (count (filter (fn [cid] (= s (c/literal st (:r (c/claim-of st cid))))) (c/by-p st Vp))))
+(defn spell-count [s] (count (filter (fn [cid] (= s (c/literal st (:r (c/fact-of st cid))))) (c/by-p st Vp))))
 
 (println "BEFORE rename:  v=\"replace!\" leaves =" (spell-count "replace!")
          " | v=\"supersede-prior!\" leaves =" (spell-count "supersede-prior!"))

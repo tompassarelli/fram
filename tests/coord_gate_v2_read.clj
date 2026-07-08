@@ -35,7 +35,7 @@
 ;; locate cross-form references: symbol S with a DERIVED refers_to -> B, S and B in different modules
 (def cross
   (->> (c/by-p st REFERS)
-       (keep (fn [cid] (let [cl (c/claim-of st cid) s (:l cl) b (:r cl)
+       (keep (fn [cid] (let [cl (c/fact-of st cid) s (:l cl) b (:r cl)
                              sn (nm s) bn (nm b)]
                          (when (and sn bn (module-of sn) (module-of bn)
                                     (not= (module-of sn) (module-of bn)))
@@ -47,7 +47,7 @@
 (defn dump [s b]
   (->> (c/by-l st s)
        (map (fn [cid]
-              (let [cl (c/claim-of st cid) p (c/literal st (:p cl)) r (:r cl)
+              (let [cl (c/fact-of st cid) p (c/literal st (:p cl)) r (:r cl)
                     ent? (not (c/value-object? st r))]
                 {:p p
                  :r-kind (if ent? :entity :literal)

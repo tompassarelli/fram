@@ -19,13 +19,13 @@
 (def st (:store @co))
 
 (defn fN-edges [e]                       ; N -> [child ...] over live f\d+ edges
-  (->> (c/by-l st e) (map #(c/claim-of st %))
+  (->> (c/by-l st e) (map #(c/fact-of st %))
        (keep (fn [cl] (let [p (c/literal st (:p cl))]
                         (when (and (string? p) (re-matches #"f\d+" p)) [(parse-long (subs p 1)) (:r cl)]))))
        (reduce (fn [m [n r]] (update m n (fnil conj []) r)) {})))
 
 (defn child-v [e]                        ; v (symbol spelling) of node e, or nil
-  (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/claim-of st) :r (c/literal st))))
+  (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/fact-of st) :r (c/literal st))))
 
 (defn head-sym-of [e]                    ; sym-val of the lowest-fN child (mirrors resolve/head-sym)
   (let [edges (fN-edges e)]
@@ -33,7 +33,7 @@
 
 (defn wrapper-of-module [m]              ; the module's beagle-file node (head symbol == "beagle-file")
   (let [NAME (c/value-id st "name") pfx (str "@" m "#")]
-    (->> (c/by-p st NAME) (map #(c/claim-of st %))
+    (->> (c/by-p st NAME) (map #(c/fact-of st %))
          (keep (fn [cl] (let [nm (c/literal st (:r cl))]
                           (when (and (string? nm) (str/starts-with? nm pfx)) (:l cl)))))
          (filter (fn [e] (= "beagle-file" (head-sym-of e))))
@@ -48,7 +48,7 @@
 (when (nil? wrap)
   (println "FAIL: no beagle-file wrapper found for module" M
            "— sample @kernel# head-syms:"
-           (->> (c/by-p st (c/value-id st "name")) (map #(c/claim-of st %))
+           (->> (c/by-p st (c/value-id st "name")) (map #(c/fact-of st %))
                 (keep (fn [cl] (let [nm (c/literal st (:r cl))]
                                  (when (and (string? nm) (str/starts-with? nm "@kernel#"))
                                    [nm (head-sym-of (:l cl))])))) (take 8) vec))

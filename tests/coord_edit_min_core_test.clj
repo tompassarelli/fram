@@ -16,7 +16,7 @@
 (boot-flat! flat)
 (def st (:store @co))
 (def Vp (c/value-id st "v"))
-(defn spell-count [s] (count (filter (fn [cid] (= s (c/literal st (:r (c/claim-of st cid))))) (c/by-p st Vp))))
+(defn spell-count [s] (count (filter (fn [cid] (= s (c/literal st (:r (c/fact-of st cid))))) (c/by-p st Vp))))
 (def fails (atom 0))
 (defn chk [name ok] (if ok (println "  [PASS]" name) (do (swap! fails inc) (println "  [FAIL]" name))))
 

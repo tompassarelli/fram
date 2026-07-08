@@ -27,7 +27,7 @@
     (let [t0 (System/nanoTime)
           NAME (c/value-id r/ctx "name")
           groups (reduce (fn [acc cid]
-                           (let [cl (c/claim-of r/ctx cid) nm (c/literal r/ctx (:r cl)) m (r/name->module nm)]
+                           (let [cl (c/fact-of r/ctx cid) nm (c/literal r/ctx (:r cl)) m (r/name->module nm)]
                              (if m (update acc m (fnil conj []) (:l cl)) acc)))
                          {} (c/by-p r/ctx NAME))]
       (reset! r/file->ents groups)

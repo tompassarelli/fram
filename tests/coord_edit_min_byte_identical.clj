@@ -36,7 +36,7 @@
   (edn/read-string
     (str "(let [p (c/value-id ctx pname) cp (c/value-id ctx \"cardinality\") "
          "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
-         "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/claim-of ctx (first cs))))))")))
+         "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))")))
 
 ;; ---- PATH 1: minimal-op (:edit-min) over a fresh daemon --------------------
 (def flat-min (str (System/getProperty "java.io.tmpdir") "/byte-id-min-" (System/nanoTime) ".code.log"))

@@ -27,24 +27,24 @@
 (defn ref? [s] (str/starts-with? s "@"))
 (defn obj-for! [s] (if (ref? s) (ent-for! s) (c/value! ctx s)))  ; r: ref->entity else value
 (doseq [cl flat-claims]
-  (c/claim! ctx (ent-for! (:l cl)) (c/value! ctx (:p cl)) (obj-for! (:r cl)) tx))
+  (c/fact! ctx (ent-for! (:l cl)) (c/value! ctx (:p cl)) (obj-for! (:r cl)) tx))
 
 ;; --- reconstruct the reified current-view as string triples -----------------
 (def rev-ent (into {} (map (fn [[k v]] [v k]) @ent)))   ; entity-id -> @id-string
 (defn obj-str [id] (if (c/value-object? ctx id) (c/literal ctx id) (get rev-ent id)))
 (def reified-set
   (set (map (fn [cid]
-              (let [cl (c/claim-of ctx cid)]
+              (let [cl (c/fact-of ctx cid)]
                 [(get rev-ent (:l cl)) (c/literal ctx (:p cl)) (obj-str (:r cl))]))
-            (c/current-claims ctx))))
+            (c/current-facts ctx))))
 
 ;; --- dump -> EDN -> load round-trip: durable serialization fidelity ---------
 (def data (read-string (pr-str (c/dump-store ctx))))
 (def ctx2 (c/new-store))
 (c/load-store! ctx2 data)
-(def rt-ok (and (= (set (c/current-claims ctx)) (set (c/current-claims ctx2)))
-                (every? (fn [cid] (= (c/claim-of ctx cid) (c/claim-of ctx2 cid)))
-                        (c/current-claims ctx))))
+(def rt-ok (and (= (set (c/current-facts ctx)) (set (c/current-facts ctx2)))
+                (every? (fn [cid] (= (c/fact-of ctx cid) (c/fact-of ctx2 cid)))
+                        (c/current-facts ctx))))
 
 (def only-flat (set/difference flat-set reified-set))
 (def only-reif (set/difference reified-set flat-set))

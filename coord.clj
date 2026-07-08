@@ -13,7 +13,7 @@
 ;;      write leaves ZERO unlogged state (else the live store would diverge from
 ;;      a replay of the log).
 ;;   3. single-subject obligations (depends_on/part_of acyclicity) for v1.
-;;   4. multi-valued idempotency — reified claim! mints a fresh cid every call,
+;;   4. multi-valued idempotency — reified fact! mints a fresh cid every call,
 ;;      so without this two identical link!s make duplicate live edges; we no-op
 ;;      when the live (l,p,r) already exists.
 ;;   5. atomic v2 log — each committed tx appends its records + a :commit marker,
@@ -426,7 +426,7 @@
               tx    (c/begin-tx! (store co) view)
               ve    (ent! co tx view)
               sp    (c/value! (store co) "selects")]
-          (c/claim! (store co) ve sp cid tx)            ; object IS the selected claim's cid
+          (c/fact! (store co) ve sp cid tx)            ; object IS the selected claim's cid
           (append-tx! co (delta-records co since tx))
           {:ok (get-in @(store co) [:txs tx :seq]) :cid cid})))))
 
@@ -494,10 +494,10 @@
                       atv (c/value! (store co) (str (get-in @(store co) [:txs tx :seq])))
                       rsv (when reason (c/value! (store co) (str reason)))]
                   (doseq [old victims]
-                    (c/claim! (store co) old sup old tx)             ; internal live-fold mechanism (remove-wins)
-                    (c/claim! (store co) old wbp ag tx)              ; cancellation SURFACE: who
-                    (c/claim! (store co) old wap atv tx)             ;   when (the retract tx seq)
-                    (when rsv (c/claim! (store co) old wrp rsv tx))) ;   why (optional)
+                    (c/fact! (store co) old sup old tx)             ; internal live-fold mechanism (remove-wins)
+                    (c/fact! (store co) old wbp ag tx)              ; cancellation SURFACE: who
+                    (c/fact! (store co) old wap atv tx)             ;   when (the retract tx seq)
+                    (when rsv (c/fact! (store co) old wrp rsv tx))) ;   why (optional)
                   (append-tx! co (delta-records co since tx))
                   {:ok (get-in @(store co) [:txs tx :seq])}))))))))))
 

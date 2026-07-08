@@ -28,19 +28,19 @@
                "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")
                "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 
-(defn vof [st e] (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/claim-of st) :r (c/literal st))))
+(defn vof [st e] (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/fact-of st) :r (c/literal st))))
 (defn forms-of [st wrap]
   (->> (c/by-l st wrap)
-       (keep (fn [cid] (let [cl (c/claim-of st cid) k (resolve/ord-parse (c/literal st (:p cl)))] (when k {:key k :child (:r cl)}))))
+       (keep (fn [cid] (let [cl (c/fact-of st cid) k (resolve/ord-parse (c/literal st (:p cl)))] (when k {:key k :child (:r cl)}))))
        (sort-by :key resolve/ord-cmp) vec))
 (defn def-name [st child]
-  (let [kids (->> (c/by-l st child) (keep (fn [cid] (let [k (resolve/ord-parse (c/literal st (:p (c/claim-of st cid))))] (when k [k (c/claim-of st cid)])))) (sort-by first resolve/ord-cmp))]
+  (let [kids (->> (c/by-l st child) (keep (fn [cid] (let [k (resolve/ord-parse (c/literal st (:p (c/fact-of st cid))))] (when k [k (c/fact-of st cid)])))) (sort-by first resolve/ord-cmp))]
     (when (>= (count kids) 2) (vof st (:r (second (nth kids 1)))))))
 (defn head-of [st child] (vof st (:child (first (forms-of st child)))))
 (defn wrapper [st m]
   (let [NAME (c/value-id st "name") pfx (str "@" m "#")]
     (->> (c/by-p st NAME)
-         (keep (fn [cid] (let [nm (c/literal st (:r (c/claim-of st cid)))] (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/claim-of st cid))))))
+         (keep (fn [cid] (let [nm (c/literal st (:r (c/fact-of st cid)))] (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/fact-of st cid))))))
          (filter (fn [e] (let [fs (forms-of st e)] (and (seq fs) (= "beagle-file" (vof st (:child (first fs)))))))) first)))
 (defn anchor-name [st]
   (let [wrap (wrapper st "schema") pre (forms-of st wrap)

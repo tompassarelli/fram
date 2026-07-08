@@ -38,7 +38,7 @@
   (edn/read-string
     (str "(let [p (c/value-id ctx pname) cp (c/value-id ctx \"" tag "\") "
          "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
-         "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/claim-of ctx (first cs))))))")))
+         "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))")))
 
 (defn edit! [tag]
   (let [t0 (System/nanoTime)

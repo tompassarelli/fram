@@ -1,6 +1,6 @@
 ;; coord_schema_read_test.clj — F4: schema-writable facts are READ-VISIBLE.
 ;; F3 opened the daemon's WRITE path for cardinality/value_kind; the READ view still hid
-;; them (the pre-F3 blanket schema-pred filter in claim->triple), so `show <pred>` returned
+;; them (the pre-F3 blanket schema-pred filter in fact->triple), so `show <pred>` returned
 ;; nothing even though the fact was in the log and the cold fold saw it — breaking the
 ;; shipped "predicates are entities" promise AND warm<->cold parity (the CLI daemon-first
 ;; read path is contracted to render byte-identical to the cold fold).

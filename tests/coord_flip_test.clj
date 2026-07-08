@@ -52,11 +52,11 @@
 ;; helpers
 (defn domain-triples [st]
   (set (keep (fn [cid]
-               (let [cl (c/claim-of st cid) pstr (c/literal st (:p cl))]
+               (let [cl (c/fact-of st cid) pstr (c/literal st (:p cl))]
                  (when-not (schema-preds pstr)
                    [(s/name-of st (:l cl)) pstr
                     (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
-             (c/current-claims st))))
+             (c/current-facts st))))
 (defn flat-triples [f] (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log f))))))))
 
 (def before-reif (domain-triples (:store @co)))

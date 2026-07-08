@@ -23,7 +23,7 @@
       live-of (fn [te-name pred]
                 (vec (live-cids-lp co (s/resolve-name (store co) te-name)
                                    (c/value-id (store co) pred))))
-      val-of  (fn [cid] (c/literal (store co) (:r (c/claim-of (store co) cid))))]
+      val-of  (fn [cid] (c/literal (store co) (:r (c/fact-of (store co) cid))))]
 
   ;; ---- (a) append! — MULTI pred, NO base, concurrent + disjoint, both land ----
   (let [fs   (mapv (fn [v] (future (commit! co (str "w" v) "M1" "tag" :link v nil)))   ; nil base

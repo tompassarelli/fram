@@ -31,7 +31,7 @@ CNF is built on a single primitive and one claim-shape.
 Object  =  addressable identity                       — the sole primitive
 Entity  =  object                          (entity!)  — bare identity, nothing more
 Value   =  object + literal                (value!)   — interned, canonical (one identity per literal)
-Claim   =  object + (l p r)                (claim!)   — a proposition; itself an object
+Claim   =  object + (l p r)                (fact!)   — a proposition; itself an object
 ```
 
 Two properties follow, and together they *are* CNF:

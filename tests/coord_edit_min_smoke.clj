@@ -46,7 +46,7 @@
 (def new-body
   (str "(let [p (c/value-id ctx pname) cp (c/value-id ctx \"cardinality\") "
        "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
-       "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/claim-of ctx (first cs))))))"))
+       "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))"))
 
 (def v-before (:version (client port {:op :version})))
 (def t0 (System/nanoTime))

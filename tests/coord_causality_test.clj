@@ -70,7 +70,7 @@
   (chk "(a) causal election is input-order-INDEPENDENT" (= causal-win (elect-causal co (vec (reverse live)))))
   (chk "(a) causal election is STABLE across reads" (= causal-win (elect-causal co live) (elect-causal co live)))
   (chk "(a) the elected member's value is the earliest decider's (B)"
-       (= "B" (c/literal (store co) (:r (c/claim-of (store co) causal-win))))))
+       (= "B" (c/literal (store co) (:r (c/fact-of (store co) causal-win))))))
 
 ;; ============================================================================
 ;; (b) as-of — reconstruct a historical view; a later-superseded claim is RE-SEEN.
@@ -85,7 +85,7 @@
       mid (current-seq co)                                  ; a seq AFTER open, BEFORE closed
       r2  (commit! co "w" "TB" "status" :assert "closed" s1); supersedes "open" at seq S2 > S1
       s2  (:ok r2)
-      val-of (fn [cids] (mapv #(c/literal (store co) (:r (c/claim-of (store co) %))) cids))]
+      val-of (fn [cids] (mapv #(c/literal (store co) (:r (c/fact-of (store co) %))) cids))]
   (chk "(b) NOW: only the latest value is live (open superseded)"
        (= ["closed"] (val-of (live-cids-lp co (tid) pid))))
   (chk "(b) as-of a seq BEFORE the overwrite RE-SEES the superseded 'open'"
@@ -116,9 +116,9 @@
       ;; the withdrawn victim cid (it is now superseded but carries a tombstone)
       victim (first (filter #(withdrawn? co %)
                             (get (:idx-by-lp @(store co)) [(tid) (pid)])))
-      remove-live (mapv #(c/literal (store co) (:r (c/claim-of (store co) %)))
+      remove-live (mapv #(c/literal (store co) (:r (c/fact-of (store co) %)))
                         (live-members co (tid) (pid) :remove-wins))
-      add-live    (sort (mapv #(c/literal (store co) (:r (c/claim-of (store co) %)))
+      add-live    (sort (mapv #(c/literal (store co) (:r (c/fact-of (store co) %)))
                               (live-members co (tid) (pid) :add-wins)))
       wd  (withdrawal-of co victim)]
   (chk "(c) 3 members live before the withdrawal" (= 3 before))
@@ -138,7 +138,7 @@
         r1 (commit! co "w" "@barrier" "phase" :assert "one" 0)
         _  (commit! co "w" "@barrier" "phase" :assert "two" (:ok r1))   ; overwrites "one" (no withdrawal)
         ppid (c/value-id (store co) "phase")
-        addp (mapv #(c/literal (store co) (:r (c/claim-of (store co) %)))
+        addp (mapv #(c/literal (store co) (:r (c/fact-of (store co) %)))
                    (live-members co (tid) ppid :add-wins))]
     (chk "(c) add-wins does NOT resurrect a genuine overwrite (no tombstone)"
          (= ["two"] addp))))

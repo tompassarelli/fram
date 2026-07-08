@@ -123,7 +123,7 @@
         file-pred (c/value-id st "file")
         src-path (when (and root-id file-pred)
                    (let [cs (c/by-lp st root-id file-pred)]
-                     (when (seq cs) (c/literal st (:r (c/claim-of st (first cs)))))))]
+                     (when (seq cs) (c/literal st (:r (c/fact-of st (first cs)))))))]
     (when-not src-path
       (die "module" module "has no @" module "#root file claim in" log-path
            "(was it ingested?)"))

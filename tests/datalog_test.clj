@@ -9,8 +9,8 @@
 (def kind (c/value! ctx "kind"))
 (def hub  (c/value! ctx "hub"))
 (def a (c/entity! ctx)) (def b (c/entity! ctx)) (def cc (c/entity! ctx)) (def dd (c/entity! ctx))
-(c/claim! ctx a edge b tx) (c/claim! ctx b edge cc tx) (c/claim! ctx cc edge dd tx)  ; a->b->c->d
-(c/claim! ctx b kind hub tx) (c/claim! ctx cc kind hub tx)                            ; b,c are hubs
+(c/fact! ctx a edge b tx) (c/fact! ctx b edge cc tx) (c/fact! ctx cc edge dd tx)  ; a->b->c->d
+(c/fact! ctx b kind hub tx) (c/fact! ctx cc kind hub tx)                            ; b,c are hubs
 
 ;; Fixture A — 2-literal positive join: pth(X,H) :- triple(X,edge,H), triple(H,kind,hub)
 (def dbA (d/run-rules ctx [(d/rule "pth" [(d/v :x) (d/v :h)]
@@ -31,7 +31,7 @@
 (def ec-pairs (set (map (fn [t] [(nth t 1) (nth t 2)]) (d/facts dbC "ec"))))
 
 ;; repeated-var equality join: selfloop(N) :- triple(N,edge,N)  (after adding a->a)
-(c/claim! ctx a edge a tx)
+(c/fact! ctx a edge a tx)
 (def loops (set (d/facts (d/run-rules ctx [(d/rule "selfloop" [(d/v :n)] [(d/lit "triple" [(d/v :n) edge (d/v :n)])])]) "selfloop")))
 
 ;; --- stratified negation: not-terminal finite-complement --------------------
@@ -40,8 +40,8 @@
 (def kindp (c/value! nx "kind")) (def nodev (c/value! nx "node"))
 (def statusp (c/value! nx "status")) (def donev (c/value! nx "done"))
 (def na (c/entity! nx)) (def nb (c/entity! nx)) (def ncc (c/entity! nx)) (def ndd (c/entity! nx))
-(doseq [e [na nb ncc ndd]] (c/claim! nx e kindp nodev ntx))           ; all are nodes
-(c/claim! nx na statusp donev ntx) (c/claim! nx nb statusp donev ntx) ; a,b terminal
+(doseq [e [na nb ncc ndd]] (c/fact! nx e kindp nodev ntx))           ; all are nodes
+(c/fact! nx na statusp donev ntx) (c/fact! nx nb statusp donev ntx) ; a,b terminal
 
 (def strata
   [[(d/rule "node" [(d/v :n)] [(d/lit "triple" [(d/v :n) kindp nodev])])

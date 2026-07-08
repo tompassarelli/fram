@@ -33,7 +33,7 @@
 (def co (atom nil))                  ; {:store :log :lock} — reified canonical (v2 log)
 (def flat-log (atom nil))            ; the flat log, now a PROJECTION the cold CLI folds
 (def cache (atom {:index nil :version -1}))
-(def claims-wire-cache (atom {:version -1 :triples nil}))  ; :claims op — fold-ordered [l p r] wire triples, per version
+(def facts-wire-cache (atom {:version -1 :triples nil}))  ; :claims op — fold-ordered [l p r] wire triples, per version
 (def subscribers (atom []))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
@@ -44,7 +44,7 @@
 ;;                     gate at do-assert/do-retract), routed through the schema layer and
 ;;                     appended VERBATIM so the cold CLI fold's card-map still sees them.
 ;; schema-preds stays their UNION, so every downstream filter (materialization skips at
-;; migrate/apply-tail!, claim->triple/lp-live-triples read-view hiding) is byte-identical.
+;; migrate/apply-tail!, fact->triple/lp-live-triples read-view hiding) is byte-identical.
 (def hard-reserved #{"name" "cnf-supersedes"})
 (def schema-writable #{"cardinality" "value_kind"})
 (def schema-preds (clojure.set/union hard-reserved schema-writable))
@@ -54,7 +54,7 @@
 ;; marker claims into a store. We run it OVER the warm `co` store, version-cached.
 ;; These predicates are DERIVED / in-memory: they must (a) never reach the flat log,
 ;; (b) never leak into the S1 :query warm cache (which keys on current-seq), and
-;; (c) never bump current-seq. claim->triple filters them out of every read projection
+;; (c) never bump current-seq. fact->triple filters them out of every read projection
 ;; (so :query/:warm-check/the read view never see them); the materialize step rolls
 ;; back the seq-space the resolver's tx consumed.
 (def resolve-preds #{"refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field" "supersedes"})
@@ -217,22 +217,22 @@
 ;; + render markers (materialized over `co` for :callers) invisible to :query, the
 ;; :warm-check tripwire, and the read view — the corpus :query sees is exactly the AST
 ;; claims the flat log ingested, identical whether or not refers_to has been materialized.
-(defn- claim->triple [st cid]
-  (let [cl (c/claim-of st cid) pstr (c/literal st (:p cl))]
+(defn- fact->triple [st cid]
+  (let [cl (c/fact-of st cid) pstr (c/literal st (:p cl))]
     (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
       [(s/name-of st (:l cl)) pstr
        (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
 
 ;; read-bridge: reified live view -> the flat (l p r) Claim vec build-index wants.
-;; PURE over its store: DOMAIN facts only (claim->triple hides every schema-pred). This is
+;; PURE over its store: DOMAIN facts only (fact->triple hides every schema-pred). This is
 ;; the STORE-MATERIALIZATION view — the snapshot-reconcile gate compares two stores of the
 ;; same log through it, and it must stay byte-identical to pre-F4 (analyst invariant 3:
 ;; schema facts are NOT store-materialized as domain triples). The client READ view adds
 ;; the log-sourced schema facts on top — see client-view-claims below.
 (defn reified->claims [c0]
   (let [st (:store c0)]
-    (->> (c/current-claims st)
-         (keep (fn [cid] (when-let [t (claim->triple st cid)] (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))))
+    (->> (c/current-facts st)
+         (keep (fn [cid] (when-let [t (fact->triple st cid)] (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))))
          vec)))
 
 ;; ---- schema-as-claims READ view (F4) ---------------------------------------
@@ -273,7 +273,7 @@
 (defn- lp-live-triples [c0 te p]
   (let [st (:store c0) lid (s/resolve-name st te) pid (c/value-id st p)]
     (if (and lid pid (not (schema-preds p)))
-      (set (keep #(claim->triple st %) (c/by-lp st lid pid)))
+      (set (keep #(fact->triple st %) (c/by-lp st lid pid)))
       #{})))
 
 ;; ---- index-accelerated read path (warm) ------------------------------------
@@ -496,7 +496,7 @@
     (if (nil? pid)
       {:count 0 :subjects []}
       (let [offending (->> (c/by-p st pid)
-                           (keep #(c/claim-of st %))
+                           (keep #(c/fact-of st %))
                            (group-by :l)
                            (filterv (fn [g] (> (count (second g)) 1))))]
         {:count (count offending)
@@ -515,7 +515,7 @@
           tx (c/begin-tx! st "schema")
           pid (c/value! st pname)
           clear! (fn [pp] (doseq [old (c/by-lp st pid (c/value! st pp))]
-                            (c/claim! st old (c/value! st "cnf-supersedes") old tx)))]
+                            (c/fact! st old (c/value! st "cnf-supersedes") old tx)))]
       (cond
         (= op "assert")     (s/assert! st pid p r tx)
         (= p "cardinality") (if (ck/single? pname)
@@ -639,7 +639,7 @@
     (when (and lid pid)
       (let [cids (live-cids-lp @co lid pid)]
         (when (seq cids)
-          (let [cl (c/claim-of st (elect @co cids))]    ; coexist-elect: the elected member
+          (let [cl (c/fact-of st (elect @co cids))]    ; coexist-elect: the elected member
             (when cl (c/literal st (:r cl)))))))))
 
 (defn- terminal-cascade! [te]
@@ -653,7 +653,7 @@
           did (c/value-id st "driver")
           live-driver (let [cids (when (and eid did) (live-cids-lp @co eid did))]
                         (when (seq cids)
-                          (let [cl (c/claim-of st (elect @co cids))]   ; coexist-elect
+                          (let [cl (c/fact-of st (elect @co cids))]   ; coexist-elect
                             (when cl
                               (if (c/value-object? st (:r cl))
                                 (c/literal st (:r cl))
@@ -665,7 +665,7 @@
           sof    (c/value-id st "session_of")]
       (when (and te-eid sof)
         (doseq [scid (vec (c/by-pr st sof te-eid))]
-          (let [cl (c/claim-of st scid)
+          (let [cl (c/fact-of st scid)
                 sid (when cl (s/name-of st (:l cl)))]
             (when (and sid
                        (some? (one-live-literal sid "start_time"))
@@ -734,7 +734,7 @@
   (let [NAME (c/value-id st "name")]
     (when NAME
       (set (keep (fn [cid]
-                   (let [cl (c/claim-of st cid)
+                   (let [cl (c/fact-of st cid)
                          nm (c/literal st (:r cl))]
                      (when (contains? mods (module-of-name nm)) (:l cl))))
                  (c/by-p st NAME))))))
@@ -920,7 +920,7 @@
 (defn- footprint-by-concern [st]
   (when-let [FP (c/value-id st "footprint")]
     (reduce (fn [m cid]
-              (let [cl (c/claim-of st cid)
+              (let [cl (c/fact-of st cid)
                     c  (s/name-of st (:l cl))
                     r  (:r cl)
                     n  (if (c/value-object? st r) (c/literal st r) (s/name-of st r))]
@@ -979,7 +979,7 @@
   (when B
     (with-resolve-read st
       (->> (c/by-p resolve/ctx resolve/REFERS)          ; every live refers_to claim
-           (map #(c/claim-of resolve/ctx %))
+           (map #(c/fact-of resolve/ctx %))
            (keep (fn [cl]
                    (let [L (:l cl)]
                      (when (= B (resolve/ultimate (:r cl)))   ; ultimate target is B (chains)
@@ -1032,7 +1032,7 @@
   (with-resolve-read st
     (let [psi (parent-slot-index st)]
       (->> (c/by-p resolve/ctx resolve/REFERS)
-           (map #(c/claim-of resolve/ctx %))
+           (map #(c/fact-of resolve/ctx %))
            (keep (fn [cl]
                    (let [L (:l cl) D (resolve/ultimate (:r cl))
                          nm     (resolve/binding-name (resolve/refers-target L))
@@ -1136,7 +1136,7 @@
         pfx  (str "@" module "#")
         mx   (if NAME
                (reduce (fn [acc cid]
-                         (let [nm (c/literal st (:r (c/claim-of st cid)))]
+                         (let [nm (c/literal st (:r (c/fact-of st cid)))]
                            (if (and (string? nm) (str/starts-with? nm pfx))
                              (if-let [[_ d] (re-matches #"@[^#]+#(\d+)" nm)]
                                (max acc (parse-long d)) acc)
@@ -1155,7 +1155,7 @@
   (let [NAME (c/value-id st "name")]
     (if NAME
       (reduce (fn [acc cid]
-                (let [nm (c/literal st (:r (c/claim-of st cid)))]
+                (let [nm (c/literal st (:r (c/fact-of st cid)))]
                   (if-let [[_ d] (and (string? nm) (re-matches #"@[^#]+#(\d+)" nm))]
                     (max acc (parse-long d)) acc)))
               0 (c/by-p st NAME))
@@ -1198,9 +1198,9 @@
       (let [BND     (or (c/value-id st "bound_to") (c/value! st "bound_to"))
             v0      (current-seq @co)
             B-name  (s/name-of st B)
-            already (set (map #(:l (c/claim-of st %)) (c/by-p st BND)))
+            already (set (map #(:l (c/fact-of st %)) (c/by-p st BND)))
             ref-leaves (->> (c/by-p st REFp)
-                            (map #(c/claim-of st %))
+                            (map #(c/fact-of st %))
                             (filter #(= B (:r %)))
                             (map :l) distinct)]
         (doseq [leaf ref-leaves :when (not (already leaf))]
@@ -1969,7 +1969,7 @@
                      :version (current-seq @co)})
       ;; :boot echoes HOW this process booted ({:mode :snapshot|:fold :ms .. :reason ..})
       ;; — the post-bounce verification surface for snapshot boot (thread 019f2190).
-      :status   {:version (current-seq @co) :claims (count (c/current-claims (:store @co)))
+      :status   {:version (current-seq @co) :claims (count (c/current-facts (:store @co)))
                  :log (or @flat-log (:log @co)) :boot @last-boot}
       ;; :claims — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
@@ -1983,12 +1983,12 @@
       ;; a mismatched daemon (fram.rt/coord-live-facts checks it). Clients ask with
       ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
       :claims   (let [v (current-seq @co)
-                      cc @claims-wire-cache
+                      cc @facts-wire-cache
                       triples (if (= v (:version cc))
                                 (:triples cc)
                                 (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
                                                (fold/refold-order (client-view-claims @co)))]
-                                  (reset! claims-wire-cache {:version v :triples ts})
+                                  (reset! facts-wire-cache {:version v :triples ts})
                                   ts))]
                   {:version v
                    :log (or @flat-log (:log @co))
@@ -2101,7 +2101,7 @@
                       e (s/resolve-name st (:te req))
                       pid (c/value-id st (:p req))
                       live (if (and e pid) (live-cids-lp @co e pid) [])
-                      render (fn [cid] (let [r (:r (c/claim-of st cid))]
+                      render (fn [cid] (let [r (:r (c/fact-of st cid))]
                                          (if (c/value-object? st r) (c/literal st r) (s/name-of st r))))
                       vals (mapv render live)]
                   ;; :value is the coexist-ELECTED member (not a blind first-live); :members/
@@ -2121,7 +2121,7 @@
                  (nil? s) {:error ":as-of needs :seq"}
                  (:query req)
                  (let [cids   (live-as-of @co s)
-                       claims (vec (keep (fn [cid] (when-let [t (claim->triple st cid)]
+                       claims (vec (keep (fn [cid] (when-let [t (fact->triple st cid)]
                                                      (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
                                          cids))
                        res    (q/run claims (:query req))]
@@ -2130,7 +2130,7 @@
                  (let [e   (s/resolve-name st (:te req))
                        pid (c/value-id st (:p req))
                        live (if (and e pid) (live-as-of-lp @co s e pid) [])
-                       render (fn [cid] (let [r (:r (c/claim-of st cid))]
+                       render (fn [cid] (let [r (:r (c/fact-of st cid))]
                                           (if (c/value-object? st r) (c/literal st r) (s/name-of st r))))
                        vals (mapv render live)]
                    {:value (when (seq live) (render (elect @co (vec live))))
@@ -2308,7 +2308,7 @@
 
 (defn serve-daemon [port log flat]
   (boot! log flat)
-  (println (str "reified coordinator: " (count (c/current-claims (:store @co))) " live claims from " log
+  (println (str "reified coordinator: " (count (c/current-facts (:store @co))) " live claims from " log
                 (when flat (str "; flat projection -> " flat))))
   (serve port))
 
@@ -2620,11 +2620,11 @@
                     link? (link-value? p r)
                     rid (when link? (s/resolve-name st r))
                     victims (if single? live
-                                (filter #(let [cr (:r (c/claim-of st %))]
+                                (filter #(let [cr (:r (c/fact-of st %))]
                                            (if link? (= rid cr) (= (c/value-id st r) cr))) live))]
-                (doseq [old victims] (c/claim! st old sup old tx)))
+                (doseq [old victims] (c/fact! st old sup old tx)))
               (let [link? (link-value? p r)
-                    exists? (some #(let [cr (:r (c/claim-of st %))]
+                    exists? (some #(let [cr (:r (c/fact-of st %))]
                                      (if link? (= (s/resolve-name st r) cr) (= (c/value-id st r) cr))) live)]
                 (when-not (and (not single?) exists?)
                   (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx)))))))
@@ -2788,7 +2788,7 @@
           _ (dump-log! st tmp)
           h (sha256-file tmp)
           _ (rename-atomic! tmp image)     ; the image appears WHOLE or not at all
-          ccount (count (c/current-claims st))
+          ccount (count (c/current-facts st))
           subj (str "@snapshot:" sq)]
       (doseq [[p v] [["covers_through" (str sq)] ["byte_offset" (str byteoff)]
                      ["claim_count" (str ccount)] ["image_path" image]
@@ -2828,7 +2828,7 @@
   (let [st (:store co) cp (c/value-id st "covers_through")]
     (if-not cp []
       (vec (for [cid (c/by-p st cp)
-                 :let [subj (:l (c/claim-of st cid))
+                 :let [subj (:l (c/fact-of st cid))
                        g (fn [p] (let [v (s/lookup st subj p)] v))]]
              {:subject (s/name-of st subj)
               :covers_through (try (parse-long (str (g "covers_through"))) (catch Exception _ nil))
@@ -2895,7 +2895,7 @@
   (boot-flat! flat)
   (start-snapshot-writer!)
   (println (str "reified coordinator (drop-in over flat log): "
-                (count (c/current-claims (:store @co))) " live claims, canonical=" flat
+                (count (c/current-facts (:store @co))) " live claims, canonical=" flat
                 (when @snapshot-boot-enabled? " [snapshot-boot ON]")))
   (serve port))
 

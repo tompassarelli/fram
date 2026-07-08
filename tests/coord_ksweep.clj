@@ -25,13 +25,13 @@
 (def st (:store @co))
 (def NAME (c/value-id st "name"))
 (def name-cids (vec (c/by-p st NAME)))
-(def mods (vec (into (sorted-set) (keep #(let [nm (c/literal st (:r (c/claim-of st %)))]
+(def mods (vec (into (sorted-set) (keep #(let [nm (c/literal st (:r (c/fact-of st %)))]
                                            (when (string? nm) (second (re-matches #"@([^#]+)#\d+" nm)))) name-cids))))
 (def K (count mods))
 (def one (first mods))
-(def nclaims (count (c/current-claims st)))
+(def nclaims (count (c/current-facts st)))
 
-(def scan-floor (first (timed (doall (map #(c/claim-of st %) name-cids)))))
+(def scan-floor (first (timed (doall (map #(c/fact-of st %) name-cids)))))
 (def whole-frame (nth (sort (repeatedly 3 #(first (timed (binding [resolve/*resolve-walk?* false]
                                                            (resolve/resolve-warm-store! st (fn []))))))) 1))
 (def scoped-frame (nth (sort (repeatedly 3 #(first (timed (binding [resolve/*resolve-walk?* false
@@ -43,7 +43,7 @@
   (with-resolve-read st
     (let [psi (parent-slot-index st)
           top (fn [n] (let [p (node-path psi n)] (when-let [s (first p)] (when (re-matches #"f\d+" s) (parse-long (subs s 1))))))]
-      (->> (c/by-p resolve/ctx resolve/REFERS) (map #(c/claim-of resolve/ctx %))
+      (->> (c/by-p resolve/ctx resolve/REFERS) (map #(c/fact-of resolve/ctx %))
            (filter (fn [cl] (let [L (:l cl) D (resolve/ultimate (:r cl)) lp (top L) dp (top D)
                                   lm (resolve/name->module (s/name-of resolve/ctx L))
                                   dm (resolve/name->module (s/name-of resolve/ctx D))]

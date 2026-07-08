@@ -103,9 +103,9 @@
 (defn- warm-ast-triples [module]
   (let [st (:store @co)]
     (into #{}
-          (->> (c/current-claims st)
+          (->> (c/current-facts st)
                (keep (fn [cid]
-                       (let [cl (c/claim-of st cid)
+                       (let [cl (c/fact-of st cid)
                              l  (s/name-of st (:l cl))
                              p  (c/literal st (:p cl))]
                          (when (and l (str/starts-with? l (str "@" module "#"))
@@ -236,7 +236,7 @@
 ;; verb quirk unrelated to the flip; we avoid it.)
 (spit kc-body (str "(let [p (c/value-id ctx pname) cp (c/value-id ctx \"cardinality\") "
                    "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
-                   "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/claim-of ctx (first cs))))))"))
+                   "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))"))
 (def kc-verb (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kc-resolve)}
                       "bb" "-cp" "out" "chartroom/src/resolve.clj" "set-body" "cardinality" "schema" kc-body
                       (str kc-resolve "/schema-emit.edn")))

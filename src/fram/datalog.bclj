@@ -46,10 +46,10 @@
 ;; --- EDB: project the LIVE claim store into triple/claim tuple-sets ----------
 (defn edb [ctx :- (Atom t/Store)] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) cid :- Int] :- (Map String (Set (Vec Any)))
-            (let [cl (c/claim-of ctx cid) l (:l cl) p (:p cl) r (:r cl)
+            (let [cl (c/fact-of ctx cid) l (:l cl) p (:p cl) r (:r cl)
                   db1 (update db "triple" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [l p r])))]
               (update db1 "claim" (fn [s :- (Set (Vec Any))] :- (Set (Vec Any)) (conj (or s #{}) [cid l p r])))))
-          {} (c/current-claims ctx)))
+          {} (c/current-facts ctx)))
 
 ;; --- unification (positional, substitution = var-name -> value) -------------
 (defn- unify [term :- Any val :- Any subst :- (Map String Any)] :- (U (Map String Any) Nil)   ; -> subst | nil

@@ -63,7 +63,7 @@
   (let [st (store co)
         dep (c/value-id st "depends_on") title (c/value-id st "title")
         foo (s/resolve-name st "foo")
-        edges (when (and foo dep) (map #(:r (c/claim-of st %)) (live-cids-lp co foo dep)))
+        edges (when (and foo dep) (map #(:r (c/fact-of st %)) (live-cids-lp co foo dep)))
         defined? (fn [node] (boolean (seq (live-cids-lp co node title))))
         dangling (vec (remove defined? edges))]
     {:coherent? (empty? dangling) :foo-edges (count edges) :dangling-targets (count dangling)}))

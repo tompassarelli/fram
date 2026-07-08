@@ -1,14 +1,13 @@
 #lang beagle/clj
 
-;; @claim-canonical — source of truth is the Fram claim graph, not this text.
-;; This .bclj is a regenerated, recompile-gated downstream VIEW (move-3 flip).
-;; Author it as a GRAPH EDIT via the fram MCP tools (add-def / set-body / rename-def),
-;; not Edit/Write — a text edit would desync the graph. The verbs live in
-;; chartroom/src/resolve.clj; the round-trip is byte-stable + recompile-identical
-;; (proven: regen builds byte-for-byte to out/fram/schema.clj). To edit as text you
-;; must first de-adopt (drop this sentinel + the registry line) — a deliberate change.
 ;; ============================================================================
-;; fram.schema — the CNF schema/identity layer over the kernel.
+;; fram.schema — the store schema/identity layer over the kernel.
+;; ============================================================================
+;; DE-ADOPTED (lane X-A): was graph-owned (rendered from the fact graph; text edits
+;; refused). De-adopted for the lane X-A fact/store rename because the backing
+;; graph still holds the OLD names — re-adopt only after the graph is re-synced to the
+;; new store names, else a graph render would overwrite this text. See
+;; docs/private/lane-xa-report.md.
 ;; ============================================================================
 ;; Still DOMAIN-AGNOSTIC: this is the META-model (name/identity, predicate
 ;; cardinality + value-kind, cardinality-driven supersession) — NOT life-os
@@ -18,15 +17,15 @@
 ;;
 ;; Predicates are interned VALUES (a pred = value! of its name). Metadata
 ;; (cardinality single|multi, value_kind ref|literal) and identity (name) are
-;; claims, so the store is self-describing — no external @id↔entity memo, and the
+;; facts, so the store is self-describing — no external @id↔entity memo, and the
 ;; hardcoded single-valued list is gone (cardinality is read from the graph).
 ;;
 ;; API (every op takes ctx + tx for writes):
 ;;   (setup! ctx tx)                       bootstrap name/superseded_by/cardinality/value_kind
 ;;   (def-predicate! ctx pname card kind tx) -> pid   register a predicate's metadata
 ;;   (cardinality ctx pname) -> "single"|"multi"
-;;   (assert! ctx subj pname literal tx) -> cid       value claim (single -> supersede prior)
-;;   (link!   ctx subj pname target tx)  -> cid       ref claim   (single -> supersede prior)
+;;   (assert! ctx subj pname literal tx) -> cid       value fact (single -> supersede prior)
+;;   (link!   ctx subj pname target tx)  -> cid       ref fact   (single -> supersede prior)
 ;;   (lookup ctx subj pname) / (lookup-all …) / (find-by ctx pname v)
 ;;   (name! ctx subj nm tx) / (name-of ctx subj) / (resolve-name ctx nm)
 ;; ============================================================================
@@ -34,42 +33,42 @@
 
 (define-mode strict)
 
-(require fram.cnf :as c)
+(require fram.store :as c)
 
 (require fram.types :as t)
 
-;; Bootstrap the structural predicates. Raw claim! (fresh store, no priors to
+;; Bootstrap the structural predicates. Raw fact! (fresh store, no priors to
 ;; supersede). superseded_by is the supersession trigger; it is multi/ref.
-;; identity lives in the graph (interned values + claims), NOT in store fields:
+;; identity lives in the graph (interned values + facts), NOT in store fields:
 ;; those don't survive dump/replay, so all reads resolve preds via value-id.
 (defn setup! [ctx :- (Atom t/Store) tx :- Int] :- (Atom t/Store)
-  (let [name-p (c/value! ctx "name") sup-p (c/value! ctx "cnf-supersedes") card-p (c/value! ctx "cardinality") kind-p (c/value! ctx "value_kind")]
+  (let [name-p (c/value! ctx "name") sup-p (c/value! ctx "store-supersedes") card-p (c/value! ctx "cardinality") kind-p (c/value! ctx "value_kind")]
     (c/set-supersedes-pred! ctx sup-p)
-    (c/claim! ctx name-p card-p (c/value! ctx "single") tx)
-    (c/claim! ctx card-p card-p (c/value! ctx "single") tx)
-    (c/claim! ctx kind-p card-p (c/value! ctx "single") tx)
-    (c/claim! ctx sup-p card-p (c/value! ctx "multi") tx)
+    (c/fact! ctx name-p card-p (c/value! ctx "single") tx)
+    (c/fact! ctx card-p card-p (c/value! ctx "single") tx)
+    (c/fact! ctx kind-p card-p (c/value! ctx "single") tx)
+    (c/fact! ctx sup-p card-p (c/value! ctx "multi") tx)
     ctx))
 
 (defn cardinality [ctx :- (Atom t/Store) pname :- String] :- String
   (let [pid (c/value-id ctx pname) card-pid (c/value-id ctx "cardinality") cs (if (and (some? pid) (some? card-pid)) (c/by-lp ctx pid card-pid) [])]
-    (if (empty? cs) "multi" (c/literal ctx (:r (c/claim-of ctx (first cs)))))))
+    (if (empty? cs) "multi" (c/literal ctx (:r (c/fact-of ctx (first cs)))))))
 
-;; supersede prior live (subj,pid) claims other than new-cid (single-valued write)
+;; supersede prior live (subj,pid) facts other than new-cid (single-valued write)
 (defn- replace! [ctx :- (Atom t/Store) subj :- Int pid :- Int new-cid :- Int tx :- Int] :- Any
-  (let [sup (c/value! ctx "cnf-supersedes")]
+  (let [sup (c/value! ctx "store-supersedes")]
     (doseq [old (c/by-lp ctx subj pid)]
-      (when (not (= old new-cid)) (c/claim! ctx new-cid sup old tx)))))
+      (when (not (= old new-cid)) (c/fact! ctx new-cid sup old tx)))))
 
 ;; v stays Any: a domain literal — the engine interns arbitrary EDN values.
 (defn assert! [ctx :- (Atom t/Store) subj :- Int pname :- String v :- Any tx :- Int] :- Int
-  (let [pid (c/value! ctx pname) new-cid (c/claim! ctx subj pid (c/value! ctx v) tx)]
+  (let [pid (c/value! ctx pname) new-cid (c/fact! ctx subj pid (c/value! ctx v) tx)]
     (when (= "single" (cardinality ctx pname))
       (replace! ctx subj pid new-cid tx))
     new-cid))
 
 (defn link! [ctx :- (Atom t/Store) subj :- Int pname :- String target :- Int tx :- Int] :- Int
-  (let [pid (c/value! ctx pname) new-cid (c/claim! ctx subj pid target tx)]
+  (let [pid (c/value! ctx pname) new-cid (c/fact! ctx subj pid target tx)]
     (when (= "single" (cardinality ctx pname))
       (replace! ctx subj pid new-cid tx))
     new-cid))
@@ -78,7 +77,7 @@
 ;; id; a value-object returns its interned literal). Justified: the union is open.
 (defn lookup-all [ctx :- (Atom t/Store) subj :- Int pname :- String] :- (Vec Any)
   (let [pid (c/value-id ctx pname) cids (if (some? pid) (c/by-lp ctx subj pid) [])]
-    (mapv (fn [cid :- Int] :- Any (let [r (:r (c/claim-of ctx cid))] (if (c/value-object? ctx r) (c/literal ctx r) r)))
+    (mapv (fn [cid :- Int] :- Any (let [r (:r (c/fact-of ctx cid))] (if (c/value-object? ctx r) (c/literal ctx r) r)))
       cids)))
 
 ;; (first all) selects the default-main of a possibly-multi (l,p) group: a view selection (first-wins), not a uniqueness proof. cf resolve/select-main-1
@@ -87,7 +86,7 @@
 
 (defn find-by [ctx :- (Atom t/Store) pname :- String v :- Any] :- (Vec Int)
   (let [pid (c/value-id ctx pname) vid (c/value-id ctx v) cids (if (and (some? pid) (some? vid)) (c/by-pr ctx pid vid) [])]
-    (mapv (fn [cid :- Int] :- Int (:l (c/claim-of ctx cid))) cids)))
+    (mapv (fn [cid :- Int] :- Int (:l (c/fact-of ctx cid))) cids)))
 
 (defn def-predicate! [ctx :- (Atom t/Store) pname :- String card :- String kind :- String tx :- Int] :- Int
   (let [pid (c/value! ctx pname)]

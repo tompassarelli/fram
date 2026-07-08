@@ -42,11 +42,11 @@
 (def schema-preds #{"name" "cardinality" "value_kind" "cnf-supersedes"})
 (def reified-domain
   (set (keep (fn [cid]
-               (let [cl (c/claim-of ctx cid) pstr (c/literal ctx (:p cl))]
+               (let [cl (c/fact-of ctx cid) pstr (c/literal ctx (:p cl))]
                  (when-not (schema-preds pstr)
                    [(s/name-of ctx (:l cl)) pstr
                     (if (c/value-object? ctx (:r cl)) (c/literal ctx (:r cl)) (s/name-of ctx (:r cl)))])))
-             (c/current-claims ctx))))
+             (c/current-facts ctx))))
 
 (def only-flat (set/difference flat-set reified-domain))
 (def only-reif (set/difference reified-domain flat-set))

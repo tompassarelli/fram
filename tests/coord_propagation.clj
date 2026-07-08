@@ -34,10 +34,10 @@
 (println "corpus: COPY of .fram/code.log ->" tmp-log)
 (let [[boot-ms _] (timed (boot-flat! tmp-log))]
   (println (format "booted isolated daemon: %d live claims in %.0f ms"
-                   (count (c/current-claims (:store @co))) boot-ms)))
+                   (count (c/current-facts (:store @co))) boot-ms)))
 (defn all-node-names [st]
   (let [NAME (c/value-id st "name")]
-    (when NAME (keep #(c/literal st (:r (c/claim-of st %))) (c/by-p st NAME)))))
+    (when NAME (keep #(c/literal st (:r (c/fact-of st %))) (c/by-p st NAME)))))
 (def modules (vec (into (sorted-set) (keep module-of-name (all-node-names (:store @co))))))
 (def n-modules (count modules))
 (println "corpus modules (K):" n-modules "  e.g." (vec (take 6 modules)))

@@ -25,7 +25,7 @@
 ;; AST asserts are MULTI-valued (kind/v/fN not in fram.kernel/single-valued), so an
 ;; identical re-assert idempotently no-ops and ordering of independent asserts is
 ;; commutative. The retract-then-assert pair is the coordinator analogue of
-;; resolve.clj retire-claim! + mint/wire. (See DESIGN.md §4.)
+;; resolve.clj retire-fact! + mint/wire. (See DESIGN.md §4.)
 ;;
 ;; USAGE:
 ;;   bin/fram-commit-code <module> <new.bclj> --port <P> [--dry-run]
@@ -90,7 +90,7 @@
 ;; the module's CURRENT @<mod>#* AST claim-triples, read off the coordinator's warm
 ;; store via :query (a Datalog triple scan). The query returns [l p r] rows for
 ;; every claim whose subject begins "@<mod>#". refers_to/render markers are filtered
-;; out of :query by the daemon (claim->triple), so this is the raw AST exactly.
+;; out of :query by the daemon (fact->triple), so this is the raw AST exactly.
 (defn- coord-rt [port req]
   (with-open [s (java.net.Socket.)]
     (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)

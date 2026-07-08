@@ -13,7 +13,7 @@
 ;;   - ONE monotonic id space; entities/values/claims are `objects`; txs draw from
 ;;     it but are NOT objects (so provenance can be claims-about-tx).
 ;;   - value! interns by equality, TYPE-GENERAL; re-intern returns the same id.
-;;   - claims are NOT interned: claim! mints a fresh id even for identical (l p r),
+;;   - claims are NOT interned: fact! mints a fresh id even for identical (l p r),
 ;;     and a claim id is itself an object usable in l/p/r (reification, any depth).
 ;;   - live view = claims − superseded; supersession is DATA-DRIVEN: a claim whose
 ;;     p == the registered supersedes-pred marks its r (the old claim) not-live.
@@ -84,7 +84,7 @@
   (swap! ctx assoc :supersedes-pred pid))
 
 ;; --- claims (reified: each has its own Object id) ---------------------------
-(defn- index-claim! [ctx :- (Atom t/Store) cid :- Int l :- Int p :- Int r :- Int] :- Any
+(defn- index-fact! [ctx :- (Atom t/Store) cid :- Int l :- Int p :- Int r :- Int] :- Any
   (swap! ctx update :idx-by-l update l (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
   (swap! ctx update :idx-by-p update p (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
   (swap! ctx update :idx-by-r update r (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
@@ -101,25 +101,15 @@
     (swap! ctx update :objects assoc cid true)
     (swap! ctx update :claims assoc cid {:l l :p p :r r})
     (swap! ctx update :tx-of assoc cid tx)
-    (index-claim! ctx cid l p r)
+    (index-fact! ctx cid l p r)
     (when (= p (let [s :- t/Store (deref ctx)] (:supersedes-pred s)))
       (swap! ctx update :superseded assoc r true))
     cid))
 
-;; claim! — back-compat alias for fact! (wave-2 rename). src/fram/schema.bclj
-;; (@claim-canonical, refuses text edits) still calls c/claim!; this thin delegate
-;; lets it compile UNCHANGED. New code should call fact!.
-(defn claim! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
-  (fact! ctx l p r tx))
-
 (defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
   (let [s :- t/Store (deref ctx)] (get (:claims s) cid)))
 
-;; claim-of — back-compat alias for fact-of (see claim! above; c/claim-of is
-;; called from the un-editable schema.bclj).
-(defn claim-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
-  (fact-of ctx cid))
-(defn claim-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
+(defn fact-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
   (let [s :- t/Store (deref ctx)] (get (:tx-of s) cid)))
 
 ;; --- queries over the LIVE view (claims − superseded) -----------------------
@@ -140,7 +130,7 @@
 (defn by-pr [ctx :- (Atom t/Store) p :- Int r :- Int] :- (Vec Int)
   (live-only ctx (let [s :- t/Store (deref ctx)] (get (:idx-by-pr s) [p r] []))))
 
-(defn current-claims [ctx :- (Atom t/Store)] :- (Vec Int)
+(defn current-facts [ctx :- (Atom t/Store)] :- (Vec Int)
   (live-only ctx (let [s :- t/Store (deref ctx)] (vec (keys (:claims s))))))
 
 ;; --- durable serialization --------------------------------------------------
@@ -174,7 +164,7 @@
   (doseq [e (:claims data)]
     (let [cid (first e) m :- (Map Keyword Any) (nth e 1)]
       (swap! ctx update :claims assoc cid m)
-      (index-claim! ctx cid (:l m) (:p m) (:r m))))
+      (index-fact! ctx cid (:l m) (:p m) (:r m))))
   (doseq [e (:tx-of data)] (swap! ctx update :tx-of assoc (first e) (nth e 1)))
   (doseq [e (:txs data)] (swap! ctx update :txs assoc (first e) (nth e 1)))
   (doseq [cid (:superseded data)] (swap! ctx update :superseded assoc cid true))
