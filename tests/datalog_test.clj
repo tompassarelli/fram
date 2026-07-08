@@ -27,7 +27,7 @@
 
 ;; Fixture C — rule over fact(Cid,L,P,R): ec(Cid,X,Y) :- fact(Cid,X,edge,Y)
 (def dbC (d/run-rules ctx [(d/rule "ec" [(d/v :cid) (d/v :x) (d/v :y)]
-                                   [(d/lit "fact" [(d/v :cid) (d/v :x) edge (d/v :y)])])]))
+                                   [(d/lit "fact-id" [(d/v :cid) (d/v :x) edge (d/v :y)])])]))
 (def ec-pairs (set (map (fn [t] [(nth t 1) (nth t 2)]) (d/facts dbC "ec"))))
 
 ;; repeated-var equality join: selfloop(N) :- triple(N,edge,N)  (after adding a->a)

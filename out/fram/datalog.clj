@@ -23,7 +23,7 @@
    p (:p cl)
    r (:r cl)
    db1 (update db "triple" (fn [s] (conj (or s #{}) [l p r])))]
-  (update db1 "claim" (fn [s] (conj (or s #{}) [cid l p r]))))) {} (c/current-facts ctx)))
+  (update db1 "fact-id" (fn [s] (conj (or s #{}) [cid l p r]))))) {} (c/current-facts ctx)))
 
 (defn- unify [term val subst]
   (if (var? term) (let [n (:var term)]
@@ -121,7 +121,7 @@
    probs []]
   (if (>= i (count strata)) probs (let [stratum (nth strata i)
    this-rels (reduce (fn [acc r] (conj acc (:rel (:head r)))) #{} stratum)
-   bad-fwd (filterv (fn [nl] (not (or (= "triple" (:rel nl)) (or (= "claim" (:rel nl)) (contains? lower (:rel nl)))))) (neg-lits stratum))
+   bad-fwd (filterv (fn [nl] (not (or (= "triple" (:rel nl)) (or (= "fact-id" (:rel nl)) (contains? lower (:rel nl)))))) (neg-lits stratum))
    bad-self (filterv (fn [nl] (contains? this-rels (:rel nl))) (neg-lits stratum))
    probs2 (vec (concat probs (concat (mapv (fn [nl] (str "stratum " i ": negated '" (:rel nl) "' is not EDB or a lower stratum")) bad-fwd) (mapv (fn [nl] (str "stratum " i ": negated '" (:rel nl) "' is also derived in the SAME stratum (recursion through negation — not stratifiable)")) bad-self))))]
   (recur (+ i 1) (reduce (fn [acc rel] (conj acc rel)) lower this-rels) probs2)))))

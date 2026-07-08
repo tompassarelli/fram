@@ -11,7 +11,7 @@
   (if (empty? cs) {"fact" fact "fact-id" fact-id} (let [c (first cs)]
   (recur (rest cs) (+ i 1) (conj fact [(:l c) (:p c) (:r c)]) (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
 
-(def rel-aliases {"triple" "fact" "claim" "fact-id"})
+(def rel-aliases {"triple" "fact"})
 
 (defn- canon-rel [r]
   (if (and (string? r) (contains? rel-aliases r)) (get rel-aliases r) r))
@@ -87,7 +87,7 @@
    args (:args litt)
    e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
    e2 (if (vector? args) [] ["literal :args must be a vector"])
-   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use fact, fact-id (aliases: triple, claim), or a :head rel you define")] [])
+   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use fact, fact-id (alias: triple), or a :head rel you define")] [])
    e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3))) ["relation fact takes 3 args (l p r)"] [])
    e5 (if (and (= rel "fact-id") (vector? args) (not (= (count args) 4))) ["relation fact-id takes 4 args (cid l p r)"] [])
    en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false))) ["literal :neg must be true or false"] [])
