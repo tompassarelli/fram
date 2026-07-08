@@ -32,11 +32,11 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 
 (doseq [[p label] [[(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
-                   [roundtrip-rkt "claims-roundtrip.rkt"]
+                   [roundtrip-rkt "facts-roundtrip.rkt"]
                    [build-all "beagle-build-all"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))

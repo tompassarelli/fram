@@ -12,16 +12,16 @@
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
 
-(def claims
+(def facts
   [(k/->Fact "@x" "title" "X thread")     ; single, literal
    (k/->Fact "@x" "owner" "personal")     ; single, literal
    (k/->Fact "@x" "depends_on" "@y")      ; multi, ref
    (k/->Fact "@y" "title" "Y thread")])
 
-(def idx (k/build-index claims))
-(def cat (t/catalog claims))
+(def idx (k/build-index facts))
+(def cat (t/catalog facts))
 (defn has-tool? [nm] (boolean (some #(= (:name %) nm) cat)))
-(defn call [tool args] (t/call claims idx cat tool args))
+(defn call [tool args] (t/call facts idx cat tool args))
 
 ;; (1) CLOSED catalog — EXACTLY these ten names, no more, no fewer, no per-predicate tools.
 (def expected-names
@@ -57,7 +57,7 @@
           {:op "retract" :l "@x" :p "tag" :r "plainword"})))
 
 ;; (3) reads off the fold
-(chk "show @x returns its claims (pred/value rows)"
+(chk "show @x returns its facts (pred/value rows)"
      (= (set (map (fn [r] [(:pred r) (:value r)]) (:rows (call "show" {:subject "x"}))))
         #{["title" "X thread"] ["owner" "personal"] ["depends_on" "@y"]}))
 (chk "show accepts a bare id (auto-@)"

@@ -5,7 +5,7 @@
 ;; The .bclj is a PURE FUNCTION of the claim log. This boots the reified store
 ;; over .fram/code.log (the SAME migrate-flat->co the daemon uses — IN-PROCESS,
 ;; no socket; a pure render needs no coordinator), materializes refers_to over the
-;; warm store (so references render via identity), projects the module's claims to
+;; warm store (so references render via identity), projects the module's facts to
 ;; resolved EDN via resolve.clj extract-file!, and `racket --render`s the .bclj.
 ;;
 ;; USAGE:
@@ -38,10 +38,10 @@
 (def ^:private home (System/getProperty "user.home"))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
-                                 (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+                                 (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
                                  (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
-;; D3: `--render` loads claims-roundtrip's .zo, compiled for beagle's flake-pinned
+;; D3: `--render` loads facts-roundtrip's .zo, compiled for beagle's flake-pinned
 ;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve the
 ;; pinned racket like bin/fram-ingest-code (FRAM_RACKET overrides, direnv fallback). NO
 ;; bare fallback: a silent mismatch looks like a code bug, not a version bug — fail loud.
@@ -101,7 +101,7 @@
 (let [{:keys [module out port]} (parse-args *command-line-args*)]
   (when (str/blank? module) (die "usage: bin/fram-render-code <module> [--log <code.log>] [--out <file.bclj>] [--port <P>]"))
   (when port
-    (when-not (.exists (io/file roundtrip-rkt)) (die "missing claims-roundtrip.rkt at" roundtrip-rkt))
+    (when-not (.exists (io/file roundtrip-rkt)) (die "missing facts-roundtrip.rkt at" roundtrip-rkt))
     (warm-render! port module out roundtrip-rkt)
     (System/exit 0)))
 
@@ -112,7 +112,7 @@
 (let [{:keys [module log out]} (parse-args *command-line-args*)
       log-path (or log (str (System/getProperty "user.dir") "/.fram/code.log"))]
   (when (str/blank? module) (die "usage: bin/fram-render-code <module> [--log <code.log>] [--out <file.bclj>] [--port <P>]"))
-  (when-not (.exists (io/file roundtrip-rkt)) (die "missing claims-roundtrip.rkt at" roundtrip-rkt))
+  (when-not (.exists (io/file roundtrip-rkt)) (die "missing facts-roundtrip.rkt at" roundtrip-rkt))
   (when-not (.exists (io/file log-path)) (die "no code log at" log-path "(run bin/fram-ingest-code first)"))
 
   ;; 1. boot the reified store over the code log (IN-PROCESS migrate-flat->co).
@@ -132,7 +132,7 @@
     ;;    every module; the renderer needs it to spell references by identity).
     (resolve/resolve-warm-store! st)
 
-    ;; 3. project the module's claims -> resolved EDN via extract-file!. resolve.clj's
+    ;; 3. project the module's facts -> resolved EDN via extract-file!. resolve.clj's
     ;;    corpus is keyed by the `src` string corpus-from-store! set (= module name).
     ;;    Re-bind the read accessors + corpus over the warm store, then extract-file!
     ;;    the module's src. (resolve-warm-store! already ran the walk + bound nothing

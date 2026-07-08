@@ -1,7 +1,7 @@
 ;; coord_views_resolve_test.clj — thread E, read-layer half: select-main-1 is now
 ;; VIEW-RELATIVE. The resolver's single read-time selection point (the descendant of
 ;; the bare `(first …)` take-firsts, VIEWS_AND_BRANCHES §6/§8) elects the *view*'s
-;; member of a live (l,p) group via (view selects @cid) overlay claims.
+;; member of a live (l,p) group via (view selects @cid) overlay facts.
 ;;
 ;; Companion to coord_honesty_pass_test (which proves the *view*=nil default ≡ first):
 ;; this proves a BOUND `*view*` isolates a branch's line, and silence inherits main.
@@ -39,8 +39,8 @@
     (chk "branch b1: input-order-independent" (= (resolve/select-main-1 grp) (resolve/select-main-1 (vec (reverse grp))))))
   (binding [resolve/*view* "@view:b2"]
     (chk "branch b2: select-main-1 elects b2's selected rival" (= "b2val" (val-of (resolve/select-main-1 grp)))))
-  ;; isolation: the three views resolve to three DISTINCT claims.
-  (chk "isolation: b1, b2, main elect distinct claims"
+  ;; isolation: the three views resolve to three DISTINCT facts.
+  (chk "isolation: b1, b2, main elect distinct facts"
        (apply distinct? [(binding [resolve/*view* "@view:b1"] (resolve/select-main-1 grp))
                          (binding [resolve/*view* "@view:b2"] (resolve/select-main-1 grp))
                          (resolve/select-main-1 grp)]))
@@ -60,5 +60,5 @@
 (chk "ctx nil: select-main-1 still ≡ first (honesty-pass preserved)"
      (= (mapv resolve/select-main-1 [[] [1] [9 8 7] (range 12)]) (mapv first [[] [1] [9 8 7] (range 12)])))
 
-(println (str "\n---- views-as-claims (resolve layer): " (if (zero? @fails) "ALL PASS" (str @fails " FAIL")) " ----"))
+(println (str "\n---- views-as-facts (resolve layer): " (if (zero? @fails) "ALL PASS" (str @fails " FAIL")) " ----"))
 (System/exit (if (zero? @fails) 0 1))

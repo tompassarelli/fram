@@ -25,7 +25,7 @@
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")
+               "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
                "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 
 (defn vof [st e] (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/fact-of st) :r (c/literal st))))

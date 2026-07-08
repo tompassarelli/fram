@@ -1,7 +1,7 @@
 ;; store_domain_test.clj — Stage 2 gate: load the LIVE corpus through the schema
-;; layer (identity as name-claims, predicate vocab + cardinality/value-kind as
-;; claims, refs linked, dangling persons minted), and prove the reified DOMAIN
-;; claims (excluding the schema/identity claims) SET-EQUAL the flat fold.
+;; layer (identity as name-facts, predicate vocab + cardinality/value-kind as
+;; facts, refs linked, dangling persons minted), and prove the reified DOMAIN
+;; facts (excluding the schema/identity facts) SET-EQUAL the flat fold.
 ;;   FRAM_LOG=/path bb -cp out store_domain_test.clj
 (require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt]
@@ -11,8 +11,8 @@
 (when (or (nil? log) (not (.exists (io/file log))))
   (println "store_domain_test: skipped — set FRAM_LOG to a claims.log to run")
   (System/exit 0))
-(def flat-claims (:facts (fold/fold (fram.rt/read-log log))))
-(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
+(def flat-facts (:facts (fold/fold (fram.rt/read-log log))))
+(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-facts)))
 
 ;; --- resolved vocabulary table (Stage 0 cardinality decision) ---------------
 (def single-preds #{"title" "owner" "lead" "driver" "assignee" "source" "part_of"
@@ -25,7 +25,7 @@
 (def ctx (c/new-store))
 (def tx (c/begin-tx! ctx "domain-load"))
 (s/setup! ctx tx)
-(doseq [p (distinct (map :p flat-claims))]
+(doseq [p (distinct (map :p flat-facts))]
   (s/def-predicate! ctx p (if (single-preds p) "single" "multi") (if (ref-preds p) "ref" "literal") tx))
 
 ;; every @id (subject OR ref-target) -> a named entity (mints the dangling persons too)
@@ -34,12 +34,12 @@
   (or (get @memo sid)
       (let [id (c/entity! ctx)] (swap! memo assoc sid id) (s/name! ctx id sid tx) id)))
 (defn ref? [x] (str/starts-with? x "@"))
-(doseq [cl flat-claims]
+(doseq [cl flat-facts]
   (let [subj (ent-for! (:l cl)) p (:p cl) r (:r cl)]
     (if (ref? r) (s/link! ctx subj p (ent-for! r) tx) (s/assert! ctx subj p r tx))))
 
-;; --- reconstruct the reified DOMAIN view (exclude schema/identity claims) ----
-(def schema-preds #{"name" "cardinality" "value_kind" "cnf-supersedes"})
+;; --- reconstruct the reified DOMAIN view (exclude schema/identity facts) ----
+(def schema-preds #{"name" "cardinality" "value_kind" "store-supersedes"})
 (def reified-domain
   (set (keep (fn [cid]
                (let [cl (c/fact-of ctx cid) pstr (c/literal ctx (:p cl))]
@@ -53,7 +53,7 @@
 (def gate-ok (and (empty? only-flat) (empty? only-reif)))
 ;; generic: every ref-target (incl. person handles) resolves to a named entity —
 ;; no hardcoded handles, no dangling refs.
-(def ref-targets (distinct (filter ref? (map :r flat-claims))))
+(def ref-targets (distinct (filter ref? (map :r flat-facts))))
 (def refs-ok (every? (fn [h] (some? (s/resolve-name ctx h))) ref-targets))
 ;; cardinality is now READ FROM THE GRAPH (no hardcoded list)
 (def card-ok (and (= "single" (s/cardinality ctx "owner")) (= "multi" (s/cardinality ctx "relates_to"))))
@@ -61,7 +61,7 @@
 (println "flat-fold:" (count flat-set) " reified-domain:" (count reified-domain) " entities:" (count @memo))
 (when (seq only-flat) (println "  LOST:") (doseq [x (take 8 only-flat)] (println "   " (pr-str x))))
 (when (seq only-reif) (println "  GAINED:") (doseq [x (take 8 only-reif)] (println "   " (pr-str x))))
-(println (if gate-ok    "  [PASS]" "  [FAIL]") "domain claims == flat fold (identity/vocab as claims, excluded)")
+(println (if gate-ok    "  [PASS]" "  [FAIL]") "domain facts == flat fold (identity/vocab as facts, excluded)")
 (println (if refs-ok    "  [PASS]" "  [FAIL]") "all ref-targets resolve to a named entity (no dangling refs)")
 (println (if card-ok    "  [PASS]" "  [FAIL]") "cardinality read from the graph (no hardcoded list)")
 (if (and gate-ok refs-ok card-ok)

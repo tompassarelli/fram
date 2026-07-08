@@ -11,7 +11,7 @@
 
 ;; a tiny graph as CLAIMS (strings, exactly the flat fold's shape):
 ;;   a -depends_on-> b -depends_on-> c   ; b,c are "hub"
-(def claims
+(def facts
   [(k/->Fact "@a" "depends_on" "@b")
    (k/->Fact "@b" "depends_on" "@c")
    (k/->Fact "@b" "kind" "hub")
@@ -19,7 +19,7 @@
    (k/->Fact "@a" "title" "Alpha")])
 
 ;; (1) positive 2-literal join: hubdep(X,H) :- triple(X,depends_on,H), triple(H,kind,hub)
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "hubdep"
            :rules [{:head {:rel "hubdep" :args [{:var "x"} {:var "h"}]}
                     :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "h"}]}
@@ -29,7 +29,7 @@
   (chk "positive join excludes a->c (a doesn't directly depend on c)" (not (contains? got ["@a" "@c"]))))
 
 ;; (2) transitive closure (recursion): reaches(X,Y) base + step
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "reaches"
            :rules [{:head {:rel "reaches" :args [{:var "x"} {:var "y"}]}
                     :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}
@@ -42,7 +42,7 @@
   (chk "transitive closure reaches b->c" (contains? got ["@b" "@c"])))
 
 ;; (3) BOUNDARY: unknown relation is rejected, not silently empty
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "x" :rules [{:head {:rel "x" :args [{:var "a"}]}
                               :body [{:rel "bogus" :args [{:var "a"}]}]}]})]
   (chk "unknown relation -> :error (not :ok)" (and (contains? r :error) (not (contains? r :ok))))
@@ -50,13 +50,13 @@
        (some #(re-find #"bogus" %) (:error r))))
 
 ;; (4) BOUNDARY: a malformed term (not {:var} / not constant) is rejected
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "x" :rules [{:head {:rel "x" :args [{:var "a"}]}
                               :body [{:rel "triple" :args [{:not-a-var "a"} "depends_on" {:var "a"}]}]}]})]
   (chk "bad term -> :error" (contains? r :error)))
 
 ;; (5) BOUNDARY: unstratified negation (negate a derived rel in the same stratum) is rejected
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "safe"
            :rules [{:head {:rel "reaches" :args [{:var "x"} {:var "y"}]}
                     :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}
@@ -68,7 +68,7 @@
 ;; (6) stratified negation that IS well-formed runs: terminal via explicit strata.
 ;;   stratum 0: done(X) :- triple(X,kind,hub)        (treat hub as "done")
 ;;   stratum 1: open(X) :- triple(X,depends_on,_), NOT done(X)
-(let [r (q/run claims
+(let [r (q/run facts
           {:find "open"
            :strata [[{:head {:rel "done" :args [{:var "x"}]}
                       :body [{:rel "triple" :args [{:var "x"} "kind" "hub"]}]}]
@@ -82,7 +82,7 @@
 
 ;; (7) BOUNDARY FIXES from adversarial review — the head is now as rigorous as the
 ;; body, and validation is total (never crashes on malformed input).
-(defn err? [q] (contains? (q/run claims q) :error))
+(defn err? [q] (contains? (q/run facts q) :error))
 (chk "bad HEAD term rejected (was silently emitted as a constant)"
      (err? {:find "r" :rules [{:head {:rel "r" :args [{:foo 1}]}
                                :body [{:rel "triple" :args [{:var "x"} "title" {:var "y"}]}]}]}))
@@ -99,7 +99,7 @@
                                :body [{:rel "triple" :args [{:var "x"} "title" {:var "y"}]}
                                       {:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}] :neg "yes"}]}]}))
 (chk "valid query still runs after tightening (regression)"
-     (contains? (q/run claims {:find "r" :rules [{:head {:rel "r" :args [{:var "x"} {:var "y"}]}
+     (contains? (q/run facts {:find "r" :rules [{:head {:rel "r" :args [{:var "x"} {:var "y"}]}
                                                   :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}]}) :ok))
 
 ;; ============================================================================
@@ -113,10 +113,10 @@
 ;; p -(neg)-> q -> p was accepted as stratifiable (strata-violations returned []);
 ;; NOT p was evaluated against a still-growing p (eval-order-dependent, inconsistent
 ;; — q(@b) asserted because ¬p(@b) held, yet p(@b) then derived). Now REJECTED.
-(let [seed-claims [(k/->Fact "@a" "seed" "yes")
+(let [seed-facts [(k/->Fact "@a" "seed" "yes")
                    (k/->Fact "@a" "node" "yes")
                    (k/->Fact "@b" "node" "yes")]
-      r (q/run seed-claims
+      r (q/run seed-facts
           {:find "p"
            :strata [[{:head {:rel "p" :args [{:var "x"}]}
                       :body [{:rel "triple" :args [{:var "x"} "seed" "yes"]}]}]
@@ -183,7 +183,7 @@
 
 ;; #22 a head derived by MULTIPLE rules at the SAME arity must still run.
 (chk "#22 same-arity multi-rule head still runs (not over-rejected)"
-     (contains? (q/run claims
+     (contains? (q/run facts
                   {:find "edge"
                    :rules [{:head {:rel "edge" :args [{:var "x"} {:var "y"}]}
                             :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}
@@ -199,8 +199,8 @@
 ;; signal is returned INSTEAD of the (huge) result. Self-calibrates to the cap.
 (let [cap q/max-results
       m (inc (long (Math/ceil (Math/sqrt (double cap)))))   ; m^2 > cap
-      big-claims (mapv (fn [i] (k/->Fact (str "@s" i) "p" (str "@o" i))) (range m))
-      r (q/run big-claims
+      big-facts (mapv (fn [i] (k/->Fact (str "@s" i) "p" (str "@o" i))) (range m))
+      r (q/run big-facts
           {:find "pair"
            :rules [{:head {:rel "pair" :args [{:var "a"} {:var "b"}]}
                     :body [{:rel "triple" :args [{:var "a"} {:var "pp"} {:var "qq"}]}
@@ -214,7 +214,7 @@
 
 ;; #11 a result set WITHIN the cap still returns :ok (the bound doesn't over-trigger).
 (chk "#11 result within the cap still returns :ok"
-     (contains? (q/run claims {:find "r" :rules [{:head {:rel "r" :args [{:var "x"} {:var "y"}]}
+     (contains? (q/run facts {:find "r" :rules [{:head {:rel "r" :args [{:var "x"} {:var "y"}]}
                                                   :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}]}) :ok))
 
 ;; --- report ---

@@ -4,7 +4,7 @@
 ;; Sections map to the thread's ACCEPTANCE criteria:
 ;;   (d) the causal STAMP (:observed) survives a log replay round-trip + is clamped
 ;;       to the pre-commit head (a writer cannot claim to have observed the future).
-;;   (a) causal ELECTION: two agents assert rival multi-valued claims, BOTH land (no
+;;   (a) causal ELECTION: two agents assert rival multi-valued facts, BOTH land (no
 ;;       reject, no block), and select-causal-1 elects an IDENTICAL winner across all
 ;;       readers purely from recorded observed/cid — and it picks by DECISION order
 ;;       (observed), which can DIFFER from commit order (cid).
@@ -32,7 +32,7 @@
       ;; agentA reports it had observed an EARLY seq (1) when it decided
       _    (commit! co "agentA" "T1" "zzz" :assert "alice" 1)
       cidA (first (live-of co "T1" "zzz"))
-      ;; a writer that claims to have observed the FUTURE is clamped to the head AT ITS COMMIT
+      ;; a writer that facts to have observed the FUTURE is clamped to the head AT ITS COMMIT
       headB (current-seq co)
       _    (commit! co "agentB" "T2" "zzz" :assert "bob" 999999)
       cidB (first (live-of co "T2" "zzz"))

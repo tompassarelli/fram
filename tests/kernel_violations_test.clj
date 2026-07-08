@@ -7,13 +7,13 @@
 ;;   bb -cp out tests/kernel_violations_test.clj      (from the repo ROOT)
 (require '[fram.kernel :as k])
 
-(defn idx-of [claims] (k/build-index claims))
+(defn idx-of [facts] (k/build-index facts))
 (defn has? [v sub] (some #(clojure.string/includes? % sub) v))
-(defn vi [claims te] (k/violations-i (idx-of claims) te))
-(defn vf [claims te] (k/violations claims te))
+(defn vi [facts te] (k/violations-i (idx-of facts) te))
+(defn vf [facts te] (k/violations facts te))
 
 ;; @w1 -> @w2 (a real thread); clean.
-(def ok-claims
+(def ok-facts
   [(k/->Fact "@w1" "title" "W1")
    (k/->Fact "@w2" "title" "W2")
    (k/->Fact "@w1" "depends_on" "@w2")])
@@ -29,11 +29,11 @@
    (k/->Fact "@a" "depends_on" "@b") (k/->Fact "@b" "depends_on" "@a")])
 
 ;; the engine must NOT derive a person/role violation (that moved to tern).
-(def role-claims [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "driver" "@ghost")])
+(def role-facts [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "driver" "@ghost")])
 
 (def checks
-  [["(i) clean graph => no violations" (empty? (vi ok-claims "@w1"))]
-   ["(f) clean graph => no violations" (empty? (vf ok-claims "@w1"))]
+  [["(i) clean graph => no violations" (empty? (vi ok-facts "@w1"))]
+   ["(f) clean graph => no violations" (empty? (vf ok-facts "@w1"))]
    ["(i) depends_on -> ghost => missing entity" (has? (vi dangling-dep "@w") "depends_on references missing entity @ghost")]
    ["(f) depends_on -> ghost => missing entity" (has? (vf dangling-dep "@w") "depends_on references missing entity @ghost")]
    ["(i) part_of -> ghost => missing entity" (has? (vi dangling-part "@w") "part_of references missing entity @ghost")]
@@ -42,8 +42,8 @@
    ["(f) relates_to -> ghost => missing entity" (has? (vf dangling-rel "@w") "relates_to references missing entity @ghost")]
    ["(i) depends_on cycle detected" (has? (vi dep-cycle "@a") "depends_on cycle")]
    ["(f) depends_on cycle detected" (has? (vf dep-cycle "@a") "depends_on cycle")]
-   ["(i) engine does NOT derive person-ref violations" (not (has? (vi role-claims "@w") "unknown person"))]
-   ["(f) engine does NOT derive person-ref violations" (not (has? (vf role-claims "@w") "unknown person"))]])
+   ["(i) engine does NOT derive person-ref violations" (not (has? (vi role-facts "@w") "unknown person"))]
+   ["(f) engine does NOT derive person-ref violations" (not (has? (vf role-facts "@w") "unknown person"))]])
 
 (let [fails (remove second checks)]
   (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))

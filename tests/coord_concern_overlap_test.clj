@@ -5,10 +5,10 @@
 ;; over the warm corpus (lifting refers_to to the enclosing defn) and exposes:
 ;;   :blast {:te "@mod#id"}        -> the node's transitive callers (who breaks)
 ;;   :concern-overlap {:te "@c"}   -> peer concerns whose blast CLOSURE intersects
-;; This proves the design's three load-bearing claims over fram's OWN corpus:
+;; This proves the design's three load-bearing facts over fram's OWN corpus:
 ;;   (1) :blast = the warm transitive-caller closure (== resolve/blast-closure)
 ;;   (2) scope-correct: same-named fns in different modules are DISTINCT nodes
-;;   (3) overlap is a closure intersection over footprint claims read LIVE; and it
+;;   (3) overlap is a closure intersection over footprint facts read LIVE; and it
 ;;       is RENAME-STABLE because footprint is keyed on @mod#int identity, not spelling.
 ;;   bb -cp out tests/coord_concern_overlap_test.clj
 ;; ============================================================================
@@ -31,9 +31,9 @@
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT wrong log") (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port" port)
+(println "daemon up:" (:facts status) "facts, port" port)
 
 (def fails (atom 0))
 (defn check [label ok?] (println (str "  " (if ok? "PASS" "FAIL") " — " label)) (when-not ok? (swap! fails inc)))

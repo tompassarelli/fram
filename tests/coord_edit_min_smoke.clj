@@ -38,9 +38,9 @@
 
 ;; --- SANITY: the daemon serves OUR code-log copy --------------------------
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT: daemon serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "live claims, log=" flat ", port=" port)
+(println "daemon up:" (:facts status) "live facts, log=" flat ", port=" port)
 
 ;; --- the 1-line set-body edit (a GENUINELY different but equivalent body) ----
 (def new-body
@@ -75,7 +75,7 @@
 (shutdown!)
 ;; PASS = the op count is proportional to the EDITED SUBTREE, not the whole module.
 ;; The whole-module path commits ~7800 (3994 retract + 3818 assert) because emit-edn
-;; renumbers every node. The minimal path commits only the new body's own claims +
+;; renumbers every node. The minimal path commits only the new body's own facts +
 ;; the one superseded edge — here a 4-binding let block (~50 nodes) => ~133 ops, a
 ;; ~59x reduction. The discriminating fact: ops scale with the body, NOT the module
 ;; (the contrast retract count is the tell: 1 vs ~3994).

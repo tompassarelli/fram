@@ -30,7 +30,7 @@
 ;;
 ;; Env (overridable for CI/tests; defaults match the live tree):
 ;;   BEAGLE_HOME   (default ~/code/beagle)
-;;   FRAM_ROUNDTRIP (default $BEAGLE_HOME/beagle-lib/private/claims-roundtrip.rkt)
+;;   FRAM_ROUNDTRIP (default $BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt)
 ;; ============================================================================
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
@@ -43,8 +43,8 @@
 (def ^:private home (System/getProperty "user.home"))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
-                                 (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
-;; emit-edn loads claims-roundtrip's .zo, compiled for beagle's flake-pinned
+                                 (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+;; emit-edn loads facts-roundtrip's .zo, compiled for beagle's flake-pinned
 ;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve
 ;; the pinned racket like bin/_beagle-racket (FRAM_RACKET overrides). NO bare
 ;; "racket" fallback: a silent mismatch produces a stale-bytecode failure that
@@ -133,10 +133,10 @@
 ;; object -> :r the string (a LITERAL). Predicate passes through verbatim.
 ;; PLUS one bookkeeping claim @<mod>#root file "<path>" so render-from-log knows the
 ;; source path (the @file wrapper analogue; "root" never collides with an int id).
-(defn- module->claims [root-segs path]
+(defn- module->facts [root-segs path]
   (let [module (module-of root-segs path)
         triples (emit-edn-triples path)
-        node-claims
+        node-facts
         (mapv (fn [[s p o]]
                 {:op "assert"
                  :l (nodename module s)
@@ -144,21 +144,21 @@
                  :r (if (integer? o) (nodename module o) (str o))})
               triples)]
     (into [{:op "assert" :l (str "@" module "#root") :p "file" :r path}]
-          node-claims)))
+          node-facts)))
 
 ;; --- main --------------------------------------------------------------------
 (let [{:keys [srcs out module append root]} (parse-args *command-line-args*)
       out-path (or out (str (System/getProperty "user.dir") "/.fram/code.log"))]
   (when (empty? srcs) (die "usage: bin/fram-ingest-code <src> [<src>...] [--out <log>] [--module <name>] [--append] [--root <dir>]"))
   (when-not (.exists (io/file roundtrip-rkt))
-    (die "missing claims-roundtrip.rkt at" roundtrip-rkt "(set FRAM_ROUNDTRIP / BEAGLE_HOME)"))
+    (die "missing facts-roundtrip.rkt at" roundtrip-rkt "(set FRAM_ROUNDTRIP / BEAGLE_HOME)"))
   (let [files (->> srcs (mapcat beagle-files) distinct sort
                    (filter (fn [p] (or (nil? module) (str/includes? p module)))))]
     (when (empty? files) (die "no Beagle modules matched" (pr-str srcs) (when module (str "(module filter: " module ")"))))
     (log! "fram-ingest-code: folding" (count files) "module(s) ->" out-path
           (when module (str "(module filter: " module ")")))
     (let [root-segs (if root (path-segs root) (infer-root-segs files))
-          all-claims (mapcat (partial module->claims root-segs) files)
+          all-facts (mapcat (partial module->facts root-segs) files)
           ;; monotone :tx across the whole log; existing daemon seeds :next-seq to max.
           base (if (and append (.exists (io/file out-path)))
                  (->> (str/split-lines (slurp out-path))
@@ -171,13 +171,13 @@
                  (fn [i c]
                    (pr-str {:tx (+ base i 1) :op (:op c) :l (:l c) :p (:p c) :r (:r c)
                             :ts ts :by "coord"}))
-                 all-claims)
+                 all-facts)
           body (str (str/join "\n" lines) "\n")]
       (.mkdirs (.getParentFile (io/file out-path)))
       (if append
         (spit out-path body :append true)
         (spit out-path body))
-      (log! "fram-ingest-code: wrote" (count all-claims) "AST claims"
+      (log! "fram-ingest-code: wrote" (count all-facts) "AST facts"
             (str "(" (count files) " module(s); ids re-keyed @<mod>#<n>)"))
       (doseq [f files] (log! "  +" (module-of root-segs f) "<-" f))
       (log! "DONE — the Beagle source is now downstream of" out-path))))

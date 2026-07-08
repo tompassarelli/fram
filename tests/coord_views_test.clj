@@ -1,6 +1,6 @@
-;; coord_views_test.clj — thread E (views-as-claims) gate: per-branch isolation +
+;; coord_views_test.clj — thread E (views-as-facts) gate: per-branch isolation +
 ;; read-time, view-relative election. A VIEW is a first-class subject; (view selects
-;; @cid) claims are its overlay; elect(view, cids) restricts the election to a branch's
+;; @cid) facts are its overlay; elect(view, cids) restricts the election to a branch's
 ;; selected rivals, inheriting main where the branch is silent. Builds on move-B
 ;; (coexist-elect): rival writes already coexist; this proves a NAMED view picks its
 ;; OWN winner without disturbing main or sibling branches — conflict dissolved into
@@ -25,7 +25,7 @@
         live (live-of "T" "color")]
     (chk "coexist: all three rivals committed — no writer blocked/rejected"
          (and (:ok r0) (:ok b1) (:ok b2)))
-    (chk "coexist: THREE live claims on (T,color) (append-only, no supersede)"
+    (chk "coexist: THREE live facts on (T,color) (append-only, no supersede)"
          (= 3 (count live)))
 
     ;; ---- (2) per-branch isolation: each view elects its OWN rival ----
@@ -74,5 +74,5 @@
   (let [cs @checks fails (remove second cs)]
     (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
     (if (empty? fails)
-      (println "\nViews-as-claims (thread E):" (count cs) "/" (count cs) "PASS")
-      (do (println "\nViews-as-claims (thread E):" (count fails) "FAILED") (System/exit 1)))))
+      (println "\nViews-as-facts (thread E):" (count cs) "/" (count cs) "PASS")
+      (do (println "\nViews-as-facts (thread E):" (count fails) "FAILED") (System/exit 1)))))

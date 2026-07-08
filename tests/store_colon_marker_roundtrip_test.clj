@@ -6,7 +6,7 @@
 ;;
 ;; Beagle reads .bclj via Racket's reader, which has NO keyword syntax: a `:foo`
 ;; token (and the `:-` inline TYPE MARKER specifically) comes back as the SYMBOL
-;; |:foo| / |:-| — claims-roundtrip emits it as kind="symbol", v=":-" (colon
+;; |:foo| / |:-| — facts-roundtrip emits it as kind="symbol", v=":-" (colon
 ;; RETAINED). The authoring spec, by contrast, is parsed by clojure.edn where `:-`
 ;; IS a keyword, so mint-datum! USED to mint it as kind="keyword", v="-" (colon
 ;; stripped). beagle's decoder then rebuilt that as the Clojure keyword `:-`, which
@@ -24,7 +24,7 @@
 ;;      type annotation survives (^String reaches the emitted Clojure).
 ;;
 ;;   bb -cp out tests/store_colon_marker_roundtrip_test.clj   (from the repo root)
-;; Needs: racket + bb + chartroom/src/resolve.clj + beagle (claims-roundtrip.rkt +
+;; Needs: racket + bb + chartroom/src/resolve.clj + beagle (facts-roundtrip.rkt +
 ;; beagle-build-all). Skips with a clear message if a beagle prereq is missing.
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
@@ -34,11 +34,11 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 
 (doseq [[p label] [[(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
-                   [roundtrip-rkt "claims-roundtrip.rkt"]
+                   [roundtrip-rkt "facts-roundtrip.rkt"]
                    [build-all "beagle-build-all"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))

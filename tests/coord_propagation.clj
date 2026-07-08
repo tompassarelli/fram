@@ -33,7 +33,7 @@
 (println "=== DEBT 1 — PROPAGATION LATENCY RECEIPT ===")
 (println "corpus: COPY of .fram/code.log ->" tmp-log)
 (let [[boot-ms _] (timed (boot-flat! tmp-log))]
-  (println (format "booted isolated daemon: %d live claims in %.0f ms"
+  (println (format "booted isolated daemon: %d live facts in %.0f ms"
                    (count (c/current-facts (:store @co))) boot-ms)))
 (defn all-node-names [st]
   (let [NAME (c/value-id st "name")]

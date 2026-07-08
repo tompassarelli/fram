@@ -1,15 +1,15 @@
 ;; coord_schema_write_test.clj — F3: the VALIDATED schema-write gate.
 ;; Lane F made the engine READ log-resident `@<pred> cardinality single|multi` /
-;; `@<pred> value_kind ref|literal` claims; F3 opens the daemon's domain WRITE boundary
-;; so those claims can be legitimately authored. cardinality + value_kind become validated
+;; `@<pred> value_kind ref|literal` facts; F3 opens the daemon's domain WRITE boundary
+;; so those facts can be legitimately authored. cardinality + value_kind become validated
 ;; domain writes (routed through the schema layer, appended verbatim so the CLI fold sees
-;; them); name + cnf-supersedes stay hard-reserved. Proves, hermetically (a synthetic
+;; them); name + store-supersedes stay hard-reserved. Proves, hermetically (a synthetic
 ;; store booted via boot-flat!, NEVER the live 7977 coordinator):
 ;;   (a) a cardinality write is accepted + visible to BOTH the daemon store AND the CLI fold
 ;;   (b) a bad value is rejected, pointed (names the allowed values / the @-prefix rule)
 ;;   (c) a multi->single flip with a live >1-value group is rejected, offending subjects named
 ;;   (d) a single->multi flip (relaxation) is accepted
-;;   (e) name / cnf-supersedes are STILL reserved (rejected)
+;;   (e) name / store-supersedes are STILL reserved (rejected)
 ;;   (f) retracting a declaration falls back to env/fallback classification
 ;; Run: bb -cp out tests/coord_schema_write_test.clj
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
@@ -79,15 +79,15 @@
     (chk "(d) daemon store: title now multi" (= "multi" (s/cardinality st "title")))
     (chk "(d) CLI fold sees title=multi" (false? (get (cmap-of LOG) "title"))))
 
-  ;; ---- (e) name / cnf-supersedes STILL hard-reserved ----
+  ;; ---- (e) name / store-supersedes STILL hard-reserved ----
   (write-lines! LOG [(ln 1 "assert" "@P1" "note" "hello")])
   (boot-flat! LOG)
   (chk "(e) assert name rejected reserved"
        (let [r (do-assert "@P1" "name" "foo" nil)]
          (and (reject? r) (str/includes? (msg-of r) "reserved predicate 'name'"))))
-  (chk "(e) assert cnf-supersedes rejected reserved"
-       (let [r (do-assert "@x" "cnf-supersedes" "y" nil)]
-         (and (reject? r) (str/includes? (msg-of r) "reserved predicate 'cnf-supersedes'"))))
+  (chk "(e) assert store-supersedes rejected reserved"
+       (let [r (do-assert "@x" "store-supersedes" "y" nil)]
+         (and (reject? r) (str/includes? (msg-of r) "reserved predicate 'store-supersedes'"))))
   (chk "(e) retract name rejected reserved"
        (let [r (do-retract "@P1" "name" "foo" nil)] (reject? r)))
 

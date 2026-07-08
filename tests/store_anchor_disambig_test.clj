@@ -17,7 +17,7 @@
          '[babashka.process :refer [sh]])
 
 (def RT  (or (System/getenv "FRAM_ROUNDTRIP")
-             (str (System/getenv "HOME") "/code/beagle/beagle-lib/private/claims-roundtrip.rkt")))
+             (str (System/getenv "HOME") "/code/beagle/beagle-lib/private/facts-roundtrip.rkt")))
 (def VIM (or (System/getenv "VIM_BJS") "/home/tom/code/gjoa/src/gjoa/chrome/bjs/tabs/vim.bjs"))
 (def work (str (System/getProperty "java.io.tmpdir") "/anchor-disambig-" (System/nanoTime)))
 (.mkdirs (io/file work))

@@ -74,7 +74,7 @@
 
 (let [r3 (get by-id 3) txt (get-in r3 [:result :content 0 :text])
       preds (set (map #(get % "pred") (json/parse-string txt)))]
-  (chk "show by subject returns @a's claims" (every? preds ["title" "owner" "depends_on"])))
+  (chk "show by subject returns @a's facts" (every? preds ["title" "owner" "depends_on"])))
 
 (let [r4 (get by-id 4) txt (get-in r4 [:result :content 0 :text])
       pairs (set (map vec (json/parse-string txt)))]

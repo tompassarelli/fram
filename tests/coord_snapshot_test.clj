@@ -33,14 +33,14 @@
   (boot-flat! LOG)
   (chk "boot(cold): live == whole-migrate" (:ok (snapshot-reconcile)))
 
-  ;; --- (B) checkpoint: dump-log! image + @snapshot:<seq> claims + sidecar ---
+  ;; --- (B) checkpoint: dump-log! image + @snapshot:<seq> facts + sidecar ---
   (def snap (write-snapshot! @co LOG))
   (chk "snapshot: image file exists"  (.exists (java.io.File. (str (:image snap)))))
   (chk "snapshot: sidecar exists"     (.exists (java.io.File. (str LOG ".snap"))))
   (chk "snapshot: covers_through == boot seq (5)" (= 5 (:ok snap)))
 
   ;; --- (C) out-of-band tail: supersede a single, add+retract a multi, new subject ---
-  (let [base (current-seq @co)]        ; past the snapshot's own @snapshot:* claims
+  (let [base (current-seq @co)]        ; past the snapshot's own @snapshot:* facts
     (append-lines! LOG
       [(ln (+ base 1) "assert"  "@T1" "title" "Updated")  ; supersede single ACROSS boundary
        (ln (+ base 2) "assert"  "@T1" "tag"   "c")        ; new multi edge

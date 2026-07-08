@@ -25,9 +25,9 @@
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT wrong log") (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port" port)
+(println "daemon up:" (:facts status) "facts, port" port)
 
 ;; warm refers_to once (cold whole-corpus), then do disjoint minimal-op edits, then
 ;; check scoped == whole-corpus ground truth.

@@ -40,7 +40,7 @@
 
 ;; --- daemon-first read (thread 019f2190) -------------------------------------
 ;; The current fact set: the coordinator's warm live view when a daemon serves
-;; THIS log (served in fold emission order — the :claims op contract — so
+;; THIS log (served in fold emission order — the :facts op contract — so
 ;; downstream output is byte-identical to the cold fold's), else the cold fold.
 ;; [] from coord-live-facts is the whole capability handshake — daemon down /
 ;; old daemon / different log.

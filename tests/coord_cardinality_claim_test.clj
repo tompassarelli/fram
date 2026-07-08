@@ -1,6 +1,6 @@
 ;; coord_cardinality_claim_test.clj — the finding #23 daemon-seam gate.
 ;; Proves the DAEMON classifies predicate cardinality from log-resident
-;; `@<pred> cardinality single|multi` claims IDENTICALLY to the cold CLI fold
+;; `@<pred> cardinality single|multi` facts IDENTICALLY to the cold CLI fold
 ;; (fram.fold), in BOTH directions:
 ;;   - a kernel-single pred forced MULTI by a claim keeps every value (accumulates)
 ;;   - a non-kernel pred forced SINGLE by a claim collapses to its latest value
@@ -19,9 +19,9 @@
 ;; the schema/meta predicates the daemon never MATERIALIZES as domain triples — filter them
 ;; from the CLI fold so it compares like-for-like against the daemon's live-name-triples
 ;; (the store-materialization view). NB (F4): schema-writable facts ARE surfaced in the
-;; daemon's CLIENT read view (client-view-claims), but live-name-triples is the domain-pure
+;; daemon's CLIENT read view (client-view-facts), but live-name-triples is the domain-pure
 ;; reconcile view, so this filter is unchanged.
-(def schema-ps #{"cardinality" "value_kind" "name" "cnf-supersedes"})
+(def schema-ps #{"cardinality" "value_kind" "name" "store-supersedes"})
 (defn cli-domain [log]
   (set (remove #(schema-ps (:p %)) (:facts (fold/fold (fram.rt/read-log log))))))
 
@@ -35,7 +35,7 @@
     (when (.exists d) (doseq [f (.listFiles d)] (.delete f))))
 
   ;; ===================================================================
-  ;; (A) WHOLE-MIGRATE: both cardinality claims + domain claims in one log
+  ;; (A) WHOLE-MIGRATE: both cardinality facts + domain facts in one log
   ;;   @title cardinality multi   -> a KERNEL-SINGLE pred forced MULTI (accumulates)
   ;;   @tag   cardinality single  -> a NON-KERNEL pred forced SINGLE (collapses)
   ;; ===================================================================

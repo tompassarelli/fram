@@ -28,9 +28,9 @@
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT: daemon serves" (pr-str (:log status))) (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "live claims, port=" port)
+(println "daemon up:" (:facts status) "live facts, port=" port)
 
 ;; a sequence of DISTINCT 1-line set-body edits to `cardinality` (each replaces the
 ;; prior body; same defn so the verb path is identical edit-to-edit).

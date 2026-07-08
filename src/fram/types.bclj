@@ -18,8 +18,8 @@
 ;;       (every real consumer uses field access, which works on a map too).
 ;; So a claim value is (Map Keyword Any) (l/p/r are Int IDS, but stored under
 ;; keyword keys in an open map) and a tx value is (Map Keyword Any). The Store
-;; record still NAMES the 15 fields; its claims/txs values are these maps.
-;; (Plan §4's explicit fallback clause: Store.claims/txs :- (Map Int <map>).)
+;; record still NAMES the 15 fields; its facts/txs values are these maps.
+;; (Plan §4's explicit fallback clause: Store.facts/txs :- (Map Int <map>).)
 ;; ============================================================================
 (ns fram.types)
 (define-mode strict)
@@ -27,7 +27,7 @@
 (defrecord Store
   [next-id :- Int next-seq :- Int supersedes-pred :- Int?
    objects :- (Map Int Bool) values :- (Map Int Any) val-intern :- (Map Any Int)
-   claims :- (Map Int (Map Keyword Any)) tx-of :- (Map Int Int) txs :- (Map Int (Map Keyword Any))
+   facts :- (Map Int (Map Keyword Any)) tx-of :- (Map Int Int) txs :- (Map Int (Map Keyword Any))
    superseded :- (Map Int Bool)
    idx-by-l :- (Map Int (Vec Int)) idx-by-p :- (Map Int (Vec Int)) idx-by-r :- (Map Int (Vec Int))
    idx-by-lp :- (Map (Vec Int) (Vec Int)) idx-by-pr :- (Map (Vec Int) (Vec Int))])

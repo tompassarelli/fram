@@ -75,7 +75,7 @@
       (let [st (try (coord-rt {:op :status}) (catch Exception _ nil))]
         (if (and st (:version st)) st (do (Thread/sleep 500) (recur (inc n))))))))
 (when-not up? (proc/destroy-tree daemon) (die "daemon did not come up on port" port))
-(println "daemon up    :" (select-keys up? [:version :claims :log]))
+(println "daemon up    :" (select-keys up? [:version :facts :log]))
 
 (defn- shutdown! [] (try (proc/destroy-tree daemon) (catch Exception _ nil)))
 
@@ -133,13 +133,13 @@
 ;; (1) the AGENT-SHAPED MCP lowering — verbatim from the live code surface.
 ;; ============================================================================
 ;; the model fills typed params on the generated tool; fram.tools/call lowers it.
-(def claims (:facts (fold/fold (fram.rt/read-log tmp-log))))
-(def cat (tl/catalog claims))
-(def idx (k/build-index claims))
+(def facts (:facts (fold/fold (fram.rt/read-log tmp-log))))
+(def cat (tl/catalog facts))
+(def idx (k/build-index facts))
 (def insert-spec (first (filter #(= "insert-after" (:name %)) cat)))
 (def new-form "(def fram_mcp_ins_A 4242)")
 (def agent-args {:module MOD :after anchor :form new-form})
-(def edit-env (tl/call claims idx cat "insert-after" agent-args))
+(def edit-env (tl/call facts idx cat "insert-after" agent-args))
 (println "\n[1] MCP catalog tool 'insert-after' present:" (some? insert-spec)
          " params:" (mapv :name (:params insert-spec)))
 (println "    tl/call -> :edit envelope:" (pr-str edit-env))

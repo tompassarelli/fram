@@ -9,21 +9,21 @@ backed by the apple-sweep in §6.
 
 ---
 
-## 0. Vocabulary (the substrate stores *claims*)
+## 0. Vocabulary (the substrate stores *facts*)
 
 Use these words precisely — they are what make the rest of this note unambiguous:
 
 - **Assertion** — the *operation/event* of asserting (`do-assert` / `commit!`). An act, not a stored thing.
 - **Claim** — the durable, immutable, **addressable object** an assertion mints (a `cid`). **This is the
   substrate atom:** a claim can be referenced, owned, selected, superseded, disputed, and cited. *The graph
-  stores claims* — not assertions (acts vanish) and not facts (facts are view-relative, below).
+  stores facts* — not assertions (acts vanish) and not facts (facts are view-relative, below).
 - **Triple** — a claim's `(l p r)` payload.
 - **Fact** — a claim *selected/accepted as true inside a view*. "Fact" is therefore always relative to a view;
   the substrate has no view-free facts.
-- **View** — a selection predicate over claims (§8). `main` is the privileged default view.
+- **View** — a selection predicate over facts (§8). `main` is the privileged default view.
 
-> **The graph is an ocean of claims, not facts.** A program/view *selects* claims and treats them as facts.
-> Assertions are operations that mint claims; provenance lives on the claim — or on claims-about-claims, e.g.
+> **The graph is an ocean of facts, not facts.** A program/view *selects* facts and treats them as facts.
+> Assertions are operations that mint facts; provenance lives on the claim — or on facts-about-facts, e.g.
 > `(C123 asserted-by agent-7)`, `(view-main selects C123)`. (Today provenance is recorded at transaction
 > granularity — the claim's tx carries who/when — with per-claim `asserted-by` available as the CNF capability.)
 >
@@ -36,7 +36,7 @@ Use these words precisely — they are what make the rest of this note unambiguo
 ## Verdict (one sentence)
 
 On an append-only claim graph, **writes do not conflict** — a program is a coherent *traversal*
-of the graph under a chosen view, divergent claims may coexist indefinitely, and the only thing
+of the graph under a chosen view, divergent facts may coexist indefinitely, and the only thing
 that ever forces two writers to disagree is a **cardinality axiom**. Identity (distinct things
 have distinct ids) is the one cardinality axiom the substrate *must* assert; every other
 "single value" is optional. So there are **no write-time conflicts, only read-time
@@ -48,14 +48,14 @@ path-selection obligations.**
 
 - **The graph is append-only.** Claims are immutable; the log only grows. (Proven today; see
   `WHY_FRAM_EXISTS.md` and the immutability analysis.)
-- **An edit is a re-pointing, not a mutation.** To "change" a thing you assert new claims; the
-  old claims are not erased. What is "current" is a *selection* over the claims (i.e. which
-  claims are facts in this view), not a property stamped on them.
-- **Divergent claims may coexist indefinitely.** Two rival writes are, at the substrate level,
-  just two claims. The substrate is not obligated to pick one (that is a view's job — selecting a
+- **An edit is a re-pointing, not a mutation.** To "change" a thing you assert new facts; the
+  old facts are not erased. What is "current" is a *selection* over the facts (i.e. which
+  facts are facts in this view), not a property stamped on them.
+- **Divergent facts may coexist indefinitely.** Two rival writes are, at the substrate level,
+  just two facts. The substrate is not obligated to pick one (that is a view's job — selecting a
   claim makes it a fact). It can hold both, forever, without being wrong.
 - **A program is a traversal under a view.** "What is the code" is the answer to a query —
-  *which coherent set of claims do I select and walk?* — not a single privileged mutable state.
+  *which coherent set of facts do I select and walk?* — not a single privileged mutable state.
   Different views can select differently from the same graph.
 
 ## 2. No write-time conflicts — only read-time path-selection obligations
@@ -64,7 +64,7 @@ Because writes only ever *add* immutable facts, two concurrent writes can always
 graph after `base + A + B` contains everything in `A` and everything in `B`; nothing was
 overwritten, nothing destroyed. The "merge" that other systems force at write time does not
 exist here as a *write* event. What remains is a **read-time** question: when a consumer
-traverses the graph and reaches a point where two divergent claims both apply, *it* must select
+traverses the graph and reaches a point where two divergent facts both apply, *it* must select
 which to follow. That selection is an obligation of the **reader**, deferred to **use-time**,
 not a conflict resolved at write-time. (This is the precise antidote to the "but eventually you
 must merge" objection: no — eventually some *consumer must choose a traversal*, which is a
@@ -99,11 +99,11 @@ thing: identity is global and forced; declared-single predicates are local and o
 **none**: on the mainline a reference is a spelling that resolves-or-fails-as-undefined, so a
 "dangling reference" is not a substrate conflict — it is a reader's traversal arriving at an
 undefined name **[today]** (measured: `coord_gate_v2_read.clj`; refs are spelling, 0 authored
-id-refs, 0 persisted derived claims).
+id-refs, 0 persisted derived facts).
 
 ## 5. Convergence is optional
 
-Because divergent claims coexist without harm, *converging* them — collapsing two branches into
+Because divergent facts coexist without harm, *converging* them — collapsing two branches into
 one selected line — is a **discretionary** act, motivated by hygiene, memory reclamation,
 refactoring, or publication. It is **not** required for substrate correctness. The graph is
 correct while divergent. Convergence is a garden-tending operation a human or tool *chooses* to
@@ -166,7 +166,7 @@ A 4-perspective adversarial check (steelman each invariant, code-ground, hunt fa
 load-bearing claim then adversarially verified) settled the empirics:
 
 - **The substrate is already view-capable; single-head lives entirely in the read/resolve layer.**
-  *Verified true:* the append-only log holds divergent claims (multi-valued AST preds; supersession
+  *Verified true:* the append-only log holds divergent facts (multi-valued AST preds; supersession
   is an appended claim, not a delete). "Current" is **one global subtraction** — `live? = (not
   (superseded? cid))` over a single `:superseded` set (`cnf.bclj:115`), with **no second selector
   anywhere** in the read layer. So global-head is **not a designed invariant** — it is the only
@@ -190,17 +190,17 @@ the warm-`refers_to` materialization for views nobody is reading (the real imple
 failure-mode pass surfaced). Convergence is then a **policy on a chosen view** (`main`, the build
 view), not a substrate axiom — git's branch/main social layer, recovered as policy.
 
-**The minimal "view" in CNF terms** = a **selection predicate over claims**, generalizing the one
+**The minimal "view" in CNF terms** = a **selection predicate over facts**, generalizing the one
 selector that already exists: replace the global `live?` with `select? : view → cid → Bool`. The
 engine today is the special case *view = the global superseded-fold*. Three CNF-native encodings,
 cheapest first:
-1. **Per-view superseded-set** — a view chooses which `supersedes` claims to honor. Cheapest:
+1. **Per-view superseded-set** — a view chooses which `supersedes` facts to honor. Cheapest:
    supersession is already append-only data.
 2. **Root + reachability** — a view = a root claim plus its coherent closure. Matches "a program is
    a traversal under a view"; reuses the renderer's existing reachability filter.
 3. **View-as-claim** — `(view selects @claim)` triples; views become first-class subjects in the
    same graph (the exact pattern tern threads/topics/`@ui` already use). Most CNF-native — no
-   new atom, consistent with `WHY_FRAM_EXISTS` ("a view is just more claims about which claims count").
+   new atom, consistent with `WHY_FRAM_EXISTS` ("a view is just more facts about which facts count").
 
 **The read-side take-firsts (§6) are the attach points.** Each `(first …)` becomes
 `(select-for-view view …)`. So the apple-sweep cleanup and the view machinery are the *same work

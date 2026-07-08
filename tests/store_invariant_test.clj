@@ -12,7 +12,7 @@
                (str/join "\n")
                str/lower-case))
 
-;; life-os (app A) + code-as-claims (app B) DATA vocabulary. NOT the language
+;; life-os (app A) + code-as-facts (app B) DATA vocabulary. NOT the language
 ;; pragma `#lang beagle/clj` — `beagle` is the host language, not a domain term.
 (def forbidden
   ["thread" "title" "owner" "clock" "driver" "work_phase" "work-phase"

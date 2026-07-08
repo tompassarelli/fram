@@ -17,7 +17,7 @@
 (def vfalse (k/value! ctx false))
 (def vlist (k/value! ctx [1 2 3]))
 
-;; --- entities + claims + reification (fixture D) ----------------------------
+;; --- entities + facts + reification (fixture D) ----------------------------
 (def e (k/entity! ctx))
 (def p-title (k/value! ctx "title"))
 (def foo (k/value! ctx "Foo"))
@@ -26,7 +26,7 @@
 (def who (k/value! ctx "claude"))
 (def c-meta (k/fact! ctx c1 p-noted who tx))
 
-;; --- claims are NOT interned: identical (l p r) -> two distinct cids ---------
+;; --- facts are NOT interned: identical (l p r) -> two distinct cids ---------
 (def e2 (k/entity! ctx))
 (def p-tag (k/value! ctx "tag"))
 (def vred (k/value! ctx "red"))
@@ -65,7 +65,7 @@
    ["fact-tx records the tx"                         (= tx (k/fact-tx ctx c1))]
    ["[check3/D] claim-id usable as l (reification)"   (= [c-meta] (k/by-lp ctx c1 p-noted))]
    ["[check3/D] meta-claim resolves with claim as l"  (= {:l c1 :p p-noted :r who} (k/fact-of ctx c-meta))]
-   ["claims are NOT interned (2 distinct cids)"        (and (not= d1 d2) (= [d1 d2] (k/by-lp ctx e2 p-tag)))]
+   ["facts are NOT interned (2 distinct cids)"        (and (not= d1 d2) (= [d1 d2] (k/by-lp ctx e2 p-tag)))]
    ["[check2/E] insertion order preserved"            (= [cx cy cz] (k/by-lp ctx e3 p-child))]
    ["[C] supersedes-claim marks old not-live"         (not (k/live? ctx old))]
    ["[C] new claim stays live"                        (k/live? ctx newc)]

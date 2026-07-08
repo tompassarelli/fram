@@ -111,7 +111,7 @@
   (chk "torn sidecar: state correct via fold" (= (live-name-triples @co) truth))
 
   ;; --- (7) torn IMAGE: hash gate rejects, fallback ---
-  (write-snapshot! @co LOG)                   ; fresh good checkpoint (log grew @snapshot:* claims)
+  (write-snapshot! @co LOG)                   ; fresh good checkpoint (log grew @snapshot:* facts)
   (def truth2 (ground-truth))
   (let [img (:image (read-sidecar LOG))
         s   (slurp img)]

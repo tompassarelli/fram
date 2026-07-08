@@ -30,7 +30,7 @@ Request/response surface (`coord_daemon.clj` `handle`):
 
 ```
 {:op :version}                          -> {:version <n>}
-{:op :status}                           -> {:version <n> :claims <n> :log "<path>"}
+{:op :status}                           -> {:version <n> :facts <n> :log "<path>"}
 {:op :validate}                         -> {:violations [...]}
 {:op :assert  :te "@id" :p "pred" :r v :base <n>} -> {:ok <n>} | {:conflict ...}
 {:op :retract :te "@id" :p "pred" :r v :base <n>} -> {:ok <n>} | {:conflict ...}

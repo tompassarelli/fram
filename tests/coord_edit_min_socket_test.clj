@@ -26,9 +26,9 @@
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT wrong log") (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port" port)
+(println "daemon up:" (:facts status) "facts, port" port)
 
 ;; two DISJOINT same-module bodies (cardinality vs lookup) — different (te,p) groups.
 (def body-card (edn/read-string "(if (some? (c/value-id ctx pname)) \"socket-card-marker\" \"multi\")"))

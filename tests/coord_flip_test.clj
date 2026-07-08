@@ -13,7 +13,7 @@
 (require '[fram.store :as c] '[fram.schema :as s]
          '[fram.fold :as fold] '[fram.rt] '[fram.kernel :as ck]
          '[clojure.string :as str] '[clojure.set :as set] '[clojure.java.io :as io])
-(load-file "coord_daemon.clj")   ; daemon: boot!/serve/client/do-* + reified->claims
+(load-file "coord_daemon.clj")   ; daemon: boot!/serve/client/do-* + reified->facts
 
 (def live (System/getenv "FRAM_LOG"))
 (when (or (nil? live) (not (.exists (io/file live))))
@@ -24,7 +24,7 @@
 (io/copy (io/file live) (io/file flip-flat))         ; the flat projection seed (full history)
 
 ;; --- migrate the copy -> reified store -> v2 log ----------------------------
-(def flat-claims (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log flip-flat))))))
+(def flat-facts (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log flip-flat))))))
 (def single-preds #{"title" "owner" "lead" "driver" "assignee" "source" "part_of"
                     "do_on" "valid_until" "estimate_hours" "created_at" "updated_at"
                     "body" "created_by" "committed" "outcome" "abandoned"
@@ -34,11 +34,11 @@
 (def mst (c/new-store))
 (def mtx (c/begin-tx! mst "migrate"))
 (s/setup! mst mtx)
-(doseq [p (distinct (map :p flat-claims))]
+(doseq [p (distinct (map :p flat-facts))]
   (s/def-predicate! mst p (if (single-preds p) "single" "multi") (if (ref-preds p) "ref" "literal") mtx))
 (def memo (atom {}))
 (defn ent-for! [sid] (or (get @memo sid) (let [id (c/entity! mst)] (swap! memo assoc sid id) (s/name! mst id sid mtx) id)))
-(doseq [cl flat-claims]
+(doseq [cl flat-facts]
   (let [su (ent-for! (:l cl)) p (:p cl) r (:r cl)]
     (if (str/starts-with? r "@") (s/link! mst su p (ent-for! r) mtx) (s/assert! mst su p r mtx))))
 (dump-log! mst flip-v2)

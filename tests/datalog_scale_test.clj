@@ -7,11 +7,11 @@
 
 (def N 200)
 ;; chain: @a1 -depends_on-> @a2 -> ... -> @aN
-(def claims
+(def facts
   (mapv (fn [i] (k/->Fact (str "@a" i) "depends_on" (str "@a" (inc i)))) (range 1 N)))
 
 (def t0 (System/currentTimeMillis))
-(def res (q/run claims
+(def res (q/run facts
            {:find "reaches"
             :rules [{:head {:rel "reaches" :args [{:var "x"} {:var "y"}]}
                      :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}

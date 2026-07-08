@@ -16,7 +16,7 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 (def code-log (str root "/.fram/code.log"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")

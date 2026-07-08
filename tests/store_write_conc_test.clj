@@ -9,7 +9,7 @@
 ;; K=8 writers hammer a scratch serve-flat daemon over the socket:
 ;;   A. DIFFERENT (subject,pred) pairs — each writer w streams N sequential
 ;;      multi-valued asserts to its own @cw<w>. Gate: no lost, no duplicated,
-;;      no reordered-within-subject claims — checked BOTH in the live view
+;;      no reordered-within-subject facts — checked BOTH in the live view
 ;;      (:resolved) AND in the durable flat log's bytes (each acked line present
 ;;      exactly once, per-writer file order == issue order, :tx strictly rising).
 ;;   B. SAME (subject,pred) pair — K writers race rounds of read-:version ->

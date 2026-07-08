@@ -40,7 +40,7 @@
         (when (and r (zero? (:exit r)) (not (str/blank? (:out r)))) (str/trim (:out r))))))
 (when (str/blank? racket-bin)
   (println "SKIP — no flake-pinned racket (set FRAM_RACKET / BEAGLE_HOME)") (System/exit 0))
-(when-not (.exists (io/file (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(when-not (.exists (io/file (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
   (println "SKIP — no beagle roundtrip.rkt under" beagle-home) (System/exit 0))
 
 ;; --- synthesize a corpus with the two risky shapes, ingest -> a flat code.log -----
@@ -80,9 +80,9 @@
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 
 (def status (client port {:op :status}))
-(when-not (pos? (or (:claims status) 0))
-  (println "ABORT: daemon not serving claims" (pr-str status)) (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port=" port "\n")
+(when-not (pos? (or (:facts status) 0))
+  (println "ABORT: daemon not serving facts" (pr-str status)) (shutdown!) (System/exit 1))
+(println "daemon up:" (:facts status) "facts, port=" port "\n")
 
 ;; --- assertion harness (coord_write_def_test style) ---------------------------------
 (def failures (atom 0))

@@ -4,20 +4,20 @@
 ;; ============================================================================
 ;; DOMAIN-AGNOSTIC by construction: knows ONLY Object / Value / Claim / tx. ZERO
 ;; life-os vocabulary and ZERO code vocabulary — all domain terms are interned
-;; VALUES that live as claims, never symbols in this file. (store_invariant_test.)
+;; VALUES that live as facts, never symbols in this file. (store_invariant_test.)
 ;;
 ;; MULTI-STORE: no globals. Every op takes a `ctx` store handle, so one engine
 ;; hosts many stores. No small-N assumptions — interning + indexes are hash maps.
 ;;
 ;; Conforms (single-process semantics) to the Racket oracle:
-;;   - ONE monotonic id space; entities/values/claims are `objects`; txs draw from
-;;     it but are NOT objects (so provenance can be claims-about-tx).
+;;   - ONE monotonic id space; entities/values/facts are `objects`; txs draw from
+;;     it but are NOT objects (so provenance can be facts-about-tx).
 ;;   - value! interns by equality, TYPE-GENERAL; re-intern returns the same id.
-;;   - claims are NOT interned: fact! mints a fresh id even for identical (l p r),
+;;   - facts are NOT interned: fact! mints a fresh id even for identical (l p r),
 ;;     and a claim id is itself an object usable in l/p/r (reification, any depth).
-;;   - live view = claims − superseded; supersession is DATA-DRIVEN: a claim whose
+;;   - live view = facts − superseded; supersession is DATA-DRIVEN: a claim whose
 ;;     p == the registered supersedes-pred marks its r (the old claim) not-live.
-;;   - provenance = tx entities (seq, agent) + claims; never denormalized fields.
+;;   - provenance = tx entities (seq, agent) + facts; never denormalized fields.
 ;;
 ;; Ids are minted as Int and the typed store carries them as Int (claim l/p/r,
 ;; the indexes, tx-of). A claim VALUE is a (Map Keyword Any) {:l :p :r} (open map,
@@ -83,7 +83,7 @@
 (defn set-supersedes-pred! [ctx :- (Atom t/Store) pid :- Int] :- Any
   (swap! ctx assoc :supersedes-pred pid))
 
-;; --- claims (reified: each has its own Object id) ---------------------------
+;; --- facts (reified: each has its own Object id) ---------------------------
 (defn- index-fact! [ctx :- (Atom t/Store) cid :- Int l :- Int p :- Int r :- Int] :- Any
   (swap! ctx update :idx-by-l update l (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
   (swap! ctx update :idx-by-p update p (fn [o :- (Vec Int)] :- (Vec Int) (conj (or o []) cid)))
@@ -99,7 +99,7 @@
 (defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
   (let [cid (fresh-id! ctx)]
     (swap! ctx update :objects assoc cid true)
-    (swap! ctx update :claims assoc cid {:l l :p p :r r})
+    (swap! ctx update :facts assoc cid {:l l :p p :r r})
     (swap! ctx update :tx-of assoc cid tx)
     (index-fact! ctx cid l p r)
     (when (= p (let [s :- t/Store (deref ctx)] (:supersedes-pred s)))
@@ -107,12 +107,12 @@
     cid))
 
 (defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Any) Nil)
-  (let [s :- t/Store (deref ctx)] (get (:claims s) cid)))
+  (let [s :- t/Store (deref ctx)] (get (:facts s) cid)))
 
 (defn fact-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
   (let [s :- t/Store (deref ctx)] (get (:tx-of s) cid)))
 
-;; --- queries over the LIVE view (claims − superseded) -----------------------
+;; --- queries over the LIVE view (facts − superseded) -----------------------
 (defn live? [ctx :- (Atom t/Store) cid :- Int] :- Bool
   (let [s :- t/Store (deref ctx)] (not (contains? (:superseded s) cid))))
 
@@ -131,7 +131,7 @@
   (live-only ctx (let [s :- t/Store (deref ctx)] (get (:idx-by-pr s) [p r] []))))
 
 (defn current-facts [ctx :- (Atom t/Store)] :- (Vec Int)
-  (live-only ctx (let [s :- t/Store (deref ctx)] (vec (keys (:claims s))))))
+  (live-only ctx (let [s :- t/Store (deref ctx)] (vec (keys (:facts s))))))
 
 ;; --- durable serialization --------------------------------------------------
 ;; dump-store is pure (snapshot -> EDN-serializable value); load-store! rebuilds a
@@ -144,7 +144,7 @@
     {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s)
      :objects (vec (keys (:objects s)))
      :values (vec (:values s))
-     :claims (vec (:claims s))
+     :facts (vec (:facts s))
      :tx-of (vec (:tx-of s))
      :txs (vec (:txs s))
      :superseded (vec (keys (:superseded s)))}))
@@ -161,9 +161,9 @@
     (let [id (first e) v :- Any (nth e 1)]
       (swap! ctx update :values assoc id v)
       (swap! ctx update :val-intern assoc v id)))
-  (doseq [e (:claims data)]
+  (doseq [e (:facts data)]
     (let [cid (first e) m :- (Map Keyword Any) (nth e 1)]
-      (swap! ctx update :claims assoc cid m)
+      (swap! ctx update :facts assoc cid m)
       (index-fact! ctx cid (:l m) (:p m) (:r m))))
   (doseq [e (:tx-of data)] (swap! ctx update :tx-of assoc (first e) (nth e 1)))
   (doseq [e (:txs data)] (swap! ctx update :txs assoc (first e) (nth e 1)))

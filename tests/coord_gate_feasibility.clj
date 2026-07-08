@@ -29,12 +29,12 @@
 (println "=== RED-vs-YELLOW — decompose the scoped corpus-from-store! floor ===")
 (println "corpus: COPY of .fram/code.log ->" tmp)
 (let [[bt _] (timed (boot-flat! tmp))]
-  (println (format "booted: %d live claims in %.0f ms" (count (c/current-facts (:store @co))) bt)))
+  (println (format "booted: %d live facts in %.0f ms" (count (c/current-facts (:store @co))) bt)))
 (def st (:store @co))
 (def NAME (c/value-id st "name"))
 (def name-cids (vec (c/by-p st NAME)))
 (def mods (vec (into (sorted-set) (keep #(parse-mod (c/literal st (:r (c/fact-of st %)))) name-cids))))
-(println (format "name-claims=%d  modules(K)=%d  e.g. %s\n" (count name-cids) (count mods) (vec (take 6 mods))))
+(println (format "name-facts=%d  modules(K)=%d  e.g. %s\n" (count name-cids) (count mods) (vec (take 6 mods))))
 
 ;; (1) the always-run floor candidate: by-p NAME scan + grouping
 (let [reps 4

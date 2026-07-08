@@ -39,7 +39,7 @@
          racket/path
          racket/port
          json
-         beagle/private/claims-roundtrip   ; edn-triples->syntax read-edn-triples edn-triples->datum datum->pretty
+         beagle/private/facts-roundtrip   ; edn-triples->syntax read-edn-triples edn-triples->datum datum->pretty
          beagle/private/parse               ; parse-program
          beagle/private/check               ; type-check-with-locs!
          beagle/private/check-all)          ; diagnostic->json

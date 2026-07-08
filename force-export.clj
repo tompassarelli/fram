@@ -4,12 +4,12 @@
 (require '[fram.kernel :as k] '[fram.fold :as fold] '[fram.export :as exp] '[fram.rt :as rt])
 (def log "/home/tom/.local/state/tern/claims.log")
 (def out "/home/tom/.local/state/tern/threads")
-(def log-claims (:facts (fold/fold (rt/read-log log))))
-(def idx (k/build-index log-claims))
+(def log-facts (:facts (fold/fold (rt/read-log log))))
+(def idx (k/build-index log-facts))
 (def tes (k/thread-ids-i idx))
 (rt/ensure-dir out)
 (doseq [te tes]
   (let [title (k/one-i idx te "title")
         fname (str (subs te 1) "-" (rt/slugify (if (some? title) title "untitled")) ".md")]
-    (rt/spit-file (str out "/" fname) (exp/thread-md log-claims te))))
+    (rt/spit-file (str out "/" fname) (exp/thread-md log-facts te))))
 (println "exported" (count tes) "threads ->" out)

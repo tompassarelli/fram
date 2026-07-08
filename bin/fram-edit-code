@@ -12,7 +12,7 @@
 ;;   2. run the authoring verb (rename / set-body / upsert-form) over THAT store
 ;;      via resolve.clj run-verb-warm! — the verb mints/supersedes claim ops
 ;;      against LOG-RESIDENT node identity (@<mod>#int), never reading any .bclj.
-;;      corpus-from-store! derives srcs/frames from the store's `name` claims, so
+;;      corpus-from-store! derives srcs/frames from the store's `name` facts, so
 ;;      the verb resolves cross-module references against the WHOLE-LOG corpus.
 ;;   3. render the affected module FROM the mutated store (extract-file! already
 ;;      wrote the resolved EDN under $RESOLVE_OUT) -> .bclj, written ATOMICALLY
@@ -62,8 +62,8 @@
 (def ^:private home (System/getProperty "user.home"))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
-                                 (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
-;; D3: the legacy cold-render path (`racket --render`) loads claims-roundtrip's .zo,
+                                 (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+;; D3: the legacy cold-render path (`racket --render`) loads facts-roundtrip's .zo,
 ;; compiled for beagle's flake-pinned racket; bare "racket" risks a .zo version mismatch.
 ;; Resolve the pinned racket like bin/fram-ingest-code (FRAM_RACKET overrides). NO bare
 ;; fallback — fail loud rather than emit a stale-bytecode failure that looks like a bug.

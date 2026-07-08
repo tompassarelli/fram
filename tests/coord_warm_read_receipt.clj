@@ -18,7 +18,7 @@
 (defmacro timed [& b] `(let [t0# (System/nanoTime) r# (do ~@b) t1# (System/nanoTime)] [(ms t0# t1#) r#]))
 (defn med [xs] (nth (sort xs) (quot (count xs) 2)))
 
-;; synthetic flat log ~ canonical thread-graph profile (N threads x 3 claims)
+;; synthetic flat log ~ canonical thread-graph profile (N threads x 3 facts)
 (def log "/tmp/cnf-warmread-synth.log")
 (def N 1200)
 (spit log (str/join "\n"

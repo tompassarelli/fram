@@ -16,8 +16,8 @@
   (System/exit 0))
 
 ;; today's flat fold: the current (l p r) string triples.
-(def flat-claims (:facts (fold/fold (fram.rt/read-log log))))
-(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
+(def flat-facts (:facts (fold/fold (fram.rt/read-log log))))
+(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-facts)))
 
 ;; --- replay into the reified kernel -----------------------------------------
 (def ctx (c/new-store))
@@ -26,7 +26,7 @@
 (defn ent-for! [s] (or (get @ent s) (let [id (c/entity! ctx)] (swap! ent assoc s id) id)))
 (defn ref? [s] (str/starts-with? s "@"))
 (defn obj-for! [s] (if (ref? s) (ent-for! s) (c/value! ctx s)))  ; r: ref->entity else value
-(doseq [cl flat-claims]
+(doseq [cl flat-facts]
   (c/fact! ctx (ent-for! (:l cl)) (c/value! ctx (:p cl)) (obj-for! (:r cl)) tx))
 
 ;; --- reconstruct the reified current-view as string triples -----------------

@@ -23,8 +23,8 @@
 ;; run-test is guarded by command-line-args, so loading it has no side effects.
 (load-file "coord.clj")
 
-(def flat-claims (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log log))))))
-(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-claims)))
+(def flat-facts (:facts (fold/fold (vec (filter #(and (:l %) (:p %) (:r %)) (fram.rt/read-log log))))))
+(def flat-set (set (map (fn [cl] [(:l cl) (:p cl) (:r cl)]) flat-facts)))
 
 ;; --- load flat -> reified (the proven Stage 2/4 loader) ---------------------
 (def single-preds #{"title" "owner" "lead" "driver" "assignee" "source" "part_of"
@@ -36,12 +36,12 @@
 (def ctx (c/new-store))
 (def tx (c/begin-tx! ctx "migrate"))
 (s/setup! ctx tx)
-(doseq [p (distinct (map :p flat-claims))]
+(doseq [p (distinct (map :p flat-facts))]
   (s/def-predicate! ctx p (if (single-preds p) "single" "multi") (if (ref-preds p) "ref" "literal") tx))
 (def memo (atom {}))
 (defn ent-for! [sid] (or (get @memo sid) (let [id (c/entity! ctx)] (swap! memo assoc sid id) (s/name! ctx id sid tx) id)))
 (defn ref? [x] (str/starts-with? x "@"))
-(doseq [cl flat-claims]
+(doseq [cl flat-facts]
   (let [subj (ent-for! (:l cl)) p (:p cl) r (:r cl)]
     (if (ref? r) (s/link! ctx subj p (ent-for! r) tx) (s/assert! ctx subj p r tx))))
 
@@ -53,11 +53,11 @@
 ;; live id-triples (substrate-level identity of the round-trip)
 (defn live-id-triples [st]
   (let [m @st]
-    (set (for [cid (keys (:claims m)) :when (not (contains? (:superseded m) cid))]
-           (let [cl (get (:claims m) cid)] [(:l cl) (:p cl) (:r cl)])))))
+    (set (for [cid (keys (:facts m)) :when (not (contains? (:superseded m) cid))]
+           (let [cl (get (:facts m) cid)] [(:l cl) (:p cl) (:r cl)])))))
 
 ;; reconstruct the DOMAIN view (names) from the REPLAYED store
-(def schema-preds #{"name" "cardinality" "value_kind" "cnf-supersedes"})
+(def schema-preds #{"name" "cardinality" "value_kind" "store-supersedes"})
 (defn domain-view [st]
   (set (keep (fn [cid]
                (let [cl (c/fact-of st cid) pstr (c/literal st (:p cl))]
@@ -78,7 +78,7 @@
    ["supersedes-pred recovered (supersession intact)" (some? (:supersedes-pred @ctx2))]])
 
 (println "flat-fold:" (count flat-set) " replayed-domain:" (count reified2-domain)
-         " entities:" (count @memo) " claims:" (count (:claims @ctx2)))
+         " entities:" (count @memo) " facts:" (count (:facts @ctx2)))
 (when (seq only-flat) (println "  LOST:") (doseq [x (take 8 only-flat)] (println "   " (pr-str x))))
 (when (seq only-reif) (println "  GAINED:") (doseq [x (take 8 only-reif)] (println "   " (pr-str x))))
 (let [fails (remove second checks)]

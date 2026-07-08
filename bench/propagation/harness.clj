@@ -84,13 +84,13 @@
         ;; after :ok already reflects A's write (no poll loop needed). Visibility = the
         ;; warm store's claim count advanced to include A's upsert.
         (let [marker (str "prop_g_" trial "_" (System/nanoTime))
-              status-claims (fn [] (:claims (client port {:op :status})))
-              c0 (status-claims)
+              status-facts (fn [] (:facts (client port {:op :status})))
+              c0 (status-facts)
               t0 (nowns)
               ins (client port {:op :edit-min :spec {:op "upsert-form" :module "kernel"
                                                      :datum (list 'def (symbol marker) 1)}})
               t-commit (nowns)
-              c1 (status-claims)        ; ONE cheap corpus-from-store read
+              c1 (status-facts)        ; ONE cheap corpus-from-store read
               t-vis (nowns)]
           {:ok (boolean (:ok ins)) :visible (and c0 c1 (> c1 c0))
            :commit (ms t0 t-commit) :commit->visible (ms t-commit t-vis) :total (ms t0 t-vis)})

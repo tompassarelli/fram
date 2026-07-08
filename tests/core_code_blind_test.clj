@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 ;; core_code_blind_test.clj — the fold guard (corrected, predicate-precise).
 ;;
-;; INVARIANT: fram-core (src/fram/*.bclj — the GENERIC claims + Datalog engine) must
+;; INVARIANT: fram-core (src/fram/*.bclj — the GENERIC facts + Datalog engine) must
 ;; stay BLIND to beagle-as-SUBJECT. This exists so that folding chartroom (beagle
 ;; source code-intelligence) into this repo cannot let beagle-shaped logic seep into
 ;; the generic core once the cross-repo friction that used to enforce that seam is gone.
@@ -20,7 +20,7 @@
 ;;
 ;; The ban-set MIRRORS chartroom's actual beagle-as-subject signature (resolve.clj's
 ;; PARAM-FORMS/TYPE-DEFS/... string-head sets). It deliberately does NOT include generic
-;; graph vocabulary (calls, refers_to — domain-neutral edge labels any claims domain may
+;; graph vocabulary (calls, refers_to — domain-neutral edge labels any facts domain may
 ;; use) nor beagle import keywords (:require/:as/:refer — those appear in fram's OWN ns
 ;; forms as axis-1 implementation). It matches QUOTED tokens in CODE (comment lines skipped),
 ;; anchored to the quotes, never bare substrings (so "recalls"/"syscalls"/prose don't trip).
@@ -33,7 +33,7 @@
 (def core-dir "src/fram")
 
 ;; beagle-as-subject form heads — unambiguous code-structure markers with no generic
-;; meaning in a claims engine. Matched only as DOUBLE-QUOTED string literals.
+;; meaning in a facts engine. Matched only as DOUBLE-QUOTED string literals.
 (def banned-quoted
   ["defn" "defn-" "defmacro" "def-" "defonce"
    "defrecord" "deftype" "defprotocol" "definterface" "defunion"

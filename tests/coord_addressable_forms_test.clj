@@ -41,9 +41,9 @@
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT: daemon serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port=" port "\n")
+(println "daemon up:" (:facts status) "facts, port=" port "\n")
 
 ;; --- assertion harness ------------------------------------------------------
 (def failures (atom 0))

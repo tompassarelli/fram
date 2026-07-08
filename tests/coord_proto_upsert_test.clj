@@ -46,9 +46,9 @@
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 
 (def status (client port {:op :status}))
-(when-not (and (= flat (str (:log status))) (pos? (:claims status)))
+(when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT: daemon serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
-(println "daemon up:" (:claims status) "claims, port=" port "\n")
+(println "daemon up:" (:facts status) "facts, port=" port "\n")
 
 ;; --- assertion harness ------------------------------------------------------
 (def failures (atom 0))
@@ -60,7 +60,7 @@
 (defn- idx [module]        (client port {:op :index     :spec {:module module}}))
 (defn- names [module]      (mapv :name (:defs (idx module))))
 
-;; render leg: :render returns resolved EDN; racket claims-roundtrip inverts it to
+;; render leg: :render returns resolved EDN; racket facts-roundtrip inverts it to
 ;; Clojure text. Resolve racket the way fram-ingest-code does (FRAM_RACKET, else
 ;; direnv, else bare) so a missing pin SKIPS the render assertions rather than lying.
 (def racket
@@ -70,7 +70,7 @@
         (when-not (str/blank? p) p))))
 (def roundtrip-rkt
   (str (or (System/getenv "BEAGLE_HOME") (str (System/getProperty "user.home") "/code/beagle"))
-       "/beagle-lib/private/claims-roundtrip.rkt"))
+       "/beagle-lib/private/facts-roundtrip.rkt"))
 (defn- render-text [module]
   (let [resp (client port {:op :render :spec {:module module} :module module})
         edn  (:edn resp)]

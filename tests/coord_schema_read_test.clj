@@ -12,9 +12,9 @@
 ;; the cold fold reads. Proves, hermetically (synthetic store via boot-flat!, NEVER the live
 ;; 7977 coordinator):
 ;;   (a) PARITY (load-bearing): after do-assert @title cardinality single, the daemon's
-;;       :claims-op view INCLUDES that fact AND equals the cold fold of the appended log —
+;;       :facts-op view INCLUDES that fact AND equals the cold fold of the appended log —
 ;;       set-equal always, and VECTOR/byte-identical at real-log scale (>8 keys, hash-order).
-;;   (b) name / cnf-supersedes (hard-reserved) stay HIDDEN from the domain read view.
+;;   (b) name / store-supersedes (hard-reserved) stay HIDDEN from the domain read view.
 ;;   (c) show-path: q-by-l over the warm view for "@title" returns the cardinality fact.
 ;;   (d) acyclic (a plain domain pred) is UNAFFECTED — present, byte-identical to cold.
 ;;   (e) do-retract drops the fact from the read view (cold fold drops it too — parity holds).
@@ -27,9 +27,9 @@
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
 (defn write-lines! [path lines] (spit path (str (str/join "\n" lines) "\n")))
 
-;; the daemon's :claims-op view (what coord serves the CLI): client read view = domain +
-;; log-sourced schema facts, in fold-emission order — exactly the :claims op's computation.
-(defn daemon-triples [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (client-view-claims @co))))
+;; the daemon's :facts-op view (what coord serves the CLI): client read view = domain +
+;; log-sourced schema facts, in fold-emission order — exactly the :facts op's computation.
+(defn daemon-triples [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (client-view-facts @co))))
 ;; the cold CLI fold of the SAME flat log — the parity target.
 (defn cold-triples   [] (mapv (fn [c] [(:l c) (:p c) (:r c)]) (fold/refold-order (:facts (fold/fold (fram.rt/read-log LOG))))))
 (defn has-fact? [triples l p r] (boolean (some #(= % [l p r]) triples)))
@@ -38,7 +38,7 @@
 ;; a >8-DISTINCT-KEY log so refold-order keys a PersistentHashMap (hash-order, input-order
 ;; independent) — the REAL-LOG regime where the warm<->cold byte-identity actually holds.
 ;; (A tiny log keys a PersistentArrayMap whose vals are insertion-ordered, so daemon and
-;; cold differ in ORDER even pre-F4 for pure domain claims — an artifact, not our concern.)
+;; cold differ in ORDER even pre-F4 for pure domain facts — an artifact, not our concern.)
 (def BASE
   (concat (for [i (range 12)] (ln (inc i) "assert" (str "@N" i) "note" (str "v" i)))
           [(ln 100 "assert" "@P1" "title" "Hi")
@@ -64,12 +64,12 @@
     (chk "(a) value_kind fact visible in read view" (has-fact? d "@title" "value_kind" "literal"))
     (chk "(a) parity still holds after value_kind write" (= d cf)))
 
-  ;; ---- (b) name / cnf-supersedes (hard-reserved) stay HIDDEN ----
+  ;; ---- (b) name / store-supersedes (hard-reserved) stay HIDDEN ----
   (write-lines! LOG BASE)
   (boot-flat! LOG)
   (let [d (daemon-triples)]
     (chk "(b) no 'name' predicate leaks into the domain read view"           (not (has-pred? d "name")))
-    (chk "(b) no 'cnf-supersedes' predicate leaks into the domain read view" (not (has-pred? d "cnf-supersedes")))
+    (chk "(b) no 'store-supersedes' predicate leaks into the domain read view" (not (has-pred? d "store-supersedes")))
     ;; the seed cardinality/value_kind pairs (one per pred) must NOT appear either:
     ;; only the log-declared schema fact is visible, never migrate's def-predicate! seeds.
     (chk "(b) no seed cardinality fact (e.g. @note) leaks — only log-declared show"
@@ -81,7 +81,7 @@
   (write-lines! LOG BASE)
   (boot-flat! LOG)
   (do-assert "@title" "cardinality" "single" nil)
-  (let [hits (mapv (fn [c] [(:l c) (:p c) (:r c)]) (ck/q-by-l (warm-claims) "@title"))]
+  (let [hits (mapv (fn [c] [(:l c) (:p c) (:r c)]) (ck/q-by-l (warm-facts) "@title"))]
     (chk "(c) q-by-l @title over the warm view returns the cardinality fact"
          (some #(= % ["@title" "cardinality" "single"]) hits)))
 

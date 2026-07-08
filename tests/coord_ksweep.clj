@@ -50,5 +50,5 @@
                               (and lm dm (= lm dm) lp dp (< lp dp))))) count))))
 (def coh (timed (fref-count)))
 
-(println (format "KSWEEP K=%d claims=%d scan_floor=%.0f whole_frame=%.0f scoped_frame=%.0f coh_scan=%.0f fwd_refs=%d"
+(println (format "KSWEEP K=%d facts=%d scan_floor=%.0f whole_frame=%.0f scoped_frame=%.0f coh_scan=%.0f fwd_refs=%d"
                  K nclaims scan-floor whole-frame scoped-frame (first coh) (second coh)))

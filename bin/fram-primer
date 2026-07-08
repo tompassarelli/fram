@@ -104,7 +104,7 @@
     ["  ;; 1. INTERN + read back (value! is one-way string->id; keep a reverse map yourself)"
      "  (def vrev (volatile! {}))"
      "  (defn V [s] (let [id (c/value! ctx (str s))] (vswap! vrev assoc id (str s)) id))"
-     "  (defn vstr [id] (get @vrev id))                 ; ground truth: web/spike/eddy-on-claims/store.clj"
+     "  (defn vstr [id] (get @vrev id))                 ; ground truth: web/spike/eddy-on-facts/store.clj"
      ""
      "  ;; 2. UPDATE = a SUPERSEDING claim (history is FREE — old claim stays, not-live)"
      "  (def SUPS (c/value! ctx \"supersedes\")) (c/set-supersedes-pred! ctx SUPS)"
@@ -132,13 +132,13 @@
      "  bb -cp \"$FRAM_OUT\" \"$FRAM/chartroom/src/resolve.clj\" <mode> ...   # FRAM=~/code/fram"
      "  ;;   modes: resolve (refers_to) | rename <old> <new> <target> | delete | callgraph"
      "  ;;   blast radius / who-calls / scope-correct rename+delete are Datalog over refers_to."
-     "  ;; For QUERYING a beagle codebase relationally, see the code-as-claims skill."
+     "  ;; For QUERYING a beagle codebase relationally, see the code-as-facts skill."
      "  ;; For WRITING beagle, see the beagle-authoring skill (run `beagle doctor --deep` first)."]))
   (println "\n## Discipline")
   (println "  - Append-only: never mutate; assert + supersede. History/audit is intrinsic.")
   (println "  - Relational/recursive question -> Datalog. Flat per-row filter -> plain code is fine")
   (println "    (Datalog there is a tax: it re-states predicate schema the index already owns).")
-  (println "  - claims are typed by predicate (open) — no CREATE TABLE / migrations for a new field.")
+  (println "  - facts are typed by predicate (open) — no CREATE TABLE / migrations for a new field.")
   (println "  - Author fram-renting tooling in BEAGLE now (the catalog types it); .clj only for legacy."))
 
 ;; ---- dispatch ----

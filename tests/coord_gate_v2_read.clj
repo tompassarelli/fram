@@ -59,17 +59,17 @@
 (doseq [{:keys [s b sn bn]} cross]
   (println (str "\n──── call-site " sn "  -->  definition " bn
                 "  (module " (module-of sn) " -> " (module-of bn) ") ────"))
-  (let [claims (dump s b)
-        authored (remove :derived? claims)
+  (let [facts (dump s b)
+        authored (remove :derived? facts)
         authored-entity-refs (filter #(and (= :entity (:r-kind %)) (not (:derived? %))) authored)
         authored-to-def (filter :points-at-def? authored)]
-    (doseq [c claims]
+    (doseq [c facts]
       (println (format "   %-12s r-slot=%-8s r=%-22s %s%s"
                        (:p c) (name (:r-kind c)) (:r c)
                        (if (:derived? c) "[DERIVED]" "[authored]")
                        (if (:points-at-def? c) "  <== ENTITY-ID -> the definition!" ""))))
     (println "   ── authored entity-id refs:" (count authored-entity-refs)
-             "| authored claims pointing AT the def:" (count authored-to-def))))
+             "| authored facts pointing AT the def:" (count authored-to-def))))
 
 (println "\n================ VERDICT (cell 1) ================")
 (def any-identity

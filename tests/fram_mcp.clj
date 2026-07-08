@@ -57,8 +57,8 @@
 ;; --- per-request state: fold the current log fresh (sees others' writes) -----
 (defn load-state []
   (let [log (fram.rt/log-path)
-        claims (:facts (fold/fold (fram.rt/read-log log)))]
-    {:claims claims :idx (k/build-index claims) :cat (tl/catalog claims)}))
+        facts (:facts (fold/fold (fram.rt/read-log log)))]
+    {:facts facts :idx (k/build-index facts) :cat (tl/catalog facts)}))
 
 ;; --- catalog spec -> MCP tool descriptor -------------------------------------
 (defn- input-schema [params]
@@ -86,24 +86,24 @@
 
 ;; --- graph-AST edits -> the gated authoring transaction (out-of-band) --------
 ;; A {:edit ...} is NOT a single coordinator triple — it mints/supersedes a whole
-;; subtree of kind/v/fN claims. The coordinator wire is single-(te,p,r) ONLY, so
-;; this runs the SAME loop the code-as-claims gate proves (authoring-verbs.sh):
-;;   project .bclj -> AST claims (claims-roundtrip --emit-edn)
+;; subtree of kind/v/fN facts. The coordinator wire is single-(te,p,r) ONLY, so
+;; this runs the SAME loop the code-as-facts gate proves (authoring-verbs.sh):
+;;   project .bclj -> AST facts (facts-roundtrip --emit-edn)
 ;;   apply the verb as a CLAIM OP (chartroom resolve.clj <mode>) -> $RESOLVE_OUT EDN
 ;;   regenerate byte-stable text (--render)
 ;;   recompile-gate (beagle-build-all '0 error') over the regenerated tree
 ;; On PASS: overwrite the source .bclj (claim-canonical text is a downstream view).
 ;; On the engine REFUSING the edit (nonzero exit; resolve.clj fail-closes with
-;; "REJECTED ... no claims mutated") OR the regen NOT recompiling: return
+;; "REJECTED ... no facts mutated") OR the regen NOT recompiling: return
 ;; {:isError true :text <diagnostic>} and write NOTHING. Fail-closed throughout.
 ;;
 ;; Tool/binary locations are overridable for tests/CI; defaults match the live tree.
 (defn- env-or [k d] (or (System/getenv k) d))
 (def ^:private beagle-home   (env-or "BEAGLE_HOME"   (str (System/getProperty "user.home") "/code/beagle")))
-(def ^:private roundtrip-rkt (env-or "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(def ^:private roundtrip-rkt (env-or "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def ^:private build-all     (env-or "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")))
 ;; INCREMENTAL DE-HANDICAP: per-edit gate checks+emits ONLY the edited module from
-;; its claims (claims->AST->type-check->emit clj), instead of rendering + building
+;; its facts (facts->AST->type-check->emit clj), instead of rendering + building
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
 ;; refs), so unchanged modules need no work. Kills the .bclj round-trip handicap.
 (def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/claims-check-emit.rkt")))
@@ -153,7 +153,7 @@
 ;; THE FLIP — GRAPH-SOURCED edit path. NO src/fram/*.bclj is read.
 ;; ============================================================================
 ;; The inversion (replaces the emit-edn(text) front of the old flip arm):
-;;   1. enumerate modules FROM THE LOG (@<mod>#root claims) — not by globbing src.
+;;   1. enumerate modules FROM THE LOG (@<mod>#root facts) — not by globbing src.
 ;;   2. apply the verb over the LOG-booted warm store (bin/fram-edit-code
 ;;      --no-commit): mint/supersede claim ops against log-resident identity, then
 ;;      render the AFFECTED module from the edited store (atomic write). NO text read.
@@ -191,7 +191,7 @@
               (do (sh {} "rm" "-rf" work)
                   {:isError true :text (str "REJECTED by the authoring engine — nothing mutated:\n"
                                             (str/trim (str (:out edit) (:err edit))))})
-              ;; 3. INCREMENTAL: emit-edn the EDITED module's claims only — skip rendering every
+              ;; 3. INCREMENTAL: emit-edn the EDITED module's facts only — skip rendering every
               ;;    OTHER module (unchanged; per-file check resolves cross-refs via declare-extern).
               (let [ednf (str work "/edited.edn")
                     render-fail
@@ -199,7 +199,7 @@
                       (when (not (zero? (:exit ee))) (str "emit-edn of edited module failed: " (str/trim (:err ee)))))]
                 (if render-fail
                   (do (sh {} "rm" "-rf" work) {:isError true :text (str "FLIP — " render-fail)})
-                  ;; 4. INCREMENTAL GATE: claims-check-emit the edited module (claims->AST->type-check
+                  ;; 4. INCREMENTAL GATE: claims-check-emit the edited module (facts->AST->type-check
                   ;;    ->clj), fail-closed on exit. No whole-tree build-all (the .bclj round-trip handicap).
                   (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt ednf)
                         built (str (:out bg) (:err bg))]
@@ -350,13 +350,13 @@
       (empty? src-files) {:isError true :text (str "no .bclj source modules under FRAM_SRC=" fram-src)}
       (not= 1 (count targets))
       {:isError true :text (str "module scope \"" module "\" matches " (count targets)
-                                " source files; an edit needs exactly one (no claims mutated)")}
+                                " source files; an edit needs exactly one (no facts mutated)")}
       :else
       (let [work (str (System/getProperty "java.io.tmpdir") "/fram-edit-" (System/nanoTime))
             edir (str work "/e") regen (str work "/regen") odir (str work "/o")
             _ (run! #(.mkdirs (io/file %)) [edir regen odir])
             resolve-out work                                  ; $RESOLVE_OUT for resolve.clj
-            ;; 1. project every source module to AST-claims EDN (cross-module resolve).
+            ;; 1. project every source module to AST-facts EDN (cross-module resolve).
             edns (mapv (fn [f]
                          (let [b (.getName (io/file f))
                                out (str edir "/" b ".edn")
@@ -389,7 +389,7 @@
               (let [rr (apply sh {:err :string :extra-env {"RESOLVE_OUT" resolve-out}}
                               "bb" "-cp" fram-out resolve-clj resolve-args)]
                 (if (not (zero? (:exit rr)))
-                  ;; engine REFUSED — resolve.clj prints "REJECTED — ... no claims mutated" to stderr.
+                  ;; engine REFUSED — resolve.clj prints "REJECTED — ... no facts mutated" to stderr.
                   (do (sh {} "rm" "-rf" work)
                       {:isError true :text (str "REJECTED by the authoring engine — nothing mutated:\n"
                                                 (str/trim (or (:err rr) "")))})
@@ -443,8 +443,8 @@
     (cond (:error warm)        {:isError true :text (str/join "\n" (:error warm))}
           (contains? warm :ok) {:text (json/generate-string (:ok warm))}
           :else                {:text (json/generate-string warm)})
-    (let [{:keys [claims idx cat]} (load-state)
-          res (tl/call claims idx cat name a)]
+    (let [{:keys [facts idx cat]} (load-state)
+          res (tl/call facts idx cat name a)]
       (cond
         (:error res) {:isError true :text (str/join "\n" (:error res))}
         (:write res) (route-write (:write res))

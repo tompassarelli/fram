@@ -57,7 +57,7 @@ engine answers questions for very different domains — each in its **own** grap
 
 - **[Tern](https://github.com/tompassarelli/tern)** — life/work coordination
   (the `ready` / `blocked` / `leverage` verbs live there, not in the engine).
-- **[Chartroom](chartroom/)** — code-as-claims (a module *inside* this repo): a Beagle
+- **[Chartroom](chartroom/)** — code-as-facts (a module *inside* this repo): a Beagle
   module's AST *is* the facts, the `.bclj` text is a view.
 - **[Beagle](https://github.com/Autonymy/beagle)** — the typed Lisp Fram itself is
   authored in; it projects source into the graph through Chartroom.
@@ -145,7 +145,7 @@ Tern-shaped *only because Fram was extracted from Tern* — that's the one reaso
 "threads" appear in the engine repo at all. `export` is the verified-lossless inverse of
 `import` (`tests/roundtrip_test.clj`): the files are a view, not a second source of truth.
 
-**Fram with Beagle (code-as-claims).** [Chartroom](chartroom/) projects **Beagle source** into
+**Fram with Beagle (code-as-facts).** [Chartroom](chartroom/) projects **Beagle source** into
 the graph with the fact log **canonical**: a module's AST *is* the facts; the `.bclj` text is
 a rendered view. No threads here — the unit is the *def*, the projection is the *resolver*, and
 references carry the binding's identity (`bound_to`), so a rename is a ~2-fact edit and code
@@ -347,7 +347,7 @@ also served over MCP by `bin/fram-mcp`. The life verbs (`ready` / `blocked` / `l
   import/export, CLI.
 - `src/fram/rt.clj` — the thin Clojure host-interop runtime.
 - `out/` — the **committed** compiled Clojure (so Fram runs without Beagle).
-- `chartroom/` — code-as-claims: the resolver, minimal-op authoring verbs, code
+- `chartroom/` — code-as-facts: the resolver, minimal-op authoring verbs, code
   intelligence.
 - `docs/` — conceptual sources of truth: `WHY_FRAM_EXISTS.md`,
   `VIEWS_AND_BRANCHES.md` (the write/read model), `adr/` (project boundaries).

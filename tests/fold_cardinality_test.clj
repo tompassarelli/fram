@@ -1,9 +1,9 @@
-;; fold_cardinality_test.clj — schema-as-claims cardinality, the TWO-PASS fold.
-;; Proves pass 1 (fram.fold/card-map) reads `@<pred> cardinality single|multi` claims —
+;; fold_cardinality_test.clj — schema-as-facts cardinality, the TWO-PASS fold.
+;; Proves pass 1 (fram.fold/card-map) reads `@<pred> cardinality single|multi` facts —
 ;; @-prefix stripped, latest-:tx-wins per predicate, meta-preds seeded — and pass 2 keys
 ;; the fold by the EFFECTIVE cardinality (claim > env > fallback, via k/single-eff?), so
 ;; a cardinality claim overrides the env/fallback classification in BOTH directions and a
-;; log with no cardinality claims folds identically to before.
+;; log with no cardinality facts folds identically to before.
 ;;   bb -cp out tests/fold_cardinality_test.clj
 (require '[fram.fold :as fold] '[fram.kernel :as k])
 
@@ -36,7 +36,7 @@
   (chk "single-eff?: undeclared pred falls back to single? (title kernel-single)"
        (= (k/single? "title") (k/single-eff? {} "title"))))
 
-;; --- pass 2: the whole fold honors the claims -------------------------------
+;; --- pass 2: the whole fold honors the facts -------------------------------
 ;; title forced multi -> BOTH values survive; tag forced single -> latest only.
 (let [f (fold/fold [(a 1 "assert" "@title" "cardinality" "multi")
                     (a 2 "assert" "@tag"   "cardinality" "single")
@@ -50,7 +50,7 @@
   (chk "fold: kernel-single 'title' forced MULTI keeps {A,B}" (= #{"A" "B"} titles))
   (chk "fold: non-kernel 'tag' forced SINGLE collapses to {y}" (= #{"y"} tags)))
 
-;; back-compat: a log with NO cardinality claims folds by env/fallback exactly as before.
+;; back-compat: a log with NO cardinality facts folds by env/fallback exactly as before.
 (let [f (fold/fold [(a 1 "assert" "@T1" "title" "A")
                     (a 2 "assert" "@T1" "title" "B")   ; title is kernel-single -> B wins
                     (a 3 "assert" "@T1" "tag"   "x")

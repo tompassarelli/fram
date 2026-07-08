@@ -24,7 +24,7 @@
                                      :else (recur (rest a) l)))
       log-path (or log (str (System/getProperty "user.dir") "/.fram/code.log"))]
   (when-not (.exists (io/file log-path)) (die "no code log at" log-path))
-  ;; scan raw log lines for `@<mod>#root file ...` claims — the per-module ingest
+  ;; scan raw log lines for `@<mod>#root file ...` facts — the per-module ingest
   ;; sentinel. We read the raw log (not a booted store) so this is fast + dependency-
   ;; free; a torn tail is harmless (we only match the stable #root lines).
   (let [mods (->> (fram.rt/read-log log-path)

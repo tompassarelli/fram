@@ -51,8 +51,8 @@
 (def ^:private home (System/getProperty "user.home"))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
-                                 (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
-;; emit-edn loads claims-roundtrip's .zo, compiled for beagle's flake-pinned
+                                 (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+;; emit-edn loads facts-roundtrip's .zo, compiled for beagle's flake-pinned
 ;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve
 ;; the pinned racket like bin/_beagle-racket (FRAM_RACKET overrides).
 (def ^:private racket-bin
@@ -166,7 +166,7 @@
         ;; emit-edn assigns node ids by deterministic traversal, so a NON-trivial edit
         ;; RENUMBERS nodes after the edit point. A set-difference by re-keyed id then
         ;; leaves coincidentally-shared ids (e.g. @schema#100 is a DIFFERENT node pre vs
-        ;; post) carrying a MIX of old + new claims -> a corrupt AST. The robust commit
+        ;; post) carrying a MIX of old + new facts -> a corrupt AST. The robust commit
         ;; is total: retract EVERY current @<mod>#* AST claim, then assert the FULL new
         ;; emit-edn. Postcondition is exactly `live AST == post`, regardless of id
         ;; alignment. (Multi-valued AST asserts are idempotent, so re-asserting the
@@ -176,8 +176,8 @@
         ;; idempotent shortcut: a claim in BOTH pre and post need not be retracted then
         ;; re-asserted (it would no-op), so we only retract pre\post and assert post\pre
         ;; ... EXCEPT that, as above, shared-id-different-node is the trap. So we retract
-        ;; ALL pre AST claims whose NODE appears in `changed` (any node touched on either
-        ;; side), and assert ALL post AST claims for those nodes. Nodes identical on both
+        ;; ALL pre AST facts whose NODE appears in `changed` (any node touched on either
+        ;; side), and assert ALL post AST facts for those nodes. Nodes identical on both
         ;; sides (same id, same full claim set) are left untouched.
         pre-by-node  (group-by first pre*)
         post-by-node (group-by first post*)
@@ -190,14 +190,14 @@
     (log! "fram-commit-code:" module "whole-node re-commit —"
           (count changed-nodes) "changed node(s):" (count adds) "assert(s),"
           (count removes) "retract(s)"
-          (str "(pre=" (count pre*) " post=" (count post*) " AST claims)"))
+          (str "(pre=" (count pre*) " post=" (count post*) " AST facts)"))
     (if dry
       (do (log! "  [dry-run] changed nodes (first 12):" (pr-str (take 12 changed-nodes)))
           (log! "  [dry-run] committed NOTHING"))
       (do
         ;; 1. retract EVERY claim on a changed node (clean slate for those nodes).
         (doseq [[te p r] removes] (commit-op! port :retract te p r))
-        ;; 2. assert the new claims for those nodes. Order leaves/v before parent fN
+        ;; 2. assert the new facts for those nodes. Order leaves/v before parent fN
         ;;    re-points: sort so kind/v come first, then fN/seg/comment/tail edges, so a
         ;;    referenced child node exists (has its kind) before a parent points at it.
         (let [leaf? (fn [[_ p _]] (#{"kind" "v"} p))

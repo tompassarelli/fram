@@ -25,7 +25,7 @@
 (def server (future (serve port)))
 (Thread/sleep 500)
 
-(defn live-idx [] (k/build-index (reified->claims @co)))
+(defn live-idx [] (k/build-index (reified->facts @co)))
 (defn v [] (:version (client port {:op :version})))
 
 ;; --- @W: title + driver + a running session (start_time, no end_time) --------

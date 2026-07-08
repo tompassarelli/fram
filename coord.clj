@@ -6,7 +6,7 @@
 ;; — direct, mutable access to the store map, no Beagle typing friction.
 ;;
 ;; The six concurrency/durability holes the analysis flagged, closed here:
-;;   1. base_version  = max tx-seq over the LIVE claims on (l,p); a stale
+;;   1. base_version  = max tx-seq over the LIVE facts on (l,p); a stale
 ;;      single-valued write is rejected (lost-update protection).
 ;;   2. validate-without-mutating — obligations (acyclicity) are a PURE pre-check
 ;;      over resolved ids, run BEFORE any tx/entity is minted, so a rejected
@@ -121,7 +121,7 @@
                       (mapv (fn [r] (str (pr-str r) "\n")) records)
                       nil)))
 
-;; the records minted in `store` since id `since` (new values/entities/claims),
+;; the records minted in `store` since id `since` (new values/entities/facts),
 ;; plus this tx's provenance and the terminating :commit marker.
 (defn- delta-records [co since txid]
   (let [m @(store co)]
@@ -130,9 +130,9 @@
      (for [id (keys (:objects m))
            :when (and (>= id since)
                       (not (contains? (:values m) id))
-                      (not (contains? (:claims m) id)))]
+                      (not (contains? (:facts m) id)))]
        {:k :entity :id id})
-     (for [[cid mm] (:claims m) :when (>= cid since)]
+     (for [[cid mm] (:facts m) :when (>= cid since)]
        {:k :claim :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
      [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])
        :observed (get-in m [:txs txid :observed])}        ; causality (thread H): the global seq the writer had SEEN when it decided
@@ -184,14 +184,14 @@
 ;; the causal key of a live claim: [observed-or-seq, cid, agent]. observed orders by
 ;; DECISION time (who saw the empty group first), cid/agent keep it a total order. A LATER
 ;; commit (higher cid) that DECIDED earlier (lower observed) wins — this is the whole point:
-;; election by causal view, not by commit order. Pure fn of recorded claims -> every reader
+;; election by causal view, not by commit order. Pure fn of recorded facts -> every reader
 ;; computes it identically with zero coordination.
 (defn causal-key [co cid]
   [(or (observed-of co cid) (seq-of co cid)) cid (str (agent-of co cid))])
 
 ;; --- as-of: the history fold (thread H, Part B) ------------------------------
 ;; "What was live AS OF seq S?" A claim is live-as-of-S iff it was BORN at a seq <= S
-;; AND no cnf-supersedes marker for it was committed at a seq <= S. Because retraction is
+;; AND no store-supersedes marker for it was committed at a seq <= S. Because retraction is
 ;; append-only (a marker, never a delete), this is EXACT: a claim later superseded/withdrawn
 ;; is naturally RE-SEEN at an earlier S — its tombstone hadn't been written yet (acceptance
 ;; b). Folds the in-store tail, so it is bounded by thread D's snapshot floor (history
@@ -200,12 +200,12 @@
 (defn- tx-seq-of [m cid] (get-in m [:txs (get (:tx-of m) cid) :seq] 0))
 (defn superseded-as-of [co s]
   (let [m @(store co) sup (:supersedes-pred m)]
-    (set (for [[cid cl] (:claims m)
+    (set (for [[cid cl] (:facts m)
                :when (and (= (:p cl) sup) (<= (tx-seq-of m cid) s))]
            (:r cl)))))
 (defn live-as-of [co s]
   (let [m @(store co) sup (:supersedes-pred m) gone (superseded-as-of co s)]
-    (set (for [[cid cl] (:claims m)
+    (set (for [[cid cl] (:facts m)
                :when (and (<= (tx-seq-of m cid) s)
                           (not= (:p cl) sup)              ; the markers are bookkeeping, not data
                           (not (contains? gone cid)))]
@@ -213,7 +213,7 @@
 ;; the live cids of ONE (te,pid) group as of S — the as-of twin of live-cids-lp.
 (defn live-as-of-lp [co s te pid]
   (let [m @(store co) all (live-as-of co s)]
-    (filterv (fn [cid] (let [cl (get (:claims m) cid)] (and (= (:l cl) te) (= (:p cl) pid))))
+    (filterv (fn [cid] (let [cl (get (:facts m) cid)] (and (= (:l cl) te) (= (:p cl) pid))))
              all)))
 
 ;; --- first-class retraction readers + the add-wins/remove-wins view selector ---
@@ -221,7 +221,7 @@
 ;; why retract! stamped). nil when the cid carries no live withdrawn_by tombstone.
 (defn- live-r-on [co cid pid]   ; live object-value of one (cid,pid) marker group
   (let [m @(store co)]
-    (some (fn [c] (when-not (contains? (:superseded m) c) (:r (get (:claims m) c))))
+    (some (fn [c] (when-not (contains? (:superseded m) c) (:r (get (:facts m) c))))
           (get (:idx-by-lp m) [cid pid]))))
 (defn withdrawal-of [co cid]
   (let [m  @(store co)
@@ -235,7 +235,7 @@
 ;; live-members — the multi-valued live group on (te,pid) UNDER A WITHDRAWAL POLICY. The
 ;; policy is a VIEW choice (thread H, Part D), not a kernel hardcode:
 ;;   :remove-wins (DEFAULT) — withdrawn members drop. Byte-identical to live-cids-lp (the
-;;     cnf-supersedes marker already excludes them); this is what every existing reader sees.
+;;     store-supersedes marker already excludes them); this is what every existing reader sees.
 ;;   :add-wins — a member superseded ONLY by a WITHDRAWAL (carries a withdrawn_by tombstone)
 ;;     RESURRECTS; a genuine OVERWRITE (superseded with no withdrawal tag) still wins. So an
 ;;     add-wins view re-sees a cancellation while remove-wins hides it — same log, two views.
@@ -252,8 +252,8 @@
          (vec (distinct (concat live resurrected))))
        (vec live)))))
 
-;; --- views-as-claims (thread E): per-branch isolation over the same log ------
-;; A VIEW is a first-class subject; (view selects @cid) claims are its OVERLAY —
+;; --- views-as-facts (thread E): per-branch isolation over the same log ------
+;; A VIEW is a first-class subject; (view selects @cid) facts are its OVERLAY —
 ;; the cids it treats as facts. The object IS a claim id: cids live in the same
 ;; flat content-interned id-space, so a claim is itself addressable (the most
 ;; CNF-native of VIEWS_AND_BRANCHES §8's three encodings). view-selects returns
@@ -264,7 +264,7 @@
         ve  (s/resolve-name (store co) view)
         sel (c/value-id (store co) "selects")]
     (when (and ve sel)
-      (set (keep #(:r (get (:claims m) %))
+      (set (keep #(:r (get (:facts m) %))
                  (remove #(contains? (:superseded m) %)
                          (get (:idx-by-lp m) [ve sel])))))))
 
@@ -278,7 +278,7 @@
 ;;     contended (s,p); sibling branches' (and main's bare) rivals are invisible to it.
 ;;   * inherit-the-base: where V selects NONE of THIS group (silent on this (s,p)), V
 ;;     falls back to the default election over the whole group — "one head + named
-;;     overlays" (VIEWS §8): a view is main plus only the claims it overrides.
+;;     overlays" (VIEWS §8): a view is main plus only the facts it overrides.
 (defn elect
   ([co cids] (elect co nil cids))
   ([co view cids]
@@ -295,7 +295,7 @@
 ;; then agent. This is what lets rival drivers/roles COEXIST and resolve by "who had
 ;; the earlier causal view" rather than "who happened to commit first" — both readers
 ;; agree, nothing blocks. Degrades to `elect` when no :observed stamps exist (legacy
-;; claims fall back to seq-of via causal-key), so it is a strict refinement, never a
+;; facts fall back to seq-of via causal-key), so it is a strict refinement, never a
 ;; regression. nil on an empty group.
 (defn elect-causal
   ([co cids] (elect-causal co nil cids))
@@ -328,7 +328,7 @@
 ;; --- obligation: depends_on/part_of acyclicity (pure, over resolved ids) ----
 (defn- succ [co pid x]
   (let [m @(store co)]
-    (map #(:r (get (:claims m) %))
+    (map #(:r (get (:facts m) %))
          (remove #(contains? (:superseded m) %) (get (:idx-by-lp m) [x pid])))))
 ;; reachability over the reified store — routed through the kernel's ONE verified
 ;; traversal (ck/reachable-from?) instead of a second hand-rolled DFS. The store
@@ -371,7 +371,7 @@
           single (= "single" (s/cardinality (store co) pred))
           bv     (if (and te0 pid) (base-version co te0 pid) 0)
           live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
-          claims (:claims @(store co))]
+          facts (:facts @(store co))]
       (cond
         ;; (1)(6) base_version: reject a stale single-valued write — ONLY when a base
         ;; was supplied (move-C: :base is OPTIONAL). The cardinality-typed verbs split
@@ -391,9 +391,9 @@
         {:reject [(str pred " cycle")] :version (current-seq co)}
 
         ;; (4) multi-valued idempotency: no-op if the live (l,p,r) already exists
-        (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get claims %))) live))
+        (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get facts %))) live))
         {:ok (current-seq co) :idempotent true}
-        (and (not single) (= kind :assert) vid (some #(= vid (:r (get claims %))) live))
+        (and (not single) (= kind :assert) vid (some #(= vid (:r (get facts %))) live))
         {:ok (current-seq co) :idempotent true}
 
         :else
@@ -408,9 +408,9 @@
           (append-tx! co (delta-records co since tx))   ; (5) atomic + fsync
           {:ok (get-in @(store co) [:txs tx :seq])})))))
 
-;; --- views-as-claims writers (thread E) -------------------------------------
+;; --- views-as-facts writers (thread E) -------------------------------------
 ;; select! asserts (view selects @cid): `view` now treats claim `cid` as a fact. Multi
-;; (a view selects many claims); idempotent when it already selects cid. This ONE write
+;; (a view selects many facts); idempotent when it already selects cid. This ONE write
 ;; is the whole branch-membership surface — per-branch isolation is otherwise pure
 ;; read-time election (elect above), no writer ever blocked.
 (defn select! [co view cid]
@@ -418,7 +418,7 @@
     (let [selp    (c/value-id (store co) "selects")
           ve0     (s/resolve-name (store co) view)
           already (when (and selp ve0)
-                    (some #(= cid (:r (get (:claims @(store co)) %)))
+                    (some #(= cid (:r (get (:facts @(store co)) %)))
                           (live-cids-lp co ve0 selp)))]
       (if already
         {:ok (current-seq co) :idempotent true :cid cid}
@@ -454,9 +454,9 @@
 ;; FIRST-CLASS RETRACTION (thread H, Part D): cancellation is now an ATTRIBUTABLE,
 ;; QUERYABLE claim-ABOUT-the-victim-cid — (@cid withdrawn_by <agent>), (@cid
 ;; withdrawn_at <seq>), (@cid withdrawn_reason "<why>") — emitted ALONGSIDE (not
-;; instead of) the anonymous cnf-supersedes marker. The supersedes marker stays the
+;; instead of) the anonymous store-supersedes marker. The supersedes marker stays the
 ;; internal live-fold mechanism (it drives live-cids-lp == remove-wins, the default);
-;; the withdrawn_* claims are the cancellation SURFACE: who/when/why, queryable, and
+;; the withdrawn_* facts are the cancellation SURFACE: who/when/why, queryable, and
 ;; the discriminator that lets an ADD-WINS view resurrect a withdrawal (live-members)
 ;; while a genuine overwrite still wins. `reason` is optional (older 6-arg callers
 ;; keep working). cids are first-class subjects (same flat id-space — VIEWS §8), so a
@@ -476,17 +476,17 @@
             (let [tgt (if (and r-spec (str/starts-with? (str r-spec) "@"))
                         (s/resolve-name (store co) r-spec)
                         (c/value-id (store co) r-spec))
-                  claims (:claims @(store co))
+                  facts (:facts @(store co))
                   victims (if single
                             (live-cids-lp co te0 pid)
-                            (filter #(= tgt (:r (get claims %))) (live-cids-lp co te0 pid)))]
+                            (filter #(= tgt (:r (get facts %))) (live-cids-lp co te0 pid)))]
               (if (empty? victims)
                 {:ok (current-seq co)}
                 (let [since (:next-id @(store co))
                       observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp on the retract tx
                       tx  (c/begin-tx! (store co) agent)
                       _   (swap! (store co) assoc-in [:txs tx :observed] observed)
-                      sup (c/value! (store co) "cnf-supersedes")
+                      sup (c/value! (store co) "store-supersedes")
                       wbp (c/value! (store co) "withdrawn_by")
                       wap (c/value! (store co) "withdrawn_at")
                       wrp (c/value! (store co) "withdrawn_reason")
@@ -523,7 +523,7 @@
         pid (c/value-id st lease-pred)]
     (when (and te pid)
       (let [cid (first (live-cids-lp co te pid))]
-        (when cid (decode-lease (get (:values @st) (:r (get (:claims @st) cid)))))))))
+        (when cid (decode-lease (get (:values @st) (:r (get (:facts @st) cid)))))))))
 
 (defn acquire-lease! [co holder res ttl-ms]
   (locking (:lock co)
@@ -569,7 +569,7 @@
         pid (c/value-id st p)]
     (when (and te pid)
       (when-let [cid (first (live-cids-lp co te pid))]
-        (parse-long (str (get (:values @st) (:r (get (:claims @st) cid)))))))))
+        (parse-long (str (get (:values @st) (:r (get (:facts @st) cid)))))))))
 
 (defn bump-counter! [co te-name p delta]
   (locking (:lock co)
@@ -603,20 +603,20 @@
 (defn- assemble-dump [recs]
   (let [vals   (vec (for [r recs :when (= (:k r) :value)]  [(:id r) (:v r)]))
         ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
-        claims (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
+        facts (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
         tx-of  (vec (for [r recs :when (= (:k r) :claim)]  [(:cid r) (:tx r)]))
         txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r) :observed (:observed r)}]))   ; recover the causal stamp through replay (acceptance d)
-        sup    (some (fn [[id v]] (when (= v "cnf-supersedes") id)) vals)
-        superd (vec (for [[_ m] claims :when (= (:p m) sup)] (:r m)))
-        all-id (concat (map first vals) ents (map first claims) (map first txs))
+        sup    (some (fn [[id v]] (when (= v "store-supersedes") id)) vals)
+        superd (vec (for [[_ m] facts :when (= (:p m) sup)] (:r m)))
+        all-id (concat (map first vals) ents (map first facts) (map first txs))
         all-sq (map (fn [[_ m]] (:seq m)) txs)]
     ;; the kernel's counters hold the LAST-used id/seq (fresh-id!/begin-tx! return
     ;; the post-increment value), so recover them as max — NOT max+1 — else the
     ;; next mint would skip an id/seq (a gap) instead of continuing contiguously.
     {:next-id (reduce max 0 all-id) :next-seq (reduce max 0 all-sq)
      :supersedes-pred sup
-     :objects (vec (concat (map first vals) ents (map first claims)))
-     :values vals :claims claims :tx-of tx-of :txs txs :superseded superd}))
+     :objects (vec (concat (map first vals) ents (map first facts)))
+     :values vals :facts facts :tx-of tx-of :txs txs :superseded superd}))
 
 (defn replay [path]
   (let [st (c/new-store)]
@@ -634,9 +634,9 @@
       (let [emit (fn [r] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))]
         (doseq [[id v] (:values m)] (emit {:k :value :id id :v v}))
         (doseq [id (keys (:objects m))
-                :when (and (not (contains? (:values m) id)) (not (contains? (:claims m) id)))]
+                :when (and (not (contains? (:values m) id)) (not (contains? (:facts m) id)))]
           (emit {:k :entity :id id}))
-        (doseq [[cid cl] (:claims m)]
+        (doseq [[cid cl] (:facts m)]
           (emit {:k :claim :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
         (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t)}))
         (emit {:k :commit :tx :migration}))
@@ -645,5 +645,5 @@
 ;; live (l,p,r) id-triples of a reified store (substrate identity for tests/diff)
 (defn live-triples [st]
   (let [m @st]
-    (set (for [cid (keys (:claims m)) :when (not (contains? (:superseded m) cid))]
-           (let [cl (get (:claims m) cid)] [(:l cl) (:p cl) (:r cl)])))))
+    (set (for [cid (keys (:facts m)) :when (not (contains? (:superseded m) cid))]
+           (let [cl (get (:facts m) cid)] [(:l cl) (:p cl) (:r cl)])))))

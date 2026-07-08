@@ -50,7 +50,7 @@ Property (2) is the load-bearing one. Because a claim is an object, every piece 
 | Justification | `(claim₁ because claim₃)` |
 | Naming | a claim named like any other object |
 
-**The unit of CNF — the thing stored, addressed, indexed, and superseded — is therefore the claim-object: a claim that can itself be the subject of claims, at the granularity of the individual claim.** Hold onto that phrase. The entire argument is whether a vendor store can take *that* as its atom.
+**The unit of CNF — the thing stored, addressed, indexed, and superseded — is therefore the claim-object: a claim that can itself be the subject of facts, at the granularity of the individual claim.** Hold onto that phrase. The entire argument is whether a vendor store can take *that* as its atom.
 
 ---
 
@@ -70,13 +70,13 @@ Datomic's atom is the **datom**:
 Three structural properties of the datom make it the wrong atom for CNF — not slower, *wrong*:
 
 **(a) The datom is not an object you can reference.**
-Entities are addressable; datoms are not. There is no datom-id you can place in the `E` slot of another datom. The finest granularity at which Datomic permits reification is the **transaction**: transaction entities are real entities and *can* carry attributes (this is how transaction metadata works). But you cannot make an assertion about an *individual datom*. CNF requires exactly that — `(claim₁ supersedes claim₀)` is a statement about two specific claims. Datomic's reification granularity is the transaction (coarse); CNF's is the claim (fine). The datom cannot express per-datom reification because the datom is not addressable.
+Entities are addressable; datoms are not. There is no datom-id you can place in the `E` slot of another datom. The finest granularity at which Datomic permits reification is the **transaction**: transaction entities are real entities and *can* carry attributes (this is how transaction metadata works). But you cannot make an assertion about an *individual datom*. CNF requires exactly that — `(claim₁ supersedes claim₀)` is a statement about two specific facts. Datomic's reification granularity is the transaction (coarse); CNF's is the claim (fine). The datom cannot express per-datom reification because the datom is not addressable.
 
 **(b) The attribute slot is privileged.**
 Attribute value types and cardinalities must be declared before an attribute is used; an undeclared attribute is rejected by the transactor. `E` and `V` carry no such obligation. The three slots are not peers — `A` is a typed, pre-registered, cardinality-bearing slot the others are not. CNF's `(l p r)` is symmetric by definition; `p` is a plain object. This is a category difference in what a slot *is*.
 
 **(c) The datom hard-codes the two reifications Datomic cannot live without.**
-`Tx` and `Op` exist precisely because Datomic needs *some* reification (for time, and for assert/retract) but has no general claim-as-object mechanism. So it welds the two it requires directly into the struct layout and offers no general facility for the rest. CNF welds nothing on: time, retraction, provenance, and justification are all just claims about claims, because the claim is an object. Datomic reifies **twice, by force, in the layout**. CNF reifies **without bound, by default, because of the primitive.**
+`Tx` and `Op` exist precisely because Datomic needs *some* reification (for time, and for assert/retract) but has no general claim-as-object mechanism. So it welds the two it requires directly into the struct layout and offers no general facility for the rest. CNF welds nothing on: time, retraction, provenance, and justification are all just facts about facts, because the claim is an object. Datomic reifies **twice, by force, in the layout**. CNF reifies **without bound, by default, because of the primitive.**
 
 Datomic's atom is *the typed property of an entity*. CNF's atom is *the reifiable proposition*. These are different primitives. A store built on the first cannot natively hold the second.
 
@@ -86,7 +86,7 @@ Datomic's atom is *the typed property of an entity*. CNF's atom is *the reifiabl
 
 The argument above is not "it is impossible to put CNF on Datomic." It is **possible**, and naming exactly what that possibility costs is what makes this document airtight.
 
-To represent a claim-object on Datomic, you model each claim as **its own entity**, with attributes `:claim/l`, `:claim/p`, `:claim/r`. Claims-about-claims then point at that claim-entity. This works. And the moment you do it:
+To represent a claim-object on Datomic, you model each claim as **its own entity**, with attributes `:claim/l`, `:claim/p`, `:claim/r`. Claims-about-facts then point at that claim-entity. This works. And the moment you do it:
 
 1. **You have abandoned the datom as your unit.** Your real atom (the claim-object) is now *emulated* as a 3-attribute entity. The datom is no longer the thing you reason about; it is plumbing beneath an emulation layer.
 
@@ -145,7 +145,7 @@ Everything else about Fram — the OCC write path, the index layout, the scoped 
 
 **This decision is correct as long as both of the following hold. To overturn it, refute one of them in its own terms — not with a benchmark, a "simpler" appeal, or a new vendor that is fast:**
 
-1. **CNF requires per-claim reification.** The claim is an object; metadata (supersession, provenance, transaction membership, justification) is expressed as claims about individual claims, at the granularity of the individual claim. *If this is ever false — if CNF can be redefined so that reification is needed only at transaction granularity or coarser — re-evaluate, because the datom becomes admissible.*
+1. **CNF requires per-claim reification.** The claim is an object; metadata (supersession, provenance, transaction membership, justification) is expressed as facts about individual facts, at the granularity of the individual claim. *If this is ever false — if CNF can be redefined so that reification is needed only at transaction granularity or coarser — re-evaluate, because the datom becomes admissible.*
 
 2. **No available store takes the reifiable claim-object as its native atom.** Datom stores reify at transaction granularity and privilege a typed attribute slot; RDF stores treat statement-level reification as a bolt-on/retrofit. *If a store ever ships whose native, non-emulated atom is the per-claim-reifiable proposition, re-evaluate, because adoption may then beat ownership.*
 

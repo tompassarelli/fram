@@ -39,7 +39,7 @@
         winner (elect co live)]
     (chk "coexist: both rival writes COMMITTED — no writer blocked or rejected"
          (and (:ok r1) (:ok r2)))
-    (chk "coexist: BOTH claims live as multi (no supersede, no idempotent no-op)"
+    (chk "coexist: BOTH facts live as multi (no supersede, no idempotent no-op)"
          (= 2 (count live)))
     (chk "elect: winner is the EARLIEST-cid claim"
          (= winner (apply min live)))

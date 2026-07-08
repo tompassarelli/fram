@@ -15,7 +15,7 @@
 ;;               after a set-body delta committed THROUGH the coordinator,
 ;;               render(log) recompiles '0 error'.
 ;;   3  INGEST (lossless)  emit-edn(schema) re-keyed @schema#n == the warm store's
-;;               @schema#* AST claims (read off the daemon); symdiff 0.
+;;               @schema#* AST facts (read off the daemon); symdiff 0.
 ;;   4  CROSS-FRAME  a bridge claim @schema#<node> relates_to @<foreign-thread>
 ;;               (code-owned subject, foreign-thread object) commits through the ONE
 ;;               coordinator and reads back — proof the code + thread frames compose.
@@ -41,12 +41,12 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/claims-roundtrip.rkt")))
+(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 (def code-log (str root "/.fram/code.log"))
 
 (def needed
-  [[roundtrip-rkt "claims-roundtrip.rkt"]
+  [[roundtrip-rkt "facts-roundtrip.rkt"]
    [build-all "beagle-build-all"]
    [(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
@@ -80,7 +80,7 @@
 ;; --- :status SANITY — refuse to trust any result unless the daemon serves OUR
 ;;     code-log copy (mirrors graph_arm.sh STATUS_OK). Falsifies "wrong log".
 (def status (client port {:op :status}))
-(def status-ok (and (= flat (str (:log status))) (pos? (:claims status))))
+(def status-ok (and (= flat (str (:log status))) (pos? (:facts status))))
 (chk "SANITY: daemon :status :log == our /tmp code-log copy (not 7977/tern)" status-ok)
 (when-not status-ok
   (println "  ABORT: daemon serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
@@ -109,7 +109,7 @@
                              l  (s/name-of st (:l cl))
                              p  (c/literal st (:p cl))]
                          (when (and l (str/starts-with? l (str "@" module "#"))
-                                    (not (#{"name" "cardinality" "value_kind" "cnf-supersedes"} p))
+                                    (not (#{"name" "cardinality" "value_kind" "store-supersedes"} p))
                                     (not (#{"refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field" "supersedes"} p)))
                            [l p (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))]))))))))
 
@@ -143,7 +143,7 @@
 (def callers-resp (client port {:op :callers :module "schema" :name a-name}))
 (chk "GATE 5 WARM: :callers schema/name-of resolves a binding + returns a set"
      (and (:target callers-resp) (vector? (:callers callers-resp))))
-;; :query over AST claims returns rows (e.g. every kind=list node).
+;; :query over AST facts returns rows (e.g. every kind=list node).
 (def q-resp (client port {:op :query :scan true
                           :query {:find "out"
                                   :rules [{:head {:rel "out" :args [{:var "l"}]}

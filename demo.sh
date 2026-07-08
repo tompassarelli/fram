@@ -21,13 +21,13 @@ run()   { printf '\n\033[1;36m$ fram %s\033[0m\n' "$*"; "$HERE/bin/fram" "$@"; p
 
 printf '\033[2m# Fram — an append-only claim graph computed from the Markdown you already write\033[0m\n'
 run import                              # fold the Markdown threads into the claim graph
-run show 2026-01-01-090500             # one thread, as the (left predicate right) claims it became
+run show 2026-01-01-090500             # one thread, as the (left predicate right) facts it became
 run validate                            # structural integrity: dependency cycles, dangling refs
 
 printf '\n\033[2m# export is the verified-lossless inverse of import — files are a view, not a source of truth\033[0m\n'
 run export "$WORK/regen"                # regenerate the Markdown from the graph
-a=$("$HERE/bin/fram" import | grep -oE '[0-9]+ claims')
-b=$(FRAM_THREADS="$WORK/regen" "$HERE/bin/fram" import | grep -oE '[0-9]+ claims')
+a=$("$HERE/bin/fram" import | grep -oE '[0-9]+ facts')
+b=$(FRAM_THREADS="$WORK/regen" "$HERE/bin/fram" import | grep -oE '[0-9]+ facts')
 printf '\033[2m# round-trip: %s in, %s back from the regenerated files — claim-identical (roundtrip_test.clj)\033[0m\n' "$a" "$b"
 
 printf '\n\033[2m# On top of this graph, a consumer (e.g. Tern) derives ready / blocked /\n# leverage / next. Those are domain projections, not engine commands.\033[0m\n'
