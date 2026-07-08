@@ -50,7 +50,7 @@
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
    "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
    "(ten tools) while the vocabulary lives in the graph as data.\n\n"
-   "Graph-owned Beagle modules (registered `graph-owned`) are authored by GRAPH "
+   "Graph-owned Beagle modules (registered `graph-upstream`) are authored by GRAPH "
    "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "
    "(recompile-gated, fail-closed)."))
 
@@ -92,7 +92,7 @@
 ;;   apply the verb as a FACT OP (chartroom resolve.clj <mode>) -> $RESOLVE_OUT EDN
 ;;   regenerate byte-stable text (--render)
 ;;   recompile-gate (beagle-build-all '0 error') over the regenerated tree
-;; On PASS: overwrite the source .bclj (graph-owned text is a downstream view).
+;; On PASS: overwrite the source .bclj (graph-upstream text is a downstream view).
 ;; On the engine REFUSING the edit (nonzero exit; resolve.clj fail-closes with
 ;; "REJECTED ... no facts mutated") OR the regen NOT recompiling: return
 ;; {:isError true :text <diagnostic>} and write NOTHING. Fail-closed throughout.
@@ -109,7 +109,7 @@
 (def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")))
 (def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
 (def ^:private fram-out      (env-or "FRAM_OUT"       (str (System/getProperty "user.dir") "/out")))
-;; the source tree graph-owned modules live in (the .bclj scope is resolved here).
+;; the source tree graph-upstream modules live in (the .bclj scope is resolved here).
 (def ^:private fram-src      (env-or "FRAM_SRC"       (str (System/getProperty "user.dir") "/src/fram")))
 
 (defn- bclj-files [dir]
