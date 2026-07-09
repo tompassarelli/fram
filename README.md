@@ -55,7 +55,7 @@ Everywhere — docs, MCP `instructions`, prompts, CLI help, lifecycle prose — 
 Fram is the **engine**, not an app. The relational structure is shared, so the *same*
 engine answers questions for very different domains — each in its **own** graph:
 
-- **[Tern](https://github.com/tompassarelli/tern)** — life/work coordination
+- **[North](https://github.com/tompassarelli/north)** — life/work coordination
   (the `ready` / `blocked` / `leverage` verbs live there, not in the engine).
 - **[Chartroom](chartroom/)** — code-as-facts (a module *inside* this repo): a Beagle
   module's AST *is* the facts, the `.bclj` text is a view.
@@ -137,11 +137,11 @@ facts ──assert──▶ facts.log (append-only) ──fold──▶ in-memor
 A **consumer** is a projection + a vocabulary onto that neutral engine. Two ship today, and
 they look nothing alike — which is the whole point:
 
-**Fram with Tern (life/work).** Tern models work as **threads** — one Markdown file
+**Fram with North (life/work).** North models work as **threads** — one Markdown file
 each (`@id` header of fact triples, `---`, prose body; see
 [THREAD-FORMAT.md](THREAD-FORMAT.md)). `bin/fram import` folds those files into facts, and
-Tern derives `ready` / `blocked` / `leverage` from them. The bundled `threads/` corpus is
-Tern-shaped *only because Fram was extracted from Tern* — that's the one reason
+North derives `ready` / `blocked` / `leverage` from them. The bundled `threads/` corpus is
+North-shaped *only because Fram was extracted from North* — that's the one reason
 "threads" appear in the engine repo at all. `export` is the verified-lossless inverse of
 `import` (`tests/roundtrip_test.clj`): the files are a view, not a second source of truth.
 
@@ -152,9 +152,9 @@ references carry the binding's identity (`bound_to`), so a rename is a ~2-fact e
 intelligence (call graphs, blast radius) is Datalog.
 
 **One engine, many memory-spaces.** Each consumer lives in its **own** graph (a separate log),
-and one coordinator can host several — one log per account/tenant. So a hosted Tern and a
+and one coordinator can host several — one log per account/tenant. So a hosted North and a
 code graph are *separate memory-spaces in the same engine*, never co-mingled (see
-[Isolation](#isolation-separate-graphs-not-access-control)). *(Hosting Tern as a tenant of
+[Isolation](#isolation-separate-graphs-not-access-control)). *(Hosting North as a tenant of
 a shared engine is a direction, not yet shipped.)*
 
 ## Multi-agent safety
@@ -341,7 +341,7 @@ bb -cp out tests/query_test.clj       # structured Datalog query + boundary reje
 `bin/fram` with no arguments prints the canonical verb list (the source of truth — don't
 trust a copy here). The daemon is `bin/fram-daemon` / `bin/fram-up`; the AI surface is
 also served over MCP by `bin/fram-mcp`. The life verbs (`ready` / `blocked` / `leverage`
-/ `next` / `capture`) belong to the *consumer* (Tern), not the engine.
+/ `next` / `capture`) belong to the *consumer* (North), not the engine.
 
 - `src/fram/*.bclj` — the engine, authored in Beagle: kernel, fold, Datalog, schema,
   import/export, CLI.

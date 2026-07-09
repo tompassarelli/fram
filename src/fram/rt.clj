@@ -314,7 +314,7 @@
 ;; :facts — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
 ;; path (thread 019f2190). The CLI rebuilds its kernel index from this instead of
 ;; paying the per-process cold fold (read-log EDN parse + fold ≈ 700ms on the 11k-line
-;; tern log). The daemon serves the triples IN FOLD EMISSION ORDER (its contract —
+;; north log). The daemon serves the triples IN FOLD EMISSION ORDER (its contract —
 ;; fram.fold/refold-order, cached per version), so the records returned here feed
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
 ;; Asked with {:fmt :json} DELIBERATELY: bb parses the ~2MB payload ~12x faster as
@@ -352,7 +352,7 @@
           (recur)))))
   nil)
 
-;; --- time module runtime (ported from los.rt for `tern clock`) -----------
+;; --- time module runtime (ported from los.rt for `north clock`) -----------
 
 (defn error-exit [msg]
   (binding [*out* *err*] (println (str "error: " msg)))

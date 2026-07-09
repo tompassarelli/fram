@@ -13,7 +13,7 @@
   alias in dispatch, mirroring `query`->`ask`); `ask` is the structured Datalog
   escape hatch (fram.query) — its op key stays `:query` and the name `query` is
   accepted as an alias in dispatch. `threads` and `dependents-of` are NOT in this catalog: threads
-  are a TERN concept (tern serves them), and a reverse edge is answerable via `ask`.
+  are a NORTH concept (north serves them), and a reverse edge is answerable via `ask`.
 
   Reads dispatch here (pure, over the fold); WRITES return an intent
   {:write {:op :l :p :r}} the host routes through the coordinator (serialized,

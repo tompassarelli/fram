@@ -1,11 +1,11 @@
 # Coordinator: wire protocol + configurable bind
 
 This is the **seam** between Fram (the engine) and a gateway-fronted consumer like
-Tern. It documents the one interface the two repos meet at — the coordinator's
+North. It documents the one interface the two repos meet at — the coordinator's
 wire protocol — and the configurable bind that lets the coordinator run behind a
 gateway on a private network.
 
-> Originally a hand-off from the Tern multi-tenant work; the engine-side change
+> Originally a hand-off from the North multi-tenant work; the engine-side change
 > (configurable bind) is **implemented** (`coord_daemon.clj` `bind-cfg`/`serve`)
 > and tested (`bind_test.clj`). Kept here as the contract of record.
 
@@ -17,7 +17,7 @@ The two repos meet at **exactly one interface: the coordinator's wire protocol.*
 |---|---|
 | Fact kernel, fold, Datalog, structural integrity (`validate`) | **Fram** |
 | Coordinator daemon: socket, **bind address**, wire protocol, sole-writer lock | **Fram** |
-| Authentication, tenant routing, rate limit, audit, body caps | **Consumer gateway** (e.g. Tern) |
+| Authentication, tenant routing, rate limit, audit, body caps | **Consumer gateway** (e.g. North) |
 | Tenant provisioning, lifecycle projections, time/billing | **Consumer** |
 
 **The contract** (must stay stable, or be versioned): a client opens a TCP
@@ -102,6 +102,6 @@ coordinator by its private host/port.
 
 - `bb bind_test.clj` — asserts both bind modes (default loopback via `ss`;
   `FRAM_BIND=0.0.0.0` binds all interfaces, loopback still answers, warning logged).
-- Tern's gateway smoke test is the cross-repo contract regression check:
-  `FRAM_HOME=/path/to/fram bash deploy/gateway/smoke_test.sh` (run from a Tern
+- North's gateway smoke test is the cross-repo contract regression check:
+  `FRAM_HOME=/path/to/fram bash deploy/gateway/smoke_test.sh` (run from a North
   checkout) — exercises auth, body cap, audit, revocation over the wire protocol.

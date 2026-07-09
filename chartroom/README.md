@@ -1,12 +1,12 @@
 # Chartroom
 
 **Code as claims, on [Fram](https://github.com/tompassarelli/fram).** Chartroom
-projects a beagle source tree into the same reified claim graph that Tern
+projects a beagle source tree into the same reified claim graph that North
 uses for life and work, then *derives* code intelligence — call graphs, scope-correct caller
 resolution, transitive leverage — as queries over that graph instead of as
 bespoke passes over text.
 
-The bet is the same one Tern makes, pointed at source: **a flat,
+The bet is the same one North makes, pointed at source: **a flat,
 text-and-grep view of a codebase rots and can't compute relational questions;
 the graph is always current and answers them for free.** The question Chartroom
 exists to settle is whether that actually buys anything over the cold-parse,

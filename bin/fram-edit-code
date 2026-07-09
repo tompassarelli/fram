@@ -44,7 +44,7 @@
 ;;                  and stop — do NOT commit (used as the recompile-gate pre-step).
 ;;
 ;; SAFETY: --port must serve a *code.log (fram-commit-code asserts this). NEVER
-;; the live tern coordinator. NO src/fram/*.bclj is read on this path.
+;; the live north coordinator. NO src/fram/*.bclj is read on this path.
 ;; Env: BEAGLE_HOME, FRAM_ROUNDTRIP, FRAM_RESOLVE, FRAM_BIN, FRAM_OUT.
 ;; ============================================================================
 (require '[clojure.string :as str]
@@ -199,7 +199,7 @@
                                         :old (edn/read-string (slurp old-file))
                                         :new (edn/read-string (slurp new-file))})
                  (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-comment | delete | reorder | replace-in-body)"))]
-      ;; SAFETY GATE: refuse unless the daemon serves a CODE log (never tern).
+      ;; SAFETY GATE: refuse unless the daemon serves a CODE log (never north).
       (let [st (coord-rt port {:op :status}) daemon-log (str (:log st))]
         (when (str/blank? daemon-log) (die "coordinator on" port "reports no :log — refusing"))
         (when-not (str/includes? daemon-log "code.log")

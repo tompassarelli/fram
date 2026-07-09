@@ -11,7 +11,7 @@
 ;; set-P AND add-P with identical semantics. Vocabulary is discoverable, not tooled:
 ;; a predicate is an entity, so `show <pred>` reveals its cardinality/value_kind facts
 ;; and `ask` enumerates it. `threads` and `dependents-of` are NOT here — threads are a
-;; TERN concept (tern serves them) and a reverse edge is an `ask`.
+;; NORTH concept (north serves them) and a reverse edge is an `ask`.
 ;; Reads fold the current log; writes route through the coordinator.
 ;; cheshire keywordizes the JSON arguments into exactly the EDN shape fram.tools /
 ;; fram.query expect, so a model fills typed params (or, for `ask`, emits a

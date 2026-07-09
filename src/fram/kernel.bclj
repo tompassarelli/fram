@@ -12,10 +12,10 @@
 ;; Lifecycle is NOT a stored enum — it's derived from these structural facts:
 ;; commitment (`committed`), completion (`outcome`), withdrawal (`abandoned`),
 ;; activity (`driver`/clock, derived), blocked (`depends_on`, derived).
-;; Cardinality vocab is INJECTED by the app (tern exports FRAM_SINGLE_VALUED,
+;; Cardinality vocab is INJECTED by the app (north exports FRAM_SINGLE_VALUED,
 ;; space-separated) — the engine hard-codes NO domain vocab of its own. The literal
 ;; below is a TRANSITIONAL fallback for back-compat (tests / un-wrapped invocation);
-;; it goes away once every caller sets the env. (§1.1, fram/tern un-tangle.)
+;; it goes away once every caller sets the env. (§1.1, fram/north un-tangle.)
 (def single-valued :- (Vec String)
   (let [env :- Any (System/getenv "FRAM_SINGLE_VALUED")]
     (if (and (some? env) (not (= env "")))
@@ -28,9 +28,9 @@
 ;; LIFECYCLE vocab, env-injected (mirrors single-valued — the consumer declares it):
 ;; "terminal" = resolved (done/canceled); "withdrawn" = a depends_on target that's
 ;; suspect to depend on. The lifecycle DERIVATION (terminal?/terminal-i?) moved to
-;; tern.projections; the kernel keeps only this vocab, for the two engine-side
+;; north.projections; the kernel keeps only this vocab, for the two engine-side
 ;; consumers that still read it: the coordinator's the-model §9 terminal-cascade
-;; (coord_daemon) and the doctor vocab-fingerprint. Defaults are the tern
+;; (coord_daemon) and the doctor vocab-fingerprint. Defaults are the north
 ;; lifecycle vocab; a consumer overrides via the env vars.
 (def terminal-preds :- (Vec String)
   (let [env :- Any (System/getenv "FRAM_TERMINAL_PREDS")]
@@ -159,7 +159,7 @@
   (mapv (fn [c :- Fact] :- String (:r c)) (q-lp facts l p)))
 
 ;; NOTE: lifecycle DERIVATION (`terminal?`/`terminal-i?` and their `any-of?`
-;; helpers) moved OUT to tern.projections — deriving "resolved" from
+;; helpers) moved OUT to north.projections — deriving "resolved" from
 ;; outcome/abandoned is WORK semantics, not a structural engine concern. The
 ;; engine stores the lifecycle facts and keeps the `terminal-preds`/
 ;; `withdrawn-preds` vocab (the coordinator's the-model §9 terminal-cascade and
@@ -269,10 +269,10 @@
 
 ;; GENERIC structural integrity only (cycles + dangling refs). The WORK rules
 ;; (depends_on→abandoned, and lead/driver/proposed_by must be a display_name
-;; person) moved to tern.validate — the engine knows no lifecycle or
+;; person) moved to north.validate — the engine knows no lifecycle or
 ;; person/role vocab. Existence is title-based: a real thread always carries a
 ;; single-valued `title`, so "titled entity" is the engine's internal existence test —
-;; a TERN convention the engine keeps as a mechanic (the surfaced tool is gone, the
+;; a NORTH convention the engine keeps as a mechanic (the surfaced tool is gone, the
 ;; helper stays). The constrained pred sets are schema-as-facts (see ref-preds-of /
 ;; acyclic-preds-of); with no schema facts they are the original hardcoded lists.
 (defn violations [facts :- (Vec Fact) te :- String] :- (Vec String)
@@ -334,12 +334,12 @@
   (filterv (fn [s :- String] :- Bool (some? (one-i idx s "title"))) (:subjects idx)))
 
 ;; NOTE: `anchor-i?` / `work-thread-ids-i` (the WORK-thread set — anchors excluded)
-;; moved OUT to tern.projections. They are WORK semantics (which titled nodes
+;; moved OUT to north.projections. They are WORK semantics (which titled nodes
 ;; are actionable work vs grouping anchors), not a structural engine concern, and
 ;; had zero fram callers. The engine keeps only the structural `thread-ids-i`.
 
 ;; `terminal-i?` / `any-of-i?` (indexed lifecycle derivation) also moved to
-;; tern.projections — see the flat `terminal?` note above.
+;; north.projections — see the flat `terminal?` note above.
 
 (defn dependents-i [idx :- Index te :- String] :- (Vec String)
   (get (:revdep idx) te []))
@@ -355,7 +355,7 @@
 
 ;; GENERIC structural integrity only (cycles + dangling refs), mirroring the flat
 ;; `violations`. The WORK rules (depends_on→abandoned, person/role refs) moved to
-;; tern.validate/work-violations-i.
+;; north.validate/work-violations-i.
 ;; Existence is title-based (a real thread carries a single-valued `title`); the
 ;; constrained pred sets are the index's schema-as-facts ref-preds / acyclic-preds
 ;; (derived once in build-index; the hardcoded lists when the log declares no schema).

@@ -3,7 +3,7 @@
   "Engine CLI: generic fact operations over the log — import/export, show, set,
   merge, tell/retract (coordinator write; `untell` is an accepted alias for
   `retract`), validate, watch. The life domain
-  (lifecycle projections, clock, capture conventions) lives in Tern."
+  (lifecycle projections, clock, capture conventions) lives in North."
   (:gen-class))
 
 (require fram.kernel :as k)

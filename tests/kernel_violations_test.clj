@@ -1,8 +1,8 @@
 ;; kernel_violations_test.clj — the GENERIC structural integrity rules the engine
-;; KEEPS after the work-semantics rules moved out to tern.validate: dangling
+;; KEEPS after the work-semantics rules moved out to north.validate: dangling
 ;; refs (depends_on / part_of / relates_to → a thread with no `title`) and cycles
 ;; (depends_on / part_of). The WORK rules (person-refs, depends_on→abandoned) now
-;; live in tern — see tern/validate_test.clj. Mirrors BOTH the indexed
+;; live in north — see north/validate_test.clj. Mirrors BOTH the indexed
 ;; (violations-i) and flat (violations) paths.
 ;;   bb -cp out tests/kernel_violations_test.clj      (from the repo ROOT)
 (require '[fram.kernel :as k])
@@ -28,7 +28,7 @@
   [(k/->Fact "@a" "title" "A") (k/->Fact "@b" "title" "B")
    (k/->Fact "@a" "depends_on" "@b") (k/->Fact "@b" "depends_on" "@a")])
 
-;; the engine must NOT derive a person/role violation (that moved to tern).
+;; the engine must NOT derive a person/role violation (that moved to north).
 (def role-facts [(k/->Fact "@w" "title" "W") (k/->Fact "@w" "driver" "@ghost")])
 
 (def checks

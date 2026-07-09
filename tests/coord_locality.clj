@@ -27,7 +27,7 @@
 ;;   set-body on different defns, which commute).
 ;;
 ;; SAFETY: isolated coordinator on a /tmp log. Never touches port 7977 or the
-;; canonical tern log (~/.local/state/tern/facts.log).
+;; canonical north log (~/.local/state/north/facts.log).
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.string :as str])
 (load-file "coord.clj")
