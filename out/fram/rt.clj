@@ -362,10 +362,16 @@
   (.format (java.time.LocalDateTime/now)
            (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ss")))
 
+;; Canonical timestamps are zone-less local ISO (now-iso above), but facts also
+;; arrive hand-written with a Z/±hh:mm offset (e.g. reconstructed clock
+;; sessions). Honor an explicit offset when present; anything zone-less stays
+;; interpreted in the system zone as before.
 (defn iso-to-seconds [s]
   (let [normalized (if (= 16 (count s)) (str s ":00") s)]
-    (.toEpochSecond (.atZone (java.time.LocalDateTime/parse normalized)
-                             (java.time.ZoneId/systemDefault)))))
+    (if (re-find #"(Z|[+-]\d\d:?\d\d)$" normalized)
+      (.toEpochSecond (java.time.OffsetDateTime/parse normalized))
+      (.toEpochSecond (.atZone (java.time.LocalDateTime/parse normalized)
+                               (java.time.ZoneId/systemDefault))))))
 
 ;; tolerant int parse for fact literals (estimate_hours etc.); 0 on garbage.
 (defn parse-int [s]
