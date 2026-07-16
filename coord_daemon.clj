@@ -232,8 +232,13 @@
 ;; valued) override the hardcoded allow-list. Absent => default holds. Read once at boot.
 (defn- load-log-routing! [st]
   (when st
-    (when-let [wid (s/resolve-name st "@log-routing")]
-      (when-let [ks (seq (s/lookup-all st wid "telemetry_kind"))]
+    ;; @worlds was the original public name. Prefer the vocabulary-neutral name,
+    ;; but keep old persisted routing policy effective during migration.
+    (let [canonical (when-let [wid (s/resolve-name st "@log-routing")]
+                      (seq (s/lookup-all st wid "telemetry_kind")))
+          legacy    (when-let [wid (s/resolve-name st "@worlds")]
+                      (seq (s/lookup-all st wid "telemetry_kind")))]
+      (when-let [ks (or canonical legacy)]
         (reset! telemetry-kinds (set (map str ks)))))))
 
 (defn- write-flat-lines! [lines]
@@ -3043,19 +3048,38 @@
 ;; Boot re-aim: the log split's artifact IS the switch (mirrors bin/north).
 ;; A caller holding a stale pre-split path — e.g. a systemd unit pinning
 ;; facts.log in ExecStart — must not fork the lineage: if coordination.log
-;; exists beside the requested log, serve the split pair instead. Rollback
+;; exists beside that exact legacy alias, serve the split pair instead. Rollback
 ;; (delete coordination.log) disables this automatically. 2026-07-16 incident:
 ;; north-coord.service respawned onto frozen facts.log and diverged live writes.
+(defn- canonical-path [f] (.getCanonicalPath (java.io.File. (str f))))
+
+(defn- activate-split! [coord]
+  (let [coord-file (.getAbsoluteFile (java.io.File. (str coord)))
+        expected   (canonical-path (java.io.File. (.getParentFile coord-file) "telemetry.log"))]
+    (if-let [configured @telemetry-log]
+      (when-not (= expected (canonical-path configured))
+        (throw (ex-info "FRAM_TELEMETRY_LOG must be telemetry.log beside coordination.log"
+                        {:coordination (canonical-path coord-file)
+                         :telemetry (canonical-path configured)
+                         :expected expected})))
+      (reset! telemetry-log expected))))
+
 (defn- reaim-split [path]
-  (let [f   (.getAbsoluteFile (java.io.File. (str path)))
-        cl  (java.io.File. (.getParentFile f) "coordination.log")]
-    (if (and (.isFile cl) (not= (.getName f) "coordination.log"))
-      (do (when-not @telemetry-log
-            (reset! telemetry-log (str (java.io.File. (.getParentFile f) "telemetry.log"))))
+  (let [f  (.getAbsoluteFile (java.io.File. (str path)))
+        cl (java.io.File. (.getParentFile f) "coordination.log")]
+    (cond
+      ;; Starting on the canonical coordination half must still activate the pair.
+      (= (.getName f) "coordination.log")
+      (do (activate-split! f) (.getPath f))
+
+      ;; Only the frozen pre-split alias is eligible for automatic re-aiming.
+      (and (= (.getName f) "facts.log") (.isFile cl))
+      (do (activate-split! cl)
           (println (str "[fram] boot re-aim: " path " -> " (.getPath cl)
                         " (log split active; telemetry: " @telemetry-log ")"))
           (.getPath cl))
-      path)))
+
+      :else path)))
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd

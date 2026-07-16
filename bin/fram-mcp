@@ -9,7 +9,8 @@
 # fold the log; writes route through the coordinator. Point a model's MCP client
 # at this command.
 #
-#   FRAM_THREADS / FRAM_LOG select the corpus (same vars the CLI reads).
+#   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
+#   names its split telemetry half. Reads fold the pair into one logical store.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
 export FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"

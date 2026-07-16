@@ -12,17 +12,21 @@
 ;; a tiny self-contained log: @a -depends_on-> @b
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-mcp-test-" (System/nanoTime)))
 (.mkdirs (java.io.File. tmp))
-(def logpath (str tmp "/facts.log"))
+(def logpath (str tmp "/coordination.log"))
+(def telemetry-path (str tmp "/telemetry.log"))
 (spit logpath
   (str/join "\n"
     ['{:tx 1 :op "assert" :l "@a" :p "title" :r "A" :frame "test"}
      '{:tx 2 :op "assert" :l "@a" :p "owner" :r "personal" :frame "test"}
      '{:tx 3 :op "assert" :l "@a" :p "depends_on" :r "@b" :frame "test"}
      '{:tx 4 :op "assert" :l "@b" :p "title" :r "B" :frame "test"}]))
+(spit telemetry-path
+  (pr-str '{:tx 5 :op "assert" :l "@run-test" :p "kind" :r "run" :frame "test"}))
 
 ;; a port nothing listens on — the warm query path and write path must fail
 ;; deterministically instead of finding a live daemon serving another corpus.
 (def dead-port "59998")
+;; No FRAM_TELEMETRY_LOG: canonical coordination.log must imply its sibling.
 (def env {"FRAM_LOG" logpath "FRAM_THREADS" tmp "FRAM_PORT" dead-port})
 
 (def reaches-query
@@ -36,6 +40,8 @@
      (json/generate-string {:jsonrpc "2.0" :id 2 :method "tools/list" :params {}})
      (json/generate-string {:jsonrpc "2.0" :id 3 :method "tools/call"
                             :params {:name "show" :arguments {:subject "a"}}})
+     (json/generate-string {:jsonrpc "2.0" :id 10 :method "tools/call"
+                            :params {:name "show" :arguments {:subject "run-test"}}})
      (json/generate-string {:jsonrpc "2.0" :id 4 :method "tools/call"
                             :params {:name "query" :arguments {:query reaches-query}}})
      (json/generate-string {:jsonrpc "2.0" :id 5 :method "tools/call"
@@ -76,6 +82,10 @@
       preds (set (map #(get % "pred") (json/parse-string txt)))]
   (chk "show by subject returns @a's facts" (every? preds ["title" "owner" "depends_on"])))
 
+(let [r10 (get by-id 10) txt (get-in r10 [:result :content 0 :text])
+      preds (set (map #(get % "pred") (json/parse-string txt)))]
+  (chk "show reads the split telemetry half" (contains? preds "kind")))
+
 (let [r4 (get by-id 4) txt (get-in r4 [:result :content 0 :text])
       pairs (set (map vec (json/parse-string txt)))]
   (chk "query (transitive) returns the @a->@b edge" (contains? pairs ["@a" "@b"])))
@@ -114,6 +124,21 @@
 (chk "unknown method -> -32601" (boolean (some #(= -32601 (get-in % [:error :code])) conf-parsed)))
 (chk "normal request after the batch still answered"
      (boolean (some #(and (= 9 (:id %)) (:result %)) conf-parsed)))
+
+;; Canonical inference is deliberately name-scoped: an unrelated primary log
+;; beside telemetry.log remains a single physical corpus unless env opts in.
+(def alternate-log (str tmp "/alternate.log"))
+(spit alternate-log (slurp logpath))
+(def alternate-out
+  (:out (p/shell {:in (str (json/generate-string
+                              {:jsonrpc "2.0" :id 20 :method "tools/call"
+                               :params {:name "show" :arguments {:subject "run-test"}}}) "\n")
+                  :out :string :err :string
+                  :extra-env {"FRAM_LOG" alternate-log "FRAM_THREADS" tmp "FRAM_PORT" dead-port}}
+                 "bin/fram-mcp")))
+(def alternate-response (json/parse-string (first (remove str/blank? (str/split-lines alternate-out))) true))
+(chk "an unrelated primary log does not infer telemetry.log"
+     (= [] (json/parse-string (get-in alternate-response [:result :content 0 :text]))))
 
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))

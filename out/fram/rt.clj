@@ -172,6 +172,20 @@
          vec)
     []))
 
+;; Read the configured split corpus as one transaction-ordered history. Callers
+;; that need a complete logical store (MCP/query projections) use this; write
+;; paths continue to name their single physical destination explicitly.
+(defn read-configured-logs []
+  (let [primary (log-path)
+        primary-file (.getAbsoluteFile (io/file primary))
+        inferred (when (= "coordination.log" (.getName primary-file))
+                   (str (io/file (.getParentFile primary-file) "telemetry.log")))
+        coord (read-log primary)
+        telemetry (or (System/getenv "FRAM_TELEMETRY_LOG") inferred)]
+    (if telemetry
+      (vec (sort-by #(or (:tx %) 0) (into coord (read-log telemetry))))
+      coord)))
+
 (defn write-log [path fact-ops]
   (let [ts (now-ts)                                  ; one batch instant (this import/rewrite)
         lines (map (fn [a]
