@@ -38,6 +38,17 @@
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
+;; ---- worlds: kind-routed per-world log persistence (A1: unified store, split disk) ----
+;; FRAM_TELEMETRY_LOG nil => single-log, BYTE-IDENTICAL to pre-worlds (write path,
+;; boot, snapshot all unchanged). Set => the coordinator partitions each written flat
+;; line to a per-world file by world-of(subject); boot merge-replays both by :tx into
+;; the ONE unified store, so every warm read/query/subscribe still sees all worlds.
+(def telemetry-log (atom (System/getenv "FRAM_TELEMETRY_LOG")))
+;; telemetry allow-list of KIND names — an allow-list, never a deny-list: everything
+;; NOT here (thread/concern/@agent/@lease/@cmd/@swarm/un-kinded legacy/unknown) is
+;; coordination. Hardcoded fallback; overridable as data via @worlds config facts.
+(def default-telemetry-kinds #{"run" "session" "mine" "guard_denial"})
+(def telemetry-kinds (atom default-telemetry-kinds))
 ;; ENGINE predicates — never ordinary domain data. Split by WRITE POLICY (F3):
 ;;   hard-reserved   — identity/bookkeeping; a domain tell/retract is REJECTED (as always).
 ;;   schema-writable — cardinality/value_kind: VALIDATED domain writes (the schema-write
@@ -193,10 +204,56 @@
 ;; instead of convoying on K of them. flat-mtime is refreshed on the appender thread,
 ;; atomically with the append (group-io-lock), so our OWN write is never mistaken for an
 ;; external edit by maybe-reload!.
+;; ---- world-of: which world does a subject's line belong to? ----------------
+;; PRIMARY = the subject's stored `kind` fact (warm store, O(1)). FALLBACK (kind-less
+;; subject, e.g. @session which carries NO kind fact yet is the biggest telemetry
+;; mass) = the structural @<token> prefix. A subject is promoted to :telemetry ONLY
+;; when its kind — or, kind-less, its token — is in the telemetry allow-list; every-
+;; thing else defaults :coordination (threads @2026-*, concern-*, @agent/@lease/@cmd
+;; tokens not in the list, un-kinded legacy). Misroute is hygiene-only, never a read
+;; bug: the store is unified (A1), so a line in the "wrong" file still folds correctly.
+(defn- subject-token [subject]
+  (when (and (string? subject) (> (count subject) 1) (= \@ (.charAt ^String subject 0)))
+    (let [c (.indexOf ^String subject ":")]
+      (when (pos? c) (subs subject 1 c)))))
+(defn- kind-of-subject [st subject]
+  (when (and st subject)
+    (when-let [sid (s/resolve-name st subject)]
+      (s/lookup st sid "kind"))))
+(defn- world-of [st subject]
+  (let [k (or (kind-of-subject st subject) (subject-token subject))]
+    (if (contains? @telemetry-kinds k) :telemetry :coordination)))
+;; a flat line is one EDN map per string; recover its subject (:l) to route it.
+;; A malformed/unreadable line routes :coordination (safe default).
+(defn- line-subject [ln]
+  (try (:l (edn/read-string ln)) (catch Exception _ nil)))
+
+;; the kind→world map is DATA, not code: `@worlds telemetry_kind <k>` facts (multi-
+;; valued) override the hardcoded allow-list. Absent => default holds. Read once at boot.
+(defn- load-worlds-config! [st]
+  (when st
+    (when-let [wid (s/resolve-name st "@worlds")]
+      (when-let [ks (seq (s/lookup-all st wid "telemetry_kind"))]
+        (reset! telemetry-kinds (set (map str ks)))))))
+
 (defn- write-flat-lines! [lines]
   (when (and @flat-log (seq lines))
-    (enqueue-durable! (str @flat-log) (vec lines)
-                      (fn [] (reset! flat-mtime (stamp @flat-log))))))
+    (if-let [tlog @telemetry-log]
+      ;; ROUTED: partition by world; the group-commit appender already keys on :path,
+      ;; so two enqueues to two paths fan out with one fsync per file. Coordination keeps
+      ;; the EXACT legacy path + flat-mtime callback (so the daemon's own coordination
+      ;; append is never misread as an external edit); telemetry needs no mtime tracking
+      ;; (maybe-reload! watches only the coordination log).
+      (let [st (some-> @co :store)
+            g  (group-by #(world-of st (line-subject %)) lines)]
+        (when-let [coord (seq (:coordination g))]
+          (enqueue-durable! (str @flat-log) (vec coord)
+                            (fn [] (reset! flat-mtime (stamp @flat-log)))))
+        (when-let [telem (seq (:telemetry g))]
+          (enqueue-durable! (str tlog) (vec telem) nil)))
+      ;; LEGACY single-log — BYTE-IDENTICAL to pre-worlds.
+      (enqueue-durable! (str @flat-log) (vec lines)
+                        (fn [] (reset! flat-mtime (stamp @flat-log)))))))
 (defn- append-flat! [op te p r seq]
   (if *flat-batch*
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
@@ -2354,13 +2411,26 @@
                   (filter #(contains? cmap %)))
         lines))
 
+;; boot merge-replay: the whole-log fold reads the UNION of world logs, stable-sorted
+;; by :tx (the sole total order). Correctness (constraint 2, byte-identical to a single-
+;; log fold of the same records): fold/keyed-latest keeps the MAX-:tx line PER KEY
+;; (order-independent), and cross-world facts never share a key ((l,p)[,r]) — different
+;; subjects live in different worlds — so any interleaving folds identically. The stable
+;; sort makes the merge deterministic. telemetry-log nil => returns the coordination log
+;; verbatim (byte-identical to pre-worlds boot).
+(defn- read-worlds-merged [flat]
+  (let [coord (fram.rt/read-log flat)]
+    (if-let [tlog @telemetry-log]
+      (vec (sort-by #(or (:tx %) 0) (into coord (fram.rt/read-log tlog))))
+      coord)))
+
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
         ;; without fsync, so a copy/read caught mid-write can yield an assertion
         ;; missing a field — and fold itself calls single? on :p, so the incomplete
         ;; line must be dropped pre-fold. A torn line is an incomplete write that
         ;; must NOT apply (the writer retries).
-        raw (fram.rt/read-log flat)
+        raw (read-worlds-merged flat)
         ;; max :tx over ALL parsed lines — same set fold/max-tx (doctor's log-v)
         ;; counts, INCLUDING a torn tail (EDN-valid but missing :r). Seeding over
         ;; only the filtered asserts would lag by one when the tail is torn and make
@@ -2687,9 +2757,14 @@
   (reset! flat-canonical? true)
   (let [t0   (System/nanoTime)
         snap (read-sidecar flat)
-        why  (if @snapshot-boot-enabled?
-               (validate-sidecar snap flat)
-               "disabled (FRAM_SNAPSHOT_BOOT unset)")
+        why  (cond
+               (not @snapshot-boot-enabled?) "disabled (FRAM_SNAPSHOT_BOOT unset)"
+               ;; a snapshot image covers the unified store but its tail-fold reads ONLY
+               ;; the coordination log's byte offset — it cannot see telemetry-world lines
+               ;; past the checkpoint. Under worlds routing, force the whole-log MERGE boot
+               ;; (both logs). A1 costs no boot speedup anyway (plan §GO); correctness > latency.
+               @telemetry-log "disabled (worlds routing active — whole-log merge boot)"
+               :else (validate-sidecar snap flat))
         [ib why] (if why
                    [nil why]
                    (try (if-let [r (incremental-boot snap flat)]
@@ -2705,6 +2780,7 @@
         (reset! built-through (or (:next-seq @(:store c0)) 0))))
     (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
     (reset! flat-log flat)
+    (load-worlds-config! (:store @co))     ; worlds: data-driven telemetry allow-list (@worlds facts > default)
     (seed-schema-view! flat)               ; F4: log-resident schema-writable facts for the read view
     (reset! flat-mtime (stamp flat))
     (reset! flat-bytes (.length (java.io.File. (str flat))))
@@ -2874,7 +2950,10 @@
       (binding [*out* *err*]
         (println (str "[fram] checkpoint (" why ") FAILED: " (.getMessage t)))))))
 (defn start-snapshot-writer! []
-  (when (and @snapshot-boot-enabled? @flat-log)
+  ;; nil? @telemetry-log: don't write checkpoints under worlds routing — boot-flat!
+  ;; forces the whole-log merge (snapshot fast-path disabled), so images would only
+  ;; accumulate unread. Per-world snapshots are a later enhancement (plan Lane 1 note).
+  (when (and @snapshot-boot-enabled? @flat-log (nil? @telemetry-log))
     ;; booted FROM a checkpoint -> the state through the current seq is exactly
     ;; what the next boot reconstructs from image+tail; only NEW commits warrant
     ;; the next checkpoint. (A fold boot leaves the seed at -1 so the post-boot
