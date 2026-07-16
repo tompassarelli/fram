@@ -3040,6 +3040,23 @@
             (System/exit 0))   ; exit cleanly so the test frees the listener port (don't leak it)
         (do (println "\nStage 7 (daemon):" (count fails) "FAILED") (System/exit 1))))))
 
+;; Boot re-aim: the log split's artifact IS the switch (mirrors bin/north).
+;; A caller holding a stale pre-split path — e.g. a systemd unit pinning
+;; facts.log in ExecStart — must not fork the lineage: if coordination.log
+;; exists beside the requested log, serve the split pair instead. Rollback
+;; (delete coordination.log) disables this automatically. 2026-07-16 incident:
+;; north-coord.service respawned onto frozen facts.log and diverged live writes.
+(defn- reaim-split [path]
+  (let [f   (.getAbsoluteFile (java.io.File. (str path)))
+        cl  (java.io.File. (.getParentFile f) "coordination.log")]
+    (if (and (.isFile cl) (not= (.getName f) "coordination.log"))
+      (do (when-not @telemetry-log
+            (reset! telemetry-log (str (java.io.File. (.getParentFile f) "telemetry.log"))))
+          (println (str "[fram] boot re-aim: " path " -> " (.getPath cl)
+                        " (log split active; telemetry: " @telemetry-log ")"))
+          (.getPath cl))
+      path)))
+
 (let [[cmd p log flat] *command-line-args*]
   (case cmd
     ;; v2-log canonical + optional flat projection (design A)
@@ -3049,6 +3066,6 @@
     ;; DROP-IN: flat log canonical, reified engine over it (design B) — the safe
     ;; reversible swap for coord.clj: `serve-flat 7977 <facts.log>`
     "serve-flat" (serve-flat-daemon (Integer/parseInt (or p "7977"))
-                                    (or log (str (System/getProperty "user.dir") "/data/facts.log")))
+                                    (reaim-split (or log (str (System/getProperty "user.dir") "/data/facts.log"))))
     "test"       (run-test (Integer/parseInt (or p "7988")))
     nil))
