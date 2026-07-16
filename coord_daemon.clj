@@ -2053,7 +2053,14 @@
       ;; thread 019f100f-7fff — snapshot/compaction surface:
       ;; :snapshot writes a checkpoint (dump-log! image + @snapshot:<seq> facts);
       ;; :snapshot-reconcile is the gate (live store == from-scratch whole migrate).
-      :snapshot           (if @flat-log (write-snapshot! @co @flat-log) {:error "snapshot needs flat-log (drop-in) mode"})
+      :snapshot           (cond
+                            (not @flat-log) {:error "snapshot needs flat-log (drop-in) mode"}
+                            ;; refuse under worlds routing: write-snapshot!'s byte_offset indexes
+                            ;; ONLY the coordination log, so a later FRAM_TELEMETRY_LOG-unset reboot
+                            ;; would incremental-boot off this sidecar and silently drop telemetry
+                            ;; facts committed after it. Mirrors the periodic-writer guard.
+                            @telemetry-log {:error "snapshot disabled under worlds routing (FRAM_TELEMETRY_LOG set)"}
+                            :else (write-snapshot! @co @flat-log))
       :snapshot-reconcile (snapshot-reconcile)
       :built-through      {:built-through @built-through :version (current-seq @co)}
       ;; warm scope-correct callers of a binding, served from refers_to materialized
@@ -2913,6 +2920,13 @@
               :hash           (g "snapshot_hash")})))))
 
 (defn materialize-as-of [flat n]
+  ;; FAIL-CLOSED under worlds routing: this reads ONLY the coordination `flat` tail
+  ;; (read-log-tail flat …) and telemetry has no snapshots, so an as-of over a routed
+  ;; store would silently omit telemetry-world facts. Dead today (no callers); guard now
+  ;; so it can't be wired into a wrong answer. To support as-of under routing, teach it to
+  ;; merge-read the telemetry tail (read-worlds-merged-style) truncated at :tx <= n.
+  (when @telemetry-log
+    (throw (ex-info "materialize-as-of is not world-aware under FRAM_TELEMETRY_LOG routing" {:flat flat :n n})))
   (let [n (long n)
         cand (->> (snapshot-entries @co)
                   (filter #(and (:covers_through %) (<= (long (:covers_through %)) n)
