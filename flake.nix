@@ -17,7 +17,7 @@
           # whole runtime tree under libexec and wrap each script with the interpreters
           # on PATH. The CLI + MCP run on babashka against the committed out/ classpath
           # (offline, no maven). The daemon uses JVM clojure + deps.edn.
-          runtimePath = pkgs.lib.makeBinPath [
+          runtimePackages = [
             pkgs.babashka
             pkgs.clojure
             pkgs.jdk
@@ -25,9 +25,12 @@
             pkgs.bash
             pkgs.gnused
             pkgs.gnugrep
-            pkgs.iproute2 # `ss` — fram-up's port probe
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.iproute2 # `ss` — fram-up's Linux port probe
+          ] ++ [
             pkgs.git
           ];
+          runtimePath = pkgs.lib.makeBinPath runtimePackages;
         in
         pkgs.stdenv.mkDerivation {
           pname = "fram";
