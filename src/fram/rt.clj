@@ -256,6 +256,296 @@
 (defn- connect-host []
   (let [h (System/getenv "FRAM_CONNECT")] (if (str/blank? h) "127.0.0.1" h)))
 
+(defn- coord-timeout-ms [name default]
+  (let [raw (or (System/getenv name) (str default))]
+    (when-not (re-matches #"[1-9][0-9]{0,5}" raw)
+      (throw
+       (ex-info
+        (str name " must be an integer from 1 through 999999 milliseconds")
+        {:type :invalid-coordinator-timeout :name name :value raw})))
+    (Integer/parseInt raw)))
+
+(defn- coord-response-byte-limit []
+  (let [raw (or (System/getenv "FRAM_COORD_MAX_RESPONSE_BYTES") "67108864")
+        value (when (re-matches #"[1-9][0-9]{0,8}" raw)
+                (Long/parseLong raw))]
+    (when-not (and value (<= value 67108864))
+      (throw
+       (ex-info
+        "FRAM_COORD_MAX_RESPONSE_BYTES must be an integer from 1 through 67108864"
+        {:type :invalid-coordinator-response-limit :value raw})))
+    (int value)))
+
+(defn- coord-response-timeout! [timeout cause]
+  (throw
+   (ex-info "coordinator response deadline exceeded"
+            {:type :coordinator-response-timeout
+             :timeout-ms timeout}
+            cause)))
+
+(defn- decode-coord-utf8! [bytes]
+  (try
+    (let [decoder
+          (doto (.newDecoder java.nio.charset.StandardCharsets/UTF_8)
+            (.onMalformedInput java.nio.charset.CodingErrorAction/REPORT)
+            (.onUnmappableCharacter java.nio.charset.CodingErrorAction/REPORT))]
+      (str (.decode decoder (java.nio.ByteBuffer/wrap bytes))))
+    (catch java.nio.charset.CharacterCodingException error
+      (throw
+       (ex-info "coordinator response line is not valid UTF-8"
+                {:type :malformed-coordinator-utf8}
+                error)))))
+
+(defrecord CoordinatorReader [socket input buffer bounds])
+
+(defn coordinator-reader [socket]
+  (->CoordinatorReader
+   socket
+   (.getInputStream socket)
+   (byte-array 65536)
+   (int-array 2)))
+
+(defn- as-coordinator-reader [source]
+  (if (instance? CoordinatorReader source)
+    source
+    (coordinator-reader source)))
+
+(defn- coord-newline-offset [buffer start end]
+  (.indexOf
+   (String.
+    buffer
+    start
+    (- end start)
+    java.nio.charset.StandardCharsets/ISO_8859_1)
+   "\n"))
+
+(defn- finish-coord-line! [output]
+  (let [line (decode-coord-utf8! (.toByteArray output))]
+    (if (str/ends-with? line "\r")
+      (subs line 0 (dec (count line)))
+      line)))
+
+(defn- arm-coord-deadline! [socket deadline timeout]
+  (let [remaining-ns (- deadline (System/nanoTime))]
+    (when-not (pos? remaining-ns)
+      (coord-response-timeout! timeout nil))
+    (.setSoTimeout
+     socket
+     (int (max 1 (quot (+ remaining-ns 999999) 1000000))))))
+
+(defn- read-coord-line! [source deadline timeout eof-ok?]
+  (let [{:keys [socket input buffer bounds]} (as-coordinator-reader source)
+        buffer-size (alength buffer)
+        limit (coord-response-byte-limit)
+        output (java.io.ByteArrayOutputStream.)]
+    (loop []
+      (when (and deadline (not (pos? (- deadline (System/nanoTime)))))
+        (coord-response-timeout! timeout nil))
+      (let [start (aget bounds 0)
+            end (aget bounds 1)]
+        (if (< start end)
+          (let [available (- end start)
+                newline-offset (coord-newline-offset buffer start end)
+                take-bytes (if (neg? newline-offset) available newline-offset)
+                total (+ (.size output) take-bytes)]
+            (when (> total limit)
+              (throw
+               (ex-info
+                (str "coordinator response line exceeds " limit " bytes")
+                {:type :coordinator-response-too-large
+                 :max-bytes limit})))
+            (.write output buffer start take-bytes)
+            (if (neg? newline-offset)
+              (do
+                (aset-int bounds 0 end)
+                (recur))
+              (do
+                (aset-int bounds 0 (+ start newline-offset 1))
+                (finish-coord-line! output))))
+          (do
+            (when deadline
+              (arm-coord-deadline! socket deadline timeout))
+            (let [read-count
+                  (try
+                    (.read input buffer 0 buffer-size)
+                    (catch java.net.SocketTimeoutException error
+                      (coord-response-timeout! timeout error)))]
+              (cond
+                (= -1 read-count)
+                (if (and eof-ok? (zero? (.size output)))
+                  nil
+                  (throw
+                   (ex-info
+                    (if (zero? (.size output))
+                      "coordinator closed before sending a response line"
+                      "coordinator closed during a response line")
+                    {:type (if (zero? (.size output))
+                             :coordinator-response-closed
+                             :coordinator-response-truncated)
+                     :bytes (.size output)})))
+
+                (zero? read-count)
+                (recur)
+
+                :else
+                (do
+                  (aset-int bounds 0 0)
+                  (aset-int bounds 1 read-count)
+                  (recur))))))))))
+
+(defn read-coord-response-line!
+  "Read one bounded UTF-8 response line under an absolute total deadline."
+  [source]
+  (let [timeout (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 2000)]
+    (read-coord-line!
+     source
+     (+ (System/nanoTime) (* 1000000 (long timeout)))
+     timeout
+     false)))
+
+(defn read-coord-stream-line!
+  "Read one bounded UTF-8 event line without an idle deadline.
+   A persistent reader retains bytes following the newline for the next event."
+  [source]
+  (let [reader (as-coordinator-reader source)]
+    (.setSoTimeout (:socket reader) 0)
+    (read-coord-line! reader nil nil true)))
+
+(defn- ensure-coord-terminal-eof! [reader deadline timeout]
+  (let [{:keys [socket input buffer bounds]} reader]
+    (loop []
+      (let [start (aget bounds 0)
+            end (aget bounds 1)]
+        (when (< start end)
+          (throw
+           (ex-info "coordinator sent more than one terminal response frame"
+                    {:type :multiple-coordinator-response-frames
+                     :surplus-bytes (- end start)})))
+        (arm-coord-deadline! socket deadline timeout)
+        (let [read-count
+              (try
+                (.read input buffer 0 (alength buffer))
+                (catch java.net.SocketTimeoutException error
+                  (coord-response-timeout! timeout error)))]
+          (cond
+            (= -1 read-count) nil
+            (zero? read-count) (recur)
+            :else
+            (throw
+             (ex-info "coordinator sent more than one terminal response frame"
+                      {:type :multiple-coordinator-response-frames
+                       :surplus-bytes read-count}))))))))
+
+(defn- read-coord-terminal-line-with-timeout! [reader timeout]
+  (let [deadline (+ (System/nanoTime) (* 1000000 (long timeout)))
+        line (read-coord-line! reader deadline timeout false)]
+    (ensure-coord-terminal-eof! reader deadline timeout)
+    line))
+
+(defn- read-coord-terminal-line! [reader]
+  (read-coord-terminal-line-with-timeout!
+   reader
+   (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 2000)))
+
+(defn- malformed-coord-line! [message line error]
+  (throw
+   (ex-info
+    message
+    {:type :malformed-coordinator-response
+     :line-bytes
+     (count (.getBytes
+             (str line)
+             java.nio.charset.StandardCharsets/UTF_8))}
+    error)))
+
+(defn parse-coord-edn-line! [line]
+  (try
+    (with-open [reader (java.io.PushbackReader. (java.io.StringReader. line))]
+      (let [eof (Object.)
+            value (edn/read {:eof eof} reader)
+            trailing (edn/read {:eof eof} reader)]
+        (when (or (identical? eof value)
+                  (not (identical? eof trailing)))
+          (throw (ex-info "not exactly one EDN form" {})))
+        value))
+    ;; Hostile bounded input can still overflow a recursive parser. Normalize that
+    ;; one Error alongside ordinary parse Exceptions, but let VM-fatal Errors pass.
+    (catch StackOverflowError error
+      (malformed-coord-line!
+       "coordinator response line is not exactly one valid EDN form"
+       line
+       error))
+    (catch Exception error
+      (malformed-coord-line!
+       "coordinator response line is not exactly one valid EDN form"
+       line
+       error))))
+
+(defn- parse-coord-json-line! [line]
+  (try
+    (with-open [reader (java.io.StringReader. line)]
+      (let [values (vec (take 2 (cheshire/parsed-seq reader)))]
+        (when-not (= 1 (count values))
+          (throw (ex-info "not exactly one JSON value" {})))
+        (first values)))
+    (catch StackOverflowError error
+      (malformed-coord-line!
+       "coordinator response line is not exactly one valid JSON value"
+       line
+       error))
+    (catch Exception error
+      (malformed-coord-line!
+       "coordinator response line is not exactly one valid JSON value"
+       line
+       error))))
+
+(defn- run-with-coord-watchdog!
+  [closeable timeout timeout-message timeout-type operation]
+  (let [state (atom :armed)
+        watchdog
+        (future
+          (try
+            (Thread/sleep timeout)
+            (when (compare-and-set! state :armed :expired)
+              (.close closeable))
+            (catch InterruptedException _ nil)
+            (catch Throwable _ nil)))]
+    (try
+      (let [result (operation)]
+        (when-not (compare-and-set! state :armed :complete)
+          (throw
+           (ex-info timeout-message
+                    {:type timeout-type
+                     :timeout-ms timeout})))
+        result)
+      (catch Throwable error
+        (if (= :expired @state)
+          (throw
+           (ex-info timeout-message
+                    {:type timeout-type
+                     :timeout-ms timeout}
+                    error))
+          (do
+            (compare-and-set! state :armed :complete)
+            (throw error))))
+      (finally
+        (future-cancel watchdog)))))
+
+(defn- coord-tls-handshake! [socket]
+  (let [timeout (coord-timeout-ms "FRAM_COORD_HANDSHAKE_TIMEOUT_MS" 2000)]
+    ;; One timeout owns the handshake: SO_TIMEOUT bounds an individual SSL read
+    ;; and the watchdog bounds the whole exchange. Request/facts readers replace
+    ;; it with their own absolute deadline after the handshake succeeds.
+    (.setSoTimeout socket timeout)
+    (run-with-coord-watchdog!
+     socket
+     timeout
+     "coordinator TLS handshake deadline exceeded"
+     :coordinator-handshake-timeout
+     (fn []
+       (.startHandshake socket)
+       nil))))
+
 (defn- coord-socket [host port]
   (let [ks (System/getenv "FRAM_TLS_KEYSTORE") ts (System/getenv "FRAM_TLS_TRUSTSTORE")
         pass (or (System/getenv "FRAM_TLS_PASS")
@@ -268,24 +558,34 @@
       (System/exit 2))
     (if (and ks ts pass)
       (let [s (.createSocket (.getSocketFactory (client-ssl-context ks ts pass)))]
-        (.connect s (java.net.InetSocketAddress. ^String host (int port)) 2000)
-        (.setSoTimeout s 2000)
-        (.startHandshake s)
-        s)
+        (try
+          (.connect s
+                    (java.net.InetSocketAddress. ^String host (int port))
+                    (coord-timeout-ms "FRAM_COORD_CONNECT_TIMEOUT_MS" 2000))
+          (coord-tls-handshake! s)
+          s
+          (catch Throwable error
+            (try (.close s) (catch Throwable _ nil))
+            (throw error))))
       (let [s (java.net.Socket.)]
-        (.connect s (java.net.InetSocketAddress. ^String host (int port)) 2000)
-        (.setSoTimeout s 2000)
-        s))))
+        (try
+          (.connect s
+                    (java.net.InetSocketAddress. ^String host (int port))
+                    (coord-timeout-ms "FRAM_COORD_CONNECT_TIMEOUT_MS" 2000))
+          s
+          (catch Throwable error
+            (try (.close s) (catch Throwable _ nil))
+            (throw error)))))))
 
 (defn- coord-rt [port req]
-  ;; read deadline (.setSoTimeout) so a process that accepts but never replies can't
-  ;; hang .readLine; SocketTimeoutException degrades to the clean "no coordinator" path.
   (with-open [s (coord-socket (connect-host) port)]
-    (let [w (io/writer (.getOutputStream s))
-          r (io/reader (.getInputStream s))]
-      (.write w (str (pr-str req) "\n"))
+    (let [w (.getOutputStream s)
+          reader (coordinator-reader s)]
+      (.write w
+              (.getBytes (str (pr-str req) "\n")
+                         java.nio.charset.StandardCharsets/UTF_8))
       (.flush w)
-      (edn/read-string (.readLine r)))))
+      (parse-coord-edn-line! (read-coord-terminal-line! reader)))))
 
 ;; Protocol-level corpus identity. The distinct :for-log operation is deliberate:
 ;; an older daemon rejects it as unknown instead of ignoring an optional field and
@@ -425,8 +725,8 @@
 ;; north log). The daemon serves the triples IN FOLD EMISSION ORDER (its contract —
 ;; fram.fold/refold-order, cached per version), so the records returned here feed
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
-;; Asked with {:fmt :json} DELIBERATELY: bb parses the ~2MB payload ~12x faster as
-;; JSON (cheshire, native) than as EDN (measured 15ms vs 186ms).
+;; Asked with {:fmt :json} DELIBERATELY: this is a multi-megabyte whole-corpus
+;; payload, and bb parses JSON (cheshire, native) substantially faster than EDN.
 ;; Returns a (Vec kernel/Fact), or [] when the warm path is unavailable — daemon
 ;; down, an older daemon without the op (its {"error" ...} reply has no "facts"),
 ;; or a daemon serving a DIFFERENT log than the caller's (the :log echo mismatches —
@@ -434,40 +734,48 @@
 ;; folds to a non-empty view (an empty log has no daemon serving it worth trusting).
 ;; Callers fall back to the cold fold on [].
 (defn coord-live-facts [port log]
-  (try
-    (with-open [s (coord-socket (connect-host) port)]
-      (let [w (io/writer (.getOutputStream s))
-            r (io/reader (.getInputStream s))]
-        (.write w (str (pr-str (log-envelope log {:op :facts :fmt :json})) "\n"))
-        (.flush w)
-        (let [resp (cheshire/parse-string (.readLine r))]
-          (if (and (map? resp)
-                   (= (canonical-log-path log)
-                      (canonical-log-path (get resp "log")))
-                   (vector? (get resp "facts")))
-            (mapv (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2))) (get resp "facts"))
-            []))))
-    (catch Exception _ [])))
+  (let [facts-timeout
+        (coord-timeout-ms "FRAM_COORD_FACTS_TIMEOUT_MS" 30000)]
+    (try
+      (with-open [s (coord-socket (connect-host) port)]
+        (let [w (.getOutputStream s)
+              reader (coordinator-reader s)]
+          (.write w
+                  (.getBytes
+                   (str (pr-str (log-envelope log {:op :facts :fmt :json})) "\n")
+                   java.nio.charset.StandardCharsets/UTF_8))
+          (.flush w)
+          (let [resp (parse-coord-json-line!
+                      (read-coord-terminal-line-with-timeout!
+                       reader
+                       facts-timeout))]
+            (if (and (map? resp)
+                     (= (canonical-log-path log)
+                        (canonical-log-path (get resp "log")))
+                     (vector? (get resp "facts")))
+              (mapv
+               (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2)))
+               (get resp "facts"))
+              []))))
+      (catch Exception _ []))))
 
 ;; subscribe + stream commit events (one EDN line each) until disconnect.
-;; coord-socket deliberately starts with a 2s request deadline. Keep that deadline
-;; through the handshake so a listener that accepts but never replies cannot hang us;
-;; only a validated subscription earns an unbounded idle read.
+;; TLS setup has its own absolute handshake deadline. After the request write, the
+;; subscription acknowledgement arms the small-response absolute deadline; only a
+;; validated subscription earns an unbounded idle read.
 (defn- coord-watch-request [port request]
   (with-open [s (coord-socket (connect-host) port)]   ; honors FRAM_CONNECT + mTLS like coord-rt
-    (let [w (io/writer (.getOutputStream s))
-          r (io/reader (.getInputStream s))
+    (let [w (.getOutputStream s)
+          reader (coordinator-reader s)
           fenced? (= :for-log (:op request))
           expected-log (:expected-log request)]
-      (.write w (str (pr-str request) "\n"))
+      (.write w
+              (.getBytes (str (pr-str request) "\n")
+                         java.nio.charset.StandardCharsets/UTF_8))
       (.flush w)
-      (let [line (.readLine r)
-            response (when line (edn/read-string line))]
+      (let [line (read-coord-response-line! reader)
+            response (parse-coord-edn-line! line)]
         (cond
-          (nil? line)
-          (throw (ex-info "coordinator closed before watch subscription handshake"
-                          {:port port}))
-
           (:reject response)
           (throw (ex-info
                   (str "coordinator rejected watch subscription"
@@ -493,7 +801,7 @@
         (.setSoTimeout s 0)
         (println line)
         (loop []
-          (when-let [event (.readLine r)]
+          (when-let [event (read-coord-stream-line! reader)]
             (println event)
             (recur))))))
   nil)
