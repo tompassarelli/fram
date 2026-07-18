@@ -177,10 +177,17 @@
           (recur (rest r) seen acc)
           (recur (rest r) (assoc seen x true) (conj acc x)))))))
 
+;; An entity exists structurally when it is the subject of any live fact. This is
+;; deliberately weaker than `thread-ids`: consumers may define titleless entity
+;; kinds (integration links, runs, people, predicate metadata, ...), and a generic
+;; ref edge must be able to point at any of them.
+(defn entity-ids [facts :- (Vec Fact)] :- (Vec String)
+  (uniq (mapv (fn [c :- Fact] :- String (:l c)) facts)))
+
 ;; a thread is structural: an entity (@id subject) that has a `title`.
 (defn thread-ids [facts :- (Vec Fact)] :- (Vec String)
   (filterv (fn [s :- String] :- Bool (some? (one facts s "title")))
-           (uniq (mapv (fn [c :- Fact] :- String (:l c)) facts))))
+           (entity-ids facts)))
 
 ;; --- apply / retract -------------------------------------------------------
 
@@ -270,13 +277,13 @@
 ;; GENERIC structural integrity only (cycles + dangling refs). The WORK rules
 ;; (depends_on→abandoned, and lead/driver/proposed_by must be a display_name
 ;; person) moved to north.validate — the engine knows no lifecycle or
-;; person/role vocab. Existence is title-based: a real thread always carries a
-;; single-valued `title`, so "titled entity" is the engine's internal existence test —
-;; a NORTH convention the engine keeps as a mechanic (the surfaced tool is gone, the
-;; helper stays). The constrained pred sets are schema-as-facts (see ref-preds-of /
-;; acyclic-preds-of); with no schema facts they are the original hardcoded lists.
+;; person/role vocab. Generic existence means the referenced id is the subject of
+;; ANY live fact; requiring `title` here would leak North's thread shape into the
+;; engine and reject legitimate titleless entities. The constrained pred sets are
+;; schema-as-facts (see ref-preds-of / acyclic-preds-of); with no schema facts they
+;; are the original hardcoded lists.
 (defn violations [facts :- (Vec Fact) te :- String] :- (Vec String)
-  (let [ids (thread-ids facts)
+  (let [ids (entity-ids facts)
         rv (reduce
             (fn [acc :- (Vec String) p :- String] :- (Vec String)
               (reduce (fn [a :- (Vec String) rt :- String] :- (Vec String)
@@ -302,6 +309,7 @@
   [single :- (Map String String)        ; "lp" -> r           (single-valued one)
    bypred :- (Map String (Vec String))  ; "lp" -> [r ...]      (many)
    subjects :- (Vec String)             ; distinct subject l's
+   entity-set :- (Map String Bool)      ; subject l -> true      (O(1) existence)
    revdep :- (Map String (Vec String))  ; r -> [l ...] for depends_on (reverse edges)
    ref-preds :- (Vec String)            ; preds whose targets must exist (schema-as-facts)
    acyclic-preds :- (Vec String)])      ; preds that must not cycle (schema-as-facts)
@@ -315,6 +323,9 @@
                            (assoc m kk (conj (get m kk []) (:r c)))))
                        {} facts)
         subjects (uniq (mapv (fn [c :- Fact] :- String (:l c)) facts))
+        entity-set (reduce (fn [m :- (Map String Bool) s :- String] :- (Map String Bool)
+                             (assoc m s true))
+                           {} subjects)
         revdep (reduce (fn [m :- (Map String (Vec String)) c :- Fact] :- (Map String (Vec String))
                          (if (= (:p c) "depends_on")
                            (assoc m (:r c) (conj (get m (:r c) []) (:l c)))
@@ -322,13 +333,16 @@
                        {} facts)]
     ;; ref-preds / acyclic-preds derived ONCE per index (whole-corpus validate calls
     ;; violations-i per thread; deriving them here keeps that O(threads + edges)).
-    (->Index single bypred subjects revdep (ref-preds-of facts) (acyclic-preds-of facts))))
+    (->Index single bypred subjects entity-set revdep (ref-preds-of facts) (acyclic-preds-of facts))))
 
 (defn one-i [idx :- Index l :- String p :- String] :- String?
   (get (:single idx) (str l "" p)))
 
 (defn many-i [idx :- Index l :- String p :- String] :- (Vec String)
   (get (:bypred idx) (str l "" p) []))
+
+(defn entity-i? [idx :- Index te :- String] :- Bool
+  (some? (get (:entity-set idx) te)))
 
 (defn thread-ids-i [idx :- Index] :- (Vec String)
   (filterv (fn [s :- String] :- Bool (some? (one-i idx s "title"))) (:subjects idx)))
@@ -347,7 +361,7 @@
 ;; --- indexed validation (O(edges) per thread; for whole-corpus validate) -----
 ;; Mirrors `violations` but over the Index — turns whole-corpus validate from
 ;; O(threads * facts) raw scans into O(threads + edges). Existence of a ref is
-;; O(1): a real thread always has a single-valued `title` fact.
+;; O(1): a real entity appears in the index's subject membership map.
 
 (defn cycle-i? [idx :- Index pred :- String te :- String] :- Bool
   (let [succ (fn [x :- String] :- (Vec String) (many-i idx x pred))]
@@ -356,14 +370,14 @@
 ;; GENERIC structural integrity only (cycles + dangling refs), mirroring the flat
 ;; `violations`. The WORK rules (depends_on→abandoned, person/role refs) moved to
 ;; north.validate/work-violations-i.
-;; Existence is title-based (a real thread carries a single-valued `title`); the
-;; constrained pred sets are the index's schema-as-facts ref-preds / acyclic-preds
-;; (derived once in build-index; the hardcoded lists when the log declares no schema).
+;; Existence is subject-based (the target carries ANY live fact); the constrained
+;; pred sets are the index's schema-as-facts ref-preds / acyclic-preds (derived once
+;; in build-index; the hardcoded lists when the log declares no schema).
 (defn violations-i [idx :- Index te :- String] :- (Vec String)
   (let [rv (reduce
             (fn [acc :- (Vec String) p :- String] :- (Vec String)
               (reduce (fn [a :- (Vec String) rt :- String] :- (Vec String)
-                        (if (nil? (one-i idx rt "title"))
+                        (if (not (entity-i? idx rt))
                           (conj a (str p " references missing entity " rt))
                           a))
                       acc (many-i idx te p)))

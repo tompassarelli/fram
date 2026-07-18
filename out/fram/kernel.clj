@@ -67,8 +67,11 @@
   (if (empty? r) acc (let [x (first r)]
   (if (some? (get seen x)) (recur (rest r) seen acc) (recur (rest r) (assoc seen x true) (conj acc x)))))))
 
+(defn entity-ids [facts]
+  (uniq (mapv (fn [c] (:l c)) facts)))
+
 (defn thread-ids [facts]
-  (filterv (fn [s] (some? (one facts s "title"))) (uniq (mapv (fn [c] (:l c)) facts))))
+  (filterv (fn [s] (some? (one facts s "title"))) (entity-ids facts)))
 
 (defn- drop-lp [facts ^String l ^String p]
   (filterv (fn [x] (not (and (= (:l x) l) (= (:p x) p)))) facts))
@@ -121,18 +124,20 @@
   (if (empty? d) acyclic-preds-fallback d)))
 
 (defn violations [facts ^String te]
-  (let [ids (thread-ids facts)
+  (let [ids (entity-ids facts)
    rv (reduce (fn [acc p] (reduce (fn [a rt] (if (not (vec-contains? ids rt)) (conj a (str p " references missing entity " rt)) a)) acc (many facts te p))) [] (ref-preds-of facts))
    cv (reduce (fn [acc p] (if (cycle? facts p te) (conj acc (str p " cycle")) acc)) rv (acyclic-preds-of facts))]
   cv))
 
-(defrecord Index [single bypred subjects revdep ref-preds acyclic-preds])
+(defrecord Index [single bypred subjects entity-set revdep ref-preds acyclic-preds])
 
 (defn index-single [r] (:single r))
 
 (defn index-bypred [r] (:bypred r))
 
 (defn index-subjects [r] (:subjects r))
+
+(defn index-entity-set [r] (:entity-set r))
 
 (defn index-revdep [r] (:revdep r))
 
@@ -145,14 +150,18 @@
    bypred (reduce (fn [m c] (let [kk (str (:l c) "\u0001" (:p c))]
   (assoc m kk (conj (get m kk []) (:r c))))) {} facts)
    subjects (uniq (mapv (fn [c] (:l c)) facts))
+   entity-set (reduce (fn [m s] (assoc m s true)) {} subjects)
    revdep (reduce (fn [m c] (if (= (:p c) "depends_on") (assoc m (:r c) (conj (get m (:r c) []) (:l c))) m)) {} facts)]
-  (->Index single bypred subjects revdep (ref-preds-of facts) (acyclic-preds-of facts))))
+  (->Index single bypred subjects entity-set revdep (ref-preds-of facts) (acyclic-preds-of facts))))
 
 (defn one-i [^Index idx ^String l ^String p]
   (get (:single idx) (str l "\u0001" p)))
 
 (defn many-i [^Index idx ^String l ^String p]
   (get (:bypred idx) (str l "\u0001" p) []))
+
+(defn ^Boolean entity-i? [^Index idx ^String te]
+  (some? (get (:entity-set idx) te)))
 
 (defn thread-ids-i [^Index idx]
   (filterv (fn [s] (some? (one-i idx s "title"))) (:subjects idx)))
@@ -165,6 +174,6 @@
   (reachable-from? succ (succ te) te)))
 
 (defn violations-i [^Index idx ^String te]
-  (let [rv (reduce (fn [acc p] (reduce (fn [a rt] (if (nil? (one-i idx rt "title")) (conj a (str p " references missing entity " rt)) a)) acc (many-i idx te p))) [] (:ref-preds idx))
+  (let [rv (reduce (fn [acc p] (reduce (fn [a rt] (if (not (entity-i? idx rt)) (conj a (str p " references missing entity " rt)) a)) acc (many-i idx te p))) [] (:ref-preds idx))
    cv (reduce (fn [acc p] (if (cycle-i? idx p te) (conj acc (str p " cycle")) acc)) rv (:acyclic-preds idx))]
   cv))
