@@ -1996,6 +1996,27 @@
     (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
+      ;; Read-set commit seam for callers that validated facts across multiple
+      ;; subjects/predicates. Ordinary :assert intentionally interprets :base
+      ;; only as per-(subject,predicate) OCC for declared-single predicates;
+      ;; changing that would break multi-value coexistence and no-base LWW.
+      ;; This opt-in verb instead compares the caller's GLOBAL snapshot version
+      ;; and performs the existing assert in this same dlock turn. Therefore an
+      ;; intervening write anywhere in the graph rejects before mutation, while
+      ;; accepted writes retain do-assert's rules, durability, notifications,
+      ;; cascades, and identical-triple idempotency.
+      :assert-at-version
+      (let [base (:base req)
+            head (current-seq @co)]
+        (cond
+          (not (and (integer? base) (not (neg? base))))
+          {:reject :invalid-base :version head}
+
+          (not= base head)
+          {:reject :conflict :version head}
+
+          :else
+          (do-assert (:te req) (:p req) (:r req) base)))
       :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
       ;; :bump — ATOMIC add to a numeric counter (read-add-write under the lease lock, so
       ;; concurrent charges from N executors can't lose updates). Declares the predicate
