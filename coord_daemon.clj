@@ -701,7 +701,10 @@
         (do (when-not (:idempotent res)
               (append-flat! "assert" te p r (:ok res))
               (apply-commit-delta! pre te p)
-              (mark-dirty! te))                    ; S3.3: this module's refers_to are stale
+              ;; #(a) a read-hidden durable pred (bound_to/withdrawn_*) is NOT AST and never
+              ;; changes resolution, so it must NOT invalidate the scoped refers_to cache —
+              ;; else persisting bound_to would re-dirty its module and force a wasted re-resolve.
+              (when-not (read-hidden-preds p) (mark-dirty! te)))   ; S3.3: this module's refers_to are stale
             (notify-subs! {:event :commit :version (:ok res) :op "assert" :l te :p p :r r})
             ;; the-model §9: a successful, non-idempotent terminal transition
             ;; (outcome|abandoned) cascades in the SAME serialized turn — retract
@@ -726,7 +729,7 @@
       (if (:ok res)
         (do (append-flat! "retract" te p r (:ok res))
             (apply-commit-delta! pre te p)
-            (mark-dirty! te)                        ; S3.3: this module's refers_to are stale
+            (when-not (read-hidden-preds p) (mark-dirty! te))   ; S3.3: this module's refers_to are stale (read-hidden preds are not AST)
             (notify-subs! {:event :commit :version (:ok res) :op "retract" :l te :p p :r r})
             {:ok (:ok res)})
         {:reject (:reject res) :version (:version res)}))))
@@ -998,6 +1001,13 @@
 ;; set. CLEAN (no dirty modules): nothing to do. refers-version still tracks the seq
 ;; the materialized edges reflect, for the gate's reasoning + status. The version is
 ;; NOT the trigger any more (scoped tracks dirty modules, which is finer than seq).
+;; persist-bound! (defined below, near do-edit-min*) is the #(a) identity migration: it
+;; do-asserts a durable bound_to edge for every reference the current refers_to resolved.
+;; ensure-refers! is the ingest / edit-reconciliation seam, so the migration rides its two
+;; materialize branches (cold whole = ingest; scoped = post-edit reconcile). Persisting under
+;; dlock (reentrant — rename already holds it) keeps the appends serialized; bound_to is NOT
+;; AST, so it never re-dirties a module (do-assert guard) and never loops the maintenance step.
+(declare persist-bound!)
 (defn ensure-refers! []
   (cond
     (not @materialized?)
@@ -1006,11 +1016,13 @@
       (reset! dirty-modules #{})
       (reset! materialized? true)
       (reset! refers-version (current-seq @co))
-      (reset! last-materialize (assoc r :mode :whole-cold :walked :all)))
+      (reset! last-materialize (assoc r :mode :whole-cold :walked :all))
+      (locking dlock (persist-bound!)))              ; #(a) code ingest — every ref gets a durable identity edge
     (seq @dirty-modules)
     (let [r (materialize-refers-scoped!)]
       (reset! refers-version (current-seq @co))
-      (reset! last-materialize r))
+      (reset! last-materialize r)
+      (locking dlock (persist-bound!)))              ; #(a) edit reconciliation — freshly minted refs get theirs
     :else nil))
 
 ;; ============================================================================
@@ -1310,33 +1322,47 @@
             op))
         asserts))
 
-;; #(a) O(1) rename precondition: before renaming a def, PERSIST a durable bound_to edge from
-;; every reference of it to the def's stable @mod#int. The rename then changes only the binding's
-;; display name; references keep their identity edge and a cold re-render follows it to the CURRENT
-;; name (instead of re-deriving by spelling and missing the renamed def). Idempotent.
+;; #(a) IDENTITY-FIRST migration — persist a durable bound_to edge for EVERY resolvable
+;; reference. Generalizes the former target-scoped persist-bound-for-rename! (which resolved
+;; ONE def's refs via target-node): for every live reference leaf whose warm refers_to lands
+;; on a binding NODE and that lacks a bound_to, do-assert `bound_to` (leaf -> the binding's
+;; stable @mod#int). References then resolve by IDENTITY, so a display-name rename or a cold
+;; re-render follows the edge to the target's CURRENT name instead of re-deriving by spelling.
 ;;
-;; Runs under dlock (caller). ensure-refers! first materializes the warm refers_to (spelling-derived
-;; on the first rename; identity-preserving on later ones) over `co`; B = the def binding node-id
-;; (def-binding via with-resolve-read, the SAME node refers_to points at). For each reference leaf
-;; whose refers_to lands on B, do-assert a `bound_to` link (leaf -> B's @mod#int). do-assert appends
-;; to the flat log (durable) and commits to the warm store; bound_to is multi-valued + survives
-;; strip-resolve-facts! (not a resolve-pred) and is filtered from read projections (read-hidden-preds).
-(defn- persist-bound-for-rename! [spec]
-  (ensure-refers!)                                   ; materialize warm refers_to (frames + edges)
-  (let [st     (:store @co)
-        REFp   (c/value-id st "refers_to")
-        B      (target-node {:module (:module spec) :name (:old spec)})]
-    (when (and B REFp)
+;; Called AT: (a) code ingest — the first cold whole materialize (ensure-refers!); (b) edit
+;; reconciliation — after a scoped re-resolve materializes fresh refers_to for a set-body /
+;; replace-in-body / upsert-form's freshly minted references; (c) atomically before a rename
+;; (do-edit-min*), so old-spelling refs are locked to identity BEFORE the display name moves.
+;;
+;; PERSISTED AT THE LOG-AUTHORITY BOUNDARY: do-assert appends to the flat log (durable) +
+;; commits to the warm store — the resolver never writes durable facts itself. IDEMPOTENT and
+;; COLD-RESTART SAFE: bound_to is multi-valued, so commit! never staleness-rejects and drops
+;; an exact-duplicate (leaf,bound_to,target) as :idempotent; `already` skips any leaf that
+;; already carries a bound_to so the invariant stays "exactly one durable edge per reference".
+;; bound_to survives strip-resolve-facts! (not a resolve-pred) and is filtered from read
+;; projections (read-hidden-preds), so it never reaches :query/Datalog. Caller holds dlock.
+;; Returns the number of edges newly persisted.
+(defn- persist-bound! []
+  (let [st   (:store @co)
+        REFp (c/value-id st "refers_to")]
+    (if-not REFp
+      0
       (let [BND     (or (c/value-id st "bound_to") (c/value! st "bound_to"))
             v0      (current-seq @co)
-            B-name  (s/name-of st B)
             already (set (map #(:l (c/fact-of st %)) (c/by-p st BND)))
-            ref-leaves (->> (c/by-p st REFp)
-                            (map #(c/fact-of st %))
-                            (filter #(= B (:r %)))
-                            (map :l) distinct)]
-        (doseq [leaf ref-leaves :when (not (already leaf))]
-          (do-assert (s/name-of st leaf) "bound_to" B-name v0))))))
+            edges   (->> (c/by-p st REFp)
+                         (map #(c/fact-of st %))
+                         (filter (fn [cl] (and (integer? (:r cl))        ; refers_to -> a binding NODE (not a value literal)
+                                               (not (already (:l cl))))))
+                         (map (fn [cl] [(:l cl) (:r cl)]))
+                         distinct)]
+        (when (seq edges)
+          ;; BATCH the durable appends into ONE fsync (the migration can touch every ref).
+          (binding [*flat-batch* (atom [])]
+            (doseq [[leaf B] edges]
+              (do-assert (s/name-of st leaf) "bound_to" (s/name-of st B) v0))
+            (flush-flat-batch!)))
+        (count edges)))))
 
 ;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
 ;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
@@ -1468,12 +1494,14 @@
                                (log-fence-rejection expected-log))]
          fence-reject
          (do
-           ;; #(a) persist rename-identity UNDER THE SAME lock as the commit (no lock-free window).
-           ;; ensure-refers! (inside) re-derives fresh, so a reference a concurrent agent committed
-           ;; BEFORE this lock is captured into bound_to; one arriving AFTER sees the renamed def
-           ;; (old spelling correctly resolves to nothing — a stale ref, not a silent mis-bind).
+           ;; #(a) persist identity UNDER THE SAME lock as the commit (no lock-free window).
+           ;; ensure-refers! re-derives fresh refers_to (so a reference a concurrent agent committed
+           ;; BEFORE this lock is captured; one arriving AFTER sees the renamed def — old spelling
+           ;; correctly resolves to nothing, a stale ref, not a silent mis-bind), then persist-bound!
+           ;; locks every ref to its @mod#int identity BEFORE the display name moves. Both are
+           ;; idempotent, so the ingest migration having already run makes this a cheap re-scan.
            ;; v0 is read AFTER, so the rename asserts' OCC base reflects the bound_to commits.
-           (when (= "rename" (:op spec)) (persist-bound-for-rename! spec))
+           (when (= "rename" (:op spec)) (ensure-refers!) (persist-bound!))
            (let [v0 (current-seq @co)
                  asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
                  rej (atom nil)]
