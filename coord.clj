@@ -525,28 +525,67 @@
       (let [cid (first (live-cids-lp co te pid))]
         (when cid (decode-lease (get (:values @st) (:r (get (:facts @st) cid)))))))))
 
+(defn- valid-lease-request? [holder res ttl-ms now]
+  (and (string? holder) (not (str/blank? holder)) (not (str/includes? holder "|"))
+       (string? res) (not (str/blank? res))
+       (integer? ttl-ms) (pos? ttl-ms)
+       (<= ttl-ms (- Long/MAX_VALUE now))))
+
+(defn- valid-lease-epoch? [epoch]
+  (and (integer? epoch) (pos? epoch) (<= epoch Long/MAX_VALUE)))
+
+(defn- persist-lease!
+  "Persist one fresh lease cell. Caller owns (:lock co); the new transaction's
+  global sequence is both the durable write version and the fencing epoch."
+  [co holder res ttl-ms now]
+  (let [exp   (+ now ttl-ms)
+        since (:next-id @(store co))
+        tx    (c/begin-tx! (store co) holder)
+        epoch (get-in @(store co) [:txs tx :seq])
+        te    (ent! co tx (lease-subj res))]
+    (when (not= "single" (s/cardinality (store co) lease-pred))
+      (s/def-predicate! (store co) lease-pred "single" "literal" tx))
+    (s/assert! (store co) te lease-pred (encode-lease holder exp epoch) tx)
+    (append-tx! co (delta-records co since tx))
+    {:ok epoch :holder holder :exp exp :epoch epoch}))
+
 (defn acquire-lease! [co holder res ttl-ms]
   (locking (:lock co)
     (let [now (System/currentTimeMillis)
           cur (read-lease co res)]
-      (if (and cur (> (:exp cur) now) (not= (:holder cur) holder))
+      (cond
+        (not (valid-lease-request? holder res ttl-ms now))
+        {:reject :invalid-lease-request :version (current-seq co)}
+
+        (and cur (> (:exp cur) now) (not= (:holder cur) holder))
         {:reject :held :holder (:holder cur) :exp (:exp cur) :version (current-seq co)}
-        (let [exp   (+ now ttl-ms)
-              since (:next-id @(store co))
-              tx    (c/begin-tx! (store co) holder)
-              ;; The transaction sequence is global and durable. Deriving the
-              ;; fence token from the lease cell itself lets release erase the
-              ;; counter, so acquire -> release -> acquire by the same holder
-              ;; can resurrect an old token (ABA). Every acquisition already
-              ;; owns a fresh transaction sequence; use that monotonic value as
-              ;; the epoch instead of incrementing the current cell.
-              epoch (get-in @(store co) [:txs tx :seq])
-              te    (ent! co tx (lease-subj res))]
-          (when (not= "single" (s/cardinality (store co) lease-pred))
-            (s/def-predicate! (store co) lease-pred "single" "literal" tx))
-          (s/assert! (store co) te lease-pred (encode-lease holder exp epoch) tx)
-          (append-tx! co (delta-records co since tx))
-          {:ok (get-in @(store co) [:txs tx :seq]) :holder holder :exp exp :epoch epoch})))))
+
+        :else
+        ;; The transaction sequence is global and durable. Deriving the fence
+        ;; token from the lease cell itself lets release erase the cell without
+        ;; erasing epoch history, closing same-holder ABA after reacquisition.
+        (persist-lease! co holder res ttl-ms now)))))
+
+(defn renew-lease!
+  "Extend only the exact current, unexpired lease and rotate its fencing token.
+  A lapse or takeover is terminal for the caller: renewal never reacquires."
+  [co holder res expected-epoch ttl-ms]
+  (locking (:lock co)
+    (let [now (System/currentTimeMillis)
+          cur (read-lease co res)]
+      (cond
+        (or (not (valid-lease-request? holder res ttl-ms now))
+            (not (valid-lease-epoch? expected-epoch)))
+        {:reject :invalid-lease-request :version (current-seq co)}
+
+        (and cur
+             (= holder (:holder cur))
+             (= expected-epoch (:epoch cur))
+             (> (:exp cur) now))
+        (persist-lease! co holder res ttl-ms now)
+
+        :else
+        {:reject :fence-lost :version (current-seq co)}))))
 
 ;; release-lease! re-enters (:lock co) via retract! — JVM monitors are REENTRANT,
 ;; so this is safe; do NOT "fix" the nesting into a separate lock (would deadlock).

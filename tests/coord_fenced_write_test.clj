@@ -35,6 +35,10 @@
   (client port {:op :acquire-lease
                 :res resource :holder holder :ttl-ms ttl-ms}))
 
+(defn renew! [port resource holder epoch ttl-ms]
+  (client port {:op :renew-lease
+                :res resource :holder holder :epoch epoch :ttl-ms ttl-ms}))
+
 (defn fenced-assert [port lease subject predicate value]
   (client port {:op :assert-with-fence
                 :res (:resource lease)
@@ -83,6 +87,54 @@
       (check! "wrong epoch rejects before mutation"
               (and (= :fence-lost (:reject wrong-epoch))
                    (= #{"winner"} (values-of port "@active" "marker")))))
+
+    (let [resource "renew-wire"
+          holder "renew-holder"
+          acquired (acquire! port resource holder 5000)
+          wrong-holder (renew! port resource "other" (:epoch acquired) 10000)
+          wrong-epoch (renew! port resource holder (inc (:epoch acquired)) 10000)
+          invalid-ttl (renew! port resource holder (:epoch acquired) 0)
+          invalid-epoch (renew! port resource holder 0 10000)
+          renewed (renew! port resource holder (:epoch acquired) 10000)
+          old-lease {:resource resource :holder holder :epoch (:epoch acquired)}
+          renewed-lease {:resource resource :holder holder :epoch (:epoch renewed)}
+          old-write (fenced-assert port old-lease "@renewed-write" "marker" "stale")
+          renewed-write (fenced-assert port renewed-lease "@renewed-write" "marker" "fresh")
+          renewed-values (values-of port "@renewed-write" "marker")
+          old-fence (client port {:op :fence-ok
+                                  :res resource :holder holder :epoch (:epoch acquired)})
+          fresh-fence (client port {:op :fence-ok
+                                    :res resource :holder holder :epoch (:epoch renewed)})
+          stale-release (client port {:op :release-lease
+                                      :res resource :holder holder :epoch (:epoch acquired)})
+          fresh-after-stale-release (client port {:op :fence-ok
+                                                  :res resource :holder holder :epoch (:epoch renewed)})
+          fresh-release (client port {:op :release-lease
+                                      :res resource :holder holder :epoch (:epoch renewed)})
+          after-release (client port {:op :fence-ok
+                                      :res resource :holder holder :epoch (:epoch renewed)})]
+      (check! "socket renew rejects wrong holder, wrong epoch, and hostile numeric input"
+              (and (= :fence-lost (:reject wrong-holder))
+                   (= :fence-lost (:reject wrong-epoch))
+                   (= :invalid-lease-request (:reject invalid-ttl))
+                   (= :invalid-lease-request (:reject invalid-epoch))))
+      (check! "socket renew returns a coherent globally newer epoch"
+              (and (:ok renewed)
+                   (= (:ok renewed) (:epoch renewed))
+                   (> (:epoch renewed) (:epoch acquired))
+                   (> (:exp renewed) (:exp acquired))))
+      (check! "socket renew invalidates the old fence and stale release"
+              (and (false? (:fence-ok old-fence))
+                   (:fence-ok fresh-fence)
+                   (:noop stale-release)
+                   (:fence-ok fresh-after-stale-release)))
+      (check! "only the renewed epoch can perform an atomic fenced write"
+              (and (= :fence-lost (:reject old-write))
+                   (:ok renewed-write)
+                   (= #{"fresh"} renewed-values)))
+      (check! "socket release accepts only the renewed epoch"
+              (and (:ok fresh-release)
+                   (false? (:fence-ok after-release)))))
 
     (let [resource "fenced-write:takeover"
           stale-holder "stale-holder"

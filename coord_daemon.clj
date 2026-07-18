@@ -2147,6 +2147,11 @@
       ;; path the lease arm exists to close — agents MUST use these. No notify-subs! (lease
       ;; changes are not broadcast), matching the fram-lease fork. Impl: coord.clj (load-file'd).
       :acquire-lease (acquire-lease! @co (:holder req) (:res req) (:ttl-ms req))
+      ;; Renewal is not reacquisition: exact holder + current epoch + unexpired
+      ;; state are checked, then the new expiry and globally fresh epoch are
+      ;; persisted in the same coordinator turn.
+      :renew-lease
+      (renew-lease! @co (:holder req) (:res req) (:epoch req) (:ttl-ms req))
       ;; Epoch is optional only for wire compatibility with legacy callers.
       ;; Modern fenced callers include it so a delayed release from the same
       ;; holder cannot delete a successor acquisition (ABA).

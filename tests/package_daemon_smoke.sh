@@ -141,6 +141,51 @@ if [[ -z "$response" ]]; then
   exit 1
 fi
 
+lease_probe='
+(require (quote [clojure.edn :as edn])
+         (quote [clojure.java.io :as io]))
+(defn request [port value]
+  (with-open [socket (java.net.Socket. "127.0.0.1" (int port))
+              writer (io/writer (.getOutputStream socket))
+              reader (java.io.PushbackReader. (io/reader (.getInputStream socket)))]
+    (.write writer (str (pr-str value) "\n"))
+    (.flush writer)
+    (edn/read reader)))
+(let [port (parse-long (first *command-line-args*))
+      resource "package-renew"
+      holder "package-holder"
+      acquired (request port {:op :acquire-lease :res resource :holder holder :ttl-ms 5000})
+      renewed (request port {:op :renew-lease :res resource :holder holder
+                             :epoch (:epoch acquired) :ttl-ms 10000})
+      old-fence (request port {:op :fence-ok :res resource :holder holder
+                               :epoch (:epoch acquired)})
+      stale-release (request port {:op :release-lease :res resource :holder holder
+                                   :epoch (:epoch acquired)})
+      fresh-fence (request port {:op :fence-ok :res resource :holder holder
+                                 :epoch (:epoch renewed)})
+      fresh-release (request port {:op :release-lease :res resource :holder holder
+                                   :epoch (:epoch renewed)})
+      after-release (request port {:op :fence-ok :res resource :holder holder
+                                   :epoch (:epoch renewed)})]
+  (if (and (:ok acquired)
+           (:ok renewed)
+           (= (:ok renewed) (:epoch renewed))
+           (> (:epoch renewed) (:epoch acquired))
+           (false? (:fence-ok old-fence))
+           (:noop stale-release)
+           (:fence-ok fresh-fence)
+           (:ok fresh-release)
+           (false? (:fence-ok after-release)))
+    (println (pr-str {:acquired (:epoch acquired)
+                      :renewed (:epoch renewed)
+                      :released true}))
+    (System/exit 1)))'
+if ! lease_receipt="$("$bb" -e "$lease_probe" "$port" 2>/dev/null)"; then
+  echo "fram package smoke: packaged daemon failed exact-epoch lease renewal" >&2
+  sed -n '1,200p' "$daemon_output" >&2
+  exit 1
+fi
+
 if [[ "$require_proc" == "1" ]]; then
   if [[ ! -r "/proc/$pid/cmdline" || ! -e "/proc/$pid/cwd" ]]; then
     echo "fram package smoke: /proc evidence unavailable for daemon $pid" >&2
@@ -461,4 +506,5 @@ if ! "$grep_bin" -Fq '"serverInfo":{"name":"fram"' <<<"$mcp_output"; then
 fi
 
 echo "fram package smoke: raw :version response $response"
+echo "fram package smoke: exact-epoch renewal receipt $lease_receipt"
 echo "fram package smoke: home-less explicit paths, writable default state, CLI, MCP, and primer surfaces reached"
