@@ -28,8 +28,9 @@
 ;; resolve.clj retire-fact! + mint/wire. (See DESIGN.md §4.)
 ;;
 ;; USAGE:
-;;   bin/fram-commit-code <module> <new.bclj> --port <P> [--dry-run]
+;;   bin/fram-commit-code <module> <new.bclj> --port <P> --log <code.log> [--dry-run]
 ;;     --port    REQUIRED — the coordinator port serving the CODE log.
+;;     --log     REQUIRED — canonical code-log identity fenced on every request.
 ;;     --dry-run print the delta (#adds / #removes) and commit NOTHING.
 ;;
 ;; SAFETY: the caller MUST point --port at a coordinator booted on the CODE log
@@ -64,10 +65,12 @@
       "racket"))
 
 (defn- parse-args [args]
-  (loop [a (drop 2 args), opts {:module (first args) :bclj (second args) :port nil :dry false}]
+  (loop [a (drop 2 args), opts {:module (first args) :bclj (second args)
+                                :port nil :log nil :dry false}]
     (cond
       (empty? a) opts
       (= "--port" (first a)) (recur (drop 2 a) (assoc opts :port (Integer/parseInt (second a))))
+      (= "--log" (first a)) (recur (drop 2 a) (assoc opts :log (second a)))
       (= "--dry-run" (first a)) (recur (rest a) (assoc opts :dry true))
       :else (recur (rest a) opts))))
 
@@ -91,26 +94,28 @@
 ;; store via :query (a Datalog triple scan). The query returns [l p r] rows for
 ;; every fact whose subject begins "@<mod>#". refers_to/render markers are filtered
 ;; out of :query by the daemon (fact->triple), so this is the raw AST exactly.
-(defn- coord-rt [port req]
-  (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
-    (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
-      (.write w (str (pr-str req) "\n")) (.flush w)
-      (edn/read-string (.readLine rd)))))
+(defn- coord-rt [port log-path req]
+  (fram.rt/coord-request-for-log port log-path req))
 
-(defn- coord-status [port] (coord-rt port {:op :status}))
-(defn- coord-version [port] (:version (coord-rt port {:op :version})))
+(defn- coord-status [port log-path]
+  (coord-rt port log-path {:op :status}))
+(defn- coord-version [port log-path]
+  (:version (coord-rt port log-path {:op :version})))
 
 ;; pull every AST triple for the module via :query: triple(l p r) with l bound by a
 ;; module-prefix test is not expressible directly, so we scan all triples and filter
 ;; in-process. The :query base relation `triple` yields [l p r] rows.
-(defn- pre-triples [port module]
+(defn- pre-triples [port log-path module]
   (let [q {:find "out"
            :rules [{:head {:rel "out" :args [{:var "l"} {:var "p"} {:var "r"}]}
                     :body [{:rel "triple" :args [{:var "l"} {:var "p"} {:var "r"}]}]}]}
-        resp (coord-rt port {:op :query :query q :scan true})
+        resp (coord-rt port log-path {:op :query :query q :scan true})
         rows (:ok resp)]
+    (when (:reject resp)
+      (die "coord :query log fence rejected:" (pr-str resp)))
     (when (:error resp) (die "coord :query failed:" (pr-str (:error resp))))
+    (when-not (sequential? rows)
+      (die "coord :query returned no row collection:" (pr-str resp)))
     (into #{} (->> rows
                    (map (fn [row] (mapv str row)))
                    (filter (fn [[l _ _]] (str/starts-with? l (str "@" module "#"))))))))
@@ -132,22 +137,30 @@
 
 ;; commit one op (:assert|:retract) at base v, retry on :conflict (route-write loop).
 ;; op is a KEYWORD — the daemon's handle dispatches on (:op req) as a keyword.
-(defn- commit-op! [port op te p r]
+(defn- commit-op! [port log-path op te p r]
   (loop [tries 5]
-    (let [v (coord-version port)
-          resp (coord-rt port {:op op :te te :p p :r r :base v :frame "flip-commit"})]
+    (let [v (coord-version port log-path)
+          _ (when-not (integer? v)
+              (die "coordinator version request failed under log fence"))
+          resp (coord-rt port log-path
+                         {:op op :te te :p p :r r :base v
+                          :frame "flip-commit"})]
       (cond
         (:ok resp) :ok
         (and (= (:reject resp) :conflict) (pos? tries)) (recur (dec tries))
         :else (die "coordinator REJECTED" op te p r "->" (pr-str resp))))))
 
-(let [{:keys [module bclj port dry]} (parse-args *command-line-args*)]
-  (when (or (str/blank? module) (str/blank? bclj)) (die "usage: bin/fram-commit-code <module> <new.bclj> --port <P> [--dry-run]"))
+(let [{:keys [module bclj port log dry]} (parse-args *command-line-args*)]
+  (when (or (str/blank? module) (str/blank? bclj))
+    (die "usage: bin/fram-commit-code <module> <new.bclj> --port <P> --log <code.log> [--dry-run]"))
   (when (nil? port) (die "--port <P> is REQUIRED (the coordinator serving the CODE log)"))
+  (when (str/blank? log) (die "--log <code.log> is REQUIRED (the expected coordinator corpus identity)"))
   (when-not (.exists (io/file bclj)) (die "no such .bclj:" bclj))
 
   ;; SAFETY GATE: refuse to commit unless the coordinator is serving a CODE log.
-  (let [st (coord-status port)
+  (let [st (coord-status port log)
+        _ (when (:reject st)
+            (die "SAFETY: coordinator log fence rejected —" (pr-str st)))
         logp (str (:log st))]
     (when (str/blank? logp) (die "coordinator on" port "reports no :log — refusing to commit"))
     (when-not (str/includes? logp "code.log")
@@ -156,7 +169,7 @@
     (log! "fram-commit-code: target coordinator" (str "127.0.0.1:" port) "log=" logp))
 
   (let [post (bclj->triples module bclj)
-        pre  (pre-triples port module)
+        pre  (pre-triples port log module)
         ;; restrict to AST predicates: the @<mod>#root file fact and any domain fact
         ;; (e.g. a relates_to bridge) on a code node are NOT module structure and must
         ;; never be churned by a code edit.
@@ -196,12 +209,12 @@
           (log! "  [dry-run] committed NOTHING"))
       (do
         ;; 1. retract EVERY fact on a changed node (clean slate for those nodes).
-        (doseq [[te p r] removes] (commit-op! port :retract te p r))
+        (doseq [[te p r] removes] (commit-op! port log :retract te p r))
         ;; 2. assert the new facts for those nodes. Order leaves/v before parent fN
         ;;    re-points: sort so kind/v come first, then fN/seg/comment/tail edges, so a
         ;;    referenced child node exists (has its kind) before a parent points at it.
         (let [leaf? (fn [[_ p _]] (#{"kind" "v"} p))
               ordered (concat (filter leaf? adds) (remove leaf? adds))]
-          (doseq [[te p r] ordered] (commit-op! port :assert te p r)))
+          (doseq [[te p r] ordered] (commit-op! port log :assert te p r)))
         (log! "fram-commit-code: COMMITTED" (count removes) "retract(s) +" (count adds)
               "assert(s) across" (count changed-nodes) "node(s) (now render-from-log to refresh the .bclj)")))))

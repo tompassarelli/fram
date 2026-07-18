@@ -12,14 +12,39 @@
 #   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
 #   names its split telemetry half. Reads fold the pair into one logical store.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-export FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
+  if [[ -z "${FRAM_LOG:-}" || -z "${FRAM_THREADS:-}" ]]; then
+    if [[ -n "${FRAM_STATE_DIR:-}" ]]; then
+      state_dir="$FRAM_STATE_DIR"
+    elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
+      state_dir="$XDG_STATE_HOME/fram"
+    elif [[ -n "${HOME:-}" ]]; then
+      state_dir="$HOME/.local/state/fram"
+    else
+      echo "fram-mcp: set FRAM_LOG + FRAM_THREADS, FRAM_STATE_DIR, XDG_STATE_HOME, or HOME" >&2
+      exit 2
+    fi
+  fi
+  [[ -n "${FRAM_THREADS:-}" ]] || FRAM_THREADS="$state_dir/threads"
+  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/facts.log"
+else
+  FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
+  FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+fi
+export FRAM_THREADS FRAM_LOG
+mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
 # Pin beagle's racket (matches the emit-edn .zo bytecode) onto PATH so the
 # facts-roundtrip --emit-edn/--render calls in the edit channel never hit an
 # ambient version-skewed racket (-> .zo "version mismatch"). FRAM_RACKET
 # overrides; mirrors bin/_beagle-racket. Covers fram_mcp.clj + every bb helper it
 # spawns (fram-commit-code / fram-render-code / ...), which inherit PATH.
-BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
-_pinned_racket="${FRAM_RACKET:-$(direnv exec "$BEAGLE_HOME" which racket 2>/dev/null || true)}"
-[ -n "$_pinned_racket" ] && export PATH="$(dirname "$_pinned_racket"):$PATH"
+BEAGLE_HOME="${BEAGLE_HOME:-${HOME:+$HOME/code/beagle}}"
+_pinned_racket="${FRAM_RACKET:-}"
+if [[ -z "$_pinned_racket" && -n "$BEAGLE_HOME" ]]; then
+  _pinned_racket="$(direnv exec "$BEAGLE_HOME" which racket 2>/dev/null || true)"
+fi
+if [ -n "$_pinned_racket" ]; then
+  PATH="$(dirname "$_pinned_racket"):$PATH"
+  export PATH
+fi
 cd "$HERE" && exec bb -cp out tests/fram_mcp.clj

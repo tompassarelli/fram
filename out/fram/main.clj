@@ -104,37 +104,43 @@
   (fram.rt/write-log log (facts->fact-ops deduped "merge"))
   (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")"))))
 
-(defn- ^String tell-once [port ^String op ^String te ^String pred ^String rv]
-  (let [v (fram.rt/coord-version port)]
-  (if (< v 0) "nodaemon" (if (= op "assert") (fram.rt/coord-assert port te pred rv v) (fram.rt/coord-retract port te pred rv v)))))
+(defn- ^String tell-once [port ^String log ^String op ^String te ^String pred ^String rv]
+  (let [v (fram.rt/coord-version-for-log port log)]
+  (cond
+  (= v -1) "nodaemon"
+  (= v -2) "log-mismatch"
+  (= v -3) "protocol-incompatible"
+  (= op "assert") (fram.rt/coord-assert-for-log port log te pred rv v)
+  :else (fram.rt/coord-retract-for-log port log te pred rv v))))
 
-(defn- ^String tell-retry [port ^String op ^String te ^String pred ^String rv tries]
-  (let [resp (tell-once port op te pred rv)]
-  (if (and (= resp "conflict") (> tries 0)) (tell-retry port op te pred rv (- tries 1)) resp)))
+(defn- ^String tell-retry [port ^String log ^String op ^String te ^String pred ^String rv tries]
+  (let [resp (tell-once port log op te pred rv)]
+  (if (and (= resp "conflict") (> tries 0)) (tell-retry port log op te pred rv (- tries 1)) resp)))
 
 (defn cmd-tell [^String log ^String op ^String id ^String pred ^String value]
   (let [facts (:facts (fold/fold (fram.rt/read-log log)))
    te (str "@" id)
    rv (tl/ref-value facts pred value)
-   resp (tell-retry (fram.rt/coord-port) op te pred rv 5)]
+   resp (tell-retry (fram.rt/coord-port) log op te pred rv 5)]
   (cond
   (= resp "nodaemon") (println (str "no coordinator on 127.0.0.1:" (fram.rt/coord-port) " — start it with bin/fram-up, or use `set` (single-writer)"))
+  (= resp "log-mismatch") (println "REJECTED by coordinator: the daemon serves a different log (run `fram doctor` for both paths)")
+  (= resp "protocol-incompatible") (println "REJECTED by coordinator: daemon lacks the required log-fence protocol; restart it with current Fram")
   (= resp "conflict") (println "rejected: write conflict after retries (another agent is racing this id+pred)")
   (str/starts-with? resp "ok:") (println (str "committed via coordinator (v" (subs resp 3) "): " id " " pred " = " rv))
   :else (println (str "REJECTED by coordinator: " resp)))))
 
-(defn cmd-watch []
+(defn cmd-watch [^String log]
   (let [port (fram.rt/coord-port)]
   (println (str "watching coordinator on 127.0.0.1:" port " — Ctrl-C to stop"))
-  (fram.rt/coord-watch port)))
+  (fram.rt/coord-watch-for-log port log)))
 
 (defn cmd-doctor [^String log]
   (let [port (fram.rt/coord-port)
-   v (fram.rt/coord-version port)
    as (fram.rt/read-log log)
    cmap (fold/card-map as)
    declared (filterv (fn [c] (= (:p c) "cardinality")) (:facts (fold/fold as)))]
-  (if (>= v 0) (println (str "coordinator UP on 127.0.0.1:" port " (v" v ")")) (println (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up")))
+  (println (fram.rt/coord-status-for-log port log))
   (println (str "vocab " (k/vocab-fingerprint)))
   (println (str "cardinality-facts: " (count declared) " facts-derived (in the log)"))
   (println (str "cardinality-overlay " (k/cards-fingerprint cmap)))
@@ -151,10 +157,12 @@
   (if (empty? rows) (println "  (no results)") (doseq [r rows]
   (println (str "  " r)))))
 
-(defn- route-write [w]
-  (let [resp (tell-retry (fram.rt/coord-port) (:op w) (:l w) (:p w) (:r w) 5)]
+(defn- route-write [^String log w]
+  (let [resp (tell-retry (fram.rt/coord-port) log (:op w) (:l w) (:p w) (:r w) 5)]
   (cond
   (= resp "nodaemon") (println (str "no coordinator on 127.0.0.1:" (fram.rt/coord-port) " — start it with bin/fram-up"))
+  (= resp "log-mismatch") (println "REJECTED by coordinator: the daemon serves a different log (run `fram doctor` for both paths)")
+  (= resp "protocol-incompatible") (println "REJECTED by coordinator: daemon lacks the required log-fence protocol; restart it with current Fram")
   (= resp "conflict") (println "rejected: write conflict after retries")
   (str/starts-with? resp "ok:") (println (str "committed (v" (subs resp 3) "): " (:l w) " " (:p w) " = " (:r w) " [" (:op w) "]"))
   :else (println (str "REJECTED by coordinator: " resp)))))
@@ -168,7 +176,7 @@
   (cond
   (some? (:error res)) (doseq [e (:error res)]
   (println (str "  error: " e)))
-  (some? (:write res)) (route-write (:write res))
+  (some? (:write res)) (route-write log (:write res))
   (some? (:ok res)) (print-rows (:ok res))
   :else (print-rows (:rows res)))))))
 
@@ -185,7 +193,7 @@
   (= cmd "import") (cmd-import threads-dir log (and (> (count args) 1) (= (nth args 1) "--force")))
   (= cmd "export") (if (> (count args) 1) (cmd-export threads-dir log (nth args 1) (and (> (count args) 2) (= (nth args 2) "--force"))) (println "usage: export <out-dir> [--force]"))
   (= cmd "validate") (cmd-validate log)
-  (= cmd "watch") (cmd-watch)
+  (= cmd "watch") (cmd-watch log)
   (= cmd "doctor") (cmd-doctor log)
   (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) ""))
   (= cmd "history") (if (> (count args) 1) (fram.rt/history log (nth args 1)) (println "usage: history <id>"))

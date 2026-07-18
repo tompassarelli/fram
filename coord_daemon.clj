@@ -38,6 +38,56 @@
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
+(def require-log-fence?
+  (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
+
+;; Canonical corpus identity for the log-fenced wire envelope. Clients that know
+;; which physical log they intend to use send:
+;;
+;;   {:op :for-log :expected-log "/path/to/facts.log" :request {<legacy request>}}
+;;
+;; This is a DISTINCT top-level op rather than an optional field on legacy ops:
+;; an older daemon rejects :for-log as unknown and therefore cannot accidentally
+;; execute the nested mutation. New daemons continue to accept legacy low-level
+;; requests, preserving old-client -> new-daemon compatibility.
+(defn- canonical-path [path]
+  (.getCanonicalPath (java.io.File. (str path))))
+
+(defn- served-log-path []
+  (when-let [path (or @flat-log (:log @co))]
+    ;; boot!/boot-flat! freeze the physical identity once. Never resolve this
+    ;; stored path again: a symlink or parent-directory retarget after boot must
+    ;; not move the daemon's identity (or its writes) to a different corpus.
+    (str path)))
+
+(defn- log-fence-rejection [expected]
+  (try
+    (let [expected* (when (and (string? expected) (not (str/blank? expected)))
+                      (canonical-path expected))
+          served* (served-log-path)]
+      (cond
+        (nil? expected*)
+        {:reject ["log fence requires a non-blank :expected-log path"]
+         :code :invalid-log-fence}
+
+        (nil? served*)
+        {:reject ["coordinator has no served log identity"]
+         :code :log-identity-unavailable
+         :expected-log expected*}
+
+        (not= expected* served*)
+        {:reject [(str "log mismatch: client expects " expected*
+                       " but coordinator serves " served*)]
+         :code :log-mismatch
+         :expected-log expected*
+         :served-log served*}
+
+        :else nil))
+    (catch Throwable t
+      {:reject [(str "invalid expected log path: "
+                     (or (.getMessage t) (.getSimpleName (class t))))]
+       :code :invalid-log-fence
+       :expected-log (str expected)})))
 ;; ---- the log split: kind-routed per-log persistence (A1: unified store, split disk) ----
 ;; FRAM_TELEMETRY_LOG nil => single-log, BYTE-IDENTICAL to pre-split (write path,
 ;; boot, snapshot all unchanged). Set => the coordinator partitions each written flat
@@ -1291,7 +1341,7 @@
 ;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
 ;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
 ;; is assigned here (the verb mints nameless local entities on the clone).
-(defn- do-edit-min [spec]
+(defn- do-edit-min* [spec expected-log fenced?]
   (let [module (:module spec)]
     (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
     ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
@@ -1411,39 +1461,46 @@
       ;; (warm-cache) + append-flat! (flat log) — the two that would corrupt if left
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
-       ;; #(a) persist rename-identity UNDER THE SAME lock as the commit (no lock-free window).
-       ;; ensure-refers! (inside) re-derives fresh, so a reference a concurrent agent committed
-       ;; BEFORE this lock is captured into bound_to; one arriving AFTER sees the renamed def
-       ;; (old spelling correctly resolves to nothing — a stale ref, not a silent mis-bind).
-       ;; v0 is read AFTER, so the rename asserts' OCC base reflects the bound_to commits.
-       (when (= "rename" (:op spec)) (persist-bound-for-rename! spec))
-       (let [v0 (current-seq @co)
-             asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
-             rej (atom nil)]
-        ;; BATCH the flat-log appends: collect every fact's line, write+fsync ONCE at the end
-        ;; (1 fsync per commit, not per fact). do-assert/do-retract still update the warm store
-        ;; per op; only the durable-log fsync is batched — same durable-before-ack guarantee.
-        (binding [*flat-batch* (atom [])]
-         (doseq [[te p r] retracts :while (nil? @rej)]
-           (let [res (do-retract te p r v0)] (when (:reject res) (reset! rej {:op :retract :te te :p p :r r :res res}))))
-         ;; r is already a wire value: a name STRING (ref, for fN/child/tail/...) or a
-         ;; literal STRING (kind/v). do-assert's kind-of picks :link vs :assert by the
-         ;; ref-shape of the string — exactly the migrate-flat->co convention.
-         (let [leaf? (fn [[_ p _]] (#{"kind" "v"} p))
-               ordered (concat (filter leaf? asserts) (remove leaf? asserts))]
-           (doseq [[te p r] ordered :while (nil? @rej)]
-             (let [res (do-assert te p r v0)]
-               (when (:reject res) (reset! rej {:op :assert :te te :p p :r r :res res})))))
-         (flush-flat-batch!))                          ; ONE fsync for the whole commit's appends
-        (when (= "1" (System/getenv "FRAM_PROF"))
-          (binding [*out* *err*] (println (format "PROF harvest=%.1fms commit=%.1fms" (/ (- t-cm t-hv) 1e6) (/ (- (System/nanoTime) t-cm) 1e6)))))
-        (if @rej
-          {:reject (:res @rej) :failed-op @rej :module module}
-          {:ok true :module module
-           :asserts (count asserts) :retracts (count retracts)
-           :ops (+ (count asserts) (count retracts))
-           :new-nodes (count new-eids) :name-ints name-ints
-           :version (current-seq @co)}))))))
+       ;; The identity check and the first possible mutation share this exact
+       ;; commit lock. Computation above stays lock-free; a mismatched request
+       ;; may consume only transient name reservations, never corpus state.
+       (if-let [fence-reject (when fenced?
+                               (log-fence-rejection expected-log))]
+         fence-reject
+         (do
+           ;; #(a) persist rename-identity UNDER THE SAME lock as the commit (no lock-free window).
+           ;; ensure-refers! (inside) re-derives fresh, so a reference a concurrent agent committed
+           ;; BEFORE this lock is captured into bound_to; one arriving AFTER sees the renamed def
+           ;; (old spelling correctly resolves to nothing — a stale ref, not a silent mis-bind).
+           ;; v0 is read AFTER, so the rename asserts' OCC base reflects the bound_to commits.
+           (when (= "rename" (:op spec)) (persist-bound-for-rename! spec))
+           (let [v0 (current-seq @co)
+                 asserts (allocate-positions asserts)  ; CRDT (#36): set PENDING ties to new nodes' atomic name-ints -> concurrent same-gap inserts get distinct keys, both land (commute)
+                 rej (atom nil)]
+            ;; BATCH the flat-log appends: collect every fact's line, write+fsync ONCE at the end
+            ;; (1 fsync per commit, not per fact). do-assert/do-retract still update the warm store
+            ;; per op; only the durable-log fsync is batched — same durable-before-ack guarantee.
+            (binding [*flat-batch* (atom [])]
+             (doseq [[te p r] retracts :while (nil? @rej)]
+               (let [res (do-retract te p r v0)] (when (:reject res) (reset! rej {:op :retract :te te :p p :r r :res res}))))
+             ;; r is already a wire value: a name STRING (ref, for fN/child/tail/...) or a
+             ;; literal STRING (kind/v). do-assert's kind-of picks :link vs :assert by the
+             ;; ref-shape of the string — exactly the migrate-flat->co convention.
+             (let [leaf? (fn [[_ p _]] (#{"kind" "v"} p))
+                   ordered (concat (filter leaf? asserts) (remove leaf? asserts))]
+               (doseq [[te p r] ordered :while (nil? @rej)]
+                 (let [res (do-assert te p r v0)]
+                   (when (:reject res) (reset! rej {:op :assert :te te :p p :r r :res res})))))
+             (flush-flat-batch!))                          ; ONE fsync for the whole commit's appends
+            (when (= "1" (System/getenv "FRAM_PROF"))
+              (binding [*out* *err*] (println (format "PROF harvest=%.1fms commit=%.1fms" (/ (- t-cm t-hv) 1e6) (/ (- (System/nanoTime) t-cm) 1e6)))))
+            (if @rej
+              {:reject (:res @rej) :failed-op @rej :module module}
+              {:ok true :module module
+               :asserts (count asserts) :retracts (count retracts)
+               :ops (+ (count asserts) (count retracts))
+               :new-nodes (count new-eids) :name-ints name-ints
+               :version (current-seq @co)}))))))))
 
 (declare maybe-reload!)
 ;; thread 019f100f-7fff: snapshot/tail-fold/as-of/incremental-aggregate surface,
@@ -1739,7 +1796,7 @@
           :else
           (let [nm (resolve/writable-disp-name form)]
             (or (static-type-check module form corpus-types)
-                (let [er (try (do-edit-min {:op "upsert-form" :module module :datum form})
+                (let [er (try (do-edit-min* {:op "upsert-form" :module module :datum form} nil false)
                               (catch Throwable t {:ex t}))]
                   (cond
                     (:ex er)     (ex->s-err module nm (:ex er))
@@ -1957,6 +2014,24 @@
         (binding [*out* *err*]
           (println (str "def-check: warm primitive unavailable (" (.getMessage t) "); staying advisory-deferred")))))))
 
+(defn- do-edit-min
+  "Legacy in-process edit seam. Socket fencing is applied by do-edit-min*."
+  [spec]
+  (do-edit-min* spec nil false))
+
+(defn- edit-min-response [req expected-log fenced?]
+  (try (do-edit-min* (:spec req) expected-log fenced?)
+       (catch Throwable t
+         ;; Surface a verb's structured disambiguation payload (replace-in-body
+         ;; candidates + :within suggestions) alongside the human :reject message.
+         (let [d   (ex-data t)
+               msg (or (not-empty (str (.getMessage t))) (:message d)
+                       (str "internal error: " (.getSimpleName (class t))))]
+           (cond-> {:reject [(str "edit-min: " msg)]
+                    :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
+                    :version (current-seq @co)}
+             (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
+
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
@@ -1965,6 +2040,39 @@
   ;; is a no-op in v2-log mode (the code daemon, where :edit-min lives), so skipping it here is
   ;; safe; the commit still serializes under dlock and is OCC-checked per (te,p) at commit time.
   (cond
+    ;; Protocol-level corpus fencing. Normal requests validate and execute while
+    ;; this outer dlock remains held; the recursive legacy handler may re-enter
+    ;; the JVM monitor, but cannot release the fence between check and mutation.
+    ;; :edit-min is different by design: its expensive compute stays lock-free
+    ;; and do-edit-min validates expected-log inside its existing commit lock.
+    (= :for-log (:op req))
+    (let [inner (:request req)
+          expected (:expected-log req)]
+      (cond
+        (not (map? inner))
+        {:reject ["log fence requires a nested request map"]
+         :code :invalid-log-fence}
+
+        (= :for-log (:op inner))
+        {:reject ["nested log-fence envelopes are not supported"]
+         :code :invalid-log-fence}
+
+        (= :edit-min (:op inner))
+        ;; Cheap preflight avoids running the lock-free compiler/harvest work
+        ;; for an already-proven mismatch. do-edit-min* repeats this check at
+        ;; the commit boundary, under the same dlock as its first mutation.
+        (if-let [fence-reject (locking dlock
+                                (log-fence-rejection expected))]
+          fence-reject
+          (edit-min-response inner expected true))
+
+        :else
+        (locking dlock
+          (maybe-reload!)
+          (if-let [fence-reject (log-fence-rejection expected)]
+            fence-reject
+            (handle* inner)))))
+
     ;; LOCK-FREE read: deref the @co immutable snapshot, NO dlock. Reads don't need the
     ;; writer lock (the atom swap on commit is atomic), so a reader never serializes behind
     ;; concurrent writers. Used to measure true propagation (commit -> reader sees) without
@@ -1995,21 +2103,7 @@
       {:ok true :checked :deferred
        :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + defcheck_gate.clj)"
        :version (current-seq @co)})
-    (= :edit-min (:op req))
-    (try (do-edit-min (:spec req))
-         (catch Throwable t
-           ;; surface a verb's structured disambiguation payload (replace-in-body candidates
-           ;; + :within suggestions) alongside the human :reject message, so the client/model
-           ;; gets HOW to disambiguate, not just that it was ambiguous. NEVER a message-less
-           ;; reject (the t-r1 IOOBE anti-pattern): synthesize from the exception class when
-           ;; getMessage is nil, and attach the full structured :error shape for repair.
-           (let [d   (ex-data t)
-                 msg (or (not-empty (str (.getMessage t))) (:message d)
-                         (str "internal error: " (.getSimpleName (class t))))]
-             (cond-> {:reject [(str "edit-min: " msg)]
-                      :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
-                      :version (current-seq @co)}
-               (:disambiguation d) (assoc :disambiguation (:disambiguation d))))))
+    (= :edit-min (:op req)) (edit-min-response req nil false)
   :else
   (locking dlock                       ; serialize reload + writes + reads (drop-in mode)
     (maybe-reload!)                     ; absorb external flat edits (no-op in v2-log mode)
@@ -2302,17 +2396,45 @@
           w (BufferedWriter. (OutputStreamWriter. (.getOutputStream s)))]
       (try
         (when-let [line (read-line-bounded r max-line-bytes)]
-          (let [req (parse-req line)]
-            (if (= (:op req) :subscribe)
-              (do (swap! subscribers conj {:w w :flt (:filter req)})   ; P5: opt-in scoped filter (nil = firehose)
+          (let [req (parse-req line)
+                inner (:request req)
+                strict-reject
+                (when (and require-log-fence?
+                           (not= :for-log (:op req)))
+                  {:reject ["this coordinator requires a :for-log envelope"]
+                   :code :log-fence-required
+                   :served-log (served-log-path)})
+                fenced-subscribe? (and (= :for-log (:op req))
+                                       (map? inner)
+                                       (= :subscribe (:op inner)))
+                subscribe-req (if fenced-subscribe? inner req)
+                fence-reject (when fenced-subscribe?
+                               (locking dlock
+                                 (maybe-reload!)
+                                 (log-fence-rejection (:expected-log req))))]
+            (cond
+              strict-reject
+              (try-reply w strict-reject (:fmt req))
+
+              fence-reject
+              (try-reply w fence-reject (:fmt req))
+
+              (or fenced-subscribe? (= (:op req) :subscribe))
+              (do (swap! subscribers conj {:w w :flt (:filter subscribe-req)})   ; P5: opt-in scoped filter (nil = firehose)
                   ;; A subscriber is long-lived: it RECEIVES pushed events and sends
                   ;; nothing, so the request-path read timeout (5s) must NOT apply or
                   ;; it would drop every idle subscriber. Disable it for this socket;
                   ;; the loop now blocks on read purely to detect disconnect (EOF).
                   ;; The 1 MiB line cap still guards against a flooding subscriber.
                   (.setSoTimeout s 0)
-                  (.write w (pr-str {:subscribed (current-seq @co)})) (.newLine w) (.flush w)
+                  (.write w (pr-str (cond-> {:subscribed (current-seq @co)}
+                                      fenced-subscribe?
+                                      (assoc :log (served-log-path)))))
+                  (.newLine w)
+                  (.flush w)
                   (loop [] (when (read-line-bounded r max-line-bytes) (recur))))
+
+              :else
               (let [resp (handle req)] (try-reply w resp (:fmt req))))))
         ;; StackOverflowError is an Error (not Exception); catching Throwable here
         ;; keeps a deep-nest / malformed line from taking down the conn thread.
@@ -2417,19 +2539,24 @@
 (defn boot!
   ([log] (boot! log nil))
   ([log flat]
-   (reset! flat-log flat)
-   (let [f (java.io.File. log)]
+   (let [log (canonical-path log)
+         flat (when flat (canonical-path flat))]
+    (when-let [tlog @telemetry-log]
+      (reset! telemetry-log (canonical-path tlog)))
+    (reset! flat-log flat)
+    (let [f (java.io.File. log)]
      (reset! co (if (and (.exists f) (pos? (.length f)))
                   {:store (replay log) :log log :lock (Object.)}
                   (new-coord log))))
-   (reset-refers-state!)                 ; S3.3: fresh store -> next materialize is cold
-   (index!)
-   @co))
+    (reset-refers-state!)                 ; S3.3: fresh store -> next materialize is cold
+    (index!)
+    @co)))
 
 (defn serve-daemon [port log flat]
   (boot! log flat)
-  (println (str "reified coordinator: " (count (c/current-facts (:store @co))) " live facts from " log
-                (when flat (str "; flat projection -> " flat))))
+  (println (str "reified coordinator: " (count (c/current-facts (:store @co)))
+                " live facts from " (:log @co)
+                (when @flat-log (str "; flat projection -> " @flat-log))))
   (serve port))
 
 ;; ===========================================================================
@@ -2616,7 +2743,7 @@
 ;; validated (fail closed).
 (def ^:private fold-fingerprint-files
   ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/store.clj"
-   "out/fram/rt.clj" "coord.clj" "coord_daemon.clj"])
+   "out/fram/rt.clj" "chartroom/src/resolve.clj" "coord.clj" "coord_daemon.clj"])
 (defn fold-fingerprint []
   (try
     (let [root (System/getProperty "user.dir")
@@ -2816,7 +2943,7 @@
          (.length (java.io.File. (str flat))))   "byte offset past EOF (log truncated below checkpoint)"
       :else nil)))
 
-(defn boot-flat! [flat]
+(defn- boot-flat-canonical! [flat]
   (reset! flat-canonical? true)
   (let [t0   (System/nanoTime)
         snap (read-sidecar flat)
@@ -2862,6 +2989,11 @@
                       (str "whole-log fold — " why))
                     " in " ms " ms")))
     @co))
+
+(defn boot-flat! [flat]
+  (when-let [tlog @telemetry-log]
+    (reset! telemetry-log (canonical-path tlog)))
+  (boot-flat-canonical! (canonical-path flat)))
 
 ;; absorb external edits (capture/import append to the flat log out-of-band). The
 ;; per-request cost is a (stamp ...) stat; on a change we now TAIL-FOLD only the new
@@ -3102,7 +3234,6 @@
 ;; exists beside that exact legacy alias, serve the split pair instead. Rollback
 ;; (delete coordination.log) disables this automatically. 2026-07-16 incident:
 ;; north-coord.service respawned onto frozen facts.log and diverged live writes.
-(defn- canonical-path [f] (.getCanonicalPath (java.io.File. (str f))))
 
 (defn- activate-split! [coord]
   (let [coord-file (.getAbsoluteFile (java.io.File. (str coord)))
@@ -3121,16 +3252,16 @@
     (cond
       ;; Starting on the canonical coordination half must still activate the pair.
       (= (.getName f) "coordination.log")
-      (do (activate-split! f) (.getPath f))
+      (do (activate-split! f) (canonical-path f))
 
       ;; Only the frozen pre-split alias is eligible for automatic re-aiming.
       (and (= (.getName f) "facts.log") (.isFile cl))
       (do (activate-split! cl)
           (println (str "[fram] boot re-aim: " path " -> " (.getPath cl)
                         " (log split active; telemetry: " @telemetry-log ")"))
-          (.getPath cl))
+          (canonical-path cl))
 
-      :else path)))
+      :else (canonical-path path))))
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd

@@ -13,6 +13,7 @@
 ;; USAGE:
 ;;   bin/fram-code-author --script <steps.edn> [--port 7979] [--pace 1.5]
 ;;                        [--boot <seed.bclj>] [--module <default-mod>]
+;;                        [--log <code.log>]
 ;;
 ;;   --script  EDN vector of step maps (inline forms — NO temp files for the author):
 ;;       {:op "upsert-form"    :module "greet" :form (def salutation :- String "Howdy") :note "..."}
@@ -35,18 +36,21 @@
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[clojure.edn :as edn]
-         '[babashka.process :as proc])
+         '[babashka.process :as proc]
+         '[fram.rt :as rt])
 (import '[java.net Socket InetSocketAddress])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
 (def ^:private cwd (System/getProperty "user.dir"))
-(def ^:private bin-dir (str cwd "/bin"))
-(def ^:private fram-out (str cwd "/out"))
+(def ^:private fram-home (or (System/getenv "FRAM_HOME") cwd))
+(def ^:private bin-dir (or (System/getenv "FRAM_BIN") (str fram-home "/bin")))
+(def ^:private fram-out (or (System/getenv "FRAM_OUT") (str fram-home "/out")))
 
 (defn- parse-args [args]
-  (loop [a args opts {:script nil :port 7979 :pace 1.5 :boot nil :module nil}]
+  (loop [a args opts {:script nil :port 7979 :pace 1.5 :boot nil :module nil
+                      :log nil}]
     (cond
       (empty? a) opts
       (= "--script" (first a)) (recur (drop 2 a) (assoc opts :script (second a)))
@@ -54,20 +58,28 @@
       (= "--pace" (first a))   (recur (drop 2 a) (assoc opts :pace (Double/parseDouble (second a))))
       (= "--boot" (first a))   (recur (drop 2 a) (assoc opts :boot (second a)))
       (= "--module" (first a)) (recur (drop 2 a) (assoc opts :module (second a)))
+      (= "--log" (first a))    (recur (drop 2 a) (assoc opts :log (second a)))
       :else (recur (rest a) opts))))
 
-;; one-shot EDN request to the coordinator (same wire fram-edit-code uses).
-(defn- coord [port req]
+;; A raw TCP probe is used only to detect port occupancy before launch. Every
+;; coordinator operation carries the expected physical code-log identity.
+(defn- port-open? [port]
   (try
     (with-open [s (Socket.)]
-      (.connect s (InetSocketAddress. "127.0.0.1" (int port)) 2000)
-      (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
-        (.write w (str (pr-str req) "\n")) (.flush w)
-        (edn/read-string (.readLine rd))))
+      (.connect s (InetSocketAddress. "127.0.0.1" (int port)) 300)
+      true)
+    (catch Exception _ false)))
+
+(defn- coord [port log-path req]
+  (try
+    (rt/coord-request-for-log port log-path req)
     (catch Exception _ nil)))
 
-(defn- version-of [port] (:version (coord port {:op :version})))
-(defn- daemon-up? [port] (some? (version-of port)))
+(defn- version-of [port log-path]
+  (:version (coord port log-path {:op :version})))
+
+(defn- daemon-up? [port log-path]
+  (integer? (version-of port log-path)))
 
 ;; ---- self-contained boot (--boot): ingest seed -> gate-passing log -> daemon ----
 (defn- module-of-seed [seed] (str/replace (.getName (io/file seed)) #"\.bclj$" ""))
@@ -85,24 +97,28 @@
         (.delete (io/file pidf))
         (log! "fram-code-author: stopped tracked daemon on :" port " (pid " pid ")"))
       (Thread/sleep 600))
-    (when (daemon-up? port)
+    (when (port-open? port)
       (die "fram-code-author: a daemon is STILL up on :" port " and not ours to stop — pick a free --port"))
     (log! "fram-code-author: ingesting" seed "-> " glog)
     (let [r (proc/sh {:err :string} (str bin-dir "/fram-ingest-code") seed "--out" glog)]
       (when-not (zero? (:exit r)) (die "ingest FAILED:\n" (:err r))))
     (log! "fram-code-author: launching daemon on :" port " over " glog)
     ;; detach: nohup so the daemon outlives this bb process (the script just drives verbs).
-    (proc/process ["nohup" (str bin-dir "/fram-daemon") (str port) glog]
-                  {:out (io/file dlog) :err (io/file dlog)
-                   :extra-env {"_" "1"} :shutdown nil})
-    (spit pidf "")                                                ; placeholder; real pid below
-    ;; nohup backgrounds; grab the daemon pid by polling for up, then record from pgrep-free path.
-    (loop [i 0]
-      (cond
-        (daemon-up? port) (log! "fram-code-author: :" port " up.")
-        (> i 80) (die "fram-code-author: :" port " TIMEOUT — see " dlog)
-        :else (do (Thread/sleep 500) (recur (inc i)))))
-    mod))
+    (let [daemon
+          (proc/process ["nohup" (str bin-dir "/fram-daemon") (str port) glog]
+                        {:out (io/file dlog) :err (io/file dlog)
+                         :extra-env {"FRAM_REQUIRE_LOG_FENCE" "1"}
+                         :shutdown nil})
+          pid (.pid ^Process (:proc daemon))]
+      (spit pidf (str pid "\n"))
+      (loop [i 0]
+        (cond
+          (daemon-up? port glog) (log! "fram-code-author: :" port " up.")
+          (> i 80) (do
+                     (try (proc/destroy-tree daemon) (catch Throwable _ nil))
+                     (die "fram-code-author: :" port " TIMEOUT — see " dlog))
+          :else (do (Thread/sleep 500) (recur (inc i))))))
+    {:module mod :log glog}))
 
 ;; ---- per-step verb invocation via fram-edit-code (the :edit-min minimal path) ----
 (defn- tmp-edn! [form]
@@ -125,14 +141,15 @@
 (def ^:private receipt-re
   #"committed (\d+) ops \((\d+) assert / (\d+) retract; (\d+) new node\(s\)\).*version -> (\d+)")
 
-(defn- run-step! [port step]
+(defn- run-step! [port log-path step]
   (let [op (:op step)
-        module (or (:module step) (:module step))
+        module (:module step)
         flags (flags-for step)
-        v0 (version-of port)
+        v0 (version-of port log-path)
         r (apply proc/sh {:err :string :out :string :extra-env (into {} (System/getenv))}
                  "bb" "-cp" fram-out (str bin-dir "/fram-edit-code")
-                 op module (concat flags ["--port" (str port)]))
+                 op module (concat flags ["--port" (str port)
+                                          "--log" log-path]))
         err (str (:out r) (:err r))
         m (re-find receipt-re err)]
     (if m
@@ -144,16 +161,27 @@
                 (str/trim err))})))
 
 ;; ---------------------------------------------------------------------------
-(let [{:keys [script port pace boot module]} (parse-args (vec *command-line-args*))]
-  (when (str/blank? script) (die "usage: bin/fram-code-author --script <steps.edn> [--port P] [--pace S] [--boot seed.bclj] [--module M]"))
+(let [{:keys [script port pace boot module log]} (parse-args (vec *command-line-args*))]
+  (when (str/blank? script) (die "usage: bin/fram-code-author --script <steps.edn> [--port P] [--pace S] [--boot seed.bclj] [--module M] [--log code.log]"))
   (when-not (.exists (io/file script)) (die "no script:" script))
   (let [steps (edn/read-string (slurp script))]
     (when-not (vector? steps) (die "script must be an EDN vector of step maps"))
-    (when boot (boot! boot port))
-    (when-not (daemon-up? port)
-      (die "fram-code-author: no code daemon on :" port " (use --boot <seed.bclj> to stand one up)"))
+    (let [booted (when boot (boot! boot port))
+          log-path (or (:log booted) log (str cwd "/.fram/code.log"))
+          module (or module (:module booted))]
+      (when-not (.exists (io/file log-path))
+        (die "fram-code-author: no code log at" log-path
+             "(pass --log <code.log> or use --boot <seed.bclj>)"))
+      (when-not (daemon-up? port log-path)
+        (die "fram-code-author: no compatible code daemon on :" port
+             "for" (.getCanonicalPath (io/file log-path))
+             "(use --boot <seed.bclj> to stand one up)"))
     ;; SAFETY pre-check: refuse anything but a *code.log (mirrors fram-edit-code's gate).
-    (let [dlog (str (:log (coord port {:op :status})))]
+    (let [status (coord port log-path {:op :status})
+          _ (when (:reject status)
+              (die "fram-code-author: coordinator log fence rejected —"
+                   (pr-str status)))
+          dlog (str (:log status))]
       (when-not (str/includes? dlog "code.log")
         (die "fram-code-author: SAFETY — :" port " serves" dlog "— NOT a *code.log; refusing")))
     (log! (str "\n  ┌─ AGENT AUTHORING  →  :" port "  (" (count steps) " verbs, " pace "s pace) ─────────"))
@@ -166,7 +194,7 @@
               (let [step (update raw :module #(or % module))]
                 (when (str/blank? (:module step))
                   (die "step" (inc i) "has no :module and no --module default"))
-                (let [res (run-step! port step)]
+                (let [res (run-step! port log-path step)]
                   (if (:ok res)
                     (log! (format "  ● [%d/%d] %-13s @%-8s %3s ops (%sa/%sr, %s new)  v%s→v%s   %s"
                                    (inc i) (count steps) (:op res) (:module res)
@@ -182,4 +210,4 @@
       (log! (str "\n  └─ DONE — " ok "/" (count steps) " verbs landed; daemon v" v0 " → v" v1
                  "  (the program was written as a graph; the log is canonical)"))
       (println (str "{:landed " ok " :of " (count steps) " :port " port " :v0 " v0 " :v1 " v1 "}"))
-      (System/exit (if (= ok (count steps)) 0 2)))))
+      (System/exit (if (= ok (count steps)) 0 2))))))

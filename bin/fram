@@ -1,9 +1,31 @@
 #!/usr/bin/env bash
 # Fram CLI (runs the compiled Clojure on babashka).
 #   fram import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <val>
-# Defaults to <repo>/threads and <repo>/facts.log; override with
-# FRAM_THREADS / FRAM_LOG.
+# Checkout runs default to <repo>/threads and <repo>/facts.log. Packaged runs
+# default to writable XDG state. Override either with FRAM_THREADS / FRAM_LOG.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-export FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-export FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
+  # Explicit corpus paths are a complete configuration. Resolve the user-state
+  # default only for a value that is actually missing, so hermetic/service
+  # launches do not need HOME merely to use FRAM_LOG + FRAM_THREADS.
+  if [[ -z "${FRAM_LOG:-}" || -z "${FRAM_THREADS:-}" ]]; then
+    if [[ -n "${FRAM_STATE_DIR:-}" ]]; then
+      state_dir="$FRAM_STATE_DIR"
+    elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
+      state_dir="$XDG_STATE_HOME/fram"
+    elif [[ -n "${HOME:-}" ]]; then
+      state_dir="$HOME/.local/state/fram"
+    else
+      echo "fram: set FRAM_LOG + FRAM_THREADS, FRAM_STATE_DIR, XDG_STATE_HOME, or HOME" >&2
+      exit 2
+    fi
+  fi
+  [[ -n "${FRAM_THREADS:-}" ]] || FRAM_THREADS="$state_dir/threads"
+  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/facts.log"
+else
+  FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
+  FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+fi
+export FRAM_THREADS FRAM_LOG
+mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
 exec bb -cp "$HERE/out" -m fram.main "$@"

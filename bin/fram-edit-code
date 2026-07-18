@@ -52,7 +52,8 @@
          '[clojure.edn :as edn]
          '[babashka.process :as proc]
          '[fram.store :as c]
-         '[fram.schema :as s])
+         '[fram.schema :as s]
+         '[fram.rt :as rt])
 (import '[java.nio.file Files CopyOption StandardCopyOption]
         '[java.io File FileOutputStream RandomAccessFile])
 
@@ -60,6 +61,8 @@
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
 (def ^:private home (System/getProperty "user.home"))
+(def ^:private fram-home (or (System/getenv "FRAM_HOME")
+                             (System/getProperty "user.dir")))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
                                  (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
@@ -78,9 +81,9 @@
                 "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
                 "(version mismatch with beagle's compiled .zo bytecode)."))))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
-                                 (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
-(def ^:private fram-out      (or (System/getenv "FRAM_OUT") (str (System/getProperty "user.dir") "/out")))
-(def ^:private bin-dir       (or (System/getenv "FRAM_BIN") (str (System/getProperty "user.dir") "/bin")))
+                                 (str fram-home "/chartroom/src/resolve.clj")))
+(def ^:private fram-out      (or (System/getenv "FRAM_OUT") (str fram-home "/out")))
+(def ^:private bin-dir       (or (System/getenv "FRAM_BIN") (str fram-home "/bin")))
 
 ;; resolve.clj's tail runs (-main) iff (first *command-line-args*) is a recognized
 ;; MODE. Our bin's own first arg (e.g. "set-body") collides with that set, AND
@@ -89,7 +92,7 @@
 ;; (fram-render-code is immune: its first arg is a module name, not a MODE.)
 (def ^:private the-args (vec *command-line-args*))   ; capture before masking
 (binding [*command-line-args* []]
-  (load-file "coord_daemon.clj")          ; migrate-flat->co + warm-store machinery
+  (load-file (str fram-home "/coord_daemon.clj"))   ; migrate-flat->co + warm-store machinery
   (load-file resolve-clj))                     ; run-verb-warm! / extract-file! / out-path
 
 ;; --- B1: ATOMIC write — render to a temp file in the SAME dir, fsync, then
@@ -144,12 +147,8 @@
 
 ;; one-shot EDN request to the live coordinator daemon (the SAME wire fram-commit-code
 ;; uses). Returns the parsed reply map.
-(defn- coord-rt [port req]
-  (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
-    (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
-      (.write w (str (pr-str req) "\n")) (.flush w)
-      (edn/read-string (.readLine rd)))))
+(defn- coord-rt [port log-path req]
+  (rt/coord-request-for-log port log-path req))
 
 (let [{:keys [op module port log out no-commit whole-module old new name body-file spec-file after text placement old-file new-file]} (parse-args the-args)
       log-path (or log (str (System/getProperty "user.dir") "/.fram/code.log"))]
@@ -200,11 +199,14 @@
                                         :new (edn/read-string (slurp new-file))})
                  (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-comment | delete | reorder | replace-in-body)"))]
       ;; SAFETY GATE: refuse unless the daemon serves a CODE log (never north).
-      (let [st (coord-rt port {:op :status}) daemon-log (str (:log st))]
+      (let [st (coord-rt port log-path {:op :status})
+            _ (when (:reject st)
+                (die "SAFETY: coordinator log fence rejected —" (pr-str st)))
+            daemon-log (str (:log st))]
         (when (str/blank? daemon-log) (die "coordinator on" port "reports no :log — refusing"))
         (when-not (str/includes? daemon-log "code.log")
           (die "SAFETY: coordinator on" port "serves" daemon-log "— NOT a *code.log; refusing"))
-        (let [resp (coord-rt port {:op :edit-min :spec spec})]
+        (let [resp (coord-rt port log-path {:op :edit-min :spec spec})]
           (if (:ok resp)
             (do (log! (str "fram-edit-code: MINIMAL-OP " op " on " module
                            " — committed " (:ops resp) " ops (" (:asserts resp) " assert / "
@@ -290,7 +292,8 @@
                   (println out-file))             ; stdout = the rendered .bclj path
               (let [commit (proc/sh {:out :string :err :string}
                                     "bb" "-cp" fram-out (str bin-dir "/fram-commit-code")
-                                    affected out-file "--port" (str port))]
+                                    affected out-file "--port" (str port)
+                                    "--log" log-path)]
                 (log! (str/trim (str (:out commit) (:err commit))))
                 (when (not (zero? (:exit commit)))
                   (die "commit FAILED — the code log was NOT updated"))

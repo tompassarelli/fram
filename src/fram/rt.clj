@@ -287,20 +287,72 @@
       (.flush w)
       (edn/read-string (.readLine r)))))
 
+;; Protocol-level corpus identity. The distinct :for-log operation is deliberate:
+;; an older daemon rejects it as unknown instead of ignoring an optional field and
+;; mutating the wrong corpus. Low-level legacy functions below remain available for
+;; compatibility; CLI/MCP entry points use the explicit *-for-log variants.
+(defn canonical-log-path [path]
+  (.getCanonicalPath (io/file path)))
+
+(defn- log-envelope [log req]
+  (cond-> {:op :for-log
+           :expected-log (canonical-log-path log)
+           :request req}
+    (contains? req :fmt) (assoc :fmt (:fmt req))))
+
+(defn coord-request-for-log [port log req]
+  (coord-rt port (log-envelope log req)))
+
 (defn coord-version [port]
   (try (let [resp (coord-rt port {:op :version})] (or (:version resp) -1))
        (catch Exception _ -1)))
 
+(defn coord-version-for-log [port log]
+  (try
+    (let [resp (coord-request-for-log port log {:op :version})]
+      (cond
+        (integer? (:version resp)) (:version resp)
+        (= :log-mismatch (:code resp)) -2
+        :else -3))
+    (catch Exception _ -1)))
+
+(defn- reject-message [rejection]
+  (if (sequential? rejection)
+    (str/join "; " (map str rejection))
+    (str rejection)))
+
+(defn- coord-write-response [resp]
+  (cond
+    (:ok resp) (str "ok:" (:ok resp))
+    (= (:reject resp) :conflict) "conflict"
+    (= (:code resp) :log-mismatch)
+    (str "log-mismatch: expected " (:expected-log resp)
+         "; daemon serves " (:served-log resp))
+    (= "unknown op" (:error resp)) "protocol-incompatible"
+    (:reject resp) (str "reject:" (reject-message (:reject resp)))
+    :else (str "error:" (pr-str resp))))
+
 (defn- coord-write [op port te pred value base]
-  (try (let [resp (coord-rt port {:op op :te te :p pred :r value :base base :frame "agent"})]
-         (cond (:ok resp)                (str "ok:" (:ok resp))
-               (= (:reject resp) :conflict) "conflict"
-               (:reject resp)            (str "reject:" (str/join "; " (:reject resp)))
-               :else                     (str "error:" (pr-str resp))))
-       (catch Exception _ "error:nodaemon")))
+  (try
+    (coord-write-response
+     (coord-rt port {:op op :te te :p pred :r value :base base :frame "agent"}))
+    (catch Exception _ "error:nodaemon")))
+
+(defn- coord-write-for-log [op port log te pred value base]
+  (try
+    (coord-write-response
+     (coord-request-for-log
+      port log {:op op :te te :p pred :r value :base base :frame "agent"}))
+    (catch Exception _ "error:nodaemon")))
 
 (defn coord-assert  [port te pred value base] (coord-write :assert  port te pred value base))
 (defn coord-retract [port te pred value base] (coord-write :retract port te pred value base))
+(defn coord-assert-for-log
+  [port log te pred value base]
+  (coord-write-for-log :assert port log te pred value base))
+(defn coord-retract-for-log
+  [port log te pred value base]
+  (coord-write-for-log :retract port log te pred value base))
 
 (defn coord-port [] (if-let [p (System/getenv "FRAM_PORT")] (Integer/parseInt p) 7977))
 
@@ -308,6 +360,32 @@
   (try (let [r (coord-rt port {:op :status})]
          (str "up|" (:version r) "|" (:facts r) "|" (:log r)))
        (catch Exception _ "down")))
+
+(defn coord-status-for-log [port log]
+  (try
+    (let [r (coord-request-for-log port log {:op :status})]
+      (cond
+        (integer? (:version r))
+        ;; Keep this exact first-line contract: North's lifecycle probe accepts
+        ;; only coordinator UP + an integer version.
+        (str "coordinator UP on 127.0.0.1:" port " (v" (:version r) ")")
+
+        (= :log-mismatch (:code r))
+        (str "coordinator WRONG LOG on 127.0.0.1:" port
+             " — expected " (:expected-log r)
+             "; daemon serves " (:served-log r)
+             "; refusing fenced reads and writes")
+
+        (= "unknown op" (:error r))
+        (str "coordinator INCOMPATIBLE on 127.0.0.1:" port
+             " — daemon lacks required log-fence protocol; restart it with current Fram")
+
+        :else
+        (str "coordinator UNUSABLE on 127.0.0.1:" port
+             " — " (pr-str r))))
+    (catch Exception _
+      (str "coordinator DOWN on 127.0.0.1:" port
+           " — start it with bin/fram-up"))))
 
 ;; warm READ ops — served off the daemon's in-memory warm store / index, avoiding the
 ;; COLD full-log fold the MCP/CLI read path pays per request (interface investigation
@@ -321,9 +399,25 @@
   (try (let [r (coord-rt port req)]
          (when-not (and (map? r) (= "unknown op" (:error r))) r))
        (catch Exception _ nil)))
+(defn warm-read-for-log [port log req]
+  (try
+    (let [r (coord-request-for-log port log req)]
+      (when-not (or (= "unknown op" (:error r))
+                    (contains? r :reject))
+        r))
+    (catch Exception _ nil)))
 (defn coord-query    [port q]       (warm-read port {:op :query :query q}))   ; -> q/run envelope | nil
 (defn coord-callers  [port te]      (warm-read port {:op :callers :te te}))   ; -> {:callers [...]} | nil
 (defn coord-resolved [port te pred] (warm-read port {:op :resolved :te te :p pred})) ; -> {:value :members :ambiguous? :values} | nil — surfaces multiplicity (#3)
+(defn coord-query-for-log
+  [port log q]
+  (warm-read-for-log port log {:op :query :query q}))
+(defn coord-callers-for-log
+  [port log te]
+  (warm-read-for-log port log {:op :callers :te te}))
+(defn coord-resolved-for-log
+  [port log te pred]
+  (warm-read-for-log port log {:op :resolved :te te :p pred}))
 
 ;; :facts — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
 ;; path (thread 019f2190). The CLI rebuilds its kernel index from this instead of
@@ -344,27 +438,69 @@
     (with-open [s (coord-socket (connect-host) port)]
       (let [w (io/writer (.getOutputStream s))
             r (io/reader (.getInputStream s))]
-        (.write w (str (pr-str {:op :facts :fmt :json}) "\n"))
+        (.write w (str (pr-str (log-envelope log {:op :facts :fmt :json})) "\n"))
         (.flush w)
         (let [resp (cheshire/parse-string (.readLine r))]
           (if (and (map? resp)
-                   (= log (get resp "log"))
+                   (= (canonical-log-path log)
+                      (canonical-log-path (get resp "log")))
                    (vector? (get resp "facts")))
             (mapv (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2))) (get resp "facts"))
             []))))
     (catch Exception _ [])))
 
-;; subscribe + stream commit events (one EDN line each) until disconnect
-(defn coord-watch [port]
+;; subscribe + stream commit events (one EDN line each) until disconnect.
+;; coord-socket deliberately starts with a 2s request deadline. Keep that deadline
+;; through the handshake so a listener that accepts but never replies cannot hang us;
+;; only a validated subscription earns an unbounded idle read.
+(defn- coord-watch-request [port request]
   (with-open [s (coord-socket (connect-host) port)]   ; honors FRAM_CONNECT + mTLS like coord-rt
     (let [w (io/writer (.getOutputStream s))
-          r (io/reader (.getInputStream s))]
-      (.write w "{:op :subscribe}\n") (.flush w)
-      (loop []
-        (when-let [line (.readLine r)]
-          (println line)
-          (recur)))))
+          r (io/reader (.getInputStream s))
+          fenced? (= :for-log (:op request))
+          expected-log (:expected-log request)]
+      (.write w (str (pr-str request) "\n"))
+      (.flush w)
+      (let [line (.readLine r)
+            response (when line (edn/read-string line))]
+        (cond
+          (nil? line)
+          (throw (ex-info "coordinator closed before watch subscription handshake"
+                          {:port port}))
+
+          (:reject response)
+          (throw (ex-info
+                  (str "coordinator rejected watch subscription"
+                       (when-let [code (:code response)] (str " (" (name code) ")"))
+                       ": " (reject-message (:reject response)))
+                  response))
+
+          (not (integer? (:subscribed response)))
+          (throw (ex-info "invalid watch subscription handshake"
+                          {:port port :response response}))
+
+          (and fenced?
+               (not= (canonical-log-path expected-log)
+                     (some-> (:log response) canonical-log-path)))
+          (throw (ex-info "watch subscription acknowledged for the wrong log"
+                          {:port port
+                           :expected-log (canonical-log-path expected-log)
+                           :served-log (:log response)})))
+
+        ;; The server has accepted this exact subscription. An idle watch is normal,
+        ;; so remove the request deadline now (and only now); disconnect/EOF still
+        ;; terminates the loop and closes the socket.
+        (.setSoTimeout s 0)
+        (println line)
+        (loop []
+          (when-let [event (.readLine r)]
+            (println event)
+            (recur))))))
   nil)
+(defn coord-watch [port]
+  (coord-watch-request port {:op :subscribe}))
+(defn coord-watch-for-log [port log]
+  (coord-watch-request port (log-envelope log {:op :subscribe})))
 
 ;; --- time module runtime (ported from los.rt for `north clock`) -----------
 

@@ -3,14 +3,66 @@
 # (Clojure), NOT babashka: a long-lived server wants JIT throughput and full Java
 # (real threads; javax.net.ssl.SSLServerSocket for engine-terminated mTLS, which
 # bb's native image lacks). bb's fast startup is irrelevant for a daemon. The CLI
-# + MCP stay on babashka. Deps (clojure + cheshire) come from deps.edn at $HERE.
+# + MCP stay on babashka. Checkout runs resolve deps.edn; the package supplies a
+# build-time-resolved, store-only Java classpath.
 #   fram-daemon [serve|serve-flat] [port] [log]   (mode defaults to serve-flat)
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
 #   FRAM_TLS_KEYSTORE / FRAM_TLS_TRUSTSTORE / FRAM_TLS_PASS  -> mutual TLS (else plaintext)
-# cd $HERE so the daemon's relative (load-file "coord.clj") + deps.edn resolve.
+# cd $HERE so the daemon's relative load-file assets resolve.
+set -euo pipefail
+
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # optional leading mode (serve | serve-flat); a numeric first arg keeps the old
 # `fram-daemon [port] [log]` shape working (mode = serve-flat).
 mode=serve-flat
-case "$1" in serve|serve-flat) mode="$1"; shift;; esac
-cd "$HERE" && exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "${2:-$HERE/facts.log}"
+case "${1:-}" in serve|serve-flat) mode="$1"; shift;; esac
+
+if [[ -n "${2:-}" ]]; then
+  log_path="$2"
+elif [[ -n "${FRAM_LOG:-}" ]]; then
+  log_path="$FRAM_LOG"
+elif [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
+  if [[ -n "${FRAM_STATE_DIR:-}" ]]; then
+    state_dir="$FRAM_STATE_DIR"
+  elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
+    state_dir="$XDG_STATE_HOME/fram"
+  elif [[ -n "${HOME:-}" ]]; then
+    state_dir="$HOME/.local/state/fram"
+  else
+    echo "fram-daemon: pass a log path, or set FRAM_LOG, FRAM_STATE_DIR, XDG_STATE_HOME, or HOME" >&2
+    exit 2
+  fi
+  log_path="$state_dir/facts.log"
+else
+  log_path="$HERE/facts.log"
+fi
+mkdir -p "$(dirname "$log_path")"
+if [[ ! -e "$log_path" ]]; then
+  : >"$log_path"
+fi
+
+if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
+  if [[ -z "${FRAM_JAVA:-}" || -z "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
+    echo "fram-daemon: FRAM_JAVA and FRAM_DAEMON_CLASSPATH_FILE must be set together" >&2
+    exit 2
+  fi
+  if [[ ! -x "$FRAM_JAVA" ]]; then
+    echo "fram-daemon: FRAM_JAVA is not executable: $FRAM_JAVA" >&2
+    exit 2
+  fi
+  if [[ ! -r "$FRAM_DAEMON_CLASSPATH_FILE" ]]; then
+    echo "fram-daemon: classpath file is not readable: $FRAM_DAEMON_CLASSPATH_FILE" >&2
+    exit 2
+  fi
+  daemon_classpath="$(<"$FRAM_DAEMON_CLASSPATH_FILE")"
+  if [[ -z "$daemon_classpath" ]]; then
+    echo "fram-daemon: packaged classpath is empty" >&2
+    exit 2
+  fi
+  cd "$HERE"
+  exec "$FRAM_JAVA" -cp "$daemon_classpath" clojure.main \
+    coord_daemon.clj "$mode" "${1:-7977}" "$log_path"
+fi
+
+cd "$HERE"
+exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "$log_path"

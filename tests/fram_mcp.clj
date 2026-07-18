@@ -70,18 +70,32 @@
 
 ;; --- writes -> through the coordinator (mirrors the CLI's route-write) -------
 (defn- route-write [w]
-  (let [port (fram.rt/coord-port)]
-    (if (neg? (fram.rt/coord-version port))
-      {:isError true :text "no coordinator on 127.0.0.1 — start it with bin/fram-up"}
+  (let [port (fram.rt/coord-port)
+        log (fram.rt/log-path)
+        initial-version (fram.rt/coord-version-for-log port log)]
+    (if (neg? initial-version)
+      {:isError true
+       :text (case initial-version
+               -1 "no coordinator on 127.0.0.1 — start it with bin/fram-up"
+               -2 "refusing write: coordinator serves a different log (run `fram doctor` for both paths)"
+               -3 "refusing write: coordinator lacks the required log-fence protocol; restart it with current Fram"
+               "refusing write: coordinator is unusable")}
       (loop [tries 5]
-        (let [v (fram.rt/coord-version port)
-              resp (if (= (:op w) "assert")
-                     (fram.rt/coord-assert port (:l w) (:p w) (:r w) v)
-                     (fram.rt/coord-retract port (:l w) (:p w) (:r w) v))]
-          (cond
-            (and (= resp "conflict") (pos? tries)) (recur (dec tries))
-            (str/starts-with? (str resp) "ok:") {:text (str "committed: " (:l w) " " (:p w) " = " (:r w) " [" (:op w) "]")}
-            :else {:isError true :text (str "rejected by coordinator: " resp)}))))))
+        (let [v (fram.rt/coord-version-for-log port log)]
+          (if (neg? v)
+            {:isError true
+             :text (case v
+                     -1 "no coordinator on 127.0.0.1 — start it with bin/fram-up"
+                     -2 "refusing write: coordinator serves a different log (run `fram doctor` for both paths)"
+                     -3 "refusing write: coordinator lacks the required log-fence protocol; restart it with current Fram"
+                     "refusing write: coordinator is unusable")}
+            (let [resp (if (= (:op w) "assert")
+                         (fram.rt/coord-assert-for-log port log (:l w) (:p w) (:r w) v)
+                         (fram.rt/coord-retract-for-log port log (:l w) (:p w) (:r w) v))]
+              (cond
+                (and (= resp "conflict") (pos? tries)) (recur (dec tries))
+                (str/starts-with? (str resp) "ok:") {:text (str "committed: " (:l w) " " (:p w) " = " (:r w) " [" (:op w) "]")}
+                :else {:isError true :text (str "rejected by coordinator: " resp)}))))))))
 
 ;; --- graph-AST edits -> the gated authoring transaction (out-of-band) --------
 ;; A {:edit ...} is NOT a single coordinator triple — it mints/supersedes a whole
@@ -207,9 +221,10 @@
                           {:isError true :text (str "REJECTED — edited module does not type-check (nothing committed):\n"
                                                     (str/trim built))})
                       ;; PASS — commit the affected module's AST delta through the coordinator.
-                      (let [commit (sh {:out :string :err :string}
-                                       "bb" "-cp" fram-out (str flip-bin-dir "/fram-commit-code")
-                                       module edited "--port" (str flip-code-port))]
+                      (let [commit (apply sh {:out :string :err :string}
+                                          "bb" "-cp" fram-out (str flip-bin-dir "/fram-commit-code")
+                                          module edited "--port" (str flip-code-port)
+                                          (flip-log-args))]
                         (if (not (zero? (:exit commit)))
                           (do (sh {} "rm" "-rf" work)
                               {:isError true :text (str "FLIP REJECTED — delta-commit to the code log failed (nothing written):\n"
@@ -250,13 +265,6 @@
 ;; coordinator's BOOT; per-edit pays NO ~3.8s log re-fold (vs cold fram-edit-code which
 ;; boots the store from the log EVERY call). This is THE confound-kill.
 ;; ============================================================================
-(defn- coord-rt [port req]
-  (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 3000)
-    (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
-      (.write w (str (pr-str req) "\n")) (.flush w)
-      (clojure.edn/read-string (.readLine rd)))))
-
 ;; build the warm :edit-min spec (inline datum, no temp file) from the {:edit} payload.
 (defn- edit-min-spec [e]
   (case (:op e)
@@ -291,7 +299,10 @@
       (let [spec (edit-min-spec e)]
         (if (nil? spec)
           {:isError true :text (str "unknown edit op: " op)}
-          (let [resp (try (coord-rt (Integer/parseInt flip-code-port) {:op :edit-min :spec spec})
+          (let [resp (try (fram.rt/coord-request-for-log
+                           (Integer/parseInt flip-code-port)
+                           (flip-log)
+                           {:op :edit-min :spec spec})
                           (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
             (cond
               (:reject resp)
@@ -438,7 +449,9 @@
   ;; this is safe even against an older live daemon (no coordinated restart required).
   ;; The warm :query op returns the SAME q/run envelope the cold path produces, so the
   ;; formatting is identical. Rep-stable: keys on (l,p,r)/Datalog, no fN ordering.
-  (if-let [warm (when (= name "query") (fram.rt/coord-query (fram.rt/coord-port) (:query a)))]
+  (if-let [warm (when (= name "query")
+                  (fram.rt/coord-query-for-log
+                   (fram.rt/coord-port) (fram.rt/log-path) (:query a)))]
     (cond (:error warm)        {:isError true :text (str/join "\n" (:error warm))}
           (contains? warm :ok) {:text (json/generate-string (:ok warm))}
           :else                {:text (json/generate-string warm)})

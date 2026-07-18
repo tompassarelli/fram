@@ -33,6 +33,56 @@ mkdir -p "$DIR/.fram"
 
 echo "fram-code-on: $DIR (port $PORT; src $SRC)"
 
+doctor_line() {
+  FRAM_PORT="$PORT" FRAM_LOG="$CODE_LOG" "$HERE/bin/fram" doctor 2>/dev/null |
+    head -n 1
+}
+
+coordinator_matches_code_log() {
+  local status
+  status="$(doctor_line || true)"
+  [[ "$status" =~ ^coordinator\ UP\ on\ 127\.0\.0\.1:${PORT}\ \(v[0-9]+\)$ ]]
+}
+
+# Managed graph-authoring daemons fail closed on every unwrapped socket request.
+# Probe the wire boundary itself so an old permissive daemon cannot be silently
+# reused merely because it happens to serve the right file.
+coordinator_requires_fence() {
+  local code
+  code="$(
+    FRAM_PROBE_PORT="$PORT" timeout 3 bb -e '
+      (require (quote [clojure.java.io :as io])
+               (quote [clojure.edn :as edn]))
+      (with-open [s (java.net.Socket.)]
+        (.connect s (java.net.InetSocketAddress.
+                     "127.0.0.1"
+                     (Integer/parseInt (System/getenv "FRAM_PROBE_PORT")))
+                  1000)
+        (.setSoTimeout s 2000)
+        (let [w (io/writer (.getOutputStream s))
+              r (io/reader (.getInputStream s))]
+          (.write w "{:op :version}\n")
+          (.flush w)
+          (print (some-> (.readLine r) edn/read-string :code name))))' 2>/dev/null || true
+  )"
+  [[ "$code" == "log-fence-required" ]]
+}
+
+verify_managed_coordinator() {
+  local status
+  status="$(doctor_line || true)"
+  if ! coordinator_matches_code_log; then
+    echo "        coordinator identity check FAILED: ${status:-no fenced response}" >&2
+    echo "        expected exact corpus: $(readlink -f "$CODE_LOG")" >&2
+    return 1
+  fi
+  if ! coordinator_requires_fence; then
+    echo "        coordinator policy check FAILED: :$PORT accepts legacy unwrapped requests" >&2
+    echo "        stop that daemon and rerun fram-code-on so strict log fencing is enabled" >&2
+    return 1
+  fi
+}
+
 # 1. ingest the code into facts (deterministic, no LLM) — recurse for ANY Beagle source.
 #    The extension only picks the emit target (.bclj->clj .bcljs->cljs .bjs->js .bnix->nix
 #    .bgl->neutral .bodin->odin); the parsed AST is target-independent, so ingest is too.
@@ -53,17 +103,26 @@ echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
 
 # 2. boot the warm coordinator (detached — survives this shell)
 if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
-  echo "  [2/3] coordinator already on :$PORT (reusing)"
+  echo "  [2/3] coordinator already on :$PORT; verifying corpus + strict policy …"
+  verify_managed_coordinator
+  echo "        verified exact code log + strict log fence (reusing)"
 else
   echo "  [2/3] booting warm coordinator on :$PORT …"
-  ( cd "$HERE" && setsid nohup clojure -M coord_daemon.clj serve-flat "$PORT" "$CODE_LOG" \
+  ( cd "$HERE" && FRAM_REQUIRE_LOG_FENCE=1 setsid nohup bin/fram-daemon serve-flat "$PORT" "$CODE_LOG" \
       >"$DIR/.fram/coord-$PORT.log" 2>&1 & )
   # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
   # quadratic today). Generous cap; the loop exits the moment the daemon listens.
-  for i in $(seq 1 2400); do sleep 0.5; grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break; done
-  grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null \
-    && echo "        coordinator up (sole-writer, loopback)" \
-    || { echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"; exit 1; }
+  for _ in $(seq 1 2400); do
+    sleep 0.5
+    grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break
+  done
+  if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
+    verify_managed_coordinator
+    echo "        coordinator up (sole-writer, loopback, exact log, strict fence)"
+  else
+    echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"
+    exit 1
+  fi
 fi
 
 # 3. write .mcp.json so Claude Code picks up the fram graph-edit MCP for this dir

@@ -39,6 +39,8 @@
      (ln 3 "assert" "@T2" "title" "Two")])
   (boot-flat! LOG)
   (write-snapshot! @co LOG)
+  (chk "checkpoint: fold fingerprint covers resolver-derived snapshot state"
+       (some #{"chartroom/src/resolve.clj"} fold-fingerprint-files))
   (chk "checkpoint: sidecar carries a fold_version stamp" (some? (:fold_version (read-sidecar LOG))))
   (chk "checkpoint: sidecar carries a log_identity stamp" (some? (:log_identity (read-sidecar LOG))))
   (chk "checkpoint: atomic writes leave no .tmp litter"
