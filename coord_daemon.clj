@@ -681,6 +681,26 @@
             {:ok (:ok res)})
         {:reject (:reject res) :version (:version res)}))))
 
+(defn- with-current-fence
+  "Run one fact mutation only while RES is held by HOLDER at EPOCH. The lease
+  check and ACTION execute under the coordinator store's one writer lock, so an
+  expiry/takeover cannot land between validation and mutation. ACTION may
+  re-enter the same JVM monitor through do-assert/do-retract."
+  [res holder epoch action]
+  (with-fence! @co res holder epoch action))
+
+(defn- assert-at-version [te p r base]
+  (let [head (current-seq @co)]
+    (cond
+      (not (and (integer? base) (not (neg? base))))
+      {:reject :invalid-base :version head}
+
+      (not= base head)
+      {:reject :conflict :version head}
+
+      :else
+      (do-assert te p r base))))
+
 ;; the-model §9 — atomic terminal-transition cascade. Called by do-assert AFTER a
 ;; successful, non-idempotent terminal assert (outcome|abandoned). Runs INSIDE the
 ;; same serialized coordinator turn (do-assert holds no extra lock here; the
@@ -1996,6 +2016,12 @@
     (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
+      ;; Lease-fenced fact writes. The fence and mutation share the coordinator
+      ;; store lock; a stale holder cannot write after expiry/takeover.
+      :assert-with-fence
+      (with-current-fence
+       (:res req) (:holder req) (:epoch req)
+       #(do-assert (:te req) (:p req) (:r req) (:base req)))
       ;; Read-set commit seam for callers that validated facts across multiple
       ;; subjects/predicates. Ordinary :assert intentionally interprets :base
       ;; only as per-(subject,predicate) OCC for declared-single predicates;
@@ -2006,18 +2032,16 @@
       ;; accepted writes retain do-assert's rules, durability, notifications,
       ;; cascades, and identical-triple idempotency.
       :assert-at-version
-      (let [base (:base req)
-            head (current-seq @co)]
-        (cond
-          (not (and (integer? base) (not (neg? base))))
-          {:reject :invalid-base :version head}
-
-          (not= base head)
-          {:reject :conflict :version head}
-
-          :else
-          (do-assert (:te req) (:p req) (:r req) base)))
+      (assert-at-version (:te req) (:p req) (:r req) (:base req))
+      :assert-at-version-with-fence
+      (with-current-fence
+       (:res req) (:holder req) (:epoch req)
+       #(assert-at-version (:te req) (:p req) (:r req) (:base req)))
       :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
+      :retract-with-fence
+      (with-current-fence
+       (:res req) (:holder req) (:epoch req)
+       #(do-retract (:te req) (:p req) (:r req) (:base req)))
       ;; :bump — ATOMIC add to a numeric counter (read-add-write under the lease lock, so
       ;; concurrent charges from N executors can't lose updates). Declares the predicate
       ;; single-valued (else asserts accumulate -> arbitrary reads). The swarm token budget
@@ -2029,7 +2053,13 @@
       ;; path the lease arm exists to close — agents MUST use these. No notify-subs! (lease
       ;; changes are not broadcast), matching the fram-lease fork. Impl: coord.clj (load-file'd).
       :acquire-lease (acquire-lease! @co (:holder req) (:res req) (:ttl-ms req))
-      :release-lease (release-lease! @co (:holder req) (:res req))
+      ;; Epoch is optional only for wire compatibility with legacy callers.
+      ;; Modern fenced callers include it so a delayed release from the same
+      ;; holder cannot delete a successor acquisition (ABA).
+      :release-lease
+      (if (contains? req :epoch)
+        (release-lease! @co (:holder req) (:res req) (:epoch req))
+        (release-lease! @co (:holder req) (:res req)))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}

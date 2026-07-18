@@ -531,10 +531,16 @@
           cur (read-lease co res)]
       (if (and cur (> (:exp cur) now) (not= (:holder cur) holder))
         {:reject :held :holder (:holder cur) :exp (:exp cur) :version (current-seq co)}
-        (let [epoch (inc (if cur (:epoch cur) 0))
-              exp   (+ now ttl-ms)
+        (let [exp   (+ now ttl-ms)
               since (:next-id @(store co))
               tx    (c/begin-tx! (store co) holder)
+              ;; The transaction sequence is global and durable. Deriving the
+              ;; fence token from the lease cell itself lets release erase the
+              ;; counter, so acquire -> release -> acquire by the same holder
+              ;; can resurrect an old token (ABA). Every acquisition already
+              ;; owns a fresh transaction sequence; use that monotonic value as
+              ;; the epoch instead of incrementing the current cell.
+              epoch (get-in @(store co) [:txs tx :seq])
               te    (ent! co tx (lease-subj res))]
           (when (not= "single" (s/cardinality (store co) lease-pred))
             (s/def-predicate! (store co) lease-pred "single" "literal" tx))
@@ -544,18 +550,44 @@
 
 ;; release-lease! re-enters (:lock co) via retract! — JVM monitors are REENTRANT,
 ;; so this is safe; do NOT "fix" the nesting into a separate lock (would deadlock).
-(defn release-lease! [co holder res]
-  (locking (:lock co)
-    (let [cur (read-lease co res)]
-      (if (and cur (= (:holder cur) holder))
-        (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
-        {:ok (current-seq co) :noop true}))))
+(defn release-lease!
+  ;; The three-argument form is the legacy holder-only contract. Keep it for
+  ;; callers that predate fencing. New callers supply their acquisition epoch:
+  ;; an old finally block from the same holder must not release a newer lease.
+  ([co holder res]
+   (locking (:lock co)
+     (let [cur (read-lease co res)]
+       (if (and cur (= (:holder cur) holder))
+         (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
+         {:ok (current-seq co) :noop true}))))
+  ([co holder res epoch]
+   (locking (:lock co)
+     (let [cur (read-lease co res)]
+       (if (and cur
+                (= (:holder cur) holder)
+                (= (:epoch cur) epoch))
+         (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
+         {:ok (current-seq co) :noop true})))))
 
 (defn fence-ok? [co res holder epoch]
   (locking (:lock co)
     (let [cur (read-lease co res)]
       (boolean (and cur (= (:holder cur) holder) (= epoch (:epoch cur))
                     (> (:exp cur) (System/currentTimeMillis)))))))
+
+(defn with-fence!
+  "Execute ACTION only while RES is held by HOLDER at EPOCH. Fence validation
+  and ACTION share the coordinator's one writer lock. ACTION may re-enter that
+  JVM monitor through commit!/retract!, so an expiry/takeover cannot land
+  between the check and its fact mutation."
+  [co res holder epoch action]
+  (locking (:lock co)
+    (if (and (string? res) (not (str/blank? res))
+             (string? holder) (not (str/blank? holder))
+             (integer? epoch) (not (neg? epoch))
+             (fence-ok? co res holder epoch))
+      (action)
+      {:reject :fence-lost :version (current-seq co)})))
 
 ;; --- atomic counter (the swarm token budget) -------------------------------
 ;; bump-counter! adds delta to a numeric single-valued predicate under the SAME

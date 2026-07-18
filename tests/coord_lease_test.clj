@@ -60,5 +60,34 @@
   (check (str "concurrent acquire of one resource: EXACTLY ONE winner (" oks " ok / " held " held / N=" N ")")
          (and (= 1 oks) (= (dec N) held))))
 
+;; 6. release erases the lease cell, but must never erase epoch history. The
+;; globally assigned transaction sequence makes a same-holder successor fresh,
+;; and an epoch-aware stale release cannot delete it.
+(let [co (new-coord (log "t6"))
+      first (acquire-lease! co "A" "R" 10000)
+      released (release-lease! co "A" "R" (:epoch first))
+      second (acquire-lease! co "A" "R" 10000)
+      stale-release (release-lease! co "A" "R" (:epoch first))]
+  (check "release then same-holder reacquire receives a globally newer epoch"
+         (and (:ok first) (:ok released) (:ok second)
+              (> (:epoch second) (:epoch first))))
+  (check "stale epoch-aware release cannot remove same-holder successor"
+         (and (:noop stale-release)
+              (fence-ok? co "R" "A" (:epoch second)))))
+
+;; 7. The epoch source survives process replacement because transaction
+;; sequences are recovered from the durable log, not from the live lease cell.
+(let [path (log "t7")
+      first-co (new-coord path)
+      first (acquire-lease! first-co "A" "R" 10000)
+      released (release-lease! first-co "A" "R" (:epoch first))
+      replayed-co {:store (replay path) :log path :lock (Object.)}
+      second (acquire-lease! replayed-co "A" "R" 10000)]
+  (check "release then replay then same-holder reacquire preserves epoch monotonicity"
+         (and (:ok first) (:ok released) (:ok second)
+              (> (:epoch second) (:epoch first))
+              (not (fence-ok? replayed-co "R" "A" (:epoch first)))
+              (fence-ok? replayed-co "R" "A" (:epoch second)))))
+
 (println (str "\nstore-lease: " @pass " / " (+ @pass @fail) " PASS"))
 (when (pos? @fail) (System/exit 1))
