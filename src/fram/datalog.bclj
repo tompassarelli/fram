@@ -166,7 +166,15 @@
                      {} rules)]
     (new-only cand db rels)))
 
-(defn fixpoint [db0 :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
+;; RETAINED VERBATIM as the least-fixpoint ORACLE. This is the scan-join
+;; semi-naive evaluator, unchanged. The indexed `fixpoint` below must produce a
+;; SET-IDENTICAL result to `fixpoint-oracle` on every program; the differential
+;; tests (datalog_diff_test) hold the two side by side. Do not "optimize" this —
+;; its whole value is being the slow, obviously-correct reference.
+;; PRIVATE on purpose: it is a test-only reference, NOT a public engine verb, so
+;; the public API (and the generated beagle catalog) is unchanged. The differential
+;; test reaches it through the private var (#'fram.datalog/fixpoint-oracle).
+(defn- fixpoint-oracle [db0 :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
   (let [rels (rule-head-rels rules)
         ;; seed: one full round against db0 (handles base/EDB-driven + ground rules)
         seeded (reduce (fn [d :- (Map String (Set (Vec Any))) r :- (Map Keyword Any)] :- (Map String (Set (Vec Any)))
@@ -180,6 +188,162 @@
         db
         (let [nw (snr-round db delta rules rels)]
           (recur (db-merge db nw rels) nw))))))
+
+;; ============================================================================
+;; INDEXED positional joins (Stage 8+ perf — SAME least fixpoint as the oracle)
+;; ============================================================================
+;; The oracle's cost is `match-lit`: a positive body literal re-scans the WHOLE
+;; relation (`(vec (get db rel))`) for every candidate substitution. On a deep
+;; transitive closure the recursive relation grows to O(N^2) tuples and each of
+;; the O(substs) probes scans all of them — the measured ~4 s on the 200-chain.
+;;
+;; Fix: keep an internal POSITIONAL index of `db` — rel -> position -> value ->
+;; tuples. A positive literal with any bound position (a constant, or a var already
+;; bound by an earlier literal) probes the most-selective bound position's bucket
+;; instead of the whole relation; `unify-args` then does the exact same positional
+;; unification the oracle does, so the accepted substitutions are IDENTICAL (a
+;; single-position bucket is a superset of the join answer, filtered by the very
+;; same predicate). Semi-naive control flow is unchanged: the pinned (delta) read
+;; stays a direct scan of the small delta; only the big-`db` reads are indexed.
+;;
+;; MEMORY: each tuple is referenced once per position, so the index is
+;; O(arity x tuples) — the explicit bound. It is maintained INCREMENTALLY (db only
+;; grows; each round's new tuples are added), never rebuilt, so total index-build
+;; work over a run is also O(arity x tuples), not O(rounds x tuples).
+;;
+;; The index is a pure internal accelerator: no public signature, no EDB
+;; projection, no validation, and no negation semantics change. Negated literals
+;; still test membership against the full `db` set (a frozen lower stratum under
+;; run-strata), exactly as the oracle does.
+;; INDEX type: (Map String (Map Int (Map Any (Vec (Vec Any)))))
+;;   rel -> position -> value-at-that-position -> tuples having it.
+
+;; add one tuple to the index at every one of its positions
+(defn- index-tuple [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String tup :- (Vec Any)] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (loop [i 0 acc idx]
+    (if (>= i (count tup))
+      acc
+      (let [val (nth tup i)
+            byrel (get acc rel {})
+            bypos (get byrel i {})
+            cur (get bypos val [])
+            bypos2 (assoc byrel i (assoc bypos val (conj cur tup)))]
+        (recur (+ i 1) (assoc acc rel bypos2))))))
+
+;; add every tuple of one relation to the index
+(defn- index-rel [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String tuples :- (Vec (Vec Any))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) t :- (Vec Any)] :- (Map String (Map Int (Map Any (Vec (Vec Any))))) (index-tuple acc rel t))
+          idx tuples))
+
+;; build a full index from a db (Map rel (Set tuple)) — O(arity x tuples)
+(defn- build-index [db :- (Map String (Set (Vec Any)))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+            (index-rel acc rel (vec (get db rel #{}))))
+          {} (vec (keys db))))
+
+;; add a delta (Map rel (Set tuple)) of NEW tuples into an existing index
+(defn- index-delta [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) delta :- (Map String (Set (Vec Any))) rels :- (Vec String)] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+            (index-rel acc rel (vec (get delta rel #{}))))
+          idx rels))
+
+(defn- idx-lookup [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String i :- Int val :- Any] :- (Vec (Vec Any))
+  (get (get (get idx rel {}) i {}) val []))
+
+;; the most-selective bound-position candidate list for a positive literal, or nil
+;; when NO position is bound (all-unbound literal — the genuine full-scan case).
+;; A position is bound iff its arg is a constant or a var already in `subst`.
+(defn- indexed-candidates [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String args :- (Vec Any) subst :- (Map String Any)] :- (U (Vec (Vec Any)) Nil)
+  (loop [i 0 as args best :- (U (Vec (Vec Any)) Nil) nil found false]
+    (if (empty? as)
+      (if found best nil)
+      (let [a (first as)]
+        (if (var? a)
+          (if (contains? subst (:var a))
+            (let [c (idx-lookup idx rel i (get subst (:var a)))]
+              (recur (+ i 1) (rest as) (if (or (not found) (< (count c) (count best))) c best) true))
+            (recur (+ i 1) (rest as) best found))
+          (let [c (idx-lookup idx rel i a)]
+            (recur (+ i 1) (rest as) (if (or (not found) (< (count c) (count best))) c best) true)))))))
+
+;; indexed positive-literal match: probe the selective bucket, then unify-args
+;; (the SAME predicate the oracle applies) over just those candidates. Negation is
+;; byte-for-byte the oracle's: ground the range-restricted args, pass iff absent.
+(defn- match-lit-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))
+  (if (:neg litt)
+    (let [g (ground (:args litt) subst)]
+      (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
+    (let [args (:args litt) rel (:rel litt)
+          cands (indexed-candidates idx rel args subst)]
+      (if (nil? cands)
+        (let [tuples (vec (get db rel #{}))]
+          (filterv (fn [s :- (Map String Any)] :- Bool (some? s))
+                   (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) tuples)))
+        (filterv (fn [s :- (Map String Any)] :- Bool (some? s))
+                 (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) cands))))))
+
+;; conjunctive body over the indexed db (seed round: no delta, all lits read db)
+(defn- eval-body-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) body :- (Vec (Map Keyword Any)) subst :- (Map String Any)] :- (Vec (Map String Any))
+  (reduce (fn [substs :- (Vec (Map String Any)) litt :- (Map Keyword Any)] :- (Vec (Map String Any))
+            (reduce (fn [acc :- (Vec (Map String Any)) s :- (Map String Any)] :- (Vec (Map String Any))
+                      (vec (concat acc (match-lit-idx db idx litt s))))
+                    [] substs))
+          [subst] body))
+
+(defn- derive-rule-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) r :- (Map Keyword Any)] :- (Set (Vec Any))
+  (let [head (:head r)]
+    (reduce (fn [acc :- (Set (Vec Any)) s :- (Map String Any)] :- (Set (Vec Any)) (conj acc (ground (:args head) s)))
+            #{} (eval-body-idx db idx (:body r) {}))))
+
+;; pinned semi-naive body: the pinned positive literal reads the (small) `delta`
+;; through ITS OWN index, every other db read through the db index. Indexing the
+;; delta read matters: a bound recursive literal (e.g. reaches(y,z) with y bound)
+;; is the hot join, and it reads the pinned delta — an unindexed delta scan is the
+;; whole cost on a chain. Negation always reads the full db set (via match-lit-idx).
+(defn- eval-body-pinned-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) delta :- (Map String (Set (Vec Any))) delta-idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) body :- (Vec (Map Keyword Any)) pin :- Int] :- (Vec (Map String Any))
+  (loop [i 0 ls body substs [{}]]
+    (if (empty? ls)
+      substs
+      (let [litt (first ls)
+            use-delta (and (not (:neg litt)) (= i pin))
+            substs2 (reduce (fn [acc :- (Vec (Map String Any)) s :- (Map String Any)] :- (Vec (Map String Any))
+                              (vec (concat acc (if use-delta (match-lit-idx delta delta-idx litt s) (match-lit-idx db idx litt s)))))
+                            [] substs)]
+        (recur (+ i 1) (rest ls) substs2)))))
+
+(defn- derive-rule-delta-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) delta :- (Map String (Set (Vec Any))) delta-idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) r :- (Map Keyword Any)] :- (Set (Vec Any))
+  (let [head (:head r) body (:body r)]
+    (reduce (fn [acc :- (Set (Vec Any)) pin :- Int] :- (Set (Vec Any))
+              (reduce (fn [a :- (Set (Vec Any)) s :- (Map String Any)] :- (Set (Vec Any)) (conj a (ground (:args head) s)))
+                      acc (eval-body-pinned-idx db idx delta delta-idx body pin)))
+            #{} (positive-positions body))))
+
+(defn- snr-round-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) delta :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any)) rels :- (Vec String)] :- (Map String (Set (Vec Any)))
+  (let [delta-idx (build-index delta)
+        cand (reduce (fn [acc :- (Map String (Set (Vec Any))) r :- (Map Keyword Any)] :- (Map String (Set (Vec Any)))
+                       (let [rel (:rel (:head r)) hs (derive-rule-delta-idx db idx delta delta-idx r)]
+                         (update acc rel (fn [s :- (Set (Vec Any))] :- (Set (Vec Any))
+                                           (reduce (fn [a :- (Set (Vec Any)) h :- (Vec Any)] :- (Set (Vec Any)) (conj a h)) (or s #{}) hs)))))
+                     {} rules)]
+    (new-only cand db rels)))
+
+;; INDEXED fixpoint — public entry point. Same least fixpoint as fixpoint-oracle,
+;; proven set-identical by datalog_diff_test over >=500 generated programs.
+(defn fixpoint [db0 :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
+  (let [rels (rule-head-rels rules)
+        idx0 (build-index db0)
+        seeded (reduce (fn [d :- (Map String (Set (Vec Any))) r :- (Map Keyword Any)] :- (Map String (Set (Vec Any)))
+                         (let [rel (:rel (:head r)) heads (derive-rule-idx db0 idx0 r)]
+                           (update d rel (fn [s :- (Set (Vec Any))] :- (Set (Vec Any))
+                                           (reduce (fn [a :- (Set (Vec Any)) h :- (Vec Any)] :- (Set (Vec Any)) (conj a h)) (or s #{}) heads)))))
+                       db0 rules)
+        delta0 (new-only seeded db0 rels)
+        idx-seeded (index-delta idx0 delta0 rels)]
+    (loop [db seeded idx idx-seeded delta delta0]
+      (if (delta-empty? delta rels)
+        db
+        (let [nw (snr-round-idx db idx delta rules rels)]
+          (recur (db-merge db nw rels) (index-delta idx nw rels) nw))))))
 
 (defn run-rules [ctx :- (Atom t/Store) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any))) (fixpoint (edb ctx) rules))
 
