@@ -4,12 +4,13 @@
          '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[fram.rt :as rt])
+(load-file "tests/log_split_readiness_lib.clj")
 
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-log-split-e2e-" (System/nanoTime)))
 (.mkdirs (java.io.File. tmp))
 (def coord (str tmp "/coordination.log"))
 (def telemetry (str tmp "/telemetry.log"))
-(def port (+ 20000 (rand-int 20000)))
+(def port (free-port))
 
 ;; The subject is already kinded at boot, so its subsequent payload routes to
 ;; telemetry. A coordination-only subject proves the other half remains active.
@@ -30,12 +31,7 @@
               :out :string :err :string}))
 
 (try
-  (loop [n 100]
-    (when (and (neg? (rt/coord-version port)) (pos? n))
-      (Thread/sleep 50)
-      (recur (dec n))))
-  (when (neg? (rt/coord-version port))
-    (throw (ex-info "split daemon did not become ready" {})))
+  (await-ready child port #(not (neg? (rt/coord-version %))))
   (let [v (rt/coord-version port)
         telemetry-resp (rt/coord-assert port "@run-e2e" "note" "routed" v)
         v2 (rt/coord-version port)
@@ -55,4 +51,5 @@
     (assert (some #(= ["@run-e2e" "seed" "telemetry"] [(:l %) (:p %) (:r %)]) warm))
     (println "log-split e2e: routed both halves and merged warm read — PASS"))
   (finally
-    (p/destroy-tree child)))
+    (p/destroy-tree child)
+    (cleanup-scratch tmp)))
