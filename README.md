@@ -225,8 +225,9 @@ module's AST is the facts, and the `.bclj` source text is a rendered view of the
   stable id (`bound_to @module#int`), so renaming a definition is a ~2-fact edit and
   every reference re-points *by identity* — where a text tool must rewrite every site.
   Measured on the honeysql corpus: **238 distinct reference sites** that text must
-  re-derive and rewrite, vs a 2-fact graph edit (receipt: the `after-text`
-  experiments package, `owned-resolution-forcing/`).
+  re-derive and rewrite, vs a 2-fact graph edit (external receipt: the `after-text`
+  experiments package, `experiments/EXP-002-owned-resolution-forcing/` — an external
+  corpus, not regenerable from this repo).
 - **The render is a pure function of the log.** `render(log) == render(text)`,
   byte-identical *to each other* (both derived from the graph). The general round-trip is
   *datum*-identical, not byte-identical to hand-authored source — comments and exact
@@ -240,7 +241,7 @@ question or to coordinate a concurrent edit. (Identity-addressed concurrency its
 unique — a node-id CRDT has it too; what's distinctive here is pairing it with a faithful
 *typed* projection into an existing language.)
 
-<!-- regenerate: bb owned-resolution-forcing/probe.clj  (in the after-text experiments package) -->
+<!-- regenerate: bb experiments/EXP-002-owned-resolution-forcing/probe.clj  (in the after-text experiments package) -->
 
 ## Anti-rot: the engine is the source of truth
 
@@ -265,17 +266,26 @@ referenced path, and fails on a stale repo URL. A command that stops working tur
 - **Construction-path scaling vs zerolang** — building a medium app by incremental
   authoring, Fram is flat per-op while zerolang's per-patch cost rises (it reloads +
   validates + rewrites the whole graph each edit): **2.3× @250 defs, 4.2× @500, 7.5×
-  @1000**, the gap *growing* with size — **"O(N²)-shaped"** (curve + pinned source, not a
-  formal fit). This is construction-*path* scaling, not language speed; the honest
-  companion is that Fram **loses** a single small edit (its sibling
-  `zerolang-vs-fram/RESULTS.md`). Receipt: `zerolang-vs-fram/CONSTRUCTION-SCALING.md`
-  (in the `after-text` experiments package).
+  @1000**, the gap *growing* with size — **"O(N²)-shaped"** (curve + source, not a
+  formal fit). This is construction-*path* scaling, not language speed — and a **fully
+  external receipt**: measured against zerolang 0.3.4 and a *non-current* Fram build
+  (`e3f5df5` + uncommitted optimizations), so it is not reproducible from a committed
+  Fram sha. The honest companion is that Fram trades away the single-small-edit case —
+  but that loss is receipted only **pre-optimization** (its sibling
+  `experiments/EXP-009-zerolang-single-op/RESULTS.md`); the later authoring-path cuts
+  flattened Fram's per-op cost, so whether it still loses a single small edit at current
+  code is **not established here**. Receipt:
+  `experiments/EXP-010-zerolang-construction-scaling/RESULTS.md` (in the `after-text`
+  experiments package).
 - **Propagation under K concurrent disjoint writers** — graph propagation stays flat
-  (~1.6–2.2 ms, K=1…8) where a git merge-queue climbs (~50→314 ms). Mirror cost, stated
-  honestly: the graph **loses the write column** (~175 ms eager-index vs git's ~22–80 ms)
-  — it front-loads at write to keep reads + propagation cheap. Receipt:
-  `propagation/RESULTS.md` (in the `after-text` experiments package); the live
-  perf-regression gate stays here as `bench/propagation/`.
+  where a git merge-queue climbs. External receipt (`after-text`
+  `experiments/EXP-007-propagation-ksweep/RESULTS.md`): graph ~1.6–2.2 ms (K=1…8) vs a
+  git push-hook queue ~50→314 ms. Mirror cost, stated honestly: the graph **loses the
+  write column** (~175 ms eager-index vs git's ~22–80 ms) — it front-loads at write to
+  keep reads + propagation cheap. A **separate** FRAM-local perf-regression gate lives
+  here as `bench/propagation/` (regen below): it reproduces the *shape* (flat graph vs
+  climbing git) and enforces the budget against this repo's own build — its absolute
+  numbers are its own, not the external EXP-007 figures.
 
 <!-- regenerate: bb -cp out bench/propagation/sweep.clj  (SWEEP_KS=1,2,4,8) -->
 
