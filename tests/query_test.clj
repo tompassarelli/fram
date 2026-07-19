@@ -4,7 +4,9 @@
 ;; relation, bad term, unstratified negation) instead of running them — the
 ;; "can't emit broken" property; (3) stratified negation runs when well-formed.
 ;;   bb -cp out query_test.clj
-(require '[fram.kernel :as k] '[fram.query :as q] '[fram.datalog :as d])
+(require '[fram.kernel :as k]
+         '[fram.query :as q]
+         '[fram.datalog :as d])
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
@@ -216,6 +218,132 @@
 (chk "#11 result within the cap still returns :ok"
      (contains? (q/run facts {:find "r" :rules [{:head {:rel "r" :args [{:var "x"} {:var "y"}]}
                                                   :body [{:rel "triple" :args [{:var "x"} "depends_on" {:var "y"}]}]}]}) :ok))
+
+;; ============================================================================
+;; (9) INTERNAL QUERY PAGES — deterministic order/cursor semantics, strict
+;; limits, mutation behavior, and byte-bounded envelopes.
+;; ============================================================================
+(def page-q
+  {:find "page-row"
+   :rules [{:head {:rel "page-row" :args [{:var "x"}]}
+            :body [{:rel "fact" :args [{:var "x"} "page" {:var "v"}]}]}]})
+
+(defn page-facts [subjects]
+  (mapv (fn [subject] (k/->Fact subject "page" "yes")) subjects))
+
+(defn drain-pages [facts limit]
+  (loop [after nil rows [] cursors []]
+    (let [page (q/run-page facts page-q limit after)]
+      (if (or (:error page) (not (:more page)))
+        {:page page :rows (into rows (:ok page)) :cursors cursors}
+        (recur (:next page)
+               (into rows (:ok page))
+               (conj cursors (:next page)))))))
+
+(let [subjects ["@z" "@a" "@m" "@é" "@🐢" "@10" "@2"]
+      fs (page-facts subjects)
+      first-run (drain-pages fs 3)
+      second-run (drain-pages (vec (reverse fs)) 3)
+      expected (vec (sort-by pr-str (mapv vector subjects)))]
+  (chk "query pages drain every tuple exactly once in canonical order"
+       (= expected (:rows first-run)))
+  (chk "query page order and cursors ignore fact/set iteration order"
+       (= (select-keys first-run [:rows :cursors])
+          (select-keys second-run [:rows :cursors])))
+  (chk "terminal query page has no cursor and reports :more false"
+       (and (= false (get-in first-run [:page :more]))
+            (nil? (get-in first-run [:page :next])))))
+
+(let [base (page-facts ["@a" "@m" "@z"])
+      first-page (q/run-page base page-q 1 nil)
+      changed (page-facts ["@0" "@b" "@m" "@z"])
+      next-page (q/run-page changed page-q 10 (:next first-page))]
+  (chk "cursor remains valid when its source row is deleted"
+       (= [["@b"] ["@m"] ["@z"]] (:ok next-page)))
+  (chk "key cursor exposes post-cursor insertions and excludes pre-cursor insertions"
+       (and (some #{["@b"]} (:ok next-page))
+            (not (some #{["@0"]} (:ok next-page))))))
+
+(let [one (page-facts ["@a"])
+      canonical (q/page-cursor ["@a"])
+      padded (str canonical "=")]
+  (chk "generated cursor round-trips to the exact canonical row key"
+       (= (pr-str ["@a"]) (:ok (q/decode-page-cursor canonical))))
+  (chk "noncanonical padded base64url aliases are rejected"
+       (contains? (q/decode-page-cursor padded) :error))
+  (chk "wrong-version, malformed base64url, and malformed UTF-8 are rejected"
+       (and (contains? (q/decode-page-cursor "other-v1.91") :error)
+            (contains?
+             (q/decode-page-cursor
+              (str q/page-cursor-prefix "*"))
+             :error)
+            (contains?
+             ;; _w is unpadded base64url for the invalid standalone byte 0xff.
+             (q/decode-page-cursor
+              (str q/page-cursor-prefix "_w"))
+             :error)))
+  (chk "oversized incoming cursors are rejected before query evaluation"
+       (contains?
+        (q/decode-page-cursor
+         (str q/page-cursor-prefix
+              (apply str (repeat q/max-page-cursor-bytes "1"))))
+        :error))
+  (chk "page limit is strict positive integer with a hard cap"
+       (every?
+        :error
+        [(q/run-page one page-q 0 nil)
+         (q/run-page one page-q (inc q/max-page-limit) nil)
+         (q/run-page one page-q "1" nil)])))
+
+;; Cursor size is not monotonic in row count. A 400k-character boundary row has
+;; a >512KiB base64url cursor and is inadmissible; the immediately following short
+;; row has a tiny cursor, so the two-row page is valid. This defeats the former
+;; binary-search assumption and proves exhaustive boundary selection.
+(let [huge-a (str "@a" (apply str (repeat 400000 "x")))
+      huge-c (str "@c" (apply str (repeat 400000 "x")))
+      fs (page-facts [huge-a "@b" huge-c "@d"])
+      page1 (q/run-page fs page-q 3 nil)
+      page2 (q/run-page fs page-q 3 (:next page1))
+      combined (into (:ok page1) (:ok page2))]
+  (chk "alternating huge/small cursors choose a later fitting boundary"
+       (and (= 2 (count (:ok page1)))
+            (= [["@b"]] [(last (:ok page1))])
+            (:more page1)
+            (string? (:next page1))))
+  (chk "alternating cursor pages still drain without loss or duplication"
+       (= (vec (sort-by pr-str [[huge-a] ["@b"] [huge-c] ["@d"]]))
+          combined))
+  (chk "every alternating-cursor page stays below the payload byte bound"
+       (every?
+        #(<= (count (.getBytes (pr-str %) "UTF-8"))
+             q/max-page-payload-bytes)
+        [page1 page2])))
+
+;; Non-BMP characters exercise surrogate-pair cursor encoding and maximum UTF-8
+;; accounting simultaneously.
+(let [unicode-row (str "@a" (apply str (repeat 20000 "🐢")))
+      fs (page-facts [unicode-row "@z"])
+      page1 (q/run-page fs page-q 1 nil)
+      page2 (q/run-page fs page-q 1 (:next page1))]
+  (chk "max-Unicode row cursor round-trips exactly"
+       (= (pr-str [unicode-row])
+          (:ok (q/decode-page-cursor (:next page1)))))
+  (chk "max-Unicode pages remain bounded and resume at the next tuple"
+       (and (<= (count (.getBytes (pr-str page1) "UTF-8"))
+                q/max-page-payload-bytes)
+            (= [["@z"]] (:ok page2))
+            (not (:more page2)))))
+
+;; No boundary is possible: the first row needs an oversized cursor, while the
+;; complete two-row page exceeds the payload cap. The returned error itself is
+;; small and bounded.
+(let [huge-a (str "@a" (apply str (repeat 1100000 "x")))
+      r (q/run-page (page-facts [huge-a "@z"]) page-q 2 nil)]
+  (chk "unpageable single-row/cursor combination fails closed"
+       (and (:error r) (= q/max-page-wire-bytes (:max-bytes r))))
+  (chk "unpageable error envelope is itself wire-bounded"
+       (<= (count (.getBytes (pr-str r) "UTF-8"))
+           q/max-page-payload-bytes)))
 
 ;; --- report ---
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]

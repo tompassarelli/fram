@@ -1,6 +1,7 @@
 (ns fram.query
   (:require [fram.kernel :as k]
             [fram.datalog :as d]
+            [fram.rt :as rt]
             [clojure.string :as str]))
 
 (defn facts->edb [facts]
@@ -134,6 +135,80 @@
 (def max-results (let [env (System/getenv "FRAM_MAX_RESULTS")
    n (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
   (if (and (some? n) (> n 0)) n 100000)))
+
+(def max-page-limit 4096)
+
+(def max-page-wire-bytes 1048576)
+
+(def max-page-payload-bytes (- max-page-wire-bytes 512))
+
+(def max-page-cursor-bytes 524288)
+
+(def ^String page-cursor-prefix "fram-query-page-v1.")
+
+(defn- utf8-size [^String s]
+  (count (.getBytes s "UTF-8")))
+
+(defn- ^String row-key [row]
+  (pr-str row))
+
+(defn- ^String encode-cursor-key [^String key]
+  (str page-cursor-prefix (rt/base64url-encode-utf8 key)))
+
+(defn ^String page-cursor [row]
+  (encode-cursor-key (row-key row)))
+
+(defn decode-page-cursor [cursor]
+  (if (not (string? cursor)) {:error "query page :after must be a cursor string or nil"} (if (or (> (utf8-size cursor) max-page-cursor-bytes) (not (str/starts-with? cursor page-cursor-prefix)) (= cursor page-cursor-prefix)) {:error "query page :after is not a valid canonical Fram query cursor"} (try
+  (let [payload (subs cursor (count page-cursor-prefix))
+   decoded (rt/base64url-decode-utf8 payload)
+   canonical (encode-cursor-key decoded)]
+  (if (= canonical cursor) {:ok decoded} {:error "query page :after is not a valid canonical Fram query cursor"}))
+  (catch Exception _
+    {:error "query page :after is not a valid canonical Fram query cursor"})))))
+
+(defn- page-envelope [window n]
+  (let [rows (subvec window 0 n)
+   more (> (count window) n)
+   next (if (and more (> n 0)) (page-cursor (nth rows (- n 1))) nil)]
+  {:ok rows :next next :more more}))
+
+(defn- envelope-size [rows-size next ^Boolean more]
+  (+ (utf8-size "{:ok ") rows-size (utf8-size " :next ") (utf8-size (pr-str next)) (utf8-size " :more ") (utf8-size (pr-str more)) (utf8-size "}")))
+
+(defn- fitting-prefix [window wanted]
+  (loop [i 0
+   rows-size 2
+   best 0]
+  (if (>= i wanted) best (let [row (nth window i)
+   n (+ i 1)
+   rows-size2 (+ rows-size (if (= i 0) 0 1) (utf8-size (pr-str row)))
+   more (> (count window) n)
+   next (if more (page-cursor row) nil)
+   cursor-ok (or (nil? next) (<= (utf8-size next) max-page-cursor-bytes))
+   fits (and cursor-ok (<= (envelope-size rows-size2 next more) max-page-payload-bytes))]
+  (recur n rows-size2 (if fits n best))))))
+
+(defn run-page [facts q0 limit after]
+  (cond
+  (or (not (integer? limit)) (< limit 1) (> limit max-page-limit)) {:error [(str "query page :limit must be an integer from 1 through " max-page-limit)]}
+  (and (some? after) (not (string? after))) {:error ["query page :after must be a cursor string or nil"]}
+  :else (let [cursor-result (if (some? after) (decode-page-cursor after) {:ok nil})]
+  (if (contains? cursor-result :error) {:error [(:error cursor-result)]} (let [q (canon-q q0)
+   errs (validate q)]
+  (if (not (empty? errs)) {:error errs} (let [edb (facts->edb facts)
+   strata (strata-of q)
+   db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
+   find (:find q)
+   rel (get db find #{})
+   keyed (mapv (fn [row] [(row-key row) row]) (vec rel))
+   ordered (sort-by first keyed)
+   after-key (:ok cursor-result)
+   eligible (if (some? after-key) (filter (fn [pair] (pos? (compare (first pair) after-key))) ordered) ordered)
+   window (mapv second (take (+ limit 1) eligible))
+   wanted (min limit (count window))]
+  (if (= wanted 0) (page-envelope window 0) (let [n (fitting-prefix window wanted)]
+  (if (= n 0) {:error ["query page contains a row too large for the bounded wire response"] :max-bytes max-page-wire-bytes} (page-envelope window n)))))))))))
 
 (defn run [facts q0]
   (let [q (canon-q q0)

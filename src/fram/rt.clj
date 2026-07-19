@@ -17,6 +17,21 @@
 ;; as arrays) to JSON — the engine's structured-output path for the MCP edge.
 (defn to-json [x] (cheshire/generate-string x))
 
+;; Canonical query-cursor codec. Encoding is unpadded URL-safe base64 over UTF-8;
+;; decoding rejects malformed UTF-8 instead of replacing invalid bytes.
+(defn base64url-encode-utf8 [value]
+  (.encodeToString
+   (.withoutPadding (java.util.Base64/getUrlEncoder))
+   (.getBytes ^String value java.nio.charset.StandardCharsets/UTF_8)))
+
+(defn base64url-decode-utf8 [value]
+  (let [bytes (.decode (java.util.Base64/getUrlDecoder) ^String value)
+        decoder
+        (doto (.newDecoder java.nio.charset.StandardCharsets/UTF_8)
+          (.onMalformedInput java.nio.charset.CodingErrorAction/REPORT)
+          (.onUnmappableCharacter java.nio.charset.CodingErrorAction/REPORT))]
+    (str (.decode decoder (java.nio.ByteBuffer/wrap bytes)))))
+
 ;; --- file IO ----------------------------------------------------------------
 
 (defn slurp [path] (clojure.core/slurp path))
@@ -265,6 +280,8 @@
         {:type :invalid-coordinator-timeout :name name :value raw})))
     (Integer/parseInt raw)))
 
+(def ^:dynamic *coord-response-byte-limit* nil)
+
 (defn- coord-response-byte-limit []
   (let [raw (or (System/getenv "FRAM_COORD_MAX_RESPONSE_BYTES") "67108864")
         value (when (re-matches #"[1-9][0-9]{0,8}" raw)
@@ -275,6 +292,8 @@
         "FRAM_COORD_MAX_RESPONSE_BYTES must be an integer from 1 through 67108864"
         {:type :invalid-coordinator-response-limit :value raw})))
     (int value)))
+
+(def query-page-response-byte-limit 1048576)
 
 (defn- coord-response-timeout! [timeout cause]
   (throw
@@ -336,7 +355,7 @@
 (defn- read-coord-line! [source deadline timeout eof-ok?]
   (let [{:keys [socket input buffer bounds]} (as-coordinator-reader source)
         buffer-size (alength buffer)
-        limit (coord-response-byte-limit)
+        limit (or *coord-response-byte-limit* (coord-response-byte-limit))
         output (java.io.ByteArrayOutputStream.)]
     (loop []
       (when (and deadline (not (pos? (- deadline (System/nanoTime)))))
@@ -707,11 +726,20 @@
         r))
     (catch Exception _ nil)))
 (defn coord-query    [port q]       (warm-read port {:op :query :query q}))   ; -> q/run envelope | nil
+(defn coord-query-page
+  [port q limit after]
+  (binding [*coord-response-byte-limit* query-page-response-byte-limit]
+    (warm-read port {:op :query-page :query q :limit limit :after after})))
 (defn coord-callers  [port te]      (warm-read port {:op :callers :te te}))   ; -> {:callers [...]} | nil
 (defn coord-resolved [port te pred] (warm-read port {:op :resolved :te te :p pred})) ; -> {:value :members :ambiguous? :values} | nil — surfaces multiplicity (#3)
 (defn coord-query-for-log
   [port log q]
   (warm-read-for-log port log {:op :query :query q}))
+(defn coord-query-page-for-log
+  [port log q limit after]
+  (binding [*coord-response-byte-limit* query-page-response-byte-limit]
+    (warm-read-for-log
+     port log {:op :query-page :query q :limit limit :after after})))
 (defn coord-callers-for-log
   [port log te]
   (warm-read-for-log port log {:op :callers :te te}))

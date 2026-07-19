@@ -2199,6 +2199,25 @@
                       use-idx (and (not (:scan req)) (simple-query? qy))
                       res (if use-idx (idx-run (warm-idx) qy) (q/run (warm-facts) qy))]
                   (assoc res :version (current-seq @co) :engine (if use-idx "index" "scan")))
+      ;; Internal mechanical-consumer surface. Unlike the AI-facing :query op,
+      ;; this always uses the canonical scan engine and returns a deterministic,
+      ;; cursor-addressed page. q/run-page bounds rows and reserves metadata room;
+      ;; this final check measures BOTH supported wire encodings after stamping
+      ;; metadata, so neither EDN nor opt-in JSON can exceed the contract.
+      :query-page
+      (let [res (q/run-page (warm-facts) (:query req) (:limit req) (:after req))
+            stamped (assoc res :version (current-seq @co) :engine "scan")
+            utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
+            edn-bytes (utf8-size (pr-str stamped))
+            json-bytes (utf8-size (fram.rt/to-json stamped))]
+        (if (and (<= edn-bytes q/max-page-wire-bytes)
+                 (<= json-bytes q/max-page-wire-bytes))
+          stamped
+          {:error ["query page response exceeded its final wire bound"]
+           :code :query-page-response-too-large
+           :max-bytes q/max-page-wire-bytes
+           :version (current-seq @co)
+           :engine "scan"}))
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
       :warm-check (let [inc (warm!) fresh (client-view-facts @co) fidx (idx-build fresh)]
                     {:consistent (and (= (:triples (:idx inc)) (:triples fidx))

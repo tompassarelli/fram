@@ -27,6 +27,7 @@
 
 (require fram.kernel :as k)
 (require fram.datalog :as d)
+(require fram.rt :as rt)
 (require clojure.string :as str)
 
 ;; --- EDB: project the current fact fold into fact/fact-id tuple-sets ---------
@@ -297,6 +298,138 @@
   (let [env :- Any (System/getenv "FRAM_MAX_RESULTS")
         n :- (U Int Nil) (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
     (if (and (some? n) (> n 0)) n 100000)))
+
+;; --- internal coordinator pagination ---------------------------------------
+;; The AI tool surface remains `run` above/below. `run-page` is an INTERNAL
+;; coordinator verb for mechanical consumers that must drain a large derived
+;; relation without ever materializing that relation on the wire.
+;;
+;; Ordering is Clojure/Java String ordering over each tuple's canonical EDN.
+;; All tuples are vectors of scalar strings, so `pr-str` is a total,
+;; restart-stable key (and avoids host-dependent set iteration order). The cursor
+;; carries that key as canonical unpadded base64url over strict UTF-8. It is
+;; deliberately a key, not an offset: deleting the row that produced a cursor
+;; does not invalidate the next page. Inserts after the key are visible; inserts
+;; before it are not.
+(def max-page-limit :- Int 4096)
+(def max-page-wire-bytes :- Int 1048576)
+;; The coordinator adds :version + :engine after `run-page`; reserve much more
+;; than their maximum serialized size, then enforce the exact final bound there.
+(def max-page-payload-bytes :- Int (- max-page-wire-bytes 512))
+(def max-page-cursor-bytes :- Int 524288)
+(def page-cursor-prefix :- String "fram-query-page-v1.")
+
+(defn- utf8-size [s :- String] :- Int
+  (count (.getBytes s "UTF-8")))
+
+(defn- row-key [row :- (Vec String)] :- String (pr-str row))
+
+(defn- encode-cursor-key [key :- String] :- String
+  (str page-cursor-prefix (rt/base64url-encode-utf8 key)))
+
+(defn page-cursor [row :- (Vec String)] :- String
+  (encode-cursor-key (row-key row)))
+
+;; -> {:ok canonical-row-key} | {:error message}. Re-encoding is an exact
+;; canonicality check: padding aliases, malformed base64url, and malformed UTF-8
+;; are rejected.
+(defn decode-page-cursor [cursor :- Any] :- Any
+  (if (not (string? cursor))
+    {:error "query page :after must be a cursor string or nil"}
+    (if (or (> (utf8-size cursor) max-page-cursor-bytes)
+            (not (str/starts-with? cursor page-cursor-prefix))
+            (= cursor page-cursor-prefix))
+      {:error "query page :after is not a valid canonical Fram query cursor"}
+      (try
+        (let [payload (subs cursor (count page-cursor-prefix))
+              decoded (rt/base64url-decode-utf8 payload)
+              canonical (encode-cursor-key decoded)]
+          (if (= canonical cursor)
+            {:ok decoded}
+            {:error "query page :after is not a valid canonical Fram query cursor"}))
+        (catch Exception _
+          {:error "query page :after is not a valid canonical Fram query cursor"})))))
+
+(defn- page-envelope [window :- (Vec (Vec String)) n :- Int] :- Any
+  (let [rows (subvec window 0 n)
+        more (> (count window) n)
+        next (if (and more (> n 0)) (page-cursor (nth rows (- n 1))) nil)]
+    {:ok rows :next next :more more}))
+
+;; Exact EDN size without repeatedly serializing every accumulated row. Cursor
+;; size is intentionally recomputed for each possible boundary: it is NOT
+;; monotonic (a later, shorter row may more than offset the added row syntax).
+(defn- envelope-size [rows-size :- Int next :- Any more :- Bool] :- Int
+  (+ (utf8-size "{:ok ")
+     rows-size
+     (utf8-size " :next ")
+     (utf8-size (pr-str next))
+     (utf8-size " :more ")
+     (utf8-size (pr-str more))
+     (utf8-size "}")))
+
+;; Exhaustively consider every allowed boundary in O(limit + total row bytes).
+;; This is proof-correct even when cursor sizes alternate huge/small.
+(defn- fitting-prefix [window :- (Vec (Vec String)) wanted :- Int] :- Int
+  (loop [i 0 rows-size 2 best 0]
+    (if (>= i wanted)
+      best
+      (let [row (nth window i)
+            n (+ i 1)
+            rows-size2 (+ rows-size (if (= i 0) 0 1) (utf8-size (pr-str row)))
+            more (> (count window) n)
+            next (if more (page-cursor row) nil)
+            cursor-ok (or (nil? next) (<= (utf8-size next) max-page-cursor-bytes))
+            fits (and cursor-ok
+                      (<= (envelope-size rows-size2 next more)
+                          max-page-payload-bytes))]
+        (recur n rows-size2 (if fits n best))))))
+
+;; Generic, deterministic, bounded query page. The Datalog fixpoint relation may
+;; exist internally, but at most `limit` rows and max-page-payload-bytes leave
+;; this function. `after` is nil for the first page.
+(defn run-page [facts :- (Vec k/Fact) q0 :- Any limit :- Any after :- Any] :- Any
+  (cond
+    [(or (not (integer? limit)) (< limit 1) (> limit max-page-limit))
+     {:error [(str "query page :limit must be an integer from 1 through " max-page-limit)]}]
+    [(and (some? after) (not (string? after)))
+     {:error ["query page :after must be a cursor string or nil"]}]
+    [:else
+     (let [cursor-result (if (some? after) (decode-page-cursor after) {:ok nil})]
+       (if (contains? cursor-result :error)
+         {:error [(:error cursor-result)]}
+         (let [q (canon-q q0)
+               errs (validate q)]
+           (if (not (empty? errs))
+             {:error errs}
+             (let [edb (facts->edb facts)
+                   strata (strata-of q)
+                   db :- (Map String (Set (Vec String)))
+                   (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint acc stratum)) edb strata)
+                   find :- Any (:find q)
+                   rel :- (Set (Vec String)) (get db find #{})
+                   ;; Compute canonical keys exactly once. Sorting then compares
+                   ;; the cheap cached strings, and the cursor filter stays lazy:
+                   ;; only limit+1 rows are copied into the bounded window.
+                   keyed (mapv (fn [row :- (Vec String)] :- Any
+                                 [(row-key row) row])
+                               (vec rel))
+                   ordered (sort-by first keyed)
+                   after-key (:ok cursor-result)
+                   eligible (if (some? after-key)
+                              (filter (fn [pair :- Any] :- Bool
+                                        (pos? (compare (first pair) after-key)))
+                                      ordered)
+                              ordered)
+                   window (mapv second (take (+ limit 1) eligible))
+                   wanted (min limit (count window))]
+               (if (= wanted 0)
+                 (page-envelope window 0)
+                 (let [n (fitting-prefix window wanted)]
+                   (if (= n 0)
+                     {:error ["query page contains a row too large for the bounded wire response"]
+                      :max-bytes max-page-wire-bytes}
+                     (page-envelope window n)))))))))]))
 
 ;; run the validated query over the fact fold; {:ok [tuple...]} | {:error [msg...]}
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
