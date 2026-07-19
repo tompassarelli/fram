@@ -4,10 +4,10 @@
 # daemon is already up it's a no-op; otherwise it starts one (detached) on the
 # canonical log and waits until it answers.
 #
-#   FRAM_PORT / FRAM_LOG select the port + log (default 7977, ./facts.log).
+#   FRAM_PORT / FRAM_LOG select the port + log (default 7977, ./coordination.log).
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export FRAM_PORT="${FRAM_PORT:-7977}"
-LOG="${FRAM_LOG:-$PWD/facts.log}"
+LOG="${FRAM_LOG:-$PWD/coordination.log}"
 RESTART=0; [ "$1" = "--restart" ] && RESTART=1
 
 # PIDs listening on the port. fuser/lsof are NOT always installed (e.g. NixOS),

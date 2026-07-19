@@ -449,13 +449,20 @@ if [[ -z "$state_response" ]]; then
   sed -n '1,200p' "$state_output" >&2
   exit 1
 fi
-expected_state_log="$home/.local/state/fram/facts.log"
+expected_state_log="$home/.local/state/fram/coordination.log"
 if [[ ! -f "$expected_state_log" ]]; then
   echo "fram package smoke: packaged daemon did not create writable state log" >&2
   exit 1
 fi
-if [[ -e "$package_root/facts.log" ||
-      -e "$package_root/libexec/fram/facts.log" ]]; then
+# Legacy retirement: the packaged default must be coordination.log, never the
+# retired facts.log alias (2026-07-16 split incident). A fresh state dir stays
+# free of the legacy path.
+if [[ -e "$home/.local/state/fram/facts.log" ]]; then
+  echo "fram package smoke: packaged daemon created the retired legacy facts.log" >&2
+  exit 1
+fi
+if [[ -e "$package_root/coordination.log" ||
+      -e "$package_root/libexec/fram/coordination.log" ]]; then
   echo "fram package smoke: packaged daemon wrote state into the Nix output" >&2
   exit 1
 fi

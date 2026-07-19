@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fram CLI (runs the compiled Clojure on babashka).
 #   fram import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <val>
-# Checkout runs default to <repo>/threads and <repo>/facts.log. Packaged runs
+# Checkout runs default to <repo>/threads and <repo>/coordination.log. Packaged runs
 # default to writable XDG state. Override either with FRAM_THREADS / FRAM_LOG.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
@@ -21,10 +21,10 @@ if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
     fi
   fi
   [[ -n "${FRAM_THREADS:-}" ]] || FRAM_THREADS="$state_dir/threads"
-  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/facts.log"
+  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/coordination.log"
 else
   FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-  FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+  FRAM_LOG="${FRAM_LOG:-$HERE/coordination.log}"
 fi
 export FRAM_THREADS FRAM_LOG
 mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"

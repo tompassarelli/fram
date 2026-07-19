@@ -3,7 +3,7 @@
   layer (file IO, log read/write, string ops) the .bclj `declare-extern`s bind
   to. Beagle owns the typed logic; this owns the host calls.
 
-  Paths default to the current working directory (./threads, ./facts.log) and
+  Paths default to the current working directory (./threads, ./coordination.log) and
   are overridable via FRAM_THREADS / FRAM_LOG."
   (:refer-clojure :exclude [slurp])   ; fram.rt/slurp wraps clojure.core/slurp; keep the JVM daemon's stderr clean
   (:require [clojure.string :as str]
@@ -155,7 +155,7 @@
       (str (System/getProperty "user.dir") "/threads")))
 (defn log-path []
   (or (System/getenv "FRAM_LOG")
-      (str (System/getProperty "user.dir") "/facts.log")))
+      (str (System/getProperty "user.dir") "/coordination.log")))
 (defn time-dir []
   (or (System/getenv "FRAM_TIME_DIR")
       (str (System/getProperty "user.dir") "/time")))

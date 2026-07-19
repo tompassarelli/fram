@@ -32,9 +32,9 @@ elif [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
     echo "fram-daemon: pass a log path, or set FRAM_LOG, FRAM_STATE_DIR, XDG_STATE_HOME, or HOME" >&2
     exit 2
   fi
-  log_path="$state_dir/facts.log"
+  log_path="$state_dir/coordination.log"
 else
-  log_path="$HERE/facts.log"
+  log_path="$HERE/coordination.log"
 fi
 mkdir -p "$(dirname "$log_path")"
 if [[ ! -e "$log_path" ]]; then

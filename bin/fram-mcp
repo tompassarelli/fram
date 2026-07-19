@@ -26,10 +26,10 @@ if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
     fi
   fi
   [[ -n "${FRAM_THREADS:-}" ]] || FRAM_THREADS="$state_dir/threads"
-  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/facts.log"
+  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/coordination.log"
 else
   FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-  FRAM_LOG="${FRAM_LOG:-$HERE/facts.log}"
+  FRAM_LOG="${FRAM_LOG:-$HERE/coordination.log}"
 fi
 export FRAM_THREADS FRAM_LOG
 mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
