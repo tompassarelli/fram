@@ -2834,6 +2834,16 @@
 ;; realistic append-no-fsync condition): fold/max-tx and migrate-flat->co's flat-max-tx
 ;; seed count such lines, so the incremental boot's version must too or a torn tail
 ;; makes a snapshot boot report STALE vs the whole-log fold.
+;;
+;; CORRUPTION POLICY — parity with fram.rt/read-log (thread 019f791c): we split the
+;; RAW UTF-8 bytes on 0x0A (never a UTF-8 continuation byte) so byte offsets survive.
+;;   * unparseable, no terminating newline (final segment) -> torn tail: recover the
+;;     accumulated lines, warn once with the exact byte offset, stop.
+;;   * unparseable, newline-terminated -> FAIL CLOSED (path + byte offset), EXCEPT the
+;;     ONE tolerated case: the FIRST segment when from-byte > 0, which the seek hint may
+;;     split mid-line (a straddle fragment) — that partial is dropped, as before.
+;;   * parses -> unchanged :tx filter (an EDN-valid-incomplete torn tail still counts
+;;     toward :max-tx but is not applied).
 (defn- read-log-tail* [path from-byte from-tx]
   (let [f (java.io.File. (str path))]
     (if-not (and (.exists f) (pos? (.length f)))
@@ -2841,17 +2851,41 @@
       (let [len (.length f) start (long (max 0 (min (long (or from-byte 0)) len)))]
         (with-open [is (java.io.FileInputStream. f)]
           (skip-fully! is start)
-          (let [rdr (java.io.BufferedReader. (java.io.InputStreamReader. is "UTF-8"))]
-            (loop [acc (transient []) mx (long from-tx)]
-              (let [line (.readLine rdr)]
-                (if (nil? line)
-                  {:lines (persistent! acc) :max-tx mx}
-                  (let [x  (try (edn/read-string line) (catch Exception _ nil))
-                        tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
-                        past? (and tx (> tx (long from-tx)))
-                        m  (when (and past? (:l x) (:p x) (:r x)) x)]
-                    (recur (if m (conj! acc m) acc)
-                           (if (and past? (> tx mx)) tx mx))))))))))))
+          (let [bs (.readAllBytes is) blen (alength bs)]
+            (loop [i 0 first? true acc (transient []) mx (long from-tx)]
+              (if (>= i blen)
+                {:lines (persistent! acc) :max-tx mx}
+                (let [nl (loop [j i] (cond (>= j blen) -1
+                                           (== (aget bs j) 10) j
+                                           :else (recur (inc j))))
+                      terminated? (>= nl 0)
+                      end (if terminated? nl blen)
+                      seg (String. bs i (- end i) java.nio.charset.StandardCharsets/UTF_8)
+                      next-i (if terminated? (inc nl) blen)
+                      abs (+ start i)]
+                  (if (str/blank? seg)
+                    (recur next-i false acc mx)
+                    (let [parsed (try {:x (edn/read-string seg)} (catch Exception _ nil))]
+                      (cond
+                        parsed
+                        (let [x  (:x parsed)
+                              tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
+                              past? (and tx (> tx (long from-tx)))
+                              m  (when (and past? (:l x) (:p x) (:r x)) x)]
+                          (recur next-i false
+                                 (if m (conj! acc m) acc)
+                                 (if (and past? (> tx mx)) tx mx)))
+                        ;; unparseable torn tail (no terminating newline): recover + warn once.
+                        (not terminated?)
+                        (let [recovered (persistent! acc)]
+                          (fram.rt/warn-torn-tail! path abs (count recovered))
+                          {:lines recovered :max-tx mx})
+                        ;; seek-straddle first fragment (from-byte landed mid-line): drop it.
+                        (and first? (pos? start))
+                        (recur next-i false acc mx)
+                        ;; unparseable, newline-terminated, real position: fail closed.
+                        :else
+                        (throw (fram.rt/corrupt-log-ex path abs))))))))))))))
 (defn- read-log-tail [path from-byte from-tx]
   (:lines (read-log-tail* path from-byte from-tx)))
 

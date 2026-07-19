@@ -176,16 +176,66 @@
 ;; nil on parse failure so the caller can report it instead of crashing.
 (defn parse-edn [s] (try (edn/read-string s) (catch Exception _ nil)))
 
+;; read-log — torn-tail recovery + fail-closed corruption. The live daemon
+;; appends WITHOUT fsync, so a reader can catch the file mid-write: the FINAL
+;; line may be truncated (its terminating newline not yet flushed). Policy, at
+;; the EDN parse boundary:
+;;   * parses to a value          -> a FactOp. An EDN-VALID-but-incomplete line
+;;     (e.g. one missing :r) is NOT corrupt: it still becomes a FactOp (fold
+;;     filters it out, but max-tx counts its :tx — preserving migrate-flat->co's
+;;     torn-tail-counts-toward-version invariant).
+;;   * unparseable AND the final UNTERMINATED segment -> torn tail: recover every
+;;     prior fact and emit ONE warning naming the exact BYTE offset where it
+;;     starts. The writer will retry; the tail is dropped, never folded.
+;;   * unparseable otherwise (newline-terminated, or a non-final line) -> FAIL
+;;     CLOSED: throw naming file + byte offset. Never a silent skip, never a
+;;     partial fold — a completed corrupt write is a real defect, not a race.
+;; str/split-lines discards byte positions (and readLine's charset handling is
+;; lossy on the offset for multi-byte values), so we split the RAW UTF-8 bytes on
+;; 0x0A — never a UTF-8 continuation byte — and carry each segment's byte offset.
+;; public: the daemon's incremental tail reader (coord_daemon read-log-tail*)
+;; emits the SAME warning + fail-closed shapes when it catches a torn/corrupt tail.
+(defn warn-torn-tail! [path off n]
+  (binding [*out* *err*]
+    (println (str "fram: WARN torn-tail: " path ": torn final log line at byte "
+                  off " — recovered " n " prior fact(s), incomplete tail dropped"))))
+
+(defn corrupt-log-ex [path off]
+  (ex-info (str "fram: corrupt log line in " path " at byte " off
+                " — unparseable and newline-terminated (not a torn tail); refusing to fold")
+           {:path path :byte-offset off :fram/corrupt-log true}))
+
 (defn read-log [path]
-  (if (.exists (io/file path))
-    (->> (str/split-lines (clojure.core/slurp path))
-         (remove str/blank?)
-         (keep (fn [line]
-                 (try (let [m (edn/read-string line)]
-                        (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m) (or (:frame m) (:by m) "legacy")))
-                      (catch Exception _ nil))))
-         vec)
-    []))
+  (if-not (.exists (io/file path))
+    []
+    (let [bs  (java.nio.file.Files/readAllBytes (.toPath (io/file path)))
+          len (alength bs)]
+      (loop [i 0 acc (transient [])]
+        (if (>= i len)
+          (persistent! acc)
+          (let [nl (loop [j i] (cond (>= j len) -1
+                                     (== (aget bs j) 10) j
+                                     :else (recur (inc j))))
+                terminated? (>= nl 0)
+                end (if terminated? nl len)
+                seg (String. bs i (- end i) java.nio.charset.StandardCharsets/UTF_8)
+                next-i (if terminated? (inc nl) len)]
+            (if (str/blank? seg)
+              (recur next-i acc)
+              (let [parsed (try {:m (edn/read-string seg)} (catch Exception _ nil))]
+                (cond
+                  parsed
+                  (let [m (:m parsed)]
+                    (recur next-i (conj! acc (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m)
+                                                            (or (:frame m) (:by m) "legacy")))))
+                  ;; unparseable + no terminating newline: torn tail — recover, warn once.
+                  (not terminated?)
+                  (let [recovered (persistent! acc)]
+                    (warn-torn-tail! path i (count recovered))
+                    recovered)
+                  ;; unparseable + newline-terminated (completed write) or non-final: fail closed.
+                  :else
+                  (throw (corrupt-log-ex path i)))))))))))
 
 ;; Read the configured split corpus as one transaction-ordered history. Callers
 ;; that need a complete logical store (MCP/query projections) use this; write
