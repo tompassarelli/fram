@@ -18,6 +18,12 @@
          '[babashka.process :as proc] '[fram.store :as c] '[fram.schema :as s])
 (def root (System/getProperty "user.dir"))
 (def KS (mapv #(Integer/parseInt %) (str/split (or (System/getenv "SWEEP_KS") "1,2,4,8") #",")))
+(def PROP-PORT (Integer/parseInt (or (System/getenv "PROP_PORT") "8496")))
+(def PROP-IN-PROCESS? (= "1" (System/getenv "PROP_IN_PROCESS")))
+(when-not (<= 8400 PROP-PORT 65535)
+  (binding [*out* *err*]
+    (println "PROP_PORT must be a scratch port in [8400,65535], got" PROP-PORT))
+  (System/exit 2))
 (defn nowns [] (System/nanoTime))
 (defn ms [a b] (/ (double (- b a)) 1e6))
 (defn p [& xs] (apply println xs) (flush))
@@ -59,17 +65,34 @@
         t-landed (nowns)]
     {:landed landed :write (ms t0 t-write) :prop (ms t-write t-landed)}))
 
+(declare graph-module)  ; resolved after the daemon boots (needs :index); used by graph-writer
+;; ---- module resolution: use the corpus's EXACT module name, not a bare suffix ----
+;; upsert-form scope-matches "kernel" against "src.fram.kernel" via the trailing-segment
+;; rule, so the FIRST upsert lands — but the write keys the new form's wrapper by the bare
+;; scope literal, minting a SECOND src named "kernel". Every subsequent upsert then sees 2
+;; kernel-matching srcs and is REJECTED (ambiguous scope). Targeting the EXACT module the
+;; daemon reports (via :index) keeps the writers on one src, so K disjoint writers all land.
+;; Override with GRAPH_MODULE if the corpus layout differs.
+(defn resolve-graph-module [port]
+  (let [req (fn [m] (if PROP-IN-PROCESS? (handle m) (client port m)))
+        mods (:modules (req {:op :index :spec {}}))]
+    (or (System/getenv "GRAPH_MODULE")
+        (first (filter #(= "kernel" %) mods))
+        (first (filter #(str/ends-with? % ".kernel") mods))
+        (first mods))))
+
 ;; ---- GRAPH arm: K concurrent writers to one warm daemon (distinct defs) ----
 (defn graph-writer [port i base]
   (let [nm (str base i)
+        request (fn [m] (if PROP-IN-PROCESS? (handle m) (client port m)))
         t0 (nowns)
-        ins (client port {:op :edit-min :spec {:op "upsert-form" :module "kernel"
-                                               :datum (list 'def (symbol nm) i)}})
+        ins (request {:op :edit-min :spec {:op "upsert-form" :module graph-module
+                                           :datum (list 'def (symbol nm) i)}})
         t-write (nowns)                                ; commit returns; store eager-updated
         ;; CONTENT ASSERTION — commit->visible means B's read REFLECTS writer i's OWN def,
         ;; not merely that a read returned. Poll the lock-free :seen until nm is in the store.
         t-vis (loop [n 0]
-                (cond (:seen (client port {:op :seen :v nm})) (nowns)
+                (cond (:seen (request {:op :seen :v nm})) (nowns)
                       (> n 100000) (do (println "  graph: def" nm "NEVER seen") (nowns))
                       :else (recur (inc n))))]
     {:landed (boolean (:ok ins)) :write (ms t0 t-write) :prop (ms t-write t-vis)}))
@@ -88,15 +111,21 @@
 (def flat (str "/tmp/prop-sweep-graph-" (System/nanoTime) ".log"))
 (io/copy (io/file code-log) (io/file flat))
 (boot-flat! flat)
-(def port 8196)
-(def server (future (serve port)))
-(Thread/sleep 600)
+(def port PROP-PORT)
+(def server (when-not PROP-IN-PROCESS? (future (serve port))))
+(when server (Thread/sleep 600))
+(def graph-module (resolve-graph-module port))
+(when-not graph-module
+  (binding [*out* *err*] (println "no writable module resolved from :index")) (System/exit 2))
 
 (p (format "=== #44 propagation K-sweep — DECOMPOSED write vs prop (ms; KS=%s) ===" (str/join "," KS)))
-(p "prop = commit->reader-sees-it (the propagation metric). git=push-hook+merge-queue; graph=eager warm store.\n")
+(p (str "prop = commit->reader-sees-it (the propagation metric). git=push-hook+merge-queue;"
+        " graph=eager warm store; transport="
+        (if PROP-IN-PROCESS? "in-process handle" (str "loopback:" port))
+        "; graph-module=" graph-module ".\n"))
 (def git-rows  (vec (for [K KS] (let [r (run-K :git K port)]  (p (format "  git   K=%-2d landed=%d/%d  write=%.1f  prop mean=%.1f max=%.1f" K (:landed r) K (:write r) (:prop r) (:prop-max r))) r))))
 (def graph-rows (vec (for [K KS] (let [r (run-K :graph K port)] (p (format "  graph K=%-2d landed=%d/%d  write=%.1f  prop mean=%.1f max=%.1f" K (:landed r) K (:write r) (:prop r) (:prop-max r))) r))))
-(future-cancel server)
+(when server (future-cancel server))
 
 (p "\n=== SHAPE (mean ms vs K) ===")
 (p "  K    git-write git-prop  graph-write graph-prop")
