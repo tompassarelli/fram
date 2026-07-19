@@ -2228,8 +2228,11 @@
                      :version (current-seq @co)})
       ;; :boot echoes HOW this process booted ({:mode :snapshot|:fold :ms .. :reason ..})
       ;; — the post-bounce verification surface for snapshot boot (thread 019f2190).
+      ;; :rollback_floor — the queryable floor law (B2 §5/R0): releases below
+      ;; this id are out of rollback support for generation-managed corpora.
       :status   {:version (current-seq @co) :facts (count (c/current-facts (:store @co)))
-                 :log (or @flat-log (:log @co)) :boot @last-boot}
+                 :log (or @flat-log (:log @co)) :boot @last-boot
+                 :rollback_floor fram.rt/rollback-floor}
       ;; :facts — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
       ;; client feeds these straight into its kernel index instead of paying the
@@ -3259,7 +3262,15 @@
                       (Thread. (fn [] (snapshot-if-dirty! "shutdown"))))))
 
 (defn serve-flat-daemon [port flat]
-  (boot-flat! flat)
+  ;; vGUARD boot participation (B2 §2): acquire the corpus rewrite lock BEFORE
+  ;; first serve — exclusive-if-free heals any crashed generation flip via the
+  ;; intent doctor; a LIVE flip's exclusive lock makes this daemon BLOCK here
+  ;; until the flip releases. Never serve a half-flipped corpus. The SHARED
+  ;; handle is held across the boot fold (a flip cannot start mid-read) and
+  ;; released before serving — steady-state appends re-take it per batch.
+  (let [gate (fram.rt/boot-rewrite-gate! (str flat))]
+    (try (boot-flat! flat)
+         (finally (fram.rt/close-rewrite-lock! gate))))
   (start-snapshot-writer!)
   (println (str "reified coordinator (drop-in over flat log): "
                 (count (c/current-facts (:store @co))) " live facts, canonical=" flat

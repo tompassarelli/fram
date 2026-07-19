@@ -251,16 +251,459 @@
       (vec (sort-by #(or (:tx %) 0) (into coord (read-log telemetry))))
       coord)))
 
+;; ============================================================================
+;; vGUARD — the rollback floor (Reification R0; B2 contract §2/§3/§5).
+;;
+;; This release is the ROLLBACK FLOOR for the generation-flip protocol the vR
+;; rewrite verbs (unify / import --force / compact / split) will ship: any pin
+;; revert lands HERE, never on a binary with live unguarded rewrite verbs.
+;; Four laws, all in this block:
+;;
+;;   1. WRITER ADMISSION — every supported append (daemon group batch, cold
+;;      `fram set`, merge/import whole-file writes) holds the SHARED
+;;      FileChannel lock on <dir>/.fram.rewrite.lock across
+;;      open→write→fsync→close. A generation flip holds the EXCLUSIVE lock, so
+;;      exclusion is kernel-arbitrated — no scan, no TOCTOU. An in-progress
+;;      flip DELAYS an append (the shared acquire blocks); it can never lose an
+;;      acked write (ack ⇒ fsync under shared lock ⇒ happens-before the
+;;      exclusive grant ⇒ inside the flip's read set).
+;;   2. GENERATION-MANAGED REFUSAL — this binary's wholesale rewrite verbs
+;;      (import / merge) FAIL CLOSED on a corpus a vR flip has ever managed
+;;      (any @log:gen generation line). Rewriting such a corpus with pre-flip
+;;      semantics could resurrect dead values; refusal is unconditional
+;;      (--force does not override the floor).
+;;   3. INTENT-AWARE EXACT-MODE DOCTOR — a crashed vR flip leaves
+;;      <dir>/.fram.rewrite.intent (single-line EDN, fsynced before any
+;;      mutation) recording exact st_ino / st_mode&07777 / source byte+sha
+;;      boundaries. Under the EXCLUSIVE lock the doctor classifies the actual
+;;      state from recorded inos/shas vs live stat — NEVER from the advisory
+;;      :phase — rolls the flip forward (coordination already renamed) or back
+;;      (not renamed), and always restores the EXACT recorded modes
+;;      (0600/0660 stay 0600/0660 — never a constant).
+;;   4. BOOT PARTICIPATION — a daemon acquires the lock BEFORE first serve:
+;;      exclusive-if-free (heal any crashed flip), else it BLOCKS on a shared
+;;      acquire until the live flip releases.
+;;
+;; bb law: a FileLock is released ONLY by closing its channel (sci restriction
+;; — FileLock methods like .release/.isShared are not invocable); never call
+;; anything on the lock object itself.
+;; ============================================================================
+
+(def rollback-floor
+  "The rollback-floor release id. Releases below this floor are OUT of
+  rollback support (restore-from-backup territory); `@fram admission_floor`
+  facts and North pin sequencing reference this exact token."
+  "vGUARD")
+(defn rollback-floor-id [] rollback-floor)
+
+(defn- corpus-dir ^java.io.File [log-path]
+  (or (.getParentFile (.getAbsoluteFile (io/file (str log-path))))
+      (io/file "/")))
+(defn rewrite-lock-path [log-path]
+  (str (io/file (corpus-dir log-path) ".fram.rewrite.lock")))
+(defn rewrite-intent-path [log-path]
+  (str (io/file (corpus-dir log-path) ".fram.rewrite.intent")))
+;; Replacement-file names are PROTOCOL CONSTANTS shared by the vR flip writer
+;; and this doctor: roll-back knows exactly which tmps to sweep, roll-forward
+;; which composed telemetry replacement to prefer.
+(defn rewrite-coord-tmp-path [log-path]
+  (str (io/file (corpus-dir log-path) ".fram.rewrite.coord.tmp")))
+(defn rewrite-telem-tmp-path [log-path]
+  (str (io/file (corpus-dir log-path) ".fram.rewrite.telem.tmp")))
+
+;; --- lock primitives --------------------------------------------------------
+;; A handle is {:channel ch}; close the channel to release (bb law above).
+(defn acquire-rewrite-lock!
+  "Acquire the corpus rewrite lock. shared? true = append class, false =
+  flip/doctor class. blocking? false uses tryLock and returns nil when the
+  lock is unavailable (incl. an overlapping lock held by this same JVM)."
+  [log-path shared? blocking?]
+  (let [raf (java.io.RandomAccessFile. (rewrite-lock-path log-path) "rw")
+        ch  (.getChannel raf)]
+    (try
+      (let [lk (if blocking?
+                 (.lock ch 0 Long/MAX_VALUE (boolean shared?))
+                 (.tryLock ch 0 Long/MAX_VALUE (boolean shared?)))]
+        (if lk
+          {:channel ch}
+          (do (.close ch) nil)))
+      ;; OverlappingFileLockException (same-JVM overlap) is not in bb's class
+      ;; allowlist — catch its supertype and discriminate by name. Only a
+      ;; NON-blocking try maps it to nil (unavailable); a blocking acquire must
+      ;; THROW — silently proceeding without the lock would break admission.
+      (catch IllegalStateException e
+        (.close ch)
+        (if (and (not blocking?)
+                 (= "OverlappingFileLockException" (.getSimpleName (class e))))
+          nil
+          (throw e)))
+      (catch Throwable t
+        (.close ch) (throw t)))))
+(defn close-rewrite-lock! [h]
+  (when-let [ch (:channel h)] (.close ^java.nio.channels.FileChannel ch))
+  nil)
+
+;; --- generation-managed detection (refusal law 2) ---------------------------
+(defn generation-managed?
+  "True when the primary log carries any @log:gen generation line (a vR flip's
+  control record sits at physical line 1; ANY occurrence counts — deliberately
+  fail-closed, no liveness fold: refusing too much is safe, resurrecting a
+  dead value is not)."
+  [log-path]
+  (if-not (.exists (io/file (str log-path)))
+    false
+    (boolean (some (fn [op] (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
+                   (read-log (str log-path))))))
+
+(def generation-managed-refusal
+  "corpus is generation-managed; use fram >= vR or `fram split` first")
+
+;; --- exact-mode stat/restore helpers ----------------------------------------
+(defn- unix-attr [path attr]
+  (java.nio.file.Files/getAttribute (.toPath (io/file (str path)))
+                                    (str "unix:" attr)
+                                    (make-array java.nio.file.LinkOption 0)))
+(defn file-ino [path] (long (unix-attr path "ino")))
+(defn file-mode
+  "st_mode & 07777 as an int — the exact value the intent records."
+  [path]
+  (bit-and (int (unix-attr path "mode")) 07777))
+(def ^:private posix-perm-bits
+  [[0400 java.nio.file.attribute.PosixFilePermission/OWNER_READ]
+   [0200 java.nio.file.attribute.PosixFilePermission/OWNER_WRITE]
+   [0100 java.nio.file.attribute.PosixFilePermission/OWNER_EXECUTE]
+   [0040 java.nio.file.attribute.PosixFilePermission/GROUP_READ]
+   [0020 java.nio.file.attribute.PosixFilePermission/GROUP_WRITE]
+   [0010 java.nio.file.attribute.PosixFilePermission/GROUP_EXECUTE]
+   [0004 java.nio.file.attribute.PosixFilePermission/OTHERS_READ]
+   [0002 java.nio.file.attribute.PosixFilePermission/OTHERS_WRITE]
+   [0001 java.nio.file.attribute.PosixFilePermission/OTHERS_EXECUTE]])
+(defn set-file-mode!
+  "Restore the EXACT recorded mode (never a constant). Special bits
+  (setuid/setgid/sticky) cannot be expressed through the Java perm API — a log
+  never legitimately carries them, so refuse loud rather than restore wrong."
+  [path mode]
+  (when (pos? (bit-and (long mode) 07000))
+    (throw (ex-info (str "refusing to restore special mode bits on " path
+                         " — recorded mode " mode " carries setuid/setgid/sticky")
+                    {:path (str path) :mode mode :fram/doctor-refusal true})))
+  (java.nio.file.Files/setPosixFilePermissions
+   (.toPath (io/file (str path)))
+   (java.util.HashSet.
+    ^java.util.Collection
+    (vec (keep (fn [[bit perm]] (when (pos? (bit-and (long mode) (long bit))) perm))
+               posix-perm-bits))))
+  nil)
+
+(defn- fsync-dir!
+  "Directory fsync — makes a rename/delete in this directory durable (Linux)."
+  [dir]
+  (with-open [ch (java.nio.channels.FileChannel/open
+                  (.toPath (io/file (str dir)))
+                  (into-array java.nio.file.OpenOption
+                              [java.nio.file.StandardOpenOption/READ]))]
+    (.force ch true))
+  nil)
+
+(defn- sha256-16hex [^bytes bs]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") bs)]
+    (subs (apply str (map #(format "%02x" %) d)) 0 16)))
+(defn- file-prefix-sha16
+  "sha256-16hex of exactly the first n bytes of path; nil when the file is
+  shorter than n (the recorded boundary cannot match)."
+  [path n]
+  (let [f (io/file (str path))]
+    (when (and (.exists f) (>= (.length f) (long n)))
+      (let [bs (byte-array (long n))]
+        (with-open [in (java.io.FileInputStream. f)]
+          (loop [off 0]
+            (when (< off (long n))
+              (let [k (.read in bs off (- (long n) off))]
+                (when (pos? k) (recur (+ off k)))))))
+        (sha256-16hex bs)))))
+(defn- file-line1-sha16
+  "sha256-16hex of physical line 1 (bytes up to and excluding the first LF)."
+  [path]
+  (let [f (io/file (str path))]
+    (when (.exists f)
+      (let [bs (java.nio.file.Files/readAllBytes (.toPath f))
+            n  (alength bs)
+            nl (loop [i 0] (cond (>= i n) n (== (aget bs i) 10) i :else (recur (inc i))))]
+        (sha256-16hex (java.util.Arrays/copyOfRange bs 0 (int nl)))))))
+
+;; --- the rewrite intent (doctor law 3) --------------------------------------
+(def rewrite-intent-version 1)
+(defn read-rewrite-intent
+  "Parse <dir>/.fram.rewrite.intent. nil when absent; throws (loud, naming the
+  required version) on an unknown :v — a NEWER flip protocol wrote it and this
+  binary must not guess at its recovery semantics."
+  [log-path]
+  (let [f (io/file (rewrite-intent-path log-path))]
+    (when (.exists f)
+      (let [m (try (edn/read-string (clojure.core/slurp f))
+                   (catch Exception e
+                     (throw (ex-info (str "unparseable rewrite intent " (.getPath f)
+                                          " — refusing to classify; operator intervention required")
+                                     {:path (.getPath f) :fram/doctor-refusal true} e))))]
+        (when-not (= rewrite-intent-version (:v m))
+          (throw (ex-info (str "rewrite intent " (.getPath f) " has version " (:v m)
+                               " — this binary understands only :v " rewrite-intent-version
+                               "; run the fram release that wrote it")
+                          {:path (.getPath f) :v (:v m)
+                           :required rewrite-intent-version :fram/doctor-refusal true})))
+        m))))
+
+(defn- telem-path-for [log-path]
+  (str (io/file (corpus-dir log-path) "telemetry.log")))
+(defn- delete-if-exists! [path]
+  (let [f (io/file (str path))] (when (.exists f) (io/delete-file f true))) nil)
+(defn- delete-tree! [path]
+  (let [f (io/file (str path))]
+    (when (.exists f)
+      (doseq [^java.io.File c (reverse (file-seq f))] (.delete c))))
+  nil)
+
+(defn- classify-rewrite-crash
+  "Which side of the coordination ATOMIC_MOVE did the flip die on? From
+  recorded inos/shas vs live stat ONLY (the advisory :phase carries zero
+  correctness weight). :rolled-back = coordination.log is still the source
+  inode/bytes; :rolled-forward = it is the composed replacement. Anything
+  unrecognizable refuses loud — never guess about a corpus."
+  [log-path intent]
+  (let [coord     (str log-path)
+        live-ino  (when (.exists (io/file coord)) (file-ino coord))
+        old-ino   (get-in intent [:coord :ino])
+        new-ino   (get-in intent [:new_coord :ino])
+        old-bytes (get-in intent [:coord :bytes])
+        old-sha   (get-in intent [:coord :sha])
+        new-sha1  (get-in intent [:new_coord :sha1])]
+    (cond
+      (nil? live-ino)
+      (throw (ex-info (str "rewrite intent present but " coord " does not exist — refusing to classify")
+                      {:path coord :fram/doctor-refusal true}))
+      (and old-ino (= live-ino old-ino)) :roll-back
+      (and new-ino (= live-ino new-ino)) :roll-forward
+      ;; ino unavailable/recycled: fall back to content shas.
+      (and new-sha1 (= new-sha1 (file-line1-sha16 coord))) :roll-forward
+      (and old-bytes old-sha (= old-sha (file-prefix-sha16 coord old-bytes))) :roll-back
+      :else
+      (throw (ex-info (str "rewrite intent does not match the live corpus at " coord
+                           " (neither source nor replacement inode/sha) — refusing to classify; "
+                           "operator intervention required")
+                      {:path coord :intent intent :fram/doctor-refusal true})))))
+
+(defn- compose-empty-telem-tmp!
+  "Step-6 twin for roll-forward: an EMPTY 0444 replacement for telemetry.log,
+  fsynced, in the corpus directory."
+  [log-path]
+  (let [tmp (rewrite-telem-tmp-path log-path)]
+    (delete-if-exists! tmp)
+    (with-open [os (java.io.FileOutputStream. tmp)]
+      (.force (.getChannel os) true))
+    (set-file-mode! tmp 0444)
+    tmp))
+
+(defn- roll-forward! [log-path intent]
+  ;; Complete flip steps 8–12. Every step is idempotent, so a crash inside the
+  ;; doctor itself re-runs cleanly.
+  (let [dir   (corpus-dir log-path)
+        telem (telem-path-for log-path)
+        telem-recorded? (some? (:telem intent))
+        telem-old-ino   (get-in intent [:telem :ino])
+        telem-live-ino  (when (.exists (io/file telem)) (file-ino telem))]
+    ;; (8) rename the composed empty telemetry replacement over telemetry.log —
+    ;; the path is EMPTIED, never deleted (North's bin trigger watches existence).
+    (when (and telem-recorded? telem-live-ino (= telem-live-ino telem-old-ino))
+      (let [tmp (let [t (io/file (rewrite-telem-tmp-path log-path))]
+                  (if (.exists t) (.getPath t) (compose-empty-telem-tmp! log-path)))]
+        (java.nio.file.Files/move (.toPath (io/file (str tmp)))
+                                  (.toPath (io/file telem))
+                                  (into-array java.nio.file.CopyOption
+                                              [java.nio.file.StandardCopyOption/ATOMIC_MOVE]))))
+    ;; (9) directory fsync — both renames durable before any mode restores.
+    (fsync-dir! dir)
+    ;; (10) restore the EXACT recorded modes.
+    (when (.exists (io/file (str log-path)))
+      (set-file-mode! (str log-path) (get-in intent [:coord :mode])))
+    (when (and telem-recorded? (.exists (io/file telem)))
+      (set-file-mode! telem (get-in intent [:telem :mode])))
+    ;; (11) sweep sidecar + snapshots — the log identity flipped, so they are
+    ;; stale by construction (an old daemon would also invalidate them; sweeping
+    ;; makes it unconditional).
+    (delete-if-exists! (str log-path ".snap"))
+    (delete-tree! (str log-path ".snapshots"))
+    ;; leftover coordination tmp (the rename source when the flip died post-move)
+    (delete-if-exists! (rewrite-coord-tmp-path log-path))
+    ;; (12) delete the intent + directory fsync.
+    (delete-if-exists! (rewrite-intent-path log-path))
+    (fsync-dir! dir)
+    :rolled-forward))
+
+(defn- roll-back! [log-path intent]
+  ;; The coordination rename never happened: sweep the composed tmps, restore
+  ;; the exact recorded modes on the untouched sources, drop the intent.
+  (let [dir   (corpus-dir log-path)
+        telem (telem-path-for log-path)]
+    (delete-if-exists! (rewrite-coord-tmp-path log-path))
+    (delete-if-exists! (rewrite-telem-tmp-path log-path))
+    (when (.exists (io/file (str log-path)))
+      (set-file-mode! (str log-path) (get-in intent [:coord :mode])))
+    (when (and (some? (:telem intent)) (.exists (io/file telem)))
+      (set-file-mode! telem (get-in intent [:telem :mode])))
+    (delete-if-exists! (rewrite-intent-path log-path))
+    (fsync-dir! dir)
+    :rolled-back))
+
+(defn doctor-rewrite-intent!
+  "Heal a crashed flip. CALLER MUST HOLD THE EXCLUSIVE LOCK. Returns
+  {:state :clean | :rolled-forward | :rolled-back}; :clean touches NOTHING
+  (A7: with no intent, store modes/bytes stay byte-for-byte untouched).
+  Throws (:fram/doctor-refusal) on unknown intent version / unclassifiable
+  state / special mode bits."
+  [log-path]
+  (if-let [intent (read-rewrite-intent log-path)]
+    (case (classify-rewrite-crash log-path intent)
+      :roll-forward {:state (roll-forward! log-path intent) :intent intent}
+      :roll-back    {:state (roll-back! log-path intent) :intent intent})
+    {:state :clean}))
+
+;; --- write admission (law 1) ------------------------------------------------
+(defn with-append-admission
+  "Run write-fn while holding the SHARED rewrite lock (blocking: a live flip
+  DELAYS the append until its exclusive lock releases). If a rewrite intent
+  still exists once the shared lock is granted, the flip crashed without being
+  healed — REFUSE LOUD (the caller's ack path delivers the throw; the daemon
+  NACKs, a CLI prints), never append into a half-flipped corpus."
+  [log-path write-fn]
+  (let [h (acquire-rewrite-lock! log-path true true)]
+    (try
+      (when (.exists (io/file (rewrite-intent-path log-path)))
+        (throw (ex-info (str "rewrite in progress/crashed on " log-path
+                             " — run `fram doctor` first")
+                        {:path (str log-path) :fram/rewrite-in-progress true})))
+      (write-fn)
+      (finally (close-rewrite-lock! h)))))
+
+(defn- heal-if-crashed!
+  "Cold-verb auto-heal (deterministic, logged): when an intent exists and the
+  exclusive lock is FREE, the crashed flip is healed before the write. A LIVE
+  flip (lock held) falls through — the shared acquire in with-append-admission
+  blocks until it completes."
+  [log-path]
+  (when (.exists (io/file (rewrite-intent-path log-path)))
+    (when-let [h (acquire-rewrite-lock! log-path false false)]
+      (try
+        (let [r (doctor-rewrite-intent! log-path)]
+          (when-not (= :clean (:state r))
+            (binding [*out* *err*]
+              (println (str "fram: healed crashed rewrite on " log-path
+                            " (" (name (:state r)) ")")))))
+        (finally (close-rewrite-lock! h))))))
+
+(defn with-cold-write-admission
+  "The cold single-process write seam (set / merge / import): auto-heal a
+  crashed flip if the lock is free, then append under the shared lock."
+  [log-path write-fn]
+  (heal-if-crashed! log-path)
+  (with-append-admission log-path write-fn))
+
+;; --- daemon boot participation (law 4) --------------------------------------
+(defn boot-rewrite-gate!
+  "Acquire the rewrite lock BEFORE first serve and RETURN a SHARED lock handle
+  the caller holds across its boot fold (close it with close-rewrite-lock!
+  before serving — a serving daemon holds the shared lock per append batch,
+  never continuously). While an intent exists: exclusive-if-free heals the
+  crashed flip; exclusive unobtainable = a LIVE flip (or a peer healing) —
+  BLOCK on a shared acquire until it releases, then re-check. The exclusive
+  path runs ONLY while an intent exists, so concurrent shared traffic (peer
+  boots, appends) can never livelock this loop; the returned handle is
+  re-checked against a fresh intent so a flip crashing between heal and
+  acquire is never served."
+  [log-path]
+  (let [intent? #(.exists (io/file (rewrite-intent-path log-path)))]
+    (loop [n 0]
+      (if (intent?)
+        (do
+          (if-let [h (acquire-rewrite-lock! log-path false false)]
+            (try
+              (let [r (doctor-rewrite-intent! log-path)]
+                (when-not (= :clean (:state r))
+                  (println (str "[fram] boot: healed crashed rewrite on " log-path
+                                " (" (name (:state r)) ")"))))
+              (finally (close-rewrite-lock! h)))
+            (do
+              (when (zero? n)
+                (println (str "[fram] boot: rewrite in progress on " log-path
+                              " — waiting for the flip to release its lock")))
+              (close-rewrite-lock! (acquire-rewrite-lock! log-path true true))))
+          (recur (inc n)))
+        ;; no intent: take the participation lock, then re-check — a flip that
+        ;; started and crashed in the gap left an intent we must heal, never serve.
+        (let [h (acquire-rewrite-lock! log-path true true)]
+          (if (intent?)
+            (do (close-rewrite-lock! h) (recur (inc n)))
+            h))))))
+
+;; --- operator doctor (the `fram doctor` face of law 3) ----------------------
+(defn doctor-rewrite!
+  "Intent doctor for the doctor CLI: loud, exact, never guesses. Heals (or
+  no-ops) and RETURNS the one-line report for the caller to print — the doctor
+  CLI's first line stays the coordinator health contract, so this line prints
+  after it. Exit 2 when a live flip holds the lock (nothing to heal yet —
+  retry after it completes); exit 1 on a refusal state (unknown intent
+  version / unclassifiable corpus)."
+  [log-path]
+  (if-let [h (acquire-rewrite-lock! log-path false false)]
+    (try
+      (let [r (try (doctor-rewrite-intent! log-path)
+                   (catch clojure.lang.ExceptionInfo e
+                     (if (:fram/doctor-refusal (ex-data e))
+                       (do (binding [*out* *err*]
+                             (println (str "fram doctor: REFUSED — " (.getMessage e))))
+                           (System/exit 1))
+                       (throw e))))
+            modes (fn [] (str (get-in r [:intent :coord :mode])
+                              (when-let [tm (get-in r [:intent :telem :mode])] (str "/" tm))))]
+        (case (:state r)
+          :clean "rewrite-intent: none (clean)"
+          :rolled-forward
+          (str "rewrite-intent: HEALED — rolled the crashed flip FORWARD"
+               " (modes restored to recorded " (modes) ")")
+          :rolled-back
+          (str "rewrite-intent: HEALED — rolled the crashed flip BACK"
+               " (modes restored to recorded " (modes) ")")))
+      (finally (close-rewrite-lock! h)))
+    (do (binding [*out* *err*]
+          (println (str "fram doctor: rewrite in progress on " log-path
+                        " — another process holds the rewrite lock; retry after the flip completes")))
+        (System/exit 2))))
+
+;; write-log / append-fact-op — the cold write seams, now vGUARD supported
+;; writers: SHARED rewrite lock across open→write→fsync→close, and the fn
+;; returns (the caller's ack) only after the bytes are fsynced. A live
+;; generation flip's exclusive lock DELAYS these writes; it can never lose one.
 (defn write-log [path fact-ops]
   (let [ts (now-ts)                                  ; one batch instant (this import/rewrite)
         lines (map (fn [a]
                      (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a) :ts ts}))
-                   fact-ops)]
-    (spit path (str (str/join "\n" lines) "\n"))))
+                   fact-ops)
+        payload (.getBytes (str (str/join "\n" lines) "\n") "UTF-8")]
+    (with-cold-write-admission path
+      (fn []
+        (with-open [os (java.io.FileOutputStream. (str path))]   ; truncate+rewrite (import/merge)
+          (.write os ^bytes payload)
+          (.flush os)
+          (.force (.getChannel os) true))))))
 
 (defn append-fact-op [path a]
-  (spit path (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a) :ts (now-ts)}) "\n")
-        :append true))
+  (let [payload (.getBytes (str (pr-str {:tx (:tx a) :op (:op a) :l (:l a) :p (:p a) :r (:r a) :frame (:frame a) :ts (now-ts)}) "\n")
+                           "UTF-8")]
+    (with-cold-write-admission path
+      (fn []
+        (with-open [os (java.io.FileOutputStream. (str path) true)]
+          (.write os ^bytes payload)
+          (.flush os)
+          (.force (.getChannel os) true))))))
 
 ;; --- entity history: the time-travel read (a log scan, not a fold) ----------
 ;; Every assert/retract touching one entity, in tx order, with its commit

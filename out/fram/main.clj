@@ -29,12 +29,12 @@
   (count (filterv (fn [v] (and (or (= (:frame v) "coord") (= (:frame v) "agent") (= (:frame v) "cli")) (nil? (get file-sigs (str (:l v) "|" (:p v) "|" (:r v)))))) (fold/fold-latest (fram.rt/read-log log)))))
 
 (defn cmd-import [^String threads-dir ^String log ^Boolean force]
-  (let [as (imp/load-corpus threads-dir)
+  (if (fram.rt/generation-managed? log) (println (str "REFUSING import: corpus is generation-managed; use fram >= vR or `fram split` first")) (let [as (imp/load-corpus threads-dir)
    file-sigs (sig-member-map (:facts (fold/fold as)))
    lost (pending-coord-count log file-sigs)]
   (if (and (> lost 0) (not force)) (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the " "files (would be lost). Run `export` first, or `import --force`.")) (do
   (fram.rt/write-log log as)
-  (println (str "imported -> " (count as) " facts -> " log))))))
+  (println (str "imported -> " (count as) " facts -> " log)))))))
 
 (defn cmd-export [^String threads-dir ^String log ^String out-dir ^Boolean force]
   (let [log-facts (:facts (fold/fold (fram.rt/read-log log)))
@@ -97,12 +97,12 @@
   (recur (rest cs) (+ i 1) (conj acc (fold/->FactOp i "assert" (:l c) (:p c) (:r c) frame)))))))
 
 (defn cmd-merge [^String log ^String from ^String to]
-  (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+  (if (fram.rt/generation-managed? log) (println (str "REFUSING merge: corpus is generation-managed; use fram >= vR or `fram split` first")) (let [facts (:facts (fold/fold (fram.rt/read-log log)))
    rewritten (mapv (fn [c] (k/->Fact (if (= (:l c) from) to (:l c)) (:p c) (if (= (:r c) from) to (:r c)))) facts)
    withrec (conj rewritten (k/->Fact from "merged_into" to))
    deduped (:facts (fold/fold (facts->fact-ops withrec "merge")))]
   (fram.rt/write-log log (facts->fact-ops deduped "merge"))
-  (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")"))))
+  (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")")))))
 
 (defn- ^String tell-once [port ^String log ^String op ^String te ^String pred ^String rv]
   (let [v (fram.rt/coord-version-for-log port log)]
@@ -136,11 +136,14 @@
   (fram.rt/coord-watch-for-log port log)))
 
 (defn cmd-doctor [^String log]
-  (let [port (fram.rt/coord-port)
+  (let [rewrite-line (fram.rt/doctor-rewrite! log)
+   port (fram.rt/coord-port)
    as (fram.rt/read-log log)
    cmap (fold/card-map as)
    declared (filterv (fn [c] (= (:p c) "cardinality")) (:facts (fold/fold as)))]
   (println (fram.rt/coord-status-for-log port log))
+  (println rewrite-line)
+  (println (str "rollback_floor " (fram.rt/rollback-floor-id)))
   (println (str "vocab " (k/vocab-fingerprint)))
   (println (str "cardinality-facts: " (count declared) " facts-derived (in the log)"))
   (println (str "cardinality-overlay " (k/cards-fingerprint cmap)))

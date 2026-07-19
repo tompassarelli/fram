@@ -32,6 +32,11 @@
 (declare-extern fram.rt/coord-watch-for-log [Int String -> Nil])
 (declare-extern fram.rt/history [String String -> Nil])
 (declare-extern fram.rt/parse-edn [String -> Any])
+;; vGUARD rollback floor (B2 §2/§3/§5): generation-managed refusal, the
+;; intent-aware exact-mode doctor, and the queryable floor id.
+(declare-extern fram.rt/generation-managed? [String -> Bool])
+(declare-extern fram.rt/doctor-rewrite! [String -> String])
+(declare-extern fram.rt/rollback-floor-id [-> String])
 
 ;; --- display helpers --------------------------------------------------------
 
@@ -71,14 +76,20 @@
 ;; drop any facts in the log that aren't in the files — i.e. pending coordinator
 ;; writes. Refuse if that would lose data; `export` first, or `--force` to overwrite.
 (defn cmd-import [threads-dir :- String log :- String force :- Bool] :- Nil
-  (let [as (imp/load-corpus threads-dir)
-        file-sigs (sig-member-map (:facts (fold/fold as)))
-        lost (pending-coord-count log file-sigs)]
-    (if (and (> lost 0) (not force))
-      (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the "
-                    "files (would be lost). Run `export` first, or `import --force`."))
-      (do (fram.rt/write-log log as)
-          (println (str "imported -> " (count as) " facts -> " log))))))
+  ;; vGUARD floor law: a generation-managed corpus (any @log:gen generation
+  ;; line — a vR flip's control record) must NEVER be wholesale-rewritten by
+  ;; this binary; pre-flip rewrite semantics could resurrect dead values.
+  ;; Unconditional — --force does not override the floor.
+  (if (fram.rt/generation-managed? log)
+    (println (str "REFUSING import: corpus is generation-managed; use fram >= vR or `fram split` first"))
+    (let [as (imp/load-corpus threads-dir)
+          file-sigs (sig-member-map (:facts (fold/fold as)))
+          lost (pending-coord-count log file-sigs)]
+      (if (and (> lost 0) (not force))
+        (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the "
+                      "files (would be lost). Run `export` first, or `import --force`."))
+        (do (fram.rt/write-log log as)
+            (println (str "imported -> " (count as) " facts -> " log)))))))
 
 ;; Inverse of import: fold the log -> write each thread as markdown into out-dir.
 ;; SAFETY: refuse if threads/ holds edits not yet in the log (would clobber).
@@ -190,16 +201,19 @@
 ;; Consolidate entity `from` into `to`: rewrite every l/r occurrence, dedup via a
 ;; re-fold, leave a `(from merged_into to)` tombstone. Run `export` afterward.
 (defn cmd-merge [log :- String from :- String to :- String] :- Nil
-  (let [facts (:facts (fold/fold (fram.rt/read-log log)))
-        rewritten (mapv (fn [c :- k/Fact] :- k/Fact
-                          (k/->Fact (if (= (:l c) from) to (:l c))
-                                     (:p c)
-                                     (if (= (:r c) from) to (:r c))))
-                        facts)
-        withrec (conj rewritten (k/->Fact from "merged_into" to))
-        deduped (:facts (fold/fold (facts->fact-ops withrec "merge")))]
-    (fram.rt/write-log log (facts->fact-ops deduped "merge"))
-    (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")"))))
+  ;; vGUARD floor law: same refusal as import — merge is a whole-log rewrite.
+  (if (fram.rt/generation-managed? log)
+    (println (str "REFUSING merge: corpus is generation-managed; use fram >= vR or `fram split` first"))
+    (let [facts (:facts (fold/fold (fram.rt/read-log log)))
+          rewritten (mapv (fn [c :- k/Fact] :- k/Fact
+                            (k/->Fact (if (= (:l c) from) to (:l c))
+                                       (:p c)
+                                       (if (= (:r c) from) to (:r c))))
+                          facts)
+          withrec (conj rewritten (k/->Fact from "merged_into" to))
+          deduped (:facts (fold/fold (facts->fact-ops withrec "merge")))]
+      (fram.rt/write-log log (facts->fact-ops deduped "merge"))
+      (println (str "merged " from " -> " to "  (" (count facts) " facts -> " (count deduped) ")")))))
 
 ;; --- write THROUGH the coordinator (safe under concurrent agents) ------------
 (defn- tell-once [port :- Int log :- String op :- String te :- String pred :- String rv :- String] :- String
@@ -256,12 +270,22 @@
 ;; longer silent. (Consistency requirement: every process folding/serving one log
 ;; MUST load the same FRAM_SINGLE_VALUED — see fram.kernel.)
 (defn cmd-doctor [log :- String] :- Nil
-  (let [port (fram.rt/coord-port)
+  ;; vGUARD intent doctor runs FIRST (heal a crashed generation flip under the
+  ;; exclusive rewrite lock — roll forward/back by recorded inos/shas, restore
+  ;; the EXACT recorded modes — BEFORE this doctor reads the corpus), but its
+  ;; report line prints LAST: the doctor's FIRST line stays the coordinator
+  ;; health contract North's lifecycle probe consumes (`coordinator UP on …`).
+  ;; Refusal states (unknown intent version, unclassifiable corpus, live flip)
+  ;; still exit loud before any report.
+  (let [rewrite-line (fram.rt/doctor-rewrite! log)
+        port (fram.rt/coord-port)
         as (fram.rt/read-log log)
         cmap (fold/card-map as)
         declared (filterv (fn [c :- k/Fact] :- Bool (= (:p c) "cardinality"))
                           (:facts (fold/fold as)))]
     (println (fram.rt/coord-status-for-log port log))
+    (println rewrite-line)
+    (println (str "rollback_floor " (fram.rt/rollback-floor-id)))
     (println (str "vocab " (k/vocab-fingerprint)))
     ;; schema-as-facts cardinality: the fact-derived overlay is the authoritative,
     ;; log-derived layer that makes CLI-vs-daemon cardinality agreement automatic (both

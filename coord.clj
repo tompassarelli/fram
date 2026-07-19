@@ -25,6 +25,7 @@
 ;;   bb -cp out coord.clj test
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck]
+         '[fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
          '[clojure.edn :as edn] '[clojure.java.io :as io] '[clojure.string :as str])
 
 (defn- store [co] (:store co))
@@ -71,11 +72,19 @@
             (let [real (filter #(seq (:lines %)) pitems)]
               (try
                 (when (and path (seq real))
-                  (with-open [os (java.io.FileOutputStream. (str path) true)]
-                    (doseq [{:keys [lines]} real, ^String ln lines]
-                      (.write os (.getBytes ln "UTF-8")))
-                    (.flush os)
-                    (.force (.getChannel os) true)))   ; ONE fsync covers the whole batch
+                  ;; vGUARD writer admission (B2 §2): the batch holds the SHARED
+                  ;; rewrite lock across open→write→fsync→close, so a generation
+                  ;; flip's EXCLUSIVE lock excludes it kernel-arbitrated (no scan,
+                  ;; no TOCTOU). A live flip DELAYS the batch — the ack (ticket
+                  ;; delivery below) still happens only after the fsync, so no
+                  ;; acked write can ever sit outside a flip's read set.
+                  (rt/with-append-admission (str path)
+                    (fn []
+                      (with-open [os (java.io.FileOutputStream. (str path) true)]
+                        (doseq [{:keys [lines]} real, ^String ln lines]
+                          (.write os (.getBytes ln "UTF-8")))
+                        (.flush os)
+                        (.force (.getChannel os) true)))))   ; ONE fsync covers the whole batch
                 (doseq [{:keys [on-flushed]} pitems :when on-flushed] (on-flushed))
                 (deliver-all! pitems :ok)
                 (catch Throwable t (deliver-all! pitems t)))))))
