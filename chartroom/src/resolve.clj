@@ -391,6 +391,35 @@
       (c/fact! ctx node ACC (c/value! ctx (:accessor x)) tx))
     (swap! n-xmod inc)
     true))
+;; ->Name / map->Name auto-constructor prefix in a spelling (bare OR alias-qualified), else nil.
+(defn ctor-prefix [nm]
+  (cond (or (str/starts-with? (or nm "") "map->") (str/includes? (or nm "") "/map->")) "map->"
+        (or (str/starts-with? (or nm "") "->") (str/includes? (or nm "") "/->")) "->"
+        :else nil))
+;; #(a) identity RE-RENDER: a reference carrying a DURABLE bound_to edge resolves by IDENTITY
+;; (the binding's stable @mod#int), but its render MARKERS (qualifier / ctor_prefix /
+;; accessor_field / keep_spelling) are spelling-derived resolve-preds that a strip+re-resolve
+;; (whole/scoped materialize, cold boot) CLEARS. So on the bound path we bind refers_to to the
+;; DURABLE target and RE-DERIVE the markers from the reference's own spelling — a cross-module
+;; `a/foo`, a `->Ctor`, or a synth accessor keeps rendering correctly after a rename or cold
+;; restart, not just a bare module-local ref. The identity target always wins over spelling.
+(defn bound-render! [node nm bt]
+  (bind! node bt)                                  ; the durable identity edge
+  (let [x   (*xresolve* nm)
+        pfx (ctor-prefix nm)
+        acc (*aresolve* nm)]
+    (cond
+      (and x (:target x))                          ; cross-module import: qualifier/keep_spelling/accessor markers
+      (do (case (:mode x)
+            :fixed (c/fact! ctx node FIXED (c/value! ctx "1") tx)
+            :qual  (c/fact! ctx node QUAL (c/value! ctx (:alias x)) tx)
+            nil)
+          (when (:accessor x) (c/fact! ctx node ACC (c/value! ctx (:accessor x)) tx)))
+      (and pfx (or (*tresolve* (str/replace nm pfx "")) (:target (*xresolve* (str/replace nm pfx "")))))
+      (c/fact! ctx node CTOR (c/value! ctx pfx) tx) ; module-local/x-mod auto-constructor factory
+      acc                                           ; module-local synth field accessor
+      (c/fact! ctx node ACC (c/value! ctx (second acc)) tx)
+      :else nil)))
 (declare walk walk-quasi walk-quasi-seq walk-fn-arity walk-pat-heads)
 (defn walk-type [node]                           ; resolve a TYPE position to its type definition
   (cond
@@ -440,8 +469,10 @@
       (cond
         ;; #(a) identity: a reference with a DURABLE bound_to edge resolves by IDENTITY
         ;; (binding's stable @mod#int), not by spelling — so a target rename (display-name only)
-        ;; leaves this intact and render follows it to the target's CURRENT name. Spelling is the fallback.
-        (bound-target node) (bind! node (bound-target node))
+        ;; leaves this intact and render follows it to the target's CURRENT name. Spelling is the
+        ;; fallback. bound-render! also re-derives the spelling-side render markers (qualifier/
+        ;; ctor/accessor) so cross-module/factory refs survive a strip+re-resolve and cold restart.
+        (bound-target node) (bound-render! node nm (bound-target node))
         local (bind! node local)
         ;; free symbol: cross-module value/type import (:refer/:rename/:as), else a
         ;; module-local TYPE used in value position (a constructor `(Point ...)` /
@@ -769,6 +800,22 @@
 (defn run-resolution! []        ; the lexical walk over every bound src (reads bound tables)
   (run-resolution-over! srcs))
 
+;; #(a) LIFT — make the materialized refers_to identity-COMPLETE: every DURABLE bound_to
+;; edge (leaf -> binding node) must be reflected as a refers_to edge, so identity-first reads
+;; (render / callers / callgraph, which read refers_to) follow a renamed or cold-restarted
+;; binding even for references the SPELLING walk cannot re-derive — a comment mention whose
+;; word no longer names any def, or a same-module reference whose def spelling has moved.
+;; The walk (walk / bound-render!) already resolves the references it reaches, WITH their
+;; render markers; this only fills the GAP: a bound leaf with no live refers_to gets a plain
+;; refers_to to its durable target. Warm-only (refers_to is a derived resolve-pred, re-cut
+;; each materialize). Idempotent: leaves already resolved are skipped.
+(defn lift-bound-to-refers! []
+  (when BOUND
+    (doseq [cid (c/by-p ctx BOUND)]
+      (let [cl (c/fact-of ctx cid) L (:l cl) D (:r cl)]
+        (when (and (integer? D) (live-node? D) (empty? (c/by-lp ctx L REFERS)))
+          (c/fact! ctx L REFERS D tx))))))
+
 ;; ============================================================================
 ;; resolve-edn! — the RUNNABLE pipeline over an ARBITRARY bound store.
 ;; Binds a FRESH store (ctx/tx/SUP + predicate value-ids recomputed against it),
@@ -935,7 +982,7 @@
                srcs [] file-modframe {} file-typeframe {} file-accessors {}
                global-exports {} global-type-exports {} global-accessor-exports {}]
        (corpus-from-store!)
-       (when *resolve-walk?* (run-resolution!))   ; Build B: the minimal-op path skips the whole-corpus walk
+       (when *resolve-walk?* (run-resolution!) (lift-bound-to-refers!))   ; Build B: the minimal-op path skips the whole-corpus walk (and the identity lift)
        (body)))))
 
 ;; ============================================================================
@@ -969,6 +1016,7 @@
                global-exports {} global-type-exports {} global-accessor-exports {}]
        (corpus-from-store!)                          ; FULL tables from the whole store
        (run-resolution-over! (filter module-set srcs))  ; WALK only the affected module subset
+       (lift-bound-to-refers!)                       ; #(a) fill identity gaps the spelling walk missed
        (body)))))
 
 ;; --- projection: emit EDN for beagle --render, names resolved via refers_to --
@@ -2105,6 +2153,62 @@
         blast (reduce (fn [m [x y]] (update m y (fnil conj #{}) x)) {} reaches)]
     {:reaches reaches :blast blast}))
 
+;; binding-privacy — {binding-leaf -> :public | :private} over the CURRENTLY BOUND corpus.
+;; A top-level `def-`/`defn-` is PRIVATE; every other top-level value binding (def/defn/
+;; defonce/fn/…) is PUBLIC — a reachability ROOT. Keyed on the binding NODE (identity), so
+;; same-spelling bindings in different modules stay DISTINCT (a private `helper` in mod A is a
+;; different node than a public `helper` in mod B). Call under with-resolve-read / resolve-edn!.
+(defn binding-privacy []
+  (into {}
+    (for [src srcs
+          f   (forms-of src)
+          :let [d (unwrap-def f) h (head-sym d)]
+          :when (VALUE-DEFS h)
+          :let [nl (unwrap-meta (second (ordered-children d)))]
+          :when (sym-val nl)]
+      [nl (if (#{"def-" "defn-"} h) :private :public)])))
+
+;; dead-private-bindings — the identity-keyed STRATIFIED-Datalog code query. Over the
+;; scope-correct call graph (call-edges), derive the PRIVATE top-level bindings UNREACHABLE
+;; from any PUBLIC binding. Two strata via fram.datalog/run-strata:
+;;   (1) POSITIVE + RECURSIVE live reachability — live(x) seeded from every public root
+;;       (is-root self-loop), grown along calls(x,y); a reachable private chain is live.
+;;   (2) NEGATED dead — dead(p) :- private(p), ¬live(p). An unreachable private recursive
+;;       cycle is NEVER seeded by a root, so positive reachability skips it -> it is dead.
+;; Because everything is keyed on the @mod#int NODE, same-spelling cross-module bindings are
+;; classified independently. Returns the set of dead private binding leaves. `privacy` maps
+;; leaf -> :public|:private (binding-privacy); a leaf absent from it (e.g. a protocol method)
+;; is treated as a non-private root, never dead.
+(defn dead-private-bindings [{:keys [defn-meta edges]} privacy]
+  (let [ctx    (c/new-store)
+        tx     (c/begin-tx! ctx "dead")
+        CALLS  (c/value! ctx "calls-defn")
+        ISROOT (c/value! ctx "is-root")
+        ISPRIV (c/value! ctx "is-priv")
+        k->id  (volatile! {})
+        ent    (fn [k] (or (get @k->id k)
+                           (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
+        _      (doseq [[a b] edges] (c/fact! ctx (ent a) CALLS (ent b) tx))
+        ;; every top-level binding is a NODE; public => root self-loop, private => priv self-loop.
+        _      (doseq [leaf (keys defn-meta)]
+                 (let [e (ent leaf)]
+                   (if (= :private (privacy leaf))
+                     (c/fact! ctx e ISPRIV e tx)
+                     (c/fact! ctx e ISROOT e tx))))
+        id->k  (into {} (map (fn [[k v]] [v k]) @k->id))
+        strata [;; stratum 1 — positive recursive live reachability from public roots
+                [(d/rule "live" [(d/v :x)]
+                         [(d/lit "triple" [(d/v :x) ISROOT (d/v :x)])])
+                 (d/rule "live" [(d/v :y)]
+                         [(d/lit "triple" [(d/v :x) CALLS (d/v :y)])
+                          (d/lit "live"   [(d/v :x)])])]
+                ;; stratum 2 — negated dead(private): private AND not (transitively) live
+                [(d/rule "dead" [(d/v :p)]
+                         [(d/lit "triple" [(d/v :p) ISPRIV (d/v :p)])
+                          (d/nlit "live"  [(d/v :p)])])]]
+        db     (d/run-strata ctx strata)]
+    (set (keep (fn [[pid]] (id->k pid)) (d/facts db "dead")))))
+
 ;; ============================================================================
 ;; CLI entry. Slice the edn paths off *command-line-args* per mode (the old
 ;; `(def srcs ...)` slice), then run the WHOLE pipeline + mode dispatch inside
@@ -2204,16 +2308,22 @@
   ;; (a/f, m/f) cross-module calls. Emits the JSON beagle-cascade consumes.
   ;; ============================================================================
   "callgraph"
-  (let [{:keys [defn-meta edges]} (call-edges)
+  (let [{:keys [defn-meta edges] :as cg} (call-edges)
         key->s  (fn [leaf] (:key (defn-meta leaf)))
         edges-s (mapv (fn [[a b]] [(key->s a) (key->s b)]) edges)
-        {:keys [reaches blast]} (blast-closure edges-s)]
+        {:keys [reaches blast]} (blast-closure edges-s)
+        ;; identity-keyed stratified-Datalog: private bindings unreachable from public roots.
+        dead-priv (dead-private-bindings cg (binding-privacy))
+        dead-s    (vec (sort (map key->s dead-priv)))]
     (binding [*out* *err*]
-      (println (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs (refers_to + Fram Datalog)"
-                       (count defn-meta) (count edges-s) (count reaches))))
+      (println (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs, %d dead private (refers_to + Fram Datalog)"
+                       (count defn-meta) (count edges-s) (count reaches) (count dead-s))))
     (println (json/generate-string
               {:defns (vec (vals defn-meta)) :edges edges-s
-               :blast (into {} (map (fn [[k vs]] [k (vec vs)]) blast))}))))))))
+               :blast (into {} (map (fn [[k vs]] [k (vec vs)]) blast))
+               ;; ADDITIVE field — the dead-private derivation, keyed like :defns/:edges
+               ;; ("src#leaf"). No Beagle syntax added; a consumer that ignores it is unaffected.
+               :dead-private dead-s}))))))))
 
 ;; GUARD: run the pipeline only when invoked as a CLI with a recognized mode.
 ;; Loaded as a library (no mode arg, or an unrecognized one), this is a no-op —
