@@ -4,6 +4,12 @@
 # Checkout runs default to <repo>/threads and <repo>/coordination.log. Packaged runs
 # default to writable XDG state. Override either with FRAM_THREADS / FRAM_LOG.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+# Deep daemon/recovery selfcheck is a bash-orchestrated command (boots isolated
+# scratch coordinators with trap-based cleanup) — dispatch before the bb exec.
+if [[ "${1:-}" == "selfcheck" ]]; then
+  shift
+  exec "$HERE/bin/fram-selfcheck" "$@"
+fi
 if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
   # Explicit corpus paths are a complete configuration. Resolve the user-state
   # default only for a value that is actually missing, so hermetic/service

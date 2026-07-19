@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# fram-selfcheck — the operator deep-recovery selfcheck (dispatched from `fram
+# selfcheck --deep`). Boots ONLY isolated scratch coordinators (scratch port
+# probed free >=8200, scratch log via mktemp, scratch PKCS12 TLS material minted
+# on the fly) and prints one named pass/fail line per subsystem:
+#   socket, mtls, fencing, lease, snapshot, cold-fold, identity, reconcile
+#
+# Exit 0 iff every subsystem passes; nonzero on any failure. A trap tears down
+# every scratch daemon (kill, verify dead) and removes the scratch dir on BOTH
+# the success and failure paths. It NEVER stops/contacts the live coordinator
+# (127.0.0.1:7977, ~/.local/state/north logs) — every port and log is scratch.
+#
+# Self-test hook: FRAM_SELFCHECK_FAULT=socket forces the socket probe at a dead
+# port (an induced failure) so the nonzero-exit + named-failure path is provable.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+
+# require the --deep form (this command has no shallow mode)
+mode=""
+for a in "$@"; do case "$a" in --deep) mode=deep ;; esac; done
+if [[ "$mode" != "deep" ]]; then
+  echo "usage: fram selfcheck --deep" >&2
+  echo "  deep daemon/recovery selfcheck over isolated scratch coordinators" >&2
+  exit 2
+fi
+
+# --- scratch lifecycle --------------------------------------------------------
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/fram-selfcheck.XXXXXX")"
+DAEMON_PIDS=()
+PORTS=()
+
+cleanup() {
+  local rc=$?
+  # kill every scratch daemon, then verify it is gone.
+  for pid in "${DAEMON_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in "${DAEMON_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] || continue
+    for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  # confirm no scratch port is still listening (deterministic teardown proof).
+  local stray=""
+  for p in "${PORTS[@]:-}"; do
+    [[ -n "$p" ]] || continue
+    if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then exec 3>&- 3<&- 2>/dev/null; stray="$stray $p"; fi
+  done
+  # remove the scratch dir by its literal mktemp path (brace-guarded).
+  rm -rf "${SCRATCH:?}"
+  if [[ -n "$stray" ]]; then
+    echo "fram selfcheck: WARNING scratch port(s) still listening after teardown:$stray" >&2
+  else
+    echo "selfcheck: cleanup complete (scratch daemons killed, ports free, scratch removed)"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM
+
+# --- port probing (>=8200, never 7977) ----------------------------------------
+next_free_port() {
+  local p="${1:-8200}"
+  while :; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then exec 3>&- 3<&- 2>/dev/null; else echo "$p"; return 0; fi
+    p=$((p + 1))
+    if [[ $p -gt 8999 ]]; then echo "fram selfcheck: no free scratch port in 8200-8999" >&2; return 1; fi
+  done
+}
+PORT_PLAIN="$(next_free_port 8200)" || exit 1
+PORT_TLS="$(next_free_port $((PORT_PLAIN + 1)))" || exit 1
+PORT_DEAD="$(next_free_port $((PORT_TLS + 1)))" || exit 1   # stays dead: forces the cold fold
+PORTS=("$PORT_PLAIN" "$PORT_TLS")
+
+# --- scratch mTLS material (server + client cross-trust + a rogue) ------------
+TLSDIR="$SCRATCH/tls"; mkdir -p "$TLSDIR"
+PW="framselfcheck"
+# Resolve keytool self-contained: the packaged wrappers do NOT put a JDK on PATH,
+# but keytool ships beside FRAM_JAVA (jdk/bin). Prefer that, else the PATH keytool.
+KEYTOOL="keytool"
+if [[ -n "${FRAM_JAVA:-}" && -x "$(dirname "$FRAM_JAVA")/keytool" ]]; then
+  KEYTOOL="$(dirname "$FRAM_JAVA")/keytool"
+fi
+kt() { "$KEYTOOL" "$@" >/dev/null 2>&1; }
+kt -genkeypair -alias server -keyalg RSA -keysize 2048 -validity 1 -dname CN=coordinator \
+   -keystore "$TLSDIR/server.p12" -storetype PKCS12 -storepass "$PW" -keypass "$PW"
+kt -genkeypair -alias client -keyalg RSA -keysize 2048 -validity 1 -dname CN=gateway \
+   -keystore "$TLSDIR/client.p12" -storetype PKCS12 -storepass "$PW" -keypass "$PW"
+kt -genkeypair -alias rogue -keyalg RSA -keysize 2048 -validity 1 -dname CN=rogue \
+   -keystore "$TLSDIR/rogue.p12" -storetype PKCS12 -storepass "$PW" -keypass "$PW"
+kt -exportcert -alias server -keystore "$TLSDIR/server.p12" -storepass "$PW" -file "$TLSDIR/server.crt"
+kt -exportcert -alias client -keystore "$TLSDIR/client.p12" -storepass "$PW" -file "$TLSDIR/client.crt"
+kt -importcert -noprompt -alias client -file "$TLSDIR/client.crt" \
+   -keystore "$TLSDIR/servertrust.p12" -storetype PKCS12 -storepass "$PW"
+kt -importcert -noprompt -alias server -file "$TLSDIR/server.crt" \
+   -keystore "$TLSDIR/clienttrust.p12" -storetype PKCS12 -storepass "$PW"
+
+# --- seed scratch logs & boot the isolated scratch coordinators ----------------
+LOG_PLAIN="$SCRATCH/plain.log"
+LOG_TLS="$SCRATCH/tls.log"
+printf '%s\n' '{:tx 1 :op "assert" :l "@sc-cold" :p "title" :r "cold-fold-canary" :ts "t" :by "selfcheck"}' > "$LOG_PLAIN"
+printf '%s\n' '{:tx 1 :op "assert" :l "@sc-tls" :p "title" :r "tls-canary" :ts "t" :by "selfcheck"}' > "$LOG_TLS"
+
+# plaintext scratch daemon: socket / fencing / lease / cold-fold
+FRAM_BIND=127.0.0.1 "$HERE/bin/fram-daemon" "$PORT_PLAIN" "$LOG_PLAIN" \
+  >"$SCRATCH/plain.out" 2>"$SCRATCH/plain.err" &
+DAEMON_PIDS+=("$!")
+
+# mTLS scratch daemon: engine-terminated mutual TLS admission
+FRAM_BIND=127.0.0.1 \
+FRAM_TLS_KEYSTORE="$TLSDIR/server.p12" \
+FRAM_TLS_TRUSTSTORE="$TLSDIR/servertrust.p12" \
+FRAM_TLS_PASS="$PW" \
+  "$HERE/bin/fram-daemon" "$PORT_TLS" "$LOG_TLS" \
+  >"$SCRATCH/tls.out" 2>"$SCRATCH/tls.err" &
+DAEMON_PIDS+=("$!")
+
+# wait for both listeners (JVM start); a daemon that never binds is a real failure.
+wait_port() {
+  local p="$1"
+  for _ in $(seq 1 120); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then exec 3>&- 3<&- 2>/dev/null; return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+if ! wait_port "$PORT_PLAIN"; then echo "  [FAIL] socket     scratch daemon never bound port $PORT_PLAIN" >&2; exit 1; fi
+if ! wait_port "$PORT_TLS";  then echo "  [FAIL] mtls       scratch mTLS daemon never bound port $PORT_TLS" >&2; exit 1; fi
+
+# --- run the probes (cwd = repo/package root so coord_daemon.clj load-files resolve) ---
+cd "$HERE"
+FRAM_SC_SCRATCH="$SCRATCH" \
+FRAM_SC_HERE="$HERE" \
+FRAM_SC_PORT_PLAIN="$PORT_PLAIN" \
+FRAM_SC_PORT_TLS="$PORT_TLS" \
+FRAM_SC_PORT_DEAD="$PORT_DEAD" \
+FRAM_SC_LOG_PLAIN="$LOG_PLAIN" \
+FRAM_SC_TLS_DIR="$TLSDIR" \
+FRAM_SC_TLS_PW="$PW" \
+  bb -cp "$HERE/out" "$HERE/bin/fram-selfcheck-probe.clj"
+exit $?
