@@ -18,13 +18,26 @@
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-rename-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)] (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false) (catch Exception _ true)))
-(def port (or (some #(when (port-free? %) %) [8200 8201 8202 8203]) 8200))
+(def port (or (some #(when (port-free? %) %) [8400 8401 8402 8403]) 8400))
 (boot-flat! flat)
 (def server (future (serve port)))
 (Thread/sleep 500)
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (println "daemon up:" (:facts (client port {:op :status})) "facts, port" port)
+
+;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —
+;; its modules are file-path-derived (`src.fram.schema`, not bare `schema`). The rename
+;; verb below is scope-match? SUFFIX-tolerant (production, unchanged) so bare "schema"
+;; still resolves there. But `bin/fram-render-code` requires the EXACT module identity
+;; (`@<module>#root`, no suffix tolerance — that's its contract, not a bug). Resolve the
+;; exact name from the daemon's own :index op (never hardcode a new prefix).
+(def index-resp (client port {:op :index}))
+(defn- resolve-module [bare]
+  (or (some #(when (or (= % bare) (str/ends-with? % (str "." bare))) %) (:modules index-resp))
+      bare))
+(def schema-module (resolve-module "schema"))
+(println "resolved module identity: schema ->" schema-module)
 
 ;; rename the schema-internal helper `replace!` -> `supersede-prior!` (a value def with
 ;; in-module references — exercises the capture-check + reference-follows-refers_to).
@@ -34,7 +47,7 @@
 (println (format "rename replace! -> supersede-prior!: %s  (%.1f ms)" (pr-str resp) ms))
 
 (def out (str (System/getProperty "java.io.tmpdir") "/edit-min-rename-out-" (System/nanoTime) ".bclj"))
-(proc/shell {:continue true :extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" flat "--out" out)
+(proc/shell {:continue true :extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" schema-module "--log" flat "--out" out)
 (def txt (when (.exists (io/file out)) (slurp out)))
 (def renamed (boolean (and txt (str/includes? txt "supersede-prior!") (not (str/includes? txt "replace!")))))
 ;; recompile

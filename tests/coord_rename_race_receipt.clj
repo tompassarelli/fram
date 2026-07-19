@@ -28,6 +28,23 @@
                "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
                "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
 
+;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —
+;; its modules are file-path-derived (`src.fram.schema`, not bare `schema`). `wrapper`
+;; below does an EXACT "@<module>#" prefix match (no suffix tolerance — that's its own
+;; contract), so it needs the module's exact identity. Resolve it from the store's own
+;; wrapper NAME facts (the same "@<module>#N" values `wrapper` reads), mirroring
+;; production's dot-segment-boundary rule (chartroom/src/resolve.clj scope-match?)
+;; instead of hardcoding a new prefix.
+(defn store-modules [st]
+  (let [NAME (c/value-id st "name")]
+    (into #{} (keep (fn [cid]
+                       (let [nm (c/literal st (:r (c/fact-of st cid)))]
+                         (when (string? nm) (second (re-matches #"@([^#]+)#.*" nm)))))
+                     (c/by-p st NAME)))))
+(defn resolve-module [st bare]
+  (let [mods (store-modules st)]
+    (or (some #(when (or (= % bare) (str/ends-with? % (str "." bare))) %) mods) bare)))
+
 (defn vof [st e] (let [Vp (c/value-id st "v")] (some->> (c/by-lp st e Vp) first (c/fact-of st) :r (c/literal st))))
 (defn forms-of [st wrap]
   (->> (c/by-l st wrap)
@@ -43,15 +60,19 @@
          (keep (fn [cid] (let [nm (c/literal st (:r (c/fact-of st cid)))] (when (and (string? nm) (str/starts-with? nm pfx)) (:l (c/fact-of st cid))))))
          (filter (fn [e] (let [fs (forms-of st e)] (and (seq fs) (= "beagle-file" (vof st (:child (first fs)))))))) first)))
 (defn anchor-name [st]
-  (let [wrap (wrapper st "schema") pre (forms-of st wrap)
+  (let [wrap (wrapper st (resolve-module st "schema")) pre (forms-of st wrap)
         ai (first (filter (fn [i] (and (< (inc i) (count pre)) (#{"def" "defn" "defn-" "def-" "defonce"} (head-of st (:child (nth pre i)))) (def-name st (:child (nth pre i))))) (range (count pre))))]
     (def-name st (:child (nth pre ai)))))
 
-;; cold render schema off `log`, return the line for the new def (or nil)
+;; cold render schema off `log`, return the line for the new def (or nil). bin/fram-render-code
+;; requires the EXACT module identity (no suffix tolerance), so resolve it fresh off `log`
+;; itself (a cold boot, matching the CLI's own cold path — never assumes the base corpus's
+;; resolution still applies once `log` has been mutated by the rename/insert ops above).
 (defn cold-render-line [log marker]
-  (let [out (str "/tmp/rename-race-" (System/nanoTime) ".bclj")]
+  (let [out (str "/tmp/rename-race-" (System/nanoTime) ".bclj")
+        module (resolve-module (:store (migrate-flat->co log)) "schema")]
     (proc/shell {:continue true :extra-env (merge (into {} (System/getenv)) base-env) :err :string}
-                "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" log "--out" out)
+                "bb" "-cp" "out" "bin/fram-render-code" module "--log" log "--out" out)
     (let [txt (when (.exists (io/file out)) (slurp out))]
       {:txt txt :line (some #(when (str/includes? % marker) %) (some-> txt str/split-lines))})))
 
@@ -61,8 +82,15 @@
     (boot-flat! log)
     (let [st (:store @co)
           anc (anchor-name st)
+          ;; rename's :module is scope-match? SUFFIX-tolerant (production, proven fine on
+          ;; bare "schema" — same as the identity/cold-restart/totality receipts). But
+          ;; insert-form MINTS a wrapper keyed by the literal :module string on a suffix
+          ;; match (same root cause as the F1 upsert-form bug: a divergent bare-named
+          ;; wrapper gets created alongside the real src.fram.schema one), which orphans
+          ;; the new def from cold render. Give insert-form the exact resolved identity;
+          ;; leave rename's bare "schema" alone (untouched production path, already green).
           mk-rename #(handle {:op :edit-min :spec {:op "rename" :module "schema" :old "replace!" :new "supersede-prior!"}})
-          mk-insert #(handle {:op :edit-min :spec {:op "insert-form" :module "schema" :after anc
+          mk-insert #(handle {:op :edit-min :spec {:op "insert-form" :module (resolve-module st "schema") :after anc
                                                    :datum (list 'def 'race_uses (list 'replace! 1))}})]
       (if concurrent?
         (let [fa (future (mk-rename)) fb (future (mk-insert))] [@fa @fb])
