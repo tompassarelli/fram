@@ -575,8 +575,17 @@
 ;; evaluator can safely keep this exact facts/index/version snapshot after dlock
 ;; is released.
 (defn- capture-query-snapshot! []
-  (let [c (warm!)]
-    {:facts (:facts c) :idx (:idx c) :version (:version c) :co @co}))
+  (let [c (warm!)
+        ;; The coordinator map is persistent, but its :store member is an atom.
+        ;; Dereference that production atom exactly once while dlock is held, then
+        ;; wrap the persistent Store value in a query-private handle. Historical
+        ;; evaluation may use the existing coord/store APIs through this handle,
+        ;; but can never observe a later mutation of the production store atom.
+        store-value @(:store @co)
+        history-store (atom store-value)]
+    {:facts (:facts c) :idx (:idx c) :version (:version c)
+     :history-co {:store history-store}
+     :history-store history-store}))
 
 (defn- query-abort-response [t version engine]
   (let [data (ex-data t)
@@ -614,8 +623,8 @@
                     :as-of (let [s (:seq req)]
                              (if (nil? s)
                                {:error [":as-of needs :seq"]}
-                               (let [co0 (:co snapshot)
-                                     st (:store co0)
+                               (let [co0 (:history-co snapshot)
+                                     st (:history-store snapshot)
                                      cids (live-as-of co0 s)
                                      facts (vec (keep (fn [cid]
                                                         (query-check)
