@@ -4,12 +4,33 @@
             [fram.rt :as rt]
             [clojure.string :as str]))
 
+(def ^:dynamic *query-control* nil)
+
+(defn- query-check []
+  (if (nil? *query-control*)
+    nil
+    (let [steps (.incrementAndGet (:steps *query-control*))
+          now (System/nanoTime)
+          cancelled (deref (:cancelled *query-control*))
+          code (cond
+                 (some? cancelled) :query-cancelled
+                 (> steps (:max-steps *query-control*)) :query-work-limit
+                 (>= now (:deadline-ns *query-control*)) :query-time-limit
+                 :else nil)]
+      (if (nil? code)
+        nil
+        (throw (ex-info (str "query evaluation stopped: " (name code))
+                        {:type :fram-query-abort :code code :reason cancelled
+                         :steps steps :max-steps (:max-steps *query-control*)
+                         :timeout-ms (:timeout-ms *query-control*)}))))))
+
 (defn facts->edb [facts]
   (loop [cs facts
    i 0
    fact #{}
    fact-id #{}]
-  (if (empty? cs) {"fact" fact "fact-id" fact-id} (let [c (first cs)]
+  (if (empty? cs) {"fact" fact "fact-id" fact-id} (let [_ (query-check)
+   c (first cs)]
   (recur (rest cs) (+ i 1) (conj fact [(:l c) (:p c) (:r c)]) (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
 
 (def rel-aliases {"triple" "fact"})

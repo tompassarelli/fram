@@ -15,7 +15,7 @@
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
          '[fram.store :as c] '[fram.schema :as s]
          '[fram.kernel :as ck]
-         '[fram.fold :as fold] '[fram.query :as q] '[fram.rt])
+         '[fram.fold :as fold] '[fram.query :as q] '[fram.datalog :as d] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
         '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
@@ -190,6 +190,21 @@
 ;; over-nested input cheaply (a count of opening delimiters) BEFORE handing it to
 ;; the reader, so a deep-nest payload returns a clean {:error} instead of an Error.
 (def ^:const max-edn-depth 200)
+
+;; Every daemon query has hard server-side limits.  Request fields may LOWER a
+;; limit for a caller/test, never raise the daemon's ceiling.
+(defn- positive-env-long [name fallback]
+  (let [n (some-> (System/getenv name) parse-long)]
+    (if (and n (pos? n)) n fallback)))
+(def query-timeout-ms (positive-env-long "FRAM_QUERY_TIMEOUT_MS" 5000))
+(def query-max-steps (positive-env-long "FRAM_QUERY_MAX_STEPS" 10000000))
+(def query-max-rows (min q/max-results (positive-env-long "FRAM_QUERY_MAX_ROWS" q/max-results)))
+(def query-max-response-bytes
+  (positive-env-long "FRAM_QUERY_MAX_RESPONSE_BYTES" (* 64 1024 1024)))
+(def active-queries (atom 0))
+(def active-query-monitors (atom 0))
+(def query-stops (atom {:query-cancelled 0 :query-work-limit 0
+                        :query-time-limit 0 :query-row-limit 0}))
 
 (defn- stamp [f] (let [fi (java.io.File. (str f))] (str (.lastModified fi) ":" (.length fi))))
 
@@ -396,16 +411,19 @@
 ;; provably a regrouping of the scan's own tuples: NO int<->string translation, hence
 ;; no silent-mistranslation hazard. q/run stays the untouched ORACLE; anything not of
 ;; the simple shape (recursion, negation, derived rels, unbound p/r) falls back to it.
-;; A by-[l p] index is carried ALONGSIDE by-[p r]: it scopes the delta to the
-;; (l,p) group a write touches, so a single-valued assert that SUPERSEDES the prior
-;; value can drop the victim without scanning the corpus (see apply-commit-delta!).
+;; Positional by-l/by-p/by-r indexes plus by-[l p]/by-[p r] compound indexes let
+;; every grounded literal probe its narrowest bucket. by-[l p] also scopes a write
+;; delta, so a superseding assert drops its victim without scanning the corpus.
 (defn- idx-build [facts]
   (reduce (fn [acc c]
             (let [t [(:l c) (:p c) (:r c)]]
               (-> acc (update :triples conj t)
+                  (update-in [:by-l (:l c)] (fnil conj #{}) t)
+                  (update-in [:by-p (:p c)] (fnil conj #{}) t)
+                  (update-in [:by-r (:r c)] (fnil conj #{}) t)
                   (update-in [:by-pr [(:p c) (:r c)]] (fnil conj #{}) t)
                   (update-in [:by-lp [(:l c) (:p c)]] (fnil conj #{}) t))))
-          {:triples #{} :by-pr {} :by-lp {}} facts))
+          {:triples #{} :by-l {} :by-p {} :by-r {} :by-pr {} :by-lp {}} facts))
 ;; Drop a key whose bucket emptied (DON'T leave it mapped to #{}) — idx-build never
 ;; emits an empty-set entry, it just omits the key, so the incremental index must do
 ;; the same or its REPRESENTATION drifts from a fresh fold (warm-check :by-pr-eq
@@ -413,40 +431,80 @@
 ;; lit-candidates treats #{} and an absent key identically, but the tripwire fires).
 (defn- bucket-update [m k v]
   (let [nb (disj (get m k #{}) v)] (if (empty? nb) (dissoc m k) (assoc m k nb))))
-;; O(1) delta maintenance on the triple set + both indexes (sets => add/remove + dedup).
+;; O(1) delta maintenance per bucket (sets => add/remove + dedup).
 (defn- idx-add [idx t]
   (-> idx (update :triples conj t)
+      (update-in [:by-l (nth t 0)] (fnil conj #{}) t)
+      (update-in [:by-p (nth t 1)] (fnil conj #{}) t)
+      (update-in [:by-r (nth t 2)] (fnil conj #{}) t)
       (update-in [:by-pr [(nth t 1) (nth t 2)]] (fnil conj #{}) t)
       (update-in [:by-lp [(nth t 0) (nth t 1)]] (fnil conj #{}) t)))
 (defn- idx-del [idx t]
   (-> idx (update :triples disj t)
+      (update :by-l (fn [m] (bucket-update m (nth t 0) t)))
+      (update :by-p (fn [m] (bucket-update m (nth t 1) t)))
+      (update :by-r (fn [m] (bucket-update m (nth t 2) t)))
       (update :by-pr (fn [m] (bucket-update m [(nth t 1) (nth t 2)] t)))
       (update :by-lp (fn [m] (bucket-update m [(nth t 0) (nth t 1)] t)))))
 
 (defn- var-term? [t] (and (map? t) (contains? t :var)))
+(declare query-check)
 (defn- unify1 [arg val s]
   (if (var-term? arg)
     (let [k (:var arg) b (get s k ::none)]
       (if (= b ::none) (assoc s k val) (if (= b val) s nil)))
     (if (= arg val) s nil)))
 (defn- unify-tuple [args tup s]
+  (query-check)
   (if (not= (count args) (count tup)) nil
     (loop [a args t tup acc s]
       (cond (nil? acc) nil (empty? a) acc
             :else (recur (rest a) (rest t) (unify1 (first a) (first t) acc))))))
 (defn- resolve-arg [arg s] (if (var-term? arg) (get s (:var arg) ::unbound) arg))
-;; candidate tuples for a "triple" literal: by-pr probe when BOTH p,r ground, else scan.
+;; Choose the narrowest exact bucket made available by the currently-ground
+;; positions.  A subject-ground lookup is therefore O(subject facts), not a full
+;; corpus scan; joins acquire by-lp/by-pr selectivity as substitutions accumulate.
 (defn- lit-candidates [idx litt s]
   (let [args (:args litt)
-        p (resolve-arg (nth args 1) s) r (resolve-arg (nth args 2) s)]
-    (if (and (not= p ::unbound) (not= r ::unbound))
-      (get (:by-pr idx) [p r] [])
-      (:triples idx))))
+        l (resolve-arg (nth args 0) s)
+        p (resolve-arg (nth args 1) s)
+        r (resolve-arg (nth args 2) s)
+        bound? #(not= % ::unbound)
+        buckets (cond-> []
+                  (and (bound? l) (bound? p)) (conj (get (:by-lp idx) [l p] #{}))
+                  (and (bound? p) (bound? r)) (conj (get (:by-pr idx) [p r] #{}))
+                  (bound? l) (conj (get (:by-l idx) l #{}))
+                  (bound? p) (conj (get (:by-p idx) p #{}))
+                  (bound? r) (conj (get (:by-r idx) r #{})))]
+    (if (seq buckets) (apply min-key count buckets) (:triples idx))))
+(defn- conj-query-row [acc row]
+  (if (nil? row)
+    acc
+    (let [max-rows (or (:max-rows d/*query-control*) query-max-rows)]
+      (when (>= (count acc) max-rows)
+        (throw (ex-info "query evaluation stopped: query-row-limit"
+                        {:type :fram-query-abort :code :query-row-limit
+                         :rows (count acc) :max-rows max-rows})))
+      (conj acc row))))
+(defn- query-check []
+  (let [control d/*query-control*]
+    (when control
+      (let [steps (.incrementAndGet (:steps control))
+            now (System/nanoTime)
+            cancelled @(:cancelled control)
+            code (cond
+                   cancelled :query-cancelled
+                   (> steps (:max-steps control)) :query-work-limit
+                   (>= now (:deadline-ns control)) :query-time-limit)]
+        (when code
+          (throw (ex-info (str "query evaluation stopped: " (name code))
+                          {:type :fram-query-abort :code code :reason cancelled
+                           :steps steps :max-steps (:max-steps control)
+                           :timeout-ms (:timeout-ms control)})))))))
 (defn- eval-body-idx [idx body]
   (reduce (fn [substs litt]
             (reduce (fn [acc s]
-                      (reduce (fn [a tup] (let [s2 (unify-tuple (:args litt) tup s)]
-                                            (if s2 (conj a s2) a)))
+                      (reduce (fn [a tup] (conj-query-row a (unify-tuple (:args litt) tup s)))
                               acc (lit-candidates idx litt s)))
                     [] substs))
           [{}] body))
@@ -472,7 +530,8 @@
 ;; path): whole-rebuild on a cold/divergent version, then O(1) incremental delta-apply
 ;; on each in-lockstep commit — so a write no longer forces an O(corpus) reprojection
 ;; (the swarm write-ceiling). :facts is a SET of Facts (O(1) add/remove); :idx is the
-;; triple-set + by-[p r]; :index (kernel, for :validate) is lazy/whole, off the hot path.
+;; triple-set + positional/compound buckets; :index (kernel, for :validate) is
+;; lazy/whole, off the hot path.
 (defn warm! []
   (let [v (current-seq @co)]
     (when (not= v (:version @cache))
@@ -484,6 +543,114 @@
     (or (:index c) (let [ix (ck/build-index (vec (:facts c)))] (swap! cache assoc :index ix) ix))))
 (defn warm-facts [] (vec (:facts (warm!))))
 (defn warm-idx [] (:idx (warm!)))
+
+(def ^:dynamic *request-query-control* nil)
+
+(defn- query-request? [req]
+  (and (map? req)
+       (or (#{:query :query-page} (:op req))
+           (and (= :as-of (:op req)) (:query req)))))
+
+(defn- lower-query-limit [req key ceiling]
+  (let [n (get req key)]
+    (if (and (integer? n) (pos? n)) (min n ceiling) ceiling)))
+
+(defn- new-query-control [req]
+  (let [timeout (lower-query-limit req :query-timeout-ms query-timeout-ms)]
+    {:cancelled (atom nil)
+     :done (atom false)
+     :steps (java.util.concurrent.atomic.AtomicLong. 0)
+     :timeout-ms timeout
+     :deadline-ns (+ (System/nanoTime) (* 1000000 timeout))
+     :max-steps (lower-query-limit req :query-max-steps query-max-steps)
+     :max-rows (lower-query-limit req :query-max-rows query-max-rows)
+     :max-response-bytes (lower-query-limit req :query-max-response-bytes
+                                            query-max-response-bytes)}))
+
+(defn- cancel-query! [control reason]
+  (compare-and-set! (:cancelled control) nil reason))
+
+;; Capture one persistent cache root while reload/write exclusion is held.  Every
+;; member is a Clojure immutable value; later cache swaps create new roots, so the
+;; evaluator can safely keep this exact facts/index/version snapshot after dlock
+;; is released.
+(defn- capture-query-snapshot! []
+  (let [c (warm!)]
+    {:facts (:facts c) :idx (:idx c) :version (:version c) :co @co}))
+
+(defn- query-abort-response [t version engine]
+  (let [data (ex-data t)
+        code (:code data)]
+    (swap! query-stops update code (fnil inc 0))
+    (merge {:error [(or (.getMessage t) (name code))]
+            :code code :version version :engine engine}
+           (select-keys data [:reason :steps :max-steps :timeout-ms :rows :max-rows]))))
+
+(defn- enforce-result-row-limit [res control]
+  (let [rows (:ok res) max-rows (:max-rows control)]
+    (if (and (vector? rows) (> (count rows) max-rows))
+      (throw (ex-info "query result exceeded row limit"
+                      {:type :fram-query-abort :code :query-row-limit
+                       :rows (count rows) :max-rows max-rows}))
+      res)))
+
+(defn- execute-query [req snapshot]
+  (let [control (or *request-query-control* (new-query-control req))
+        use-idx (and (= :query (:op req))
+                     (not (:scan req))
+                     (simple-query? (:query req)))
+        engine (if use-idx "index" "scan")
+        version (:version snapshot)]
+    (swap! active-queries inc)
+    (try
+      (binding [d/*query-control* control
+                q/*query-control* control]
+        (let [res (case (:op req)
+                    :query (if use-idx
+                             (idx-run (:idx snapshot) (:query req))
+                             (q/run (vec (:facts snapshot)) (:query req)))
+                    :query-page (q/run-page (vec (:facts snapshot)) (:query req)
+                                           (:limit req) (:after req))
+                    :as-of (let [s (:seq req)]
+                             (if (nil? s)
+                               {:error [":as-of needs :seq"]}
+                               (let [co0 (:co snapshot)
+                                     st (:store co0)
+                                     cids (live-as-of co0 s)
+                                     facts (vec (keep (fn [cid]
+                                                        (query-check)
+                                                        (when-let [t (fact->triple st cid)]
+                                                          (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                                                      cids))]
+                                 (assoc (q/run facts (:query req)) :as-of s)))))
+              bounded (enforce-result-row-limit res control)
+              stamped (assoc bounded :version version :engine engine)
+              utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
+              edn-bytes (utf8-size (pr-str stamped))
+              json-bytes (utf8-size (fram.rt/to-json stamped))
+              max-bytes (if (= :query-page (:op req))
+                          q/max-page-wire-bytes
+                          (:max-response-bytes control))]
+          (if (and (<= edn-bytes max-bytes)
+                   (<= json-bytes max-bytes))
+            stamped
+            (if (= :query-page (:op req))
+              {:error ["query page response exceeded its final wire bound"]
+               :code :query-page-response-too-large
+               :max-bytes max-bytes
+               :version version :engine engine}
+              {:error ["query response exceeded its final wire bound"]
+               :code :query-response-too-large
+               :max-bytes max-bytes
+               :edn-bytes edn-bytes :json-bytes json-bytes
+               :version version :engine engine}))))
+      (catch clojure.lang.ExceptionInfo t
+        (if (= :fram-query-abort (:type (ex-data t)))
+          (query-abort-response t version engine)
+          (throw t)))
+      (finally
+        (reset! (:done control) true)
+        (swap! active-queries dec)))))
 ;; apply a just-committed (te p) edit to the warm cache IFF the cache was current as of
 ;; the pre-commit seq; else invalidate so the next warm! whole-rebuilds (correctness
 ;; floor — incremental only when provably in lockstep). We reconcile the whole (te,p)
@@ -2068,6 +2235,26 @@
   ;; is a no-op in v2-log mode (the code daemon, where :edit-min lives), so skipping it here is
   ;; safe; the commit still serializes under dlock and is OCC-checked per (te,p) at commit time.
   (cond
+    ;; Query fencing covers only reload/fence validation and capture of one
+    ;; immutable cache root. Evaluation happens after releasing dlock, so an
+    ;; expensive or abandoned read can never block writes, leases, or status.
+    (and (= :for-log (:op req)) (query-request? (:request req)))
+    (let [inner (:request req)
+          captured (locking dlock
+                     (maybe-reload!)
+                     (if-let [reject (log-fence-rejection (:expected-log req))]
+                       {:reject reject}
+                       {:snapshot (capture-query-snapshot!)}))]
+      (if-let [reject (:reject captured)]
+        reject
+        (execute-query inner (:snapshot captured))))
+
+    (query-request? req)
+    (let [snapshot (locking dlock
+                     (maybe-reload!)
+                     (capture-query-snapshot!))]
+      (execute-query req snapshot))
+
     ;; Protocol-level corpus fencing. Normal requests validate and execute while
     ;; this outer dlock remains held; the recursive legacy handler may re-enter
     ;; the JVM monitor, but cannot release the fence between check and mutation.
@@ -2190,37 +2377,12 @@
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
-      ;; AST/Datalog query over the WARM in-memory graph — the read surface the cold
-      ;; CLI/MCP path lacked. Runs fram.query/run (validate + fixpoint) against the
-      ;; version-cached facts vec, so a callers-of/blast-radius/bridge query never
-      ;; pays the ~3.8s log fold. Result is q/run's {:ok tuples} | {:error msgs}
-      ;; envelope, stamped with the snapshot version the answer reflects.
-      :query    (let [qy (:query req)
-                      use-idx (and (not (:scan req)) (simple-query? qy))
-                      res (if use-idx (idx-run (warm-idx) qy) (q/run (warm-facts) qy))]
-                  (assoc res :version (current-seq @co) :engine (if use-idx "index" "scan")))
-      ;; Internal mechanical-consumer surface. Unlike the AI-facing :query op,
-      ;; this always uses the canonical scan engine and returns a deterministic,
-      ;; cursor-addressed page. q/run-page bounds rows and reserves metadata room;
-      ;; this final check measures BOTH supported wire encodings after stamping
-      ;; metadata, so neither EDN nor opt-in JSON can exceed the contract.
-      :query-page
-      (let [res (q/run-page (warm-facts) (:query req) (:limit req) (:after req))
-            stamped (assoc res :version (current-seq @co) :engine "scan")
-            utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
-            edn-bytes (utf8-size (pr-str stamped))
-            json-bytes (utf8-size (fram.rt/to-json stamped))]
-        (if (and (<= edn-bytes q/max-page-wire-bytes)
-                 (<= json-bytes q/max-page-wire-bytes))
-          stamped
-          {:error ["query page response exceeded its final wire bound"]
-           :code :query-page-response-too-large
-           :max-bytes q/max-page-wire-bytes
-           :version (current-seq @co)
-           :engine "scan"}))
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
       :warm-check (let [inc (warm!) fresh (client-view-facts @co) fidx (idx-build fresh)]
                     {:consistent (and (= (:triples (:idx inc)) (:triples fidx))
+                                      (= (:by-l (:idx inc)) (:by-l fidx))
+                                      (= (:by-p (:idx inc)) (:by-p fidx))
+                                      (= (:by-r (:idx inc)) (:by-r fidx))
                                       (= (:by-pr (:idx inc)) (:by-pr fidx))
                                       (= (:by-lp (:idx inc)) (:by-lp fidx))
                                       (= (:facts inc) (set fresh)))
@@ -2232,6 +2394,8 @@
       ;; this id are out of rollback support for generation-managed corpora.
       :status   {:version (current-seq @co) :facts (count (c/current-facts (:store @co)))
                  :log (or @flat-log (:log @co)) :boot @last-boot
+                 :queries {:active @active-queries :monitors @active-query-monitors
+                           :stops @query-stops}
                  :rollback_floor fram.rt/rollback-floor}
       ;; :facts — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
@@ -2415,11 +2579,14 @@
 ;; every one of this request's appends is fsynced (durability-before-ack holds);
 ;; a failed append/fsync rethrows here and surfaces as the same {:error} the old
 ;; in-lock fsync failure did. Reads collect no tickets and pass straight through.
-(defn handle [req]
-  (binding [*durable-tickets* (atom [])]
-    (let [resp (handle* req)]
-      (doseq [t @*durable-tickets*] (await-durable! t))
-      resp)))
+(defn handle
+  ([req] (handle req nil))
+  ([req query-control]
+   (binding [*durable-tickets* (atom [])
+             *request-query-control* query-control]
+     (let [resp (handle* req)]
+       (doseq [t @*durable-tickets*] (await-durable! t))
+       resp))))
 
 ;; ---- socket server (verbatim shape from the proven coord.clj) ---------------
 ;; Hardened (findings #2/#5/#19/#20): every accepted socket gets a read timeout
@@ -2443,6 +2610,29 @@
   ([^BufferedWriter w resp] (try-reply w resp nil))
   ([^BufferedWriter w resp fmt]
    (try (.write w (serialize-resp fmt resp)) (.newLine w) (.flush w) (catch Throwable _ nil))))
+
+(defn- monitor-query-disconnect [^Socket s ^BufferedReader r control]
+  ;; serve-conn has completely parsed the protocol's single request line before
+  ;; starting this future. From this point until close, this monitor is the sole
+  ;; input-stream owner; the request handler never reads from the socket.
+  (swap! active-query-monitors inc)
+  (future
+    (try
+      (.setSoTimeout s 100)
+      (loop []
+        (when-not @(:done control)
+          (let [again? (try
+                         (let [ch (.read r)]
+                           (if (= ch -1)
+                             (cancel-query! control :client-disconnected)
+                             ;; One request per connection is the protocol. Extra input is a
+                             ;; protocol violation and also a reliable signal to stop work.
+                             (cancel-query! control :unexpected-client-input))
+                           false)
+                         (catch java.net.SocketTimeoutException _ true))]
+            (when again? (recur)))))
+      (catch Throwable _ nil)
+      (finally (swap! active-query-monitors dec)))))
 
 (defn serve-conn [^Socket s]
   (try
@@ -2490,7 +2680,19 @@
                   (loop [] (when (read-line-bounded r max-line-bytes) (recur))))
 
               :else
-              (let [resp (handle req)] (try-reply w resp (:fmt req))))))
+              (let [actual (if (= :for-log (:op req)) inner req)
+                    query? (query-request? actual)
+                    control (when query? (new-query-control actual))
+                    _ (when query? (monitor-query-disconnect s r control))]
+                (try
+                  (let [resp (if control (handle req control) (handle req))]
+                    (try-reply w resp (:fmt req)))
+                  (finally
+                    ;; The monitor owns input after request parse and has a 100ms
+                    ;; read timeout. Marking done lets it retire by itself; do not
+                    ;; future-cancel it (cancelling before scheduling could skip
+                    ;; its finally and leak the monitor count).
+                    (when control (reset! (:done control) true))))))))
         ;; StackOverflowError is an Error (not Exception); catching Throwable here
         ;; keeps a deep-nest / malformed line from taking down the conn thread.
         (catch java.net.SocketTimeoutException _ nil)   ; slow client: just close

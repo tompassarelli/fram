@@ -30,6 +30,34 @@
 (require fram.store :as c)
 (require fram.types :as t)
 
+;; A coordinator request binds one control map around query evaluation.  The
+;; evaluator remains API-compatible and unbounded for callers that do not bind a
+;; control.  Bound requests cooperatively stop inside the actual join/index hot
+;; loops; a socket timeout without these checks would only abandon the reply while
+;; the work kept consuming a core.
+(def ^:dynamic *query-control* :- Any nil)
+
+(defn- query-check [] :- Any
+  (if (nil? *query-control*)
+    nil
+    (let [steps (.incrementAndGet (:steps *query-control*))
+          now (System/nanoTime)
+          cancelled (deref (:cancelled *query-control*))
+          code (cond
+                 [(some? cancelled) :query-cancelled]
+                 [(> steps (:max-steps *query-control*)) :query-work-limit]
+                 [(>= now (:deadline-ns *query-control*)) :query-time-limit]
+                 [:else nil])]
+      (if (nil? code)
+        nil
+        (throw (ex-info (str "query evaluation stopped: " (name code))
+                        {:type :fram-query-abort
+                         :code code
+                         :reason cancelled
+                         :steps steps
+                         :max-steps (:max-steps *query-control*)
+                         :timeout-ms (:timeout-ms *query-control*)}))))))
+
 ;; --- rule/term constructors (rules are plain data) --------------------------
 (defn v [name :- Keyword] :- (Map Keyword Any) {:var name})                 ; a logic variable (name is a keyword id, e.g. :x)
 (defn lit [rel :- String args :- (Vec Any)] :- (Map Keyword Any) {:rel rel :args args :neg false})
@@ -61,6 +89,7 @@
     (if (= term val) subst nil)))
 
 (defn- unify-args [args :- (Vec Any) tuple :- (Vec Any) subst :- (Map String Any)] :- (U (Map String Any) Nil)   ; -> subst | nil
+  (query-check)
   (if (not (= (count args) (count tuple)))
     nil
     (loop [a args t tuple s subst]
@@ -220,6 +249,7 @@
 
 ;; add one tuple to the index at every one of its positions
 (defn- index-tuple [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String tup :- (Vec Any)] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (query-check)
   (loop [i 0 acc idx]
     (if (>= i (count tup))
       acc

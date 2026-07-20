@@ -2,6 +2,29 @@
   (:require [fram.store :as c]
             [fram.types :as t]))
 
+(def ^:dynamic *query-control* nil)
+
+(defn- query-check []
+  (if (nil? *query-control*)
+    nil
+    (let [steps (.incrementAndGet (:steps *query-control*))
+          now (System/nanoTime)
+          cancelled (deref (:cancelled *query-control*))
+          code (cond
+                 (some? cancelled) :query-cancelled
+                 (> steps (:max-steps *query-control*)) :query-work-limit
+                 (>= now (:deadline-ns *query-control*)) :query-time-limit
+                 :else nil)]
+      (if (nil? code)
+        nil
+        (throw (ex-info (str "query evaluation stopped: " (name code))
+                        {:type :fram-query-abort
+                         :code code
+                         :reason cancelled
+                         :steps steps
+                         :max-steps (:max-steps *query-control*)
+                         :timeout-ms (:timeout-ms *query-control*)}))))))
+
 (defn v [name]
   {:var name})
 
@@ -30,6 +53,7 @@
   (if (contains? subst n) (if (= (get subst n) val) subst nil) (assoc subst n val))) (if (= term val) subst nil)))
 
 (defn- unify-args [args tuple subst]
+  (query-check)
   (if (not (= (count args) (count tuple))) nil (loop [a args
    t tuple
    s subst]
@@ -107,6 +131,7 @@
   (recur (db-merge db nw rels) nw))))))
 
 (defn- index-tuple [idx ^String rel tup]
+  (query-check)
   (loop [i 0
    acc idx]
   (if (>= i (count tup)) acc (let [val (nth tup i)
