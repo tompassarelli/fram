@@ -43,15 +43,17 @@
 (def w1 (client port {:op :assert :te "@dropin-subj" :p "title" :r "Drop-in test" :base v0}))
 ;; a DOMAIN write to a reserved engine predicate must be rejected (would collide
 ;; with the reified schema layer)
+(def before-reserved (slurp flat))
 (def reserved-rej (client port {:op :assert :te "@dropin-subj" :p "name" :r "collide" :base v0}))
+(def reserved-left-log-byte-identical (= before-reserved (slurp flat)))
 (def after-write-has (contains? (domain-triples (:store @co)) ["@dropin-subj" "title" "Drop-in test"]))
 (def flat-has-write (contains? (flat-set flat) ["@dropin-subj" "title" "Drop-in test"]))
 
 ;; --- EXTERNAL edit: append a flat line out-of-band (simulating import/capture) -
 (with-open [os (java.io.FileOutputStream. flat true)]
   (.write os (.getBytes (str (pr-str {:tx 999999 :op "assert" :l "@ext-subj" :p "title" :r "External import" :ts "t" :by "import"}) "\n") "UTF-8")))
-;; next op triggers maybe-reload! -> absorbs the external edit
-(def status (client port {:op :status}))
+;; next freshness-sensitive read triggers maybe-reload! -> absorbs the external edit
+(def status (client port {:op :resolved :te "@ext-subj" :p "title"}))
 (def absorbed (contains? (domain-triples (:store @co)) ["@ext-subj" "title" "External import"]))
 (def daemon-write-survived (contains? (domain-triples (:store @co)) ["@dropin-subj" "title" "Drop-in test"]))
 
@@ -78,7 +80,7 @@
 ;; so an EDN-valid-but-incomplete tail line is a realistic standing condition).
 (with-open [os (java.io.FileOutputStream. flat true)]
   (.write os (.getBytes (str (pr-str {:tx 7777777 :op "assert" :l "@torn-tail" :p "title"}) "\n") "UTF-8")))
-(client port {:op :status})    ; trigger maybe-reload! over the torn tail
+(client port {:op :resolved :te "@torn-tail" :p "title"}) ; trigger maybe-reload! over the torn tail
 (def fresh-with-torn-tail (= (current-seq @co) (:version (fold/fold (fram.rt/read-log flat)))))
 
 (def checks
@@ -96,7 +98,7 @@
    [":version stays FRESH with a torn tail (no false STALE)" fresh-with-torn-tail]
    ["write to a reserved engine predicate is rejected" (some? (:reject reserved-rej))]
    ["reserved-pred reject did NOT pollute the flat log"
-    (not (some #(str/includes? % "\"name\"") (remove str/blank? (str/split-lines (slurp flat)))))]])
+    reserved-left-log-byte-identical]])
 
 (println "boot live:" (count (flat-set flat)))
 (let [fails (remove second checks)]

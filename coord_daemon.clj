@@ -203,6 +203,9 @@
   (positive-env-long "FRAM_QUERY_MAX_RESPONSE_BYTES" (* 64 1024 1024)))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
+(def active-reloads (atom 0))
+(def reload-retries (atom 0))
+(def reload-generation (atom 0))
 (def query-stops (atom {:query-cancelled 0 :query-work-limit 0
                         :query-time-limit 0 :query-row-limit 0}))
 
@@ -344,6 +347,7 @@
 ;; + render markers (materialized over `co` for :callers) invisible to :query, the
 ;; :warm-check tripwire, and the read view — the corpus :query sees is exactly the AST
 ;; facts the flat log ingested, identical whether or not refers_to has been materialized.
+(declare query-check)
 (defn- fact->triple [st cid]
   (let [cl (c/fact-of st cid) pstr (c/literal st (:p cl))]
     (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
@@ -379,19 +383,60 @@
 ;; recompute schema-view from a flat log's schema-writable lines (keyed-latest via the SAME
 ;; fold the cold path uses, so the facts are byte-identical to the cold projection). Called
 ;; at boot + on external reload, when the log file is quiescent (safe to re-read).
+(defn- schema-view-from-flat [flat]
+  (->> (fram.rt/read-log flat)
+       (filter #(schema-writable (:p %)))
+       vec fold/fold :facts
+       (reduce (fn [m cl] (assoc m [(:l cl) (:p cl)] cl)) {})))
+
 (defn- seed-schema-view! [flat]
-  (reset! schema-view
-    (->> (fram.rt/read-log flat)
-         (filter #(schema-writable (:p %)))
-         vec fold/fold :facts
-         (reduce (fn [m cl] (assoc m [(:l cl) (:p cl)] cl)) {}))))
+  (reset! schema-view (schema-view-from-flat flat)))
 
 ;; the CLIENT read view: DOMAIN facts (store) + user-declared SCHEMA facts (log). This is
 ;; what the daemon serves to CLI reads (:facts op, warm cache, :query/show). It is NOT the
 ;; reconcile/materialization view (that stays domain-pure, reified->facts). Every schema
 ;; fact here is hidden from the store projection, so there is no double-count.
+(defn- client-view-facts-from [c0 schema-root]
+  (into (reified->facts c0) (vals schema-root)))
+
 (defn client-view-facts [c0]
-  (into (reified->facts c0) (vals @schema-view)))
+  (client-view-facts-from c0 @schema-view))
+
+;; Query cache misses project from the immutable Store value captured under dlock,
+;; never from the live store atom.  Keep this projection cooperative: unlike
+;; c/current-facts, the direct persistent-map walk can poll timeout/disconnect/work
+;; control at every historical fact, including superseded facts.  Name resolution is
+;; the pure equivalent of schema/name-of over that same Store root.
+(defn- store-root-name-of [store-root subj]
+  (let [name-pid (get (:val-intern store-root) "name")
+        cids (when name-pid (get (:idx-by-lp store-root) [subj name-pid] []))]
+    (some (fn [cid]
+            (when-not (contains? (:superseded store-root) cid)
+              (let [rid (get-in store-root [:facts cid :r])]
+                (get (:values store-root) rid))))
+          cids)))
+
+(defn- store-root-fact->triple [store-root cl]
+  (let [pstr (get (:values store-root) (:p cl))]
+    (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
+      [(store-root-name-of store-root (:l cl)) pstr
+       (if (contains? (:values store-root) (:r cl))
+         (get (:values store-root) (:r cl))
+         (store-root-name-of store-root (:r cl)))])))
+
+(defn- query-client-view-facts [store-root schema-root]
+  (let [domain
+        (persistent!
+         (reduce-kv
+          (fn [acc cid cl]
+            (query-check)
+            (if (contains? (:superseded store-root) cid)
+              acc
+              (if-let [t (store-root-fact->triple store-root cl)]
+                (conj! acc (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))
+                acc)))
+          (transient []) (:facts store-root)))]
+    (reduce (fn [facts cl] (query-check) (conj facts cl)) domain (vals schema-root))))
 
 ;; The live (l p r) triples on ONE (te-name, p-str) group, projected exactly as
 ;; reified->facts would — the authoritative post-commit state of just that group.
@@ -416,6 +461,7 @@
 ;; delta, so a superseding assert drops its victim without scanning the corpus.
 (defn- idx-build [facts]
   (reduce (fn [acc c]
+            (query-check)
             (let [t [(:l c) (:p c) (:r c)]]
               (-> acc (update :triples conj t)
                   (update-in [:by-l (:l c)] (fnil conj #{}) t)
@@ -533,10 +579,17 @@
 ;; triple-set + positional/compound buckets; :index (kernel, for :validate) is
 ;; lazy/whole, off the hot path.
 (defn warm! []
-  (let [v (current-seq @co)]
-    (when (not= v (:version @cache))
-      (let [facts (client-view-facts @co)]        ; F4: client read view = domain + schema facts
-        (reset! cache {:facts (set facts) :idx (idx-build facts) :index nil :version v})))
+  (let [co-root @co
+        store-root @(:store co-root)
+        schema-root @schema-view
+        v (current-seq co-root)
+        c @cache]
+    (when (or (not= v (:version c))
+              (not (identical? store-root (:store-root c)))
+              (not (identical? schema-root (:schema-root c))))
+      (let [facts (client-view-facts-from co-root schema-root)] ; F4: domain + schema facts
+        (reset! cache {:facts (set facts) :idx (idx-build facts) :index nil :version v
+                       :store-root store-root :schema-root schema-root})))
     @cache))
 (defn index! []
   (let [c (warm!)]
@@ -570,20 +623,46 @@
 (defn- cancel-query! [control reason]
   (compare-and-set! (:cancelled control) nil reason))
 
-;; Capture one persistent cache root while reload/write exclusion is held.  Every
-;; member is a Clojure immutable value; later cache swaps create new roots, so the
-;; evaluator can safely keep this exact facts/index/version snapshot after dlock
-;; is released.
-(defn- capture-query-snapshot! []
-  (let [c (warm!)
-        ;; The coordinator map is persistent, but its :store member is an atom.
-        ;; Dereference that production atom exactly once while dlock is held, then
-        ;; wrap the persistent Store value in a query-private handle. Historical
-        ;; evaluation may use the existing coord/store APIs through this handle,
-        ;; but can never observe a later mutation of the production store atom.
-        store-value @(:store @co)
-        history-store (atom store-value)]
-    {:facts (:facts c) :idx (:idx c) :version (:version c)
+;; Capture ONLY immutable roots while reload/write exclusion is held.  A hot cache
+;; is already immutable and can be reused directly.  A miss is merely described
+;; here; projection/index construction happens cooperatively outside dlock.
+(defn- capture-query-roots! []
+  (let [co-root @co
+        store-root @(:store co-root)
+        schema-root @schema-view
+        version (current-seq co-root)
+        c @cache
+        current-cache? (and (= version (:version c))
+                            (identical? store-root (:store-root c))
+                            (identical? schema-root (:schema-root c))
+                            (:facts c) (:idx c))]
+    {:store-root store-root :schema-root schema-root :version version
+     :cache (when current-cache? c)}))
+
+(defn- publish-query-cache! [roots built]
+  ;; Publishing is an optimization, never the query's consistency boundary.  Recheck
+  ;; all captured identities under dlock; if a writer/reload moved any root while the
+  ;; miss was being built, this query still uses its private snapshot and simply skips
+  ;; publication.
+  (locking dlock
+    (let [co-root @co]
+      (when (and (= (:version roots) (current-seq co-root))
+                 (identical? (:store-root roots) @(:store co-root))
+                 (identical? (:schema-root roots) @schema-view))
+        (reset! cache built)
+        true))))
+
+(defn- materialize-query-snapshot [roots]
+  (let [history-store (atom (:store-root roots))
+        c (or (:cache roots)
+              (let [facts (query-client-view-facts (:store-root roots) (:schema-root roots))
+                    built {:facts (set facts) :idx (idx-build facts) :index nil
+                           :version (:version roots)
+                           :store-root (:store-root roots)
+                           :schema-root (:schema-root roots)}]
+                (publish-query-cache! roots built)
+                built))]
+    {:facts (:facts c) :idx (:idx c) :version (:version roots)
      :history-co {:store history-store}
      :history-store history-store}))
 
@@ -603,13 +682,13 @@
                        :rows (count rows) :max-rows max-rows}))
       res)))
 
-(defn- execute-query [req snapshot]
+(defn- execute-query [req roots]
   (let [control (or *request-query-control* (new-query-control req))
         use-idx (and (= :query (:op req))
                      (not (:scan req))
                      (simple-query? (:query req)))
         engine (if use-idx "index" "scan")
-        version (:version snapshot)]
+        version (:version roots)]
     (swap! active-queries inc)
     (try
       (binding [d/*query-control* control
@@ -619,7 +698,9 @@
         ;; a normal validation envelope after its connection already pipelined
         ;; forbidden extra input.
         (query-check)
-        (let [res (case (:op req)
+        (let [snapshot (materialize-query-snapshot roots)
+              _ (query-check)
+              res (case (:op req)
                     :query (if use-idx
                              (idx-run (:idx snapshot) (:query req))
                              (q/run (vec (:facts snapshot)) (:query req)))
@@ -692,7 +773,8 @@
                   facts' (as-> (:facts c) cs
                             (reduce (fn [s t] (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-del)
                             (reduce (fn [s t] (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-add))]
-              {:facts facts' :idx idx' :index nil :version post})
+              {:facts facts' :idx idx' :index nil :version post
+               :store-root @(:store @co) :schema-root (:schema-root c)})
             (assoc c :version -1)))))))
 
 ;; Subscriber delivery is BEST-EFFORT and OFF the write path (finding #3): a slow
@@ -827,6 +909,7 @@
         ;; version bump alone leaves a race window where a rebuild could tag the new
         ;; version with the pre-swap schema-view. Invalidate so the next warm! re-projects.
         (swap! cache assoc :version -1)
+        (reset! facts-wire-cache {:version -1 :triples nil})
         (notify-subs! {:event :commit :version seq :op op :l te :p p :r r})
         {:ok seq}))))
 
@@ -1712,6 +1795,27 @@
                :version (current-seq @co)}))))))))
 
 (declare maybe-reload!)
+(def ^:dynamic *reload-checked* false)
+(def ^:private reload-deferred-ops
+  ;; These operations are meaningful against the currently-installed root and
+  ;; must never make their client pay for an unrelated external corpus import.
+  ;; The pending physical stamp remains visible to the next freshness-sensitive
+  ;; read or fact mutation.
+  #{:version :status :built-through
+    :acquire-lease :renew-lease :release-lease :fence-ok})
+(def ^:private reload-mutation-ops
+  ;; A first fact mutation after an external edit must absorb/validate that edit
+  ;; before committing.  If another request already owns the rebuild, however,
+  ;; mutate the old root and make that owner's identity check retry over both.
+  #{:assert :assert-with-fence :assert-at-version :assert-at-version-with-fence
+    :retract :retract-with-fence :bump})
+
+(defn- prepare-request-reload! [req]
+  (let [op (:op req)]
+    (cond
+      (reload-deferred-ops op) :deferred
+      (reload-mutation-ops op) (maybe-reload! true)
+      :else (maybe-reload! false))))
 ;; thread 019f100f-7fff: snapshot/tail-fold/as-of/incremental-aggregate surface,
 ;; defined below migrate-flat->co (so they can call it) but referenced in handle.
 (declare write-snapshot! snapshot-reconcile materialize-as-of register-agg! agg-report sweep-snapshots! built-through last-boot)
@@ -2253,21 +2357,20 @@
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
     ;; expensive or abandoned read can never block writes, leases, or status.
     (and (= :for-log (:op req)) (query-request? (:request req)))
-    (let [inner (:request req)
+    (let [_ (maybe-reload!)
+          inner (:request req)
           captured (locking dlock
-                     (maybe-reload!)
                      (if-let [reject (log-fence-rejection (:expected-log req))]
                        {:reject reject}
-                       {:snapshot (capture-query-snapshot!)}))]
+                       {:roots (capture-query-roots!)}))]
       (if-let [reject (:reject captured)]
         reject
-        (execute-query inner (:snapshot captured))))
+        (execute-query inner (:roots captured))))
 
     (query-request? req)
-    (let [snapshot (locking dlock
-                     (maybe-reload!)
-                     (capture-query-snapshot!))]
-      (execute-query req snapshot))
+    (let [_ (maybe-reload!)
+          roots (locking dlock (capture-query-roots!))]
+      (execute-query req roots))
 
     ;; Protocol-level corpus fencing. Normal requests validate and execute while
     ;; this outer dlock remains held; the recursive legacy handler may re-enter
@@ -2296,11 +2399,13 @@
           (edit-min-response inner expected true))
 
         :else
-        (locking dlock
-          (maybe-reload!)
+        (do
+          (prepare-request-reload! inner)
+          (locking dlock
           (if-let [fence-reject (log-fence-rejection expected)]
             fence-reject
-            (handle* inner)))))
+            (binding [*reload-checked* true]
+              (handle* inner)))))))
 
     ;; LOCK-FREE read: deref the @co immutable snapshot, NO dlock. Reads don't need the
     ;; writer lock (the atom swap on commit is atomic), so a reader never serializes behind
@@ -2311,6 +2416,11 @@
     ;; yet? Names are unique per writer, so interned <=> that writer's def reached the store.
     ;; This is the propagation visibility signal (commit -> reader sees THIS def), off the dlock.
     (= :seen (:op req)) {:seen (boolean (c/value-id (:store @co) (:v req)))}
+    ;; Lock-free reload telemetry: supervisors/tests can observe the two-phase build
+    ;; without triggering another maybe-reload! request themselves.
+    (= :reload-status (:op req))
+    {:active @active-reloads :retries @reload-retries
+     :generation @reload-generation}
     ;; S-PROFILE text-bridge verbs (thread A1). LOCK-FREE: write-def commits through
     ;; do-edit-min (which takes dlock itself); read-def/index are @co snapshot reads.
     ;; All return the structured ERROR shape on any malformed input — never a bare throw.
@@ -2334,9 +2444,13 @@
        :version (current-seq @co)})
     (= :edit-min (:op req)) (edit-min-response req nil false)
   :else
-  (locking dlock                       ; serialize reload + writes + reads (drop-in mode)
-    (maybe-reload!)                     ; absorb external flat edits (no-op in v2-log mode)
-    (case (:op req)
+  (do
+    ;; maybe-reload! performs its own two-phase capture/build/install.  It must run
+    ;; before this request takes dlock; *reload-checked* prevents a log-fenced
+    ;; recursive dispatch from repeating it while the outer fence holds the monitor.
+    (when-not *reload-checked* (prepare-request-reload! req))
+    (locking dlock                     ; serialize writes + short immutable captures
+     (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       ;; Lease-fenced fact writes. The fence and mutation share the coordinator
@@ -2410,6 +2524,8 @@
                  :log (or @flat-log (:log @co)) :boot @last-boot
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
+                 :reloads {:active @active-reloads :retries @reload-retries
+                           :generation @reload-generation}
                  :rollback_floor fram.rt/rollback-floor}
       ;; :facts — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
@@ -2584,7 +2700,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      {:error "unknown op"}))))
+      {:error "unknown op"})))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
@@ -2699,7 +2815,6 @@
                 subscribe-req (if fenced-subscribe? inner req)
                 fence-reject (when fenced-subscribe?
                                (locking dlock
-                                 (maybe-reload!)
                                  (log-fence-rejection (:expected-log req))))]
             (cond
               strict-reject
@@ -3330,50 +3445,141 @@
     (reset! telemetry-log (canonical-path tlog)))
   (boot-flat-canonical! (canonical-path flat)))
 
-;; absorb external edits (capture/import append to the flat log out-of-band). The
-;; per-request cost is a (stamp ...) stat; on a change we now TAIL-FOLD only the new
-;; lines (:tx > built-through, read from the last byte length) onto a STRUCTURAL-SHARE
-;; CLONE of the live store — O(delta), not the old O(history) whole re-migrate. The
-;; clone (atom over the immutable store value) is O(1) and keeps the swap atomic, so a
-;; lock-free reader sees the old OR the new store, never a half-applied tail. If the
-;; mtime moved but no new :tx appeared (a compaction/rewrite that renumbered or shrank
-;; the log), we fall back to the whole migrate — correctness floor.
-(defn maybe-reload! []
-  (when (and @flat-canonical? @flat-log)
-    ;; group-io-lock: the appender thread updates the file AND flat-mtime atomically
-    ;; under this monitor, so the stamp comparison here can never catch our own async
-    ;; append halfway (file moved, stamp not yet refreshed) and misread it as an
-    ;; external edit. External edits still trip it exactly as before. Lock order is
-    ;; dlock -> group-io-lock (here); the appender takes ONLY group-io-lock — no cycle.
+;; External flat edits are a two-phase OCC reload.  The writer lock protects only
+;; capture/install of immutable identities.  Tail I/O, clone mutation, whole-log
+;; fallback, and schema projection all run outside it, so an import or compaction
+;; cannot convoy leases/writes/status.  A concurrent coordinator append invalidates
+;; the captured Store/stamp and forces a fresh read; once an external change has been
+;; observed, retries remain forced even if the appender's mtime callback moved the
+;; public stamp, so that callback can never swallow the external tail.
+(def ^:private reload-max-attempts 8)
+
+(defn- capture-reload-roots! [force?]
+  (locking dlock
     (locking group-io-lock
-    (let [st (stamp @flat-log)]
-      (when (not= st @flat-mtime)
-        (let [tail (read-log-tail @flat-log @flat-bytes @built-through)]
-          (if (seq tail)
-            (let [clone {:store (atom @(:store @co)) :log nil :lock (Object.)}]
+      (when (and @flat-canonical? @flat-log)
+        (let [path @flat-log
+              target-stamp (stamp path)]
+          (when (or force? (not= target-stamp @flat-mtime))
+            {:path path
+             :known-stamp @flat-mtime
+             :target-stamp target-stamp
+             :target-bytes (.length (java.io.File. (str path)))
+             :from-byte @flat-bytes
+             :from-tx @built-through
+             :co-version (current-seq @co)
+             :store-root @(:store @co)
+             :generation @reload-generation}))))))
+
+(defn- build-reload-candidate [roots]
+  (swap! active-reloads inc)
+  (try
+    (let [path (:path roots)
+          tail-result (read-log-tail* path (:from-byte roots) (:from-tx roots))
+          tail (:lines tail-result)
+          tail-max (:max-tx tail-result)
+          schema-root (schema-view-from-flat path)
+          candidate
+          (if (> (long tail-max) (long (:from-tx roots)))
+            (let [clone {:store (atom (:store-root roots)) :log nil :lock (Object.)}]
               (apply-tail! clone tail)
-              (reset! co clone)
-              (reset! built-through (reduce max (long @built-through) (map :tx tail))))
-            ;; mtime moved, no new tx from the live offset. A legit compaction keeps the
-            ;; head (log max-tx >= built-through); a REGRESSION (revert/truncation — e.g.
-            ;; a `git checkout` of the tracked facts.log) drops it BELOW our live state.
-            ;; NEVER silently adopt a log that lost our facts.
-            (let [logmax (reduce max -1 (map :tx (read-log-tail @flat-log 0 -1)))]
-              (if (< logmax (long @built-through))
-                (binding [*out* *err*]
-                  (println (str "[fram] REFUSED reload: facts.log regressed (max-tx "
-                                logmax " < live built-through " @built-through ") — a"
-                                " revert/truncation, NOT an append. Kept the in-memory"
-                                " state; the log file is STALE — restore before restart.")))
-                (let [c0 (migrate-flat->co @flat-log)]
-                  (reset! co c0)
-                  (reset! built-through (or (:next-seq @(:store c0)) 0)))))))
-        (reset! flat-mtime st)
-        (reset! flat-bytes (.length (java.io.File. (str @flat-log))))
-        (seed-schema-view! @flat-log)      ; F4: external edits may add/drop schema-writable lines
-        (reset! cache {:index nil :version -1})
-        (reset-refers-state!)
-        (index!))))))
+              ;; read-log-tail* deliberately excludes an EDN-valid incomplete row
+              ;; from :lines while retaining its :tx in :max-tx.  The cold fold does
+              ;; the same: no fact applies, but version advances past the torn write.
+              ;; Advancing the private clone also keeps schema-only tails in cheap
+              ;; tail mode instead of forcing a whole-log migration.
+              (swap! (:store clone) assoc :next-seq tail-max)
+              {:mode :install :co clone :schema-root schema-root
+               :through tail-max})
+            (let [whole (read-log-tail* path 0 -1)
+                  logmax (:max-tx whole)]
+              (if (< logmax (long (:from-tx roots)))
+                {:mode :refused :logmax logmax}
+                (let [c0 (migrate-flat->co path)]
+                  {:mode :install :co c0 :schema-root schema-root
+                   :through (or (:next-seq @(:store c0)) 0)}))))]
+      ;; External writers do not participate in group-io-lock.  A final stamp check
+      ;; is therefore mandatory after every byte of candidate construction.
+      (if (= (:target-stamp roots) (stamp path))
+        candidate
+        {:mode :raced}))
+    (finally
+      (swap! active-reloads dec))))
+
+(defn- install-reload-candidate! [roots candidate]
+  (locking dlock
+    (locking group-io-lock
+      (let [same-target? (and (= (:path roots) @flat-log)
+                              (= (:target-stamp roots) (stamp (:path roots))))
+            exact-base? (and @flat-canonical?
+                             (= (:known-stamp roots) @flat-mtime)
+                             (= (:from-byte roots) @flat-bytes)
+                             (= (:from-tx roots) @built-through)
+                             (= (:co-version roots) (current-seq @co))
+                             (identical? (:store-root roots) @(:store @co))
+                             (= (:generation roots) @reload-generation))]
+        (cond
+          (= :raced (:mode candidate)) :retry
+
+          (and same-target? exact-base? (= :refused (:mode candidate)))
+          (do
+            ;; Remember the refused physical state so every later request does not
+            ;; rescan it.  The in-memory Store/schema/cache stay on the last good root.
+            (reset! flat-mtime (:target-stamp roots))
+            (reset! flat-bytes (:target-bytes roots))
+            (binding [*out* *err*]
+              (println (str "[fram] REFUSED reload: facts.log regressed (max-tx "
+                            (:logmax candidate) " < live built-through " (:from-tx roots) ") — a"
+                            " revert/truncation, NOT an append. Kept the in-memory"
+                            " state; the log file is STALE — restore before restart.")))
+            :refused)
+
+          (and same-target? exact-base? (= :install (:mode candidate)))
+          (do
+            (reset! co (:co candidate))
+            (reset! built-through (:through candidate))
+            (reset! flat-mtime (:target-stamp roots))
+            (reset! flat-bytes (:target-bytes roots))
+            (reset! schema-view (:schema-root candidate))
+            (reset! cache {:index nil :version -1})
+            (reset! facts-wire-cache {:version -1 :triples nil})
+            (reset-refers-state!)
+            (swap! reload-generation inc)
+            :installed)
+
+          ;; Another reloader installed this exact physical target.  Its generation
+          ;; is proof of convergence; do not whole-migrate the same corpus again.
+          (and same-target?
+               (> @reload-generation (:generation roots))
+               (= @flat-mtime (:target-stamp roots)))
+          :superseded
+
+          :else :retry)))))
+
+(defn maybe-reload!
+  ([] (maybe-reload! false))
+  ([nonblocking-if-active?]
+   ;; A fact mutation arriving after another request has already
+   ;; observed and started rebuilding an external tail must not duplicate that
+   ;; O(corpus) work before it can acquire a lease or commit.  It may safely mutate
+   ;; the old immutable root: the active reloader's Store/stamp OCC check will fail
+   ;; and its forced retry will clone the new root plus the external tail.  Reads
+   ;; that require reload freshness pass false and continue to participate.
+   (if (and nonblocking-if-active? (pos? @active-reloads))
+     :in-progress
+     (loop [attempt 0 force? false]
+       (if-let [roots (capture-reload-roots! force?)]
+         (let [candidate (build-reload-candidate roots)
+               result (install-reload-candidate! roots candidate)]
+           (if (= :retry result)
+             (if (< attempt (dec reload-max-attempts))
+               (do (swap! reload-retries inc)
+                   (recur (inc attempt) true))
+               (throw (ex-info "external log kept changing during reload"
+                               {:type :reload-raced :attempts reload-max-attempts
+                                :path (:path roots)})))
+             result))
+         :unchanged)))))
 
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------
 ;; dump-log! writes the live store as a v2 image the EXISTING replay consumes (reuse,
