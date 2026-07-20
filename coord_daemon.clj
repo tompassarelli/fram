@@ -614,6 +614,11 @@
     (try
       (binding [d/*query-control* control
                 q/*query-control* control]
+        ;; Cancellation is a protocol decision, not merely an evaluator-loop
+        ;; check. Poll before validation so a fast malformed request cannot return
+        ;; a normal validation envelope after its connection already pipelined
+        ;; forbidden extra input.
+        (query-check)
         (let [res (case (:op req)
                     :query (if use-idx
                              (idx-run (:idx snapshot) (:query req))
@@ -2624,24 +2629,54 @@
   ;; serve-conn has completely parsed the protocol's single request line before
   ;; starting this future. From this point until close, this monitor is the sole
   ;; input-stream owner; the request handler never reads from the socket.
-  (swap! active-query-monitors inc)
-  (future
+  (let [inspected (java.util.concurrent.CountDownLatch. 1)
+        registered? (atom true)
+        release-monitor! (fn []
+                           (when (compare-and-set! registered? true false)
+                             (swap! active-query-monitors dec)))]
+    (swap! active-query-monitors inc)
     (try
-      (.setSoTimeout s 100)
-      (loop []
-        (when-not @(:done control)
-          (let [again? (try
-                         (let [ch (.read r)]
-                           (if (= ch -1)
-                             (cancel-query! control :client-disconnected)
-                             ;; One request per connection is the protocol. Extra input is a
-                             ;; protocol violation and also a reliable signal to stop work.
-                             (cancel-query! control :unexpected-client-input))
-                           false)
-                         (catch java.net.SocketTimeoutException _ true))]
-            (when again? (recur)))))
-      (catch Throwable _ nil)
-      (finally (swap! active-query-monitors dec)))))
+      (let [worker
+            (future
+              (try
+                (.setSoTimeout s 100)
+                ;; read-line-bounded has consumed exactly the first protocol line,
+                ;; but BufferedReader may already hold read-ahead bytes. Inspect
+                ;; that SAME reader before allowing evaluation to begin. ready is
+                ;; nonblocking; if true, one byte is conclusive because the wire
+                ;; contract permits no second frame or trailing data.
+                (when (.ready r)
+                  (let [ch (.read r)]
+                    (if (= ch -1)
+                      (cancel-query! control :client-disconnected)
+                      (cancel-query! control :unexpected-client-input))))
+                (.countDown inspected)
+                (when (nil? @(:cancelled control))
+                  (loop []
+                    (when-not @(:done control)
+                      (let [again? (try
+                                     (let [ch (.read r)]
+                                       (if (= ch -1)
+                                         (cancel-query! control :client-disconnected)
+                                         (cancel-query! control :unexpected-client-input))
+                                       false)
+                                     (catch java.net.SocketTimeoutException _ true))]
+                        (when again? (recur))))))
+                (catch Throwable _
+                  (cancel-query! control :client-disconnected))
+                (finally
+                  ;; Also releases serve-conn if initial inspection itself failed.
+                  (.countDown inspected)
+                  (release-monitor!))))]
+        ;; Synchronization point: evaluation/response ordering begins only after
+        ;; the monitor's initial nonblocking inspection has a definitive result.
+        (.await inspected)
+        worker)
+      (catch Throwable t
+        ;; Submission/await failure races safely with the worker's finally: the
+        ;; registration is released exactly once, never driven negative.
+        (release-monitor!)
+        (throw t)))))
 
 (defn serve-conn [^Socket s]
   (try

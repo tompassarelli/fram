@@ -24,6 +24,17 @@
       (.write writer (str (pr-str request) "\n"))
       (.flush writer)
       (edn/read reader))))
+(defn pipelined-client [port request]
+  (with-open [socket (java.net.Socket.)]
+    (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1000)
+    (.setSoTimeout socket 5000)
+    (with-open [writer (io/writer (.getOutputStream socket))
+                reader (java.io.PushbackReader. (io/reader (.getInputStream socket)))]
+      ;; One transport write makes the forbidden byte available for the server's
+      ;; BufferedReader read-ahead together with the request line.
+      (.write writer (str (pr-str request) "\nX"))
+      (.flush writer)
+      (edn/read reader))))
 (defn elapsed-ms [f]
   (let [started (System/nanoTime) value (f)]
     [(/ (- (System/nanoTime) started) 1000000.0) value]))
@@ -91,6 +102,14 @@
     (check! "normal completed request retires its EOF monitor"
             (eventually #(zero? (get-in (client port {:op :status})
                                         [:queries :monitors]))))
+    (let [samples (vec (repeatedly 100
+                                   #(elapsed-ms
+                                     (fn [] (client port {:op :query
+                                                          :query subject-q})))))
+          max-ms (apply max (map first samples))]
+      (check! (format "normal no-extra fast queries remain below one second (max %.1fms)" max-ms)
+              (and (every? #(= [["group" "g"]] (:ok (second %))) samples)
+                   (< max-ms 1000.0))))
 
     (let [work (client port {:op :query :scan true :query all-pairs-q
                              :query-max-steps 10})]
@@ -156,18 +175,20 @@
                   (and (zero? (:active q))
                        (pos? (get-in q [:stops :query-cancelled])))))))
 
-    ;; The wire protocol is exactly one request per connection. Once that line
-    ;; is parsed the disconnect monitor is the sole reader; pipelined bytes are
-    ;; rejected by cancelling the in-flight query with a specific reason.
-    (with-open [socket (java.net.Socket. "127.0.0.1" (int port))
-                writer (io/writer (.getOutputStream socket))
-                reader (java.io.PushbackReader. (io/reader (.getInputStream socket)))]
-      (.write writer (str (pr-str {:op :query :query all-pairs-q}) "\nX"))
-      (.flush writer)
-      (let [response (edn/read reader)]
-        (check! "pipelined extra input explicitly cancels one-request protocol"
-                (and (= :query-cancelled (:code response))
-                     (= :unexpected-client-input (:reason response))))))
+    ;; Fast malformed validation used to beat the asynchronously-scheduled
+    ;; monitor. Exercise both that path and a one-row valid query 1000 times each;
+    ;; every already-pipelined byte must win before evaluation/response.
+    (let [failures (atom [])]
+      (dotimes [i 1000]
+        (doseq [[kind request]
+                [[:malformed {:op :query :query nil}]
+                 [:valid {:op :query :query subject-q}]]]
+          (let [response (pipelined-client port request)]
+            (when-not (and (= :query-cancelled (:code response))
+                           (= :unexpected-client-input (:reason response)))
+              (swap! failures conj [i kind response])))))
+      (check! "1000 iterations each of fast malformed and valid pipelined requests cancel"
+              (empty? @failures)))
     (check! "all query monitors retire after completion/cancellation"
             (eventually #(zero? (get-in (client port {:op :status})
                                         [:queries :monitors]))))
