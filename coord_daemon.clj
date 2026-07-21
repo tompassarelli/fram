@@ -21,6 +21,9 @@
         '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
         '[java.security KeyStore])
 (load-file "coord.clj")          ; the reified coordinator library
+(load-file "pull.clj")           ; the PULL API (ns pull) — MUST load after coord.clj:
+                                 ; pull references coord.clj's readers as user/… and SCI
+                                 ; resolves those qualified symbols at analysis time.
 ;; resolve.clj — the store-parameterized lexical resolver (S3.1/S3.2), loaded as a
 ;; LIBRARY: its -main is guarded behind a recognized MODES arg, and the daemon's
 ;; *command-line-args* ("serve-flat" ...) is not one, so load-file runs NOTHING — it
@@ -601,7 +604,7 @@
 
 (defn- query-request? [req]
   (and (map? req)
-       (or (#{:query :query-page} (:op req))
+       (or (#{:query :query-page :pull} (:op req))
            (and (= :as-of (:op req)) (:query req)))))
 
 (defn- lower-query-limit [req key ceiling]
@@ -686,6 +689,10 @@
   (let [control (or *request-query-control* (new-query-control req))
         use-idx (and (= :query (:op req))
                      (not (:scan req))
+                     ;; SEAM (aggregates lane): a map-shaped :find is an AGGREGATE query
+                     ;; (landing concurrently in fram.query); it must NEVER route to
+                     ;; idx-run — only a string :find (a plain head-rel name) may.
+                     (string? (:find (:query req)))
                      (simple-query? (:query req)))
         engine (if use-idx "index" "scan")
         version (:version roots)]
@@ -706,6 +713,10 @@
                              (q/run (vec (:facts snapshot)) (:query req)))
                     :query-page (q/run-page (vec (:facts snapshot)) (:query req)
                                            (:limit req) (:after req))
+                    :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
+                            (if (seq errs)
+                              {:error errs}
+                              (pull/run (:history-store snapshot) (:root req) (:pattern req) req)))
                     :as-of (let [s (:seq req)]
                              (if (nil? s)
                                {:error [":as-of needs :seq"]}
