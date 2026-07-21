@@ -216,6 +216,91 @@ coordinator; single-vs-multi cardinality is a fact in the log, so a cold CLI fol
 the warm daemon classify identically), so the surface is closed — the vocabulary is data,
 reached through `show`/`ask`, not through the tool list.
 
+### Aggregates — grouped counts/sums over the fixpoint
+
+`:find` can name a **grouped aggregate spec** instead of a bare relation name, applied
+*after* the Datalog fixpoint — so it composes with recursion and stratified negation for
+free, not a bolt-on that has to re-derive them:
+
+```edn
+;; deg(x,y) :- fact(x,"depends_on",y) ; count out-edges per subject
+{:find {:rel "deg" :group [0] :agg [{:op :count}]}
+ :rules [{:head {:rel "deg" :args [{:var "x"} {:var "y"}]}
+          :body [{:rel "fact" :args [{:var "x"} "depends_on" {:var "y"}]}]}]}
+;; => {:ok [["@a" 2] ["@b" 1]]}
+```
+
+```edn
+;; reaches = transitive closure of depends_on ; distinct reachable targets per source
+{:find {:rel "reaches" :group [0] :agg [{:op :count-distinct :arg 1}]}
+ :rules [...]}
+;; => {:ok [["@a" 3] ["@b" 2] ["@c" 1]]}
+```
+
+Ops: `:count` (`:arg` optional), `:count-distinct`, `:sum`, `:avg`, `:min`, `:max`
+(the last four take `:arg`, the group position to aggregate). `:group []` is one global
+group (a single row, no group columns). `count` over an empty relation is `[]`, not a
+zero row. `sum`/`avg`/`min`/`max` parse string values numerically — `sum` stays integer
+when every value is a long, `avg` is always a double — and a non-numeric value at the
+aggregated position is a hard `{:error}` naming the position. Result rows are sorted
+canonically; the output group count is capped by `FRAM_MAX_RESULTS`. **Limits:** no
+HAVING (an aggregate result can't feed back into a rule body); aggregate `:find` is not
+pageable (`run-page` rejects it).
+
+### Comparison predicates — filter-only, never bind
+
+A rule body can carry a filter literal alongside `:rel` clauses:
+
+```edn
+;; big(x) :- fact(x,"count",c), c > 100
+{:find "big"
+ :rules [{:head {:rel "big" :args [{:var "x"}]}
+          :body [{:rel "fact" :args [{:var "x"} "count" {:var "c"}]}
+                 {:pred :gt :args [{:var "c"} 100]}]}]}
+```
+
+Ops: `:eq` `:ne` (raw string equality/disequality) and `:lt` `:le` `:gt` `:ge` (numeric
+ordering — a non-numeric operand silently drops the row, never errors). A predicate
+**never binds a variable**: every var it reads must already be bound by an earlier `:rel`
+clause in the same body — the same range-restriction rule negation follows. **Limit:** no
+arithmetic or binding function clauses — predicates filter, they don't compute.
+
+## Pull — nested reads over the graph
+
+The daemon speaks a `{:op :pull}` wire query alongside `ask`: name a root entity and a
+declarative pattern, get back a nested map — no rule-writing for "give me this thing and
+its dependencies' titles":
+
+```edn
+{:op :pull :root "@x" :pattern [{"depends_on" ["title"]} :* "_part_of"] :provenance true}
+```
+
+Pattern grammar, per element: `"pred"` (flat attr), `:*` (all non-reserved attrs on this
+node, refs rendered as name strings — no recursion), `{"pred" [sub-pattern]}` (recurse
+into a ref with a sub-pattern), `{"pred" N}` (recurse N levels deep), `{"pred" :...}`
+(recurse until a cap or a cycle), `"_pred"` (reverse ref — subjects pointing *at* this
+node via `pred`). Rendering is cardinality-driven: a single-valued predicate comes back
+scalar, multi-valued comes back a vector.
+
+```edn
+;; @x depends_on @dep1 ; pull nested title + per-value provenance
+(pull/run store "@x" [{"depends_on" ["title"]} "status"] {:provenance true})
+;; => {:fram/id "@x"
+;;     "depends_on" [{:fram/id "@dep1" "title" "Design"}]
+;;     "status" {:val "open" :cid 2 :by "u" :seq 2 :withdrawn false}}
+```
+
+`:provenance true` turns each value into `{:val :cid :by :seq :withdrawn}` (plus
+`:withdrawn_by`/`:withdrawn_at`/`:withdrawn_reason` when withdrawn) — per-fact
+provenance is possible in the first place because every Fram fact is itself an
+addressable, reifiable object, not a row. `:as-of <seq>` composes with `:provenance` to
+read a historical snapshot. `:max-depth` and `:max-nodes` cap traversal; a node beyond
+either cap comes back as a `{:fram/truncated true}` stub, and a cycle revisit on the
+current path comes back as `{:fram/cycle true}` — both keep `pull` total (never hangs,
+never throws) instead of erroring. **Limit:** `pull` is daemon-only (needs the live
+index) — the cold CLI fold doesn't serve it. No wall-clock timestamps either — only the
+causal `:seq` order, same as the rest of the log.
+
 ## Identity-addressed code (Chartroom)
 
 [Chartroom](chartroom/) points the engine at *code*. The fact log is canonical: a
@@ -303,6 +388,12 @@ personal life-graph, a client's data, and public code tooling are *separate logs
 separate processes*, never one. Share *machinery* across domains freely; never share
 *data*.
 
+- **Hosting from an edge platform (Cloudflare Workers).** Workers are ephemeral and hold
+  no state, so they can't be the writer; put the coordinator in a Docker container as the
+  durable single writer, and a small bearer-token HTTP shim in front of it to bridge the
+  Worker's `fetch()` to the coordinator's TCP protocol (Workers can't present a client
+  cert on a raw socket, so engine-terminated mTLS isn't reachable directly today). Exact
+  procedure, Dockerfiles, and an observed local smoke test: **[deploy/cloudflare/PROCEDURE.md](deploy/cloudflare/PROCEDURE.md)**.
 - **Your data is two plain-text things you can `grep`:** your Markdown and an append-only
   `coordination.log`. No proprietary format, no telemetry, no lock-in.
 - **The log is the recoverable history.** Each line records *who* and *when*;

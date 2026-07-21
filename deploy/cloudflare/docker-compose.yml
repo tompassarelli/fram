@@ -1,0 +1,40 @@
+# Fram coordinator + auth shim for Cloudflare Workers clients.
+# Run from THIS directory (build contexts point at the repo root ../..):
+#   SHIM_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
+#
+# Topology: the Worker fetches the shim (bearer token, HTTP); the shim speaks
+# the one-line-EDN TCP protocol to the coordinator over the private network.
+# The coordinator's port 7977 is NEVER published — the wire protocol is
+# unauthenticated by design and must stay behind the shim.
+services:
+  coordinator:
+    build:
+      context: ../..
+      dockerfile: deploy/cloudflare/Dockerfile
+    volumes:
+      - fram-data:/data              # the durable fact log survives restarts
+    networks: [framnet]
+    restart: unless-stopped
+    # no ports: — private network only
+
+  shim:
+    build:
+      context: ../..
+      dockerfile: deploy/cloudflare/Dockerfile.shim
+    environment:
+      FRAM_HOST: coordinator
+      FRAM_PORT: "7977"
+      SHIM_PORT: "8787"
+      SHIM_TOKEN: ${SHIM_TOKEN:?set SHIM_TOKEN (e.g. openssl rand -hex 32)}
+    ports:
+      - "8080:8787"                  # the ONE public ingress; front with TLS in prod
+    networks: [framnet]
+    depends_on:
+      - coordinator
+    restart: unless-stopped
+
+networks:
+  framnet: {}                        # private bridge network
+
+volumes:
+  fram-data: {}
