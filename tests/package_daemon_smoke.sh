@@ -27,6 +27,7 @@ required=(
   "$package_root/libexec/fram/coord.clj"
   "$package_root/libexec/fram/coord_daemon.clj"
   "$package_root/libexec/fram/pull.clj"
+  "$package_root/libexec/fram/fri.clj"
   "$package_root/libexec/fram/defcheck_gate.clj"
   "$package_root/libexec/fram/chartroom/src/resolve.clj"
   "$package_root/libexec/fram/daemon.classpath"
