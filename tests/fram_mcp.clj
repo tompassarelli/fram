@@ -511,6 +511,62 @@
 (def ^:private edit-tools #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
 
+;; ============================================================================
+;; PROFILES — opt-in restricted tool surfaces (FRAM_MCP_PROFILE; unset = full).
+;; ============================================================================
+;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact ten-tool
+;; closed catalog above — the pre-profile behavior, no new checks anywhere.
+;; "graph-edit-v1" is the RESTRICTED authoring profile for graph-upstream repos
+;; (the fram-code-on wiring): exactly the five graph-edit verbs are EXPOSED
+;; (tools/list) *and* AUTHORIZED (tools/call). The call gate is server-side and
+;; runs BEFORE alias normalization (untell->retract, query<->ask) and BEFORE any
+;; dispatch: a denied name never reaches tl/call, load-state, the coordinator,
+;; or a subprocess — zero mutation by construction. Filtering tools/list alone
+;; would be advisory; the tools/call gate is the authority.
+;; The profile is fixed at STARTUP from the server's own environment — never
+;; from a request, never from a project .mcp.json (this server loads no MCP
+;; config and execs nothing a caller names); the allow-list is a compile-time
+;; constant. Unknown profile names FAIL CLOSED at startup (fence at the bottom).
+(def ^:private profile (or (System/getenv "FRAM_MCP_PROFILE") "full"))
+(def ^:private restricted? (= profile "graph-edit-v1"))
+
+;; canonical-path helper: resolves ., .., and symlinks; defined for a
+;; not-yet-existing leaf (a render target may not exist yet).
+(defn- canon [p] (.getCanonicalPath (io/file p)))
+
+;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
+;;   (1) the name must be one of the five edit verbs — everything else
+;;       (tell/retract/show/ask/validate, the query/untell aliases, unknown
+;;       names) is denied AS GIVEN, pre-normalization, pre-dispatch;
+;;   (2) the rendered target FRAM_SRC/<module>.bclj must stay CONFINED under
+;;       the FRAM_SRC root once canonicalized (a module like "../x" would
+;;       otherwise render outside the intended source tree).
+(defn- profile-gate [nm args]
+  (when restricted?
+    (if-not (edit-tool? nm)
+      {:text (str "profile graph-edit-v1: tool '" nm "' is not authorized — this surface is exactly "
+                  "add-def / set-body / rename-def / insert-after / replace-in-body. "
+                  "Denied before alias normalization and dispatch; nothing mutated.")}
+      (let [m (:module args)]
+        (cond
+          (and (some? m) (not (string? m)))
+          {:text "profile graph-edit-v1: 'module' must be a string — refused before dispatch; nothing mutated."}
+          (and (string? m)
+               (not (str/starts-with? (canon (str fram-src "/" m ".bclj"))
+                                      (str (canon fram-src) "/"))))
+          {:text (str "profile graph-edit-v1: module '" m "' renders outside the source root "
+                      fram-src " — refused before dispatch; nothing mutated.")}
+          :else nil)))))
+
+(def ^:private profile-instructions
+  (if restricted?
+    (str instructions
+         "\n\nPROFILE graph-edit-v1 (restricted): only the five graph-edit verbs "
+         "(add-def / set-body / rename-def / insert-after / replace-in-body) are exposed and "
+         "authorized; tell / retract / show / ask / validate (and the untell/query aliases) "
+         "are denied server-side before dispatch.")
+    instructions))
+
 ;; --- dispatch one tools/call (catalog path) ------------------------------------
 (defn- dispatch-call [name a]
   ;; WARM READ PATH (interface investigation #1): serve `query` off the daemon's warm
@@ -611,25 +667,119 @@
       (reply id {:protocolVersion "2024-11-05"
                  :capabilities {:tools {}}
                  :serverInfo {:name "fram" :version "0.1"}
-                 :instructions instructions})
+                 :instructions profile-instructions})
 
       (= method "tools/list")
-      (reply id {:tools (mapv ->tool (:cat (load-state)))})
+      ;; a restricted profile EXPOSES exactly its allow-list. (Exposure is UX;
+      ;; the profile-gate on tools/call below is the enforcement.)
+      (reply id {:tools (->> (:cat (load-state))
+                             (filter (fn [spec] (or (not restricted?) (edit-tool? (:name spec)))))
+                             (mapv ->tool))})
 
       (= method "tools/call")
-      ;; graph-AST edits run a multi-process recompile-gated transaction that far
-      ;; exceeds the 10s QUERY budget (and is bounded by its own subprocesses, not a
-      ;; CPU-pegged datalog fixpoint), so they BYPASS with-timeout. Reads/queries keep
-      ;; the budget. Classify by tool name against the catalog's edit ops.
-      (let [nm (:name params)
-            r (if (edit-tool? nm)
-                (handle-call nm (:arguments params))
-                (with-timeout 10000 (fn [] (handle-call nm (:arguments params)))))]
-        (reply id {:content [{:type "text" :text (:text r)}] :isError (boolean (:isError r))}))
+      ;; PROFILE GATE FIRST: under a restricted profile an unauthorized or
+      ;; unconfined call is denied HERE — before alias normalization
+      ;; (handle-call / tl-call), before load-state, before any coordinator or
+      ;; subprocess contact. Zero mutation on the denial path.
+      ;;
+      ;; Then: graph-AST edits run a multi-process recompile-gated transaction that
+      ;; far exceeds the 10s QUERY budget (and is bounded by its own subprocesses,
+      ;; not a CPU-pegged datalog fixpoint), so they BYPASS with-timeout.
+      ;; Reads/queries keep the budget. Classify by tool name against the catalog's
+      ;; edit ops.
+      (let [nm (:name params)]
+        (if-let [denial (profile-gate nm (:arguments params))]
+          (reply id {:content [{:type "text" :text (:text denial)}] :isError true})
+          (let [r (if (edit-tool? nm)
+                    (handle-call nm (:arguments params))
+                    (with-timeout 10000 (fn [] (handle-call nm (:arguments params)))))]
+            (reply id {:content [{:type "text" :text (:text r)}] :isError (boolean (:isError r))}))))
 
       :else (reply-err id -32601 (str "method not found: " method)))))
 
-(log! "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)")
+;; ============================================================================
+;; PROFILE STARTUP FENCE — a restricted profile binds its WHOLE identity before
+;; serving a single request; anything short of the exact contract fails closed
+;; (exit 2, diagnostic on stderr, stdout stays a pure JSON-RPC channel).
+;; ============================================================================
+(defn- die! [msg]
+  (log! (str "fram-mcp: REFUSING to start (FRAM_MCP_PROFILE=" profile "): " msg))
+  (System/exit 2))
+
+;; require an env path that is present, ABSOLUTE, already CANONICAL (equal to
+;; its own canonical form — no relative segments, no symlink indirection), and
+;; that exists as a directory/file. Returns the canonical path.
+(defn- require-canonical! [label v dir?]
+  (when (str/blank? (str v)) (die! (str label " is required")))
+  (when-not (.isAbsolute (io/file v))
+    (die! (str label " must be an ABSOLUTE path (got " (pr-str v) ")")))
+  (let [c (canon v)]
+    (when-not (= c v)
+      (die! (str label " must be CANONICAL (got " (pr-str v) "; canonical form " (pr-str c) ")")))
+    (when (and dir? (not (.isDirectory (io/file v))))
+      (die! (str label " is not an existing directory: " v)))
+    (when (and (not dir?) (not (.isFile (io/file v))))
+      (die! (str label " is not an existing file: " v)))
+    c))
+
+;; strict-fence probe (mirrors bin/fram-code-on's coordinator_requires_fence):
+;; an UNWRAPPED {:op :version} must be REJECTED with :code :log-fence-required.
+;; A dead port, a permissive/legacy daemon, or any other answer -> NOT strict.
+(defn- strict-fence-live? [port]
+  (try
+    (with-open [s (java.net.Socket.)]
+      (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
+      (.setSoTimeout s 2000)
+      (let [w (io/writer (.getOutputStream s))
+            r (java.io.BufferedReader. (io/reader (.getInputStream s)))]
+        (.write w "{:op :version}\n") (.flush w)
+        (let [line (.readLine r)]
+          (and (some? line)
+               (= :log-fence-required (:code (clojure.edn/read-string line)))))))
+    (catch Throwable _ false)))
+
+(defn- enforce-graph-edit-v1! []
+  ;; graph-edit MODE is the licensed substrate: FRAM_GRAPH_EDIT declares the
+  ;; fram-code-on wiring and FRAM_FLIP routes every verb graph-sourced (warm
+  ;; :edit-min) — the text-legacy edit path is NOT licensed under this profile.
+  (when-not (= "1" (System/getenv "FRAM_GRAPH_EDIT"))
+    (die! "graph-edit mode is required: FRAM_GRAPH_EDIT=1 (wire with bin/fram-code-on)"))
+  (when-not flip-on?
+    (die! "graph-sourced editing is required: FRAM_FLIP=1 (text-legacy edits are not licensed under graph-edit-v1)"))
+  (let [port (try (Integer/parseInt (str flip-code-port)) (catch Exception _ nil))]
+    (when-not (and port (<= 1 port 65535))
+      (die! (str "FRAM_CODE_PORT must name a TCP port (got " (pr-str flip-code-port) ")")))
+    (let [src (require-canonical! "FRAM_SRC" (System/getenv "FRAM_SRC") true)
+          log (require-canonical! "FRAM_CODE_LOG" (System/getenv "FRAM_CODE_LOG") false)]
+      ;; the code log must live INSIDE the source binding (fram-code-on puts it
+      ;; at <src>/.fram/code.log) — a log outside the tree is a foreign corpus.
+      (when-not (str/starts-with? log (str src "/"))
+        (die! (str "FRAM_CODE_LOG " log " lies OUTSIDE the FRAM_SRC source binding " src)))
+      ;; live coordinator, STRICT fence, EXACT canonical log — all three.
+      (when-not (strict-fence-live? port)
+        (die! (str "no strict-fenced coordinator on 127.0.0.1:" port
+                   " — unwrapped requests must be rejected with :log-fence-required"
+                   " (daemon dead, or permissive/legacy; rerun bin/fram-code-on)")))
+      (let [v (fram.rt/coord-version-for-log port log)]
+        (when (neg? v)
+          (die! (case v
+                  -1 (str "no coordinator answers fenced requests on 127.0.0.1:" port)
+                  -2 (str "coordinator on 127.0.0.1:" port " serves a DIFFERENT log than " log)
+                  -3 (str "coordinator on 127.0.0.1:" port " lacks the log-fence protocol")
+                  (str "coordinator on 127.0.0.1:" port " is unusable")))))
+      (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
+                 ", strict-fenced coordinator 127.0.0.1:" port)))))
+
+;; fail-closed profile admission: full = the exact legacy surface (no new
+;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.
+(case profile
+  "full"          nil
+  "graph-edit-v1" (enforce-graph-edit-v1!)
+  (die! "unknown profile — known profiles: full, graph-edit-v1"))
+
+(log! (if restricted?
+        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body ONLY)"
+        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)"))
 (loop []
   (let [line (read-line)]
     (when (some? line)

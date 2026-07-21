@@ -11,6 +11,12 @@
 #
 #   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
 #   names its split telemetry half. Reads fold the pair into one logical store.
+#   FRAM_MCP_PROFILE (optional; unset = "full", the exact ten-tool surface):
+#   "graph-edit-v1" exposes AND server-authorizes ONLY the five graph-edit verbs
+#   (denials pre-alias, pre-dispatch, zero mutation) and refuses to start unless
+#   graph-edit mode is wired with canonical absolute FRAM_SRC / FRAM_CODE_LOG /
+#   FRAM_CODE_PORT identity, an existing in-tree log, and a live strict-fenced
+#   coordinator. Unknown profile names fail closed.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
   if [[ -z "${FRAM_LOG:-}" || -z "${FRAM_THREADS:-}" ]]; then
