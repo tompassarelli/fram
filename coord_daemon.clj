@@ -21,6 +21,7 @@
         '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
         '[java.security KeyStore])
 (load-file "coord.clj")          ; the reified coordinator library
+(load-file "fri.clj")            ; FRAM_MMAP_IMAGE V1: the .fri columnar mmap image (ns fri)
 (load-file "pull.clj")           ; the PULL API (ns pull) — MUST load after coord.clj:
                                  ; pull references coord.clj's readers as user/… and SCI
                                  ; resolves those qualified symbols at analysis time.
@@ -112,6 +113,20 @@
 (def hard-reserved #{"name" "store-supersedes"})
 (def schema-writable #{"cardinality" "value_kind"})
 (def schema-preds (clojure.set/union hard-reserved schema-writable))
+
+;; ---- FRAM_MMAP_IMAGE (thread 019f82d9): the beyond-RAM mmap-cold slice ---------
+;; Flag UNSET/off => every byte of today's behavior (checkpoint stays v2log, boot
+;; unchanged, bar 1). Flag on => the checkpoint writer ALSO emits a .fri columnar
+;; image; boot mmaps it READ-ONLY (OS page cache holds the cold corpus, NOT the JVM
+;; heap) and serves the by-l/by-lp/fact/value primitives from it, deferring the heap
+;; fold until a whole-corpus op arrives (ensure-materialized!). An atom (not a bare
+;; env read) so in-process tests/bench flip it without an env round-trip. Declared
+;; early: the :status handler (hybrid-fact-count) and maybe-reload! reference these.
+(def mmap-image-enabled?
+  (atom (contains? #{"1" "true" "on"} (str/lower-case (str (System/getenv "FRAM_MMAP_IMAGE"))))))
+(def cold-image (atom nil))     ; the open fri.Image while booted mmap-cold + unmaterialized
+(declare ensure-materialized! mmap-boot write-fri-snapshot! hybrid-fact-count
+         cold-served? cold-by-l cold-by-lp cold-render mmap-reconcile)
 
 ;; ---- warm scope-correct code-intelligence (refers_to materialized over `co`) -
 ;; resolve.clj's lexical resolver (loadable as a library) writes refers_to + render-
@@ -2531,7 +2546,7 @@
       ;; — the post-bounce verification surface for snapshot boot (thread 019f2190).
       ;; :rollback_floor — the queryable floor law (B2 §5/R0): releases below
       ;; this id are out of rollback support for generation-managed corpora.
-      :status   {:version (current-seq @co) :facts (count (c/current-facts (:store @co)))
+      :status   {:version (current-seq @co) :facts (hybrid-fact-count)
                  :log (or @flat-log (:log @co)) :boot @last-boot
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
@@ -3416,15 +3431,24 @@
                ;; (both logs). A1 costs no boot speedup anyway (plan §GO); correctness > latency.
                @telemetry-log "disabled (log-split routing active — whole-log merge boot)"
                :else (validate-sidecar snap flat))
+        ;; FRAM_MMAP_IMAGE: when the sidecar advertises an :fri image and the flag is
+        ;; on, prefer the mmap-cold boot (mmap-boot); it returns :cold when it kept the
+        ;; corpus mmap'd (empty tail) or falls into a byte-identical heap fold+tail.
+        ;; A missing/torn .fri returns nil -> we retry the v2log incremental-boot, then
+        ;; the whole-log fold. Every miss costs a slower boot, never wrong state.
         [ib why] (if why
                    [nil why]
-                   (try (if-let [r (incremental-boot snap flat)]
+                   (try (if-let [r (or (when (and @mmap-image-enabled? (= :fri (:image_format snap)))
+                                         (mmap-boot snap flat))
+                                       (incremental-boot snap flat))]
                           [r nil]
                           [nil "snapshot image missing/torn (hash gate)"])
                         (catch Throwable t
                           [nil (str "snapshot replay failed: " (.getMessage t))])))]
+    (reset! cold-image nil)                ; drop any prior boot's mmap handle
     (if ib
-      (do (reset! co (:co ib)) (reset! built-through (:through ib)))
+      (do (reset! co (:co ib)) (reset! built-through (:through ib))
+          (when (:cold ib) (reset! cold-image (:cold ib))))
       ;; cold path: no/invalid checkpoint -> the proven whole-log migrate
       (let [c0 (migrate-flat->co flat)]
         (reset! co c0)
@@ -3437,11 +3461,14 @@
     (reset! flat-bytes (.length (java.io.File. (str flat))))
     (reset! cache {:index nil :version -1})
     (reset-refers-state!)                  ; S3.3: derived refers_to belong to the OLD store
-    (index!)
+    ;; mmap-cold + unmaterialized: SKIP the eager warm-cache build (index!) — that
+    ;; 5-way String projection is the dominant RSS multiplier this slice defers. The
+    ;; first whole-corpus op materializes and warms (ensure-materialized!).
+    (when-not @cold-image (index!))
     (let [ms (quot (- (System/nanoTime) t0) 1000000)]
       (reset! last-boot (if ib
-                          {:mode :snapshot :ms ms :image (:image snap) :covers (:seq snap)
-                           :tail-lines (:tail-lines ib)}
+                          {:mode :snapshot :ms ms :image (or (:fri_image snap) (:image snap)) :covers (:seq snap)
+                           :cold (boolean @cold-image) :tail-lines (:tail-lines ib)}
                           {:mode :fold :ms ms :reason why}))
       (println (str "[fram] boot(flat): "
                     (if ib
@@ -3570,6 +3597,11 @@
 (defn maybe-reload!
   ([] (maybe-reload! false))
   ([nonblocking-if-active?]
+   ;; FRAM_MMAP_IMAGE: any corpus-touching op (every non-deferred request routes here
+   ;; via prepare-request-reload!) forces the lazy heap fold FIRST — reload cloning,
+   ;; tail apply, and whole-log fallback all assume a materialized heap Store. Deferred
+   ;; ops (:status/:version/lease) never reach here, so they stay mmap-cold.
+   (ensure-materialized!)
    ;; A fact mutation arriving after another request has already
    ;; observed and started rebuilding an external tail must not duplicate that
    ;; O(corpus) work before it can acquire a lease or commit.  It may safely mutate
@@ -3624,9 +3656,25 @@
       ;; read, or log-identity-of could see an empty/stale file and stamp a nil identity
       ;; (boot would then fail closed to a whole fold — safe, but silently slower).
       (durable-barrier!)
-      (write-sidecar! flat {:seq sq :image image :byte_offset byteoff :fact_count ccount :hash h
-                            :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
-                            :written_at (fram.rt/now-iso)})
+      ;; FRAM_MMAP_IMAGE: emit the columnar .fri alongside the v2log image (never on
+      ;; the commit/ack path — this is the checkpoint writer). The sidecar gains
+      ;; :image_format :fri + per-segment sha256 so boot's hash gate rejects a torn
+      ;; segment -> full-log fold. The v2log image + its :hash stay for the flag-off
+      ;; boot path (unchanged) and as the fallback when a segment hash fails.
+      ;; The .fri is dumped HERE — after the @snapshot:* appends + barrier — so it
+      ;; COVERS its own metadata and boot sees an EMPTY tail (the mmap-cold path).
+      ;; :fri_covers/:fri_byte_offset (post-append) drive mmap-boot's tail read; the
+      ;; v2log image keeps the pre-append :seq/:byte_offset for the flag-off path.
+      (let [fri-meta (when @mmap-image-enabled? (write-fri-snapshot! st flat (current-seq co)))
+            fri-byteoff (when fri-meta (.length (java.io.File. (str flat))))]
+        (write-sidecar! flat (cond-> {:seq sq :image image :byte_offset byteoff :fact_count ccount :hash h
+                                      :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
+                                      :written_at (fram.rt/now-iso)}
+                               fri-meta (assoc :image_format :fri
+                                               :fri_image (:image fri-meta)
+                                               :fri_segments (:segments fri-meta)
+                                               :fri_covers (:covers_seq fri-meta)
+                                               :fri_byte_offset fri-byteoff))))
       ;; the snapshot's own @snapshot:<seq> facts were appended inline (do-assert),
       ;; so the LIVE store already reflects them: advance built-through past them and
       ;; re-stamp, so a following reload tail-reads only genuinely-new appends.
@@ -3634,6 +3682,120 @@
       (reset! flat-mtime (stamp flat))
       (reset! flat-bytes (.length (java.io.File. (str flat))))
       {:ok sq :image image :byte_offset byteoff :fact_count ccount :hash h})))
+
+;; ============================================================================
+;; FRAM_MMAP_IMAGE (thread 019f82d9): checkpoint .fri emit, mmap-cold boot, the
+;; lazy heap-materialize seam, and the mmap-cold read primitives / parity gate.
+;; ============================================================================
+(defn- fri-image-path [flat sq] (str (snap-dir flat) "/snap-" sq ".fri"))
+
+;; checkpoint-side .fri writer. Serializes the live Store VALUE into the columnar
+;; image (fri/write-fri! does temp+fsync+ATOMIC_MOVE). Off the commit/ack path.
+(defn write-fri-snapshot! [st flat sq]
+  (let [path (fri-image-path flat sq)
+        r (fri/write-fri! @st path :fold-fingerprint (fold-fingerprint))]
+    (assoc r :image path)))
+
+;; boot-side: mmap the .fri, gate every segment's sha, then EITHER keep the corpus
+;; mmap'd (empty post-checkpoint tail -> the RSS-win path, heap holds only a seeded
+;; tail Store) OR — when a tail exists — fold cold into heap and apply the tail via
+;; the existing seam, byte-identical to the v2log incremental-boot. Returns the
+;; boot-flat shape {:co :through :tail-lines :cold img|nil} or nil to fall through.
+(defn- seeded-tail-store [img]
+  (let [st (c/new-store)]
+    (swap! st assoc :next-id (fri/next-id img) :next-seq (fri/covers-seq img)
+           :supersedes-pred (fri/supersedes-pred img))
+    st))
+
+(defn mmap-boot [snap flat]
+  (let [fri-path (:fri_image snap)
+        f (and fri-path (java.io.File. (str fri-path)))]
+    (when (and f (.exists f) (pos? (.length f)))
+      (let [img (fri/open-fri fri-path)]
+        (if-not (fri/verify-segments? img (:fri_segments snap))
+          (do (fri/close-fri! img) nil)     ; torn segment -> caller falls back
+          ;; the .fri covers POST-@snapshot-metadata state, so tail-read from the
+          ;; fri-specific covers/offset (empty right after a checkpoint = cold path).
+          (let [fcov (or (:fri_covers snap) (:seq snap))
+                foff (or (:fri_byte_offset snap) (:byte_offset snap))
+                {:keys [lines max-tx]} (read-log-tail* flat foff fcov)
+                through (max (long fcov) (long max-tx))
+                real-tail (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))) lines)]
+            (if (seq real-tail)
+              ;; NON-EMPTY tail: heap-fold cold + apply tail (== v2log incremental boot).
+              (let [st (c/new-store)]
+                (c/load-store! st (fri/cold->dump img))
+                (let [base {:store st :log nil :lock (Object.)}]
+                  (apply-tail! base lines)
+                  (swap! (:store base) update :next-seq #(max (long (or % 0)) through))
+                  (fri/close-fri! img)
+                  {:co base :through through :tail-lines (count lines) :cold nil}))
+              ;; EMPTY tail: keep cold mmap'd; heap = seeded (empty) tail Store.
+              {:co {:store (seeded-tail-store img) :log nil :lock (Object.)}
+               :through through :tail-lines 0 :cold img})))))))
+
+;; the lazy heap fold — first whole-corpus op (any non-deferred request; see
+;; maybe-reload!) reconstructs the exact heap Store cold->dump == a v2log replay would,
+;; then warms/re-seeds as a normal boot tail. Idempotent + no-op when already
+;; materialized (cold-image nil) or flag-off. Under dlock: readers/writers capture
+;; roots under the same lock, so the atomic :store swap is a clean generation flip.
+(defn ensure-materialized! []
+  (when @cold-image
+    (locking dlock
+      (when-let [img @cold-image]
+        (let [st (c/new-store)]
+          (c/load-store! st (fri/cold->dump img))
+          (reset! co (assoc @co :store st))
+          (seed-name-seq! st)
+          (reset! cache {:index nil :version -1})
+          (reset! facts-wire-cache {:version -1 :triples nil})
+          (reset-refers-state!)
+          (reset! cold-image nil)
+          (fri/close-fri! img)            ; frees the fd; buffers evict on GC (unmap caveat)
+          (reset! last-boot (assoc @last-boot :materialized true :cold false)))))))
+
+;; :status live-fact count WITHOUT materializing: cold live = nfacts - superseded
+;; (both counted in the footer; every superseded cid is a fact cid) + the (empty)
+;; tail store's live facts. Falls to the plain store count once materialized/flag-off.
+(defn hybrid-fact-count []
+  (if-let [img @cold-image]
+    (+ (- (fri/nfacts img) (long (get-in img [:footer :counts :superseded])))
+       (count (c/current-facts (:store @co))))
+    (count (c/current-facts (:store @co)))))
+
+;; mmap-served LOCAL read primitives (thread bar 3 latency scenario). Resolve a
+;; wire-shaped (subject-name, predicate-name) to cold ids and probe the mmap postings
+;; — the by-l / by-lp path served WITHOUT a heap fold. nil when not booted mmap-cold.
+(defn cold-served? [] (some? @cold-image))
+(defn cold-by-lp [subj-name pred-name]      ; -> live cids on (subject,pred), or nil
+  (when-let [img @cold-image]
+    (let [lid (fri/resolve-name img subj-name) pid (fri/pred-id img pred-name)]
+      (when (and lid pid) (fri/by-lp img lid pid)))))
+(defn cold-by-l [subj-name]                  ; -> all live cids on subject, or nil
+  (when-let [img @cold-image]
+    (when-let [lid (fri/resolve-name img subj-name)] (fri/by-l img lid))))
+(defn cold-render [cid]                       ; cid -> [subj-name pred-str r-rendered]
+  (when-let [img @cold-image] (fri/render img cid)))
+;; the mmap-served GROUP read: (subject,pred) -> rendered triples, direct from ordinals
+;; (no ord->cid->ord round-trip) — the fast local-read path.
+(defn cold-lp-render [subj-name pred-name]
+  (when-let [img @cold-image] (fri/render-lp img subj-name pred-name)))
+
+;; parity gate (bar 2): the mmap projection == a from-scratch whole-log fold. Reads
+;; the cold columns straight (no materialize) into the reified->facts name-triple shape
+;; (schema/resolve/read-hidden preds hidden identically) and set-compares to a fresh
+;; migrate. Meaningful while booted mmap-cold (empty tail); once a tail forces a heap
+;; fold, snapshot-reconcile is the (byte-identical) authority.
+(defn mmap-reconcile
+  ([] (mmap-reconcile @flat-log))
+  ([flat]
+   (if-let [img @cold-image]
+     (let [pred-hidden? (fn [p] (or (schema-preds p) (resolve-preds p) (read-hidden-preds p)))
+           cold (fri/cold-name-triples img pred-hidden? (constantly false))
+           fresh (set (reified->facts (migrate-flat->co flat)))
+           fresh* (set (map (fn [f] [(:l f) (:p f) (:r f)]) fresh))]
+       {:ok (= cold fresh*) :cold (count cold) :fresh (count fresh*)})
+     {:ok true :cold 0 :fresh 0 :note "not booted mmap-cold (nothing to project)"})))
 
 ;; ---- as-of: read the graph AS IT STOOD at flat seq N ----------------------------
 ;; nearest snapshot with covers_through <= N, then tail-apply the lines in
