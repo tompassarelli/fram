@@ -48,10 +48,24 @@
                 (if (c/value-object? st (:r f)) (c/literal st (:r f)) (s/name-of st (:r f)))))))))
     (/ (ms t0) (* iters (count subjects)))))     ; ms per (subject,pred) lookup+render
 
-(defn cold-by-lp-latency [subjects pred iters]
+;; COLD FIRST-TOUCH: clear the render caches each round so every (subject,pred)
+;; render is a cache MISS (the O(log n) dictionary-search path). Only the render is
+;; timed — the clear is outside the timer. This is the bar-2 number (documented bound).
+(defn firsttouch-by-lp-latency [subjects pred rounds]
+  (let [img @cold-image]
+    (loop [i 0 acc 0.0]
+      (if (= i rounds) (/ acc (double (* rounds (count subjects))))
+          (do (fri/clear-render-caches! img)
+              (let [t0 (System/nanoTime)]
+                (doseq [sn subjects] (cold-lp-render sn pred))
+                (recur (inc i) (+ acc (ms t0)))))))))
+
+;; HOT (repeat-key): warm the cache once (all keys resident), then time repeated
+;; touches — every access is a whole-render cache HIT. This is the bar-1 number.
+(defn hot-by-lp-latency [subjects pred iters]
+  (doseq [sn subjects] (cold-lp-render sn pred))     ; prime the cache
   (let [t0 (System/nanoTime)]
-    (dotimes [_ iters]
-      (doseq [sn subjects] (cold-lp-render sn pred)))   ; direct ordinal render (fast path)
+    (dotimes [_ iters] (doseq [sn subjects] (cold-lp-render sn pred)))
     (/ (ms t0) (* iters (count subjects)))))
 
 (defn heap-by-l-latency [subjects iters]
@@ -67,17 +81,24 @@
 (def LIT-PRED "line")        ; literal-valued: render is a direct dict read
 (def REF-PRED "in_module")   ; ref-valued: render also resolves the target's name
 (def ITERS 300)
+(def FT-ROUNDS 100)          ; cold first-touch: clear+sweep rounds (each = 500 misses)
 
-(defn by-lp-lat [cold? pred iters]
-  (if cold? (cold-by-lp-latency subjects pred iters) (heap-by-lp-latency subjects pred iters)))
+;; heap modes (off/on-mat) have no cold render cache: first-touch == hot == warm heap.
+(defn ft-by-lp [cold? pred rounds]
+  (if cold? (firsttouch-by-lp-latency subjects pred rounds) (heap-by-lp-latency subjects pred rounds)))
+(defn hot-by-lp [cold? pred iters]
+  (if cold? (hot-by-lp-latency subjects pred iters) (heap-by-lp-latency subjects pred iters)))
 
 (defn measure-row []
   (let [cold? (and (#{:on :on-mat} mode) (some? @cold-image))
-        ;; warm the JIT (discard) so the reported number is steady-state, not first-touch.
-        _ (do (by-lp-lat cold? LIT-PRED 40) (by-lp-lat cold? REF-PRED 40)
+        ;; warm the JIT (discard) so reported numbers are steady-state.
+        _ (do (hot-by-lp cold? LIT-PRED 40) (hot-by-lp cold? REF-PRED 40)
+              (when cold? (ft-by-lp true LIT-PRED 5) (ft-by-lp true REF-PRED 5))
               (if cold? (cold-by-l-latency subjects 40) (heap-by-l-latency subjects 40)))
-        by-lp-lit (by-lp-lat cold? LIT-PRED ITERS)
-        by-lp-ref (by-lp-lat cold? REF-PRED ITERS)
+        ft-lit  (ft-by-lp cold? LIT-PRED FT-ROUNDS)     ; cold first-touch (cache miss)
+        ft-ref  (ft-by-lp cold? REF-PRED FT-ROUNDS)
+        hot-lit (hot-by-lp cold? LIT-PRED ITERS)        ; hot repeat-key (cache hit)
+        hot-ref (hot-by-lp cold? REF-PRED ITERS)
         by-l  (if cold? (cold-by-l-latency subjects ITERS) (heap-by-l-latency subjects ITERS))]
     {:mode mode
      :boot-ms (:ms @last-boot)
@@ -87,8 +108,10 @@
      :vmrss-mib (Math/round (vmrss-mib))
      :vmhwm-mib (Math/round (vmhwm-mib))
      :heap-mib (Math/round (heap-mib))
-     :by-lp-lit-us (Math/round (* 1000.0 by-lp-lit))   ; us/lookup, literal-valued pred
-     :by-lp-ref-us (Math/round (* 1000.0 by-lp-ref))   ; us/lookup, ref-valued pred
+     :by-lp-lit-ft-us  (Math/round (* 1000.0 ft-lit))    ; cold first-touch, literal pred
+     :by-lp-ref-ft-us  (Math/round (* 1000.0 ft-ref))    ; cold first-touch, ref pred
+     :by-lp-lit-hot-us (Math/round (* 1000.0 hot-lit))   ; hot repeat-key, literal pred
+     :by-lp-ref-hot-us (Math/round (* 1000.0 hot-ref))   ; hot repeat-key, ref pred
      :by-l-us  (Math/round (* 1000.0 by-l))
      :sampled-subjects (count subjects)}))
 

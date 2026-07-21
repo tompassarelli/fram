@@ -273,6 +273,69 @@
       (let [o (locate-chunked img seg pos len) dup (.duplicate ^ByteBuffer (aget o 0))]
         (.position dup (int (aget o 1))) (.get dup out) out))))
 
+;; ---- bounded render caches (the by-lp cold-render latency repair) ------------
+;; V1 served every cold by-lp render straight off the mmap: ~4 dictionary binary
+;; searches per row (name-of = by-lp + fact-of + literal, each O(log n) with a
+;; String alloc per probe) vs warm heap's one O(1) hashmap hit -> 5-6x over the
+;; committed <=2x local-read bar. Fix: BOUNDED memoization on the cold render path
+;; (capacity-capped; eviction is FIFO — see the cache impl for why not strict LRU).
+;; Two layers, both capped:
+;;   :render-cache  (lid,pid) -> rendered-triples vector. The whole-render memo:
+;;                  a repeat touch of a hot (subject,pred) key is ONE hashmap hit,
+;;                  matching warm-heap semantics -> hot working set reaches O(1).
+;;   :name-cache / :lit-cache  entity-id -> name String / value-id -> literal
+;;                  String. Interning: shared across DIFFERENT (lid,pid) keys
+;;                  (many rows resolve the same predicate / ref target), so the
+;;                  hit rate is higher than the whole-render memo and the cached
+;;                  Strings are shared refs INSIDE the render-cache vectors (one
+;;                  String per distinct id, not per row) — bounds the RSS cost.
+;; INVARIANT (asserted, no invalidation logic): the .fri image is IMMUTABLE per
+;; generation. Cache lifetime == image lifetime. by-lp-ords over the image is a
+;; pure function of the fixed columns, so a cached (lid,pid) render can NEVER go
+;; stale while the image is open. The only "invalidation" is wholesale drop on
+;; image close/rotation (close-fri! discards the whole image map incl. its caches
+;; -> GC). A mutation would rotate to a NEW image (new caches); it never edits an
+;; open one. Do not add per-key invalidation — there is nothing to invalidate.
+;; Capacity: FRAM_MMAP_RENDER_CACHE entries per layer (default 65536). At 1M facts
+;; the whole-render entry averages ~a few short Strings; 64k caps each layer at
+;; low-tens-of-MiB resident — a small, BOUNDED fraction of the mmap RSS win.
+(def ^:private DEFAULT-RENDER-CACHE 65536)
+(defn- env-long [k default]
+  (or (try (some-> (System/getenv k) str/trim not-empty Long/parseLong)
+           (catch Exception _ nil))
+      default))
+;; *cache-cap* — test seam: lets a test drive eviction at a tiny cap without a
+;; 64k-key corpus. nil in production => the env/default governs.
+(def ^:dynamic *cache-cap* nil)
+(defn render-cache-cap ^long [] (or *cache-cap* (env-long "FRAM_MMAP_RENDER_CACHE" DEFAULT-RENDER-CACHE)))
+
+;; Bounded cache = one atom holding {:m persistent-map, :q insertion queue}. READS
+;; are write-free — (get (:m @a) k) is a plain volatile deref + map get, so a hot
+;; repeat touch pays no bookkeeping (a strict-LRU reorder-on-read would WRITE per
+;; hit, defeating the very hot-path latency bar we're repairing). Eviction is
+;; insertion-order (FIFO): a put over a full cache drops the oldest key. For the
+;; design target — a working set <= cap — nothing is ever evicted, so FIFO vs LRU
+;; is moot; once the set exceeds cap, FIFO bounds RSS identically to LRU (the
+;; load-bearing property here is BOUNDED, not the eviction order). swap! makes the
+;; put atomic; a racing double-miss recomputes the SAME value over the immutable
+;; image (idempotent). Pure Clojure — one impl runs on both the JVM daemon and the
+;; sci/babashka test harness (java.util.LinkedHashMap resolves in neither uniformly).
+(defn- lru [] (atom {:m {} :q clojure.lang.PersistentQueue/EMPTY}))
+;; drop all cached renders/decodes (bench first-touch isolation; also the manual
+;; wholesale invalidation if a caller ever needs it — the image itself is immutable).
+(defn clear-render-caches! [img]
+  (doseq [k [:render-cache :name-cache :lit-cache]]
+    (when-let [a (get img k)] (reset! a {:m {} :q clojure.lang.PersistentQueue/EMPTY}))))
+(defn- cache-get [a k] (get (:m @a) k))
+(defn- cache-put! [a k v ^long cap]
+  (swap! a (fn [{:keys [m q] :as s}]
+             (if (contains? m k) s                     ; already cached: leave order intact
+                 (let [m1 (assoc m k v) q1 (conj q k)]
+                   (if (> (count m1) cap)
+                     {:m (dissoc m1 (peek q1)) :q (pop q1)}   ; evict oldest inserted
+                     {:m m1 :q q1})))))
+  v)
+
 (defn open-fri [path]
   (let [raf (RandomAccessFile. (str path) "r")
         ch (.getChannel raf)
@@ -301,7 +364,11 @@
                                 s (String. (seg-get-bytes img :names-blob soff slen) StandardCharsets/UTF_8)]
                             (assoc! m s eid)))
                         (transient {}) (range nn)))]
-      (assoc img :names-map nmap :name-pid (value-id img "name")))))
+      (assoc img :names-map nmap :name-pid (value-id img "name")
+             ;; bounded render caches — dropped wholesale on close-fri! (image
+             ;; lifetime == cache lifetime; immutable image => never stale).
+             :cache-cap (render-cache-cap)
+             :render-cache (lru) :name-cache (lru) :lit-cache (lru)))))
 
 (defn close-fri! [img]
   ;; JVM mmap caveat: there is no portable public unmap. Dropping the buffer refs +
@@ -309,6 +376,10 @@
   ;; (rotation) must drop ALL refs and (System/gc) BEFORE unlink, or the old inode
   ;; lingers until GC. We close the channel/raf (frees the fd) but the MappedByteBuffers
   ;; stay valid until GC'd — documented in coord_daemon rotation.
+  ;; The bounded render caches (:render-cache/:name-cache/:lit-cache) need NO
+  ;; explicit teardown: they are plain heap maps reachable only through `img`, so
+  ;; dropping the image ref drops them wholesale (the only cache invalidation —
+  ;; the image is immutable per generation, so nothing invalidates mid-life).
   (try (.close (:channel img)) (catch Exception _ nil))
   (try (.close (:raf img)) (catch Exception _ nil)))
 
@@ -442,6 +513,19 @@
      :objects (vec (concat (map first values) ents (map first facts)))
      :values values :facts facts :tx-of tx-of :txs txs :superseded superd}))
 
+;; interned decodes for the cold RENDER path only (NOT the bulk cold->dump /
+;; cold-name-triples paths, which would thrash a bounded LRU with a full-corpus
+;; scan for no reuse). Cache non-nil results keyed by id; a nil (id is not a
+;; value / not named) is rare on the render path and left uncached.
+(defn- literal* [img ^long id]
+  (let [c (:lit-cache img) v (cache-get c id)]
+    (if (some? v) v
+        (let [r (literal img id)] (when (some? r) (cache-put! c id r (:cache-cap img))) r))))
+(defn- name-of* [img ^long subj]
+  (let [c (:name-cache img) v (cache-get c subj)]
+    (if (some? v) v
+        (let [r (name-of img subj)] (when (some? r) (cache-put! c subj r (:cache-cap img))) r))))
+
 ;; render one cid to [subj-name pred-str r-rendered] — ONE value lookup for r (literal
 ;; if it's a value, else a name), not value-object? + literal doubling the search.
 (defn render [img cid]
@@ -453,8 +537,8 @@
 ;; (postings runs are ordinals); rendering from the ordinal skips the cid->ord binary
 ;; search that render(cid) pays. Used by the daemon's cold group-render read path.
 (defn render-ord [img ord]
-  [(name-of img (ord-l img ord)) (literal img (ord-p img ord))
-   (let [r (ord-r img ord)] (or (literal img r) (name-of img r)))])
+  [(name-of* img (ord-l img ord)) (literal* img (ord-p img ord))
+   (let [r (ord-r img ord)] (or (literal* img r) (name-of* img r)))])
 
 ;; live ordinals on (lid,pid) — same binary search as by-lp but WITHOUT the ord->cid map.
 (defn by-lp-ords [img ^long lid ^long pid]
@@ -471,9 +555,17 @@
 
 ;; the daemon's cold GROUP-RENDER: (subject-name, pred-name) -> rendered triples, direct
 ;; from ordinals. This is the intended mmap-served local read (no cid round-trip).
+;; whole-render memo (bar 1): a repeat touch of a hot (lid,pid) key is a single
+;; hashmap hit, never re-walking the postings/dictionaries. Cache keyed by the
+;; ORDINAL-resolved (lid,pid) — a pure fn of the immutable image, so the cached
+;; vector cannot go stale for the image's lifetime (see cache invariant above).
 (defn render-lp [img ^String subj-name ^String pred-name]
   (let [lid (resolve-name img subj-name) pid (pred-id img pred-name)]
-    (when (and lid pid) (mapv #(render-ord img %) (by-lp-ords img lid pid)))))
+    (when (and lid pid)
+      (let [c (:render-cache img) k [lid pid] hit (cache-get c k)]
+        (if (some? hit) hit
+            (let [v (mapv #(render-ord img %) (by-lp-ords img lid pid))]
+              (cache-put! c k v (:cache-cap img)) v))))))
 
 ;; ---- cold projection for the parity gate (mmap-only, no materialize) ---------
 ;; live (l-name, p-str, r-rendered) domain triples, the same shape reified->facts

@@ -157,6 +157,44 @@
   (ensure-materialized!)
   (chk "edge: materialize state correct" (= (live-name-triples @co) truth-f))
 
+  ;; ======================================================================
+  ;; (G) bounded render cache: hit-correctness, superseded/multi under cache,
+  ;;     interning, and eviction bound (no unbounded growth past capacity).
+  ;; ======================================================================
+  (clean!)
+  (reset! mmap-image-enabled? true)
+  (write-lines! LOG [(ln 1 "assert" "@A" "title" "First")
+                     (ln 2 "assert" "@A" "title" "Updated")   ; supersede pre-checkpoint
+                     (ln 3 "assert" "@A" "tag" "x")
+                     (ln 4 "assert" "@A" "tag" "y")
+                     (ln 5 "assert" "@B" "title" "Bee")
+                     (ln 6 "assert" "@C" "title" "Cee")
+                     (ln 7 "assert" "@D" "title" "Dee")])
+  (boot-flat! LOG)
+  (write-snapshot! @co LOG)
+  (binding [fri/*cache-cap* 2] (boot-flat! LOG))   ; boot cold with a TINY cap
+  (chk "cache: booted mmap-cold" (some? @cold-image))
+  (let [img @cold-image
+        r1 (fri/render-lp img "@A" "title")
+        r2 (fri/render-lp img "@A" "title")]        ; second call = cache HIT
+    (chk "cache: render-lp @A title = one row Updated (superseded First excluded, cache on)"
+         (= [["@A" "title" "Updated"]] r1))
+    (chk "cache: repeat render-lp identical to first (cache hit)" (= r1 r2))
+    (chk "cache: @A tag multi-group renders {x y} under cache"
+         (= #{"x" "y"} (set (map #(nth % 2) (fri/render-lp img "@A" "tag")))))
+    (chk "cache: interned subject name renders correctly (@A)"
+         (= "@A" (ffirst r1)))
+    ;; eviction bound: touch >cap distinct (lid,pid) keys — cache stays <= cap.
+    (doseq [s ["@A" "@B" "@C" "@D"]] (fri/render-lp img s "title"))
+    (chk "cache: render-cache bounded at cap (<=2 over 5 distinct keys)"
+         (<= (count (:m @(:render-cache img))) 2))
+    (chk "cache: name-cache bounded at cap (no unbounded interning growth)"
+         (<= (count (:m @(:name-cache img))) 2))
+    ;; a key evicted by the churn recomputes correctly off the immutable image.
+    (chk "cache: evicted key re-renders correctly (@B title = Bee)"
+         (= [["@B" "title" "Bee"]] (fri/render-lp img "@B" "title"))))
+  (ensure-materialized!)
+
   ;; --- report ---
   (let [cs @checks fails (remove second cs)]
     (println "\n=== FRAM_MMAP_IMAGE V1: mmap-cold image round-trip + parity + fallback ===")

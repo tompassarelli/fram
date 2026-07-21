@@ -41,13 +41,15 @@ echo "# ================= RESULTS ================="
 (require (quote [clojure.edn :as edn]) (quote [clojure.string :as str]))
 (def rows (->> (slurp (str (or (System/getenv "BENCH_WORK") "/tmp/fram-beyond-ram") "/rows.edn"))
                str/split-lines (remove str/blank?) (map edn/read-string)))
-(println (format "%-8s %8s %9s %8s %8s %8s %10s %10s %8s"
-                 "mode" "boot-ms" "facts" "vmRSS" "vmHWM" "heap" "bylp-lit" "bylp-ref" "by-l"))
+(println (format "%-8s %8s %9s %8s %8s %8s %9s %9s %9s %9s %6s"
+                 "mode" "boot-ms" "facts" "vmRSS" "vmHWM" "heap"
+                 "lit-1st" "lit-hot" "ref-1st" "ref-hot" "by-l"))
 (doseq [r rows]
-  (println (format "%-8s %8s %9s %8s %8s %8s %10s %10s %8s"
+  (println (format "%-8s %8s %9s %8s %8s %8s %9s %9s %9s %9s %6s"
                    (name (:mode r)) (:boot-ms r) (:facts r) (:vmrss-mib r) (:vmhwm-mib r)
-                   (:heap-mib r) (:by-lp-lit-us r) (:by-lp-ref-us r) (:by-l-us r))))
-(println "(RSS in MiB; latencies in us/lookup, JIT-warmed steady state)")
+                   (:heap-mib r) (:by-lp-lit-ft-us r) (:by-lp-lit-hot-us r)
+                   (:by-lp-ref-ft-us r) (:by-lp-ref-hot-us r) (:by-l-us r))))
+(println "(RSS in MiB; latencies us/lookup; 1st=cold first-touch, hot=repeat-key cache hit)")
 (let [off (first (filter #(= :off (:mode %)) rows))
       on  (first (filter #(= :on  (:mode %)) rows))]
   (when (and off on)
@@ -55,8 +57,11 @@ echo "# ================= RESULTS ================="
                      (/ (double (:heap-mib off)) (max 1 (:heap-mib on)))
                      (/ (double (:vmrss-mib off)) (max 1 (:vmrss-mib on)))
                      (/ (double (:vmhwm-mib off)) (max 1 (:vmhwm-mib on)))))
-    (println (format "by-lp latency on-cold vs off-warm: literal %.2fx  ref %.2fx"
-                     (/ (double (:by-lp-lit-us on)) (max 1 (:by-lp-lit-us off)))
-                     (/ (double (:by-lp-ref-us on)) (max 1 (:by-lp-ref-us off)))))))
+    (println (format "HOT by-lp on vs off-warm (bar1 <=2x): literal %.2fx  ref %.2fx"
+                     (/ (double (:by-lp-lit-hot-us on)) (max 1 (:by-lp-lit-hot-us off)))
+                     (/ (double (:by-lp-ref-hot-us on)) (max 1 (:by-lp-ref-hot-us off)))))
+    (println (format "cold FIRST-touch on vs off-warm (bar2 bound): literal %.2fx  ref %.2fx"
+                     (/ (double (:by-lp-lit-ft-us on)) (max 1 (:by-lp-lit-hot-us off)))
+                     (/ (double (:by-lp-ref-ft-us on)) (max 1 (:by-lp-ref-hot-us off)))))))
 '
 )
