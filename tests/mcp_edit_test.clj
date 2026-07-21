@@ -190,8 +190,14 @@
               after (slurp schema-src)
               log-txt (slurp code-log)]
           (chk "FLIP: set-body via FRAM_FLIP -> isError=false" (not (reply-iserr r)))
-          (chk "FLIP: reply reports the FLIP path (committed FLIP)"
-               (str/includes? (or (reply-text r) "") "FLIP"))
+          ;; the graph-sourced arm answers either "committed (FLIP, graph-sourced)"
+          ;; (cold flip) or "committed … (WARM :edit-min …)" (the warm socket path
+          ;; that superseded it); the text-legacy arm says neither. Accept both
+          ;; graph-sourced markers — asserting only "FLIP" was stale after the
+          ;; warm :edit-min reply text landed.
+          (chk "FLIP: reply reports the graph-sourced path (FLIP / WARM :edit-min)"
+               (let [t (or (reply-text r) "")]
+                 (or (str/includes? t "FLIP") (str/includes? t "WARM :edit-min"))))
           (chk "FLIP: .bclj re-rendered (new body present -> render-from-log ran)"
                (and (not= before after) (str/includes? after "p (c/value-id ctx pname)")))
           (chk "FLIP: the AST delta is DURABLE in the code log (kind/v/fN lines appended)"
