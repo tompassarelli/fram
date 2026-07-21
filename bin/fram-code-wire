@@ -25,10 +25,14 @@ case "$MODE" in
     ;;
   off)
     if [ -f "$MCP_JSON" ]; then
-      jq '.mcpServers |= (. // {} | del(.fram))' "$MCP_JSON" > "$MCP_JSON.tmp"
-      if [ "$(jq '.mcpServers | length' "$MCP_JSON.tmp")" = "0" ] && \
-         [ "$(jq 'keys - ["mcpServers"] | length' "$MCP_JSON.tmp")" = "0" ]; then
-        rm -f "$MCP_JSON.tmp" "$MCP_JSON"
+      # drop mcpServers.fram; if that empties mcpServers, drop the key
+      # itself too rather than leaving a dangling {} — but keep any other
+      # unrelated root keys intact.
+      jq '(.mcpServers // {} | del(.fram)) as $s
+          | if ($s | length) == 0 then del(.mcpServers) else .mcpServers = $s end' \
+        "$MCP_JSON" > "$MCP_JSON.tmp"
+      if [ "$(jq 'keys | length' "$MCP_JSON.tmp")" = "0" ]; then
+        rm -f "${MCP_JSON:?}.tmp" "${MCP_JSON:?}"
       else
         mv "$MCP_JSON.tmp" "$MCP_JSON"
       fi
