@@ -71,6 +71,12 @@
 ;; The open-map discriminator (contains? t :var) can't be a record, so t stays Any.
 (defn- var? [t :- Any] :- Bool (and (map? t) (contains? t :var)))
 
+;; a COMPARISON-PREDICATE body literal: {:pred :gt :args [a b]}. Distinguished by
+;; the :pred key. It never binds and never reads db/delta/index — it only FILTERS a
+;; substitution (range-restricted: every var must be bound by an earlier positive
+;; literal, enforced at validation). Ops :eq :ne :lt :le :gt :ge, all binary.
+(defn- pred? [litt :- Any] :- Bool (and (map? litt) (contains? litt :pred)))
+
 ;; --- EDB: project the LIVE fact store into triple/fact-id tuple-sets ----------
 (defn edb [ctx :- (Atom t/Store)] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) cid :- Int] :- (Map String (Set (Vec Any)))
@@ -101,19 +107,53 @@
 (defn- ground [args :- (Vec Any) subst :- (Map String Any)] :- (Vec Any)
   (mapv (fn [t :- Any] :- Any (if (var? t) (get subst (:var t)) t)) args))
 
+;; numeric coercion for ordering predicates: a ground operand (a String from the
+;; EDB or a bare number constant) -> its Double value, or nil when non-numeric.
+;; Routed through `str` so both String and number operands are handled without any
+;; type narrowing on the polymorphic Any operand.
+(defn- num-of [v :- Any] :- (U Double Nil)
+  (let [s (str v)
+        l (parse-long s)]
+    (if (some? l) (double l) (parse-double s))))
+
+;; evaluate a comparison predicate on a substitution. :eq/:ne are raw-string (never
+;; parsed) equality/disequality; :lt/:le/:gt/:ge parse both operands numerically and
+;; are FALSE (row dropped, never a query error) when either operand is non-numeric.
+(defn- eval-pred [litt :- (Map Keyword Any) subst :- (Map String Any)] :- Bool
+  (let [op (:pred litt)
+        g (ground (:args litt) subst)
+        a (nth g 0)
+        b (nth g 1)]
+    (cond
+      [(= op :eq) (= a b)]
+      [(= op :ne) (not (= a b))]
+      [:else
+       (let [na (num-of a) nb (num-of b)]
+         (if (or (nil? na) (nil? nb))
+           false
+           (cond
+             [(= op :lt) (< na nb)]
+             [(= op :le) (<= na nb)]
+             [(= op :gt) (> na nb)]
+             [(= op :ge) (>= na nb)]
+             [:else false])))])))
+
 ;; literal match. Positive: scan the relation's tuples, collect substs. Negated:
 ;; ground the (range-restricted) args and pass the subst through iff that tuple is
 ;; absent from the relation (which, when stratified, is a frozen lower stratum).
 (defn- match-lit [db :- (Map String (Set (Vec Any))) litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))   ; -> [subst...]
-  (if (:neg litt)
-    (let [g (ground (:args litt) subst)]
-      (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
+  (cond
+    [(pred? litt) (if (eval-pred litt subst) [subst] [])]
+    [(:neg litt)
+     (let [g (ground (:args litt) subst)]
+      (if (contains? (get db (:rel litt) #{}) g) [] [subst]))]
+    [:else
     (let [tuples (vec (get db (:rel litt) #{})) args (:args litt)]
       ;; unify-args genuinely returns (Map String Any)? — nil on a failed
       ;; unification — so the mapv lambda's return is NULLABLE. The filterv on
       ;; some? then drops those nils, so the RESULT vector holds only real substs.
       (filterv (fn [s :- (Map String Any)] :- Bool (some? s))
-               (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) tuples)))))
+               (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) tuples)))]))
 
 ;; conjunctive body: thread substitutions left-to-right (nested-loop join)
 (defn- eval-body [db :- (Map String (Set (Vec Any))) body :- (Vec (Map Keyword Any)) subst :- (Map String Any)] :- (Vec (Map String Any))   ; -> [subst...]
@@ -139,7 +179,7 @@
 (defn- positive-positions [body :- (Vec (Map Keyword Any))] :- (Vec Int)
   (loop [i 0 ls body acc []]
     (if (empty? ls) acc
-      (recur (+ i 1) (rest ls) (if (:neg (first ls)) acc (conj acc i))))))
+      (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (:pred (first ls))) acc (conj acc i))))))
 
 ;; eval a body with the literal at `pin` reading from `delta`, all others from
 ;; `db` (negated literals always read full `db` — stratification keeps them frozen).
@@ -300,9 +340,12 @@
 ;; (the SAME predicate the oracle applies) over just those candidates. Negation is
 ;; byte-for-byte the oracle's: ground the range-restricted args, pass iff absent.
 (defn- match-lit-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))
-  (if (:neg litt)
-    (let [g (ground (:args litt) subst)]
-      (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
+  (cond
+    [(pred? litt) (if (eval-pred litt subst) [subst] [])]
+    [(:neg litt)
+     (let [g (ground (:args litt) subst)]
+      (if (contains? (get db (:rel litt) #{}) g) [] [subst]))]
+    [:else
     (let [args (:args litt) rel (:rel litt)
           cands (indexed-candidates idx rel args subst)]
       (if (nil? cands)
@@ -310,7 +353,7 @@
           (filterv (fn [s :- (Map String Any)] :- Bool (some? s))
                    (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) tuples)))
         (filterv (fn [s :- (Map String Any)] :- Bool (some? s))
-                 (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) cands))))))
+                 (mapv (fn [tup :- (Vec Any)] :- (U (Map String Any) Nil) (unify-args args tup subst)) cands))))]))
 
 ;; conjunctive body over the indexed db (seed round: no delta, all lits read db)
 (defn- eval-body-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) body :- (Vec (Map Keyword Any)) subst :- (Map String Any)] :- (Vec (Map String Any))

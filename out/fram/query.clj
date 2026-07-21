@@ -7,22 +7,15 @@
 (def ^:dynamic *query-control* nil)
 
 (defn- query-check []
-  (if (nil? *query-control*)
-    nil
-    (let [steps (.incrementAndGet (:steps *query-control*))
-          now (System/nanoTime)
-          cancelled (deref (:cancelled *query-control*))
-          code (cond
-                 (some? cancelled) :query-cancelled
-                 (> steps (:max-steps *query-control*)) :query-work-limit
-                 (>= now (:deadline-ns *query-control*)) :query-time-limit
-                 :else nil)]
-      (if (nil? code)
-        nil
-        (throw (ex-info (str "query evaluation stopped: " (name code))
-                        {:type :fram-query-abort :code code :reason cancelled
-                         :steps steps :max-steps (:max-steps *query-control*)
-                         :timeout-ms (:timeout-ms *query-control*)}))))))
+  (if (nil? *query-control*) nil (let [steps (.incrementAndGet (:steps *query-control*))
+   now (System/nanoTime)
+   cancelled (deref (:cancelled *query-control*))
+   code (cond
+  (some? cancelled) :query-cancelled
+  (> steps (:max-steps *query-control*)) :query-work-limit
+  (>= now (:deadline-ns *query-control*)) :query-time-limit
+  :else nil)]
+  (if (nil? code) nil (throw (ex-info (str "query evaluation stopped: " (name code)) {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps (:max-steps *query-control*) :timeout-ms (:timeout-ms *query-control*)}))))))
 
 (defn facts->edb [facts]
   (loop [cs facts
@@ -48,8 +41,11 @@
 (defn- canon-rules [rs]
   (if (vector? rs) (mapv canon-rule rs) rs))
 
+(defn- canon-find [f]
+  (if (and (map? f) (contains? f :rel)) (assoc f :rel (canon-rel (:rel f))) (canon-rel f)))
+
 (defn canon-q [q]
-  (if (not (map? q)) q (let [q1 (if (contains? q :find) (assoc q :find (canon-rel (:find q))) q)
+  (if (not (map? q)) q (let [q1 (if (contains? q :find) (assoc q :find (canon-find (:find q))) q)
    q2 (if (contains? q1 :rules) (assoc q1 :rules (canon-rules (:rules q1))) q1)]
   (if (contains? q2 :strata) (assoc q2 :strata (if (vector? (:strata q2)) (mapv canon-rules (:strata q2)) (:strata q2))) q2))))
 
@@ -59,8 +55,11 @@
 (defn- vars-of [args]
   (reduce (fn [acc t] (if (and (map? t) (contains? t :var)) (conj acc (:var t)) acc)) #{} args))
 
+(defn- ^Boolean binding-lit? [litt]
+  (and (map? litt) (contains? litt :rel) (not (:neg litt)) (not (:pred litt)) (vector? (:args litt))))
+
 (defn- positive-body-vars [body]
-  (reduce (fn [acc litt] (if (and (map? litt) (not (:neg litt)) (vector? (:args litt))) (reduce (fn [a v] (conj a v)) acc (vec (vars-of (:args litt)))) acc)) #{} body))
+  (reduce (fn [acc litt] (if (binding-lit? litt) (reduce (fn [a v] (conj a v)) acc (vec (vars-of (:args litt)))) acc)) #{} body))
 
 (defn- ^Boolean all-vectors? [xs]
   (loop [ys xs]
@@ -104,8 +103,54 @@
   (reduce (fn [acc rel] (let [ns (get arities rel #{})]
   (if (> (count ns) 1) (conj acc (str "relation '" rel "' is derived at inconsistent arities " (str (vec ns)) " — every rule deriving a head must agree on argument count")) acc))) [] (vec (keys arities)))))
 
+(defn- head-arity-map [rules]
+  (reduce (fn [acc r] (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:args (:head r)))) (assoc acc (:rel (:head r)) (count (:args (:head r)))) acc)) {} rules))
+
+(def agg-ops #{:count :count-distinct :sum :avg :min :max})
+
+(def agg-arg-ops #{:count-distinct :sum :avg :min :max})
+
+(defn- agg-spec-errors [spec rel arity]
+  (if (not (map? spec)) [":find :agg entry must be a map {:op <op> :arg <pos>}"] (let [op (:op spec)
+   arg (:arg spec)
+   e1 (if (contains? agg-ops op) [] [(str ":find :agg :op must be one of :count :count-distinct :sum :avg :min :max, got " (str op))])
+   e2 (if (and (contains? agg-arg-ops op) (nil? arg)) [(str ":find :agg :op " (str op) " requires an :arg position")] [])
+   e3 (if (and (some? arg) (not (integer? arg))) [":find :agg :arg must be an integer position"] [])
+   e4 (if (and (integer? arg) (integer? arity) (or (< arg 0) (>= arg arity))) [(str ":find :agg :arg position " (str arg) " out of range for relation '" (str rel) "' arity " (str arity))] [])]
+  (vec (concat e1 (concat e2 (concat e3 e4)))))))
+
+(defn- aggregate-find-errors [find derived arities]
+  (let [rel (:rel find)
+   group (:group find)
+   agg (:agg find)
+   e-rel (cond
+  (not (string? rel)) [":find :rel must be a string relation name"]
+  (or (= rel "fact") (= rel "fact-id")) [":find :rel cannot be a base relation (fact/fact-id) — aggregate over a :head rel you derive"]
+  (not (contains? derived rel)) [(str ":find :rel '" (str rel) "' is not a derived head relation")]
+  :else [])
+   arity (get arities (if (string? rel) rel ""))
+   e-group (cond
+  (not (vector? group)) [":find :group must be a vector of integer positions"]
+  :else (reduce (fn [acc g] (if (and (integer? g) (>= g 0) (or (nil? arity) (< g arity))) acc (conj acc (str ":find :group position " (str g) " is not a valid position for relation '" (str rel) "' (arity " (str arity) ")")))) [] group))
+   e-agg (cond
+  (not (vector? agg)) [":find :agg must be a vector of aggregate specs"]
+  (empty? agg) [":find :agg must contain at least one aggregate {:op ...}"]
+  :else (reduce (fn [acc spec] (vec (concat acc (agg-spec-errors spec rel arity)))) [] agg))]
+  (vec (concat e-rel (concat e-group e-agg)))))
+
+(def pred-ops #{:eq :ne :lt :le :gt :ge})
+
+(defn- pred-lit-errors [litt bound]
+  (let [op (:pred litt)
+   args (:args litt)
+   e1 (if (contains? pred-ops op) [] [(str "predicate :pred must be one of :eq :ne :lt :le :gt :ge, got " (str op))])
+   e2 (if (and (vector? args) (= (count args) 2)) [] ["predicate :args must be a 2-vector [a b]"])
+   e3 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad predicate term " (str t) " — use {:var \"n\"} or a constant")))) [] args) [])
+   e4 (if (vector? args) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "predicate var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
+  (vec (concat e1 (concat e2 (concat e3 e4))))))
+
 (defn- lit-errors [litt known bound]
-  (if (not (map? litt)) ["body literal must be a map {:rel r :args [...] :neg? bool}"] (let [rel (:rel litt)
+  (if (not (map? litt)) ["body literal must be a map {:rel r :args [...] :neg? bool}"] (if (contains? litt :pred) (pred-lit-errors litt bound) (let [rel (:rel litt)
    args (:args litt)
    e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
    e2 (if (vector? args) [] ["literal :args must be a vector"])
@@ -115,7 +160,7 @@
    en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false))) ["literal :neg must be true or false"] [])
    e6 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad term " (str t) " — use {:var \"n\"} or a constant")))) [] args) [])
    e7 (if (and (= (:neg litt) true) (vector? args)) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
-  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))
+  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7))))))))))))
 
 (defn- body-errors [body known]
   (loop [ls body
@@ -123,7 +168,7 @@
    errs []]
   (if (empty? ls) errs (let [litt (first ls)
    le (lit-errors litt known bound)
-   bound2 (if (and (map? litt) (not (:neg litt)) (vector? (:args litt))) (reduce (fn [acc v] (conj acc v)) bound (vec (vars-of (:args litt)))) bound)]
+   bound2 (if (binding-lit? litt) (reduce (fn [acc v] (conj acc v)) bound (vec (vars-of (:args litt)))) bound)]
   (recur (rest ls) bound2 (vec (concat errs le)))))))
 
 (defn- rule-errors [r known]
@@ -145,7 +190,10 @@
    derived (head-rels rules)
    known (conj (conj derived "fact") "fact-id")
    find (:find q)
-   ef (if (string? find) (if (contains? known find) [] [(str "unknown :find relation '" find "' — name a :head rel you define")]) [":find must be a relation name (string)"])
+   ef (cond
+  (string? find) (if (contains? known find) [] [(str "unknown :find relation '" find "' — name a :head rel you define")])
+  (map? find) (aggregate-find-errors find derived (head-arity-map rules))
+  :else [":find must be a relation name (string) or an aggregate spec map {:rel R :group [..] :agg [..]}"])
    er (if (empty? rules) ["provide at least one rule in :rules or :strata"] [])
    erules (reduce (fn [acc r] (vec (concat acc (rule-errors r known)))) [] rules)
    esv (d/strata-violations strata)
@@ -217,7 +265,7 @@
   :else (let [cursor-result (if (some? after) (decode-page-cursor after) {:ok nil})]
   (if (contains? cursor-result :error) {:error [(:error cursor-result)]} (let [q (canon-q q0)
    errs (validate q)]
-  (if (not (empty? errs)) {:error errs} (let [edb (facts->edb facts)
+  (if (not (empty? errs)) {:error errs} (if (map? (:find q)) {:error ["aggregate :find is not pageable in v1 — use run (aggregates return a bounded group set)"]} (let [edb (facts->edb facts)
    strata (strata-of q)
    db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
    find (:find q)
@@ -229,7 +277,85 @@
    window (mapv second (take (+ limit 1) eligible))
    wanted (min limit (count window))]
   (if (= wanted 0) (page-envelope window 0) (let [n (fitting-prefix window wanted)]
-  (if (= n 0) {:error ["query page contains a row too large for the bounded wire response"] :max-bytes max-page-wire-bytes} (page-envelope window n)))))))))))
+  (if (= n 0) {:error ["query page contains a row too large for the bounded wire response"] :max-bytes max-page-wire-bytes} (page-envelope window n))))))))))))
+
+(defn- as-int [x]
+  (if (integer? x) x 0))
+
+(defn- num-of-str [^String s]
+  (let [l (parse-long s)]
+  (if (some? l) (double l) (parse-double s))))
+
+(defn- num-double [^String s]
+  (let [l (parse-long s)]
+  (if (some? l) (double l) (let [d (parse-double s)]
+  (if (some? d) d 0.0)))))
+
+(defn- coerce-str [^String s]
+  (let [l (parse-long s)]
+  (if (some? l) l (let [d (parse-double s)]
+  (if (some? d) d 0.0)))))
+
+(defn- ^Boolean all-int? [tuples i]
+  (loop [ts tuples]
+  (if (empty? ts) true (if (some? (parse-long (nth (first ts) i))) (recur (rest ts)) false))))
+
+(defn- sum-longs [tuples i]
+  (reduce (fn [a t] (+ a (let [l (parse-long (nth t i))]
+  (if (some? l) l 0)))) 0 tuples))
+
+(defn- sum-doubles [tuples i]
+  (reduce (fn [a t] (+ a (num-double (nth t i)))) 0.0 tuples))
+
+(defn- extreme [tuples i ^Boolean want-max]
+  (loop [ts tuples
+   best nil
+   best-d 0.0]
+  (if (empty? ts) (coerce-str (if (some? best) best "0")) (let [s (nth (first ts) i)
+   d (num-double s)]
+  (if (or (nil? best) (if want-max (> d best-d) (< d best-d))) (recur (rest ts) s d) (recur (rest ts) best best-d))))))
+
+(defn- first-nonnumeric [tuples i]
+  (loop [ts tuples]
+  (if (empty? ts) nil (let [s (nth (first ts) i)]
+  (if (nil? (num-of-str s)) s (recur (rest ts)))))))
+
+(def agg-num-ops #{:sum :avg :min :max})
+
+(defn- numeric-errors [rel rel-name agg]
+  (reduce (fn [acc spec] (if (contains? agg-num-ops (:op spec)) (let [i (as-int (:arg spec))
+   bad (first-nonnumeric rel i)]
+  (if (some? bad) (conj acc (str "aggregate " (str (:op spec)) " over relation '" (str rel-name) "' position " (str i) " requires numeric values, but found non-numeric " (pr-str bad))) acc)) acc)) [] agg))
+
+(defn- group-rel [rel group]
+  (reduce (fn [acc tup] (let [gkey (mapv (fn [i] (nth tup i)) group)]
+  (update acc gkey (fn [v] (conj (or v []) tup))))) {} rel))
+
+(defn- agg-value [tuples spec]
+  (let [op (:op spec)
+   i (as-int (:arg spec))]
+  (cond
+  (= op :count) (count tuples)
+  (= op :count-distinct) (count (set (mapv (fn [t] (nth t i)) tuples)))
+  (= op :sum) (if (all-int? tuples i) (sum-longs tuples i) (sum-doubles tuples i))
+  (= op :avg) (/ (sum-doubles tuples i) (double (count tuples)))
+  (= op :min) (extreme tuples i false)
+  (= op :max) (extreme tuples i true)
+  :else nil)))
+
+(defn- agg-row [gkey tuples agg]
+  (vec (concat gkey (mapv (fn [spec] (agg-value tuples spec)) agg))))
+
+(defn- aggregate-run [db find]
+  (let [rel-name (:rel find)
+   rel (vec (get db (if (string? rel-name) rel-name "") #{}))
+   group (mapv (fn [g] (as-int g)) (vec (:group find)))
+   agg (vec (:agg find))]
+  (if (empty? rel) {:ok []} (let [nerrs (numeric-errors rel rel-name agg)]
+  (if (not (empty? nerrs)) {:error nerrs} (let [groups (group-rel rel group)
+   ng (count groups)]
+  (if (> ng max-results) {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ng " groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit ng :max max-results} (let [rows (mapv (fn [gkey] (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))]
+  {:ok (vec (sort-by pr-str rows))}))))))))
 
 (defn run [facts q0]
   (let [q (canon-q q0)
@@ -237,7 +363,7 @@
   (if (not (empty? errs)) {:error errs} (let [edb (facts->edb facts)
    strata (strata-of q)
    db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
-   find (:find q)
-   rel (get db find #{})
+   find (:find q)]
+  (if (map? find) (aggregate-run db find) (let [rel (get db find #{})
    n (count rel)]
-  (if (> n max-results) {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit n :max max-results} {:ok (d/facts db find)})))))
+  (if (> n max-results) {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit n :max max-results} {:ok (d/facts db find)})))))))

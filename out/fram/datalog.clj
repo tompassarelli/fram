@@ -5,25 +5,15 @@
 (def ^:dynamic *query-control* nil)
 
 (defn- query-check []
-  (if (nil? *query-control*)
-    nil
-    (let [steps (.incrementAndGet (:steps *query-control*))
-          now (System/nanoTime)
-          cancelled (deref (:cancelled *query-control*))
-          code (cond
-                 (some? cancelled) :query-cancelled
-                 (> steps (:max-steps *query-control*)) :query-work-limit
-                 (>= now (:deadline-ns *query-control*)) :query-time-limit
-                 :else nil)]
-      (if (nil? code)
-        nil
-        (throw (ex-info (str "query evaluation stopped: " (name code))
-                        {:type :fram-query-abort
-                         :code code
-                         :reason cancelled
-                         :steps steps
-                         :max-steps (:max-steps *query-control*)
-                         :timeout-ms (:timeout-ms *query-control*)}))))))
+  (if (nil? *query-control*) nil (let [steps (.incrementAndGet (:steps *query-control*))
+   now (System/nanoTime)
+   cancelled (deref (:cancelled *query-control*))
+   code (cond
+  (some? cancelled) :query-cancelled
+  (> steps (:max-steps *query-control*)) :query-work-limit
+  (>= now (:deadline-ns *query-control*)) :query-time-limit
+  :else nil)]
+  (if (nil? code) nil (throw (ex-info (str "query evaluation stopped: " (name code)) {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps (:max-steps *query-control*) :timeout-ms (:timeout-ms *query-control*)}))))))
 
 (defn v [name]
   {:var name})
@@ -39,6 +29,9 @@
 
 (defn- ^Boolean var? [t]
   (and (map? t) (contains? t :var)))
+
+(defn- ^Boolean pred? [litt]
+  (and (map? litt) (contains? litt :pred)))
 
 (defn edb [ctx]
   (reduce (fn [db cid] (let [cl (c/fact-of ctx cid)
@@ -65,9 +58,34 @@
 (defn- ground [args subst]
   (mapv (fn [t] (if (var? t) (get subst (:var t)) t)) args))
 
+(defn- num-of [v]
+  (let [s (str v)
+   l (parse-long s)]
+  (if (some? l) (double l) (parse-double s))))
+
+(defn- ^Boolean eval-pred [litt subst]
+  (let [op (:pred litt)
+   g (ground (:args litt) subst)
+   a (nth g 0)
+   b (nth g 1)]
+  (cond
+  (= op :eq) (= a b)
+  (= op :ne) (not (= a b))
+  :else (let [na (num-of a)
+   nb (num-of b)]
+  (if (or (nil? na) (nil? nb)) false (cond
+  (= op :lt) (< na nb)
+  (= op :le) (<= na nb)
+  (= op :gt) (> na nb)
+  (= op :ge) (>= na nb)
+  :else false))))))
+
 (defn- match-lit [db litt subst]
-  (if (:neg litt) (let [g (ground (:args litt) subst)]
-  (if (contains? (get db (:rel litt) #{}) g) [] [subst])) (let [tuples (vec (get db (:rel litt) #{}))
+  (cond
+  (pred? litt) (if (eval-pred litt subst) [subst] [])
+  (:neg litt) (let [g (ground (:args litt) subst)]
+  (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
+  :else (let [tuples (vec (get db (:rel litt) #{}))
    args (:args litt)]
   (filterv (fn [s] (some? s)) (mapv (fn [tup] (unify-args args tup subst)) tuples)))))
 
@@ -82,7 +100,7 @@
   (loop [i 0
    ls body
    acc []]
-  (if (empty? ls) acc (recur (+ i 1) (rest ls) (if (:neg (first ls)) acc (conj acc i))))))
+  (if (empty? ls) acc (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (:pred (first ls))) acc (conj acc i))))))
 
 (defn- eval-body-pinned [db delta body pin]
   (loop [i 0
@@ -164,8 +182,11 @@
   (recur (+ i 1) (rest as) (if (or (not found) (< (count c) (count best))) c best) true)))))))
 
 (defn- match-lit-idx [db idx litt subst]
-  (if (:neg litt) (let [g (ground (:args litt) subst)]
-  (if (contains? (get db (:rel litt) #{}) g) [] [subst])) (let [args (:args litt)
+  (cond
+  (pred? litt) (if (eval-pred litt subst) [subst] [])
+  (:neg litt) (let [g (ground (:args litt) subst)]
+  (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
+  :else (let [args (:args litt)
    rel (:rel litt)
    cands (indexed-candidates idx rel args subst)]
   (if (nil? cands) (let [tuples (vec (get db rel #{}))]

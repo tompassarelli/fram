@@ -86,10 +86,16 @@
 ;; Rewrite base-relation aliases everywhere the query names a relation (:find + every
 ;; body literal's :rel, across :rules and :strata). Total + shape-preserving: a
 ;; non-map / malformed q flows through untouched so validate still reports it.
+;; :find is EITHER a relation-name string OR an aggregate spec map {:rel R ...};
+;; canon its relation name either way so a base-relation alias is still caught.
+(defn- canon-find [f :- Any] :- Any
+  (if (and (map? f) (contains? f :rel))
+    (assoc f :rel (canon-rel (:rel f)))
+    (canon-rel f)))
 (defn canon-q [q :- Any] :- Any
   (if (not (map? q))
     q
-    (let [q1 (if (contains? q :find) (assoc q :find (canon-rel (:find q))) q)
+    (let [q1 (if (contains? q :find) (assoc q :find (canon-find (:find q))) q)
           q2 (if (contains? q1 :rules) (assoc q1 :rules (canon-rules (:rules q1))) q1)]
       (if (contains? q2 :strata)
         (assoc q2 :strata (if (vector? (:strata q2)) (mapv canon-rules (:strata q2)) (:strata q2)))
@@ -108,10 +114,14 @@
             (if (and (map? t) (contains? t :var)) (conj acc (:var t)) acc))
           #{} args))
 
-;; union of the vars bound by the POSITIVE literals of a body
+;; union of the vars bound by the POSITIVE literals of a body. A literal binds vars
+;; only if it names a relation (:rel) and is neither negated nor a comparison
+;; predicate — negated and predicate literals only FILTER, they never bind.
+(defn- binding-lit? [litt :- Any] :- Bool
+  (and (map? litt) (contains? litt :rel) (not (:neg litt)) (not (:pred litt)) (vector? (:args litt))))
 (defn- positive-body-vars [body :- (Vec Any)] :- (Set String)
   (reduce (fn [acc :- (Set String) litt :- Any] :- (Set String)
-            (if (and (map? litt) (not (:neg litt)) (vector? (:args litt)))
+            (if (binding-lit? litt)
               (reduce (fn [a :- (Set String) v :- String] :- (Set String) (conj a v)) acc (vec (vars-of (:args litt))))
               acc))
           #{} body))
@@ -198,12 +208,94 @@
                   acc)))
             [] (vec (keys arities)))))
 
+;; rel -> arity, for the derived heads (reuses the same shape rel-arity-violations
+;; folds over). When a head is derived at inconsistent arities that is a separate
+;; validation error; this map just takes each rule's head arity.
+(defn- head-arity-map [rules :- (Vec Any)] :- (Map String Int)
+  (reduce (fn [acc :- (Map String Int) r :- Any] :- (Map String Int)
+            (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:args (:head r))))
+              (assoc acc (:rel (:head r)) (count (:args (:head r))))
+              acc))
+          {} rules))
+
+;; --- AGGREGATE :find validation ---------------------------------------------
+;; :find may be an aggregate spec {:rel R :group [ints] :agg [{:op .. :arg ..}...]}.
+(def agg-ops :- (Set Keyword) #{:count :count-distinct :sum :avg :min :max})
+;; ops that REQUIRE a numeric :arg position (count's :arg is optional).
+(def agg-arg-ops :- (Set Keyword) #{:count-distinct :sum :avg :min :max})
+
+(defn- agg-spec-errors [spec :- Any rel :- Any arity :- Any] :- (Vec String)
+  (if (not (map? spec))
+    [":find :agg entry must be a map {:op <op> :arg <pos>}"]
+    (let [op (:op spec) arg (:arg spec)
+          e1 (if (contains? agg-ops op) []
+               [(str ":find :agg :op must be one of :count :count-distinct :sum :avg :min :max, got " (str op))])
+          e2 (if (and (contains? agg-arg-ops op) (nil? arg))
+               [(str ":find :agg :op " (str op) " requires an :arg position")] [])
+          e3 (if (and (some? arg) (not (integer? arg)))
+               [":find :agg :arg must be an integer position"] [])
+          e4 (if (and (integer? arg) (integer? arity) (or (< arg 0) (>= arg arity)))
+               [(str ":find :agg :arg position " (str arg) " out of range for relation '" (str rel) "' arity " (str arity))] [])]
+      (vec (concat e1 (concat e2 (concat e3 e4)))))))
+
+(defn- aggregate-find-errors [find :- Any derived :- (Set String) arities :- (Map String Int)] :- (Vec String)
+  (let [rel (:rel find) group (:group find) agg (:agg find)
+        e-rel (cond
+                [(not (string? rel)) [":find :rel must be a string relation name"]]
+                [(or (= rel "fact") (= rel "fact-id"))
+                 [":find :rel cannot be a base relation (fact/fact-id) — aggregate over a :head rel you derive"]]
+                [(not (contains? derived rel))
+                 [(str ":find :rel '" (str rel) "' is not a derived head relation")]]
+                [:else []])
+        arity (get arities (if (string? rel) rel ""))
+        e-group (cond
+                  [(not (vector? group)) [":find :group must be a vector of integer positions"]]
+                  [:else (reduce (fn [acc :- (Vec String) g :- Any] :- (Vec String)
+                                   (if (and (integer? g) (>= g 0) (or (nil? arity) (< g arity))) acc
+                                     (conj acc (str ":find :group position " (str g) " is not a valid position for relation '" (str rel) "' (arity " (str arity) ")"))))
+                                 [] group)])
+        e-agg (cond
+                [(not (vector? agg)) [":find :agg must be a vector of aggregate specs"]]
+                [(empty? agg) [":find :agg must contain at least one aggregate {:op ...}"]]
+                [:else (reduce (fn [acc :- (Vec String) spec :- Any] :- (Vec String)
+                                 (vec (concat acc (agg-spec-errors spec rel arity))))
+                               [] agg)])]
+    (vec (concat e-rel (concat e-group e-agg)))))
+
+;; comparison-predicate ops (binary): equality/disequality + numeric ordering.
+(def pred-ops :- (Set Keyword) #{:eq :ne :lt :le :gt :ge})
+
+;; a comparison-predicate literal {:pred op :args [a b]}: op valid, exactly 2 valid
+;; terms, and every var already bound by an earlier positive literal (range-restricted,
+;; same rule as negation — a predicate FILTERS, it never binds).
+(defn- pred-lit-errors [litt :- Any bound :- (Set String)] :- (Vec String)
+  (let [op (:pred litt) args (:args litt)
+        e1 (if (contains? pred-ops op) []
+             [(str "predicate :pred must be one of :eq :ne :lt :le :gt :ge, got " (str op))])
+        e2 (if (and (vector? args) (= (count args) 2)) []
+             ["predicate :args must be a 2-vector [a b]"])
+        e3 (if (vector? args)
+             (reduce (fn [acc :- (Vec String) t :- Any] :- (Vec String)
+                       (if (term-ok? t) acc
+                         (conj acc (str "bad predicate term " (str t) " — use {:var \"n\"} or a constant"))))
+                     [] args)
+             [])
+        e4 (if (vector? args)
+             (reduce (fn [acc :- (Vec String) v :- String] :- (Vec String)
+                       (if (contains? bound v) acc
+                         (conj acc (str "predicate var '" (str v) "' must be bound by an earlier positive literal"))))
+                     [] (vec (vars-of args)))
+             [])]
+    (vec (concat e1 (concat e2 (concat e3 e4))))))
+
 ;; per-literal errors, given the known relations + the vars bound by earlier
-;; positive literals in the same body (for negation range-restriction).
+;; positive literals in the same body (for negation + predicate range-restriction).
 ;; litt stays Any: it's an open keyword-map validated key-by-key here.
 (defn- lit-errors [litt :- Any known :- (Set String) bound :- (Set String)] :- (Vec String)
   (if (not (map? litt))
     ["body literal must be a map {:rel r :args [...] :neg? bool}"]
+    (if (contains? litt :pred)
+      (pred-lit-errors litt bound)
     (let [rel (:rel litt) args (:args litt)
           e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
           e2 (if (vector? args) [] ["literal :args must be a vector"])
@@ -228,7 +320,7 @@
                            (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal"))))
                        [] (vec (vars-of args)))
                [])]
-      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))
+      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7))))))))))))
 
 (defn- body-errors [body :- (Vec Any) known :- (Set String)] :- (Vec String)
   (loop [ls body bound :- (Set String) #{} errs :- (Vec String) []]
@@ -236,7 +328,7 @@
       errs
       (let [litt (first ls)
             le (lit-errors litt known bound)
-            bound2 (if (and (map? litt) (not (:neg litt)) (vector? (:args litt)))
+            bound2 (if (binding-lit? litt)
                      (reduce (fn [acc :- (Set String) v :- String] :- (Set String) (conj acc v)) bound (vec (vars-of (:args litt))))
                      bound)]
         (recur (rest ls) bound2 (vec (concat errs le)))))))
@@ -287,10 +379,12 @@
               derived (head-rels rules)
               known (conj (conj derived "fact") "fact-id")
               find (:find q)
-              ef (if (string? find)
-                   (if (contains? known find) []
-                     [(str "unknown :find relation '" find "' — name a :head rel you define")])
-                   [":find must be a relation name (string)"])
+              ef (cond
+                   [(string? find)
+                    (if (contains? known find) []
+                      [(str "unknown :find relation '" find "' — name a :head rel you define")])]
+                   [(map? find) (aggregate-find-errors find derived (head-arity-map rules))]
+                   [:else [":find must be a relation name (string) or an aggregate spec map {:rel R :group [..] :agg [..]}"]])
               er (if (empty? rules) ["provide at least one rule in :rules or :strata"] [])
               erules (reduce (fn [acc :- (Vec String) r :- Any] :- (Vec String)
                                (vec (concat acc (rule-errors r known))))
@@ -422,6 +516,8 @@
                errs (validate q)]
            (if (not (empty? errs))
              {:error errs}
+             (if (map? (:find q))
+               {:error ["aggregate :find is not pageable in v1 — use run (aggregates return a bounded group set)"]}
              (let [edb (facts->edb facts)
                    strata (strata-of q)
                    db :- (Map String (Set (Vec String)))
@@ -449,7 +545,106 @@
                    (if (= n 0)
                      {:error ["query page contains a row too large for the bounded wire response"]
                       :max-bytes max-page-wire-bytes}
-                     (page-envelope window n)))))))))]))
+                     (page-envelope window n))))))))))]))
+
+;; ============================================================================
+;; AGGREGATES — post-fixpoint reduction over a materialized derived relation.
+;; ============================================================================
+;; Fact is all-String, so aggregate values are coerced at the reduction:
+;;   coerce(v) = (or (parse-long v) (parse-double v))
+;; :count/:count-distinct never coerce; :sum/:avg/:min/:max require numeric (a
+;; non-numeric at the agg position makes the whole query an :error). Output rows are
+;; [<group vals> <agg vals>] and are sorted canonically by pr-str (run-page idiom).
+
+;; the integer positions are validated (< arity, >= 0); as-int narrows the Any.
+(defn- as-int [x :- Any] :- Int (if (integer? x) x 0))
+
+;; numeric coercion helpers over the string cell value.
+(defn- num-of-str [s :- String] :- (U Double Nil)
+  (let [l (parse-long s)] (if (some? l) (double l) (parse-double s))))
+(defn- num-double [s :- String] :- Double
+  (let [l (parse-long s)] (if (some? l) (double l) (let [d (parse-double s)] (if (some? d) d 0.0)))))
+(defn- coerce-str [s :- String] :- (U Int Double)     ; long-preserving numeric value
+  (let [l (parse-long s)] (if (some? l) l (let [d (parse-double s)] (if (some? d) d 0.0)))))
+
+;; every value at position i parses as a long -> :sum stays integer.
+(defn- all-int? [tuples :- (Vec (Vec String)) i :- Int] :- Bool
+  (loop [ts tuples]
+    (if (empty? ts) true
+      (if (some? (parse-long (nth (first ts) i))) (recur (rest ts)) false))))
+(defn- sum-longs [tuples :- (Vec (Vec String)) i :- Int] :- Int
+  (reduce (fn [a :- Int t :- (Vec String)] :- Int
+            (+ a (let [l (parse-long (nth t i))] (if (some? l) l 0)))) 0 tuples))
+(defn- sum-doubles [tuples :- (Vec (Vec String)) i :- Int] :- Double
+  (reduce (fn [a :- Double t :- (Vec String)] :- Double (+ a (num-double (nth t i)))) 0.0 tuples))
+;; numeric min/max: compare as double, return the coerced (long-preserving) value.
+(defn- extreme [tuples :- (Vec (Vec String)) i :- Int want-max :- Bool] :- (U Int Double)
+  (loop [ts tuples best :- (U String Nil) nil best-d :- Double 0.0]
+    (if (empty? ts)
+      (coerce-str (if (some? best) best "0"))
+      (let [s (nth (first ts) i) d (num-double s)]
+        (if (or (nil? best) (if want-max (> d best-d) (< d best-d)))
+          (recur (rest ts) s d)
+          (recur (rest ts) best best-d))))))
+
+;; first non-numeric value at position i, or nil when the whole column is numeric.
+(defn- first-nonnumeric [tuples :- (Vec (Vec String)) i :- Int] :- (U String Nil)
+  (loop [ts tuples]
+    (if (empty? ts) nil
+      (let [s (nth (first ts) i)]
+        (if (nil? (num-of-str s)) s (recur (rest ts)))))))
+
+;; ops that REQUIRE numeric values (a non-numeric -> whole query :error).
+(def agg-num-ops :- (Set Keyword) #{:sum :avg :min :max})
+(defn- numeric-errors [rel :- (Vec (Vec String)) rel-name :- Any agg :- (Vec Any)] :- (Vec String)
+  (reduce (fn [acc :- (Vec String) spec :- Any] :- (Vec String)
+            (if (contains? agg-num-ops (:op spec))
+              (let [i (as-int (:arg spec)) bad (first-nonnumeric rel i)]
+                (if (some? bad)
+                  (conj acc (str "aggregate " (str (:op spec)) " over relation '" (str rel-name) "' position " (str i) " requires numeric values, but found non-numeric " (pr-str bad)))
+                  acc))
+              acc))
+          [] agg))
+
+;; tuples sharing the :group positions form a group ([] = one global group).
+(defn- group-rel [rel :- (Vec (Vec String)) group :- (Vec Int)] :- (Map (Vec String) (Vec (Vec String)))
+  (reduce (fn [acc :- (Map (Vec String) (Vec (Vec String))) tup :- (Vec String)] :- (Map (Vec String) (Vec (Vec String)))
+            (let [gkey (mapv (fn [i :- Int] :- String (nth tup i)) group)]
+              (update acc gkey (fn [v :- (U (Vec (Vec String)) Nil)] :- (Vec (Vec String)) (conj (or v []) tup)))))
+          {} rel))
+
+(defn- agg-value [tuples :- (Vec (Vec String)) spec :- Any] :- Any
+  (let [op (:op spec) i (as-int (:arg spec))]
+    (cond
+      [(= op :count) (count tuples)]
+      [(= op :count-distinct) (count (set (mapv (fn [t :- (Vec String)] :- String (nth t i)) tuples)))]
+      [(= op :sum) (if (all-int? tuples i) (sum-longs tuples i) (sum-doubles tuples i))]
+      [(= op :avg) (/ (sum-doubles tuples i) (double (count tuples)))]
+      [(= op :min) (extreme tuples i false)]
+      [(= op :max) (extreme tuples i true)]
+      [:else nil])))
+
+(defn- agg-row [gkey :- (Vec String) tuples :- (Vec (Vec String)) agg :- (Vec Any)] :- (Vec Any)
+  (vec (concat gkey (mapv (fn [spec :- Any] :- Any (agg-value tuples spec)) agg))))
+
+;; run an aggregate :find over the fully-materialized relation (post-fixpoint).
+(defn- aggregate-run [db :- (Map String (Set (Vec String))) find :- Any] :- Any
+  (let [rel-name (:rel find)
+        rel :- (Vec (Vec String)) (vec (get db (if (string? rel-name) rel-name "") #{}))
+        group :- (Vec Int) (mapv (fn [g :- Any] :- Int (as-int g)) (vec (:group find)))
+        agg :- (Vec Any) (vec (:agg find))]
+    (if (empty? rel)
+      {:ok []}
+      (let [nerrs (numeric-errors rel rel-name agg)]
+        (if (not (empty? nerrs))
+          {:error nerrs}
+          (let [groups (group-rel rel group) ng (count groups)]
+            (if (> ng max-results)
+              {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ng " groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")]
+               :over-limit ng :max max-results}
+              (let [rows :- (Vec (Vec Any))
+                    (mapv (fn [gkey :- (Vec String)] :- (Vec Any) (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))]
+                {:ok (vec (sort-by pr-str rows))}))))))))
 
 ;; run the validated query over the fact fold; {:ok [tuple...]} | {:error [msg...]}
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
@@ -466,12 +661,14 @@
             ;; assignable into this stricter (Vec String) accumulator (verified).
             db :- (Map String (Set (Vec String)))
             (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint acc stratum)) edb strata)
-            find :- Any (:find q)
-            rel :- (Set (Vec String)) (get db find #{})
-            n :- Int (count rel)]
-        (if (> n max-results)
-          ;; over the cap: surface a clear, actionable signal WITHOUT building the
-          ;; (potentially huge) result vector or serializing it.
-          {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")]
-           :over-limit n :max max-results}
-          {:ok (d/facts db find)})))))
+            find :- Any (:find q)]
+        (if (map? find)
+          (aggregate-run db find)
+          (let [rel :- (Set (Vec String)) (get db find #{})
+                n :- Int (count rel)]
+            (if (> n max-results)
+              ;; over the cap: surface a clear, actionable signal WITHOUT building the
+              ;; (potentially huge) result vector or serializing it.
+              {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")]
+               :over-limit n :max max-results}
+              {:ok (d/facts db find)})))))))
