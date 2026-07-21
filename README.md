@@ -243,9 +243,26 @@ group (a single row, no group columns). `count` over an empty relation is `[]`, 
 zero row. `sum`/`avg`/`min`/`max` parse string values numerically — `sum` stays integer
 when every value is a long, `avg` is always a double — and a non-numeric value at the
 aggregated position is a hard `{:error}` naming the position. Result rows are sorted
-canonically; the output group count is capped by `FRAM_MAX_RESULTS`. **Limits:** no
-HAVING (an aggregate result can't feed back into a rule body); aggregate `:find` is not
-pageable (`run-page` rejects it).
+canonically; the output group count is capped by `FRAM_MAX_RESULTS`.
+
+**`:having`** filters the grouped rows by their aggregate outputs:
+
+```edn
+;; subjects with more than 5 out-edges
+{:find {:rel "deg" :group [0] :agg [{:op :count}]
+        :having [{:op :gt :agg 0 :val 5}]}
+ :rules [...]}
+```
+
+`:having` is a vector of clauses, ANDed. A clause is `{:op <op> :agg <i> :val <n>}`:
+the operand `{:agg i}` addresses the *i-th* `:agg` entry (layout-independent, not a
+column position), `:op` is one of `:eq :ne :lt :le :gt :ge` (all **numeric** here —
+agg outputs are always numbers, so `:eq` on `:avg` is fragile), and `:val` is a
+required number. `:having []` filters nothing; a clause set that excludes every group
+yields `{:ok []}`. The cap fires **post-having** — `FRAM_MAX_RESULTS` bounds the
+*survivor* count, so a query with a huge group set trimmed to a few by `:having`
+returns `{:ok}`. **Limits:** an aggregate result can't feed back into a rule body;
+aggregate `:find` is not pageable (`run-page` rejects it).
 
 ### Comparison predicates — filter-only, never bind
 
@@ -262,8 +279,28 @@ A rule body can carry a filter literal alongside `:rel` clauses:
 Ops: `:eq` `:ne` (raw string equality/disequality) and `:lt` `:le` `:gt` `:ge` (numeric
 ordering — a non-numeric operand silently drops the row, never errors). A predicate
 **never binds a variable**: every var it reads must already be bound by an earlier `:rel`
-clause in the same body — the same range-restriction rule negation follows. **Limit:** no
-arithmetic or binding function clauses — predicates filter, they don't compute.
+clause in the same body — the same range-restriction rule negation follows.
+
+### Arithmetic fn clauses — compute-and-bind
+
+A body can also carry an arithmetic **fn clause** that computes a value and binds it to
+a fresh variable:
+
+```edn
+;; h = c + s  (then usable by later clauses / the head)
+{:fn :+ :args [{:var "c"} {:var "s"}] :bind "h"}
+```
+
+Ops: `:+` `:-` `:*` `:/` `:mod`, binary. Both args must be already-bound vars or numeric
+constants. The result is bound as a **canonical string** (keeping the query db all-String):
+`8` → `"8"`, `3.5` → `"3.5"`, `8.0` → `"8.0"`. Integer preservation mirrors `:sum` —
+`:+ :- :*` stay long when both operands parse as longs, else fall to double; **`:/` is
+always double**. Any failure (a non-numeric operand, division or modulus by zero, or
+`:mod` of a non-long) **drops the row** — never an error, exactly like a predicate filter.
+The fresh `:bind` var **counts as a binding** for later `:pred`/`:neg` clauses and head
+vars (its `:args` vars do not). A fn clause is **forbidden in a recursive rule** (a rule
+whose head rel reaches itself): fn-introduced values could grow without bound through the
+fixpoint, so it is rejected at validation to preserve termination.
 
 ## Pull — nested reads over the graph
 
@@ -287,19 +324,22 @@ scalar, multi-valued comes back a vector.
 (pull/run store "@x" [{"depends_on" ["title"]} "status"] {:provenance true})
 ;; => {:fram/id "@x"
 ;;     "depends_on" [{:fram/id "@dep1" "title" "Design"}]
-;;     "status" {:val "open" :cid 2 :by "u" :seq 2 :withdrawn false}}
+;;     "status" {:val "open" :cid 2 :by "u" :seq 2 :withdrawn false
+;;               :ts "2026-07-21T04:39:34.924Z"}}
 ```
 
-`:provenance true` turns each value into `{:val :cid :by :seq :withdrawn}` (plus
+`:provenance true` turns each value into `{:val :cid :by :seq :withdrawn :ts}` (plus
 `:withdrawn_by`/`:withdrawn_at`/`:withdrawn_reason` when withdrawn) — per-fact
 provenance is possible in the first place because every Fram fact is itself an
 addressable, reifiable object, not a row. `:as-of <seq>` composes with `:provenance` to
 read a historical snapshot. `:max-depth` and `:max-nodes` cap traversal; a node beyond
 either cap comes back as a `{:fram/truncated true}` stub, and a cycle revisit on the
 current path comes back as `{:fram/cycle true}` — both keep `pull` total (never hangs,
-never throws) instead of erroring. **Limit:** `pull` is daemon-only (needs the live
-index) — the cold CLI fold doesn't serve it. No wall-clock timestamps either — only the
-causal `:seq` order, same as the rest of the log.
+never throws) instead of erroring. `:ts` is the asserting tx's wall-clock instant
+(stamped once at commit, identical in the log and after replay); it is display
+metadata only — `:as-of` stays addressed by causal `:seq`, and the key is omitted for
+txs whose log records predate it. **Limit:** `pull` is daemon-only (needs the live
+index) — the cold CLI fold doesn't serve it.
 
 ## Identity-addressed code (Chartroom)
 

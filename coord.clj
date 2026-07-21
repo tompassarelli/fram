@@ -144,7 +144,8 @@
      (for [[cid mm] (:facts m) :when (>= cid since)]
        {:k :fact :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
      [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])
-       :observed (get-in m [:txs txid :observed])}        ; causality (thread H): the global seq the writer had SEEN when it decided
+       :observed (get-in m [:txs txid :observed])          ; causality (thread H): the global seq the writer had SEEN when it decided
+       :ts (get-in m [:txs txid :ts])}                     ; wall-clock (display-only): the SAME instant stamped into the store map, so replay recovers the identical :ts pull rendered live. nil for internal txs that never stamped (bootstrap/schema/lease/bump) -> pull omits :ts.
       {:k :commit :tx txid}])))
 
 ;; --- reads over the reified store -------------------------------------------
@@ -190,6 +191,14 @@
 ;; to the pre-commit current-seq at the write site (a backdated stamp only LOSES elections).
 (defn observed-of [co cid]
   (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :observed])))
+;; ts-of — the WALL-CLOCK stamp of a fact's asserting tx (thread H, display metadata).
+;; Mirrors agent-of/observed-of: reads the tx record's :ts (an ISO-8601 instant string,
+;; same format the flat log records, minted once per tx at commit via rt/now-ts). PURELY
+;; DISPLAY — pull surfaces it as :ts; it NEVER participates in as-of / live election, which
+;; stay seq-addressed. nil for pre-existing v2 txs whose record predates the :ts field (pull
+;; omits the key then), so OLD logs replay unchanged — the stamp is strictly additive.
+(defn ts-of [co cid]
+  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :ts])))
 ;; the causal key of a live fact: [observed-or-seq, cid, agent]. observed orders by
 ;; DECISION time (who saw the empty group first), cid/agent keep it a total order. A LATER
 ;; commit (higher cid) that DECIDED earlier (lower observed) wins — this is the whole point:
@@ -410,6 +419,7 @@
               observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp, clamped to head (no future)
               tx (c/begin-tx! (store co) agent)
               _  (swap! (store co) assoc-in [:txs tx :observed] observed)
+              _  (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for pull provenance (display-only; ONE clock read per tx, mirrored into the v2 log via delta-records so live + replay agree)
               te (ent! co tx te-name)]
           (case kind
             :link   (s/link! (store co) te pred (ent! co tx r-spec) tx)
@@ -433,6 +443,7 @@
         {:ok (current-seq co) :idempotent true :cid cid}
         (let [since (:next-id @(store co))
               tx    (c/begin-tx! (store co) view)
+              _     (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp (display-only) — view-select facts are pullable too
               ve    (ent! co tx view)
               sp    (c/value! (store co) "selects")]
           (c/fact! (store co) ve sp cid tx)            ; object IS the selected fact's cid
@@ -495,6 +506,7 @@
                       observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp on the retract tx
                       tx  (c/begin-tx! (store co) agent)
                       _   (swap! (store co) assoc-in [:txs tx :observed] observed)
+                      _   (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for the retract tx (display-only; distinct from :withdrawn_at, which holds the retract SEQ)
                       sup (c/value! (store co) "store-supersedes")
                       wbp (c/value! (store co) "withdrawn_by")
                       wap (c/value! (store co) "withdrawn_at")
@@ -685,7 +697,7 @@
         ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
         facts (vec (for [r recs :when (= (:k r) :fact)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))
         tx-of  (vec (for [r recs :when (= (:k r) :fact)]  [(:cid r) (:tx r)]))
-        txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r) :observed (:observed r)}]))   ; recover the causal stamp through replay (acceptance d)
+        txs    (vec (for [r recs :when (= (:k r) :tx)]     [(:tx r) {:seq (:seq r) :agent (:agent r) :observed (:observed r) :ts (:ts r)}]))   ; recover the causal stamp AND wall-clock :ts through replay (acceptance d). OLD v2 records predate :ts -> (:ts r) is nil -> pull omits the key, exactly as for a never-stamped tx. Backward-compatible: old logs replay unchanged.
         sup    (some (fn [[id v]] (when (= v "store-supersedes") id)) vals)
         superd (vec (for [[_ m] facts :when (= (:p m) sup)] (:r m)))
         all-id (concat (map first vals) ents (map first facts) (map first txs))
@@ -718,7 +730,7 @@
           (emit {:k :entity :id id}))
         (doseq [[cid cl] (:facts m)]
           (emit {:k :fact :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
-        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t)}))
+        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t) :ts (:ts t)}))
         (emit {:k :commit :tx :migration}))
       (.force (.getChannel os) true))))
 

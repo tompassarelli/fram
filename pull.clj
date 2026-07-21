@@ -114,10 +114,16 @@
                       v
                       (let [tx   (c/fact-tx st cid)
                             wd   (when-not asof (user/withdrawn? co0 cid))
-                            base {:val v :cid cid
-                                  :by (user/agent-of co0 cid)
-                                  :seq (c/tx-seq st tx)
-                                  :withdrawn (boolean wd)}]
+                            ;; wall-clock of the asserting tx (ISO-8601 string). DISPLAY-ONLY
+                            ;; metadata: :seq stays the causal address, :ts never drives as-of.
+                            ;; nil for pre-existing v2 txs whose record predates the :ts field
+                            ;; (and for internal txs that never stamped) -> the key is OMITTED.
+                            ts   (user/ts-of co0 cid)
+                            base (cond-> {:val v :cid cid
+                                          :by (user/agent-of co0 cid)
+                                          :seq (c/tx-seq st tx)
+                                          :withdrawn (boolean wd)}
+                                   (some? ts) (assoc :ts ts))]
                         (if wd
                           (let [w (user/withdrawal-of co0 cid)]
                             (assoc base :withdrawn_by (:by w)

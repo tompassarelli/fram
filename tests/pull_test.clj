@@ -70,6 +70,8 @@
     (chk "prov: :cid is an int" (integer? (:cid p)))
     (chk "prov: :by is the agent" (= "u" (:by p)))
     (chk "prov: :seq is an int" (integer? (:seq p)))
+    (chk "prov: :ts is a wall-clock instant string" (and (some? (:ts p)) (string? (:ts p))))
+    (chk "prov: :ts parses as an Instant (ISO-8601)" (some? (try (java.time.Instant/parse (:ts p)) (catch Throwable _ nil))))
     (chk "prov: live value :withdrawn false" (= false (:withdrawn p))))
 
   ;; --- (7) provenance surfaces a WITHDRAWN value with attribution ------------
@@ -82,7 +84,12 @@
     (chk "withdraw: :withdrawn true" (= true (:withdrawn red)))
     (chk "withdraw: :withdrawn_by" (= "w" (:withdrawn_by red)))
     (chk "withdraw: :withdrawn_reason" (= "no longer relevant" (:withdrawn_reason red)))
-    (chk "withdraw: :withdrawn_at present" (some? (:withdrawn_at red))))
+    (chk "withdraw: :withdrawn_at present" (some? (:withdrawn_at red)))
+    ;; the value's :ts is its OWN asserting tx wall-clock, NOT the withdrawal's; and
+    ;; :withdrawn_at holds the retract SEQ (a numeric string) — the two never conflate.
+    (chk "withdraw: withdrawn value still carries its own assert :ts" (some? (:ts red)))
+    (chk "withdraw: :ts (assert wall-clock) distinct from :withdrawn_at (retract seq)"
+         (not= (:ts red) (:withdrawn_at red))))
 
   ;; --- (8) as-of: historical value + historical withdrawal state ------------
   (let [r1 (commit! co "u" "@y" "status" :assert "s1" nil)
@@ -148,6 +155,25 @@
     (chk "vector root: one node per root" (and (vector? r) (= 2 (count r))))
     (chk "vector root: nodes resolve independently"
          (= ["Ship v1" "Design"] (mapv #(get % "title") r)))))
+
+;; --- (14b) :ts SURVIVES BOOT REPLAY from the v2 log ---------------------------
+;; Commit through a coord (v2 log), capture the LIVE-rendered :ts, then rebuild a fresh
+;; store from that log ALONE via coord/replay and pull the same fact: identical :ts proves
+;; the wall-clock stamp is durable (recovered from the logged :tx record), not a per-read
+;; clock call. This is the "restart case" — the cheapest coord re-boot idiom (replay a log
+;; into a new store), no socket daemon needed.
+(let [rlog "/tmp/pull-ts-replay.log"
+      co   (new-coord rlog)]
+  (register-pred! co "title" "single" "literal")
+  (commit! co "u" "@r" "title" :assert "Persisted" nil)
+  (let [live    (pull/run (:store co) "@r" ["title"] {:provenance true})
+        live-ts (:ts (get live "title"))
+        st2     (replay rlog)                       ; fresh store rebuilt from the log alone
+        boot    (pull/run st2 "@r" ["title"] {:provenance true})
+        boot-ts (:ts (get boot "title"))]
+    (chk "replay: live render carries :ts" (some? live-ts))
+    (chk "replay: booted value equals live value" (= "Persisted" (:val (get boot "title"))))
+    (chk "replay: same fact renders the SAME :ts after boot" (= live-ts boot-ts))))
 
 ;; --- (15) WIRE: dispatch-level {:op :pull} through the daemon's execute-query -
 ;; Boot the daemon's co/schema/cache state in-process (no socket) and drive the real
