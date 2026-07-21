@@ -74,3 +74,9 @@ round-trip → graph-native rename → a shadow-correct lexical resolver →
 rename-correct comments. Headline gates hold at **1100/1100 forms, 97/97 files**.
 Measured results are in **[RESULTS.md](RESULTS.md)**; the stage-by-stage build
 log is in **[docs/build-log.md](docs/build-log.md)**.
+
+## License
+
+Chartroom is dual-licensed under your choice of the [MIT License](LICENSE-MIT)
+or the [Apache License, Version 2.0](LICENSE-APACHE)
+(`MIT OR Apache-2.0`).

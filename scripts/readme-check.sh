@@ -9,7 +9,8 @@
 #   (2) engine verbs      — every `bin/fram <verb>` named in README must be a real verb.
 #   (3) bin entrypoints   — every `bin/fram-*` named in README must exist + be executable.
 #   (4) referenced paths  — every relative link/path in README must exist.
-#   (5) the core loop runs — import / validate / call / query / export on a SCRATCH copy
+#   (5) licensing        — canonical texts, chooser, README, and package metadata agree.
+#   (6) the core loop runs — import / validate / call / query / export on a SCRATCH copy
 #                            of threads/ (the canonical facts.log is never touched).
 #   --local additionally checks the toolchain (bb / clojure / java) is on PATH.
 set -uo pipefail
@@ -47,8 +48,34 @@ for p in $(grep -oE '\]\(([^)#]+)\)' "$README" | sed -E 's/^\]\(//; s/\)$//' \
   if [ -e "$p" ]; then note "ok — $p"; else bad "README links a missing path: $p"; fi
 done
 
-# (5) the core loop runs — on a scratch copy; canonical facts.log untouched.
-echo "== (5) core engine loop (scratch copy) =="
+# (5) dual-license contract — fail closed when texts, choosers, or metadata drift.
+echo "== (5) dual-license contract =="
+expect_sha() {
+  actual=$(sha256sum "$1" | awk '{print $1}')
+  if [ "$actual" = "$2" ]; then note "ok — $1"
+  else bad "$1 license text/chooser drifted (got $actual)"; fi
+}
+expect_text() {
+  if grep -Fq -- "$2" "$1"; then note "ok — $1 declares $2"
+  else bad "$1 is missing: $2"; fi
+}
+expect_sha LICENSE 51bd50bac830296b4e643a0fb74995b6a36592aca2a039c5587cdae0fa4115dd
+expect_sha LICENSE-APACHE 481d039b296107335037f88f33e435b75f931cf3605f222d5c3c634a4b70ec5f
+expect_sha LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
+expect_sha chartroom/LICENSE 361f8dc2cdf2e37f8ec56468127d0f54d679b78f450ca72ac0b226a46cccc3de
+expect_sha chartroom/LICENSE-APACHE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+expect_sha chartroom/LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
+for readme in README.md chartroom/README.md; do
+  expect_text "$readme" '[MIT License](LICENSE-MIT)'
+  expect_text "$readme" '[Apache License, Version 2.0](LICENSE-APACHE)'
+  expect_text "$readme" '`MIT OR Apache-2.0`'
+done
+expect_text README.md 'license-MIT_OR_Apache--2.0-blue.svg'
+expect_text deploy/cloudflare/package.json '"license": "MIT OR Apache-2.0"'
+expect_text flake.nix 'license = with licenses; [ mit asl20 ];'
+
+# (6) the core loop runs — on a scratch copy; canonical facts.log untouched.
+echo "== (6) core engine loop (scratch copy) =="
 WD=$(mktemp -d)
 trap 'rm -rf "$WD"' EXIT
 cp -r threads "$WD/threads"

@@ -6,7 +6,7 @@
 lifecycle is *derived*, never stored; every write serializes through one coordinator;
 and the text is a **view** of the graph you can always walk away with.
 
-[![license](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue.svg)](LICENSE)
 [![status](https://img.shields.io/badge/status-early%2C%20experimental-orange.svg)](#what-it-isnt)
 [![runtime](https://img.shields.io/badge/CLI%20%2B%20MCP-babashka-success.svg)](https://babashka.org)
 [![daemon](https://img.shields.io/badge/coordinator-JVM%20%2B%20mTLS-informational.svg)](#multi-agent-safety)
@@ -509,4 +509,6 @@ See [`docs/WHY_FRAM_EXISTS.md`](docs/WHY_FRAM_EXISTS.md) and the [ADRs](docs/adr
 
 ## License
 
-[MIT](LICENSE).
+Fram is dual-licensed under your choice of the [MIT License](LICENSE-MIT) or
+the [Apache License, Version 2.0](LICENSE-APACHE)
+(`MIT OR Apache-2.0`).

@@ -169,6 +169,7 @@
               Beagle graph-authoring helpers are retained under libexec and require
               an external BEAGLE_HOME toolchain; they are not public package commands.
             '';
+            license = with licenses; [ mit asl20 ];
             platforms = systems;
             mainProgram = "fram";
           };
