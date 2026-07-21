@@ -97,7 +97,7 @@ data. Under the hood `./demo.sh` runs the engine loop:
 bin/fram import           # fold the Markdown threads into the fact graph (coordination.log — facts by nature)
 bin/fram validate         # structural integrity: cycles, dangling refs, closed vocab
 bin/fram call show '{:subject "2026-01-01-090500"}'     # all facts on the thread (title, owner, deps…)
-bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "fact" :args [{:var "x"} "depends_on" "@2026-01-01-090200"}]}]}}}'  # reverse edge via ask
+bin/fram call ask '{:query {:find "dep" :rules [{:head {:rel "dep" :args [{:var "x"}]} :body [{:rel "fact" :args [{:var "x"} "depends_on" "@2026-01-01-090200"]}]}]}}'  # reverse edge via ask
 bin/fram export /tmp/regen   # regenerate the Markdown from the graph (lossless round-trip)
 ```
 
