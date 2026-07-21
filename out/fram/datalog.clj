@@ -33,6 +33,47 @@
 (defn- ^Boolean pred? [litt]
   (and (map? litt) (contains? litt :pred)))
 
+(defn- ^Boolean fnlit? [litt]
+  (and (map? litt) (contains? litt :fn)))
+
+(def fn-ops #{:+ :- :* :/ :mod})
+
+(defn- fn-long [v]
+  (parse-long (str v)))
+
+(defn- fn-double [v]
+  (let [s (str v)
+   l (parse-long s)]
+  (if (some? l) (double l) (parse-double s))))
+
+(defn- fn-long-op [op a b]
+  (cond
+  (= op :+) (+ a b)
+  (= op :-) (- a b)
+  (= op :*) (* a b)
+  :else 0))
+
+(defn- fn-double-op [op a b]
+  (cond
+  (= op :+) (+ a b)
+  (= op :-) (- a b)
+  (= op :*) (* a b)
+  :else 0.0))
+
+(defn- fn-compute [op a b]
+  (cond
+  (= op :/) (let [na (fn-double a)
+   nb (fn-double b)]
+  (if (or (nil? na) (nil? nb) (= nb 0.0)) nil (/ na nb)))
+  (= op :mod) (let [la (fn-long a)
+   lb (fn-long b)]
+  (if (or (nil? la) (nil? lb) (= lb 0)) nil (- la (* (quot la lb) lb))))
+  :else (let [la (fn-long a)
+   lb (fn-long b)]
+  (if (and (some? la) (some? lb)) (fn-long-op op la lb) (let [na (fn-double a)
+   nb (fn-double b)]
+  (if (or (nil? na) (nil? nb)) nil (fn-double-op op na nb)))))))
+
 (defn edb [ctx]
   (reduce (fn [db cid] (let [cl (c/fact-of ctx cid)
    l (:l cl)
@@ -80,8 +121,14 @@
   (= op :ge) (>= na nb)
   :else false))))))
 
+(defn- eval-fn [litt subst]
+  (let [g (ground (:args litt) subst)
+   result (fn-compute (:fn litt) (nth g 0) (nth g 1))]
+  (if (nil? result) [] [(assoc subst (:bind litt) (str result))])))
+
 (defn- match-lit [db litt subst]
   (cond
+  (fnlit? litt) (eval-fn litt subst)
   (pred? litt) (if (eval-pred litt subst) [subst] [])
   (:neg litt) (let [g (ground (:args litt) subst)]
   (if (contains? (get db (:rel litt) #{}) g) [] [subst]))
@@ -100,7 +147,7 @@
   (loop [i 0
    ls body
    acc []]
-  (if (empty? ls) acc (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (:pred (first ls))) acc (conj acc i))))))
+  (if (empty? ls) acc (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (or (:pred (first ls)) (:fn (first ls)))) acc (conj acc i))))))
 
 (defn- eval-body-pinned [db delta body pin]
   (loop [i 0
@@ -183,6 +230,7 @@
 
 (defn- match-lit-idx [db idx litt subst]
   (cond
+  (fnlit? litt) (eval-fn litt subst)
   (pred? litt) (if (eval-pred litt subst) [subst] [])
   (:neg litt) (let [g (ground (:args litt) subst)]
   (if (contains? (get db (:rel litt) #{}) g) [] [subst]))

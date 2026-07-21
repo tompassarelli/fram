@@ -114,16 +114,25 @@
             (if (and (map? t) (contains? t :var)) (conj acc (:var t)) acc))
           #{} args))
 
+;; a FN literal {:fn op :args [a b] :bind "h"}: distinguished by :fn. It computes a
+;; value and binds :bind (a fresh var); its :args vars do NOT get bound by it.
+(defn- fnlit? [litt :- Any] :- Bool (and (map? litt) (contains? litt :fn)))
+
 ;; union of the vars bound by the POSITIVE literals of a body. A literal binds vars
 ;; only if it names a relation (:rel) and is neither negated nor a comparison
 ;; predicate — negated and predicate literals only FILTER, they never bind.
 (defn- binding-lit? [litt :- Any] :- Bool
   (and (map? litt) (contains? litt :rel) (not (:neg litt)) (not (:pred litt)) (vector? (:args litt))))
+;; the vars a single literal BINDS for range-restriction: a positive rel binds its
+;; arg vars; a fn literal binds ONLY its :bind var; predicates/negation bind nothing.
+(defn- lit-binds [litt :- Any] :- (Set String)
+  (cond
+    [(fnlit? litt) (if (string? (:bind litt)) #{(:bind litt)} #{})]
+    [(binding-lit? litt) (vars-of (:args litt))]
+    [:else #{}]))
 (defn- positive-body-vars [body :- (Vec Any)] :- (Set String)
   (reduce (fn [acc :- (Set String) litt :- Any] :- (Set String)
-            (if (binding-lit? litt)
-              (reduce (fn [a :- (Set String) v :- String] :- (Set String) (conj a v)) acc (vec (vars-of (:args litt))))
-              acc))
+            (reduce (fn [a :- (Set String) v :- String] :- (Set String) (conj a v)) acc (vec (lit-binds litt))))
           #{} body))
 
 (defn- all-vectors? [xs :- (Vec Any)] :- Bool
@@ -218,6 +227,60 @@
               acc))
           {} rules))
 
+;; comparison-predicate ops (binary): equality/disequality + numeric ordering. Shared
+;; by predicate literals (below) and :having clauses (numeric, over agg outputs).
+(def pred-ops :- (Set Keyword) #{:eq :ne :lt :le :gt :ge})
+;; arithmetic fn-clause ops (binary), mirrored from fram.datalog/fn-ops.
+(def fn-ops :- (Set Keyword) #{:+ :- :* :/ :mod})
+
+;; --- fn-clause recursion guard ----------------------------------------------
+;; A fn clause introduces NEW values (arithmetic results) that are not in the EDB's
+;; finite Herbrand base. In a recursive rule those values could grow without bound
+;; through the fixpoint, breaking termination. So a fn clause is REJECTED in any rule
+;; whose head rel is RECURSIVE — i.e. the head reaches itself over positive dependency
+;; edges (head -> each positive derived body rel). Non-recursive rules (incl. rules
+;; that merely READ a fn-free recursive closure) are fine.
+(defn- rule-dep-edges [rules :- (Vec Any)] :- (Map String (Set String))
+  (reduce (fn [acc :- (Map String (Set String)) r :- Any] :- (Map String (Set String))
+            (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:body r)))
+              (update acc (:rel (:head r))
+                      (fn [s :- (U (Set String) Nil)] :- (Set String)
+                        (reduce (fn [a :- (Set String) rel :- String] :- (Set String) (conj a rel)) (or s #{}) (positive-body-rels (:body r)))))
+              acc))
+          {} rules))
+
+;; does `start` reach itself over the positive dependency edges? (BFS over the graph)
+(defn- reaches-self? [start :- String edges :- (Map String (Set String))] :- Bool
+  (loop [frontier :- (Vec String) (vec (get edges start #{})) seen :- (Set String) #{}]
+    (if (empty? frontier)
+      false
+      (let [n (first frontier)]
+        (if (= n start)
+          true
+          (if (contains? seen n)
+            (recur (vec (rest frontier)) seen)
+            (recur (vec (concat (vec (rest frontier)) (vec (get edges n #{})))) (conj seen n))))))))
+
+(defn recursive-head-rels [rules :- (Vec Any)] :- (Set String)
+  (let [edges (rule-dep-edges rules)]
+    (reduce (fn [acc :- (Set String) h :- String] :- (Set String)
+              (if (reaches-self? h edges) (conj acc h) acc))
+            #{} (vec (head-rels rules)))))
+
+(defn- body-has-fn? [body :- (Vec Any)] :- Bool
+  (loop [ls body]
+    (if (empty? ls) false
+      (if (fnlit? (first ls)) true (recur (rest ls))))))
+
+(defn fn-recursion-violations [rules :- (Vec Any)] :- (Vec String)
+  (let [rec (recursive-head-rels rules)]
+    (reduce (fn [acc :- (Vec String) r :- Any] :- (Vec String)
+              (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:body r))
+                       (contains? rec (:rel (:head r))) (body-has-fn? (:body r)))
+                (conj acc (str "rule head '" (:rel (:head r)) "' is recursive, so it cannot contain a fn clause — fn-introduced values can grow without bound through the fixpoint (which would break termination over the finite Herbrand base)"))
+                acc))
+            [] rules)))
+
 ;; --- AGGREGATE :find validation ---------------------------------------------
 ;; :find may be an aggregate spec {:rel R :group [ints] :agg [{:op .. :arg ..}...]}.
 (def agg-ops :- (Set Keyword) #{:count :count-distinct :sum :avg :min :max})
@@ -237,6 +300,22 @@
           e4 (if (and (integer? arg) (integer? arity) (or (< arg 0) (>= arg arity)))
                [(str ":find :agg :arg position " (str arg) " out of range for relation '" (str rel) "' arity " (str arity))] [])]
       (vec (concat e1 (concat e2 (concat e3 e4)))))))
+
+;; a :having clause {:op <pred-op> :agg <i> :val <n>}: op ∈ pred-ops (all numeric
+;; here — agg outputs are numeric), :agg an integer index in [0, agg-count) addressing
+;; the i-th :agg entry layout-independently, :val a required number. Operands are only
+;; {:agg i} vs :val — no {:group i}, no :pos, no agg-vs-agg, no OR.
+(defn- having-spec-errors [spec :- Any agg-count :- Int] :- (Vec String)
+  (if (not (map? spec))
+    [":having clause must be a map {:op <op> :agg <i> :val <n>}"]
+    (let [op (:op spec) ai (:agg spec) val (:val spec)
+          e1 (if (contains? pred-ops op) []
+               [(str ":having :op must be one of :eq :ne :lt :le :gt :ge, got " (str op))])
+          e2 (if (and (integer? ai) (>= ai 0) (< ai agg-count)) []
+               [(str ":having :agg must be an integer index in [0, " (str agg-count) "), got " (str ai))])
+          e3 (if (number? val) []
+               [":having :val must be a number"])]
+      (vec (concat e1 (concat e2 e3))))))
 
 (defn- aggregate-find-errors [find :- Any derived :- (Set String) arities :- (Map String Int)] :- (Vec String)
   (let [rel (:rel find) group (:group find) agg (:agg find)
@@ -259,11 +338,17 @@
                 [(empty? agg) [":find :agg must contain at least one aggregate {:op ...}"]]
                 [:else (reduce (fn [acc :- (Vec String) spec :- Any] :- (Vec String)
                                  (vec (concat acc (agg-spec-errors spec rel arity))))
-                               [] agg)])]
-    (vec (concat e-rel (concat e-group e-agg)))))
-
-;; comparison-predicate ops (binary): equality/disequality + numeric ordering.
-(def pred-ops :- (Set Keyword) #{:eq :ne :lt :le :gt :ge})
+                               [] agg)])
+        ;; :having (optional) is a vector of clauses, ANDed. Absent = no filter.
+        agg-count (if (vector? agg) (count agg) 0)
+        e-having (if (not (contains? find :having)) []
+                   (let [having (:having find)]
+                     (if (not (vector? having))
+                       [":having must be a vector of clauses"]
+                       (reduce (fn [acc :- (Vec String) spec :- Any] :- (Vec String)
+                                 (vec (concat acc (having-spec-errors spec agg-count))))
+                               [] having))))]
+    (vec (concat e-rel (concat e-group (concat e-agg e-having))))))
 
 ;; a comparison-predicate literal {:pred op :args [a b]}: op valid, exactly 2 valid
 ;; terms, and every var already bound by an earlier positive literal (range-restricted,
@@ -288,6 +373,34 @@
              [])]
     (vec (concat e1 (concat e2 (concat e3 e4))))))
 
+;; an arithmetic fn literal {:fn op :args [a b] :bind "h"}: op valid, exactly 2 valid
+;; terms, every arg var already bound by an earlier positive literal (range-restricted,
+;; like a predicate), and :bind a FRESH string var (not already bound — a fn binds a
+;; new value, it never rebinds).
+(defn- fn-lit-errors [litt :- Any bound :- (Set String)] :- (Vec String)
+  (let [op (:fn litt) args (:args litt) bnd (:bind litt)
+        e1 (if (contains? fn-ops op) []
+             [(str "fn :fn must be one of :+ :- :* :/ :mod, got " (str op))])
+        e2 (if (and (vector? args) (= (count args) 2)) []
+             ["fn :args must be a 2-vector [a b]"])
+        e3 (if (vector? args)
+             (reduce (fn [acc :- (Vec String) t :- Any] :- (Vec String)
+                       (if (term-ok? t) acc
+                         (conj acc (str "bad fn term " (str t) " — use {:var \"n\"} or a numeric constant"))))
+                     [] args)
+             [])
+        e4 (if (vector? args)
+             (reduce (fn [acc :- (Vec String) v :- String] :- (Vec String)
+                       (if (contains? bound v) acc
+                         (conj acc (str "fn arg var '" (str v) "' must be bound by an earlier positive literal"))))
+                     [] (vec (vars-of args)))
+             [])
+        e5 (if (string? bnd) []
+             ["fn :bind must be a string variable name"])
+        e6 (if (and (string? bnd) (contains? bound bnd))
+             [(str "fn :bind '" (str bnd) "' is already bound — :bind must be a FRESH variable")] [])]
+    (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 e6))))))))
+
 ;; per-literal errors, given the known relations + the vars bound by earlier
 ;; positive literals in the same body (for negation + predicate range-restriction).
 ;; litt stays Any: it's an open keyword-map validated key-by-key here.
@@ -296,6 +409,8 @@
     ["body literal must be a map {:rel r :args [...] :neg? bool}"]
     (if (contains? litt :pred)
       (pred-lit-errors litt bound)
+    (if (contains? litt :fn)
+      (fn-lit-errors litt bound)
     (let [rel (:rel litt) args (:args litt)
           e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
           e2 (if (vector? args) [] ["literal :args must be a vector"])
@@ -320,7 +435,7 @@
                            (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal"))))
                        [] (vec (vars-of args)))
                [])]
-      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7))))))))))))
+      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))))
 
 (defn- body-errors [body :- (Vec Any) known :- (Set String)] :- (Vec String)
   (loop [ls body bound :- (Set String) #{} errs :- (Vec String) []]
@@ -328,9 +443,7 @@
       errs
       (let [litt (first ls)
             le (lit-errors litt known bound)
-            bound2 (if (binding-lit? litt)
-                     (reduce (fn [acc :- (Set String) v :- String] :- (Set String) (conj acc v)) bound (vec (vars-of (:args litt))))
-                     bound)]
+            bound2 (reduce (fn [acc :- (Set String) v :- String] :- (Set String) (conj acc v)) bound (vec (lit-binds litt)))]
         (recur (rest ls) bound2 (vec (concat errs le)))))))
 
 ;; r stays Any: an open keyword-map rule, validated key-by-key here.
@@ -394,8 +507,10 @@
               ;; defined only in a later stratum (it would read empty).
               efr (forward-ref-violations strata derived)
               ;; #22: a derived head relation must be defined at a single arity.
-              ea (rel-arity-violations rules)]
-          (vec (concat ef (concat er (concat erules (concat esv (concat efr ea))))))))))))
+              ea (rel-arity-violations rules)
+              ;; fn clauses are forbidden in recursive rules (termination guard).
+              efn (fn-recursion-violations rules)]
+          (vec (concat ef (concat er (concat erules (concat esv (concat efr (concat ea efn)))))))))))))
 
 ;; #11 — upper bound on result-set size. The query path is bounded only by the
 ;; Herbrand base (facts^k for a k-ary cross-join), so a model can ask for a result
@@ -627,7 +742,38 @@
 (defn- agg-row [gkey :- (Vec String) tuples :- (Vec (Vec String)) agg :- (Vec Any)] :- (Vec Any)
   (vec (concat gkey (mapv (fn [spec :- Any] :- Any (agg-value tuples spec)) agg))))
 
+;; --- HAVING: post-grouping numeric filter over the agg-output columns --------
+;; Any agg output (Int or Double) coerced to Double for comparison; :val (a number)
+;; likewise. Routed through str so the polymorphic Any needs no narrowing.
+(defn- num-any-double [x :- Any] :- Double
+  (let [s (str x) l (parse-long s)]
+    (if (some? l) (double l) (let [d (parse-double s)] (if (some? d) d 0.0)))))
+;; all-numeric comparison (agg outputs are always numeric; :eq on :avg is fragile).
+(defn- having-cmp [op :- Any a :- Double b :- Double] :- Bool
+  (cond
+    [(= op :eq) (= a b)]
+    [(= op :ne) (not (= a b))]
+    [(= op :lt) (< a b)]
+    [(= op :le) (<= a b)]
+    [(= op :gt) (> a b)]
+    [(= op :ge) (>= a b)]
+    [:else false]))
+;; a row survives iff every clause holds. Clause operand {:agg i} reads the agg-output
+;; column at (+ group-count i) — layout-independent addressing.
+(defn- having-eval [row :- (Vec Any) group-count :- Int having :- (Vec Any)] :- Bool
+  (loop [cs having]
+    (if (empty? cs)
+      true
+      (let [clause (first cs)
+            lhs (num-any-double (nth row (+ group-count (as-int (:agg clause)))))
+            rhs (num-any-double (:val clause))]
+        (if (having-cmp (:op clause) lhs rhs)
+          (recur (rest cs))
+          false)))))
+
 ;; run an aggregate :find over the fully-materialized relation (post-fixpoint).
+;; The cap FIRES POST-HAVING: FRAM_MAX_RESULTS bounds the SURVIVOR count, so a query
+;; with a huge group set trimmed to a few by :having returns {:ok}.
 (defn- aggregate-run [db :- (Map String (Set (Vec String))) find :- Any] :- Any
   (let [rel-name (:rel find)
         rel :- (Vec (Vec String)) (vec (get db (if (string? rel-name) rel-name "") #{}))
@@ -638,13 +784,19 @@
       (let [nerrs (numeric-errors rel rel-name agg)]
         (if (not (empty? nerrs))
           {:error nerrs}
-          (let [groups (group-rel rel group) ng (count groups)]
-            (if (> ng max-results)
-              {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ng " groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")]
-               :over-limit ng :max max-results}
-              (let [rows :- (Vec (Vec Any))
-                    (mapv (fn [gkey :- (Vec String)] :- (Vec Any) (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))]
-                {:ok (vec (sort-by pr-str rows))}))))))))
+          (let [groups (group-rel rel group)
+                rows :- (Vec (Vec Any))
+                (mapv (fn [gkey :- (Vec String)] :- (Vec Any) (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))
+                having :- Any (:having find)
+                survivors :- (Vec (Vec Any))
+                (if (and (vector? having) (not (empty? having)))
+                  (filterv (fn [row :- (Vec Any)] :- Bool (having-eval row (count group) having)) rows)
+                  rows)
+                ns (count survivors)]
+            (if (> ns max-results)
+              {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ns " surviving groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query or add :having (raise the cap via env FRAM_MAX_RESULTS if intended)")]
+               :over-limit ns :max max-results}
+              {:ok (vec (sort-by pr-str survivors))})))))))
 
 ;; run the validated query over the fact fold; {:ok [tuple...]} | {:error [msg...]}
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.

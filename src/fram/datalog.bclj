@@ -77,6 +77,47 @@
 ;; literal, enforced at validation). Ops :eq :ne :lt :le :gt :ge, all binary.
 (defn- pred? [litt :- Any] :- Bool (and (map? litt) (contains? litt :pred)))
 
+;; an ARITHMETIC FN body literal: {:fn :- :args [a b] :bind "h"}. Distinguished by
+;; the :fn key. It never reads db/delta/index — it grounds its two args, computes a
+;; binary arithmetic value, and BINDS a fresh var to the CANONICAL STRING of that
+;; value (keeping the query db all-String). Failure (non-numeric operand, div/mod by
+;; zero, mod of a non-long) DROPS the row — never an error — exactly like a predicate
+;; filter. Because it ignores db/delta/index, the scan and indexed engines route it
+;; identically (differential agreement by construction).
+(defn- fnlit? [litt :- Any] :- Bool (and (map? litt) (contains? litt :fn)))
+(def fn-ops :- (Set Keyword) #{:+ :- :* :/ :mod})
+
+;; parse a ground operand (a String from the EDB or a bare number constant) to a
+;; long-first / double value. fn-long -> Int|nil (mirrors coerce-str's long attempt);
+;; fn-double -> Double|nil (long-then-double, routed through str like num-of).
+(defn- fn-long [v :- Any] :- (U Int Nil) (parse-long (str v)))
+(defn- fn-double [v :- Any] :- (U Double Nil)
+  (let [s (str v) l (parse-long s)] (if (some? l) (double l) (parse-double s))))
+
+;; :+ :- :* preserve long when BOTH operands parse-long, else fall to double.
+(defn- fn-long-op [op :- Keyword a :- Int b :- Int] :- Int
+  (cond [(= op :+) (+ a b)] [(= op :-) (- a b)] [(= op :*) (* a b)] [:else 0]))
+(defn- fn-double-op [op :- Keyword a :- Double b :- Double] :- Double
+  (cond [(= op :+) (+ a b)] [(= op :-) (- a b)] [(= op :*) (* a b)] [:else 0.0]))
+
+;; compute the arithmetic result, or nil to DROP the row. :/ is ALWAYS double
+;; (divisor 0 drops); :mod requires two longs (non-long or divisor 0 drops), integer
+;; mod via quot; :+ :- :* preserve long when both parse-long, else double.
+(defn- fn-compute [op :- Keyword a :- Any b :- Any] :- (U Int Double Nil)
+  (cond
+    [(= op :/)
+     (let [na (fn-double a) nb (fn-double b)]
+       (if (or (nil? na) (nil? nb) (= nb 0.0)) nil (/ na nb)))]
+    [(= op :mod)
+     (let [la (fn-long a) lb (fn-long b)]
+       (if (or (nil? la) (nil? lb) (= lb 0)) nil (- la (* (quot la lb) lb))))]
+    [:else
+     (let [la (fn-long a) lb (fn-long b)]
+       (if (and (some? la) (some? lb))
+         (fn-long-op op la lb)
+         (let [na (fn-double a) nb (fn-double b)]
+           (if (or (nil? na) (nil? nb)) nil (fn-double-op op na nb)))))]))
+
 ;; --- EDB: project the LIVE fact store into triple/fact-id tuple-sets ----------
 (defn edb [ctx :- (Atom t/Store)] :- (Map String (Set (Vec Any)))
   (reduce (fn [db :- (Map String (Set (Vec Any))) cid :- Int] :- (Map String (Set (Vec Any)))
@@ -138,11 +179,20 @@
              [(= op :ge) (>= na nb)]
              [:else false])))])))
 
+;; evaluate a fn literal on a substitution: ground the two args, compute, and (on
+;; success) bind :bind to the CANONICAL STRING of the numeric result — Long 8 -> "8",
+;; Double 3.5 -> "3.5", 8.0 -> "8.0". Drop (return []) on any failure.
+(defn- eval-fn [litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))
+  (let [g (ground (:args litt) subst)
+        result (fn-compute (:fn litt) (nth g 0) (nth g 1))]
+    (if (nil? result) [] [(assoc subst (:bind litt) (str result))])))
+
 ;; literal match. Positive: scan the relation's tuples, collect substs. Negated:
 ;; ground the (range-restricted) args and pass the subst through iff that tuple is
 ;; absent from the relation (which, when stratified, is a frozen lower stratum).
 (defn- match-lit [db :- (Map String (Set (Vec Any))) litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))   ; -> [subst...]
   (cond
+    [(fnlit? litt) (eval-fn litt subst)]
     [(pred? litt) (if (eval-pred litt subst) [subst] [])]
     [(:neg litt)
      (let [g (ground (:args litt) subst)]
@@ -179,7 +229,7 @@
 (defn- positive-positions [body :- (Vec (Map Keyword Any))] :- (Vec Int)
   (loop [i 0 ls body acc []]
     (if (empty? ls) acc
-      (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (:pred (first ls))) acc (conj acc i))))))
+      (recur (+ i 1) (rest ls) (if (or (:neg (first ls)) (or (:pred (first ls)) (:fn (first ls)))) acc (conj acc i))))))
 
 ;; eval a body with the literal at `pin` reading from `delta`, all others from
 ;; `db` (negated literals always read full `db` — stratification keeps them frozen).
@@ -341,6 +391,7 @@
 ;; byte-for-byte the oracle's: ground the range-restricted args, pass iff absent.
 (defn- match-lit-idx [db :- (Map String (Set (Vec Any))) idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) litt :- (Map Keyword Any) subst :- (Map String Any)] :- (Vec (Map String Any))
   (cond
+    [(fnlit? litt) (eval-fn litt subst)]
     [(pred? litt) (if (eval-pred litt subst) [subst] [])]
     [(:neg litt)
      (let [g (ground (:args litt) subst)]

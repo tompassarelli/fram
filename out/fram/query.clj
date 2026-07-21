@@ -55,11 +55,20 @@
 (defn- vars-of [args]
   (reduce (fn [acc t] (if (and (map? t) (contains? t :var)) (conj acc (:var t)) acc)) #{} args))
 
+(defn- ^Boolean fnlit? [litt]
+  (and (map? litt) (contains? litt :fn)))
+
 (defn- ^Boolean binding-lit? [litt]
   (and (map? litt) (contains? litt :rel) (not (:neg litt)) (not (:pred litt)) (vector? (:args litt))))
 
+(defn- lit-binds [litt]
+  (cond
+  (fnlit? litt) (if (string? (:bind litt)) #{(:bind litt)} #{})
+  (binding-lit? litt) (vars-of (:args litt))
+  :else #{}))
+
 (defn- positive-body-vars [body]
-  (reduce (fn [acc litt] (if (binding-lit? litt) (reduce (fn [a v] (conj a v)) acc (vec (vars-of (:args litt)))) acc)) #{} body))
+  (reduce (fn [acc litt] (reduce (fn [a v] (conj a v)) acc (vec (lit-binds litt)))) #{} body))
 
 (defn- ^Boolean all-vectors? [xs]
   (loop [ys xs]
@@ -106,6 +115,31 @@
 (defn- head-arity-map [rules]
   (reduce (fn [acc r] (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:args (:head r)))) (assoc acc (:rel (:head r)) (count (:args (:head r)))) acc)) {} rules))
 
+(def pred-ops #{:eq :ne :lt :le :gt :ge})
+
+(def fn-ops #{:+ :- :* :/ :mod})
+
+(defn- rule-dep-edges [rules]
+  (reduce (fn [acc r] (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:body r))) (update acc (:rel (:head r)) (fn [s] (reduce (fn [a rel] (conj a rel)) (or s #{}) (positive-body-rels (:body r))))) acc)) {} rules))
+
+(defn- ^Boolean reaches-self? [^String start edges]
+  (loop [frontier (vec (get edges start #{}))
+   seen #{}]
+  (if (empty? frontier) false (let [n (first frontier)]
+  (if (= n start) true (if (contains? seen n) (recur (vec (rest frontier)) seen) (recur (vec (concat (vec (rest frontier)) (vec (get edges n #{})))) (conj seen n))))))))
+
+(defn recursive-head-rels [rules]
+  (let [edges (rule-dep-edges rules)]
+  (reduce (fn [acc h] (if (reaches-self? h edges) (conj acc h) acc)) #{} (vec (head-rels rules)))))
+
+(defn- ^Boolean body-has-fn? [body]
+  (loop [ls body]
+  (if (empty? ls) false (if (fnlit? (first ls)) true (recur (rest ls))))))
+
+(defn fn-recursion-violations [rules]
+  (let [rec (recursive-head-rels rules)]
+  (reduce (fn [acc r] (if (and (map? r) (map? (:head r)) (string? (:rel (:head r))) (vector? (:body r)) (contains? rec (:rel (:head r))) (body-has-fn? (:body r))) (conj acc (str "rule head '" (:rel (:head r)) "' is recursive, so it cannot contain a fn clause — fn-introduced values can grow without bound through the fixpoint (which would break termination over the finite Herbrand base)")) acc)) [] rules)))
+
 (def agg-ops #{:count :count-distinct :sum :avg :min :max})
 
 (def agg-arg-ops #{:count-distinct :sum :avg :min :max})
@@ -118,6 +152,15 @@
    e3 (if (and (some? arg) (not (integer? arg))) [":find :agg :arg must be an integer position"] [])
    e4 (if (and (integer? arg) (integer? arity) (or (< arg 0) (>= arg arity))) [(str ":find :agg :arg position " (str arg) " out of range for relation '" (str rel) "' arity " (str arity))] [])]
   (vec (concat e1 (concat e2 (concat e3 e4)))))))
+
+(defn- having-spec-errors [spec agg-count]
+  (if (not (map? spec)) [":having clause must be a map {:op <op> :agg <i> :val <n>}"] (let [op (:op spec)
+   ai (:agg spec)
+   val (:val spec)
+   e1 (if (contains? pred-ops op) [] [(str ":having :op must be one of :eq :ne :lt :le :gt :ge, got " (str op))])
+   e2 (if (and (integer? ai) (>= ai 0) (< ai agg-count)) [] [(str ":having :agg must be an integer index in [0, " (str agg-count) "), got " (str ai))])
+   e3 (if (number? val) [] [":having :val must be a number"])]
+  (vec (concat e1 (concat e2 e3))))))
 
 (defn- aggregate-find-errors [find derived arities]
   (let [rel (:rel find)
@@ -135,10 +178,11 @@
    e-agg (cond
   (not (vector? agg)) [":find :agg must be a vector of aggregate specs"]
   (empty? agg) [":find :agg must contain at least one aggregate {:op ...}"]
-  :else (reduce (fn [acc spec] (vec (concat acc (agg-spec-errors spec rel arity)))) [] agg))]
-  (vec (concat e-rel (concat e-group e-agg)))))
-
-(def pred-ops #{:eq :ne :lt :le :gt :ge})
+  :else (reduce (fn [acc spec] (vec (concat acc (agg-spec-errors spec rel arity)))) [] agg))
+   agg-count (if (vector? agg) (count agg) 0)
+   e-having (if (not (contains? find :having)) [] (let [having (:having find)]
+  (if (not (vector? having)) [":having must be a vector of clauses"] (reduce (fn [acc spec] (vec (concat acc (having-spec-errors spec agg-count)))) [] having))))]
+  (vec (concat e-rel (concat e-group (concat e-agg e-having))))))
 
 (defn- pred-lit-errors [litt bound]
   (let [op (:pred litt)
@@ -149,8 +193,20 @@
    e4 (if (vector? args) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "predicate var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
   (vec (concat e1 (concat e2 (concat e3 e4))))))
 
+(defn- fn-lit-errors [litt bound]
+  (let [op (:fn litt)
+   args (:args litt)
+   bnd (:bind litt)
+   e1 (if (contains? fn-ops op) [] [(str "fn :fn must be one of :+ :- :* :/ :mod, got " (str op))])
+   e2 (if (and (vector? args) (= (count args) 2)) [] ["fn :args must be a 2-vector [a b]"])
+   e3 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad fn term " (str t) " — use {:var \"n\"} or a numeric constant")))) [] args) [])
+   e4 (if (vector? args) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "fn arg var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])
+   e5 (if (string? bnd) [] ["fn :bind must be a string variable name"])
+   e6 (if (and (string? bnd) (contains? bound bnd)) [(str "fn :bind '" (str bnd) "' is already bound — :bind must be a FRESH variable")] [])]
+  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 e6))))))))
+
 (defn- lit-errors [litt known bound]
-  (if (not (map? litt)) ["body literal must be a map {:rel r :args [...] :neg? bool}"] (if (contains? litt :pred) (pred-lit-errors litt bound) (let [rel (:rel litt)
+  (if (not (map? litt)) ["body literal must be a map {:rel r :args [...] :neg? bool}"] (if (contains? litt :pred) (pred-lit-errors litt bound) (if (contains? litt :fn) (fn-lit-errors litt bound) (let [rel (:rel litt)
    args (:args litt)
    e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
    e2 (if (vector? args) [] ["literal :args must be a vector"])
@@ -160,7 +216,7 @@
    en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false))) ["literal :neg must be true or false"] [])
    e6 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad term " (str t) " — use {:var \"n\"} or a constant")))) [] args) [])
    e7 (if (and (= (:neg litt) true) (vector? args)) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
-  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7))))))))))))
+  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))))
 
 (defn- body-errors [body known]
   (loop [ls body
@@ -168,7 +224,7 @@
    errs []]
   (if (empty? ls) errs (let [litt (first ls)
    le (lit-errors litt known bound)
-   bound2 (if (binding-lit? litt) (reduce (fn [acc v] (conj acc v)) bound (vec (vars-of (:args litt)))) bound)]
+   bound2 (reduce (fn [acc v] (conj acc v)) bound (vec (lit-binds litt)))]
   (recur (rest ls) bound2 (vec (concat errs le)))))))
 
 (defn- rule-errors [r known]
@@ -198,8 +254,9 @@
    erules (reduce (fn [acc r] (vec (concat acc (rule-errors r known)))) [] rules)
    esv (d/strata-violations strata)
    efr (forward-ref-violations strata derived)
-   ea (rel-arity-violations rules)]
-  (vec (concat ef (concat er (concat erules (concat esv (concat efr ea))))))))))))
+   ea (rel-arity-violations rules)
+   efn (fn-recursion-violations rules)]
+  (vec (concat ef (concat er (concat erules (concat esv (concat efr (concat ea efn)))))))))))))
 
 (def max-results (let [env (System/getenv "FRAM_MAX_RESULTS")
    n (if (and (some? env) (not (= env ""))) (parse-long env) nil)]
@@ -346,6 +403,29 @@
 (defn- agg-row [gkey tuples agg]
   (vec (concat gkey (mapv (fn [spec] (agg-value tuples spec)) agg))))
 
+(defn- num-any-double [x]
+  (let [s (str x)
+   l (parse-long s)]
+  (if (some? l) (double l) (let [d (parse-double s)]
+  (if (some? d) d 0.0)))))
+
+(defn- ^Boolean having-cmp [op a b]
+  (cond
+  (= op :eq) (= a b)
+  (= op :ne) (not (= a b))
+  (= op :lt) (< a b)
+  (= op :le) (<= a b)
+  (= op :gt) (> a b)
+  (= op :ge) (>= a b)
+  :else false))
+
+(defn- ^Boolean having-eval [row group-count having]
+  (loop [cs having]
+  (if (empty? cs) true (let [clause (first cs)
+   lhs (num-any-double (nth row (+ group-count (as-int (:agg clause)))))
+   rhs (num-any-double (:val clause))]
+  (if (having-cmp (:op clause) lhs rhs) (recur (rest cs)) false)))))
+
 (defn- aggregate-run [db find]
   (let [rel-name (:rel find)
    rel (vec (get db (if (string? rel-name) rel-name "") #{}))
@@ -353,9 +433,11 @@
    agg (vec (:agg find))]
   (if (empty? rel) {:ok []} (let [nerrs (numeric-errors rel rel-name agg)]
   (if (not (empty? nerrs)) {:error nerrs} (let [groups (group-rel rel group)
-   ng (count groups)]
-  (if (> ng max-results) {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ng " groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit ng :max max-results} (let [rows (mapv (fn [gkey] (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))]
-  {:ok (vec (sort-by pr-str rows))}))))))))
+   rows (mapv (fn [gkey] (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))
+   having (:having find)
+   survivors (if (and (vector? having) (not (empty? having))) (filterv (fn [row] (having-eval row (count group) having)) rows) rows)
+   ns (count survivors)]
+  (if (> ns max-results) {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ns " surviving groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query or add :having (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit ns :max max-results} {:ok (vec (sort-by pr-str survivors))})))))))
 
 (defn run [facts q0]
   (let [q (canon-q q0)
