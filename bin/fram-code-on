@@ -125,32 +125,32 @@ else
   fi
 fi
 
-# 3. write .mcp.json so Claude Code picks up the fram graph-edit MCP for this dir
-echo "  [3/3] writing $DIR/.mcp.json …"
-cat > "$DIR/.mcp.json" <<JSON
+# 3. write .mcp.json (Claude Code) + .codex/config.toml [mcp_servers.fram] (Codex)
+#    so BOTH pick up the fram graph-edit MCP for this dir. MERGE, never clobber —
+#    an existing .mcp.json / config.toml may carry unrelated servers/projects.
+echo "  [3/3] wiring $DIR/.mcp.json + $DIR/.codex/config.toml …"
+FRAM_SERVER_JSON=$(cat <<JSON
 {
-  "mcpServers": {
-    "fram": {
-      "command": "$HERE/bin/fram-mcp",
-      "args": [],
-      "env": {
-        "FRAM_FLIP": "1",
-        "FRAM_GRAPH_EDIT": "1",
-        "FRAM_CODE_PORT": "$PORT",
-        "FRAM_CODE_LOG": "$CODE_LOG",
-        "FRAM_SRC": "$DIR",
-        "FRAM_OUT": "$HERE/out",
-        "FRAM_BIN": "$HERE/bin",
-        "FRAM_RESOLVE": "$HERE/chartroom/src/resolve.clj",
-        "FRAM_ROUNDTRIP": "$BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt",
-        "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
-        "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
-        "BEAGLE_HOME": "$BEAGLE_HOME"
-      }
-    }
+  "command": "$HERE/bin/fram-mcp",
+  "args": [],
+  "env": {
+    "FRAM_FLIP": "1",
+    "FRAM_GRAPH_EDIT": "1",
+    "FRAM_CODE_PORT": "$PORT",
+    "FRAM_CODE_LOG": "$CODE_LOG",
+    "FRAM_SRC": "$DIR",
+    "FRAM_OUT": "$HERE/out",
+    "FRAM_BIN": "$HERE/bin",
+    "FRAM_RESOLVE": "$HERE/chartroom/src/resolve.clj",
+    "FRAM_ROUNDTRIP": "$BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt",
+    "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
+    "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
+    "BEAGLE_HOME": "$BEAGLE_HOME"
   }
 }
 JSON
+)
+"$HERE/bin/fram-code-wire" on "$DIR" "$FRAM_SERVER_JSON"
 
 cat <<EOF
 
