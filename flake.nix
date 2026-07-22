@@ -9,9 +9,16 @@
     # The packaged daemon runs Java directly and has no runtime clj-nix dependency.
     clj-nix.url = "github:jlesquembre/clj-nix/2b1290ee56e9bbd50e9b5874c985d34ad2f1b458";
     clj-nix.inputs.nixpkgs.follows = "nixpkgs";
+
+    # Graph-edit authoring is sealed against one published Beagle source. Its
+    # nixpkgs follows this flake so the packaged .zo files and the Racket that
+    # loads them are built from the exact same package set.
+    beagle.url = "github:tompassarelli/beagle/989fff80824f0e5a8936ac0d7e0ceba33b810890";
+    beagle.inputs.clj-nix.follows = "clj-nix";
+    beagle.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, clj-nix }:
+  outputs = { self, nixpkgs, clj-nix, beagle }:
     let
       # babashka is unavailable on x86_64-darwin in this nixpkgs revision, so
       # advertising that system made `flake check --all-systems` dishonest.
@@ -181,22 +188,211 @@
             babashkaClasspath = "${finalAttrs.finalPackage}/libexec/fram/out";
           };
         });
+
+      # Authority packaging only. The coordinator authentication, descriptor,
+      # receipts, and projection lifecycle live in later slices. This output
+      # closes the executable/toolchain boundary and refuses to serve until
+      # North supplies the future lease and independently computed closure seal.
+      mkGraphEditRuntime = pkgs: fram: beaglePkg:
+        let
+          framRoot = fram.runtimeRoot;
+          beagleRevision = "989fff80824f0e5a8936ac0d7e0ceba33b810890";
+          runtimePackages = [
+            fram
+            beaglePkg
+            pkgs.babashka
+            pkgs.racket
+            pkgs.jdk
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gnugrep
+            pkgs.gnused
+          ];
+          runtimePath = pkgs.lib.makeBinPath runtimePackages;
+          coreManifestData = {
+            manifestVersion = "fram.graph-edit-runtime-core/v1";
+            authorityProfile = "graph-edit-authority-v1";
+            verificationOwner = "north";
+            selfAttestation = false;
+            closureDigestField = "intentionally-absent; North computes it from trusted Nix DB NAR hashes";
+            sourcePins = {
+              beagle = beagleRevision;
+            };
+            storeRoots = [
+              { role = "babashka"; path = "${pkgs.babashka}"; }
+              { role = "beagle"; path = "${beaglePkg}"; }
+              { role = "fram"; path = "${fram}"; }
+              { role = "jdk"; path = "${pkgs.jdk}"; }
+              { role = "racket"; path = "${pkgs.racket}"; }
+            ];
+            executables = {
+              babashka = "${pkgs.babashka}/bin/bb";
+              coordinatorJava = "${pkgs.jdk}/bin/java";
+              coordinatorSource = "${framRoot}/coord_daemon.clj";
+              entrypointRelative = "bin/fram-graph-edit-runtime";
+              mcpSource = "${framRoot}/tests/fram_mcp.clj";
+              racket = "${pkgs.racket}/bin/racket";
+            };
+            helpers = {
+              beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
+              factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
+              factsRoundtrip = "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt";
+              framResolve = "${framRoot}/chartroom/src/resolve.clj";
+            };
+            environment = {
+              acceptedNorthBindings = [
+                "NORTH_FRAM_AUTHORITY_INSTANCE_ID"
+                "NORTH_FRAM_AUTHORITY_LEASE_EPOCH"
+                "NORTH_FRAM_AUTHORITY_LEASE_ID"
+                "NORTH_FRAM_CHECKOUT_ROOT"
+                "NORTH_FRAM_CODE_LOG"
+                "NORTH_FRAM_CODE_PORT"
+                "NORTH_FRAM_RUNTIME_CLOSURE_DIGEST"
+                "NORTH_FRAM_SOURCE_ROOT"
+              ];
+              childPolicy = "env-i-explicit-allowlist";
+              ignoredAmbient = [
+                "BEAGLE_HOME"
+                "FRAM_*"
+                "HOME"
+                "PATH"
+                "direnv"
+                "project .mcp.json"
+              ];
+              runtimePath = runtimePath;
+            };
+          };
+          coreManifest = pkgs.writeText
+            "fram-graph-edit-runtime-core-v1.json"
+            (builtins.toJSON coreManifestData + "\n");
+        in
+        pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
+          pname = "fram-graph-edit-runtime";
+          version = "1";
+          src = ./.;
+
+          nativeBuildInputs = [
+            pkgs.makeBinaryWrapper
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.diffutils
+            pkgs.babashka
+            pkgs.gnugrep
+            pkgs.python3
+          ];
+
+          dontConfigure = true;
+          dontBuild = true;
+
+          installPhase = ''
+            runHook preInstall
+
+            mkdir -p "$out/bin" "$out/libexec/fram" "$out/share/fram/empty-threads"
+            cp ${./bin/fram-graph-edit-runtime} "$out/libexec/fram/fram-graph-edit-runtime"
+            cp ${coreManifest} "$out/share/fram/graph-edit-runtime-core-v1.json"
+            chmod 0444 "$out/libexec/fram/fram-graph-edit-runtime"
+
+            # Source this hook at the point of use so its binary implementation
+            # wins even if another propagated setup hook also defined
+            # makeWrapper. A shell wrapper would itself evaluate BASH_ENV before
+            # it could clear hostile caller state.
+            source ${pkgs.makeBinaryWrapper}/nix-support/setup-hook
+            # The pinned hook accumulates optional C fragments in deliberately
+            # unset locals, so its generator is not nounset-clean.
+            set +u
+            makeBinaryWrapper "${pkgs.bash}/bin/bash" \
+              "$out/bin/fram-graph-edit-runtime" \
+              --add-flag -p \
+              --add-flag "$out/libexec/fram/fram-graph-edit-runtime" \
+              --unset BASHOPTS \
+              --unset BASH_ENV \
+              --unset CDPATH \
+              --unset ENV \
+              --unset FRAM_GRAPH_EDIT_SEALED_ENVIRONMENT_STAGE \
+              --unset SHELLOPTS \
+              --set HOME "/homeless-shelter" \
+              --set LANG C \
+              --set LC_ALL C \
+              --set PATH "${runtimePath}" \
+              --set BEAGLE_HOME "${beaglePkg}" \
+              --set FRAM_GRAPH_EDIT_SEALED_BASH "${pkgs.bash}/bin/bash" \
+              --set FRAM_GRAPH_EDIT_SEALED_BB "${pkgs.babashka}/bin/bb" \
+              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE "${beaglePkg}" \
+              --set FRAM_GRAPH_EDIT_SEALED_BUILD_ALL "${beaglePkg}/bin/beagle-build-all" \
+              --set FRAM_GRAPH_EDIT_SEALED_CAT "${pkgs.coreutils}/bin/cat" \
+              --set FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt" \
+              --set FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS "$out/share/fram/empty-threads" \
+              --set FRAM_GRAPH_EDIT_SEALED_ENV "${pkgs.coreutils}/bin/env" \
+              --set FRAM_GRAPH_EDIT_SEALED_FRAM "${framRoot}" \
+              --set FRAM_GRAPH_EDIT_SEALED_JAVA "${pkgs.jdk}/bin/java" \
+              --set FRAM_GRAPH_EDIT_SEALED_MANIFEST "$out/share/fram/graph-edit-runtime-core-v1.json" \
+              --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
+              --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
+              --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/chartroom/src/resolve.clj" \
+              --set FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt"
+            set -u
+
+            runHook postInstall
+          '';
+
+          doInstallCheck = true;
+          installCheckPhase = ''
+            runHook preInstallCheck
+
+            FRAM_RUNTIME_TEST_BB="${pkgs.babashka}/bin/bb" \
+            FRAM_RUNTIME_TEST_CMP="${pkgs.diffutils}/bin/cmp" \
+            FRAM_RUNTIME_TEST_ENV="${pkgs.coreutils}/bin/env" \
+            FRAM_RUNTIME_TEST_GREP="${pkgs.gnugrep}/bin/grep" \
+            FRAM_RUNTIME_TEST_PYTHON="${pkgs.python3}/bin/python3" \
+            FRAM_RUNTIME_TEST_SLEEP="${pkgs.coreutils}/bin/sleep" \
+              ${pkgs.bash}/bin/bash ${./tests/package_graph_edit_runtime_smoke.sh} "$out"
+
+            runHook postInstallCheck
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Default-dark sealed runtime for North-owned Fram graph editing";
+            longDescription = ''
+              Store-only Fram, Beagle, Racket, Babashka, and JVM graph-edit
+              runtime. North remains the independent closure-verification and
+              authority owner; this package never self-attests its NAR closure.
+            '';
+            license = with licenses; [ mit asl20 ];
+            platforms = systems;
+            mainProgram = "fram-graph-edit-runtime";
+          };
+
+          passthru = {
+            coreManifest = "${finalAttrs.finalPackage}/share/fram/graph-edit-runtime-core-v1.json";
+            framPackage = fram;
+            beaglePackage = beaglePkg;
+          };
+        });
     in
     {
       packages = forAll (system: pkgs: rec {
         fram = mkFram pkgs clj-nix.packages.${system};
+        fram-graph-edit-runtime = mkGraphEditRuntime pkgs fram beagle.packages.${system}.default;
         default = fram;
       });
 
       checks = forAll (system: pkgs:
-        let fram = self.packages.${system}.default;
+        let
+          fram = self.packages.${system}.default;
+          graphEditRuntime = self.packages.${system}.fram-graph-edit-runtime;
         in {
           packaged-daemon = fram;
+          graph-edit-runtime = graphEditRuntime;
           package-contract = pkgs.runCommand "fram-package-contract" {} ''
             test "${fram.runtimeRoot}" = "${fram}/libexec/fram"
             test "${fram.babashkaClasspath}" = "${fram}/libexec/fram/out"
             test -d "${fram.runtimeRoot}"
             test -d "${fram.babashkaClasspath}"
+            test "${graphEditRuntime.coreManifest}" = \
+              "${graphEditRuntime}/share/fram/graph-edit-runtime-core-v1.json"
+            test -x "${graphEditRuntime}/bin/fram-graph-edit-runtime"
+            test -r "${graphEditRuntime.coreManifest}"
             touch "$out"
           '';
         });
@@ -219,6 +415,14 @@
           fram-daemon = mkApp "fram-daemon";
           fram-mcp = mkApp "fram-mcp";
           fram-primer = mkApp "fram-primer";
+          fram-graph-edit-runtime = {
+            type = "app";
+            program = "${self.packages.${system}.fram-graph-edit-runtime}/bin/fram-graph-edit-runtime";
+            meta = {
+              description = "Run the default-dark sealed Fram graph-edit runtime";
+              platforms = systems;
+            };
+          };
         });
     };
 }
