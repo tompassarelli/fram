@@ -462,6 +462,53 @@
   (when-let [ch (:ch pin)]
     (try (.close ^java.nio.channels.FileChannel ch) (catch Throwable _ nil))))
 
+(defn- commit-candidate-exactly [port req]
+  ;; A socket can disappear after the coordinator's append+fsync commit point but
+  ;; before this process receives the receipt. Retry the IDENTICAL request once:
+  ;; graph-edit-candidate-v1 deduplicates it from the durable batch identity, even
+  ;; after coordinator restart. A second transport failure is explicitly UNKNOWN,
+  ;; never mislabeled "nothing committed" and never automatically replayed again.
+  (try
+    (fram.rt/coord-request-for-log port (flip-log) req)
+    (catch Throwable first-error
+      (try
+        (fram.rt/coord-request-for-log port (flip-log) req)
+        (catch Throwable retry-error
+          {:reject [(str "commit response is unknown after one exact-request retry: "
+                         (.getMessage ^Throwable first-error) "; retry: "
+                         (.getMessage ^Throwable retry-error))]
+           :code :commit-response-unknown
+           :candidate (:candidate req)
+           :base-version (:version req)})))))
+
+(defn- coordinator-commit-warning [commit]
+  (when (or (:repair-needed commit) (seq (:warnings commit)))
+    (str " (WARNING: coordinator reports "
+         (let [code (or (:code commit) :committed-with-warning)]
+           (if (keyword? code) (name code) (str code)))
+         " for candidate " (:candidate commit) " at exact version " (:version commit)
+         (when-let [ws (seq (:warnings commit))]
+           (str ": " (str/join "; " (map (fn [w]
+                                             (str (if (keyword? (:stage w))
+                                                    (name (:stage w))
+                                                    (or (:stage w) "unknown-stage"))
+                                                  " — " (or (:message w) "unspecified warning")))
+                                           ws))))
+         ". The graph batch is COMMITTED; DO NOT RETRY."
+         (when (:repair-needed commit) " Restart the coordinator to rebuild derived state.")
+         ")")))
+
+(defn- committed-postprocess-failure [commit op module t]
+  {:text (str "COMMITTED WITH WARNING (graph-edit-candidate-v1, atomic batch): "
+              op " on " module " — candidate " (:candidate commit) ", "
+              (:installed commit) " ops at exact version " (:version commit)
+              ". Post-commit projection/response handling failed: "
+              (or (.getMessage ^Throwable t) (.getSimpleName (class t)))
+              ". The graph batch is COMMITTED; DO NOT RETRY. Repair the tracked view with: "
+              "bin/fram-render-code " module " --port " flip-code-port " "
+              (str/join " " (flip-log-args)) " --out " (:path commit)
+              (coordinator-commit-warning commit))})
+
 (defn route-edit [e]
   (let [op (:op e) module (:module e)]
     (cond
@@ -569,25 +616,27 @@
                                               "parse/type check (nothing committed). Re-issue the edit. Beagle error:\n"
                                               (str/trim (str (:out bg) (:err bg))))})
                               ;; checks green — commit the sealed candidate at its exact version.
-                              (let [commit (try (fram.rt/coord-request-for-log port (flip-log)
-                                                 {:op :edit-commit
-                                                  :candidate (:candidate prep)
-                                                  :version (:version prep)
-                                                  :module module
-                                                  :path target
-                                                  :ops-digest (:ops-digest prep)
-                                                  :edn-digest (:edn-digest prep)
-                                                  :src-root (canon fram-src)})
-                                                (catch Throwable t {:reject [(str "edit-commit socket: " (.getMessage t))]}))]
+                              (let [commit-req {:op :edit-commit
+                                                :candidate (:candidate prep)
+                                                :version (:version prep)
+                                                :module module
+                                                :path target
+                                                :ops-digest (:ops-digest prep)
+                                                :edn-digest (:edn-digest prep)
+                                                :src-root (canon fram-src)}
+                                    commit (commit-candidate-exactly port commit-req)]
                                 (cond
                                   (:reject commit)
                                   (do (sh {} "rm" "-rf" work)
-                                      (if (#{:durability-indeterminate :durability-poisoned} (:code commit))
+                                      (if (#{:durability-indeterminate :durability-poisoned
+                                             :committed-repair-needed :commit-response-unknown}
+                                           (:code commit))
                                         {:isError true
                                          :text (str "STOPPED (graph-edit-candidate-v1, " (name (:code commit))
                                                     "): " (str/join "; " (map str (:reject commit)))
-                                                    " — outcome is NOT an ordinary rejection; DO NOT RETRY."
-                                                    " Stop/restart the coordinator for sole-writer recovery")}
+                                                    " — outcome is NOT an ordinary rejection and may already be"
+                                                    " committed; DO NOT RETRY. Stop/restart the coordinator and"
+                                                    " inspect :edit-protocol/:status for the exact receipt")}
                                         {:isError true
                                          :text (str "REJECTED (graph-edit-candidate-v1 commit — nothing committed"
                                                     (when-let [c (:code commit)] (str ", " (name c))) "): "
@@ -605,29 +654,42 @@
                                   ;; reply reports PROJECTION-STALE. Any failure leaves the LOG
                                   ;; canonical and the projection STALE — reported loudly with the
                                   ;; repair command.
-                                  (let [proj (try (publish-projection-pinned!
-                                                   pin (io/file candf) (.getName (io/file target)))
-                                                  (catch Throwable t {:proj-err (str (.getMessage t))}))]
-                                    (sh {} "rm" "-rf" work)
-                                    (cond
-                                      (:proj-err proj)
-                                      {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
-                                                  " — " (:installed commit) " ops at version " (:version commit)
-                                                  " (WARNING: tracked projection is STALE — writing " target
-                                                  " failed: " (:proj-err proj) "; repair with: bin/fram-render-code "
-                                                  module " --port " flip-code-port " "
-                                                  (str/join " " (flip-log-args)) " --out " target ")")}
-                                      (:stale proj)
-                                      {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
-                                                  " — " (:installed commit) " ops at version " (:version commit)
-                                                  " (WARNING: tracked projection is PROJECTION-STALE — "
-                                                  (:stale proj) "; repair with: bin/fram-render-code "
-                                                  module " --port " flip-code-port " "
-                                                  (str/join " " (flip-log-args)) " --out " target ")")}
-                                      :else
-                                      {:text (str "committed + TYPE-CHECKS CLEAN (graph-edit-candidate-v1, atomic batch): "
-                                                  op " on " module " — " (:installed commit) " ops at version "
-                                                  (:version commit) "; tracked view " target " updated")}))
+                                  (try
+                                    (let [proj (try (publish-projection-pinned!
+                                                     pin (io/file candf) (.getName (io/file target)))
+                                                    (catch Throwable t {:proj-err (str (.getMessage t))}))]
+                                      (sh {} "rm" "-rf" work)
+                                      (cond
+                                        (:proj-err proj)
+                                        {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
+                                                    " — candidate " (:candidate commit) ", "
+                                                    (:installed commit) " ops at exact version " (:version commit)
+                                                    " (WARNING: tracked projection is STALE — writing " target
+                                                    " failed: " (:proj-err proj) "; graph batch is COMMITTED; DO NOT RETRY;"
+                                                    " repair with: bin/fram-render-code "
+                                                    module " --port " flip-code-port " "
+                                                    (str/join " " (flip-log-args)) " --out " target ")"
+                                                    (coordinator-commit-warning commit))}
+                                        (:stale proj)
+                                        {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
+                                                    " — candidate " (:candidate commit) ", "
+                                                    (:installed commit) " ops at exact version " (:version commit)
+                                                    " (WARNING: tracked projection is PROJECTION-STALE — "
+                                                    (:stale proj) "; graph batch is COMMITTED; DO NOT RETRY; repair with: "
+                                                    "bin/fram-render-code " module " --port " flip-code-port " "
+                                                    (str/join " " (flip-log-args)) " --out " target ")"
+                                                    (coordinator-commit-warning commit))}
+                                        :else
+                                        {:text (str "committed + TYPE-CHECKS CLEAN (graph-edit-candidate-v1, atomic batch): "
+                                                    op " on " module " — candidate " (:candidate commit) ", "
+                                                    (:installed commit) " ops at exact version "
+                                                    (:version commit) "; tracked view " target " updated"
+                                                    (coordinator-commit-warning commit))}))
+                                    (catch Throwable t
+                                      ;; Any failure after an :ok/:committed receipt is
+                                      ;; presentation/projection repair, never edit failure.
+                                      (try (sh {} "rm" "-rf" work) (catch Throwable _ nil))
+                                      (committed-postprocess-failure commit op module t)))
                                   :else
                                   (do (sh {} "rm" "-rf" work)
                                       {:isError true
@@ -1001,10 +1063,14 @@
                      " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
                      ") — legacy or wrong-protocol coordinator; restart it with current Fram"
                      " (rerun bin/fram-code-on)")))
-        (when (= :poisoned (get-in pr [:durability :state]))
-          (die! (str "coordinator on 127.0.0.1:" port
-                     " is DURABILITY-POISONED (" (pr-str (:durability pr)) ") — REFUSING to serve;"
-                     " stop/restart it for sole-writer recovery before authoring"))))
+        (let [state (get-in pr [:durability :state])]
+          (when (#{:poisoned :committed-repair-needed} state)
+            (die! (str "coordinator on 127.0.0.1:" port " is "
+                       (if (= :poisoned state)
+                         "DURABILITY-POISONED"
+                         "COMMITTED-REPAIR-NEEDED")
+                       " " (pr-str (:durability pr)) " — REFUSING to serve; stop/restart it"
+                       " for sole-writer recovery/repair before authoring")))))
       (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
                  ", strict-fenced coordinator 127.0.0.1:" port
                  " [graph-edit-candidate-v1]")))))

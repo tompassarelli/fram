@@ -42,6 +42,11 @@
 ;;      checkout and replacing its old entry makes publication stop BEFORE temp
 ;;      creation/write; both moved original and replacement stay byte-identical.
 ;;      A deterministic short-write oracle also proves ByteBuffer drain-to-empty.
+;;   L. POST-COMMIT OUTCOME TRUTH — every operation after append+fsync is faulted
+;;      on an isolated log. Each returns an exact COMMITTED warning receipt, exact
+;;      retry is byte-idempotent, and one cold restart reconstructs the receipt.
+;;      A hard process halt immediately after append acknowledgement proves the
+;;      same contract before any in-memory receipt/root publication.
 ;;   F. PROJECTION-STALE — a commit whose tracked-view write fails reports the
 ;;      stale projection loudly (log canonical, repair command included), and
 ;;      warm render-from-log repairs the file.
@@ -98,9 +103,13 @@
        ";; %NAME% — hermetic nested fixture for graph-edit-candidate-v1 probes.\n\n"
        "(defn double-it [x :- Int] :- Int\n  (* 2 x))\n\n"
        "(defn plus-both [a :- Int b :- Int] :- Int\n  (+ (double-it a) (double-it b)))\n"))
-(def modules ["wkfix" "missmod" "dupmod" "relmod" "outmod" "travmod" "linkmod"])
+(def modules ["wkfix" "schema" "missmod" "dupmod" "relmod" "outmod" "travmod" "linkmod"])
 (doseq [m modules]
   (spit (str nested-dir "/" m ".bclj") (str/replace fixture-body "%NAME%" m)))
+(spit (str nested-dir "/schema.bclj")
+      (str "#lang beagle/clj\n\n"
+           ";; schema — exact verifier-reproduction fixture.\n\n"
+           "(defn cardinality [ctx :- Int pname :- Int] :- Int\n  (* 2 pname))\n"))
 
 ;; HERMETIC SPAWNS — :env REPLACES the environment everywhere below. An ambient
 ;; live-runtime FRAM_TELEMETRY_LOG would otherwise leak into the daemons via
@@ -166,10 +175,15 @@
 (def replay-port (pick-port [39931 39933 39935 39937 39939]))
 (def poison-port (pick-port [39941 39943 39945 39947 39949]))
 (def poison-restart-port (pick-port [39951 39953 39955 39957 39959]))
+(def post-port (pick-port [39961 39963 39965 39967 39969]))
+(def post-restart-port (pick-port [39962 39964 39966 39968 39970]))
+(def crash-port (pick-port [39971 39973 39975 39977 39979]))
+(def crash-restart-port (pick-port [39972 39974 39976 39978 39980]))
 (def dead-port (pick-port [59981 59983 59985 59987 59989]))
 
 (defn boot-daemon! [port log]
   (let [outf (str tmp "/daemon-" port ".log")
+        _ (java.nio.file.Files/deleteIfExists (.toPath (io/file outf)))
         proc (p/process {:out (io/file outf) :err (io/file outf)
                          :env (assoc scrub-env "FRAM_REQUIRE_LOG_FENCE" "1" "FRAM_EDIT_INJECT" "1")}
                         "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
@@ -179,6 +193,15 @@
         (> i 360) (do (p/destroy-tree proc)
                       (throw (ex-info (str "daemon on :" port " never came up") {:log outf})))
         :else (do (Thread/sleep 500) (recur (inc i)))))))
+
+(defn stop-daemon! [proc]
+  (when (and proc (.isAlive ^Process (:proc proc)))
+    (p/destroy-tree proc))
+  (loop [i 0]
+    (when (and proc (.isAlive ^Process (:proc proc)) (< i 100))
+      (Thread/sleep 50)
+      (recur (inc i))))
+  (not (and proc (.isAlive ^Process (:proc proc)))))
 
 (println "booting throwaway coordinators (main:" main-port " pathology:" bad-port ") …")
 (def main-daemon (boot-daemon! main-port code-log))
@@ -793,6 +816,172 @@
   (chk "K: deterministic short-write oracle required multiple writes and drained exact bytes"
        (and m (> (:write-calls m) 1) (= "WRITE-ALL" (:write-bytes m))
             (zero? (:write-remaining m)))))
+
+;; ============================================================================
+;; L. POST-COMMIT OUTCOME TRUTH — append+fsync is the commit point. Fault every
+;;    later source-order operation on an isolated log, restart that log exactly
+;;    once, and prove both the live warning receipt and cold reconstructed receipt
+;;    name the same candidate/final version without duplicating a byte. Then halt
+;;    a real process immediately after append acknowledgement, before receipt/root.
+;; ============================================================================
+(def post-publication-stages
+  [:outcome-record :journal-retire :root-swap :index-cache-invalidate
+   :wire-cache-invalidate :mark-dirty :notify :candidate-retire
+   :warning-aggregation :response-construction])
+
+(defn candidate-commit-req [prep extra]
+  (merge {:op :edit-commit
+          :candidate (:candidate prep)
+          :version (:version prep)
+          :module (:module prep)
+          :path (:path prep)
+          :ops-digest (:ops-digest prep)
+          :edn-digest (:edn-digest prep)}
+         extra))
+
+(doseq [stage post-publication-stages]
+  (let [seam-log (str tmp "/post-" (name stage) ".log")
+        _ (write-bytes seam-log (read-bytes code-log))
+        daemon (boot-daemon! post-port seam-log)]
+    (try
+      (let [datum 'pname
+            prep (coord post-port seam-log
+                        {:op :edit-prepare
+                         :spec {:op "set-body" :module "src.fram.schema"
+                                :name "cardinality" :datum datum}})
+            req (candidate-commit-req prep {:inject-post-publication-at stage})
+            v0 (:version prep)
+            bytes0 (count (read-bytes seam-log))
+            r (coord post-port seam-log req)
+            final (+ v0 (:installed r))
+            warning (some #(when (= stage (:stage %)) %) (:warnings r))
+            committed-bytes (vec (read-bytes seam-log))]
+        (chk (str "L: " (name stage) " candidate is the exact four-op schema/cardinality batch")
+             (and (true? (:ok prep)) (= 4 (:ops prep)) (= 4 (:installed r))))
+        (chk (str "L: " (name stage) " returns explicit COMMITTED warning with exact receipt")
+             (and (true? (:ok r)) (true? (:committed r))
+                  (= :committed-with-warning (:code r))
+                  (= (:candidate prep) (:candidate r) (:batch r))
+                  (= v0 (:base-version r)) (= final (:version r))
+                  (= stage (:stage warning))))
+        (chk (str "L: " (name stage) " advanced version/log exactly and retired the journal")
+             (and (= final (:version (coord post-port seam-log {:op :version})))
+                  (> (count committed-bytes) bytes0)
+                  (not (.exists (io/file (str seam-log ".edit-batch"))))))
+        (when (= :notify stage)
+          (chk "L: notify seam directly reproduces the verifier's escaped failure text"
+               (= "forced post-publication notification failure" (:message warning))))
+        (chk (str "L: " (name stage) " exact live retry returns same receipt with zero duplicate bytes")
+             (let [again (coord post-port seam-log req)]
+               (and (true? (:committed again))
+                    (= (:candidate r) (:candidate again))
+                    (= (:version r) (:version again))
+                    (= committed-bytes (vec (read-bytes seam-log))))))
+        (chk (str "L: " (name stage) " initial daemon stops before its one restart")
+             (stop-daemon! daemon))
+        (let [restarted (boot-daemon! post-restart-port seam-log)]
+          (try
+            (let [restart-bytes (vec (read-bytes seam-log))
+                  recovered (coord post-restart-port seam-log req)
+                  status (coord post-restart-port seam-log {:op :status})]
+              (chk (str "L: " (name stage) " cold retry reconstructs exact committed receipt after one restart")
+                   (and (true? (:ok recovered)) (true? (:committed recovered))
+                        (= :committed-recovered (:code recovered))
+                        (= (:candidate r) (:candidate recovered))
+                        (= (:version r) (:version recovered)
+                           (:version status)
+                           (get-in status [:last-edit-outcome :version]))
+                        (= restart-bytes (vec (read-bytes seam-log)))
+                        (not (.exists (io/file (str seam-log ".edit-batch")))))))
+            (finally (stop-daemon! restarted)))))
+      (finally (stop-daemon! daemon)))))
+
+(let [repair-log (str tmp "/post-root-repair-needed.log")
+      _ (write-bytes repair-log (read-bytes code-log))
+      daemon (boot-daemon! post-port repair-log)]
+  (try
+    (let [prep (coord post-port repair-log
+                      {:op :edit-prepare
+                       :spec {:op "set-body" :module "src.fram.schema"
+                              :name "cardinality" :datum 'pname}})
+          req (candidate-commit-req
+               prep {:inject-post-publication-permanent-at :root-swap})
+          bytes0 (count (read-bytes repair-log))
+          r (coord post-port repair-log req)
+          status (coord post-port repair-log {:op :status})
+          again (coord post-port repair-log req)
+          blocked (coord post-port repair-log
+                         {:op :edit-prepare
+                          :spec {:op "set-body" :module "src.fram.schema"
+                                 :name "cardinality" :datum 999}})]
+      (chk "L: unrecoverable post-commit root failure returns COMMITTED-REPAIR-NEEDED, never rejection"
+           (and (true? (:ok r)) (true? (:committed r))
+                (= :committed-repair-needed (:code r))
+                (true? (:repair-needed r))
+                (= :committed-repair-needed (get-in r [:durability :state]))
+                (= :root-swap (:stage (last (:warnings r))))))
+      (chk "L: repair-needed state keeps exact receipt retryable and stops unrelated authoring"
+           (and (= (:candidate r) (:candidate again))
+                (= (:version r) (:version again))
+                (= :committed-repair-needed (:code again))
+                (= :committed-repair-needed (:code blocked))
+                (= (:candidate r) (get-in status [:last-edit-outcome :candidate]))))
+      (chk "L: repair-needed root stayed pre-commit in memory while canonical log is durably final"
+           (and (= (:version prep) (:version status))
+                (= (+ (:version prep) (:installed r)) (:version r))
+                (> (count (read-bytes repair-log)) bytes0)
+                (not (.exists (io/file (str repair-log ".edit-batch"))))))
+      (stop-daemon! daemon)
+      (let [restarted (boot-daemon! post-restart-port repair-log)]
+        (try
+          (let [recovered (coord post-restart-port repair-log req)
+                healthy (coord post-restart-port repair-log {:op :status})]
+            (chk "L: one restart repairs the root and reconstructs the exact committed receipt"
+                 (and (= :healthy (get-in healthy [:durability :state]))
+                      (= (:version r) (:version recovered) (:version healthy))
+                      (= :committed-recovered (:code recovered))
+                      (= (:candidate r) (:candidate recovered)))))
+          (finally (stop-daemon! restarted)))))
+    (finally (stop-daemon! daemon))))
+
+(let [crash-log (str tmp "/post-append-hard-crash.log")
+      _ (write-bytes crash-log (read-bytes code-log))
+      daemon (boot-daemon! crash-port crash-log)
+      prep (coord crash-port crash-log
+                  {:op :edit-prepare
+                   :spec {:op "set-body" :module "src.fram.schema"
+                          :name "cardinality" :datum 'pname}})
+      req (candidate-commit-req prep {:inject-crash-after-append-ack true})
+      v0 (:version prep)
+      bytes0 (count (read-bytes crash-log))
+      response (try (coord crash-port crash-log req)
+                    (catch Throwable t {:transport-error (.getMessage t)}))]
+  (Thread/sleep 250)
+  (chk "L: hard-crash candidate is the exact four-op schema/cardinality batch"
+       (and (true? (:ok prep)) (= 4 (:ops prep))))
+  (chk "L: Runtime.halt immediately after append acknowledgement yields no ordinary failure response"
+       (and (:transport-error response)
+            (not (.isAlive ^Process (:proc daemon)))))
+  (chk "L: hard crash happened after durable append and before journal retirement"
+       (and (> (count (read-bytes crash-log)) bytes0)
+            (.exists (io/file (str crash-log ".edit-batch")))))
+  (let [restarted (boot-daemon! crash-restart-port crash-log)]
+    (try
+      (let [before-retry (vec (read-bytes crash-log))
+            recovered (coord crash-restart-port crash-log req)
+            status (coord crash-restart-port crash-log {:op :status})
+            exact-final (+ v0 (:ops prep))]
+        (chk "L: one restart retires the crash journal and boots the exact committed final version"
+             (and (= exact-final (:version status))
+                  (not (.exists (io/file (str crash-log ".edit-batch"))))))
+        (chk "L: exact post-crash retry reconstructs committed receipt, never duplicates the batch"
+             (and (true? (:ok recovered)) (true? (:committed recovered))
+                  (= :committed-recovered (:code recovered))
+                  (= (:candidate prep) (:candidate recovered) (:batch recovered))
+                  (= v0 (:base-version recovered))
+                  (= exact-final (:version recovered))
+                  (= before-retry (vec (read-bytes crash-log))))))
+      (finally (stop-daemon! restarted)))))
 
 ;; ============================================================================
 ;; F. PROJECTION-STALE — commit lands, tracked-view write fails: loud warning +
