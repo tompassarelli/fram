@@ -16,13 +16,41 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
-(def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
-(def code-log (str root "/.fram/code.log"))
-(def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
-(doseq [p [code-log roundtrip-rkt]]
-  (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
+(def roundtrip-rkt (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt"))
+(def build-all (str beagle-home "/bin/beagle-build-all"))
+;; HERMETIC: the committed single-module fixture (exactly one canonical `schema`),
+;; never the worktree's live .fram/code.log. FRAM_BIN pinned to the worktree bin so
+;; sub-invocations never reach an ambient live-deployment FRAM_BIN.
+(def fixture (str root "/tests/fixtures/edit-min/schema.code.factlog"))
+(def child-env
+  (merge (into {} (remove (fn [[k _]] (or (str/starts-with? k "FRAM_")
+                                            (= k "RESOLVE_OUT")))
+                           (System/getenv)))
+         {"BEAGLE_HOME" beagle-home
+          "FRAM_HOME" root
+          "FRAM_OUT" (str root "/out")
+          "FRAM_ROUNDTRIP" roundtrip-rkt
+          "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")
+          "FRAM_BIN" (str root "/bin")}))
+(defn- fail-fast! [& xs]
+  (binding [*out* *err*] (apply println "FAIL —" xs))
+  (System/exit 1))
+(doseq [p [fixture roundtrip-rkt build-all]]
+  (when-not (.isFile (io/file p)) (fail-fast! "missing required file" p)))
+(def fixture-roots
+  (with-open [reader (io/reader fixture)]
+    (reduce (fn [roots line]
+              (let [{:keys [op l p r]} (edn/read-string line)
+                    root [l r]]
+                (if (= "file" p)
+                  (case op
+                    "assert" (conj roots root)
+                    "retract" (disj roots root)
+                    roots)
+                  roots)))
+            #{} (line-seq reader))))
+(when-not (= #{["@schema#root" "src/fram/schema.bclj"]} fixture-roots)
+  (fail-fast! "fixture must contain exactly the canonical schema root; found" (pr-str fixture-roots)))
 (binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]
@@ -30,15 +58,20 @@
                            (catch Exception _ true)))
 (defn render-schema [flat tag]
   (let [out (str (System/getProperty "java.io.tmpdir") "/commute-" tag "-" (System/nanoTime) ".bclj")]
-    (proc/shell {:continue true :extra-env base-env :err :string}
-                "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" flat "--out" out)
-    (when (.exists (io/file out)) (slurp out))))
+    (let [r (proc/shell {:continue true :env child-env :out :string :err :string}
+                        "bb" "-cp" "out" "bin/fram-render-code"
+                        "schema" "--log" flat "--out" out)]
+      (when-not (zero? (:exit r))
+        (binding [*out* *err*]
+          (println "render failed for" tag (str/trim (str (:out r) (:err r))))))
+      (when (and (zero? (:exit r)) (.isFile (io/file out))) (slurp out)))))
 (defn recompiles? [render-txt]
   (let [work (str (System/getProperty "java.io.tmpdir") "/commute-rc-" (System/nanoTime))
         src (str work "/src") out (str work "/out")]
     (.mkdirs (io/file src)) (.mkdirs (io/file out))
     (spit (str src "/schema.bclj") render-txt)
-    (let [r (proc/sh {:out :string :err :string} build-all src "--out" out)]
+    (let [r (proc/shell {:continue true :env child-env :out :string :err :string}
+                        build-all src "--out" out)]
       (boolean (re-find #"\b1 built, 0 error\(s\)" (str (:out r) (:err r)))))))
 
 ;; two DISJOINT, type-correct bodies. cardinality :- String ; lookup :- Any.
@@ -52,7 +85,7 @@
 ;; PATH 1 — :edit-min through ONE warm daemon (the fact path).
 ;; ============================================================================
 (def flat (str (System/getProperty "java.io.tmpdir") "/commute-min-" (System/nanoTime) ".code.log"))
-(io/copy (io/file code-log) (io/file flat))
+(io/copy (io/file fixture) (io/file flat))
 (def port (or (some #(when (port-free? %) %) [8170 8171 8172 8173]) 8170))
 (boot-flat! flat)
 (def server (future (serve port)))
@@ -78,55 +111,81 @@
 (shutdown!)
 
 ;; ============================================================================
-;; PATH 2 — WHOLE-MODULE on the SAME scenario (the contrast). Two CONCURRENT
-;; whole-module edits each computed against the SAME pre-edit log: render fnA-edit
-;; AND fnB-edit independently (each from the ORIGINAL log via --no-commit), then
-;; commit BOTH through one daemon. The whole-module path renumbers the WHOLE module,
-;; so the two commits collide on the SAME (te,p) groups => the second false-conflicts
-;; or clobbers the first (only ONE body survives).
+;; PATH 2 — WHOLE-MODULE on the SAME scenario (the contrast), applied for real.
+;; Two stale whole-module candidates are rendered from byte-identical copies of ONE
+;; pristine base. Candidate A and candidate B therefore cannot have observed each
+;; other. Both are then accepted, in order, by one coordinator over another pristine
+;; copy. The post-A render must carry A; the post-B render must carry B and have LOST A.
+;; That observed state transition is the clobber proof — candidate inspection alone is
+;; not evidence that the legacy commit mechanism actually behaves this way.
 ;; ============================================================================
+(def bf-card (str (System/getProperty "java.io.tmpdir") "/commute-bc-" (System/nanoTime) ".edn"))
+(def bf-lookup (str (System/getProperty "java.io.tmpdir") "/commute-bl-" (System/nanoTime) ".edn"))
+(spit bf-card (pr-str body-card)) (spit bf-lookup (pr-str body-lookup))
+(def pristine-a (str (System/getProperty "java.io.tmpdir") "/commute-pa-" (System/nanoTime) ".code.log"))
+(def pristine-b (str (System/getProperty "java.io.tmpdir") "/commute-pb-" (System/nanoTime) ".code.log"))
+(io/copy (io/file fixture) (io/file pristine-a))
+(io/copy (io/file fixture) (io/file pristine-b))
+(def same-base? (and (= (slurp fixture) (slurp pristine-a))
+                     (= (slurp fixture) (slurp pristine-b))))
+(def render-a (str (System/getProperty "java.io.tmpdir") "/commute-ra-" (System/nanoTime) ".bclj"))
+(def render-b (str (System/getProperty "java.io.tmpdir") "/commute-rb-" (System/nanoTime) ".bclj"))
+(def candidate-a
+  (proc/shell {:continue true :env child-env :out :string :err :string}
+              "bb" "-cp" "out" "bin/fram-edit-code" "set-body" "schema"
+              "--name" "cardinality" "--body-file" bf-card
+              "--whole-module" "--no-commit" "--out" render-a "--log" pristine-a))
+(def candidate-b
+  (proc/shell {:continue true :env child-env :out :string :err :string}
+              "bb" "-cp" "out" "bin/fram-edit-code" "set-body" "schema"
+              "--name" "lookup" "--body-file" bf-lookup
+              "--whole-module" "--no-commit" "--out" render-b "--log" pristine-b))
+(def txt-a (when (.exists (io/file render-a)) (slurp render-a)))
+(def txt-b (when (.exists (io/file render-b)) (slurp render-b)))
+(def candidates-stale?
+  (boolean (and same-base?
+                (zero? (:exit candidate-a)) (zero? (:exit candidate-b))
+                txt-a txt-b
+                (str/includes? txt-a card-marker)
+                (not (str/includes? txt-a lookup-marker))
+                (str/includes? txt-b lookup-marker)
+                (not (str/includes? txt-b card-marker)))))
+
 (def flat-w (str (System/getProperty "java.io.tmpdir") "/commute-whole-" (System/nanoTime) ".code.log"))
-(io/copy (io/file code-log) (io/file flat-w))
+(io/copy (io/file fixture) (io/file flat-w))
 (def portw (or (some #(when (port-free? %) %) [8180 8181 8182 8183]) 8180))
 (boot-flat! flat-w)
 (def serverw (future (serve portw)))
 (Thread/sleep 500)
-(def bf-card (str (System/getProperty "java.io.tmpdir") "/commute-bc-" (System/nanoTime) ".edn"))
-(def bf-lookup (str (System/getProperty "java.io.tmpdir") "/commute-bl-" (System/nanoTime) ".edn"))
-(spit bf-card (pr-str body-card)) (spit bf-lookup (pr-str body-lookup))
-;; CONCURRENT whole-module: each edit is RENDERED from a PRISTINE copy of the original
-;; log (so both see the SAME pre-edit state — true concurrency, neither sees the
-;; other), THEN both whole-module deltas are committed through the SAME daemon. The
-;; whole-module path re-keys the ENTIRE module to @schema#1..n and diffs vs the
-;; coordinator, so the two deltas overlap on the SAME (te,p) groups: committing B's
-;; pristine-rendered whole-module delta RE-ASSERTS the old cardinality body and
-;; RETRACTS A's — the clobber. (--no-commit renders only; --log is the pristine base.)
-(def pristine-a (str (System/getProperty "java.io.tmpdir") "/commute-pa-" (System/nanoTime) ".code.log"))
-(def pristine-b (str (System/getProperty "java.io.tmpdir") "/commute-pb-" (System/nanoTime) ".code.log"))
-(io/copy (io/file code-log) (io/file pristine-a))
-(io/copy (io/file code-log) (io/file pristine-b))
-(def render-a (str (System/getProperty "java.io.tmpdir") "/commute-ra-" (System/nanoTime) ".bclj"))
-(def render-b (str (System/getProperty "java.io.tmpdir") "/commute-rb-" (System/nanoTime) ".bclj"))
-;; 1. render both whole-module edits from pristine bases (no commit).
-(proc/shell {:continue true :extra-env (merge (into {} (System/getenv)) base-env) :err :string}
-            "bb" "-cp" "out" "bin/fram-edit-code" "set-body" "schema"
-            "--name" "cardinality" "--body-file" bf-card "--no-commit" "--out" render-a "--log" pristine-a)
-(proc/shell {:continue true :extra-env (merge (into {} (System/getenv)) base-env) :err :string}
-            "bb" "-cp" "out" "bin/fram-edit-code" "set-body" "schema"
-            "--name" "lookup" "--body-file" bf-lookup "--no-commit" "--out" render-b "--log" pristine-b)
-;; 2. commit BOTH whole-module deltas through the daemon (A first, then B — B's delta
-;;    was computed against the PRISTINE base, concurrent with A).
-(def w-a (proc/shell {:continue true :extra-env (merge (into {} (System/getenv)) base-env) :out :string :err :string}
-                     "bb" "-cp" "out" "bin/fram-commit-code" "schema" render-a "--port" (str portw)))
-(def w-b (proc/shell {:continue true :extra-env (merge (into {} (System/getenv)) base-env) :out :string :err :string}
-                     "bb" "-cp" "out" "bin/fram-commit-code" "schema" render-b "--port" (str portw)))
-(println "\nwhole-module commit A exit:" (:exit w-a) " B exit:" (:exit w-b))
-(println "  whole B output:" (str/trim (str (:out w-b) (:err w-b))))
-(def render-whole (render-schema flat-w "whole"))
-(def whole-both (boolean (and render-whole
-                              (str/includes? render-whole card-marker)
-                              (str/includes? render-whole lookup-marker))))
-(try (future-cancel serverw) (catch Throwable _ nil))
+(defn- shutdownw! [] (try (future-cancel serverw) (catch Throwable _ nil)))
+(.addShutdownHook (Runtime/getRuntime) (Thread. shutdownw!))
+(def whole-status (client portw {:op :status}))
+(def commit-a
+  (proc/shell {:continue true :env child-env :out :string :err :string}
+              "bb" "-cp" "out" "bin/fram-commit-code"
+              "schema" render-a "--port" (str portw) "--log" flat-w))
+(def after-a (render-schema flat-w "whole-after-a"))
+(def commit-b
+  (proc/shell {:continue true :env child-env :out :string :err :string}
+              "bb" "-cp" "out" "bin/fram-commit-code"
+              "schema" render-b "--port" (str portw) "--log" flat-w))
+(def after-b (render-schema flat-w "whole-after-b"))
+(shutdownw!)
+
+(def a-published?
+  (boolean (and after-a
+                (str/includes? after-a card-marker)
+                (not (str/includes? after-a lookup-marker)))))
+(def b-clobbered-a?
+  (boolean (and after-b
+                (str/includes? after-b lookup-marker)
+                (not (str/includes? after-b card-marker)))))
+(def whole-applied?
+  (and (= flat-w (str (:log whole-status)))
+       (zero? (:exit commit-a))
+       (zero? (:exit commit-b))
+       a-published?
+       b-clobbered-a?))
 
 ;; ============================================================================
 (println "\n=== GATE 2 — COMMUTATION (two disjoint same-module edits) ===")
@@ -134,12 +193,19 @@
                  (boolean (:ok edit-a)) (boolean (:ok edit-b)) no-conflict))
 (println (format "  [fact/:edit-min] BOTH bodies present in render(log): %s" both-present))
 (println (format "  [fact/:edit-min] render(log) recompiles 1/0:        %s" min-recompiles))
-(println (format "  [whole-module]    BOTH bodies present (contrast):     %s   <- expect FALSE (clobber/conflict)" whole-both))
+(println (format "  [whole-module]    candidates share exact pristine base: %s" same-base?))
+(println (format "  [whole-module]    stale candidates each carry own edit: %s" candidates-stale?))
+(println (format "  [whole-module]    commit A accepted and published A:    %s" a-published?))
+(println (format "  [whole-module]    commit B accepted, B present, A LOST: %s" b-clobbered-a?))
+(when-not (zero? (:exit commit-a))
+  (println "  whole commit A output:" (str/trim (str (:out commit-a) (:err commit-a)))))
+(when-not (zero? (:exit commit-b))
+  (println "  whole commit B output:" (str/trim (str (:out commit-b) (:err commit-b)))))
 
-(def pass (and no-conflict both-present min-recompiles))
+(def pass (and no-conflict both-present min-recompiles candidates-stale? whole-applied?))
 (if pass
-  (do (println "\nGATE 2 PASS — disjoint same-module edits COMMUTE on the fact graph "
-               "(both survive, recompiles). The whole-module path " (if whole-both "ALSO kept both (no contrast)" "did NOT (it clobbered/conflicted) — the contrast holds") ".")
+  (do (println "\nGATE 2 PASS — minimal graph edits preserved both disjoint changes; "
+               "the same-base stale whole-module sequence accepted both commits and the second demonstrably clobbered the first.")
       (System/exit 0))
   (do (println "\nGATE 2 FAIL — the crown jewel is dead: disjoint same-module edits did NOT both survive.")
       (System/exit 1)))
