@@ -383,36 +383,80 @@
                                " (" (count cands) " candidates) — the directory identity changed during"
                                " pinning or fd attribution is ambiguous; refusing (no path-based fallback)")})))))))))
 
+(defn- write-byte-buffer-all!
+  ;; FileChannel.write is allowed to consume only part of a ByteBuffer. Drive it
+  ;; until drained; zero progress yields and retries, while EOF-like negative
+  ;; progress is a hard I/O failure. `write-one!` is injected so the exact
+  ;; short-write contract has a deterministic direct probe.
+  [write-one! ^java.nio.ByteBuffer buf]
+  (loop [calls 0]
+    (if-not (.hasRemaining buf)
+      calls
+      (let [n (long (write-one! buf))]
+        (cond
+          (neg? n) (throw (ex-info "projection FileChannel reported negative write progress"
+                                   {:code :projection-short-write}))
+          (zero? n) (do (Thread/yield) (recur (inc calls)))
+          :else (recur (inc calls)))))))
+
 (defn- publish-projection-pinned!
   ;; Publish `src-file`'s bytes as `leaf` THROUGH the pinned parent directory:
-  ;; re-verify identity via the fd, create + write + force a same-directory temp
-  ;; addressed through the fd, atomically replace the leaf relative to the fd,
-  ;; then fsync the PINNED directory channel itself. Returns nil on a clean
-  ;; publish; {:stale <why>} when the CURRENT parent-path identity no longer
-  ;; matches the pinned one (the canonical graph commit stands; the projection
-  ;; is honestly stale and repairable); throws on I/O failure.
+  ;; FIRST compare the current parent pathname to the pin, before creating a temp
+  ;; or writing one byte. A parent moved anywhere (including outside FRAM_SRC)
+  ;; and replaced therefore returns :stale with zero writes to both the moved
+  ;; original and replacement. Recheck before the atomic publication, drain the
+  ;; complete ByteBuffer, then fsync the PINNED directory channel. Returns nil on
+  ;; a clean publish; {:stale <why>} when current pathname identity differs;
+  ;; throws on I/O failure.
   [{:keys [ch fd-dir key parent]} src-file leaf]
-  (when (not= key (file-key-of fd-dir))
+  (cond
+    (not= key (file-key-of fd-dir))
     (throw (ex-info (str "pinned parent-directory fd no longer matches its validated identity " key)
-                    {:code :pin-identity-lost})))
-  (let [tmp (str ".fram-proj-" (System/nanoTime) ".tmp")]
-    (with-open [wch (java.nio.channels.FileChannel/open
-                     (path-of (str fd-dir "/" tmp))
-                     (into-array java.nio.file.OpenOption
-                                 [java.nio.file.StandardOpenOption/CREATE_NEW
-                                  java.nio.file.StandardOpenOption/WRITE]))]
-      (.write wch (java.nio.ByteBuffer/wrap (java.nio.file.Files/readAllBytes (.toPath (io/file src-file)))))
-      (.force wch true))
-    (java.nio.file.Files/move
-     (path-of (str fd-dir "/" tmp)) (path-of (str fd-dir "/" leaf))
-     (into-array java.nio.file.CopyOption
-                 [java.nio.file.StandardCopyOption/ATOMIC_MOVE
-                  java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
-    (.force ^java.nio.channels.FileChannel ch true)      ; directory fsync on the PINNED inode
-    (when (not= key (file-key-of parent))
-      {:stale (str "the tracked parent directory " parent " no longer resolves to its validated identity "
-                   key " — the projection was published into the ORIGINAL (pinned) directory, not wherever"
-                   " the path points now")})))
+                    {:code :pin-identity-lost}))
+
+    ;; LOAD-BEARING PRE-WRITE CHECK: do not create the same-directory temp and
+    ;; do not consume src-file unless the checkout pathname still names the pin.
+    (not= key (file-key-of parent))
+    {:stale (str "the tracked parent directory " parent
+                 " no longer resolves to its validated identity " key
+                 " — projection NOT published; zero bytes written")}
+
+    :else
+    (let [tmp (str ".fram-proj-" (System/nanoTime) ".tmp")
+          tmp-path (path-of (str fd-dir "/" tmp))]
+      (try
+        (with-open [wch (java.nio.channels.FileChannel/open
+                         tmp-path
+                         (into-array java.nio.file.OpenOption
+                                     [java.nio.file.StandardOpenOption/CREATE_NEW
+                                      java.nio.file.StandardOpenOption/WRITE]))]
+          (let [buf (java.nio.ByteBuffer/wrap
+                     (java.nio.file.Files/readAllBytes (.toPath (io/file src-file))))]
+            (write-byte-buffer-all! #(.write wch ^java.nio.ByteBuffer %) buf))
+          (.force wch true))
+        ;; If identity moved while the temp was being prepared, remove the temp
+        ;; and refuse to replace the leaf. The deterministic move-before-call
+        ;; boundary above performs no create/write at all.
+        (if (not= key (file-key-of parent))
+          (do
+            (java.nio.file.Files/deleteIfExists tmp-path)
+            (.force ^java.nio.channels.FileChannel ch true)
+            {:stale (str "the tracked parent directory " parent
+                         " changed during projection preparation — leaf NOT published")})
+          (do
+            (java.nio.file.Files/move
+             tmp-path (path-of (str fd-dir "/" leaf))
+             (into-array java.nio.file.CopyOption
+                         [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                          java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+            (.force ^java.nio.channels.FileChannel ch true)
+            (when (not= key (file-key-of parent))
+              {:stale (str "the tracked parent directory " parent
+                           " changed during atomic publication; canonical graph stands and"
+                           " the projection requires repair")})))
+        (catch Throwable t
+          (try (java.nio.file.Files/deleteIfExists tmp-path) (catch Throwable _ nil))
+          (throw t))))))
 
 (defn- release-pin! [pin]
   (when-let [ch (:ch pin)]
@@ -538,21 +582,29 @@
                                 (cond
                                   (:reject commit)
                                   (do (sh {} "rm" "-rf" work)
-                                      {:isError true
-                                       :text (str "REJECTED (graph-edit-candidate-v1 commit — nothing committed"
-                                                  (when-let [c (:code commit)] (str ", " (name c))) "): "
-                                                  (str/join "; " (map str (:reject commit)))
-                                                  (when (= "stale-version" (some-> (:code commit) name))
-                                                    " — a concurrent edit landed first; re-issue this edit"))})
+                                      (if (#{:durability-indeterminate :durability-poisoned} (:code commit))
+                                        {:isError true
+                                         :text (str "STOPPED (graph-edit-candidate-v1, " (name (:code commit))
+                                                    "): " (str/join "; " (map str (:reject commit)))
+                                                    " — outcome is NOT an ordinary rejection; DO NOT RETRY."
+                                                    " Stop/restart the coordinator for sole-writer recovery")}
+                                        {:isError true
+                                         :text (str "REJECTED (graph-edit-candidate-v1 commit — nothing committed"
+                                                    (when-let [c (:code commit)] (str ", " (name c))) "): "
+                                                    (str/join "; " (map str (:reject commit)))
+                                                    (when (= "stale-version" (some-> (:code commit) name))
+                                                      " — a concurrent edit landed first; re-issue this edit"))}))
                                   (:ok commit)
                                   ;; the tracked projection: publish the CHECKED candidate bytes
                                   ;; THROUGH the parent directory pinned before the commit
                                   ;; (identity-verified fd; temp + force + atomic replace +
-                                  ;; pinned-dir fsync). A parent entry replaced since validation
-                                  ;; can never redirect this write outside the checkout: the
-                                  ;; bytes land in the PINNED directory and the reply reports
-                                  ;; PROJECTION-STALE. Any failure leaves the LOG canonical and
-                                  ;; the projection STALE — reported loudly with the repair command.
+                                  ;; pinned-dir fsync). A parent entry already replaced when
+                                  ;; publication starts is rejected before temp creation or source
+                                  ;; read. A replacement racing the prepared temp can never redirect
+                                  ;; bytes into the replacement: publication stays pinned and the
+                                  ;; reply reports PROJECTION-STALE. Any failure leaves the LOG
+                                  ;; canonical and the projection STALE — reported loudly with the
+                                  ;; repair command.
                                   (let [proj (try (publish-projection-pinned!
                                                    pin (io/file candf) (.getName (io/file target)))
                                                   (catch Throwable t {:proj-err (str (.getMessage t))}))]
@@ -948,7 +1000,11 @@
           (die! (str "coordinator on 127.0.0.1:" port " does not speak graph-edit-candidate-v1"
                      " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
                      ") — legacy or wrong-protocol coordinator; restart it with current Fram"
-                     " (rerun bin/fram-code-on)"))))
+                     " (rerun bin/fram-code-on)")))
+        (when (= :poisoned (get-in pr [:durability :state]))
+          (die! (str "coordinator on 127.0.0.1:" port
+                     " is DURABILITY-POISONED (" (pr-str (:durability pr)) ") — REFUSING to serve;"
+                     " stop/restart it for sole-writer recovery before authoring"))))
       (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
                  ", strict-fenced coordinator 127.0.0.1:" port
                  " [graph-edit-candidate-v1]")))))
