@@ -2518,6 +2518,36 @@
                     :version (current-seq @co)}
              (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
 
+;; Internal adapter read: resolve a module's canonical downstream view from the
+;; graph's @<module>#root `file` fact. The MCP validates path confinement before
+;; sending :edit-min; returning anything but exactly one live path fails closed.
+(defn- module-path-response [module]
+  (let [st (:store @co)
+        root-id (when-not (str/blank? (str module))
+                  (s/resolve-name st (str "@" module "#root")))
+        file-pred (c/value-id st "file")
+        paths (if (and root-id file-pred)
+                (->> (c/by-lp st root-id file-pred)
+                     (map #(c/literal st (:r (c/fact-of st %))))
+                     (filter string?) distinct vec)
+                [])]
+    (cond
+      (str/blank? (str module))
+      {:reject ["module-path: :module required"] :code :invalid-module
+       :version (current-seq @co)}
+
+      (nil? root-id)
+      {:reject [(str "module-path: no registered root for module " (pr-str module))]
+       :code :missing-module :version (current-seq @co)}
+
+      (not= 1 (count paths))
+      {:reject [(str "module-path: expected exactly one live file fact for " module
+                     ", found " (count paths))]
+       :code :ambiguous-module-path :version (current-seq @co)}
+
+      :else
+      {:ok true :module module :path (first paths) :version (current-seq @co)})))
+
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
@@ -2750,6 +2780,7 @@
       ;; per invocation (~1.8s). Served off `co` it skips BOTH: ensure-refers! keeps
       ;; refers_to current (scoped), then project the module via extract-file! over the
       ;; warm store and return the resolved EDN. The client racket --renders the EDN.
+      :module-path (module-path-response (:module req))
       :render   (do (ensure-refers!)
                     (let [st (:store @co) module (:module req)
                           tmp (str (System/getProperty "java.io.tmpdir") "/fram-warmrender-" (System/nanoTime))

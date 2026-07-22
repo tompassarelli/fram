@@ -21,6 +21,7 @@
 ;; Diagnostics go to STDERR; stdout is the JSON-RPC channel only.
 ;; ============================================================================
 (require '[cheshire.core :as json]
+         '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc]
@@ -266,26 +267,86 @@
 ;; boots the store from the log EVERY call). This is THE confound-kill.
 ;; ============================================================================
 ;; build the warm :edit-min spec (inline datum, no temp file) from the {:edit} payload.
+;; MCP arguments are JSON strings. Parse the datum-bearing arguments exactly as the
+;; legacy path does when resolve.clj reads its spec/body files; otherwise a form such
+;; as `(defn f ...)` becomes a quoted string literal in the graph.
 (defn- edit-min-spec [e]
-  (case (:op e)
-    "rename"      {:op "rename"      :module (:module e) :old (:name e) :new (:new-name e)}
-    "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (:body e)}
-    "upsert-form" {:op "upsert-form" :module (:module e) :datum (:form e)}
-    "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (:form e)}
-    ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
-    ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
-    ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
-    "replace-in-body" (cond-> {:op "replace-in-body" :module (:module e) :name (:name e)
-                               :old (clojure.edn/read-string (:old e)) :new (clojure.edn/read-string (:new e))}
-                        ;; optional :within scope-narrower (enclosing-form datum STRING) — the
-                        ;; disambiguation remedy; parse it here exactly like :old/:new.
-                        (:within e) (assoc :within (clojure.edn/read-string (:within e))))
-    nil))
+  (let [datum! (fn [s label]
+                 (try (edn/read-string s)
+                      (catch Exception ex
+                        (throw (ex-info (str label " is not readable EDN: " (.getMessage ex))
+                                        {:spec-error true})))))]
+    (case (:op e)
+      "rename"      {:op "rename"      :module (:module e) :old (:name e) :new (:new-name e)}
+      "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (datum! (:body e) "body")}
+      "upsert-form" {:op "upsert-form" :module (:module e) :datum (datum! (:form e) "form")}
+      "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (datum! (:form e) "form")}
+      ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
+      ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
+      ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
+      "replace-in-body" (cond-> {:op "replace-in-body" :module (:module e) :name (:name e)
+                                 :old (datum! (:old e) "old") :new (datum! (:new e) "new")}
+                          ;; optional :within scope-narrower (enclosing-form datum STRING) — the
+                          ;; disambiguation remedy; parse it here exactly like :old/:new.
+                          (:within e) (assoc :within (datum! (:within e) "within")))
+      nil)))
 
 ;; the corpus the verb operates over = every .bclj in the source tree (so cross-module
 ;; references resolve), with the per-file projected EDN written next to it in a temp dir.
 
 (declare route-edit-text)        ; the legacy text path, defined below (forward ref for bb/SCI)
+
+;; Resolve the downstream view from the graph's @<module>#root `file` fact. Dotted
+;; module ids encode nested paths but are not paths themselves, so constructing
+;; FRAM_SRC/<module>.bclj creates the wrong root-level artifact. The registered path
+;; must be absolute, canonical, and confined beneath FRAM_SRC before the edit mutates
+;; the graph; an older coordinator without :module-path is refused, not guessed around.
+(defn- tracked-module-path [module]
+  (let [resp (try (fram.rt/coord-request-for-log
+                   (Integer/parseInt flip-code-port)
+                   (flip-log)
+                   {:op :module-path :module module})
+                  (catch Throwable t {:reject [(str "module-path socket: " (.getMessage t))]}))]
+    (cond
+      (:reject resp)
+      {:error (str "registered source lookup rejected: "
+                   (str/join "; " (map str (:reject resp))))}
+
+      (:error resp)
+      {:error (if (= "unknown op" (:error resp))
+                "the code coordinator predates tracked module paths — restart it with current Fram"
+                (str "registered source lookup failed: " (:error resp)))}
+
+      (not (:ok resp))
+      {:error (str "registered source lookup returned an unexpected response: " (pr-str resp))}
+
+      :else
+      (let [p (:path resp)
+            root (.getCanonicalFile (io/file fram-src))]
+        (cond
+          (not (string? p))
+          {:error "the module has no registered source path"}
+
+          (not (.isDirectory root))
+          {:error (str "FRAM_SRC is not a directory: " (.getPath root))}
+
+          (not (.isAbsolute (io/file p)))
+          {:error (str "registered source path is not absolute: " (pr-str p))}
+
+          :else
+          (let [target (.getCanonicalFile (io/file p))
+                root-path (.toPath root)
+                target-path (.toPath target)]
+            (cond
+              (not= p (.getPath target))
+              {:error (str "registered source path is not canonical: " (pr-str p)
+                           " resolves to " (pr-str (.getPath target)))}
+
+              (or (= root-path target-path) (not (.startsWith target-path root-path)))
+              {:error (str "registered source path " p " lies outside FRAM_SRC "
+                           (.getPath root))}
+
+              :else {:path p})))))))
 
 (defn route-edit [e]
   (let [op (:op e) module (:module e)]
@@ -296,14 +357,25 @@
       ;; enumeration, the corpus, the render, and the commit input all come from the log.
       (and flip-on? flip-code-port)
       ;; WARM path: socket :edit-min to the live coordinator (no per-edit log re-fold).
-      (let [spec (edit-min-spec e)]
-        (if (nil? spec)
-          {:isError true :text (str "unknown edit op: " op)}
-          (let [resp (try (fram.rt/coord-request-for-log
-                           (Integer/parseInt flip-code-port)
-                           (flip-log)
-                           {:op :edit-min :spec spec})
-                          (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
+      (let [spec (try (edit-min-spec e)
+                      (catch clojure.lang.ExceptionInfo ex
+                        (if (:spec-error (ex-data ex))
+                          {:spec-error (.getMessage ex)}
+                          (throw ex))))]
+        (cond
+          (nil? spec) {:isError true :text (str "unknown edit op: " op)}
+          (:spec-error spec) {:isError true
+                              :text (str "REJECTED (nothing committed): " (:spec-error spec))}
+          :else
+          (let [tracked (tracked-module-path module)]
+            (if-let [path-error (:error tracked)]
+              {:isError true :text (str "REJECTED (nothing committed): " path-error)}
+              (let [target-bclj (:path tracked)
+                    resp (try (fram.rt/coord-request-for-log
+                               (Integer/parseInt flip-code-port)
+                               (flip-log)
+                               {:op :edit-min :spec spec})
+                              (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
             (cond
               (:reject resp)
               {:isError true :text (str "REJECTED (warm :edit-min, nothing committed): "
@@ -317,8 +389,7 @@
               ;; RETURN pointed Beagle errors so the agent can REPAIR (the beagle repair loop — without
               ;; this the agent commits broken Beagle syntax + flies blind; WITH it, it fixes + lands green).
               ;; No re-fold anywhere: render is warm off the coordinator; the check parses ONE module.
-              (let [target-bclj (str fram-src "/" module ".bclj")
-                    rr (apply sh {:out (io/file target-bclj) :err :string}
+              (let [rr (apply sh {:out (io/file target-bclj) :err :string}
                               "bb" "-cp" fram-out (str flip-bin-dir "/fram-render-code")
                               module "--port" flip-code-port (flip-log-args))]
                 (if-not (zero? (:exit rr))
@@ -341,7 +412,7 @@
                                       "the module is now broken. Correct it by re-editing the same def. "
                                       "Beagle type error:\n" (str/trim (str (:out bg) (:err bg))))}))))))
               :else
-              {:isError true :text (str "warm :edit-min unexpected response: " (pr-str resp))}))))
+              {:isError true :text (str "warm :edit-min unexpected response: " (pr-str resp))}))))))
 
       ;; FRAM_FLIP=1 but no code coordinator: fail loud (don't silently text-fallback).
       flip-on?
