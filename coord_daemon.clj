@@ -46,6 +46,49 @@
 (def require-log-fence?
   (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
 
+;; A graph-edit append failure has only two honest terminal states:
+;;   * :healthy — the batch is durably present, OR its exact pre-state plus a
+;;     durably invalidated recovery intent are proven; normal service continues.
+;;   * :poisoned — disk outcome is indeterminate (restore failed, or a still-valid
+;;     replay intent could not be retired). The daemon remains up ONLY as a
+;;     diagnostic surface and refuses every non-diagnostic request. Sole-writer
+;;     boot recovery is the one authority that can resolve this state.
+;; This is process state, not a fact in the uncertain log.
+(def edit-durability-state (atom {:state :healthy}))
+(declare canonical-path)
+
+(defn- poison-edit-durability! [flat phase message]
+  (let [state {:state :poisoned
+               :code :durability-indeterminate
+               :phase phase
+               :log (canonical-path flat)
+               :journal (str (canonical-path flat) ".edit-batch")
+               :message (str message)
+               :at-ms (System/currentTimeMillis)}]
+    (reset! edit-durability-state state)
+    state))
+
+(defn- effective-request-op [req]
+  (if (= :for-log (:op req)) (get-in req [:request :op]) (:op req)))
+
+(def ^:private durability-diagnostic-ops
+  ;; These never read or mutate the uncertain disk tail. :edit-protocol and
+  ;; :status expose the poison record so both new and already-running clients
+  ;; have an explicit stop signal. Everything else fails closed.
+  #{:version :version-free :status :edit-protocol :reload-status})
+
+(defn- durability-stop-rejection [req]
+  (let [state @edit-durability-state]
+    (when (and (= :poisoned (:state state))
+               (not (durability-diagnostic-ops (effective-request-op req))))
+      {:reject [(str "coordinator durability is INDETERMINATE and POISONED at "
+                     (name (:phase state)) "; no retry or further mutation is safe in this"
+                     " process. Stop it and restart against " (:log state)
+                     " so sole-writer recovery can deterministically resolve the sealed intent")]
+       :code :durability-poisoned
+       :durability state
+       :version (when @co (current-seq @co))})))
+
 ;; Canonical corpus identity for the log-fenced wire envelope. Clients that know
 ;; which physical log they intend to use send:
 ;;
@@ -1938,13 +1981,14 @@
       ;; (warm-cache) + append-flat! (flat log) — the two that would corrupt if left
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
-       ;; The identity check and the first possible mutation share this exact
-       ;; commit lock. Computation above stays lock-free; a mismatched request
-       ;; may consume only transient name reservations, never corpus state.
-       (if-let [fence-reject (when fenced?
-                               (log-fence-rejection expected-log))]
-         fence-reject
-         (do
+       (or (durability-stop-rejection {:op :edit-min})
+           ;; The identity check and the first possible mutation share this exact
+           ;; commit lock. Computation above stays lock-free; a mismatched request
+           ;; may consume only transient name reservations, never corpus state.
+           (if-let [fence-reject (when fenced?
+                                   (log-fence-rejection expected-log))]
+             fence-reject
+             (do
            ;; #(a) persist identity UNDER THE SAME lock as the commit (no lock-free window).
            ;; ensure-refers! re-derives fresh refers_to (so a reference a concurrent agent committed
            ;; BEFORE this lock is captured; one arriving AFTER sees the renamed def — old spelling
@@ -1979,7 +2023,7 @@
                :asserts (count asserts) :retracts (count retracts)
                :ops (+ (count asserts) (count retracts))
                :new-nodes (count new-eids) :name-ints name-ints
-               :version (current-seq @co)}))))))))
+               :version (current-seq @co)})))))))))
 
 ;; ============================================================================
 ;; graph-edit-candidate-v1 — the ATOMIC CANDIDATE GATE (:edit-prepare/:edit-commit).
@@ -2021,14 +2065,16 @@
 ;;       its ticket AWAITED INSIDE this serialized section — the append's own
 ;;       fsync ack IS the commit point -> durable intent removal -> ONE root
 ;;       swap. The root/version/projection never advance before the batch is
-;;       known durable. An append/fsync failure (or partial write) synchronously
-;;       restores the exact pre-state, durably removes the intent, and returns a
-;;       typed :durability-failure — a reported failure is never left scheduled
-;;       to redo after restart. Crash/torn-tail safety: an UNREPORTED crash with
-;;       a sealed intent redoes the whole batch at boot (byte-exact idempotent);
-;;       a torn/foreign/rewritten-prefix journal is rejected with the log
-;;       untouched. Recovery runs ONLY at daemon boot under the rewrite gate
-;;       (sole writer) — never from read-only paths.
+;;       known durable. An append/fsync failure (or partial write) earns a typed
+;;       :durability-failure only after exact pre-state restore plus durable
+;;       intent invalidation. If either proof is unavailable, the response is
+;;       :durability-indeterminate and the process poison-stops until sole-writer
+;;       restart recovery. Crash/torn-tail safety: an UNREPORTED or indeterminate
+;;       crash with a sealed intent completes the whole batch at boot; an
+;;       already-present BATCH preserves every LATER byte. A torn/foreign/
+;;       rewritten-prefix journal is rejected with the log untouched. Recovery
+;;       runs ONLY at daemon boot under the rewrite gate (sole writer) — never
+;;       from read-only paths.
 ;;   :edit-protocol — capability handshake; a restricted MCP profile refuses to
 ;;     start against a coordinator that does not answer graph-edit-candidate-v1
 ;;     (legacy daemons answer {:error "unknown op"}).
@@ -2038,7 +2084,8 @@
 (def edit-protocol-name "graph-edit-candidate-v1")
 (def edit-candidates (atom {}))          ; id -> sealed candidate (server-side seal)
 (def ^:private max-edit-candidates 16)   ; bounded; stale ones die by version CAS anyway
-(declare publish-edit-journal! remove-edit-journal! restore-log-pre-state! ex->s-err)
+(declare publish-edit-journal! remove-edit-journal! restore-log-pre-state!
+         sha256-file-prefix ex->s-err)
 ;; env-gated test seam (FRAM_EDIT_INJECT=1 + request flag): force a directory-
 ;; fsync failure so the fail-closed durability path is provable end to end.
 ;; (def'd here, above its binding site in do-edit-commit; used by fsync-dir! below.)
@@ -2232,9 +2279,10 @@
 
 (defn- do-edit-commit [req expected-log fenced?]
   (locking dlock
-    (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
-      fence-reject
-      (let [id (:candidate req)
+    (or (durability-stop-rejection req)
+        (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
+          fence-reject
+          (let [id (:candidate req)
             cand (get @edit-candidates id)
             head (current-seq @co)
             fail (fn [code & msg] {:reject [(apply str msg)] :code code :version head})]
@@ -2284,78 +2332,148 @@
                         ;; describe the exact pre-state; (2) durable RECOVERY INTENT
                         ;; (temp + atomic rename + dir fsync, bound to the canonical log
                         ;; identity + exact pre-state digest) — NOT the commit point: an
-                        ;; unreported crash from here redoes the whole batch at boot, a
-                        ;; REPORTED failure removes it below; (3) whole-batch append via
+                        ;; unreported crash from here redoes the whole batch at boot;
+                        ;; (3) whole-batch append via
                         ;; group commit, ticket awaited INLINE — the append's fsync ack
                         ;; IS the commit point; (4) durable intent removal (post-commit;
                         ;; a failure here cannot un-commit — boot redo is byte-exact
                         ;; idempotent); (5) ONE root swap, only after durability is
-                        ;; KNOWN. On append/fsync failure or partial write: restore the
-                        ;; exact pre-state (truncate + fsync + verify) while the sealed
-                        ;; intent still guards atomicity, THEN durably remove the intent,
-                        ;; and return a typed :durability-failure with root/version/
-                        ;; projection unchanged — the reported-failed batch can never
-                        ;; appear after restart. Lock-free readers see the pre state
-                        ;; until the single reset! — never a partial batch.
+                        ;; KNOWN. On append/fsync failure or partial write, a typed
+                        ;; :durability-failure is definitive ONLY after exact pre-state
+                        ;; restore (truncate + fsync + digest verify) and durable intent
+                        ;; invalidation. Otherwise return :durability-indeterminate,
+                        ;; poison-stop the process, and leave the sealed intent to boot
+                        ;; recovery. Lock-free readers see the pre state until the single
+                        ;; reset! — never a partial batch.
                         durable
                         (if-not (seq lines)
                           {:ok true}
-                          (try
-                            (durable-barrier!)
-                            (let [pre (.length (java.io.File. ^String flat))]
-                              (binding [*inject-dirsync-fail* (boolean (and inject? (:inject-dirsync-fail req)))]
-                                (publish-edit-journal! flat lines pre))
-                              (try
-                                (when (and inject? (:inject-durable-fail req))
-                                  ;; test seam: simulate the appender landing a PARTIAL
-                                  ;; batch and then failing its fsync — bytes on disk,
-                                  ;; no ack. The restore below must erase them.
-                                  (let [payload (.getBytes ^String (apply str lines) "UTF-8")
-                                        cut (max 1 (quot (alength payload) 2))]
-                                    (with-open [os (java.io.FileOutputStream. flat true)]
-                                      (.write os payload 0 cut))
-                                    (throw (ex-info (str "injected durable-append failure after a partial write of "
-                                                         cut " bytes (FRAM_EDIT_INJECT test seam)")
-                                                    {:code :injected-durable-failure}))))
-                                ;; THE COMMIT POINT: inline await (never deferred past
-                                ;; this serialized section) — returns only after THIS
-                                ;; batch's append+fsync succeeded; throws on failure.
-                                (binding [*durable-tickets* nil]
-                                  (enqueue-durable! flat (vec lines)
-                                                    (fn [] (reset! flat-mtime (stamp @flat-log)))))
-                                (try (remove-edit-journal! flat)
-                                     (catch Throwable rt
-                                       (binding [*out* *err*]
-                                         (println (str "[fram] WARNING: edit-batch journal removal failed after a durable commit ("
-                                                       (.getMessage rt) ") — boot redo of this batch is byte-exact idempotent")))))
-                                {:ok true}
-                                (catch Throwable t
-                                  (let [restore-err (try (restore-log-pre-state! flat pre) nil
-                                                         (catch Throwable rt rt))
-                                        ;; if the restore itself failed, LEAVE the sealed intent:
-                                        ;; boot redo keeps the batch atomic on a disk we could not
-                                        ;; repair; removing it would let a partial batch fold.
-                                        remove-err (when-not restore-err
-                                                     (try (remove-edit-journal! flat) nil
-                                                          (catch Throwable rt rt)))]
-                                    {:reject [(str "durable append failed — batch not committed, exact pre-state "
-                                                   (if restore-err
-                                                     (str "restore FAILED (" (.getMessage ^Throwable restore-err)
-                                                          "); recovery intent left sealed for boot repair — STATE UNCERTAIN")
-                                                     (str "restored"
-                                                          (when remove-err
-                                                            (str " (recovery-intent removal failed: "
-                                                                 (.getMessage ^Throwable remove-err)
-                                                                 " — intent is invalidated-or-sealed; boot handles both)"))))
-                                                   ": " (.getMessage t))]
-                                     :code :durability-failure}))))
-                            (catch Throwable t
-                              ;; barrier / intent-publication failure: nothing of this batch
-                              ;; touched the main log; drop any half-published intent, typed reject.
-                              (try (remove-edit-journal! flat) (catch Throwable _ nil))
-                              {:reject [(str "durable install failed before the batch touched the log: "
-                                             (.getMessage t))]
-                               :code :durability-failure})))]
+                          (let [cleanup-at (when inject? (:inject-cleanup-fail-at req))
+                                ;; Conservative source-order oracle for the outer
+                                ;; catch. Once publication starts, no unexpected
+                                ;; exception may be called a definitive failure
+                                ;; until replay has been durably invalidated.
+                                durability-stage (atom :before-intent)
+                                indeterminate
+                                (fn [phase msg]
+                                  (let [state (poison-edit-durability! flat phase msg)]
+                                    {:reject [(str "DURABILITY INDETERMINATE — outcome is not a definitive"
+                                                   " failure and MUST NOT be retried in this process: " msg
+                                                   ". Coordinator is POISONED; stop and restart for"
+                                                   " sole-writer recovery")]
+                                     :code :durability-indeterminate
+                                     :durability state}))
+                                failed
+                                (fn [msg]
+                                  {:reject [(str "durable install failed with the batch proven absent: " msg)]
+                                   :code :durability-failure})]
+                            (try
+                              (durable-barrier!)
+                              (let [pre (.length (java.io.File. ^String flat))
+                                    pre-sha (sha256-file-prefix flat pre)
+                                    pub-err
+                                    (try
+                                      (binding [*inject-dirsync-fail*
+                                                (boolean (and inject? (:inject-dirsync-fail req)))]
+                                        (reset! durability-stage :intent-may-replay)
+                                        (publish-edit-journal! flat lines pre))
+                                      nil
+                                      (catch Throwable t t))]
+                                (if pub-err
+                                  ;; Publication can fail after ATOMIC_MOVE but before
+                                  ;; directory fsync, so prove the intent invalid before
+                                  ;; claiming the batch (which never touched the log) failed.
+                                  (let [retire-err (try (remove-edit-journal! flat) nil
+                                                        (catch Throwable t t))
+                                        retired? (or (nil? retire-err)
+                                                     (= false (:intent-valid? (ex-data retire-err))))]
+                                    (when retired? (reset! durability-stage :intent-invalid))
+                                    (if (and retire-err
+                                             (not= false (:intent-valid? (ex-data retire-err))))
+                                      (indeterminate :intent-publication
+                                                     (str (.getMessage ^Throwable pub-err)
+                                                          "; valid intent retirement also failed: "
+                                                          (.getMessage ^Throwable retire-err)))
+                                      (failed (str "intent publication rejected before log append ("
+                                                   (.getMessage ^Throwable pub-err) ")"
+                                                   (when retire-err
+                                                     (str "; invalid intent cleanup incomplete ("
+                                                          (.getMessage ^Throwable retire-err) ")"))))))
+                                  (try
+                                    (when (and inject? (:inject-durable-fail req))
+                                      ;; Simulate the appender landing a PARTIAL
+                                      ;; batch and then failing before a durable ack.
+                                      (let [payload (.getBytes ^String (apply str lines) "UTF-8")
+                                            cut (max 1 (quot (alength payload) 2))]
+                                        (with-open [os (java.io.FileOutputStream. flat true)]
+                                          (.write os payload 0 cut))
+                                        (throw (ex-info (str "injected durable-append failure after a partial write of "
+                                                             cut " bytes (FRAM_EDIT_INJECT test seam)")
+                                                        {:code :injected-durable-failure}))))
+                                    ;; THE COMMIT POINT: this call returns only
+                                    ;; after this exact batch append+fsync succeeds.
+                                    (binding [*durable-tickets* nil]
+                                      (enqueue-durable! flat (vec lines)
+                                                        (fn [] (reset! flat-mtime (stamp @flat-log)))))
+                                    (reset! durability-stage :batch-committed)
+                                    ;; Post-commit cleanup cannot uncommit. A valid
+                                    ;; sidecar may survive a cleanup error, but boot
+                                    ;; recovery now preserves BATCH+LATER exactly.
+                                    (try (remove-edit-journal! flat cleanup-at)
+                                         (catch Throwable rt
+                                           (binding [*out* *err*]
+                                             (println (str "[fram] WARNING: recovery-intent cleanup failed after"
+                                                           " durable commit (" (.getMessage rt)
+                                                           "); replay preserves this batch and every later tail byte")))))
+                                    {:ok true}
+                                    (catch Throwable append-err
+                                      ;; No durable ack: only exact restore followed
+                                      ;; by proven invalidation earns a definitive
+                                      ;; failure. Every other state poisons the process.
+                                      (let [restore-err
+                                            (try (restore-log-pre-state!
+                                                  flat pre pre-sha
+                                                  (boolean (and inject? (:inject-restore-fail req))))
+                                                 nil
+                                                 (catch Throwable t t))]
+                                        (if restore-err
+                                          (indeterminate :pre-state-restore
+                                                         (str (.getMessage ^Throwable append-err)
+                                                              "; exact pre-state restore failed: "
+                                                              (.getMessage ^Throwable restore-err)
+                                                              "; sealed intent retained as recovery authority"))
+                                          (let [retire-err
+                                                (try (remove-edit-journal! flat cleanup-at) nil
+                                                     (catch Throwable t t))
+                                                retired? (or (nil? retire-err)
+                                                             (= false (:intent-valid? (ex-data retire-err))))]
+                                            (when retired? (reset! durability-stage :intent-invalid))
+                                            (if (and retire-err
+                                                     (not= false (:intent-valid? (ex-data retire-err))))
+                                              (indeterminate :intent-retirement
+                                                             (str (.getMessage ^Throwable append-err)
+                                                                  "; pre-state restored but a valid replay intent"
+                                                                  " may survive: "
+                                                                  (.getMessage ^Throwable retire-err)))
+                                              (failed (str (.getMessage ^Throwable append-err)
+                                                           "; exact pre-state restored and intent "
+                                                           (if retire-err
+                                                             (str "durably invalidated (later cleanup incomplete: "
+                                                                  (.getMessage ^Throwable retire-err) ")")
+                                                             "durably retired")))))))))))
+                              (catch Throwable unexpected
+                                (if (#{:intent-may-replay :batch-committed}
+                                      @durability-stage)
+                                  (indeterminate :unexpected-durability-transition
+                                                 (str "unexpected failure at "
+                                                      (name @durability-stage) ": "
+                                                      (.getMessage ^Throwable unexpected)))
+                                  ;; :before-intent means this batch has no replay
+                                  ;; authority; :intent-invalid means retirement
+                                  ;; already proved it cannot replay after restart.
+                                  (failed (str "pre-state/replay absence is proven after unexpected "
+                                               (name @durability-stage) " failure: "
+                                               (.getMessage ^Throwable unexpected))))))))]
                     (if-not (:ok durable)
                       (do (swap! edit-candidates dissoc id)
                           (merge {:version (current-seq @co)} durable))
@@ -2371,7 +2489,7 @@
                         (swap! edit-candidates dissoc id)
                         {:ok true :protocol edit-protocol-name :module (:module cand)
                          :candidate id :ops (count (:ops cand)) :installed (count lines)
-                         :path (:path cand) :version (current-seq @co)}))))))))))))
+                         :path (:path cand) :version (current-seq @co)})))))))))))))
 
 ;; ---- the batch journal (crash/torn-tail safety) -----------------------------
 ;; The journal is durable RECOVERY INTENT for one atomic batch — NOT an
@@ -2459,103 +2577,199 @@
   ;; file): if the unlink below never becomes durable and the directory entry
   ;; resurrects after a crash, it resurrects INVALID and boot recovery discards
   ;; it instead of redoing a batch whose outcome was already reported. Then
-  ;; delete + parent-directory fsync. Throws typed on failure.
-  [flat]
-  (let [jf  (java.io.File. ^String (edit-journal-path flat))
-        dir (or (.getParent jf) ".")]
-    (when (.exists jf)
-      (with-open [fos (java.io.FileOutputStream. jf)]    ; truncates to 0 = invalid journal
-        (.force (.getChannel fos) true))
-      (java.nio.file.Files/deleteIfExists (.toPath jf))
-      (fsync-dir! dir))))
+  ;; delete + parent-directory fsync.
+  ;;
+  ;; Failure metadata is load-bearing. :intent-valid? true means a valid replay
+  ;; authority may still survive, so a failed append cannot be reported as a
+  ;; definitive failure. false means invalidation was observed durable before
+  ;; the later cleanup failure; retry/restart can never apply the batch from it.
+  ;; fail-at is an env-gated test seam selected by do-edit-commit; direct probes
+  ;; exercise every source-order boundary.
+  ([flat] (remove-edit-journal! flat nil))
+  ([flat fail-at]
+   (let [jf  (java.io.File. ^String (edit-journal-path flat))
+         dir (or (.getParent jf) ".")
+         stage (atom :before-invalidate)
+         valid? (atom (.exists jf))
+         inject! (fn [at]
+                   (when (= fail-at at)
+                     (throw (ex-info (str "injected recovery-intent cleanup failure at " (name at))
+                                     {:code :injected-intent-cleanup-failure :stage at}))))]
+     (try
+       (when (.exists jf)
+         (inject! :before-invalidate)
+         (reset! stage :invalidating)
+         (with-open [fos (java.io.FileOutputStream. jf)] ; truncates to 0 = invalid journal
+           (.force (.getChannel fos) true))
+         ;; Only a successful file force proves that a resurrected directory
+         ;; entry cannot contain the old valid replay intent.
+         (reset! valid? false)
+         (reset! stage :after-invalidate)
+         (inject! :after-invalidate)
+         (java.nio.file.Files/deleteIfExists (.toPath jf))
+         (reset! stage :after-unlink)
+         (inject! :after-unlink)
+         (fsync-dir! dir)
+         (reset! stage :retired))
+       {:retired true :intent-valid? false :stage @stage}
+       (catch Throwable t
+         (throw (ex-info (str "recovery-intent retirement failed at " (name @stage)
+                              ": " (.getMessage t))
+                         (merge {:code :intent-retirement-failed
+                                 :stage @stage
+                                 :intent-valid? @valid?}
+                                (select-keys (ex-data t) [:injected :at]))
+                         t)))))))
 
 (defn- restore-log-pre-state!
   ;; Synchronously restore the exact pre-batch state after a failed/partial
   ;; durable append: truncate to `pre`, fsync, verify, and re-stamp so the
   ;; daemon's own repair is never mistaken for an external edit. group-io-lock
   ;; orders this against the appender's write+stamp critical section.
-  [flat pre]
-  (locking group-io-lock
-    (with-open [raf (java.io.RandomAccessFile. (java.io.File. ^String flat) "rw")]
-      (.setLength raf (long pre))
-      (.force (.getChannel raf) true))
-    (let [len (.length (java.io.File. ^String flat))]
-      (when (not= (long pre) len)
-        (throw (ex-info (str "pre-state restore verified length " len " != expected " pre)
-                        {:code :restore-verify-failed}))))
-    (reset! flat-mtime (stamp flat))))
+  ([flat pre] (restore-log-pre-state! flat pre nil false))
+  ([flat pre inject-fail?] (restore-log-pre-state! flat pre nil inject-fail?))
+  ([flat pre expected-pre-sha inject-fail?]
+   (locking group-io-lock
+     (when inject-fail?
+       (throw (ex-info "injected exact pre-state restore failure"
+                       {:code :injected-restore-failure})))
+     (with-open [raf (java.io.RandomAccessFile. (java.io.File. ^String flat) "rw")]
+       (.setLength raf (long pre))
+       (.force (.getChannel raf) true))
+     (let [len (.length (java.io.File. ^String flat))]
+       (when (not= (long pre) len)
+         (throw (ex-info (str "pre-state restore verified length " len " != expected " pre)
+                         {:code :restore-verify-failed})))
+       (when (and expected-pre-sha
+                  (not= expected-pre-sha (sha256-file-prefix flat pre)))
+         (throw (ex-info "pre-state restore digest differs from the sealed exact prefix"
+                         {:code :restore-digest-mismatch}))))
+     (reset! flat-mtime (stamp flat)))))
+
+(defn- read-file-region
+  ;; Exact positioned read used by recovery's byte oracle. Returns n bytes or
+  ;; throws; a short read must never be silently treated as a prefix match.
+  [flat offset n]
+  (let [buf (byte-array (int n))]
+    (with-open [raf (java.io.RandomAccessFile. (java.io.File. ^String flat) "r")]
+      (.seek raf (long offset))
+      (loop [at 0]
+        (when (< at (alength buf))
+          (let [got (.read raf buf at (- (alength buf) at))]
+            (when (neg? got)
+              (throw (ex-info (str "short recovery read at " (+ (long offset) at)
+                                   " while reading " n " bytes")
+                              {:code :short-recovery-read})))
+            (recur (+ at got)))))
+      buf)))
+
+(defn- bytes-prefix-of? [^bytes prefix ^bytes whole]
+  (and (<= (alength prefix) (alength whole))
+       (loop [i 0]
+         (or (= i (alength prefix))
+             (and (= (aget prefix i) (aget whole i))
+                  (recur (inc i)))))))
 
 (defn recover-edit-journal!
   "SOLE-WRITER boot repair for a crashed :edit-commit. Called by serve-flat-daemon
-  BEFORE the boot fold, holding the rewrite gate — NEVER from read-only paths (a
-  cold renderer racing a live daemon's commit window must not touch the log).
-  The journal is recovery INTENT, not an acknowledged commit: redo happens ONLY
-  when every binding matches — v2 shape + lines digest, the CANONICAL LOG
-  IDENTITY (:log == this log's canonical path), and the EXACT PRE-STATE DIGEST
-  (:pre-sha over the first :pre-bytes bytes). A matching sealed journal REDOES
-  the whole batch byte-exactly (idempotent — a fully-landed batch redoes to the
-  identical bytes; only an UNREPORTED crash window can reach this, because a
-  reported failure durably removes its intent). A sidecar copied beside another
-  log, or a log whose prefix was rewritten without changing this journal, is
-  REJECTED: the sidecar is discarded and that log stays byte-identical. Torn,
-  invalid, or legacy (pre-v2, unbound) journals are discarded — a legacy
-  journal cannot prove which log/state it belongs to, so it is never replayed."
+  BEFORE the boot fold, holding the rewrite gate — NEVER from read-only paths.
+  The v2 recovery intent binds canonical log identity, exact pre-state digest,
+  and exact BATCH bytes. Recovery classifies the bytes after :pre-bytes without
+  truncation: empty/proper BATCH prefix is completed; complete BATCH is kept;
+  complete BATCH+LATER preserves every later byte; any other tail refuses boot
+  with log and valid intent untouched. Foreign, rewritten, torn, and legacy
+  intents are rejected and durably retired with the log byte-identical."
   [flat]
   (let [jf (java.io.File. ^String (edit-journal-path flat))
         discard! (fn [why]
                    (binding [*out* *err*]
                      (println (str "[fram] edit-batch journal: " why)))
+                   ;; Never fall back to a non-durable plain unlink: a rejected
+                   ;; intent that can resurrect is not actually rejected.
                    (try (remove-edit-journal! flat)
                         (catch Throwable t
-                          (binding [*out* *err*]
-                            (println (str "[fram] WARNING: durable journal removal failed ("
-                                          (.getMessage t) ") — falling back to plain delete")))
-                          (.delete jf))))]
+                          (throw (ex-info (str "cannot durably retire rejected recovery intent: "
+                                               (.getMessage t))
+                                          {:code :recovery-retirement-failed} t)))))
+        retire! (fn []
+                  ;; If retirement fails before invalidation, a still-valid
+                  ;; intent is safe: the next boot recognizes BATCH(+LATER),
+                  ;; preserves the later tail, and retries retirement.
+                  (try (remove-edit-journal! flat)
+                       (catch Throwable t
+                         (binding [*out* *err*]
+                           (println (str "[fram] WARNING: recovery intent retirement failed after"
+                                         " byte-exact recovery (" (.getMessage t)
+                                         "); future recovery preserves BATCH+LATER"))))))]
     (when (.isFile jf)
       (let [j (try (edn/read-string (slurp jf)) (catch Throwable _ nil))
             valid? (and (map? j) (= 2 (:fram-edit-batch j))
-                        (string? (:log j)) (string? (:pre-sha j))
+                        (string? (:log j)) (string? (:pre-sha j)) (string? (:sha j))
                         (vector? (:lines j)) (every? string? (:lines j))
-                        (integer? (:pre-bytes j))
+                        (integer? (:pre-bytes j)) (<= 0 (:pre-bytes j))
                         (= (:sha j) (sha256-hex (apply str (:lines j)))))]
         (cond
           (not valid?)
-          (discard! "torn/invalid/legacy journal — discarding (no proven batch to redo; the log is untouched)")
+          (discard! "torn/invalid/legacy journal — discarding (no proven batch to replay; log untouched)")
 
           (not= (canonical-path flat) (:log j))
           (discard! (str "journal is bound to a DIFFERENT canonical log (" (pr-str (:log j))
                          " != " (pr-str (canonical-path flat))
-                         ") — rejecting the copied sidecar; this log is untouched"))
+                         ") — rejecting copied sidecar; log untouched"))
 
           :else
           (let [f (java.io.File. ^String flat)
                 pre (long (:pre-bytes j))]
             (cond
               (< (.length f) pre)
-              ;; external surgery shrank the log below the journal's base — the unacked
-              ;; batch has no truthful base to redo onto; the surgery wins. Discard loudly.
               (discard! (str "pre-bytes " pre " exceeds log length " (.length f)
-                             " (external rewrite?) — discarding the unacked batch"))
+                             " (external rewrite?) — discarding unapplicable intent"))
 
               (not= (:pre-sha j) (sha256-file-prefix flat pre))
-              (discard! (str "pre-state digest mismatch over the first " pre
-                             " bytes — the log prefix was rewritten (or this sidecar describes"
-                             " another log's state); rejecting, log untouched"))
+              (discard! (str "pre-state digest mismatch over first " pre
+                             " bytes — rejecting rewritten/foreign state; log untouched"))
 
               :else
-              (do (binding [*out* *err*]
-                    (println (str "[fram] edit-batch journal: redoing atomic batch ("
-                                  (count (:lines j)) " lines) at byte " pre " of " flat)))
-                  (with-open [raf (java.io.RandomAccessFile. f "rw")]
-                    (.setLength raf pre)                       ; drop any torn partial batch
-                    (.seek raf pre)
-                    (.write raf (.getBytes ^String (apply str (:lines j)) "UTF-8"))
-                    (.force (.getChannel raf) true))           ; bb-safe fsync (group-appender idiom)
-                  (try (remove-edit-journal! flat)
-                       (catch Throwable t
-                         (binding [*out* *err*]
-                           (println (str "[fram] WARNING: durable journal removal failed after redo ("
-                                         (.getMessage t) ") — a re-redo at next boot is byte-exact idempotent")))))))))))))
+              (let [batch (.getBytes ^String (apply str (:lines j)) "UTF-8")
+                    batch-n (long (alength ^bytes batch))
+                    tail-n (- (.length f) pre)
+                    observed-n (long (min tail-n batch-n))
+                    observed (read-file-region flat pre observed-n)
+                    prefix? (bytes-prefix-of? observed batch)
+                    batch-present? (and (>= tail-n batch-n) prefix?)]
+                (cond
+                  batch-present?
+                  (do
+                    (binding [*out* *err*]
+                      (println (str "[fram] edit-batch journal: batch already present at byte " pre
+                                    "; preserving " (- tail-n batch-n)
+                                    " later bytes and retiring stale intent")))
+                    (retire!))
+
+                  (and (< tail-n batch-n) prefix?)
+                  (do
+                    (binding [*out* *err*]
+                      (println (str "[fram] edit-batch journal: completing atomic batch from byte "
+                                    (+ pre tail-n) " of " flat)))
+                    (with-open [raf (java.io.RandomAccessFile. f "rw")]
+                      ;; Preserve the byte-exact prefix already present; append
+                      ;; only the missing suffix, then force the complete batch.
+                      (.seek raf (+ pre tail-n))
+                      (.write raf batch (int tail-n) (int (- batch-n tail-n)))
+                      (.force (.getChannel raf) true))
+                    (retire!))
+
+                  :else
+                  ;; A valid applicable intent and a non-BATCH tail disagree.
+                  ;; Leave both authorities byte-identical and stop boot.
+                  (throw (ex-info (str "recovery intent conflicts with " tail-n
+                                       " bytes after its exact pre-state; tail is not a prefix of"
+                                       " sealed BATCH — refusing boot without changing log or intent")
+                                  {:code :recovery-tail-conflict
+                                   :log (canonical-path flat)
+                                   :pre-bytes pre
+                                   :tail-bytes tail-n
+                                   :batch-bytes batch-n})))))))))))
 
 (declare maybe-reload!)
 (def ^:dynamic *reload-checked* false)
@@ -2564,7 +2778,7 @@
   ;; must never make their client pay for an unrelated external corpus import.
   ;; The pending physical stamp remains visible to the next freshness-sensitive
   ;; read or fact mutation.
-  #{:version :status :built-through
+  #{:version :version-free :status :edit-protocol :reload-status :built-through
     :acquire-lease :renew-lease :release-lease :fence-ok})
 (def ^:private reload-mutation-ops
   ;; A first fact mutation after an external edit must absorb/validate that edit
@@ -3146,6 +3360,12 @@
   ;; is a no-op in v2-log mode (the code daemon, where :edit-min lives), so skipping it here is
   ;; safe; the commit still serializes under dlock and is OCC-checked per (te,p) at commit time.
   (cond
+    ;; An indeterminate append outcome poisons the process. Diagnostics remain
+    ;; live and expose the reason; every other request stops before reload,
+    ;; compute, or mutation so no later commit can outrun recovery authority.
+    (durability-stop-rejection req)
+    (durability-stop-rejection req)
+
     ;; Query fencing covers only reload/fence validation and capture of one
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
     ;; expensive or abandoned read can never block writes, leases, or status.
@@ -3260,7 +3480,10 @@
     ;; recursive dispatch from repeating it while the outer fence holds the monitor.
     (when-not *reload-checked* (prepare-request-reload! req))
     (locking dlock                     ; serialize writes + short immutable captures
-     (case (:op req)
+     ;; Recheck after acquiring dlock: a concurrent request may have passed the
+     ;; outer guard before the failing edit poisoned the process.
+     (or (durability-stop-rejection req)
+         (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       ;; Lease-fenced fact writes. The fence and mutation share the coordinator
@@ -3321,7 +3544,9 @@
       ;; graph-edit-candidate-v1 capability handshake — the restricted MCP profile
       ;; refuses to start against a daemon that cannot answer this (legacy daemons
       ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
-      :edit-protocol {:ok true :protocol edit-protocol-name :version (current-seq @co)}
+      :edit-protocol {:ok true :protocol edit-protocol-name
+                      :durability @edit-durability-state
+                      :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
@@ -3341,6 +3566,7 @@
       ;; this id are out of rollback support for generation-managed corpora.
       :status   {:version (current-seq @co) :facts (hybrid-fact-count)
                  :log (or @flat-log (:log @co)) :boot @last-boot
+                 :durability @edit-durability-state
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
@@ -3520,7 +3746,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      {:error "unknown op"})))))
+      {:error "unknown op"}))))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
@@ -4726,6 +4952,9 @@
   ;; no peer append or generation flip can race between truncating/finalizing an
   ;; unacknowledged tail and observing the repaired bytes. Once serving begins,
   ;; every append re-takes the shared rewrite lock and refuses a non-LF boundary.
+  ;; A fresh process begins healthy; recovery below either deterministically
+  ;; resolves the sole sealed intent or throws before the daemon can serve.
+  (reset! edit-durability-state {:state :healthy})
   (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
     (try
       (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
