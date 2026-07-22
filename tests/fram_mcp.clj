@@ -322,7 +322,8 @@
       {:err (str "tracked source path " (pr-str p) " is not CANONICAL (resolves to "
                  (pr-str (canon p)) ") — traversal/symlink segments are refused before mutation")}
       (not (str/starts-with? p (str root "/")))
-      {:err (str "tracked source path " p " lies outside the source root " root " — refused before mutation")}
+      {:err (str "tracked source path " p " is outside FRAM_SRC and therefore outside the source root "
+                 root " — refused before mutation")}
       :else nil)))
 
 ;; ---- pinned projection publication (parent-directory identity confinement) --

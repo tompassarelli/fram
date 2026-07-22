@@ -2780,7 +2780,9 @@
                                     ;; after this exact batch append+fsync succeeds.
                                     (binding [*durable-tickets* nil]
                                       (enqueue-durable! flat (vec lines)
-                                                        (fn [] (reset! flat-mtime (stamp @flat-log)))))
+                                                        (fn [flush]
+                                                          (advance-owned-append-stamp!
+                                                           flat-mtime flush))))
                                     (reset! durability-stage :batch-committed)
                                     ;; Hard crash seam: the self-identifying batch is
                                     ;; fsynced, but no in-memory receipt/root and no
