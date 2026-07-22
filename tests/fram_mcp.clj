@@ -325,6 +325,99 @@
       {:err (str "tracked source path " p " lies outside the source root " root " — refused before mutation")}
       :else nil)))
 
+;; ---- pinned projection publication (parent-directory identity confinement) --
+;; validate-tracked-path above is PATHNAME-based and one-time; between it and
+;; the projection write the parent directory ENTRY could be replaced (e.g.
+;; swapped for a symlink into an outside tree), redirecting a path-based write
+;; OUTSIDE the checkout. bb's GraalVM image does not register Java's
+;; SecureDirectoryStream methods for reflection (verified: getMethod -> NoSuchMethod),
+;; so this uses the equivalently PINNED relative move: hold an open FileChannel
+;; on the validated parent directory (an fd pins the INODE, not the name) and
+;; address every publication op through /proc/self/fd/<N>/<leaf>, which the
+;; kernel resolves via that pinned inode exactly like openat/renameat relative
+;; ops. Identity is compared by fileKey (dev,ino) through the fd after pinning;
+;; the directory fsync is .force on the pinned channel itself (never on a
+;; re-resolved path). No /proc, an ambiguous fd attribution, or an identity
+;; mismatch FAILS CLOSED before any commit — never a silent fallback to
+;; path-based writes.
+(defn- path-of [s] (java.nio.file.Paths/get (str s) (into-array String [])))
+(defn- file-key-of
+  ;; fileKey (dev,ino) of what `p` RESOLVES to, as a comparable string; nil if unreadable.
+  [p]
+  (try (str (.fileKey (java.nio.file.Files/readAttributes
+                       (path-of p) java.nio.file.attribute.BasicFileAttributes
+                       (into-array java.nio.file.LinkOption []))))
+       (catch Throwable _ nil)))
+(defn- dir-fds-matching
+  ;; the /proc/self/fd entries currently resolving to directory identity `k`.
+  [k]
+  (set (for [f (or (seq (.listFiles (io/file "/proc/self/fd"))) [])
+             :let [n (.getName ^java.io.File f)]
+             :when (= k (file-key-of (str "/proc/self/fd/" n)))]
+         n)))
+
+(defn- pin-parent-dir!
+  ;; -> {:ch <FileChannel> :fd-dir "/proc/self/fd/N" :key K :parent P} | {:err ..}
+  ;; Pin protocol: capture the expected identity K from the validated path, scan
+  ;; the fds already on K, open the directory channel, scan again — the single
+  ;; NEW matching fd is ours (the channel keeps it alive, so the number cannot
+  ;; be reused while pinned). Anything other than exactly one candidate refuses.
+  [parent]
+  (if-not (.isDirectory (io/file "/proc/self/fd"))
+    {:err "pinned publication unsupported: /proc/self/fd unavailable on this platform"}
+    (let [k (file-key-of parent)]
+      (if (nil? k)
+        {:err (str "cannot read the identity of tracked parent directory " parent)}
+        (let [before (dir-fds-matching k)
+              ch (try (java.nio.channels.FileChannel/open
+                       (path-of parent)
+                       (into-array java.nio.file.OpenOption [java.nio.file.StandardOpenOption/READ]))
+                      (catch Throwable t t))]
+          (if (instance? Throwable ch)
+            {:err (str "cannot pin tracked parent directory " parent ": " (.getMessage ^Throwable ch))}
+            (let [cands (vec (remove before (dir-fds-matching k)))]
+              (if (= 1 (count cands))
+                {:ch ch :fd-dir (str "/proc/self/fd/" (first cands)) :key k :parent parent}
+                (do (try (.close ^java.nio.channels.FileChannel ch) (catch Throwable _ nil))
+                    {:err (str "cannot attribute a pinned parent-directory fd for " parent
+                               " (" (count cands) " candidates) — the directory identity changed during"
+                               " pinning or fd attribution is ambiguous; refusing (no path-based fallback)")})))))))))
+
+(defn- publish-projection-pinned!
+  ;; Publish `src-file`'s bytes as `leaf` THROUGH the pinned parent directory:
+  ;; re-verify identity via the fd, create + write + force a same-directory temp
+  ;; addressed through the fd, atomically replace the leaf relative to the fd,
+  ;; then fsync the PINNED directory channel itself. Returns nil on a clean
+  ;; publish; {:stale <why>} when the CURRENT parent-path identity no longer
+  ;; matches the pinned one (the canonical graph commit stands; the projection
+  ;; is honestly stale and repairable); throws on I/O failure.
+  [{:keys [ch fd-dir key parent]} src-file leaf]
+  (when (not= key (file-key-of fd-dir))
+    (throw (ex-info (str "pinned parent-directory fd no longer matches its validated identity " key)
+                    {:code :pin-identity-lost})))
+  (let [tmp (str ".fram-proj-" (System/nanoTime) ".tmp")]
+    (with-open [wch (java.nio.channels.FileChannel/open
+                     (path-of (str fd-dir "/" tmp))
+                     (into-array java.nio.file.OpenOption
+                                 [java.nio.file.StandardOpenOption/CREATE_NEW
+                                  java.nio.file.StandardOpenOption/WRITE]))]
+      (.write wch (java.nio.ByteBuffer/wrap (java.nio.file.Files/readAllBytes (.toPath (io/file src-file)))))
+      (.force wch true))
+    (java.nio.file.Files/move
+     (path-of (str fd-dir "/" tmp)) (path-of (str fd-dir "/" leaf))
+     (into-array java.nio.file.CopyOption
+                 [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                  java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+    (.force ^java.nio.channels.FileChannel ch true)      ; directory fsync on the PINNED inode
+    (when (not= key (file-key-of parent))
+      {:stale (str "the tracked parent directory " parent " no longer resolves to its validated identity "
+                   key " — the projection was published into the ORIGINAL (pinned) directory, not wherever"
+                   " the path points now")})))
+
+(defn- release-pin! [pin]
+  (when-let [ch (:ch pin)]
+    (try (.close ^java.nio.channels.FileChannel ch) (catch Throwable _ nil))))
+
 (defn route-edit [e]
   (let [op (:op e) module (:module e)]
     (cond
@@ -342,10 +435,16 @@
       ;;      BEFORE any commit; a failing candidate rejects with canonical log,
       ;;      facts, version, and tracked projection untouched.
       ;;   4. :edit-commit — the coordinator revalidates log/version/path/digests
-      ;;      (exact-version CAS) and installs the WHOLE sealed batch through one
-      ;;      crash/torn-tail-safe journaled append + a single root swap.
-      ;;   5. the CHECKED candidate bytes are written to the tracked path via
-      ;;      temp + atomic rename (checked-is-installed — no re-render race).
+      ;;      (exact-version CAS), publishes a durable identity-bound recovery
+      ;;      intent, awaits the whole-batch append+fsync (THE commit point)
+      ;;      inside its serialized section, and only then swaps the root; an
+      ;;      append failure restores the exact pre-state and rejects typed.
+      ;;   5. the CHECKED candidate bytes are published to the tracked path
+      ;;      THROUGH the parent directory pinned at validation time (identity-
+      ;;      compared fd; temp + force + atomic replace + pinned-dir fsync) —
+      ;;      checked-is-installed, no re-render race, and a replaced parent
+      ;;      entry can never redirect the write outside the checkout (the
+      ;;      reply reports PROJECTION-STALE instead).
       ;; NO fallback to the commit-first :edit-min flow: a coordinator that cannot
       ;; prepare/commit candidates gets a typed refusal, never a degraded write.
       (and flip-on? flip-code-port)
@@ -384,6 +483,17 @@
               (let [target (:path prep)]
                 (if-let [pe (validate-tracked-path target)]
                   {:isError true :text (str "REJECTED (nothing committed): " (:err pe))}
+                  ;; pin the validated parent directory BEFORE any commit: the
+                  ;; projection publication below goes only through this pinned
+                  ;; identity, and an environment where pinning is unsupported
+                  ;; rejects here with nothing committed (fail closed) instead
+                  ;; of always committing into a stale/unconfined projection.
+                  (let [pin (pin-parent-dir! (.getParent (io/file target)))]
+                    (if (:err pin)
+                      {:isError true
+                       :text (str "REJECTED (nothing committed): projection parent-directory pin failed: "
+                                  (:err pin))}
+                      (try
                   (let [work (str (System/getProperty "java.io.tmpdir") "/fram-cand-" (System/nanoTime))
                         _ (.mkdirs (io/file work))
                         ext (let [n (.getName (io/file target)) i (.lastIndexOf n ".")]
@@ -435,36 +545,42 @@
                                                   (when (= "stale-version" (some-> (:code commit) name))
                                                     " — a concurrent edit landed first; re-issue this edit"))})
                                   (:ok commit)
-                                  ;; the tracked projection: write the CHECKED candidate bytes via
-                                  ;; temp + atomic rename. A failure here leaves the LOG canonical and
-                                  ;; the projection STALE — report it loudly with the repair command.
-                                  (let [proj-err
-                                        (try
-                                          (let [dir (.getParentFile (io/file target))
-                                                tmpf (java.io.File/createTempFile ".fram-proj-" ext dir)]
-                                            (io/copy (io/file candf) tmpf)
-                                            (java.nio.file.Files/move
-                                             (.toPath tmpf) (.toPath (io/file target))
-                                             (into-array java.nio.file.CopyOption
-                                                         [java.nio.file.StandardCopyOption/ATOMIC_MOVE
-                                                          java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
-                                            nil)
-                                          (catch Throwable t (str (.getMessage t))))]
+                                  ;; the tracked projection: publish the CHECKED candidate bytes
+                                  ;; THROUGH the parent directory pinned before the commit
+                                  ;; (identity-verified fd; temp + force + atomic replace +
+                                  ;; pinned-dir fsync). A parent entry replaced since validation
+                                  ;; can never redirect this write outside the checkout: the
+                                  ;; bytes land in the PINNED directory and the reply reports
+                                  ;; PROJECTION-STALE. Any failure leaves the LOG canonical and
+                                  ;; the projection STALE — reported loudly with the repair command.
+                                  (let [proj (try (publish-projection-pinned!
+                                                   pin (io/file candf) (.getName (io/file target)))
+                                                  (catch Throwable t {:proj-err (str (.getMessage t))}))]
                                     (sh {} "rm" "-rf" work)
-                                    (if proj-err
+                                    (cond
+                                      (:proj-err proj)
                                       {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
                                                   " — " (:installed commit) " ops at version " (:version commit)
                                                   " (WARNING: tracked projection is STALE — writing " target
-                                                  " failed: " proj-err "; repair with: bin/fram-render-code "
+                                                  " failed: " (:proj-err proj) "; repair with: bin/fram-render-code "
                                                   module " --port " flip-code-port " "
                                                   (str/join " " (flip-log-args)) " --out " target ")")}
+                                      (:stale proj)
+                                      {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
+                                                  " — " (:installed commit) " ops at version " (:version commit)
+                                                  " (WARNING: tracked projection is PROJECTION-STALE — "
+                                                  (:stale proj) "; repair with: bin/fram-render-code "
+                                                  module " --port " flip-code-port " "
+                                                  (str/join " " (flip-log-args)) " --out " target ")")}
+                                      :else
                                       {:text (str "committed + TYPE-CHECKS CLEAN (graph-edit-candidate-v1, atomic batch): "
                                                   op " on " module " — " (:installed commit) " ops at version "
                                                   (:version commit) "; tracked view " target " updated")}))
                                   :else
                                   (do (sh {} "rm" "-rf" work)
                                       {:isError true
-                                       :text (str "edit-commit unexpected response: " (pr-str commit))})))))))))))))))
+                                       :text (str "edit-commit unexpected response: " (pr-str commit))})))))))))
+                        (finally (release-pin! pin)))))))))))
 
       ;; FRAM_FLIP=1 but no code coordinator: fail loud (don't silently text-fallback).
       flip-on?
@@ -581,6 +697,10 @@
 ;; constant. Unknown profile names FAIL CLOSED at startup (fence at the bottom).
 (def ^:private profile (or (System/getenv "FRAM_MCP_PROFILE") "full"))
 (def ^:private restricted? (= profile "graph-edit-v1"))
+;; FRAM_MCP_LIBRARY=1: load this file as a LIBRARY (defs only — no profile
+;; fence, no stdio loop). Test seam for driving the pinned projection
+;; publication helpers directly and deterministically (mcp_candidate_test).
+(def ^:private library-mode? (= "1" (System/getenv "FRAM_MCP_LIBRARY")))
 
 ;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
 
@@ -835,15 +955,20 @@
 
 ;; fail-closed profile admission: full = the exact legacy surface (no new
 ;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.
-(case profile
-  "full"          nil
-  "graph-edit-v1" (enforce-graph-edit-v1!)
-  (die! "unknown profile — known profiles: full, graph-edit-v1"))
+;; FRAM_MCP_LIBRARY=1 skips admission AND the loop — library load, never serving.
+(when-not library-mode?
+  (case profile
+    "full"          nil
+    "graph-edit-v1" (enforce-graph-edit-v1!)
+    (die! "unknown profile — known profiles: full, graph-edit-v1")))
 
-(log! (if restricted?
+(when library-mode?
+  (log! "fram-mcp: loaded as a library (FRAM_MCP_LIBRARY=1) — no profile fence, no stdio loop"))
+(when-not library-mode?
+ (log! (if restricted?
         "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body ONLY)"
         "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)"))
-(loop []
+ (loop []
   (let [line (read-line)]
     (when (some? line)
       (when (seq (str/trim line))
@@ -860,4 +985,4 @@
             (try (handle req)
                  (catch Exception e (log! "handler error:" (.getMessage e))
                    (when (contains? req :id) (reply-err (:id req) -32603 (str (.getMessage e)))))))))
-      (recur))))
+      (recur)))))
