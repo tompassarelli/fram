@@ -1950,8 +1950,9 @@
 ;;       :durability-failure only after exact pre-state restore plus durable
 ;;       intent invalidation. If either proof is unavailable, the response is
 ;;       :durability-indeterminate and the process poison-stops until sole-writer
-;;       restart recovery. Each fact line embeds inert batch identity/index/count
-;;       metadata, and the first line embeds the exact response receipt. Therefore
+;;       restart recovery. A distinct sealed envelope precedes the exact batch;
+;;       each fact line carries only inert batch identity/index/count metadata.
+;;       Therefore
 ;;       a crash after append acknowledgement but before root/receipt publication
 ;;       is reconstructed by an exact request after restart. Every operation after
 ;;       append acknowledgement is guarded: failure returns COMMITTED with a
@@ -2011,11 +2012,22 @@
     (reset! last-edit-outcome receipt)
     receipt))
 
-;; Every candidate fact line carries the batch id/index/count, while the first
-;; line additionally carries the complete receipt identity. These keys are inert
-;; to the flat fold, which reads only :tx/:op/:l/:p/:r/:frame/:ts. They make an
-;; acknowledged batch self-identifying after a process dies between append/fsync
-;; and in-memory root/receipt publication.
+;; A committed candidate is one CLOSED envelope record followed immediately by
+;; its exact indexed fact rows.  Receipt identity never lives on a fact row: old
+;; or manually-authored facts carrying similarly named inert keys remain ordinary
+;; facts and cannot be interpreted as receipts.  The envelope has no :tx, so the
+;; operation facts remain the sole version clock; fram.rt/read-log validates and
+;; skips only the exact v1 envelope schema.
+(def ^:private edit-batch-fact-keys
+  #{:tx :op :l :p :r :ts :by
+    :fram-edit-batch :fram-edit-index :fram-edit-count})
+
+(defn- canonical-edit-op [row]
+  [(keyword (:op row)) (:l row) (:p row) (:r row)])
+
+(defn- edit-ops-digest [ops]
+  (sha256-hex (pr-str (vec ops))))
+
 (defn- annotate-edit-batch-lines [lines receipt]
   (let [n (count lines)]
     (mapv (fn [i line]
@@ -2023,20 +2035,29 @@
                   m (assoc m
                            :fram-edit-batch (:batch receipt)
                            :fram-edit-index i
-                           :fram-edit-count n)
-                  m (if (zero? i)
-                      (assoc m
-                             :fram-edit-module (:module receipt)
-                             :fram-edit-path (:path receipt)
-                             :fram-edit-base-version (:base-version receipt)
-                             :fram-edit-final-version (:version receipt)
-                             :fram-edit-ops (:ops receipt)
-                             :fram-edit-installed (:installed receipt)
-                             :fram-edit-ops-digest (:ops-digest receipt)
-                             :fram-edit-edn-digest (:edn-digest receipt))
-                      m)]
+                           :fram-edit-count n)]
               (str (pr-str m) "\n")))
           (range n) lines)))
+
+(defn- edit-batch-envelope [flat receipt fact-lines]
+  (let [payload {:fram-edit-envelope fram.rt/edit-batch-envelope-version
+                 :fram-edit-log (canonical-path flat)
+                 :fram-edit-candidate (:candidate receipt)
+                 :fram-edit-batch (:batch receipt)
+                 :fram-edit-module (:module receipt)
+                 :fram-edit-path (:path receipt)
+                 :fram-edit-base-version (:base-version receipt)
+                 :fram-edit-final-version (:version receipt)
+                 :fram-edit-ops (:ops receipt)
+                 :fram-edit-installed (:installed receipt)
+                 :fram-edit-ops-digest (:ops-digest receipt)
+                 :fram-edit-edn-digest (:edn-digest receipt)
+                 :fram-edit-line-count (count fact-lines)
+                 :fram-edit-batch-sha (sha256-hex (apply str fact-lines))}]
+    (assoc payload :fram-edit-seal-sha (fram.rt/edit-batch-envelope-seal payload))))
+
+(defn- edit-batch-envelope-line [flat receipt fact-lines]
+  (str (pr-str (edit-batch-envelope flat receipt fact-lines)) "\n"))
 
 (defn- request-matches-receipt? [req receipt]
   (and (= (:candidate req) (:candidate receipt))
@@ -2046,45 +2067,96 @@
        (= (:ops-digest req) (:ops-digest receipt))
        (= (:edn-digest req) (:edn-digest receipt))))
 
+(defn- complete-log-records [flat]
+  ;; Only newline-terminated records are eligible for a receipt.  A final
+  ;; EDN-readable-but-unterminated segment is still a torn tail and is omitted.
+  ;; Physical ordinals retain blank/corrupt/interleaved boundaries so they can
+  ;; never be skipped while proving envelope -> immediate batch contiguity.
+  (let [bs (java.nio.file.Files/readAllBytes (.toPath (java.io.File. ^String flat)))
+        text (String. ^bytes bs java.nio.charset.StandardCharsets/UTF_8)
+        terminated-segments (butlast (str/split text #"\n" -1))]
+    (mapv (fn [ordinal segment]
+            {:ordinal ordinal
+             :line (str segment "\n")
+             :record (when-not (str/blank? segment)
+                       (try (edn/read-string segment) (catch Throwable _ nil)))})
+          (range) terminated-segments)))
+
+(defn- valid-edit-batch-fact-row? [row id n index base]
+  (and (map? row)
+       (= edit-batch-fact-keys (set (keys row)))
+       (= id (:fram-edit-batch row))
+       (= index (:fram-edit-index row))
+       (= n (:fram-edit-count row))
+       (= (+ base index 1) (:tx row))
+       (contains? #{"assert" "retract"} (:op row))
+       (string? (:l row))
+       (string? (:p row))
+       (some? (:r row))
+       (string? (:ts row))
+       (= "coord" (:by row))))
+
 (defn- persisted-edit-outcome [flat req]
   (when (and flat (:candidate req) (.isFile (java.io.File. ^String flat)))
     (try
-      (with-open [rdr (clojure.java.io/reader flat)]
-        (let [id (:candidate req)
-              rows (->> (line-seq rdr)
-                        (keep (fn [line]
-                                (try
-                                  (let [m (edn/read-string line)]
-                                    (when (= id (:fram-edit-batch m)) m))
-                                  (catch Throwable _ nil))))
-                        vec)
-              first-row (first (sort-by :fram-edit-index rows))
-              n (:fram-edit-count first-row)
-              complete? (and (pos-int? n)
-                             (= n (count rows))
-                             (= (vec (range n))
-                                (mapv :fram-edit-index (sort-by :fram-edit-index rows))))
-              receipt (when complete?
-                        (assoc
-                         (base-committed-receipt
-                          {:id id
-                           :module (:fram-edit-module first-row)
-                           :path (:fram-edit-path first-row)
-                           :version (:fram-edit-base-version first-row)
-                           :ops (vec (repeat (:fram-edit-ops first-row) nil))
-                           :ops-digest (:fram-edit-ops-digest first-row)
-                           :edn-digest (:fram-edit-edn-digest first-row)}
-                          (:fram-edit-installed first-row)
-                          (:fram-edit-final-version first-row))
-                         :code :committed-recovered
-                         :recovered true
-                         :warnings [{:stage :restart-recovery
-                                     :code :committed-recovered
-                                     :message "durable batch receipt reconstructed from the canonical log"}]))]
-          (when (and receipt
-                     (= (:version receipt) (:tx (last (sort-by :fram-edit-index rows))))
-                     (request-matches-receipt? req receipt))
-            receipt)))
+      (let [id (:candidate req)
+            records (complete-log-records flat)
+            envelopes (->> records
+                           (filter (fn [{m :record}]
+                                     (and (fram.rt/edit-batch-envelope-marker? m)
+                                          (or (= id (:fram-edit-candidate m))
+                                              (= id (:fram-edit-batch m))))))
+                           vec)
+            envelope-record (when (= 1 (count envelopes)) (first envelopes))
+            envelope (:record envelope-record)
+            valid-envelope? (and envelope
+                                 (fram.rt/valid-edit-batch-envelope? envelope)
+                                 (= (canonical-path flat) (:fram-edit-log envelope)))
+            n (when valid-envelope? (:fram-edit-line-count envelope))
+            at (when envelope-record (:ordinal envelope-record))
+            end (when (and at n) (+ at 1 n))
+            contiguous (when (and end (<= end (count records)))
+                         (subvec records (inc at) end))
+            batch-records (->> records
+                               (filter (fn [{m :record}]
+                                         (and (not (fram.rt/edit-batch-envelope-marker? m))
+                                              (= id (:fram-edit-batch m)))))
+                               vec)
+            base (:fram-edit-base-version envelope)
+            rows (mapv :record contiguous)
+            rows-valid? (and valid-envelope?
+                             (= n (count contiguous))
+                             (= (mapv :ordinal contiguous)
+                                (mapv :ordinal batch-records))
+                             (every? true?
+                                     (map-indexed
+                                      (fn [index row]
+                                        (valid-edit-batch-fact-row? row id n index base))
+                                      rows)))
+            ops (when rows-valid? (mapv canonical-edit-op rows))
+            batch-bytes (when rows-valid? (apply str (map :line contiguous)))
+            receipt (when (and rows-valid?
+                               (= (:fram-edit-ops-digest envelope)
+                                  (edit-ops-digest ops))
+                               (= (:fram-edit-batch-sha envelope)
+                                  (sha256-hex batch-bytes)))
+                      (assoc
+                       (base-committed-receipt
+                        {:id id
+                         :module (:fram-edit-module envelope)
+                         :path (:fram-edit-path envelope)
+                         :version base
+                         :ops ops
+                         :ops-digest (:fram-edit-ops-digest envelope)
+                         :edn-digest (:fram-edit-edn-digest envelope)}
+                        n
+                        (:fram-edit-final-version envelope))
+                       :code :committed-recovered
+                       :recovered true
+                       :warnings [{:stage :restart-recovery
+                                   :code :committed-recovered
+                                   :message "durable batch receipt reconstructed from the canonical log envelope"}]))]
+        (when (and receipt (request-matches-receipt? req receipt)) receipt))
       (catch Throwable _ nil))))
 
 (defn- in-memory-committed-edit-outcome [req]
@@ -2260,15 +2332,20 @@
 ;; rehearsal and install run this one function over the SAME store value (the version
 ;; CAS guarantees it), rehearsal IS a dress rehearsal of the install. inject-at (the
 ;; env-gated test seam) forces a rejection at that operation boundary, 0..n inclusive.
-;; -> {:ok {:lines [..] :events [..]}} | {:reject r :at i [:op op] :code ..}
+;; -> {:ok {:lines [..] :events [..] :installed-ops [..]}}
+;;    | {:reject r :at i [:op op] :code ..}
+;; installed-ops is the canonical effective candidate: kernel-confirmed
+;; idempotent asserts produce no line/event and are omitted.  Prepare seals this
+;; exact vector, so cold recovery can recompute its digest from persisted fact
+;; rows without storing or guessing discarded no-ops.
 (defn- apply-candidate-ops! [co2 ops base inject-at]
   (let [n (count ops)]
-    (loop [i 0 lines [] events []]
+    (loop [i 0 lines [] events [] installed-ops []]
       (cond
         (and inject-at (= i inject-at))
         {:reject [(str "injected failure at operation boundary " i " of " n " (FRAM_EDIT_INJECT test seam)")]
          :at i :code :injected-failure}
-        (= i n) {:ok {:lines lines :events events}}
+        (= i n) {:ok {:lines lines :events events :installed-ops installed-ops}}
         :else
         (let [[verb te p r :as op] (nth ops i)]
           (if-not (and (#{:assert :retract} verb) (string? te) (string? p) (some? r)
@@ -2281,11 +2358,13 @@
               (cond
                 (:reject res) {:reject (:reject res) :at i :op op :code :op-rejected}
                 ;; multi-valued idempotent assert: no line, no event (do-assert parity).
-                (and (= verb :assert) (:idempotent res)) (recur (inc i) lines events)
+                (and (= verb :assert) (:idempotent res))
+                (recur (inc i) lines events installed-ops)
                 :else (recur (inc i)
                              (conj lines (flat-line (name verb) te p r (:ok res)))
                              (conj events {:event :commit :version (:ok res)
-                                           :op (name verb) :l te :p p :r r}))))))))))
+                                           :op (name verb) :l te :p p :r r})
+                             (conj installed-ops op))))))))))
 
 ;; project one module's resolved EDN off a store (read-only; refers_to must already
 ;; be current for that module on THIS store). Used by :edit-prepare to project the
@@ -2362,13 +2441,13 @@
           (let [{:keys [asserts retracts new-eids]} (edit-min-compute spec snap)
                 asserts (allocate-positions asserts)   ; seal PENDING ties NOW — the sealed ops are final
                 leaf? (fn [[_ p _]] (#{"kind" "v"} p))
-                ops (vec (concat
-                          (when (= "rename" (:op spec)) (candidate-bound-ops snap))
-                          (map (fn [[te p r]] [:retract te p r]) retracts)
-                          (map (fn [[te p r]] [:assert te p r])
-                               (concat (filter leaf? asserts) (remove leaf? asserts)))))
+                proposed-ops (vec (concat
+                                   (when (= "rename" (:op spec)) (candidate-bound-ops snap))
+                                   (map (fn [[te p r]] [:retract te p r]) retracts)
+                                   (map (fn [[te p r]] [:assert te p r])
+                                        (concat (filter leaf? asserts) (remove leaf? asserts)))))
                 co2 {:store (atom snap) :log nil :lock (Object.)}
-                ap (apply-candidate-ops! co2 ops v0 nil)
+                ap (apply-candidate-ops! co2 proposed-ops v0 nil)
                 ap (if (:reject ap) ap
                        (try (clone-refresh-refers! (:store co2) module)
                             (assoc ap :edn (project-module-edn (:store co2) module))
@@ -2383,6 +2462,7 @@
                :code :candidate-render-failed :version v0}
               :else
               (let [edn-str (:edn (:edn ap))
+                    ops (get-in ap [:ok :installed-ops])
                     id (str (java.util.UUID/randomUUID))
                     ops-digest (sha256-hex (pr-str ops))
                     edn-digest (sha256-hex edn-str)
@@ -2397,7 +2477,9 @@
                 {:ok true :protocol edit-protocol-name :candidate id :module module
                  :version v0 :path (:path tp) :edn edn-str
                  :ops-digest ops-digest :edn-digest edn-digest
-                 :ops (count ops) :asserts (count asserts) :retracts (count retracts)
+                 :ops (count ops)
+                 :asserts (count (filter #(= :assert (first %)) ops))
+                 :retracts (count (filter #(= :retract (first %)) ops))
                  :new-nodes (count new-eids)}))))))
     (catch Throwable t
       (let [d (ex-data t)
@@ -2456,14 +2538,16 @@
                   (do (swap! edit-candidates dissoc id)
                       (merge {:reject (:reject ap) :version (current-seq @co)}
                              (select-keys ap [:at :op :code])))
-                  (let [{raw-lines :lines events :events} (:ok ap)
+                  (let [{raw-lines :lines events :events installed-ops :installed-ops} (:ok ap)
+                        _ (when-not (= (:ops cand) installed-ops)
+                            (throw (ex-info "effective candidate operations changed between prepare and commit"
+                                            {:code :candidate-effective-ops-mismatch})))
                         flat (str @flat-log)
                         inject? (= "1" (System/getenv "FRAM_EDIT_INJECT"))
                         final-version (current-seq co3)
                         receipt (base-committed-receipt cand (count raw-lines) final-version)
-                        lines (if (seq raw-lines)
-                                (annotate-edit-batch-lines raw-lines receipt)
-                                raw-lines)
+                        fact-lines (annotate-edit-batch-lines raw-lines receipt)
+                        lines (into [(edit-batch-envelope-line flat receipt fact-lines)] fact-lines)
                         ;; DURABLE ATOMIC INSTALL. Order: (1) barrier — every previously
                         ;; enqueued append is on disk, so the intent's :pre-bytes/:pre-sha
                         ;; describe the exact pre-state; (2) durable RECOVERY INTENT
@@ -2483,9 +2567,7 @@
                         ;; recovery. Lock-free readers see the pre state until the single
                         ;; reset! — never a partial batch.
                         durable
-                        (if-not (seq lines)
-                          {:ok true}
-                          (let [cleanup-at (when inject? (:inject-cleanup-fail-at req))
+                        (let [cleanup-at (when inject? (:inject-cleanup-fail-at req))
                                 ;; Conservative source-order oracle for the outer
                                 ;; catch. Once publication starts, no unexpected
                                 ;; exception may be called a definitive failure
@@ -2610,7 +2692,7 @@
                                   ;; already proved it cannot replay after restart.
                                   (failed (str "pre-state/replay absence is proven after unexpected "
                                                (name @durability-stage) " failure: "
-                                               (.getMessage ^Throwable unexpected)))))))))]
+                                               (.getMessage ^Throwable unexpected))))))))]
                     (if-not (:ok durable)
                       (do (swap! edit-candidates dissoc id)
                           (merge {:version (current-seq @co)} durable))
@@ -4404,12 +4486,16 @@
                       (cond
                         parsed
                         (let [x  (:x parsed)
-                              tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
-                              past? (and tx (> tx (long from-tx)))
-                              m  (when (and past? (:l x) (:p x) (:r x)) x)]
-                          (recur next-i false
-                                 (if m (conj! acc m) acc)
-                                 (if (and past? (> tx mx)) tx mx)))
+                              envelope? (fram.rt/edit-batch-envelope-marker? x)]
+                          (if envelope?
+                            (do (fram.rt/validate-edit-batch-envelope! path abs x)
+                                (recur next-i false acc mx))
+                            (let [tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
+                                  past? (and tx (> tx (long from-tx)))
+                                  m  (when (and past? (:l x) (:p x) (:r x)) x)]
+                              (recur next-i false
+                                     (if m (conj! acc m) acc)
+                                     (if (and past? (> tx mx)) tx mx)))))
                         ;; unparseable torn tail (no terminating newline): recover + warn once.
                         (not terminated?)
                         (let [recovered (persistent! acc)]
