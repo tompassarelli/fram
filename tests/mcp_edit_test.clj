@@ -190,14 +190,17 @@
               after (slurp schema-src)
               log-txt (slurp code-log)]
           (chk "FLIP: set-body via FRAM_FLIP -> isError=false" (not (reply-iserr r)))
-          ;; the graph-sourced arm answers either "committed (FLIP, graph-sourced)"
-          ;; (cold flip) or "committed … (WARM :edit-min …)" (the warm socket path
-          ;; that superseded it); the text-legacy arm says neither. Accept both
-          ;; graph-sourced markers — asserting only "FLIP" was stale after the
-          ;; warm :edit-min reply text landed.
-          (chk "FLIP: reply reports the graph-sourced path (FLIP / WARM :edit-min)"
+          ;; the graph-sourced arm answers "committed (FLIP, graph-sourced)" (cold
+          ;; flip), "committed … (WARM :edit-min …)" (the warm socket path that
+          ;; superseded it), or "committed … (graph-edit-candidate-v1 …)" (the
+          ;; atomic candidate gate that superseded the commit-first warm flow);
+          ;; the text-legacy arm says none of these. Accept every graph-sourced
+          ;; marker — asserting only the older ones goes stale as the protocol
+          ;; hardens.
+          (chk "FLIP: reply reports the graph-sourced path (FLIP / WARM :edit-min / candidate-v1)"
                (let [t (or (reply-text r) "")]
-                 (or (str/includes? t "FLIP") (str/includes? t "WARM :edit-min"))))
+                 (or (str/includes? t "FLIP") (str/includes? t "WARM :edit-min")
+                     (str/includes? t "graph-edit-candidate-v1"))))
           (chk "FLIP: .bclj re-rendered (new body present -> render-from-log ran)"
                (and (not= before after) (str/includes? after "p (c/value-id ctx pname)")))
           (chk "FLIP: the AST delta is DURABLE in the code log (kind/v/fN lines appended)"

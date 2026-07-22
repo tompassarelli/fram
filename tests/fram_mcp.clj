@@ -260,88 +260,211 @@
     nil))
 
 ;; ============================================================================
-;; WARM edit path — socket :edit-min DIRECTLY to the live coordinator (the persistent
-;; MCP server -> persistent coordinator, one round-trip). The fold is amortized to the
-;; coordinator's BOOT; per-edit pays NO ~3.8s log re-fold (vs cold fram-edit-code which
-;; boots the store from the log EVERY call). This is THE confound-kill.
+;; WARM edit path — graph-edit-candidate-v1 against the live coordinator (the
+;; persistent MCP server -> persistent coordinator). The fold stays amortized to
+;; the coordinator's BOOT (no per-edit log re-fold); the edit itself is the
+;; ATOMIC CANDIDATE GATE: :edit-prepare (clone + seal, zero writes) -> render +
+;; Beagle parse/type check the candidate HERE -> :edit-commit (exact-version CAS,
+;; journaled whole-batch install, one root swap) -> write the checked bytes to
+;; the module's TRACKED path. Replaces the commit-first :edit-min warm flow.
 ;; ============================================================================
-;; build the warm :edit-min spec (inline datum, no temp file) from the {:edit} payload.
+;; build the warm edit spec (inline datum, no temp file) from the {:edit} payload.
+;; The body/form STRING is parsed to a DATUM here (clojure.edn/read-string) — exactly
+;; what the CLI (bin/fram-edit-code) and the legacy text path (resolve.clj slurp +
+;; read-string of the spec/body file) both do. The old warm path passed the RAW
+;; string through, so the verb minted a STRING-LITERAL body instead of the form —
+;; masked by String-returning test defns. An unreadable payload throws; route-edit
+;; maps that to a typed rejection BEFORE any coordinator contact.
 (defn- edit-min-spec [e]
-  (case (:op e)
-    "rename"      {:op "rename"      :module (:module e) :old (:name e) :new (:new-name e)}
-    "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (:body e)}
-    "upsert-form" {:op "upsert-form" :module (:module e) :datum (:form e)}
-    "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (:form e)}
-    ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
-    ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
-    ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
-    "replace-in-body" (cond-> {:op "replace-in-body" :module (:module e) :name (:name e)
-                               :old (clojure.edn/read-string (:old e)) :new (clojure.edn/read-string (:new e))}
-                        ;; optional :within scope-narrower (enclosing-form datum STRING) — the
-                        ;; disambiguation remedy; parse it here exactly like :old/:new.
-                        (:within e) (assoc :within (clojure.edn/read-string (:within e))))
-    nil))
+  (let [datum! (fn [s label]
+                 (try (clojure.edn/read-string s)
+                      (catch Exception ex
+                        (throw (ex-info (str label " is not readable EDN: " (.getMessage ex))
+                                        {:spec-error true})))))]
+    (case (:op e)
+      "rename"      {:op "rename"      :module (:module e) :old (:name e) :new (:new-name e)}
+      "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (datum! (:body e) "body")}
+      "upsert-form" {:op "upsert-form" :module (:module e) :datum (datum! (:form e) "form")}
+      "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (datum! (:form e) "form")}
+      ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
+      ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
+      ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
+      "replace-in-body" (cond-> {:op "replace-in-body" :module (:module e) :name (:name e)
+                                 :old (datum! (:old e) "old") :new (datum! (:new e) "new")}
+                          ;; optional :within scope-narrower (enclosing-form datum STRING) — the
+                          ;; disambiguation remedy; parse it here exactly like :old/:new.
+                          (:within e) (assoc :within (datum! (:within e) "within")))
+      nil)))
 
 ;; the corpus the verb operates over = every .bclj in the source tree (so cross-module
 ;; references resolve), with the per-file projected EDN written next to it in a temp dir.
 
 (declare route-edit-text)        ; the legacy text path, defined below (forward ref for bb/SCI)
 
+;; canonical-path helper: resolves ., .., and symlinks; defined for a
+;; not-yet-existing leaf (a render target may not exist yet).
+(defn- canon [p] (.getCanonicalPath (io/file p)))
+
+;; graph-edit-candidate-v1 — validate the module's TRACKED source path (the
+;; coordinator resolved it from the sealed graph file fact @<mod>#root `file`)
+;; against the canonical FRAM_SRC checkout root. Refuses non-absolute,
+;; non-canonical (traversal `..`/`.` segments OR any symlink component — the
+;; canonical form differs from the stored form in every such case), and
+;; outside-root paths. nil = confined; else {:err <why>}.
+(defn- validate-tracked-path [p]
+  (let [root (canon fram-src)]
+    (cond
+      (not (string? p))
+      {:err "coordinator returned no tracked source path for the module"}
+      (not (.isAbsolute (io/file p)))
+      {:err (str "tracked source path " (pr-str p) " is not ABSOLUTE — refused before mutation")}
+      (not= p (canon p))
+      {:err (str "tracked source path " (pr-str p) " is not CANONICAL (resolves to "
+                 (pr-str (canon p)) ") — traversal/symlink segments are refused before mutation")}
+      (not (str/starts-with? p (str root "/")))
+      {:err (str "tracked source path " p " lies outside the source root " root " — refused before mutation")}
+      :else nil)))
+
 (defn route-edit [e]
   (let [op (:op e) module (:module e)]
     (cond
-      ;; FLIP path (FRAM_FLIP=1 + a code coordinator): the LOG is canonical. The verb
-      ;; runs over the LOG-booted store, recompiles FROM the log, and the AST delta is
-      ;; committed THROUGH the coordinator. NO src/fram/*.bclj is read here — module
-      ;; enumeration, the corpus, the render, and the commit input all come from the log.
+      ;; FLIP path (FRAM_FLIP=1 + a code coordinator): the LOG is canonical, and the
+      ;; edit goes through the ATOMIC CANDIDATE GATE (graph-edit-candidate-v1):
+      ;;   1. :edit-prepare — the coordinator runs the verb over an exact-version
+      ;;      clone (ZERO canonical writes), seals the op set, resolves the module's
+      ;;      TRACKED path from the graph file fact, and returns the candidate EDN
+      ;;      + digests. (The legacy warm flow committed FIRST and checked after —
+      ;;      a failing check left broken canonical state — and rendered to
+      ;;      FRAM_SRC/<module>.bclj, minting root-level artifacts for nested
+      ;;      modules like src.fram.world.)
+      ;;   2. the tracked path is confined under the canonical FRAM_SRC root here.
+      ;;   3. the candidate text is rendered and Beagle PARSE + TYPE checked — all
+      ;;      BEFORE any commit; a failing candidate rejects with canonical log,
+      ;;      facts, version, and tracked projection untouched.
+      ;;   4. :edit-commit — the coordinator revalidates log/version/path/digests
+      ;;      (exact-version CAS) and installs the WHOLE sealed batch through one
+      ;;      crash/torn-tail-safe journaled append + a single root swap.
+      ;;   5. the CHECKED candidate bytes are written to the tracked path via
+      ;;      temp + atomic rename (checked-is-installed — no re-render race).
+      ;; NO fallback to the commit-first :edit-min flow: a coordinator that cannot
+      ;; prepare/commit candidates gets a typed refusal, never a degraded write.
       (and flip-on? flip-code-port)
-      ;; WARM path: socket :edit-min to the live coordinator (no per-edit log re-fold).
-      (let [spec (edit-min-spec e)]
-        (if (nil? spec)
+      (let [spec (try (edit-min-spec e)
+                      (catch clojure.lang.ExceptionInfo ex
+                        (if (:spec-error (ex-data ex)) {:spec-error (.getMessage ex)} (throw ex))))]
+        (cond
+          (nil? spec)
           {:isError true :text (str "unknown edit op: " op)}
-          (let [resp (try (fram.rt/coord-request-for-log
-                           (Integer/parseInt flip-code-port)
-                           (flip-log)
-                           {:op :edit-min :spec spec})
-                          (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
+          (:spec-error spec)
+          {:isError true
+           :text (str "REJECTED (nothing prepared, nothing committed): " (:spec-error spec)
+                      " — the edit payload must be a readable EDN form")}
+          :else
+          (let [port (Integer/parseInt flip-code-port)
+                prep (try (fram.rt/coord-request-for-log port (flip-log) {:op :edit-prepare :spec spec})
+                          (catch Throwable t {:reject [(str "edit-prepare socket: " (.getMessage t))]}))]
             (cond
-              (:reject resp)
-              {:isError true :text (str "REJECTED (warm :edit-min, nothing committed): "
-                                        (str/join "; " (map str (:reject resp)))
-                                        ;; surface the structured disambiguation remedy (replace-in-body
-                                        ;; candidates + copy-pastable :within forms) so the model gets HOW
-                                        ;; to disambiguate, not just that it was ambiguous.
-                                        (when-let [d (:disambiguation resp)] (str "\n" (:message d))))}
-              (:ok resp)
-              ;; render the .bclj view WARM (:render, no fold), then TYPE-CHECK the edited module +
-              ;; RETURN pointed Beagle errors so the agent can REPAIR (the beagle repair loop — without
-              ;; this the agent commits broken Beagle syntax + flies blind; WITH it, it fixes + lands green).
-              ;; No re-fold anywhere: render is warm off the coordinator; the check parses ONE module.
-              (let [target-bclj (str fram-src "/" module ".bclj")
-                    rr (apply sh {:out (io/file target-bclj) :err :string}
-                              "bb" "-cp" fram-out (str flip-bin-dir "/fram-render-code")
-                              module "--port" flip-code-port (flip-log-args))]
-                (if-not (zero? (:exit rr))
-                  {:text (str "committed (WARM :edit-min): " op " on " module " — " (:ops resp)
-                              " ops (WARNING: view render failed: " (str/trim (:err rr)) ")")}
-                  (let [ednf (str target-bclj ".chk.edn")
-                        ee (sh {:out (io/file ednf) :err :string} "racket" roundtrip-rkt "--emit-edn" target-bclj)]
-                    (if-not (zero? (:exit ee))
-                      {:isError true
-                       :text (str "Your edit COMMITTED but module `" module "` no longer PARSES — the module "
-                                  "is now broken. Correct it by re-editing the same def with valid Beagle "
-                                  "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n" (str/trim (:err ee)))}
-                      (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt ednf)]
-                        (try (io/delete-file (io/file ednf) true) (catch Throwable _ nil))
-                        (if (zero? (:exit bg))
-                          {:text (str "committed + TYPE-CHECKS CLEAN (WARM :edit-min, no re-fold): "
-                                      op " on " module " — " (:ops resp) " ops")}
-                          {:isError true
-                           :text (str "Your edit COMMITTED but module `" module "` does NOT TYPE-CHECK — "
-                                      "the module is now broken. Correct it by re-editing the same def. "
-                                      "Beagle type error:\n" (str/trim (str (:out bg) (:err bg))))}))))))
+              (= "unknown op" (:error prep))
+              {:isError true
+               :text (str "REJECTED (nothing committed): the coordinator does not speak "
+                          "graph-edit-candidate-v1 (legacy :edit-min-only daemon) — restart it "
+                          "with current Fram (bin/fram-code-on)")}
+              (:reject prep)
+              {:isError true
+               :text (str "REJECTED (graph-edit-candidate-v1 prepare — nothing committed"
+                          (when-let [c (:code prep)] (str ", " (name c))) "): "
+                          (str/join "; " (map str (:reject prep)))
+                          ;; surface the structured disambiguation remedy (replace-in-body
+                          ;; candidates + copy-pastable :within forms) so the model gets HOW
+                          ;; to disambiguate, not just that it was ambiguous.
+                          (when-let [d (:disambiguation prep)] (str "\n" (:message d))))}
+              (not (:ok prep))
+              {:isError true :text (str "edit-prepare unexpected response: " (pr-str prep))}
               :else
-              {:isError true :text (str "warm :edit-min unexpected response: " (pr-str resp))}))))
+              (let [target (:path prep)]
+                (if-let [pe (validate-tracked-path target)]
+                  {:isError true :text (str "REJECTED (nothing committed): " (:err pe))}
+                  (let [work (str (System/getProperty "java.io.tmpdir") "/fram-cand-" (System/nanoTime))
+                        _ (.mkdirs (io/file work))
+                        ext (let [n (.getName (io/file target)) i (.lastIndexOf n ".")]
+                              (if (pos? i) (subs n i) ".bclj"))
+                        ednf  (str work "/candidate" ext ".edn")
+                        candf (str work "/candidate" ext)
+                        _ (spit ednf (:edn prep))
+                        rr (sh {:out (io/file candf) :err :string} "racket" roundtrip-rkt "--render" ednf)]
+                    (if-not (zero? (:exit rr))
+                      (do (sh {} "rm" "-rf" work)
+                          {:isError true
+                           :text (str "REJECTED — candidate render failed (nothing committed):\n"
+                                      (str/trim (:err rr)))})
+                      ;; sealed Beagle checks — parse, then type — on the candidate, BEFORE commit.
+                      (let [chk-edn (str candf ".chk.edn")
+                            pe2 (sh {:out (io/file chk-edn) :err :string} "racket" roundtrip-rkt "--emit-edn" candf)]
+                        (if-not (zero? (:exit pe2))
+                          (do (sh {} "rm" "-rf" work)
+                              {:isError true
+                               :text (str "REJECTED — candidate module `" module "` does not PARSE "
+                                          "(nothing committed). Re-issue the edit with valid Beagle "
+                                          "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n"
+                                          (str/trim (:err pe2)))})
+                          (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt chk-edn)]
+                            (if-not (zero? (:exit bg))
+                              (do (sh {} "rm" "-rf" work)
+                                  {:isError true
+                                   :text (str "REJECTED — candidate module `" module "` fails the sealed Beagle "
+                                              "parse/type check (nothing committed). Re-issue the edit. Beagle error:\n"
+                                              (str/trim (str (:out bg) (:err bg))))})
+                              ;; checks green — commit the sealed candidate at its exact version.
+                              (let [commit (try (fram.rt/coord-request-for-log port (flip-log)
+                                                 {:op :edit-commit
+                                                  :candidate (:candidate prep)
+                                                  :version (:version prep)
+                                                  :module module
+                                                  :path target
+                                                  :ops-digest (:ops-digest prep)
+                                                  :edn-digest (:edn-digest prep)
+                                                  :src-root (canon fram-src)})
+                                                (catch Throwable t {:reject [(str "edit-commit socket: " (.getMessage t))]}))]
+                                (cond
+                                  (:reject commit)
+                                  (do (sh {} "rm" "-rf" work)
+                                      {:isError true
+                                       :text (str "REJECTED (graph-edit-candidate-v1 commit — nothing committed"
+                                                  (when-let [c (:code commit)] (str ", " (name c))) "): "
+                                                  (str/join "; " (map str (:reject commit)))
+                                                  (when (= "stale-version" (some-> (:code commit) name))
+                                                    " — a concurrent edit landed first; re-issue this edit"))})
+                                  (:ok commit)
+                                  ;; the tracked projection: write the CHECKED candidate bytes via
+                                  ;; temp + atomic rename. A failure here leaves the LOG canonical and
+                                  ;; the projection STALE — report it loudly with the repair command.
+                                  (let [proj-err
+                                        (try
+                                          (let [dir (.getParentFile (io/file target))
+                                                tmpf (java.io.File/createTempFile ".fram-proj-" ext dir)]
+                                            (io/copy (io/file candf) tmpf)
+                                            (java.nio.file.Files/move
+                                             (.toPath tmpf) (.toPath (io/file target))
+                                             (into-array java.nio.file.CopyOption
+                                                         [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                                                          java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+                                            nil)
+                                          (catch Throwable t (str (.getMessage t))))]
+                                    (sh {} "rm" "-rf" work)
+                                    (if proj-err
+                                      {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
+                                                  " — " (:installed commit) " ops at version " (:version commit)
+                                                  " (WARNING: tracked projection is STALE — writing " target
+                                                  " failed: " proj-err "; repair with: bin/fram-render-code "
+                                                  module " --port " flip-code-port " "
+                                                  (str/join " " (flip-log-args)) " --out " target ")")}
+                                      {:text (str "committed + TYPE-CHECKS CLEAN (graph-edit-candidate-v1, atomic batch): "
+                                                  op " on " module " — " (:installed commit) " ops at version "
+                                                  (:version commit) "; tracked view " target " updated")}))
+                                  :else
+                                  (do (sh {} "rm" "-rf" work)
+                                      {:isError true
+                                       :text (str "edit-commit unexpected response: " (pr-str commit))})))))))))))))))
 
       ;; FRAM_FLIP=1 but no code coordinator: fail loud (don't silently text-fallback).
       flip-on?
@@ -459,9 +582,7 @@
 (def ^:private profile (or (System/getenv "FRAM_MCP_PROFILE") "full"))
 (def ^:private restricted? (= profile "graph-edit-v1"))
 
-;; canonical-path helper: resolves ., .., and symlinks; defined for a
-;; not-yet-existing leaf (a render target may not exist yet).
-(defn- canon [p] (.getCanonicalPath (io/file p)))
+;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
 
 ;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
 ;;   (1) the name must be one of the five edit verbs — everything else
@@ -696,8 +817,21 @@
                   -2 (str "coordinator on 127.0.0.1:" port " serves a DIFFERENT log than " log)
                   -3 (str "coordinator on 127.0.0.1:" port " lacks the log-fence protocol")
                   (str "coordinator on 127.0.0.1:" port " is unusable")))))
+      ;; PROTOCOL HANDSHAKE — the restricted profile edits ONLY through the atomic
+      ;; candidate gate (:edit-prepare/:edit-commit). A coordinator that cannot
+      ;; answer the capability op is a legacy commit-first daemon (or a future
+      ;; incompatible protocol) — refuse to serve rather than degrade to unsafe
+      ;; commit-before-check editing.
+      (let [pr (try (fram.rt/coord-request-for-log port log {:op :edit-protocol})
+                    (catch Throwable _ nil))]
+        (when-not (= "graph-edit-candidate-v1" (:protocol pr))
+          (die! (str "coordinator on 127.0.0.1:" port " does not speak graph-edit-candidate-v1"
+                     " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
+                     ") — legacy or wrong-protocol coordinator; restart it with current Fram"
+                     " (rerun bin/fram-code-on)"))))
       (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
-                 ", strict-fenced coordinator 127.0.0.1:" port)))))
+                 ", strict-fenced coordinator 127.0.0.1:" port
+                 " [graph-edit-candidate-v1]")))))
 
 ;; fail-closed profile admission: full = the exact legacy surface (no new
 ;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.
