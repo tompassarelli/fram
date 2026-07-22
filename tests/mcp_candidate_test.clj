@@ -15,11 +15,32 @@
 ;;   C. STALE CAS — a candidate prepared at version V rejects (:stale-version)
 ;;      after a concurrent edit lands, with zero canonical operations.
 ;;   D. INJECTED MID-BATCH FAILURE — with the FRAM_EDIT_INJECT seam, a failure
-;;      at EVERY operation boundary (0, 1, mid, n-1, n) yields a typed rejection
-;;      and zero canonical operations; a clean batch then commits COMPLETELY.
-;;   E. TORN-TAIL REPLAY — a sealed batch journal redoes the WHOLE batch over a
-;;      torn mid-batch log (byte-exact); a torn journal is discarded and the log
-;;      is untouched; a real daemon boots the recovered log and serves the batch.
+;;      at EVERY operation boundary (0 through n, inclusive) yields a typed
+;;      rejection and zero canonical operations; a clean batch then commits
+;;      COMPLETELY.
+;;   E. RECOVERY-INTENT REPLAY — the journal is recovery INTENT bound to the
+;;      canonical log identity + exact pre-state digest, not a commit by
+;;      itself. A sealed intent redoes the WHOLE batch over a torn mid-batch
+;;      log (byte-exact); a torn journal is discarded with the log untouched;
+;;      a sidecar COPIED beside another log is rejected with that log
+;;      byte-identical; a REWRITTEN PREFIX (same length) is rejected with the
+;;      log byte-identical; a real daemon boots the crash state and serves the
+;;      redone batch.
+;;   I. DURABLE-APPEND FAILURE BEFORE ROOT SWAP — an injected append/fsync
+;;      failure (partial write) and an injected directory-fsync failure each
+;;      return a typed :durability-failure with the exact pre-state restored
+;;      (log/version/projection unchanged, no journal residue), and boot
+;;      recovery over the post-failure state is a NO-OP: a reported failure is
+;;      never scheduled to appear after restart. A clean commit then lands.
+;;   J. DIRECTORY-DURABILITY SEAMS (direct) — journal publication uses
+;;      same-directory temp + atomic rename + parent fsync and binds the v2
+;;      identity fields; removal durably retires the intent; a forced
+;;      directory-fsync failure propagates TYPED from both (fail closed).
+;;   K. PARENT-IDENTITY PINNING (direct, deterministic) — the projection
+;;      publishes only through the pinned validated parent-directory identity:
+;;      replacing the parent entry (symlink to an outside tree, or an impostor
+;;      directory) between pin and publish writes NOTHING outside the checkout
+;;      (bytes land in the pinned inode) and reports projection-stale.
 ;;   F. PROJECTION-STALE — a commit whose tracked-view write fails reports the
 ;;      stale projection loudly (log canonical, repair command included), and
 ;;      warm render-from-log repairs the file.
@@ -312,7 +333,9 @@
       n (:ops (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                :name "double-it" :datum '(* 41 x)}}))
       _ (chk "D: probe candidate seals a multi-op batch (n >= 4)" (and (integer? n) (>= n 4)))
-      boundaries (distinct [0 1 (quot n 2) (dec n) n])]
+      ;; EVERY operation boundary, 0 through n inclusive — before the first op,
+      ;; between every adjacent pair, and after the last op pre-install.
+      boundaries (range 0 (inc n))]
   (doseq [b boundaries]
     (let [prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                 :name "double-it" :datum '(* 41 x)}})
@@ -349,8 +372,20 @@
          (> (count (read-bytes code-log)) (count bytes0)))))
 
 ;; ============================================================================
-;; E. TORN-TAIL REPLAY — the sealed journal is the commit point.
+;; E. RECOVERY-INTENT REPLAY — the journal is recovery INTENT bound to the
+;;    canonical log identity + exact pre-state digest; the commit point is the
+;;    awaited batch append/fsync. Boot recovery redoes ONLY a proven-bound
+;;    sealed intent; foreign/rewritten/torn journals leave the log untouched.
 ;; ============================================================================
+(defn sha256-hex-bytes [^bytes bs]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") bs)]
+    (apply str (map #(format "%02x" %) d))))
+;; boot-recovery probe, exactly what serve-flat-daemon runs before its fold
+;; (used by E's replay cases and I's restart-equivalence check).
+(defn recover! [log-path]
+  (p/shell {:continue true :out :string :err :string :env scrub-env :dir root}
+           "bb" "-cp" "out" "-e"
+           (str "(load-file \"coord_daemon.clj\") (recover-edit-journal! " (pr-str log-path) ")")))
 (let [pre-bytes (read-bytes code-log)
       pre-len (count pre-bytes)
       prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
@@ -359,18 +394,22 @@
                  :module "src.fram.wkfix" :path (:path prep)
                  :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)})
       _ (chk "E: reference batch committed live" (true? (:ok cm)))
+      _ (chk "E: no recovery intent survives an ACKED commit (journal durably removed)"
+             (not (.exists (io/file (str code-log ".edit-batch")))))
       v-after (cur-version)
       post-bytes (read-bytes code-log)
       batch (String. ^bytes (java.util.Arrays/copyOfRange ^bytes post-bytes pre-len (count post-bytes)) "UTF-8")
       batch-lines (mapv #(str % "\n") (str/split-lines batch))
       _ (chk "E: captured batch region is line-shaped (>= 4 lines)" (>= (count batch-lines) 4))
+      pre-region (java.util.Arrays/copyOfRange ^bytes pre-bytes 0 pre-len)
+      ;; v2 recovery intent: bound to the CANONICAL LOG PATH and the EXACT
+      ;; pre-state digest over the first :pre-bytes bytes.
       journal-of (fn [log-path]
-                   (pr-str {:fram-edit-batch 1 :log log-path :pre-bytes pre-len
+                   (pr-str {:fram-edit-batch 2
+                            :log (.getCanonicalPath (io/file log-path))
+                            :pre-bytes pre-len
+                            :pre-sha (sha256-hex-bytes pre-region)
                             :lines batch-lines :sha (sha256-hex (apply str batch-lines))}))
-      recover! (fn [log-path]
-                 (p/shell {:continue true :out :string :err :string :env scrub-env}
-                          "bb" "-cp" "out" "-e"
-                          (str "(load-file \"coord_daemon.clj\") (recover-edit-journal! " (pr-str log-path) ")")))
       ;; (1) SEALED journal + torn MID-BATCH main log -> redo the WHOLE batch byte-exactly.
       elog (str tmp "/replay-torn.log")
       torn (byte-array (+ pre-len (count (.getBytes ^String (first batch-lines) "UTF-8")) 7))]
@@ -409,7 +448,217 @@
         (chk "E: journal consumed by the boot recovery" (not (.exists (io/file (str elog3 ".edit-batch")))))
         (chk "E: recovered log byte-identical to the live post-commit log"
              (= (vec post-bytes) (vec (read-bytes elog3))))
-        (finally (p/destroy-tree d))))))
+        (finally (p/destroy-tree d)))))
+  ;; (4) COPIED SIDECAR — a VALID sealed intent for one log, copied beside a
+  ;;     DIFFERENT log, must be rejected by the canonical-log-identity binding
+  ;;     and leave the victim log byte-identical (never redo onto a foreign log).
+  (let [elog4 (str tmp "/replay-owner.log")
+        elog5 (str tmp "/replay-victim.log")]
+    (write-bytes elog4 torn)
+    (write-bytes elog5 pre-region)                      ; victim: same pre-state content, different identity
+    (spit (str elog5 ".edit-batch") (journal-of elog4)) ; sidecar bound to elog4, copied beside elog5
+    (let [r (recover! elog5)]
+      (chk "E: sidecar copied beside another log -> REJECTED by canonical-log-identity binding"
+           (str/includes? (str (:err r) (:out r)) "DIFFERENT canonical log"))
+      (chk "E: victim log BYTE-IDENTICAL after the sidecar rejection"
+           (= (vec pre-region) (vec (read-bytes elog5))))
+      (chk "E: rejected sidecar discarded (not left to re-fire)"
+           (not (.exists (io/file (str elog5 ".edit-batch")))))))
+  ;; (5) REWRITTEN PREFIX — the SAME log, same length, one byte changed BEFORE
+  ;;     the recorded boundary, journal untouched: the exact pre-state digest
+  ;;     must reject the redo and leave the (rewritten) log byte-identical.
+  (let [elog6 (str tmp "/replay-rewritten.log")
+        doctored (java.util.Arrays/copyOf ^bytes pre-region (int pre-len))]
+    (aset-byte doctored 5 (byte (bit-xor (aget ^bytes doctored 5) 1)))
+    (write-bytes elog6 doctored)
+    (spit (str elog6 ".edit-batch") (journal-of elog6))  ; identity matches; PREFIX does not
+    (let [r (recover! elog6)]
+      (chk "E: rewritten prefix under an unchanged journal -> REJECTED by the exact pre-state digest"
+           (str/includes? (str (:err r) (:out r)) "pre-state digest mismatch"))
+      (chk "E: rewritten log BYTE-IDENTICAL after the rejection (recovery never touched it)"
+           (= (vec doctored) (vec (read-bytes elog6))))
+      (chk "E: rejected journal discarded (not left to re-fire)"
+           (not (.exists (io/file (str elog6 ".edit-batch"))))))))
+
+;; ============================================================================
+;; I. DURABLE-APPEND FAILURE BEFORE ROOT SWAP — the live root never advances on
+;;    an unproven append: injected append/fsync failure (with a real PARTIAL
+;;    write on disk) and injected directory-fsync failure each return a typed
+;;    :durability-failure, restore the exact pre-state, leave no recovery
+;;    intent, and are NOT scheduled to appear after restart.
+;; ============================================================================
+(let [bytes0 (vec (read-bytes code-log))
+      v0 (cur-version)
+      file0 (slurp wkfix-file)
+      commit! (fn [prep extra]
+                (coord (merge {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+                               :module "src.fram.wkfix" :path (:path prep)
+                               :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)}
+                              extra)))
+      prep1 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+                                             :name "double-it" :datum '(* 81 x)}})
+      r1 (commit! prep1 {:inject-durable-fail true})]
+  (chk "I: injected append/fsync failure (partial write) -> typed :durability-failure"
+       (= :durability-failure (:code r1)))
+  (chk "I: the rejection names the injected durable-append failure + pre-state restore"
+       (let [m (str (first (:reject r1)))]
+         (and (str/includes? m "injected durable-append failure")
+              (str/includes? m "restored"))))
+  (chk "I: exact pre-state restored — log BYTE-IDENTICAL (partial write erased)"
+       (= bytes0 (vec (read-bytes code-log))))
+  (chk "I: canonical version UNCHANGED (root never advanced)" (= v0 (cur-version)))
+  (chk "I: tracked projection UNCHANGED" (= file0 (slurp wkfix-file)))
+  (chk "I: no recovery intent left behind (journal durably removed)"
+       (not (.exists (io/file (str code-log ".edit-batch")))))
+  ;; restart-equivalence: boot recovery over a COPY of the exact post-failure
+  ;; disk state (log + absent journal) is a NO-OP — the reported-failed batch
+  ;; is not scheduled to appear after restart.
+  (let [cp (str tmp "/post-durable-fail.log")]
+    (write-bytes cp (read-bytes code-log))
+    (let [rr (recover! cp)]
+      (chk "I: boot recovery over the post-failure state is a NO-OP (nothing scheduled to appear after restart)"
+           (and (zero? (:exit rr))
+                (not (str/includes? (str (:out rr) (:err rr)) "redoing"))
+                (= bytes0 (vec (read-bytes cp)))))))
+  ;; directory-fsync failure at intent PUBLICATION: fail-closed typed rejection,
+  ;; zero canonical mutation, no journal residue (nothing of the batch touched the log).
+  (let [prep2 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+                                               :name "double-it" :datum '(* 81 x)}})
+        r2 (commit! prep2 {:inject-dirsync-fail true})]
+    (chk "I: injected directory-fsync failure -> typed :durability-failure (fail closed, nothing committed)"
+         (and (= :durability-failure (:code r2))
+              (str/includes? (str (first (:reject r2))) "injected directory-fsync failure")))
+    (chk "I: log BYTE-IDENTICAL + version UNCHANGED across the dirsync failure"
+         (and (= bytes0 (vec (read-bytes code-log))) (= v0 (cur-version))))
+    (chk "I: no journal residue after the dirsync failure"
+         (not (.exists (io/file (str code-log ".edit-batch"))))))
+  ;; the daemon is CONSISTENT after the restores: a clean commit still lands whole.
+  (let [prep3 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+                                               :name "double-it" :datum '(* 82 x)}})
+        r3 (commit! prep3 {})]
+    (chk "I: clean commit after the restores lands completely (daemon consistent)"
+         (and (true? (:ok r3)) (= (:ops r3) (:installed r3))
+              (= (cur-version) (+ v0 (:installed r3)))))))
+
+;; ============================================================================
+;; J. DIRECTORY-DURABILITY SEAMS (direct) — publication/removal call the parent
+;;    directory fsync; forced failure propagates TYPED from both (fail closed);
+;;    publication is same-directory temp + atomic rename with v2 identity binding.
+;; ============================================================================
+(let [probe-file (str tmp "/j_probe.clj")
+      _ (spit probe-file (str
+        "(load-file \"coord_daemon.clj\")\n"
+        "(let [dir \"" tmp "/jdir\"\n"
+        "      _ (.mkdirs (java.io.File. ^String dir))\n"
+        "      log (str dir \"/j.log\")\n"
+        "      jf  (str log \".edit-batch\")\n"
+        "      calls (atom [])\n"
+        "      orig fsync-dir!]\n"
+        "  (spit log \"pre-1\\npre-2\\n\")\n"
+        "  (with-redefs [fsync-dir! (fn [d] (swap! calls conj (str d)) (orig d))]\n"
+        "    (publish-edit-journal! log [\"x1\\n\" \"x2\\n\"] (.length (java.io.File. ^String log)))\n"
+        "    (let [pub-calls (count @calls)\n"
+        "          j (clojure.edn/read-string (slurp jf))\n"
+        "          tmp-gone (not (.exists (java.io.File. ^String (str jf \".tmp\"))))]\n"
+        "      (remove-edit-journal! log)\n"
+        "      (println (pr-str {:pub-dir-fsyncs pub-calls\n"
+        "                        :rm-dir-fsyncs (- (count @calls) pub-calls)\n"
+        "                        :dirs-forced (vec (distinct @calls))\n"
+        "                        :v2 (= 2 (:fram-edit-batch j))\n"
+        "                        :bound-log (= (:log j) (.getCanonicalPath (java.io.File. ^String log)))\n"
+        "                        :pre-sha? (string? (:pre-sha j))\n"
+        "                        :tmp-gone tmp-gone\n"
+        "                        :removed (not (.exists (java.io.File. ^String jf)))}))))\n"
+        "  (let [fail (fn [_] (throw (ex-info \"forced dir-fsync failure\" {:code :forced-dirsync})))\n"
+        "        pub-err (try (with-redefs [fsync-dir! fail]\n"
+        "                       (publish-edit-journal! log [\"y\\n\"] (.length (java.io.File. ^String log)))) nil\n"
+        "                     (catch Throwable t (:code (ex-data t))))\n"
+        "        _ (try (remove-edit-journal! log) (catch Throwable _ nil))   ; real fsync: clear residue\n"
+        "        _ (publish-edit-journal! log [\"z\\n\"] (.length (java.io.File. ^String log)))\n"
+        "        rm-err (try (with-redefs [fsync-dir! fail] (remove-edit-journal! log)) nil\n"
+        "                    (catch Throwable t (:code (ex-data t))))]\n"
+        "    (println (pr-str {:pub-fail pub-err :rm-fail rm-err}))))\n"))
+      r (p/shell {:continue true :out :string :err :string :env scrub-env :dir root}
+                 "bb" "-cp" "out" probe-file)
+      lines (->> (str/split-lines (or (:out r) "")) (remove str/blank?) vec)
+      m1 (try (edn/read-string (nth lines 0)) (catch Throwable _ nil))
+      m2 (try (edn/read-string (nth lines 1 nil)) (catch Throwable _ nil))]
+  (chk "J: direct probe ran (exit 0, two result maps)" (and (zero? (:exit r)) (map? m1) (map? m2)))
+  (chk "J: journal PUBLICATION fsyncs the containing directory (>= 1 call, correct dir)"
+       (and m1 (pos? (:pub-dir-fsyncs m1)) (some #(str/includes? % "/jdir") (:dirs-forced m1))))
+  (chk "J: journal REMOVAL fsyncs the containing directory (>= 1 call)"
+       (and m1 (pos? (:rm-dir-fsyncs m1))))
+  (chk "J: published journal is v2 — bound to the canonical log + pre-state digest; temp gone; removal removes"
+       (and m1 (:v2 m1) (:bound-log m1) (:pre-sha? m1) (:tmp-gone m1) (:removed m1)))
+  (chk "J: forced directory-fsync failure propagates TYPED from publication (fail closed)"
+       (and m2 (= :forced-dirsync (:pub-fail m2))))
+  (chk "J: forced directory-fsync failure propagates TYPED from removal (fail closed)"
+       (and m2 (= :forced-dirsync (:rm-fail m2)))))
+
+;; ============================================================================
+;; K. PARENT-IDENTITY PINNING (direct, deterministic) — replace the tracked
+;;    parent entry between pin and publication: NOTHING is written outside the
+;;    checkout (bytes land in the PINNED inode) and the publish reports stale.
+;; ============================================================================
+(let [probe-file (str tmp "/k_probe.clj")
+      kdir (str tmp "/kfix")
+      _ (spit probe-file (str
+        "(load-file \"tests/fram_mcp.clj\")\n"
+        "(let [base \"" kdir "\"\n"
+        "      parent (str base \"/checkout/src/fram\")\n"
+        "      outside (str base \"/outside\")\n"
+        "      impostor (str base \"/impostor\")\n"
+        "      _ (.mkdirs (java.io.File. ^String parent))\n"
+        "      _ (.mkdirs (java.io.File. ^String outside))\n"
+        "      _ (.mkdirs (java.io.File. ^String impostor))\n"
+        "      src (str base \"/cand.bclj\")\n"
+        "      mv (fn [a b] (java.nio.file.Files/move (.toPath (java.io.File. ^String a)) (.toPath (java.io.File. ^String b)) (into-array java.nio.file.CopyOption [])))\n"
+        "      lnk (fn [a b] (java.nio.file.Files/createSymbolicLink (.toPath (java.io.File. ^String a)) (.toPath (java.io.File. ^String b)) (into-array java.nio.file.attribute.FileAttribute [])))]\n"
+        "  (spit (str parent \"/leaf.bclj\") \"OLD\")\n"
+        "  (spit src \"FIRST\")\n"
+        "  (let [pin (pin-parent-dir! parent)\n"
+        "        clean (publish-projection-pinned! pin (clojure.java.io/file src) \"leaf.bclj\")\n"
+        "        clean-leaf (slurp (str parent \"/leaf.bclj\"))\n"
+        "        ;; replacement 1: parent entry -> SYMLINK to an outside tree\n"
+        "        _ (mv parent (str base \"/aside\"))\n"
+        "        _ (lnk parent outside)\n"
+        "        _ (spit src \"SECOND\")\n"
+        "        r1 (publish-projection-pinned! pin (clojure.java.io/file src) \"leaf.bclj\")\n"
+        "        aside-leaf (slurp (str base \"/aside/leaf.bclj\"))\n"
+        "        outside-files (vec (.list (java.io.File. ^String outside)))\n"
+        "        ;; replacement 2: parent entry -> a plain IMPOSTOR directory\n"
+        "        _ (java.nio.file.Files/delete (.toPath (java.io.File. ^String parent)))\n"
+        "        _ (mv impostor parent)\n"
+        "        _ (spit src \"THIRD\")\n"
+        "        r2 (publish-projection-pinned! pin (clojure.java.io/file src) \"leaf.bclj\")\n"
+        "        impostor-files (vec (.list (java.io.File. ^String parent)))\n"
+        "        aside-leaf2 (slurp (str base \"/aside/leaf.bclj\"))\n"
+        "        residue (vec (filter #(clojure.string/starts-with? % \".fram-proj-\") (.list (java.io.File. ^String (str base \"/aside\")))))]\n"
+        "    (release-pin! pin)\n"
+        "    (println (pr-str {:pin-ok (not (:err pin))\n"
+        "                      :clean-stale (boolean (:stale clean))\n"
+        "                      :clean-leaf clean-leaf\n"
+        "                      :symlink-stale (boolean (:stale r1))\n"
+        "                      :outside-files outside-files\n"
+        "                      :aside-leaf aside-leaf\n"
+        "                      :impostor-stale (boolean (:stale r2))\n"
+        "                      :impostor-files impostor-files\n"
+        "                      :aside-leaf2 aside-leaf2\n"
+        "                      :residue residue}))))\n"))
+      r (p/shell {:continue true :out :string :err :string
+                  :env (assoc scrub-env "FRAM_MCP_LIBRARY" "1") :dir root}
+                 "bb" "-cp" "out" probe-file)
+      m (try (edn/read-string (last (remove str/blank? (str/split-lines (or (:out r) ""))))) (catch Throwable _ nil))]
+  (chk "K: direct pin probe ran (exit 0, result map)" (and (zero? (:exit r)) (map? m)))
+  (chk "K: parent pinned after canonical validation; clean publish lands through the pin (not stale)"
+       (and m (:pin-ok m) (not (:clean-stale m)) (= "FIRST" (:clean-leaf m))))
+  (chk "K: SYMLINK-replaced parent entry -> publish reports projection-stale"
+       (and m (:symlink-stale m)))
+  (chk "K: NO file written outside the checkout (outside tree EMPTY; bytes landed in the pinned inode)"
+       (and m (empty? (:outside-files m)) (= "SECOND" (:aside-leaf m))))
+  (chk "K: IMPOSTOR-directory parent entry -> publish reports projection-stale, impostor EMPTY"
+       (and m (:impostor-stale m) (empty? (:impostor-files m)) (= "THIRD" (:aside-leaf2 m))))
+  (chk "K: no temp residue in the pinned directory" (and m (empty? (:residue m)))))
 
 ;; ============================================================================
 ;; F. PROJECTION-STALE — commit lands, tracked-view write fails: loud warning +
