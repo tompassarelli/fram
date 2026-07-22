@@ -984,6 +984,197 @@
       (finally (stop-daemon! restarted)))))
 
 ;; ============================================================================
+;; M. COLD RECEIPT ENVELOPE — a recovered receipt requires one exact closed v1
+;;    envelope immediately followed by the complete indexed operation batch.
+;;    Fact metadata alone, malformed/incomplete groups, wrong recomputed content,
+;;    and every truncated prefix remain ordinary/incomplete log data and cannot
+;;    produce a committed receipt. Legacy facts still fold unchanged.
+;; ============================================================================
+(let [seal-log (str tmp "/receipt-envelope-reference.log")
+      _ (write-bytes seal-log (read-bytes code-log))
+      before (read-bytes seal-log)
+      pre-len (count before)
+      daemon (boot-daemon! post-port seal-log)]
+  (try
+    (let [prep (coord post-port seal-log
+                      {:op :edit-prepare
+                       :spec {:op "set-body" :module "src.fram.schema"
+                              :name "cardinality" :datum 'pname}})
+          req (candidate-commit-req prep {})
+          committed (coord post-port seal-log req)
+          committed-bytes (vec (read-bytes seal-log))
+          retry (coord post-port seal-log req)
+          after (read-bytes seal-log)
+          region (String. ^bytes
+                          (java.util.Arrays/copyOfRange ^bytes after pre-len (count after))
+                          "UTF-8")
+          region-lines (mapv #(str % "\n") (str/split-lines region))
+          envelope0 (edn/read-string (first region-lines))
+          fact-lines (subvec region-lines 1)
+          rebind-envelope
+          (fn [path overrides]
+            (let [e (-> envelope0
+                        (merge overrides)
+                        (assoc :fram-edit-log (.getCanonicalPath (io/file path)))
+                        (dissoc :fram-edit-seal-sha))]
+              (assoc e :fram-edit-seal-sha (rt/edit-batch-envelope-seal e))))
+          write-case!
+          (fn [label lines case-req]
+            (let [path (str tmp "/receipt-" label ".log")]
+              (spit path (str (String. ^bytes before "UTF-8") (apply str lines)))
+              [(keyword label) {:path (.getCanonicalPath (io/file path)) :req case-req}]))
+          group-lines (fn [path overrides]
+                        (let [e (rebind-envelope path overrides)]
+                          (into [(str (pr-str e) "\n")] fact-lines)))
+          valid-path (str tmp "/receipt-valid.log")
+          valid-case (write-case! "valid" (group-lines valid-path {}) req)
+          standalone-row (-> (edn/read-string (first fact-lines))
+                             (assoc :fram-edit-module (:module prep)
+                                    :fram-edit-path (:path prep)
+                                    :fram-edit-base-version (:version prep)
+                                    :fram-edit-final-version (:version committed)
+                                    :fram-edit-ops (:ops committed)
+                                    :fram-edit-installed (:installed committed)
+                                    :fram-edit-ops-digest (:ops-digest prep)
+                                    :fram-edit-edn-digest (:edn-digest prep)))
+          standalone-case (write-case! "standalone" [(str (pr-str standalone-row) "\n")] req)
+          wrong-ops (sha256-hex "wrong persisted operation digest")
+          wrong-ops-req (assoc req :ops-digest wrong-ops)
+          wrong-ops-path (str tmp "/receipt-wrong-ops.log")
+          wrong-ops-case (write-case! "wrong-ops"
+                                      (group-lines wrong-ops-path
+                                                   {:fram-edit-ops-digest wrong-ops})
+                                      wrong-ops-req)
+          wrong-bytes-path (str tmp "/receipt-wrong-bytes.log")
+          wrong-bytes-case (write-case! "wrong-bytes"
+                                        (group-lines wrong-bytes-path
+                                                     {:fram-edit-batch-sha
+                                                      (sha256-hex "wrong exact batch bytes")})
+                                        req)
+          duplicate-path (str tmp "/receipt-duplicate.log")
+          duplicate-lines (let [g (group-lines duplicate-path {})]
+                            (vec (concat [(first g)] [(second g) (second g)] (drop 2 g))))
+          duplicate-case (write-case! "duplicate" duplicate-lines req)
+          interleaved-path (str tmp "/receipt-interleaved.log")
+          interloper (str (pr-str {:tx (:version committed) :op "assert"
+                                   :l "@interloper" :p "title" :r "between"
+                                   :ts "probe" :by "probe"}) "\n")
+          interleaved-lines (let [g (group-lines interleaved-path {})]
+                              (vec (concat (take 2 g) [interloper] (drop 2 g))))
+          interleaved-case (write-case! "interleaved" interleaved-lines req)
+          envelope-only-path (str tmp "/receipt-envelope-only.log")
+          envelope-only-case (write-case! "envelope-only"
+                                          [(first (group-lines envelope-only-path {}))] req)
+          facts-only-case (write-case! "facts-only" fact-lines req)
+          conflicting-path (str tmp "/receipt-conflicting-count.log")
+          conflicting-lines (let [g (group-lines conflicting-path {})
+                                  bad (assoc (edn/read-string (nth g 2))
+                                             :fram-edit-count (inc (count fact-lines)))]
+                              (assoc g 2 (str (pr-str bad) "\n")))
+          conflicting-case (write-case! "conflicting-count" conflicting-lines req)
+          boundary-cases
+          (mapv (fn [cut]
+                  (let [label (str "boundary-" cut)
+                        path (str tmp "/receipt-" label ".log")
+                        g (group-lines path {})]
+                    (write-case! label (subvec g 0 cut) req)))
+                (range (inc (count fact-lines))))
+          partial-cases
+          (mapv (fn [cut]
+                  (let [label (str "partial-" cut)
+                        path (str tmp "/receipt-" label ".log")
+                        g (group-lines path {})
+                        next-line (nth g cut)
+                        partial (subs next-line 0 (max 1 (quot (count next-line) 2)))]
+                    (write-case! label
+                                 (conj (subvec g 0 cut) partial)
+                                 req)))
+                (range (inc (count fact-lines))))
+          zero-id "00000000-0000-4000-8000-000000000000"
+          zero-path (str tmp "/receipt-zero-op.log")
+          zero-ops-digest (sha256-hex (pr-str []))
+          zero-envelope-base (-> envelope0
+                                 (assoc :fram-edit-candidate zero-id
+                                        :fram-edit-batch zero-id
+                                        :fram-edit-log (.getCanonicalPath (io/file zero-path))
+                                        :fram-edit-final-version (:fram-edit-base-version envelope0)
+                                        :fram-edit-ops 0
+                                        :fram-edit-installed 0
+                                        :fram-edit-line-count 0
+                                        :fram-edit-ops-digest zero-ops-digest
+                                        :fram-edit-batch-sha (sha256-hex ""))
+                                 (dissoc :fram-edit-seal-sha))
+          zero-envelope (assoc zero-envelope-base
+                               :fram-edit-seal-sha (rt/edit-batch-envelope-seal zero-envelope-base))
+          zero-req (assoc req :candidate zero-id
+                          :ops-digest zero-ops-digest
+                          :version (:fram-edit-base-version zero-envelope))
+          zero-case (write-case! "zero-op" [(str (pr-str zero-envelope) "\n")] zero-req)
+          cases (into {} (concat [valid-case standalone-case wrong-ops-case wrong-bytes-case
+                                  duplicate-case interleaved-case envelope-only-case facts-only-case
+                                  conflicting-case zero-case]
+                                 boundary-cases partial-cases))
+          cases-file (str tmp "/receipt-cases.edn")
+          probe-file (str tmp "/receipt-probe.clj")
+          _ (spit cases-file (pr-str cases))
+          _ (spit probe-file
+                  (str "(require '[clojure.edn :as edn])\n"
+                       "(binding [*command-line-args* []] (load-file " (pr-str (str root "/coord_daemon.clj")) "))\n"
+                       "(let [cases (edn/read-string (slurp (first *command-line-args*)))]\n"
+                       "  (println (pr-str (into {} (map (fn [[k v]] [k (boolean (persisted-edit-outcome (:path v) (:req v)))]) cases)))))\n"))
+          probe (p/shell {:continue true :out :string :err :string :env scrub-env :dir root}
+                         "bb" "-cp" "out" probe-file cases-file)
+          scan-results (try (edn/read-string
+                             (last (remove str/blank? (str/split-lines (or (:out probe) "")))))
+                            (catch Throwable _ nil))]
+      (chk "M: live commit appends one closed envelope plus its exact four operation rows"
+           (and (true? (:ok committed)) (= 4 (:installed committed))
+                (= 5 (count region-lines))
+                (rt/valid-edit-batch-envelope? envelope0)
+                (= (:candidate prep) (:fram-edit-candidate envelope0)
+                   (:fram-edit-batch envelope0))))
+      (chk "M: exact live retry preserves log bytes and final version (no duplicate movement)"
+           (and (= committed-bytes (vec (read-bytes seal-log)))
+                (= (:version committed) (:version retry))
+                (= (:candidate committed) (:candidate retry))))
+      (chk "M: direct cold receipt matrix ran successfully"
+           (and (zero? (:exit probe)) (map? scan-results)))
+      (chk "M: exact envelope + contiguous rows reconstructs the committed receipt"
+           (true? (:valid scan-results)))
+      (chk "M: internally consistent standalone fact metadata cannot reconstruct a receipt"
+           (false? (:standalone scan-results)))
+      (chk "M: complete-looking group with wrong recomputed operation digest cannot reconstruct"
+           (false? (:wrong-ops scan-results)))
+      (chk "M: exact batch-byte digest mismatch cannot reconstruct"
+           (false? (:wrong-bytes scan-results)))
+      (chk "M: duplicate and interleaved rows cannot reconstruct"
+           (and (false? (:duplicate scan-results))
+                (false? (:interleaved scan-results))))
+      (chk "M: envelope-only, facts-only, and conflicting-count groups cannot reconstruct"
+           (and (false? (:envelope-only scan-results))
+                (false? (:facts-only scan-results))
+                (false? (:conflicting-count scan-results))))
+      (chk "M: every envelope/fact line-boundary truncation cannot reconstruct"
+           (every? false? (map #(get scan-results (first %)) boundary-cases)))
+      (chk "M: every envelope/fact partial-line truncation cannot reconstruct"
+           (every? false? (map #(get scan-results (first %)) partial-cases)))
+      (chk "M: zero-effective-op receipt is envelope-bound without a minimum-op heuristic"
+           (true? (:zero-op scan-results)))
+      (chk "M: legacy standalone row carrying old similarly named fields still folds as an ordinary fact"
+           (let [legacy-path (get-in cases [:standalone :path])
+                 folded (rt/read-log legacy-path)]
+             (= (:l standalone-row) (:l (last folded)))))
+      (let [malformed-path (str tmp "/receipt-malformed-near-match.log")
+            malformed (-> (rebind-envelope malformed-path {})
+                          (dissoc :fram-edit-batch-sha))
+            _ (spit malformed-path
+                    (str (String. ^bytes before "UTF-8") (pr-str malformed) "\n"))
+            err (try (rt/read-log malformed-path) nil (catch Throwable t (ex-data t)))]
+        (chk "M: discriminator-bearing malformed near-match fails the normal cold fold"
+             (true? (:fram/malformed-edit-envelope err)))))
+    (finally (stop-daemon! daemon))))
+
+;; ============================================================================
 ;; F. PROJECTION-STALE — commit lands, tracked-view write fails: loud warning +
 ;;    repair command; warm render-from-log repairs the file.
 ;; ============================================================================
