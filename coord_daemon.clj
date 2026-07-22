@@ -1801,32 +1801,16 @@
             (flush-flat-batch!)))
         (count edges)))))
 
-;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
-;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
-;; is assigned here (the verb mints nameless local entities on the clone).
-(defn- do-edit-min* [spec expected-log fenced?]
-  (let [module (:module spec)]
-    (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
-    ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
-    ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
-    ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
-    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
-      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-comment, rename, delete, reorder, replace-in-body)")
-                      {:reject :unknown-verb})))
-    ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
-    ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
-    ;; persisted HERE before the rename so a cold re-render resolves them by IDENTITY, not by spelling
-    ;; (the old failure: coord_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
-    ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
-    ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
-    ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
-    ;; #(a) rename-identity is persisted INSIDE the commit dlock below (ONE acquisition) —
-    ;; NOT in a separate dlock here. A separate lock would leave a lock-free window (the verb
-    ;; compute) in which a concurrent agent could commit a NEW reference AFTER the snapshot but
-    ;; BEFORE the rename commits, landing it with no identity edge (the red-team's snapshot-window
-    ;; race). Folded into the commit lock so persist + rename are atomic.
-    (let [real   (:store @co)
-          clone  (atom @real)                       ; O(1) structural clone; verb writes here only
+;; edit-min-compute: run the verb over a DISCARDABLE clone of store snapshot `snap`
+;; and harvest the minimal wire delta. NO canonical state is touched here — the
+;; clone is thrown away, nothing is appended, `co` is never written; the only
+;; global consumed is a transient name-int reservation (monotonic, collision-free
+;; by construction, harmless to burn). Throws ex-info when the verb rejects.
+;; ONE compute phase shared by the legacy :edit-min commit (do-edit-min*) and the
+;; graph-edit-candidate-v1 :edit-prepare (which seals the harvest WITHOUT committing).
+(defn- edit-min-compute [spec snap]
+  (let [module (:module spec)
+        clone  (atom snap)                          ; O(1) structural clone; verb writes here only
           since  (:next-id @clone)
           ;; SCOPE the verb's frame build to the edited module(s) for the single-module
           ;; verbs (set-body/upsert-form read ONLY their own module's def-binding/frame).
@@ -1912,7 +1896,37 @@
                                 (when-let [vcl (get (:facts m) vcid)]
                                   (when (ast-pred-str? (c/literal clone (:p vcl)))
                                     (->wire vcl))))
-                              victim-cids))
+                              victim-cids))]
+      (when (= "1" (System/getenv "FRAM_PROF"))
+        (binding [*out* *err*] (println (format "PROF harvest=%.1fms" (/ (- (System/nanoTime) t-hv) 1e6)))))
+      {:asserts asserts :retracts retracts :new-eids new-eids :name-ints name-ints}))
+
+;; do-edit-min: run the verb over a CLONE (edit-min-compute), harvest its minimal
+;; delta as wire ops, and commit those through do-assert/do-retract on the REAL
+;; `co`. te-naming for new nodes is assigned in the compute phase (the verb mints
+;; nameless local entities on the clone).
+(defn- do-edit-min* [spec expected-log fenced?]
+  (let [module (:module spec)]
+    (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
+    ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
+    ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
+    ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
+    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-comment, rename, delete, reorder, replace-in-body)")
+                      {:reject :unknown-verb})))
+    ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
+    ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
+    ;; persisted HERE before the rename so a cold re-render resolves them by IDENTITY, not by spelling
+    ;; (the old failure: coord_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
+    ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
+    ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
+    ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
+    ;; #(a) rename-identity is persisted INSIDE the commit dlock below (ONE acquisition) —
+    ;; NOT in a separate dlock here. A separate lock would leave a lock-free window (the verb
+    ;; compute) in which a concurrent agent could commit a NEW reference AFTER the snapshot but
+    ;; BEFORE the rename commits, landing it with no identity edge (the red-team's snapshot-window
+    ;; race). Folded into the commit lock so persist + rename are atomic.
+    (let [{:keys [asserts retracts new-eids name-ints]} (edit-min-compute spec @(:store @co))
           t-cm (System/nanoTime)]
       ;; commit through the REAL coordinator wire. Retract old edges first, then
       ;; assert leaves (kind/v) before parent fN re-points. Each op is OCC-checked at
@@ -1958,7 +1972,7 @@
                    (when (:reject res) (reset! rej {:op :assert :te te :p p :r r :res res})))))
              (flush-flat-batch!))                          ; ONE fsync for the whole commit's appends
             (when (= "1" (System/getenv "FRAM_PROF"))
-              (binding [*out* *err*] (println (format "PROF harvest=%.1fms commit=%.1fms" (/ (- t-cm t-hv) 1e6) (/ (- (System/nanoTime) t-cm) 1e6)))))
+              (binding [*out* *err*] (println (format "PROF commit=%.1fms" (/ (- (System/nanoTime) t-cm) 1e6)))))
             (if @rej
               {:reject (:res @rej) :failed-op @rej :module module}
               {:ok true :module module
@@ -1966,6 +1980,376 @@
                :ops (+ (count asserts) (count retracts))
                :new-nodes (count new-eids) :name-ints name-ints
                :version (current-seq @co)}))))))))
+
+;; ============================================================================
+;; graph-edit-candidate-v1 — the ATOMIC CANDIDATE GATE (:edit-prepare/:edit-commit).
+;; ============================================================================
+;; Corrects the two audited :edit-min authoring defects:
+;;   (1) COMMIT-BEFORE-CHECK — :edit-min made the delta durable, then the MCP
+;;       edge rendered + Beagle-checked AFTER the fact: a failing check left
+;;       broken canonical state ("your edit COMMITTED but no longer parses").
+;;   (2) NAIVE PATH — the rendered view targeted FRAM_SRC/<module>.bclj, so a
+;;       nested module (src.fram.world) produced a ROOT-LEVEL src.fram.world.bclj
+;;       artifact instead of updating its tracked src/fram/world.bclj.
+;; The protocol:
+;;   :edit-prepare {:spec <edit-min spec>} — LOCK-FREE, ZERO canonical writes.
+;;     * resolves the module's ONE tracked source path from the SEALED graph
+;;       file fact (@<mod>#root `file`); missing/ambiguous reject here, before
+;;       any verb work (client-side the path is additionally confined under the
+;;       canonical FRAM_SRC root — absolute, canonical, inside-root).
+;;     * runs the verb over a discardable exact-version clone (edit-min-compute)
+;;       and SEALS the harvested wire ops (order + PENDING-tie allocation final).
+;;     * REHEARSES the sealed ops on a second exact clone through the SAME
+;;       kernel wire the install uses — an op that cannot apply rejects here.
+;;     * projects the candidate module EDN from the rehearsed clone (what the
+;;       client renders + parse/type-checks IS what the install will produce).
+;;     * returns {:candidate <id> :version V :path P :edn ... :ops-digest
+;;       :edn-digest ...}; the sealed candidate is retained SERVER-SIDE — the
+;;       client can never substitute ops between prepare and commit.
+;;   :edit-commit {:candidate id :version V :module M :path P :ops-digest
+;;                 :edn-digest [:src-root R]} — under dlock:
+;;     * revalidates log fence (envelope), candidate identity, BOTH digests, the
+;;       exact version CAS (current == prepare version), and a FRESH tracked-path
+;;       resolution (+ optional src-root confinement echo). Any mismatch is a
+;;       typed rejection with ZERO canonical operations.
+;;     * applies the sealed ops to an INSTALL CLONE; any op rejection (or the
+;;       env-gated injected-failure test seam, at ANY operation boundary)
+;;       discards the clone — typed rejection, zero canonical operations.
+;;     * installs durably: durable-barrier -> SEALED batch journal (fsync) ->
+;;       whole-batch append via group commit -> ONE root swap. Crash/torn-tail
+;;       safety: the journal is the commit point — a torn journal is discarded
+;;       at boot (batch never happened); a sealed journal is REDONE at boot
+;;       (truncate any torn partial batch back to :pre-bytes, re-append the
+;;       whole batch). Recovery runs ONLY at daemon boot under the rewrite
+;;       gate (sole writer) — never from read-only paths.
+;;   :edit-protocol — capability handshake; a restricted MCP profile refuses to
+;;     start against a coordinator that does not answer graph-edit-candidate-v1
+;;     (legacy daemons answer {:error "unknown op"}).
+;; :edit-min stays untouched (CLI fram-edit-code + regression surface); the MCP
+;; warm path no longer calls it.
+;; ============================================================================
+(def edit-protocol-name "graph-edit-candidate-v1")
+(def edit-candidates (atom {}))          ; id -> sealed candidate (server-side seal)
+(def ^:private max-edit-candidates 16)   ; bounded; stale ones die by version CAS anyway
+(declare write-edit-journal! delete-edit-journal! ex->s-err)
+
+(defn- sha256-hex [^String s]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))]
+    (apply str (map #(format "%02x" %) d))))
+
+;; sealed op vocabulary: the AST preds a code delta may touch, plus bound_to (the
+;; rename identity migration, sealed INTO the batch so it installs atomically with
+;; the rename instead of as separate pre-writes).
+(defn- candidate-pred-ok? [p] (or (ast-pred-str? p) (= "bound_to" p)))
+
+;; the module's ONE canonical tracked source path from the sealed graph file fact
+;; (@<module>#root `file` <path>). {:path p} | {:reject [..] :code ..}. Read off the
+;; given store snapshot — never off anything the client supplies.
+(defn- tracked-path-of [st module]
+  (let [m @st
+        root-id (s/resolve-name st (str "@" module "#root"))
+        fp (c/value-id st "file")
+        vals (when (and root-id fp)
+               (->> (get (:idx-by-lp m) [root-id fp])
+                    (remove #(contains? (:superseded m) %))
+                    (map #(c/literal st (:r (c/fact-of st %))))
+                    distinct vec))]
+    (cond
+      (empty? vals)
+      {:reject [(str "module '" module "' has no live @" module "#root file fact in the code log (not ingested?)")]
+       :code :no-tracked-path}
+      (> (count vals) 1)
+      {:reject [(str "module '" module "' has " (count vals) " live tracked-path file facts (" (str/join ", " (map pr-str vals)) ") — ambiguous; refuse before mutation")]
+       :code :ambiguous-tracked-path}
+      (not (string? (first vals)))
+      {:reject [(str "module '" module "' tracked-path file fact is not a string literal: " (pr-str (first vals)))]
+       :code :no-tracked-path}
+      :else {:path (first vals)})))
+
+;; apply sealed wire ops IN ORDER to co2 (a throwaway rehearsal clone OR the install
+;; clone) through the SAME kernel wire every commit uses (commit!/retract!). Because
+;; rehearsal and install run this one function over the SAME store value (the version
+;; CAS guarantees it), rehearsal IS a dress rehearsal of the install. inject-at (the
+;; env-gated test seam) forces a rejection at that operation boundary, 0..n inclusive.
+;; -> {:ok {:lines [..] :events [..]}} | {:reject r :at i [:op op] :code ..}
+(defn- apply-candidate-ops! [co2 ops base inject-at]
+  (let [n (count ops)]
+    (loop [i 0 lines [] events []]
+      (cond
+        (and inject-at (= i inject-at))
+        {:reject [(str "injected failure at operation boundary " i " of " n " (FRAM_EDIT_INJECT test seam)")]
+         :at i :code :injected-failure}
+        (= i n) {:ok {:lines lines :events events}}
+        :else
+        (let [[verb te p r :as op] (nth ops i)]
+          (if-not (and (#{:assert :retract} verb) (string? te) (string? p) (some? r)
+                       (candidate-pred-ok? p))
+            {:reject [(str "candidate op " i " is outside the sealed AST vocabulary: " (pr-str op))]
+             :at i :op op :code :sealed-vocabulary}
+            (let [res (case verb
+                        :assert  (commit! co2 "coord" te p (kind-of p r) r base)
+                        :retract (retract! co2 "coord" te p r base))]
+              (cond
+                (:reject res) {:reject (:reject res) :at i :op op :code :op-rejected}
+                ;; multi-valued idempotent assert: no line, no event (do-assert parity).
+                (and (= verb :assert) (:idempotent res)) (recur (inc i) lines events)
+                :else (recur (inc i)
+                             (conj lines (flat-line (name verb) te p r (:ok res)))
+                             (conj events {:event :commit :version (:ok res)
+                                           :op (name verb) :l te :p p :r r}))))))))))
+
+;; project one module's resolved EDN off a store (read-only; refers_to must already
+;; be current for that module on THIS store). Used by :edit-prepare to project the
+;; rehearsed candidate clone. (The warm :render op keeps its own inline binding —
+;; it also opens a read tx on the REAL store; this one binds read-only over a
+;; throwaway clone and must not touch any real seq-space.)
+(defn- project-module-edn [st module]
+  (let [tmp (str (System/getProperty "java.io.tmpdir") "/fram-projedn-" (System/nanoTime))
+        _   (.mkdirs (java.io.File. ^String tmp))
+        edn-out (str tmp "/resolved-" module ".bclj.edn")]
+    (try
+      (with-resolve-read st
+        (let [the-src (some #(when (= module %) %) resolve/srcs)]
+          (if-not the-src
+            {:error (str "no such module in the corpus: " module) :srcs (vec resolve/srcs)}
+            (do (resolve/extract-file! the-src edn-out)
+                {:edn (slurp edn-out)}))))
+      (finally (.delete (java.io.File. ^String edn-out))
+               (.delete (java.io.File. ^String tmp))))))
+
+;; refresh refers_to for ONE module on a CLONE store (the candidate rehearsal):
+;; scoped strip + scoped walk + seq-space restore — the clone-local mirror of
+;; materialize-refers-scoped!, with no global dirty/export state touched.
+(defn- clone-refresh-refers! [st module]
+  (let [before @st
+        keep-ids (module-node-ids st #{module})]
+    (strip-resolve-facts! st (or keep-ids #{}))
+    (resolve/resolve-modules! st #{module} (fn [] nil))
+    (restore-seq-space! st before)))
+
+;; RENAME identity edges, computed CLONE-SIDE and sealed into the batch: whole-corpus
+;; refers_to over the clone (the same ground-truth walk refers-keyset uses), then the
+;; persist-bound! edge rule (every live reference leaf resolving to a binding NODE and
+;; lacking a durable bound_to) as [:assert leaf "bound_to" target] wire ops. Zero real-
+;; store writes at prepare; the edges install atomically with the rename or not at all.
+(defn- candidate-bound-ops [snap]
+  (let [st (atom snap)
+        before @st]
+    (strip-resolve-facts! st)
+    (resolve/resolve-warm-store! st)
+    (restore-seq-space! st before)
+    (let [REFp (c/value-id st "refers_to")]
+      (if-not REFp
+        []
+        (let [BND     (c/value-id st "bound_to")
+              already (if BND (set (map #(:l (c/fact-of st %)) (c/by-p st BND))) #{})]
+          (->> (c/by-p st REFp)
+               (map #(c/fact-of st %))
+               (filter (fn [cl] (and (integer? (:r cl)) (not (already (:l cl))))))
+               (map (fn [cl] [(:l cl) (:r cl)]))
+               distinct
+               (keep (fn [[leaf B]]
+                       (let [ln (s/name-of st leaf) bn (s/name-of st B)]
+                         (when (and ln bn) [:assert ln "bound_to" bn]))))
+               vec))))))
+
+(defn- do-edit-prepare [req]
+  (try
+    (let [spec (:spec req)
+          module (:module spec)]
+      (when-not (map? spec)
+        (throw (ex-info "edit-prepare: :spec map required" {:reject :invalid-spec})))
+      (when (str/blank? (str module))
+        (throw (ex-info "edit-prepare: :module required" {:reject :invalid-spec})))
+      (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+        (throw (ex-info (str "edit-prepare: unknown verb '" (:op spec) "'") {:reject :unknown-verb})))
+      ;; ONE snapshot deref: the candidate's version, verb clone, rehearsal clone, and
+      ;; tracked path all come from the same immutable store value.
+      (let [snap @(:store @co)
+            v0   (or (:next-seq snap) 0)
+            tp   (tracked-path-of (atom snap) module)]
+        (if (:reject tp)
+          (assoc tp :version v0)
+          (let [{:keys [asserts retracts new-eids]} (edit-min-compute spec snap)
+                asserts (allocate-positions asserts)   ; seal PENDING ties NOW — the sealed ops are final
+                leaf? (fn [[_ p _]] (#{"kind" "v"} p))
+                ops (vec (concat
+                          (when (= "rename" (:op spec)) (candidate-bound-ops snap))
+                          (map (fn [[te p r]] [:retract te p r]) retracts)
+                          (map (fn [[te p r]] [:assert te p r])
+                               (concat (filter leaf? asserts) (remove leaf? asserts)))))
+                co2 {:store (atom snap) :log nil :lock (Object.)}
+                ap (apply-candidate-ops! co2 ops v0 nil)
+                ap (if (:reject ap) ap
+                       (try (clone-refresh-refers! (:store co2) module)
+                            (assoc ap :edn (project-module-edn (:store co2) module))
+                            (catch Throwable t {:reject [(str "candidate projection failed: " (.getMessage t))]
+                                                :code :candidate-render-failed})))]
+            (cond
+              (:reject ap)
+              (merge {:reject (:reject ap) :version v0}
+                     (select-keys ap [:at :op :code]))
+              (:error (:edn ap))
+              {:reject [(str "candidate projection failed: " (:error (:edn ap)))]
+               :code :candidate-render-failed :version v0}
+              :else
+              (let [edn-str (:edn (:edn ap))
+                    id (str (java.util.UUID/randomUUID))
+                    ops-digest (sha256-hex (pr-str ops))
+                    edn-digest (sha256-hex edn-str)
+                    cand {:id id :module module :verb (:op spec) :ops ops :version v0
+                          :path (:path tp) :ops-digest ops-digest :edn-digest edn-digest
+                          :created (System/currentTimeMillis)}]
+                (swap! edit-candidates
+                       (fn [cm] (let [cm (assoc cm id cand)]
+                                  (if (> (count cm) max-edit-candidates)
+                                    (dissoc cm (:id (apply min-key :created (vals cm))))
+                                    cm))))
+                {:ok true :protocol edit-protocol-name :candidate id :module module
+                 :version v0 :path (:path tp) :edn edn-str
+                 :ops-digest ops-digest :edn-digest edn-digest
+                 :ops (count ops) :asserts (count asserts) :retracts (count retracts)
+                 :new-nodes (count new-eids)}))))))
+    (catch Throwable t
+      (let [d (ex-data t)
+            msg (or (not-empty (str (.getMessage t))) (:message d)
+                    (str "internal error: " (.getSimpleName (class t))))]
+        (cond-> {:reject [(str "edit-prepare: " msg)]
+                 :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
+                 :version (current-seq @co)}
+          (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
+
+(defn- do-edit-commit [req expected-log fenced?]
+  (locking dlock
+    (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
+      fence-reject
+      (let [id (:candidate req)
+            cand (get @edit-candidates id)
+            head (current-seq @co)
+            fail (fn [code & msg] {:reject [(apply str msg)] :code code :version head})]
+        (cond
+          (not @flat-log)
+          (fail :unsupported-mode "edit-commit requires drop-in (flat-log) mode")
+          (nil? cand)
+          (fail :unknown-candidate "unknown candidate " (pr-str id) " (expired, already installed, or never prepared)")
+          (not= (:module req) (:module cand))
+          (fail :candidate-mismatch "candidate module " (pr-str (:module cand)) " != request module " (pr-str (:module req)))
+          (not= (:version req) (:version cand))
+          (fail :candidate-mismatch "candidate version " (:version cand) " != request version " (pr-str (:version req)))
+          (not= (:ops-digest req) (:ops-digest cand))
+          (fail :digest-mismatch "ops-digest mismatch — the request does not describe the sealed candidate")
+          (not= (:edn-digest req) (:edn-digest cand))
+          (fail :digest-mismatch "edn-digest mismatch — what was checked is not what this candidate installs")
+          (not= (:path req) (:path cand))
+          (fail :path-mismatch "candidate tracked path " (pr-str (:path cand)) " != request path " (pr-str (:path req)))
+          ;; THE CAS — exact-version install: any interleaved commit rejects the batch whole.
+          (not= head (:version cand))
+          (do (swap! edit-candidates dissoc id)
+              (fail :stale-version "stale candidate: prepared at version " (:version cand)
+                    " but canonical is " head " — re-prepare against the current version"))
+          :else
+          (let [tp (tracked-path-of (:store @co) (:module cand))]
+            (cond
+              (:reject tp) (assoc tp :version head)
+              (not= (:path tp) (:path cand))
+              (fail :path-mismatch "tracked path moved since prepare: " (pr-str (:path tp)) " != sealed " (pr-str (:path cand)))
+              (and (string? (:src-root req))
+                   (not (str/starts-with? (str (:path cand)) (str (:src-root req) "/"))))
+              (fail :path-unconfined "tracked path " (:path cand) " lies OUTSIDE the declared source root " (:src-root req))
+              :else
+              (let [snap @(:store @co)
+                    co3 {:store (atom snap) :log nil :lock (Object.)}
+                    inject (when (= "1" (System/getenv "FRAM_EDIT_INJECT")) (:inject-fail-at req))
+                    ap (apply-candidate-ops! co3 (:ops cand) (:version cand) inject)]
+                (if (:reject ap)
+                  (do (swap! edit-candidates dissoc id)
+                      (merge {:reject (:reject ap) :version (current-seq @co)}
+                             (select-keys ap [:at :op :code])))
+                  (let [{:keys [lines events]} (:ok ap)]
+                    ;; DURABLE ATOMIC INSTALL. Order: (1) barrier — every previously
+                    ;; enqueued append is on disk, so the journal's :pre-bytes is exact;
+                    ;; (2) sealed journal, fsync — THE commit point; (3) whole-batch
+                    ;; append via group commit (handle acks only after its fsync; the
+                    ;; flush callback deletes the journal); (4) ONE root swap. A crash
+                    ;; before (2) = batch never happened; after (2) = boot recovery
+                    ;; redoes the whole batch byte-exactly. Lock-free readers see the
+                    ;; pre state until the single reset! — never a partial batch.
+                    (when (seq lines)
+                      (durable-barrier!)
+                      (write-edit-journal! (str @flat-log) lines)
+                      (enqueue-durable! (str @flat-log) (vec lines)
+                                        (fn [] (reset! flat-mtime (stamp @flat-log))
+                                          (delete-edit-journal! (str @flat-log)))))
+                    (reset! (:store @co) @(:store co3))                 ; ROOT SWAP
+                    (swap! cache assoc :version -1)                     ; warm caches rebuild on next read
+                    (reset! facts-wire-cache {:version -1 :triples nil})
+                    (doseq [te (distinct (keep (fn [[_ te p _]]
+                                                 (when-not (read-hidden-preds p) te))
+                                               (:ops cand)))]
+                      (mark-dirty! te))
+                    (doseq [ev events] (notify-subs! ev))
+                    (swap! edit-candidates dissoc id)
+                    {:ok true :protocol edit-protocol-name :module (:module cand)
+                     :candidate id :ops (count (:ops cand)) :installed (count lines)
+                     :path (:path cand) :version (current-seq @co)}))))))))))
+
+;; ---- the batch journal (crash/torn-tail safety) -----------------------------
+(defn- edit-journal-path [flat] (str flat ".edit-batch"))
+
+(defn- write-edit-journal! [flat lines]
+  ;; sealed intent record for ONE atomic batch: the pre-append log length, the exact
+  ;; lines, and their digest — one EDN map, fsynced before the main append starts.
+  ;; A TORN journal (crash mid-write) fails the digest/shape check at boot and is
+  ;; discarded: the batch never touched the main log (nothing acked, root not swapped).
+  (let [pre (.length (java.io.File. ^String flat))
+        payload (pr-str {:fram-edit-batch 1 :log flat :pre-bytes pre
+                         :lines (vec lines) :sha (sha256-hex (apply str lines))})
+        jf (java.io.File. ^String (edit-journal-path flat))]
+    (with-open [fos (java.io.FileOutputStream. jf)]
+      (.write fos (.getBytes payload "UTF-8"))
+      (.force (.getChannel fos) true))))   ; same fsync idiom as the group appender (bb-safe)
+
+(defn- delete-edit-journal! [flat]
+  (.delete (java.io.File. ^String (edit-journal-path flat))))
+
+(defn recover-edit-journal!
+  "SOLE-WRITER boot repair for a crashed :edit-commit. Called by serve-flat-daemon
+  BEFORE the boot fold, holding the rewrite gate — NEVER from read-only paths (a
+  cold renderer racing a live daemon's commit window must not touch the log).
+  Sealed journal => REDO: truncate any torn partial batch back to :pre-bytes and
+  re-append the whole batch (byte-exact, idempotent — a fully-landed batch redoes
+  to the identical bytes). Torn/invalid journal => the batch never committed;
+  discard it and leave the log alone."
+  [flat]
+  (let [jf (java.io.File. ^String (edit-journal-path flat))]
+    (when (.isFile jf)
+      (let [j (try (edn/read-string (slurp jf)) (catch Throwable _ nil))
+            valid? (and (map? j) (= 1 (:fram-edit-batch j))
+                        (vector? (:lines j)) (every? string? (:lines j))
+                        (integer? (:pre-bytes j))
+                        (= (:sha j) (sha256-hex (apply str (:lines j)))))]
+        (if-not valid?
+          (do (binding [*out* *err*]
+                (println "[fram] edit-batch journal is torn/invalid — discarding (the batch never committed)"))
+              (.delete jf))
+          (let [f (java.io.File. ^String flat)
+                pre (long (:pre-bytes j))]
+            (if (< (.length f) pre)
+              ;; external surgery shrank the log below the journal's base — the unacked
+              ;; batch has no truthful base to redo onto; the surgery wins. Discard loudly.
+              (do (binding [*out* *err*]
+                    (println (str "[fram] edit-batch journal pre-bytes " pre " exceeds log length "
+                                  (.length f) " (external rewrite?) — discarding the unacked batch")))
+                  (.delete jf))
+              (do (binding [*out* *err*]
+                    (println (str "[fram] edit-batch journal: redoing atomic batch ("
+                                  (count (:lines j)) " lines) at byte " pre " of " flat)))
+                  (with-open [raf (java.io.RandomAccessFile. f "rw")]
+                    (.setLength raf pre)                       ; drop any torn partial batch
+                    (.seek raf pre)
+                    (.write raf (.getBytes ^String (apply str (:lines j)) "UTF-8"))
+                    (.force (.getChannel raf) true))           ; bb-safe fsync (group-appender idiom)
+                  (.delete jf)))))))))
 
 (declare maybe-reload!)
 (def ^:dynamic *reload-checked* false)
@@ -2601,6 +2985,19 @@
           fence-reject
           (edit-min-response inner expected true))
 
+        ;; graph-edit-candidate-v1: prepare is LOCK-FREE compute (like :edit-min's
+        ;; compute) behind a cheap fence preflight; it writes NOTHING canonical, so
+        ;; no fence recheck is needed at its end. Commit takes dlock itself and
+        ;; rechecks the fence inside it (do-edit-commit).
+        (= :edit-prepare (:op inner))
+        (if-let [fence-reject (locking dlock
+                                (log-fence-rejection expected))]
+          fence-reject
+          (do-edit-prepare inner))
+
+        (= :edit-commit (:op inner))
+        (do-edit-commit inner expected true)
+
         :else
         (do
           (prepare-request-reload! inner)
@@ -2646,6 +3043,10 @@
        :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + defcheck_gate.clj)"
        :version (current-seq @co)})
     (= :edit-min (:op req)) (edit-min-response req nil false)
+    ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence
+    ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
+    (= :edit-prepare (:op req)) (do-edit-prepare req)
+    (= :edit-commit (:op req)) (do-edit-commit req nil false)
   :else
   (do
     ;; maybe-reload! performs its own two-phase capture/build/install.  It must run
@@ -2711,6 +3112,10 @@
               (release-lease! @co (:holder req) (:res req) (:epoch req))
               (release-lease! @co (:holder req) (:res req))))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
+      ;; graph-edit-candidate-v1 capability handshake — the restricted MCP profile
+      ;; refuses to start against a daemon that cannot answer this (legacy daemons
+      ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
+      :edit-protocol {:ok true :protocol edit-protocol-name :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
@@ -4121,6 +4526,11 @@
         (when-not (= :clean (:state healed))
           (println (str "[fram] boot: healed crashed rewrite on " flat
                         " (" (name (:state healed)) ")"))))
+      ;; A committed graph-edit batch is repaired before generic tail handling:
+      ;; its durable journal determines whether the entire batch is redone or
+      ;; discarded, while the exclusive rewrite lock prevents any peer from
+      ;; observing an intermediate recovery state.
+      (recover-edit-journal! (str flat))
       (repair-flat-corpus-tails! flat)
       (boot-flat! flat)
          (finally (fram.rt/close-rewrite-lock! gate))))
