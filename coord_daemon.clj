@@ -41,6 +41,7 @@
 (def subscribers (atom []))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
+(def telemetry-mtime (atom nil))     ; same freshness fence for the split telemetry half
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
 (def require-log-fence?
   (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
@@ -227,6 +228,101 @@
 (def query-stops (atom {:query-cancelled 0 :query-work-limit 0
                         :query-time-limit 0 :query-row-limit 0}))
 
+(defn- complete-flat-record? [record]
+  (and (map? record)
+       (int? (:tx record))
+       (#{"assert" "retract"} (:op record))
+       (some? (:l record))
+       (some? (:p record))
+       (some? (:r record))))
+
+(defn- read-exact-flat-record [^bytes tail]
+  (try
+    (with-open [reader (java.io.PushbackReader.
+                        (java.io.StringReader.
+                         (String. tail java.nio.charset.StandardCharsets/UTF_8)))]
+      (let [eof (Object.)
+            record (edn/read {:eof eof} reader)
+            trailing (edn/read {:eof eof} reader)]
+        (when (and (not (identical? eof record))
+                   (identical? eof trailing))
+          record)))
+    (catch Exception _ nil)))
+
+(defn- repair-flat-tail!
+  "Repair one unterminated final flat-log segment while the caller holds the
+  corpus EXCLUSIVE rewrite lock. A complete fold-visible record is preserved by
+  durably adding its missing LF; an unparseable/incomplete segment is durably
+  truncated back to the last complete LF boundary. Mid-log corruption remains
+  untouched and is refused by the normal fold."
+  [label path]
+  (let [f (java.io.File. (str path))]
+    (when (and (.exists f) (pos? (.length f)))
+      (when-not (and (.isFile f) (not (java.nio.file.Files/isSymbolicLink (.toPath f))))
+        (throw (ex-info (str label " flat log is not a real regular file: " path)
+                        {:path (str path) :fram/flat-tail-repair-refused true})))
+      (with-open [raf (java.io.RandomAccessFile. f "rw")]
+        (let [length (.length raf)]
+          (.seek raf (dec length))
+          (when-not (= 10 (.read raf))
+            (let [window-size (int (min length (inc (long max-line-bytes))))
+                  window-start (- length window-size)
+                  window (byte-array window-size)
+                  _ (do (.seek raf window-start) (.readFully raf window))
+                  last-lf (loop [i (dec window-size)]
+                            (cond
+                              (neg? i) nil
+                              (= 10 (bit-and 0xff (aget window i))) i
+                              :else (recur (dec i))))
+                  boundary (if last-lf (+ window-start last-lf 1) 0)
+                  tail-bytes (- length boundary)]
+              (when (> tail-bytes max-line-bytes)
+                (throw (ex-info (str label " unterminated flat-log tail exceeds the repair bound: "
+                                     tail-bytes " bytes")
+                                {:path (str path) :bytes tail-bytes
+                                 :max-bytes max-line-bytes
+                                 :fram/flat-tail-repair-refused true})))
+              (let [tail (byte-array (int tail-bytes))
+                    _ (do (.seek raf boundary) (.readFully raf tail))
+                    parsed (read-exact-flat-record tail)
+                    preserve? (complete-flat-record? parsed)
+                    expected-length (if preserve? (inc length) boundary)]
+                (if preserve?
+                  (do (.seek raf length) (.write raf 10))
+                  (.setLength raf boundary))
+                (.force (.getChannel raf) true)
+                (when-not (= expected-length (.length raf))
+                  (throw (ex-info (str label " flat-log tail repair did not reach its exact boundary")
+                                  {:path (str path) :expected expected-length
+                                   :actual (.length raf)
+                                   :fram/flat-tail-repair-refused true})))
+                (when (pos? expected-length)
+                  (.seek raf (dec expected-length))
+                  (when-not (= 10 (.read raf))
+                    (throw (ex-info (str label " flat-log tail repair did not leave a terminal LF")
+                                    {:path (str path)
+                                     :fram/flat-tail-repair-refused true}))))
+                (binding [*out* *err*]
+                  (println (str "[fram] repaired " label " flat-log tail at byte " boundary
+                                (if preserve?
+                                  " — complete record preserved and LF forced"
+                                  (str " — truncated " tail-bytes " incomplete byte(s) and forced")))))))))))))
+
+(defn- repair-flat-corpus-tails! [flat]
+  (doseq [[label path]
+          (distinct
+           (remove (comp nil? second)
+                   [["coordination" (canonical-path flat)]
+                    ["telemetry" (some-> @telemetry-log canonical-path)]]))]
+    (repair-flat-tail! label path)))
+
+(defn- assert-flat-corpus-append-boundaries! []
+  (locking group-io-lock
+    (when @flat-log
+      (assert-flat-append-boundary! @flat-log)
+      (when-let [path @telemetry-log]
+        (assert-flat-append-boundary! path)))))
+
 (defn- stamp [f] (let [fi (java.io.File. (str f))] (str (.lastModified fi) ":" (.length fi))))
 
 ;; bounded readLine: read at most `cap` chars, stopping at newline. Returns the
@@ -281,6 +377,15 @@
 (def ^:dynamic *flat-batch* nil)
 (defn- flat-line [op te p r seq]
   (str (pr-str {:tx seq :op op :l te :p p :r r :ts (fram.rt/now-ts) :by "coord"}) "\n"))
+
+(defn- advance-owned-append-stamp!
+  "Advance a known corpus stamp only when the appender proved that the bytes
+  between its before/after observations are exactly its own batch. If an
+  external prefix was already pending—or raced the append—the old stamp stays
+  visible and the next freshness-sensitive request must reload it."
+  [known-stamp {:keys [before-stamp after-stamp owned-append-exact?]}]
+  (when (and owned-append-exact? (= before-stamp @known-stamp))
+    (reset! known-stamp after-stamp)))
 ;; DURABILITY (finding #13) is preserved through GROUP COMMIT (coord/enqueue-durable!):
 ;; the lines are enqueued (in commit order — callers hold dlock) and the {:ok} ack only
 ;; happens after the appender thread has fsynced them (handle awaits the tickets after
@@ -339,12 +444,16 @@
             g  (group-by #(log-for st (line-subject %)) lines)]
         (when-let [coord (seq (:coordination g))]
           (enqueue-durable! (str @flat-log) (vec coord)
-                            (fn [] (reset! flat-mtime (stamp @flat-log)))))
+                            (fn [flush]
+                              (advance-owned-append-stamp! flat-mtime flush))))
         (when-let [telem (seq (:telemetry g))]
-          (enqueue-durable! (str tlog) (vec telem) nil)))
+          (enqueue-durable! (str tlog) (vec telem)
+                            (fn [flush]
+                              (advance-owned-append-stamp! telemetry-mtime flush)))))
       ;; LEGACY single-log — BYTE-IDENTICAL to pre-split.
       (enqueue-durable! (str @flat-log) (vec lines)
-                        (fn [] (reset! flat-mtime (stamp @flat-log)))))))
+                        (fn [flush]
+                          (advance-owned-append-stamp! flat-mtime flush))))))
 (defn- append-flat! [op te p r seq]
   (if *flat-batch*
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
@@ -356,6 +465,7 @@
 ;; projection in this one dlock turn; handle awaits the resulting durable ticket
 ;; before acknowledging the request. Rejected/no-op calls append nothing.
 (defn- lease-flat-mutation! [req action]
+  (assert-flat-corpus-append-boundaries!)
   (let [st (:store @co)
         resource (:res req)
         before (read-lease @co resource)
@@ -1014,6 +1124,7 @@
 ;; would collide with the reified schema layer and silently corrupt; reject at the boundary.
 ;; cardinality/value_kind are validated schema writes (do-schema-assert/retract, F3).
 (defn- do-assert [te p r base]
+  (assert-flat-corpus-append-boundaries!)
   (cond
     (hard-reserved p)
     {:reject [(str "reserved predicate '" p "' (engine-internal; use a domain predicate)")] :version (current-seq @co)}
@@ -1043,6 +1154,7 @@
         {:reject (:reject res) :version (:version res)}))))
 
 (defn- do-retract [te p r base]
+  (assert-flat-corpus-append-boundaries!)
   (cond
     (hard-reserved p)
     {:reject [(str "reserved predicate '" p "'")] :version (current-seq @co)}
@@ -2544,7 +2656,8 @@
       ;; concurrent charges from N executors can't lose updates). Declares the predicate
       ;; single-valued (else asserts accumulate -> arbitrary reads). The swarm token budget
       ;; (@swarm budget_spent) uses it. -> {:ok seq :value <new>}. (:n may be negative.)
-      :bump     (bump-counter! @co (:te req) (:p req) (:n req))
+      :bump     (do (assert-flat-corpus-append-boundaries!)
+                    (bump-counter! @co (:te req) (:p req) (:n req)))
       ;; --- exclusive-lease wire verbs (agents lease @lease:<res> over the socket) ---
       ;; The lease fn enforces mutual exclusion in its OWN (:lock co); the outer dlock just
       ;; serializes with other daemon ops. A bare :assert @lease:<res> is the UNSAFE lost-update
@@ -3173,6 +3286,7 @@
 ;; (risk guard: "anchor boot on :tx (monotonic), not byte_offset").
 (def built-through (atom 0))
 (def flat-bytes    (atom 0))
+(def telemetry-bytes (atom 0))
 
 (defn- snap-dir [flat] (str flat ".snapshots"))
 (defn- snap-image [flat seq] (str (snap-dir flat) "/snap-" seq ".v2log"))
@@ -3498,6 +3612,11 @@
     (seed-schema-view! flat)               ; F4: log-resident schema-writable facts for the read view
     (reset! flat-mtime (stamp flat))
     (reset! flat-bytes (.length (java.io.File. (str flat))))
+    (if-let [tlog @telemetry-log]
+      (do (reset! telemetry-mtime (stamp tlog))
+          (reset! telemetry-bytes (.length (java.io.File. (str tlog)))))
+      (do (reset! telemetry-mtime nil)
+          (reset! telemetry-bytes 0)))
     (reset! cache {:index nil :version -1})
     (reset-refers-state!)                  ; S3.3: derived refers_to belong to the OLD store
     ;; mmap-cold + unmaterialized: SKIP the eager warm-cache build (index!) — that
@@ -3536,13 +3655,23 @@
     (locking group-io-lock
       (when (and @flat-canonical? @flat-log)
         (let [path @flat-log
-              target-stamp (stamp path)]
-          (when (or force? (not= target-stamp @flat-mtime))
+              telemetry-path @telemetry-log
+              target-stamp (stamp path)
+              target-telemetry-stamp (some-> telemetry-path stamp)]
+          (when (or force?
+                    (not= target-stamp @flat-mtime)
+                    (not= target-telemetry-stamp @telemetry-mtime))
             {:path path
              :known-stamp @flat-mtime
              :target-stamp target-stamp
              :target-bytes (.length (java.io.File. (str path)))
+             :telemetry-path telemetry-path
+             :known-telemetry-stamp @telemetry-mtime
+             :target-telemetry-stamp target-telemetry-stamp
+             :target-telemetry-bytes
+             (when telemetry-path (.length (java.io.File. (str telemetry-path))))
              :from-byte @flat-bytes
+             :from-telemetry-byte @telemetry-bytes
              :from-tx @built-through
              :co-version (current-seq @co)
              :store-root @(:store @co)
@@ -3552,32 +3681,46 @@
   (swap! active-reloads inc)
   (try
     (let [path (:path roots)
-          tail-result (read-log-tail* path (:from-byte roots) (:from-tx roots))
-          tail (:lines tail-result)
-          tail-max (:max-tx tail-result)
+          telemetry-path (:telemetry-path roots)
           schema-root (schema-view-from-flat path)
           candidate
-          (if (> (long tail-max) (long (:from-tx roots)))
-            (let [clone {:store (atom (:store-root roots)) :log nil :lock (Object.)}]
-              (apply-tail! clone tail)
-              ;; read-log-tail* deliberately excludes an EDN-valid incomplete row
-              ;; from :lines while retaining its :tx in :max-tx.  The cold fold does
-              ;; the same: no fact applies, but version advances past the torn write.
-              ;; Advancing the private clone also keeps schema-only tails in cheap
-              ;; tail mode instead of forcing a whole-log migration.
-              (swap! (:store clone) assoc :next-seq tail-max)
-              {:mode :install :co clone :schema-root schema-root
-               :through tail-max})
-            (let [whole (read-log-tail* path 0 -1)
-                  logmax (:max-tx whole)]
-              (if (< logmax (long (:from-tx roots)))
-                {:mode :refused :logmax logmax}
-                (let [c0 (migrate-flat->co path)]
-                  {:mode :install :co c0 :schema-root schema-root
-                   :through (or (:next-seq @(:store c0)) 0)}))))]
+          (if telemetry-path
+            ;; The two logs share one tx space but have independent byte offsets.
+            ;; An out-of-band edit to either half therefore rebuilds from their
+            ;; stable tx-ordered union. Runtime split edits are rare; correctness
+            ;; here is worth avoiding two partially-coupled incremental cursors.
+            (let [c0 (migrate-flat->co path)
+                  through (or (:next-seq @(:store c0)) 0)]
+              (if (< (long through) (long (:from-tx roots)))
+                {:mode :refused :logmax through}
+                {:mode :install :co c0 :schema-root schema-root
+                 :through through}))
+            (let [tail-result (read-log-tail* path (:from-byte roots) (:from-tx roots))
+                  tail (:lines tail-result)
+                  tail-max (:max-tx tail-result)]
+              (if (> (long tail-max) (long (:from-tx roots)))
+                (let [clone {:store (atom (:store-root roots)) :log nil :lock (Object.)}]
+                  (apply-tail! clone tail)
+                  ;; read-log-tail* deliberately excludes an EDN-valid incomplete row
+                  ;; from :lines while retaining its :tx in :max-tx.  The cold fold does
+                  ;; the same: no fact applies, but version advances past the torn write.
+                  ;; Advancing the private clone also keeps schema-only tails in cheap
+                  ;; tail mode instead of forcing a whole-log migration.
+                  (swap! (:store clone) assoc :next-seq tail-max)
+                  {:mode :install :co clone :schema-root schema-root
+                   :through tail-max})
+                (let [whole (read-log-tail* path 0 -1)
+                      logmax (:max-tx whole)]
+                  (if (< logmax (long (:from-tx roots)))
+                    {:mode :refused :logmax logmax}
+                    (let [c0 (migrate-flat->co path)]
+                      {:mode :install :co c0 :schema-root schema-root
+                       :through (or (:next-seq @(:store c0)) 0)}))))))]
       ;; External writers do not participate in group-io-lock.  A final stamp check
       ;; is therefore mandatory after every byte of candidate construction.
-      (if (= (:target-stamp roots) (stamp path))
+      (if (and (= (:target-stamp roots) (stamp path))
+               (= (:target-telemetry-stamp roots)
+                  (some-> telemetry-path stamp)))
         candidate
         {:mode :raced}))
     (finally
@@ -3587,10 +3730,15 @@
   (locking dlock
     (locking group-io-lock
       (let [same-target? (and (= (:path roots) @flat-log)
-                              (= (:target-stamp roots) (stamp (:path roots))))
+                              (= (:target-stamp roots) (stamp (:path roots)))
+                              (= (:telemetry-path roots) @telemetry-log)
+                              (= (:target-telemetry-stamp roots)
+                                 (some-> (:telemetry-path roots) stamp)))
             exact-base? (and @flat-canonical?
                              (= (:known-stamp roots) @flat-mtime)
+                             (= (:known-telemetry-stamp roots) @telemetry-mtime)
                              (= (:from-byte roots) @flat-bytes)
+                             (= (:from-telemetry-byte roots) @telemetry-bytes)
                              (= (:from-tx roots) @built-through)
                              (= (:co-version roots) (current-seq @co))
                              (identical? (:store-root roots) @(:store @co))
@@ -3604,6 +3752,8 @@
             ;; rescan it.  The in-memory Store/schema/cache stay on the last good root.
             (reset! flat-mtime (:target-stamp roots))
             (reset! flat-bytes (:target-bytes roots))
+            (reset! telemetry-mtime (:target-telemetry-stamp roots))
+            (reset! telemetry-bytes (or (:target-telemetry-bytes roots) 0))
             (binding [*out* *err*]
               (println (str "[fram] REFUSED reload: facts.log regressed (max-tx "
                             (:logmax candidate) " < live built-through " (:from-tx roots) ") — a"
@@ -3617,6 +3767,8 @@
             (reset! built-through (:through candidate))
             (reset! flat-mtime (:target-stamp roots))
             (reset! flat-bytes (:target-bytes roots))
+            (reset! telemetry-mtime (:target-telemetry-stamp roots))
+            (reset! telemetry-bytes (or (:target-telemetry-bytes roots) 0))
             (reset! schema-view (:schema-root candidate))
             (reset! cache {:index nil :version -1})
             (reset! facts-wire-cache {:version -1 :triples nil})
@@ -3628,7 +3780,8 @@
           ;; is proof of convergence; do not whole-migrate the same corpus again.
           (and same-target?
                (> @reload-generation (:generation roots))
-               (= @flat-mtime (:target-stamp roots)))
+               (= @flat-mtime (:target-stamp roots))
+               (= @telemetry-mtime (:target-telemetry-stamp roots)))
           :superseded
 
           :else :retry)))))
@@ -3926,14 +4079,19 @@
                       (Thread. (fn [] (snapshot-if-dirty! "shutdown"))))))
 
 (defn serve-flat-daemon [port flat]
-  ;; vGUARD boot participation (B2 §2): acquire the corpus rewrite lock BEFORE
-  ;; first serve — exclusive-if-free heals any crashed generation flip via the
-  ;; intent doctor; a LIVE flip's exclusive lock makes this daemon BLOCK here
-  ;; until the flip releases. Never serve a half-flipped corpus. The SHARED
-  ;; handle is held across the boot fold (a flip cannot start mid-read) and
-  ;; released before serving — steady-state appends re-take it per batch.
-  (let [gate (fram.rt/boot-rewrite-gate! (str flat))]
-    (try (boot-flat! flat)
+  ;; Boot owns the corpus EXCLUSIVELY across intent healing, torn-tail repair,
+  ;; and the fold. This is stronger than steady-state shared append admission:
+  ;; no peer append or generation flip can race between truncating/finalizing an
+  ;; unacknowledged tail and observing the repaired bytes. Once serving begins,
+  ;; every append re-takes the shared rewrite lock and refuses a non-LF boundary.
+  (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
+    (try
+      (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
+        (when-not (= :clean (:state healed))
+          (println (str "[fram] boot: healed crashed rewrite on " flat
+                        " (" (name (:state healed)) ")"))))
+      (repair-flat-corpus-tails! flat)
+      (boot-flat! flat)
          (finally (fram.rt/close-rewrite-lock! gate))))
   (start-snapshot-writer!)
   (println (str "reified coordinator (drop-in over flat log): "

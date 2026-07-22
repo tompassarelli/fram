@@ -57,6 +57,30 @@
 
 (defn- deliver-all! [items v] (doseq [{:keys [ticket]} items] (deliver ticket v)))
 
+(defn assert-flat-append-boundary!
+  "Refuse to append after a non-empty unterminated flat-log tail. Boot recovery
+  repairs a crash tail under the exclusive rewrite lock; reaching this shared
+  append seam without a terminal LF means repair did not own a stable corpus."
+  [path]
+  (let [f (java.io.File. (str path))]
+    (when (and (.exists f) (pos? (.length f)))
+      (with-open [raf (java.io.RandomAccessFile. f "r")]
+        (.seek raf (dec (.length raf)))
+        (when-not (= 10 (.read raf))
+          (throw (ex-info (str "refusing append to unterminated flat log: " path)
+                          {:path (str path)
+                           :bytes (.length raf)
+                           :fram/unterminated-flat-tail true})))))))
+
+(defn- flat-file-stamp [path]
+  (let [f (java.io.File. (str path))]
+    (str (.lastModified f) ":" (.length f))))
+
+(defn- utf8-byte-count [items]
+  (reduce + 0
+          (for [{:keys [lines]} items, ^String line lines]
+            (alength (.getBytes line java.nio.charset.StandardCharsets/UTF_8)))))
+
 (defn- group-appender-loop []
   (loop []
     (let [fst (.take group-q)
@@ -69,7 +93,9 @@
         ;; for an external edit (stamp and file move together).
         (locking group-io-lock
           (doseq [[path pitems] (group-by :path items)]
-            (let [real (filter #(seq (:lines %)) pitems)]
+            (let [real (vec (filter #(seq (:lines %)) pitems))
+                  written-bytes (when (seq real) (utf8-byte-count real))
+                  flush-context (volatile! nil)]
               (try
                 (when (and path (seq real))
                   ;; vGUARD writer admission (B2 §2): the batch holds the SHARED
@@ -80,12 +106,29 @@
                   ;; acked write can ever sit outside a flip's read set.
                   (rt/with-append-admission (str path)
                     (fn []
-                      (with-open [os (java.io.FileOutputStream. (str path) true)]
-                        (doseq [{:keys [lines]} real, ^String ln lines]
-                          (.write os (.getBytes ln "UTF-8")))
-                        (.flush os)
-                        (.force (.getChannel os) true)))))   ; ONE fsync covers the whole batch
-                (doseq [{:keys [on-flushed]} pitems :when on-flushed] (on-flushed))
+                      (assert-flat-append-boundary! path)
+                      (let [before-stamp (flat-file-stamp path)
+                            before-bytes (.length (java.io.File. (str path)))]
+                        (with-open [os (java.io.FileOutputStream. (str path) true)]
+                          (doseq [{:keys [lines]} real, ^String ln lines]
+                            (.write os (.getBytes ln "UTF-8")))
+                          (.flush os)
+                          (.force (.getChannel os) true))    ; ONE fsync covers the whole batch
+                        ;; Capture the owned-byte proof before releasing shared
+                        ;; rewrite admission; a generation flip cannot hide in
+                        ;; the before/after window.
+                        (let [after-stamp (flat-file-stamp path)
+                              after-bytes (.length (java.io.File. (str path)))]
+                          (vreset! flush-context
+                                   {:path (str path)
+                                    :before-stamp before-stamp
+                                    :after-stamp after-stamp
+                                    :owned-append-exact?
+                                    (= (long after-bytes)
+                                       (+ (long before-bytes)
+                                          (long written-bytes)))}))))))
+                (doseq [{:keys [on-flushed]} pitems :when on-flushed]
+                  (on-flushed @flush-context))
                 (deliver-all! pitems :ok)
                 (catch Throwable t (deliver-all! pitems t)))))))
       (recur))))
@@ -102,7 +145,8 @@
 
 ;; enqueue `lines` for durable append to `path`. Returns the ticket when deferred
 ;; (collected into *durable-tickets*); awaits it inline otherwise. on-flushed (may
-;; be nil) runs on the appender thread after the batch's fsync, before delivery.
+;; be nil) runs on the appender thread after the batch's fsync, before delivery,
+;; with the batch's before/after stamps and an exact-owned-byte verdict.
 (defn enqueue-durable! [path lines on-flushed]
   (ensure-group-appender!)
   (let [t (promise)]
