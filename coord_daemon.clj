@@ -349,6 +349,41 @@
   (if *flat-batch*
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
     (write-flat-lines! [(flat-line op te p r seq)])))       ; immediate (single-op / non-batched callers)
+
+;; coord.clj persists leases through its v2 transaction log. In serve-flat mode
+;; `co` deliberately has no v2 log, so accepted lease mutations need the same
+;; flat projection bridge used by ordinary fact writes. Keep the mutation and
+;; projection in this one dlock turn; handle awaits the resulting durable ticket
+;; before acknowledging the request. Rejected/no-op calls append nothing.
+(defn- lease-flat-mutation! [req action]
+  (let [st (:store @co)
+        resource (:res req)
+        before (read-lease @co resource)
+        schema-single? (= "single" (s/cardinality st lease-pred))
+        result (action)]
+    (when @flat-log
+      (let [seq (:ok result)
+            acquired? (and (integer? seq)
+                           (= seq (:epoch result)))
+            released? (and (integer? seq)
+                           before
+                           (not (:noop result))
+                           (nil? (:epoch result)))
+            schema-lines (when (and acquired? (not schema-single?))
+                           [(flat-line "assert" "@lease" "cardinality" "single" seq)
+                            (flat-line "assert" "@lease" "value_kind" "literal" seq)])
+            lease-line (cond
+                         acquired?
+                         (flat-line "assert" (lease-subj resource) lease-pred
+                                    (encode-lease (:holder result) (:exp result) (:epoch result))
+                                    seq)
+
+                         released?
+                         (flat-line "retract" (lease-subj resource) lease-pred
+                                    (encode-lease (:holder before) (:exp before) (:epoch before))
+                                    seq))]
+        (write-flat-lines! (cond-> (vec schema-lines) lease-line (conj lease-line)))))
+    result))
 (defn- flush-flat-batch! []
   (when *flat-batch*
     (let [t0 (System/nanoTime) lines @*flat-batch*]
@@ -2515,19 +2550,23 @@
       ;; serializes with other daemon ops. A bare :assert @lease:<res> is the UNSAFE lost-update
       ;; path the lease arm exists to close — agents MUST use these. No notify-subs! (lease
       ;; changes are not broadcast), matching the fram-lease fork. Impl: coord.clj (load-file'd).
-      :acquire-lease (acquire-lease! @co (:holder req) (:res req) (:ttl-ms req))
+      :acquire-lease
+      (lease-flat-mutation!
+       req #(acquire-lease! @co (:holder req) (:res req) (:ttl-ms req)))
       ;; Renewal is not reacquisition: exact holder + current epoch + unexpired
       ;; state are checked, then the new expiry and globally fresh epoch are
       ;; persisted in the same coordinator turn.
       :renew-lease
-      (renew-lease! @co (:holder req) (:res req) (:epoch req) (:ttl-ms req))
+      (lease-flat-mutation!
+       req #(renew-lease! @co (:holder req) (:res req) (:epoch req) (:ttl-ms req)))
       ;; Epoch is optional only for wire compatibility with legacy callers.
       ;; Modern fenced callers include it so a delayed release from the same
       ;; holder cannot delete a successor acquisition (ABA).
       :release-lease
-      (if (contains? req :epoch)
-        (release-lease! @co (:holder req) (:res req) (:epoch req))
-        (release-lease! @co (:holder req) (:res req)))
+      (lease-flat-mutation!
+       req #(if (contains? req :epoch)
+              (release-lease! @co (:holder req) (:res req) (:epoch req))
+              (release-lease! @co (:holder req) (:res req))))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
