@@ -1,5 +1,6 @@
 (ns fram.authority
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [fram.authority-json :as authority-json]))
 
 (def ^String u64-max "18446744073709551615")
 
@@ -26,6 +27,13 @@
   (vector? value) (every? (fn [item] (json-subset-value? item)) value)
   (map? value) (every? (fn [key] (and (string? key) (unicode-scalar-string? key) (json-subset-value? (get value key)))) (vec (keys value)))
   :else false))
+
+(defn decode-json-no-number-no-null! [raw]
+  (if (string? raw) (let [parsed (try
+  (authority-json/decode-strict raw)
+  (catch Throwable _
+    (authority-fail! "invalid-json" "$" "raw JSON is malformed or contains a duplicate object name")))]
+  (if (json-subset-value? parsed) parsed (authority-fail! "json-domain" "$" "raw JSON must contain only booleans, strings, arrays, and string-keyed objects"))) (authority-fail! "invalid-json" "$" "raw JSON input must be a string")))
 
 (defn ^Boolean clean-authority-string? [value]
   (if (string? value) (and (unicode-scalar-string? value) (java.text.Normalizer/isNormalized value java.text.Normalizer$Form/NFC) (loop [i 0]
@@ -72,19 +80,16 @@
    missing (filterv (fn [key] (not (contains? m key))) required)
    unknown (filterv (fn [key] (or (not (string? key)) (not (some (fn [allowed-key] (= allowed-key key)) allowed)))) keys0)]
   (do
-  (ensure-authority! (empty? missing) "missing-key" path (str "missing keys: " (str/join "," missing)))
+  (ensure-authority! (empty? missing) "missing-key" path (str "missing required keys: " (str/join "," missing)))
   (ensure-authority! (empty? unknown) "unknown-key" path (str "unknown keys: " (str/join "," (mapv str unknown))))
   m)) (authority-fail! "expected-object" path "expected a JSON object")))
 
 (defn- ^String clean-text! [value ^String path]
-  (do
-  (ensure-authority! (clean-authority-string? value) "invalid-string" path "expected an NFC Unicode string without control characters")
-  (str value)))
+  (if (clean-authority-string? value) value (authority-fail! "invalid-text" path "expected NFC Unicode scalar text without control characters")))
 
 (defn- ^String digest-text! [value ^String path]
-  (do
-  (ensure-authority! (and (string? value) (.matches value "sha256:[0-9a-f]{64}")) "invalid-digest" path "expected lowercase sha256:<64 hex>")
-  (str value)))
+  (let [text (clean-text! value path)]
+  (if (.matches text "sha256:[0-9a-f]{64}") text (authority-fail! "invalid-digest" path "expected lowercase sha256:<64 hex>"))))
 
 (defn- ^String decimal-text! [value ^String path]
   (do
@@ -195,6 +200,10 @@
   (ensure-authority! (= module-id (module-id-for-source-path! source-path)) "module-path-mismatch" "manifest.entries[]" "moduleId must be derived exactly from sourcePath")
   {"moduleId" module-id "sourcePath" source-path})))
 
+(defn ^String ascii-case-alias [^String value]
+  (apply str (mapv (fn [i] (let [n (int (.charAt value i))]
+  (if (and (<= 65 n) (<= n 90)) (str (char (+ n 32))) (subs value i (inc i))))) (vec (range (count value))))))
+
 (defn- module-entry-compare [a b]
   (let [by-module (unsigned-utf8-compare (str (get a "moduleId")) (str (get b "moduleId")))]
   (if (zero? by-module) (unsigned-utf8-compare (str (get a "sourcePath")) (str (get b "sourcePath"))) by-module)))
@@ -205,8 +214,8 @@
    entries (mapv (fn [entry] (validate-module-entry! entry)) (vector-value! entries-value "manifest.entries"))
    module-ids (mapv (fn [entry] (str (get entry "moduleId"))) entries)
    source-paths (mapv (fn [entry] (str (get entry "sourcePath"))) entries)
-   module-aliases (mapv str/lower-case module-ids)
-   path-aliases (mapv str/lower-case source-paths)
+   module-aliases (mapv ascii-case-alias module-ids)
+   path-aliases (mapv ascii-case-alias source-paths)
    ast-module-ids (clean-string-vector! ast-module-ids-value "manifest.astModuleIds")
    known (set module-ids)
    orphans (filterv (fn [module-id] (not (contains? known module-id))) ast-module-ids)
@@ -215,8 +224,8 @@
    snapshot-core (assoc mapping-core "graphVersion" version)]
   (do
   (ensure-authority! (portable-relative-path? source-root true) "invalid-source-root" "manifest.sourceRootRelativeToCheckout" "source root must be a canonical portable checkout-relative path; empty denotes checkout root")
-  (ensure-authority! (= (count module-aliases) (count (set module-aliases))) "duplicate-module" "manifest.entries" "duplicate or case-colliding moduleId")
-  (ensure-authority! (= (count path-aliases) (count (set path-aliases))) "duplicate-source-path" "manifest.entries" "duplicate or case-colliding sourcePath")
+  (ensure-authority! (= (count module-aliases) (count (set module-aliases))) "duplicate-module" "manifest.entries" "duplicate or ASCII-case-colliding moduleId")
+  (ensure-authority! (= (count path-aliases) (count (set path-aliases))) "duplicate-source-path" "manifest.entries" "duplicate or ASCII-case-colliding sourcePath")
   (ensure-authority! (empty? orphans) "orphan-ast-module" "manifest.astModuleIds" (str "AST modules lack a registered module root: " (str/join "," orphans)))
   {"manifestVersion" "fram.module-manifest/v1" "sourceRootRelativeToCheckout" source-root "graphVersion" version "mappingDigest" (digest-json-no-number-no-null! mapping-core) "snapshotDigest" (digest-json-no-number-no-null! snapshot-core) "entries" ordered})))
 
@@ -283,27 +292,11 @@
   (let [m (string-object! value "descriptor")]
   (digest-json-no-number-no-null! (dissoc m "descriptorDigest"))))
 
-(defn validate-authority-descriptor! [value]
-  (let [m (closed-object! value ["descriptorVersion" "descriptorDigest" "candidateProtocol" "coordinator" "runtime" "corpus" "tools" "lifecycle" "bindingDigest"] [] "descriptor")
-   coordinator (closed-object! (get m "coordinator") ["instanceId" "endpoint" "lease"] [] "descriptor.coordinator")
+(defn- validate-descriptor-coordinator! [value]
+  (let [coordinator (closed-object! value ["instanceId" "endpoint" "lease"] [] "descriptor.coordinator")
    endpoint (closed-object! (get coordinator "endpoint") ["transport" "host" "port" "serverSpkiSha256"] [] "descriptor.coordinator.endpoint")
-   lease (closed-object! (get coordinator "lease") ["id" "epoch" "clientSpkiSha256" "expiresAtUnixMs" "state"] [] "descriptor.coordinator.lease")
-   runtime (closed-object! (get m "runtime") ["sealVersion" "system" "roots" "closureDigest"] [] "descriptor.runtime")
-   roots (clean-string-vector! (get runtime "roots") "descriptor.runtime.roots")
-   corpus (closed-object! (get m "corpus") ["checkoutRoot" "sourceRoot" "sourceRootRelativeToCheckout" "codeLog" "identity" "snapshot"] [] "descriptor.corpus")
-   identity (closed-object! (get corpus "identity") ["checkoutFileKey" "sourceFileKey" "logFileKey"] [] "descriptor.corpus.identity")
-   snapshot (closed-object! (get corpus "snapshot") ["graphVersion" "logPrefixBytes" "logPrefixSha256" "moduleManifest"] [] "descriptor.corpus.snapshot")
-   manifest (closed-object! (get snapshot "moduleManifest") ["manifestVersion" "mappingDigest" "snapshotDigest" "entries"] [] "descriptor.corpus.snapshot.moduleManifest")
-   tools (closed-object! (get m "tools") ["catalogVersion" "catalogDigest" "tools"] [] "descriptor.tools")
-   lifecycle (closed-object! (get m "lifecycle") ["durability" "projection"] [] "descriptor.lifecycle")
-   durability (closed-object! (get lifecycle "durability") ["state"] [] "descriptor.lifecycle.durability")
-   projection (closed-object! (get lifecycle "projection") ["state" "generation"] [] "descriptor.lifecycle.projection")
-   full-manifest {"manifestVersion" (get manifest "manifestVersion") "sourceRootRelativeToCheckout" (get corpus "sourceRootRelativeToCheckout") "graphVersion" (get snapshot "graphVersion") "mappingDigest" (get manifest "mappingDigest") "snapshotDigest" (get manifest "snapshotDigest") "entries" (get manifest "entries")}
-   catalog {"catalogVersion" (get tools "catalogVersion") "tools" (get tools "tools")}
-   binding (authority-binding-from-descriptor m)]
+   lease (closed-object! (get coordinator "lease") ["id" "epoch" "clientSpkiSha256" "expiresAtUnixMs" "state"] [] "descriptor.coordinator.lease")]
   (do
-  (ensure-authority! (= "fram.graph-edit-authority/v1" (clean-text! (get m "descriptorVersion") "descriptor.descriptorVersion")) "descriptor-version" "descriptor.descriptorVersion" "unsupported descriptorVersion")
-  (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol")) "candidate-protocol" "descriptor.candidateProtocol" "unsupported candidate protocol")
   (clean-text! (get coordinator "instanceId") "descriptor.coordinator.instanceId")
   (clean-text! (get endpoint "transport") "descriptor.coordinator.endpoint.transport")
   (clean-text! (get endpoint "host") "descriptor.coordinator.endpoint.host")
@@ -314,10 +307,25 @@
   (digest-text! (get lease "clientSpkiSha256") "descriptor.coordinator.lease.clientSpkiSha256")
   (decimal-text! (get lease "expiresAtUnixMs") "descriptor.coordinator.lease.expiresAtUnixMs")
   (ensure-authority! (= "active" (clean-text! (get lease "state") "descriptor.coordinator.lease.state")) "lease-state" "descriptor.coordinator.lease.state" "descriptors require an active lease")
+  coordinator)))
+
+(defn- validate-descriptor-runtime! [value]
+  (let [runtime (closed-object! value ["sealVersion" "system" "roots" "closureDigest"] [] "descriptor.runtime")
+   roots (clean-string-vector! (get runtime "roots") "descriptor.runtime.roots")]
+  (do
   (clean-text! (get runtime "sealVersion") "descriptor.runtime.sealVersion")
   (clean-text! (get runtime "system") "descriptor.runtime.system")
   (ensure-authority! (not (empty? roots)) "runtime-roots" "descriptor.runtime.roots" "runtime roots must not be empty")
   (digest-text! (get runtime "closureDigest") "descriptor.runtime.closureDigest")
+  runtime)))
+
+(defn- validate-descriptor-corpus! [value]
+  (let [corpus (closed-object! value ["checkoutRoot" "sourceRoot" "sourceRootRelativeToCheckout" "codeLog" "identity" "snapshot"] [] "descriptor.corpus")
+   identity (closed-object! (get corpus "identity") ["checkoutFileKey" "sourceFileKey" "logFileKey"] [] "descriptor.corpus.identity")
+   snapshot (closed-object! (get corpus "snapshot") ["graphVersion" "logPrefixBytes" "logPrefixSha256" "moduleManifest"] [] "descriptor.corpus.snapshot")
+   manifest (closed-object! (get snapshot "moduleManifest") ["manifestVersion" "mappingDigest" "snapshotDigest" "entries"] [] "descriptor.corpus.snapshot.moduleManifest")
+   full-manifest {"manifestVersion" (get manifest "manifestVersion") "sourceRootRelativeToCheckout" (get corpus "sourceRootRelativeToCheckout") "graphVersion" (get snapshot "graphVersion") "mappingDigest" (get manifest "mappingDigest") "snapshotDigest" (get manifest "snapshotDigest") "entries" (get manifest "entries")}]
+  (do
   (clean-text! (get corpus "checkoutRoot") "descriptor.corpus.checkoutRoot")
   (clean-text! (get corpus "sourceRoot") "descriptor.corpus.sourceRoot")
   (clean-text! (get corpus "codeLog") "descriptor.corpus.codeLog")
@@ -327,10 +335,36 @@
   (decimal-text! (get snapshot "logPrefixBytes") "descriptor.corpus.snapshot.logPrefixBytes")
   (digest-text! (get snapshot "logPrefixSha256") "descriptor.corpus.snapshot.logPrefixSha256")
   (validate-normalized-module-manifest! full-manifest)
+  corpus)))
+
+(defn- validate-descriptor-tools! [value]
+  (let [tools (closed-object! value ["catalogVersion" "catalogDigest" "tools"] [] "descriptor.tools")
+   catalog {"catalogVersion" (get tools "catalogVersion") "tools" (get tools "tools")}]
+  (do
   (ensure-authority! (= (digest-text! (get tools "catalogDigest") "descriptor.tools.catalogDigest") (tool-catalog-digest! catalog)) "catalog-digest" "descriptor.tools.catalogDigest" "catalogDigest does not match the exact served catalog")
+  tools)))
+
+(defn- validate-descriptor-lifecycle! [value]
+  (let [lifecycle (closed-object! value ["durability" "projection"] [] "descriptor.lifecycle")
+   durability (closed-object! (get lifecycle "durability") ["state"] [] "descriptor.lifecycle.durability")
+   projection (closed-object! (get lifecycle "projection") ["state" "generation"] [] "descriptor.lifecycle.projection")]
+  (do
   (clean-text! (get durability "state") "descriptor.lifecycle.durability.state")
   (clean-text! (get projection "state") "descriptor.lifecycle.projection.state")
   (decimal-text! (get projection "generation") "descriptor.lifecycle.projection.generation")
+  lifecycle)))
+
+(defn validate-authority-descriptor! [value]
+  (let [m (closed-object! value ["descriptorVersion" "descriptorDigest" "candidateProtocol" "coordinator" "runtime" "corpus" "tools" "lifecycle" "bindingDigest"] [] "descriptor")
+   binding (authority-binding-from-descriptor m)]
+  (do
+  (ensure-authority! (= "fram.graph-edit-authority/v1" (clean-text! (get m "descriptorVersion") "descriptor.descriptorVersion")) "descriptor-version" "descriptor.descriptorVersion" "unsupported descriptorVersion")
+  (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol")) "candidate-protocol" "descriptor.candidateProtocol" "unsupported candidate protocol")
+  (validate-descriptor-coordinator! (get m "coordinator"))
+  (validate-descriptor-runtime! (get m "runtime"))
+  (validate-descriptor-corpus! (get m "corpus"))
+  (validate-descriptor-tools! (get m "tools"))
+  (validate-descriptor-lifecycle! (get m "lifecycle"))
   (validate-authority-binding! binding)
   (ensure-authority! (= (digest-text! (get m "bindingDigest") "descriptor.bindingDigest") (authority-binding-digest! binding)) "binding-digest" "descriptor.bindingDigest" "bindingDigest does not match stable authority identity")
   (ensure-authority! (= (digest-text! (get m "descriptorDigest") "descriptor.descriptorDigest") (authority-descriptor-digest! m)) "descriptor-digest" "descriptor.descriptorDigest" "descriptorDigest does not match descriptor content")
@@ -346,28 +380,89 @@
   (let [m (string-object! value "receipt")]
   (digest-json-no-number-no-null! (dissoc m "receiptDigest"))))
 
-(defn validate-phase-receipt! [value]
-  (let [m (closed-object! value ["receiptVersion" "receiptDigest" "operationId" "authority" "request" "module" "prepare" "commit" "projection" "outcome" "canonicalMutation" "retry" "automaticRetryable"] ["detailCode"] "receipt")
-   authority (closed-object! (get m "authority") ["bindingDigest" "descriptorDigest" "instanceId" "leaseId" "leaseEpoch"] [] "receipt.authority")
-   request (closed-object! (get m "request") ["tool" "argumentsDigest"] [] "receipt.request")
-   module (closed-object! (get m "module") ["moduleId" "sourcePath"] [] "receipt.module")
-   prepare (closed-object! (get m "prepare") ["status" "candidateId" "baseGraphVersion" "manifestSnapshotDigest" "opsDigest" "ednDigest" "ops" "asserts" "retracts" "newNodes"] [] "receipt.prepare")
-   commit (closed-object! (get m "commit") ["status" "graphVersionBefore" "graphVersionAfter" "installed" "coordinatorReceiptDigest"] [] "receipt.commit")
-   projection (closed-object! (get m "projection") ["status" "expectedSha256" "actualSha256" "coordinatorReceiptDigest"] [] "receipt.projection")
-   prepare-status (clean-text! (get prepare "status") "receipt.prepare.status")
-   commit-status (clean-text! (get commit "status") "receipt.commit.status")
-   projection-status (clean-text! (get projection "status") "receipt.projection.status")
-   outcome (clean-text! (get m "outcome") "receipt.outcome")
-   canonical (bool-value! (get m "canonicalMutation") "receipt.canonicalMutation")
-   automatic (bool-value! (get m "automaticRetryable") "receipt.automaticRetryable")
-   ops (bigint (decimal-text! (get prepare "ops") "receipt.prepare.ops"))
-   asserts (bigint (decimal-text! (get prepare "asserts") "receipt.prepare.asserts"))
-   retracts (bigint (decimal-text! (get prepare "retracts") "receipt.prepare.retracts"))
-   new-nodes (bigint (decimal-text! (get prepare "newNodes") "receipt.prepare.newNodes"))
-   before (bigint (decimal-text! (get commit "graphVersionBefore") "receipt.commit.graphVersionBefore"))
-   after (bigint (decimal-text! (get commit "graphVersionAfter") "receipt.commit.graphVersionAfter"))
-   installed (bigint (decimal-text! (get commit "installed") "receipt.commit.installed"))
-   completed (= outcome "completed")]
+(def receipt-transition-table {"canonical_indeterminate" {"prepare" "accepted" "commit" "indeterminate" "projection" "not_run" "canonicalMutation" "indeterminate" "retry" "new-session-after-recovery" "detailCodes" ["durability-indeterminate" "commit-response-unknown"]} "rejected_prepare" {"prepare" "rejected" "commit" "not_run" "projection" "not_run" "canonicalMutation" "none" "retry" "same-session-after-correction" "detailCodes" ["candidate-rejected"]} "committed_projection_stale" {"prepare" "accepted" "commit" "committed" "projection" "stale" "canonicalMutation" "committed" "retry" "new-session-after-repair" "detailCodes" ["projection-stale"]} "completed" {"prepare" "accepted" "commit" "committed" "projection" "published" "canonicalMutation" "committed" "retry" "never" "detailCodes" []} "rejected_input" {"prepare" "not_run" "commit" "not_run" "projection" "not_run" "canonicalMutation" "none" "retry" "same-session-after-correction" "detailCodes" ["invalid-input"]} "commit_failed_restored" {"prepare" "accepted" "commit" "failed_restored" "projection" "not_run" "canonicalMutation" "none" "retry" "new-session-after-recovery" "detailCodes" ["durability-failure"]} "committed_projection_indeterminate" {"prepare" "accepted" "commit" "committed" "projection" "indeterminate" "canonicalMutation" "committed" "retry" "new-session-after-repair" "detailCodes" ["projection-indeterminate"]} "authority_stopped" {"prepare" "not_run" "commit" "not_run" "projection" "not_run" "canonicalMutation" "none" "retry" "lifecycle-specific-new-session" "detailCodes" ["durability-poisoned" "committed-repair-needed" "authority-stopped"]} "protocol_violation" {"prepare" "not_run" "commit" "not_run" "projection" "not_run" "canonicalMutation" "indeterminate" "retry" "new-session-after-recovery" "detailCodes" ["protocol-violation"]} "rejected_stale" {"prepare" "accepted" "commit" "rejected_stale" "projection" "not_run" "canonicalMutation" "none" "retry" "same-session-reprepare" "detailCodes" ["stale-version"]}})
+
+(defn- validate-accepted-prepare! [value]
+  (let [m (closed-object! value ["status" "candidateId" "baseGraphVersion" "manifestSnapshotDigest" "opsDigest" "ednDigest" "ops" "asserts" "retracts" "newNodes"] [] "receipt.prepare")
+   ops (bigint (decimal-text! (get m "ops") "receipt.prepare.ops"))
+   asserts (bigint (decimal-text! (get m "asserts") "receipt.prepare.asserts"))
+   retracts (bigint (decimal-text! (get m "retracts") "receipt.prepare.retracts"))
+   new-nodes (bigint (decimal-text! (get m "newNodes") "receipt.prepare.newNodes"))]
+  (do
+  (ensure-authority! (= "accepted" (clean-text! (get m "status") "receipt.prepare.status")) "prepare-status" "receipt.prepare.status" "accepted prepare schema requires accepted status")
+  (clean-text! (get m "candidateId") "receipt.prepare.candidateId")
+  (decimal-text! (get m "baseGraphVersion") "receipt.prepare.baseGraphVersion")
+  (digest-text! (get m "manifestSnapshotDigest") "receipt.prepare.manifestSnapshotDigest")
+  (digest-text! (get m "opsDigest") "receipt.prepare.opsDigest")
+  (digest-text! (get m "ednDigest") "receipt.prepare.ednDigest")
+  (ensure-authority! (= ops (+ asserts retracts)) "receipt-counts" "receipt.prepare" "ops must equal asserts plus retracts")
+  (ensure-authority! (<= new-nodes asserts) "receipt-counts" "receipt.prepare.newNodes" "newNodes cannot exceed asserts")
+  m)))
+
+(defn- validate-prepare-phase! [value]
+  (let [raw (string-object! value "receipt.prepare")
+   status (clean-text! (get raw "status") "receipt.prepare.status")]
+  (cond
+  (= status "not_run") (closed-object! raw ["status"] [] "receipt.prepare")
+  (= status "rejected") (closed-object! raw ["status"] [] "receipt.prepare")
+  (= status "accepted") (validate-accepted-prepare! raw)
+  :else (authority-fail! "prepare-status" "receipt.prepare.status" "prepare status must be not_run, accepted, or rejected"))))
+
+(defn- validate-versioned-commit! [value]
+  (let [m (closed-object! value ["status" "graphVersionBefore" "graphVersionAfter" "installed" "coordinatorReceiptDigest"] [] "receipt.commit")
+   status (clean-text! (get m "status") "receipt.commit.status")
+   before (bigint (decimal-text! (get m "graphVersionBefore") "receipt.commit.graphVersionBefore"))
+   after (bigint (decimal-text! (get m "graphVersionAfter") "receipt.commit.graphVersionAfter"))
+   installed (bigint (decimal-text! (get m "installed") "receipt.commit.installed"))]
+  (do
+  (ensure-authority! (contains? (set ["committed" "failed_restored"]) status) "commit-status" "receipt.commit.status" "versioned commit schema requires committed or failed_restored")
+  (digest-text! (get m "coordinatorReceiptDigest") "receipt.commit.coordinatorReceiptDigest")
+  (if (= status "failed_restored") (do
+  (do
+  (ensure-authority! (= before after) "commit-restoration" "receipt.commit" "failed_restored must restore the pre-commit graph version")
+  (ensure-authority! (zero? installed) "commit-restoration" "receipt.commit.installed" "failed_restored must install zero operations"))))
+  m)))
+
+(defn- validate-commit-phase! [value]
+  (let [raw (string-object! value "receipt.commit")
+   status (clean-text! (get raw "status") "receipt.commit.status")]
+  (cond
+  (= status "not_run") (closed-object! raw ["status"] [] "receipt.commit")
+  (or (= status "committed") (= status "failed_restored")) (validate-versioned-commit! raw)
+  (= status "rejected_stale") (let [m (closed-object! raw ["status" "observedGraphVersion" "coordinatorReceiptDigest"] [] "receipt.commit")]
+  (do
+  (decimal-text! (get m "observedGraphVersion") "receipt.commit.observedGraphVersion")
+  (digest-text! (get m "coordinatorReceiptDigest") "receipt.commit.coordinatorReceiptDigest")
+  m))
+  (= status "indeterminate") (let [m (closed-object! raw ["status" "graphVersionBefore" "coordinatorReceiptDigest"] [] "receipt.commit")]
+  (do
+  (decimal-text! (get m "graphVersionBefore") "receipt.commit.graphVersionBefore")
+  (digest-text! (get m "coordinatorReceiptDigest") "receipt.commit.coordinatorReceiptDigest")
+  m))
+  :else (authority-fail! "commit-status" "receipt.commit.status" "commit status must be not_run, committed, rejected_stale, failed_restored, or indeterminate"))))
+
+(defn- validate-projection-phase! [value]
+  (let [raw (string-object! value "receipt.projection")
+   status (clean-text! (get raw "status") "receipt.projection.status")]
+  (cond
+  (= status "not_run") (closed-object! raw ["status"] [] "receipt.projection")
+  (= status "published") (let [m (closed-object! raw ["status" "expectedSha256" "actualSha256" "coordinatorReceiptDigest"] [] "receipt.projection")]
+  (do
+  (digest-text! (get m "expectedSha256") "receipt.projection.expectedSha256")
+  (digest-text! (get m "actualSha256") "receipt.projection.actualSha256")
+  (digest-text! (get m "coordinatorReceiptDigest") "receipt.projection.coordinatorReceiptDigest")
+  (ensure-authority! (= (get m "expectedSha256") (get m "actualSha256")) "projection-bytes" "receipt.projection" "published projection hashes must match")
+  m))
+  (or (= status "stale") (= status "indeterminate")) (let [m (closed-object! raw ["status" "expectedSha256" "coordinatorReceiptDigest"] [] "receipt.projection")]
+  (do
+  (digest-text! (get m "expectedSha256") "receipt.projection.expectedSha256")
+  (digest-text! (get m "coordinatorReceiptDigest") "receipt.projection.coordinatorReceiptDigest")
+  m))
+  :else (authority-fail! "projection-status" "receipt.projection.status" "projection status must be not_run, published, stale, or indeterminate"))))
+
+(defn- validate-receipt-envelope! [m]
+  (let [authority (closed-object! (get m "authority") ["bindingDigest" "descriptorDigest" "instanceId" "leaseId" "leaseEpoch"] [] "receipt.authority")
+   request (closed-object! (get m "request") ["tool" "argumentsDigest"] [] "receipt.request")]
   (do
   (ensure-authority! (= "fram.graph-edit-phase-receipt/v1" (clean-text! (get m "receiptVersion") "receipt.receiptVersion")) "receipt-version" "receipt.receiptVersion" "unsupported receiptVersion")
   (clean-text! (get m "operationId") "receipt.operationId")
@@ -378,27 +473,62 @@
   (decimal-text! (get authority "leaseEpoch") "receipt.authority.leaseEpoch")
   (ensure-authority! (contains? (set expected-tool-order) (clean-text! (get request "tool") "receipt.request.tool")) "receipt-tool" "receipt.request.tool" "receipt tool is outside the five-tool authority")
   (digest-text! (get request "argumentsDigest") "receipt.request.argumentsDigest")
-  (validate-module-entry! module)
-  (clean-text! (get prepare "candidateId") "receipt.prepare.candidateId")
-  (decimal-text! (get prepare "baseGraphVersion") "receipt.prepare.baseGraphVersion")
-  (digest-text! (get prepare "manifestSnapshotDigest") "receipt.prepare.manifestSnapshotDigest")
-  (digest-text! (get prepare "opsDigest") "receipt.prepare.opsDigest")
-  (digest-text! (get prepare "ednDigest") "receipt.prepare.ednDigest")
-  (digest-text! (get commit "coordinatorReceiptDigest") "receipt.commit.coordinatorReceiptDigest")
-  (digest-text! (get projection "expectedSha256") "receipt.projection.expectedSha256")
-  (digest-text! (get projection "actualSha256") "receipt.projection.actualSha256")
-  (digest-text! (get projection "coordinatorReceiptDigest") "receipt.projection.coordinatorReceiptDigest")
-  (decimal-text! (get m "retry") "receipt.retry")
-  (if (contains? m "detailCode") (do
-  (clean-text! (get m "detailCode") "receipt.detailCode")))
-  (ensure-authority! (= ops (+ asserts retracts)) "receipt-counts" "receipt.prepare" "ops must equal asserts plus retracts")
-  (ensure-authority! (<= new-nodes asserts) "receipt-counts" "receipt.prepare.newNodes" "newNodes cannot exceed asserts")
-  (ensure-authority! (= (bigint (decimal-text! (get prepare "baseGraphVersion") "receipt.prepare.baseGraphVersion")) before) "receipt-version" "receipt.commit.graphVersionBefore" "commit must start at prepared baseGraphVersion")
-  (ensure-authority! (or (not canonical) (and (= prepare-status "prepared") (= commit-status "committed") (= after (+ before installed)) (= installed ops))) "receipt-canonical-contradiction" "receipt" "canonical mutation requires prepared+committed phases and exact installed/version counts")
-  (ensure-authority! (or canonical (and (not (= commit-status "committed")) (= before after) (zero? installed) (not (= projection-status "installed")))) "receipt-rejection-contradiction" "receipt" "non-canonical outcome cannot report a commit, install, or version change")
-  (ensure-authority! (or (not (= projection-status "installed")) (and canonical (= (get projection "expectedSha256") (get projection "actualSha256")))) "receipt-projection-contradiction" "receipt.projection" "installed projection requires a canonical mutation and matching bytes")
-  (ensure-authority! (or (not automatic) (and (not canonical) (not completed))) "receipt-retry-contradiction" "receipt.automaticRetryable" "automatic retry is allowed only before any canonical mutation")
-  (ensure-authority! (or (not completed) (and canonical (= prepare-status "prepared") (= commit-status "committed") (= projection-status "installed") (not automatic) (not (contains? m "detailCode")))) "receipt-completed-contradiction" "receipt" "completed outcome requires all phases installed, no automatic retry, and no detailCode")
+  (validate-module-entry! (get m "module"))
+  (clean-text! (get m "outcome") "receipt.outcome")
+  (clean-text! (get m "canonicalMutation") "receipt.canonicalMutation")
+  (clean-text! (get m "retry") "receipt.retry")
+  (ensure-authority! (not (bool-value! (get m "automaticRetryable") "receipt.automaticRetryable")) "automatic-retry" "receipt.automaticRetryable" "automaticRetryable must be false")
+  m)))
+
+(defn- validate-receipt-transition! [m prepare commit projection]
+  (let [outcome (clean-text! (get m "outcome") "receipt.outcome")
+   spec-value (get receipt-transition-table outcome)]
+  (do
+  (ensure-authority! (some? spec-value) "receipt-outcome" "receipt.outcome" "outcome is outside the closed receipt vocabulary")
+  (let [spec spec-value
+   detail-codes (vector-value! (get spec "detailCodes") "receipt.transition.detailCodes")]
+  (do
+  (ensure-authority! (= (get prepare "status") (get spec "prepare")) "receipt-transition" "receipt.prepare.status" "prepare status contradicts outcome")
+  (ensure-authority! (= (get commit "status") (get spec "commit")) "receipt-transition" "receipt.commit.status" "commit status contradicts outcome")
+  (ensure-authority! (= (get projection "status") (get spec "projection")) "receipt-transition" "receipt.projection.status" "projection status contradicts outcome")
+  (ensure-authority! (= (get m "canonicalMutation") (get spec "canonicalMutation")) "receipt-transition" "receipt.canonicalMutation" "canonicalMutation contradicts outcome")
+  (ensure-authority! (= (get m "retry") (get spec "retry")) "receipt-transition" "receipt.retry" "retry policy contradicts outcome")
+  (if (empty? detail-codes) (ensure-authority! (not (contains? m "detailCode")) "receipt-detail" "receipt.detailCode" "completed receipt must omit detailCode") (ensure-authority! (and (contains? m "detailCode") (contains? (set detail-codes) (clean-text! (get m "detailCode") "receipt.detailCode"))) "receipt-detail" "receipt.detailCode" "detailCode is absent or invalid for outcome"))
+  nil)))))
+
+(defn- validate-receipt-version-relations! [prepare commit projection]
+  (let [prepare-status (str (get prepare "status"))
+   commit-status (str (get commit "status"))
+   projection-status (str (get projection "status"))]
+  (do
+  (if (= prepare-status "accepted") (do
+  (let [base (bigint (str (get prepare "baseGraphVersion")))
+   ops (bigint (str (get prepare "ops")))]
+  (cond
+  (= commit-status "committed") (let [before (bigint (str (get commit "graphVersionBefore")))
+   after (bigint (str (get commit "graphVersionAfter")))
+   installed (bigint (str (get commit "installed")))]
+  (do
+  (ensure-authority! (= base before) "receipt-version" "receipt.commit.graphVersionBefore" "commit must start at prepared baseGraphVersion")
+  (ensure-authority! (= installed ops) "receipt-counts" "receipt.commit.installed" "committed install count must equal prepared ops")
+  (ensure-authority! (= after (+ before installed)) "receipt-version" "receipt.commit.graphVersionAfter" "committed version delta must equal installed count")))
+  (= commit-status "failed_restored") (ensure-authority! (= base (bigint (str (get commit "graphVersionBefore")))) "receipt-version" "receipt.commit.graphVersionBefore" "restored commit must start at prepared baseGraphVersion")
+  (= commit-status "rejected_stale") (ensure-authority! (not (= base (bigint (str (get commit "observedGraphVersion"))))) "receipt-stale" "receipt.commit.observedGraphVersion" "rejected_stale requires a graph version different from prepared base")
+  (= commit-status "indeterminate") (ensure-authority! (= base (bigint (str (get commit "graphVersionBefore")))) "receipt-version" "receipt.commit.graphVersionBefore" "indeterminate commit must record prepared baseGraphVersion")
+  :else (authority-fail! "receipt-transition" "receipt.commit.status" "accepted prepare requires a commit attempt"))))))
+  (if (not (= projection-status "not_run")) (do
+  (ensure-authority! (= (get commit "coordinatorReceiptDigest") (get projection "coordinatorReceiptDigest")) "receipt-coordinator-link" "receipt.projection.coordinatorReceiptDigest" "projection must cite the committed coordinator receipt")))
+  nil))
+
+(defn validate-phase-receipt! [value]
+  (let [m (closed-object! value ["receiptVersion" "receiptDigest" "operationId" "authority" "request" "module" "prepare" "commit" "projection" "outcome" "canonicalMutation" "retry" "automaticRetryable"] ["detailCode"] "receipt")
+   prepare (validate-prepare-phase! (get m "prepare"))
+   commit (validate-commit-phase! (get m "commit"))
+   projection (validate-projection-phase! (get m "projection"))]
+  (do
+  (validate-receipt-envelope! m)
+  (validate-receipt-transition! m prepare commit projection)
+  (validate-receipt-version-relations! prepare commit projection)
   (ensure-authority! (= (digest-text! (get m "receiptDigest") "receipt.receiptDigest") (phase-receipt-digest! m)) "receipt-digest" "receipt.receiptDigest" "receiptDigest does not match receipt content")
   m)))
 
