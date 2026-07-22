@@ -46,15 +46,21 @@
 (def require-log-fence?
   (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
 
-;; A graph-edit append failure has only two honest terminal states:
+;; A graph edit has only three honest durability states:
 ;;   * :healthy — the batch is durably present, OR its exact pre-state plus a
 ;;     durably invalidated recovery intent are proven; normal service continues.
 ;;   * :poisoned — disk outcome is indeterminate (restore failed, or a still-valid
 ;;     replay intent could not be retired). The daemon remains up ONLY as a
 ;;     diagnostic surface and refuses every non-diagnostic request. Sole-writer
 ;;     boot recovery is the one authority that can resolve this state.
+;;   * :committed-repair-needed — the exact batch is durably present, but a
+;;     critical derived-state transition could not be repaired in-process. Its
+;;     exact retry receipt stays readable; unrelated mutation stops until restart.
 ;; This is process state, not a fact in the uncertain log.
 (def edit-durability-state (atom {:state :healthy}))
+(def edit-committed-outcomes (atom {}))
+(def last-edit-outcome (atom nil))
+(def ^:private max-edit-committed-outcomes 64)
 (declare canonical-path)
 
 (defn- poison-edit-durability! [flat phase message]
@@ -68,24 +74,46 @@
     (reset! edit-durability-state state)
     state))
 
+(defn- require-edit-repair! [flat phase message receipt]
+  (let [state {:state :committed-repair-needed
+               :code :committed-repair-needed
+               :phase phase
+               :log (canonical-path flat)
+               :message (str message)
+               :receipt (select-keys receipt [:candidate :batch :module :path
+                                              :base-version :version :ops :installed
+                                              :ops-digest :edn-digest])
+               :at-ms (System/currentTimeMillis)}]
+    (reset! edit-durability-state state)
+    state))
+
 (defn- effective-request-op [req]
   (if (= :for-log (:op req)) (get-in req [:request :op]) (:op req)))
 
 (def ^:private durability-diagnostic-ops
   ;; These never read or mutate the uncertain disk tail. :edit-protocol and
-  ;; :status expose the poison record so both new and already-running clients
-  ;; have an explicit stop signal. Everything else fails closed.
-  #{:version :version-free :status :edit-protocol :reload-status})
+  ;; :status expose the poison/repair record so both new and already-running
+  ;; clients have an explicit stop signal. :edit-commit reaches its own receipt-
+  ;; first admission gate, which returns an already-committed exact retry before
+  ;; rejecting any unrelated candidate. Everything else fails closed.
+  #{:version :version-free :status :edit-protocol :reload-status :edit-commit})
 
 (defn- durability-stop-rejection [req]
   (let [state @edit-durability-state]
-    (when (and (= :poisoned (:state state))
+    (when (and (#{:poisoned :committed-repair-needed} (:state state))
                (not (durability-diagnostic-ops (effective-request-op req))))
-      {:reject [(str "coordinator durability is INDETERMINATE and POISONED at "
-                     (name (:phase state)) "; no retry or further mutation is safe in this"
-                     " process. Stop it and restart against " (:log state)
-                     " so sole-writer recovery can deterministically resolve the sealed intent")]
-       :code :durability-poisoned
+      {:reject [(if (= :poisoned (:state state))
+                  (str "coordinator durability is INDETERMINATE and POISONED at "
+                       (name (:phase state)) "; no retry or further mutation is safe in this"
+                       " process. Stop it and restart against " (:log state)
+                       " so sole-writer recovery can deterministically resolve the sealed intent")
+                  (str "a graph edit is durably COMMITTED but coordinator repair is required at "
+                       (name (:phase state)) "; DO NOT RETRY the edit or perform further mutation"
+                       " in this process. Restart against " (:log state)
+                       " to rebuild derived state from the canonical committed log"))]
+       :code (if (= :poisoned (:state state))
+               :durability-poisoned
+               :committed-repair-needed)
        :durability state
        :version (when @co (current-seq @co))})))
 
@@ -2069,8 +2097,14 @@
 ;;       :durability-failure only after exact pre-state restore plus durable
 ;;       intent invalidation. If either proof is unavailable, the response is
 ;;       :durability-indeterminate and the process poison-stops until sole-writer
-;;       restart recovery. Crash/torn-tail safety: an UNREPORTED or indeterminate
-;;       crash with a sealed intent completes the whole batch at boot; an
+;;       restart recovery. Each fact line embeds inert batch identity/index/count
+;;       metadata, and the first line embeds the exact response receipt. Therefore
+;;       a crash after append acknowledgement but before root/receipt publication
+;;       is reconstructed by an exact request after restart. Every operation after
+;;       append acknowledgement is guarded: failure returns COMMITTED with a
+;;       typed warning (or COMMITTED repair-needed), never an ordinary failure.
+;;       Crash/torn-tail safety: an UNREPORTED or indeterminate crash with a sealed
+;;       intent completes the whole batch at boot; an
 ;;       already-present BATCH preserves every LATER byte. A torn/foreign/
 ;;       rewritten-prefix journal is rejected with the log untouched. Recovery
 ;;       runs ONLY at daemon boot under the rewrite gate (sole writer) — never
@@ -2094,6 +2128,250 @@
 (defn- sha256-hex [^String s]
   (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))]
     (apply str (map #(format "%02x" %) d))))
+
+(defn- base-committed-receipt [cand installed final-version]
+  {:ok true
+   :committed true
+   :code :committed
+   :protocol edit-protocol-name
+   :module (:module cand)
+   :candidate (:id cand)
+   :batch (:id cand)
+   :base-version (:version cand)
+   :version final-version
+   :ops (count (:ops cand))
+   :installed installed
+   :path (:path cand)
+   :ops-digest (:ops-digest cand)
+   :edn-digest (:edn-digest cand)
+   :warnings []
+   :repair-needed false})
+
+(defn- remember-edit-outcome! [receipt]
+  (let [receipt (assoc receipt :recorded-at-ms (System/currentTimeMillis))]
+    (swap! edit-committed-outcomes
+           (fn [m]
+             (let [m (assoc m (:candidate receipt) receipt)]
+               (if (> (count m) max-edit-committed-outcomes)
+                 (dissoc m (:candidate (apply min-key :recorded-at-ms (vals m))))
+                 m))))
+    (reset! last-edit-outcome receipt)
+    receipt))
+
+;; Every candidate fact line carries the batch id/index/count, while the first
+;; line additionally carries the complete receipt identity. These keys are inert
+;; to the flat fold, which reads only :tx/:op/:l/:p/:r/:frame/:ts. They make an
+;; acknowledged batch self-identifying after a process dies between append/fsync
+;; and in-memory root/receipt publication.
+(defn- annotate-edit-batch-lines [lines receipt]
+  (let [n (count lines)]
+    (mapv (fn [i line]
+            (let [m (edn/read-string line)
+                  m (assoc m
+                           :fram-edit-batch (:batch receipt)
+                           :fram-edit-index i
+                           :fram-edit-count n)
+                  m (if (zero? i)
+                      (assoc m
+                             :fram-edit-module (:module receipt)
+                             :fram-edit-path (:path receipt)
+                             :fram-edit-base-version (:base-version receipt)
+                             :fram-edit-final-version (:version receipt)
+                             :fram-edit-ops (:ops receipt)
+                             :fram-edit-installed (:installed receipt)
+                             :fram-edit-ops-digest (:ops-digest receipt)
+                             :fram-edit-edn-digest (:edn-digest receipt))
+                      m)]
+              (str (pr-str m) "\n")))
+          (range n) lines)))
+
+(defn- request-matches-receipt? [req receipt]
+  (and (= (:candidate req) (:candidate receipt))
+       (= (:version req) (:base-version receipt))
+       (= (:module req) (:module receipt))
+       (= (:path req) (:path receipt))
+       (= (:ops-digest req) (:ops-digest receipt))
+       (= (:edn-digest req) (:edn-digest receipt))))
+
+(defn- persisted-edit-outcome [flat req]
+  (when (and flat (:candidate req) (.isFile (java.io.File. ^String flat)))
+    (try
+      (with-open [rdr (clojure.java.io/reader flat)]
+        (let [id (:candidate req)
+              rows (->> (line-seq rdr)
+                        (keep (fn [line]
+                                (try
+                                  (let [m (edn/read-string line)]
+                                    (when (= id (:fram-edit-batch m)) m))
+                                  (catch Throwable _ nil))))
+                        vec)
+              first-row (first (sort-by :fram-edit-index rows))
+              n (:fram-edit-count first-row)
+              complete? (and (pos-int? n)
+                             (= n (count rows))
+                             (= (vec (range n))
+                                (mapv :fram-edit-index (sort-by :fram-edit-index rows))))
+              receipt (when complete?
+                        (assoc
+                         (base-committed-receipt
+                          {:id id
+                           :module (:fram-edit-module first-row)
+                           :path (:fram-edit-path first-row)
+                           :version (:fram-edit-base-version first-row)
+                           :ops (vec (repeat (:fram-edit-ops first-row) nil))
+                           :ops-digest (:fram-edit-ops-digest first-row)
+                           :edn-digest (:fram-edit-edn-digest first-row)}
+                          (:fram-edit-installed first-row)
+                          (:fram-edit-final-version first-row))
+                         :code :committed-recovered
+                         :recovered true
+                         :warnings [{:stage :restart-recovery
+                                     :code :committed-recovered
+                                     :message "durable batch receipt reconstructed from the canonical log"}]))]
+          (when (and receipt
+                     (= (:version receipt) (:tx (last (sort-by :fram-edit-index rows))))
+                     (request-matches-receipt? req receipt))
+            receipt)))
+      (catch Throwable _ nil))))
+
+(defn- in-memory-committed-edit-outcome [req]
+  (let [receipt (get @edit-committed-outcomes (:candidate req))]
+    (when (and receipt (request-matches-receipt? req receipt)) receipt)))
+
+(defn- committed-edit-outcome [req]
+  (or (in-memory-committed-edit-outcome req)
+      ;; Disk reconstruction is a restart/healthy-state path. Never reinterpret
+      ;; an unacknowledged tail while this process is durability-poisoned.
+      (when (= :healthy (:state @edit-durability-state))
+        (when-let [receipt (persisted-edit-outcome (some-> @flat-log str) req)]
+          (remember-edit-outcome! receipt)))))
+
+(defn- inject-post-publication! [req stage]
+  (when (and (= "1" (System/getenv "FRAM_EDIT_INJECT"))
+             (or (= stage (:inject-post-publication-at req))
+                 (= stage (:inject-post-publication-permanent-at req))))
+    (throw
+     (ex-info (if (= stage :notify)
+                "forced post-publication notification failure"
+                (str "injected post-publication failure at " (name stage)))
+              {:code :injected-post-publication-failure :stage stage}))))
+
+(defn- post-publication-warning [stage t recovered?]
+  {:stage stage
+   :code (or (:code (ex-data t)) :post-publication-failure)
+   :message (or (.getMessage ^Throwable t) (.getSimpleName (class t)))
+   :recovered (boolean recovered?)})
+
+(defn- run-post-publication-step!
+  [req flat receipt warnings stage critical? retry? f]
+  (try
+    (inject-post-publication! req stage)
+    (f)
+    true
+    (catch Throwable first-error
+      (let [retry-error (when retry?
+                          (try
+                            ;; The ordinary seam fails only the first attempt so
+                            ;; idempotent recovery is exercised. This stronger
+                            ;; seam proves the externally visible repair-stop path.
+                            (when (= stage (:inject-post-publication-permanent-at req))
+                              (inject-post-publication! req stage))
+                            (f)
+                            nil
+                            (catch Throwable t t)))
+            recovered? (and retry? (nil? retry-error))
+            warning (post-publication-warning stage first-error recovered?)]
+        (swap! warnings conj
+               (cond-> warning
+                 retry-error
+                 (assoc :recovery-message
+                        (or (.getMessage ^Throwable retry-error)
+                            (.getSimpleName (class retry-error))))))
+        (when (and critical? (not recovered?))
+          (require-edit-repair!
+           flat stage
+           (str (:message warning)
+                (when retry-error (str "; recovery failed: " (:recovery-message (last @warnings)))))
+           receipt))
+        recovered?))))
+
+(defn- finalize-committed-edit!
+  [req cand co3 events flat receipt]
+  (let [warnings (atom (vec (:warnings receipt)))
+        cleanup-first? (atom true)
+        dirty-tes (vec (distinct (keep (fn [[_ te p _]]
+                                         (when-not (read-hidden-preds p) te))
+                                       (:ops cand))))]
+    ;; Source order is intentional and is mirrored exactly by the candidate
+    ;; receipt. Every state transition is either completed, retried idempotently,
+    ;; or converted to an explicit committed-repair-needed admission stop.
+    (run-post-publication-step!
+     req flat receipt warnings :outcome-record true true
+     #(remember-edit-outcome! receipt))
+    (run-post-publication-step!
+     req flat receipt warnings :journal-retire true true
+     #(remove-edit-journal!
+       flat
+       (when (compare-and-set! cleanup-first? true false)
+         (:inject-cleanup-fail-at req))))
+    (run-post-publication-step!
+     req flat receipt warnings :root-swap true true
+     #(reset! (:store @co) @(:store co3)))
+    (run-post-publication-step!
+     req flat receipt warnings :index-cache-invalidate true true
+     #(swap! cache assoc :version -1))
+    (run-post-publication-step!
+     req flat receipt warnings :wire-cache-invalidate true true
+     #(reset! facts-wire-cache {:version -1 :triples nil}))
+    (run-post-publication-step!
+     req flat receipt warnings :mark-dirty true true
+     #(doseq [te dirty-tes] (mark-dirty! te)))
+    ;; Notifications are at-most-once. Retrying a partially delivered fanout can
+    ;; duplicate events, so failure is a typed non-repair warning, never replay.
+    (run-post-publication-step!
+     req flat receipt warnings :notify false false
+     #(doseq [ev events] (notify-subs! ev)))
+    (run-post-publication-step!
+     req flat receipt warnings :candidate-retire false true
+     #(swap! edit-candidates dissoc (:id cand)))
+    (let [warnings*
+          (try
+            (inject-post-publication! req :warning-aggregation)
+            (vec @warnings)
+            (catch Throwable t
+              (conj (vec @warnings)
+                    (post-publication-warning :warning-aggregation t true))))
+          repair? (= :committed-repair-needed (:state @edit-durability-state))
+          build-response
+          (fn [ws]
+            (assoc receipt
+                   :code (cond repair? :committed-repair-needed
+                               (seq ws) :committed-with-warning
+                               :else :committed)
+                   :warnings (vec ws)
+                   :warning-count (count ws)
+                   :repair-needed repair?
+                   :durability @edit-durability-state))
+          response
+          (try
+            (inject-post-publication! req :response-construction)
+            (build-response warnings*)
+            (catch Throwable t
+              ;; This literal fallback is deliberately simpler than the primary
+              ;; builder: a response-formatting defect may never erase the known
+              ;; durable receipt or reach the socket wrapper as a generic error.
+              (assoc receipt
+                     :code (if repair?
+                             :committed-repair-needed
+                             :committed-with-warning)
+                     :warnings (conj warnings*
+                                     (post-publication-warning
+                                      :response-construction t true))
+                     :warning-count (inc (count warnings*))
+                     :repair-needed repair?
+                     :durability @edit-durability-state)))]
+      (try (remember-edit-outcome! response) (catch Throwable _ nil))
+      response)))
 
 ;; sealed op vocabulary: the AST preds a code delta may touch, plus bound_to (the
 ;; rename identity migration, sealed INTO the batch so it installs atomically with
@@ -2279,7 +2557,8 @@
 
 (defn- do-edit-commit [req expected-log fenced?]
   (locking dlock
-    (or (durability-stop-rejection req)
+    (or (committed-edit-outcome req)
+        (durability-stop-rejection req)
         (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
           fence-reject
           (let [id (:candidate req)
@@ -2324,9 +2603,14 @@
                   (do (swap! edit-candidates dissoc id)
                       (merge {:reject (:reject ap) :version (current-seq @co)}
                              (select-keys ap [:at :op :code])))
-                  (let [{:keys [lines events]} (:ok ap)
+                  (let [{raw-lines :lines events :events} (:ok ap)
                         flat (str @flat-log)
                         inject? (= "1" (System/getenv "FRAM_EDIT_INJECT"))
+                        final-version (current-seq co3)
+                        receipt (base-committed-receipt cand (count raw-lines) final-version)
+                        lines (if (seq raw-lines)
+                                (annotate-edit-batch-lines raw-lines receipt)
+                                raw-lines)
                         ;; DURABLE ATOMIC INSTALL. Order: (1) barrier — every previously
                         ;; enqueued append is on disk, so the intent's :pre-bytes/:pre-sha
                         ;; describe the exact pre-state; (2) durable RECOVERY INTENT
@@ -2416,15 +2700,11 @@
                                       (enqueue-durable! flat (vec lines)
                                                         (fn [] (reset! flat-mtime (stamp @flat-log)))))
                                     (reset! durability-stage :batch-committed)
-                                    ;; Post-commit cleanup cannot uncommit. A valid
-                                    ;; sidecar may survive a cleanup error, but boot
-                                    ;; recovery now preserves BATCH+LATER exactly.
-                                    (try (remove-edit-journal! flat cleanup-at)
-                                         (catch Throwable rt
-                                           (binding [*out* *err*]
-                                             (println (str "[fram] WARNING: recovery-intent cleanup failed after"
-                                                           " durable commit (" (.getMessage rt)
-                                                           "); replay preserves this batch and every later tail byte")))))
+                                    ;; Hard crash seam: the self-identifying batch is
+                                    ;; fsynced, but no in-memory receipt/root and no
+                                    ;; journal retirement have happened yet.
+                                    (when (and inject? (:inject-crash-after-append-ack req))
+                                      (.halt (Runtime/getRuntime) 86))
                                     {:ok true}
                                     (catch Throwable append-err
                                       ;; No durable ack: only exact restore followed
@@ -2462,8 +2742,12 @@
                                                                   (.getMessage ^Throwable retire-err) ")")
                                                              "durably retired")))))))))))
                               (catch Throwable unexpected
-                                (if (#{:intent-may-replay :batch-committed}
-                                      @durability-stage)
+                                (if (= :batch-committed @durability-stage)
+                                  ;; The exact self-identifying batch is already
+                                  ;; fsynced. Never relabel this as a failure.
+                                  {:ok true
+                                   :post-commit-unexpected unexpected}
+                                  (if (= :intent-may-replay @durability-stage)
                                   (indeterminate :unexpected-durability-transition
                                                  (str "unexpected failure at "
                                                       (name @durability-stage) ": "
@@ -2473,23 +2757,42 @@
                                   ;; already proved it cannot replay after restart.
                                   (failed (str "pre-state/replay absence is proven after unexpected "
                                                (name @durability-stage) " failure: "
-                                               (.getMessage ^Throwable unexpected))))))))]
+                                               (.getMessage ^Throwable unexpected)))))))))]
                     (if-not (:ok durable)
                       (do (swap! edit-candidates dissoc id)
                           (merge {:version (current-seq @co)} durable))
-                      (do
-                        (reset! (:store @co) @(:store co3))                 ; ROOT SWAP — durability known
-                        (swap! cache assoc :version -1)                     ; warm caches rebuild on next read
-                        (reset! facts-wire-cache {:version -1 :triples nil})
-                        (doseq [te (distinct (keep (fn [[_ te p _]]
-                                                     (when-not (read-hidden-preds p) te))
-                                                   (:ops cand)))]
-                          (mark-dirty! te))
-                        (doseq [ev events] (notify-subs! ev))
-                        (swap! edit-candidates dissoc id)
-                        {:ok true :protocol edit-protocol-name :module (:module cand)
-                         :candidate id :ops (count (:ops cand)) :installed (count lines)
-                         :path (:path cand) :version (current-seq @co)})))))))))))))
+                      (let [receipt (if-let [t (:post-commit-unexpected durable)]
+                                      (assoc receipt
+                                             :code :committed-with-warning
+                                             :warnings [(post-publication-warning
+                                                         :durable-transition t false)])
+                                      receipt)]
+                        (finalize-committed-edit! req cand co3 events flat receipt))))))))))))))
+
+(defn- edit-commit-response [req expected-log fenced?]
+  (try
+    (do-edit-commit req expected-log fenced?)
+    (catch Throwable t
+      ;; Last-resort protocol boundary: if the durable self-identifying batch is
+      ;; already present, an exception from any overlooked post-publication path
+      ;; is a COMMITTED repair warning, never a generic socket error/rejection.
+      (if-let [receipt (committed-edit-outcome req)]
+        (let [warning (post-publication-warning :protocol-response-wrapper t false)
+              state (require-edit-repair! (str @flat-log)
+                                          :protocol-response-wrapper
+                                          (:message warning)
+                                          receipt)
+              response (assoc receipt
+                              :code :committed-repair-needed
+                              :committed true
+                              :ok true
+                              :warnings (conj (vec (:warnings receipt)) warning)
+                              :warning-count (inc (count (:warnings receipt)))
+                              :repair-needed true
+                              :durability state)]
+          (try (remember-edit-outcome! response) (catch Throwable _ nil))
+          response)
+        (throw t)))))
 
 ;; ---- the batch journal (crash/torn-tail safety) -----------------------------
 ;; The journal is durable RECOVERY INTENT for one atomic batch — NOT an
@@ -2608,9 +2911,12 @@
          (inject! :after-invalidate)
          (java.nio.file.Files/deleteIfExists (.toPath jf))
          (reset! stage :after-unlink)
-         (inject! :after-unlink)
-         (fsync-dir! dir)
-         (reset! stage :retired))
+         (inject! :after-unlink))
+       ;; Force the directory even when a prior attempt already unlinked the
+       ;; sidecar. This is the idempotent recovery path for a failure between
+       ;; unlink and its original directory fsync.
+       (fsync-dir! dir)
+       (reset! stage :retired)
        {:retired true :intent-valid? false :stage @stage}
        (catch Throwable t
          (throw (ex-info (str "recovery-intent retirement failed at " (name @stage)
@@ -3422,7 +3728,7 @@
           (do-edit-prepare inner))
 
         (= :edit-commit (:op inner))
-        (do-edit-commit inner expected true)
+        (edit-commit-response inner expected true)
 
         :else
         (do
@@ -3472,7 +3778,7 @@
     ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence
     ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
     (= :edit-prepare (:op req)) (do-edit-prepare req)
-    (= :edit-commit (:op req)) (do-edit-commit req nil false)
+    (= :edit-commit (:op req)) (edit-commit-response req nil false)
   :else
   (do
     ;; maybe-reload! performs its own two-phase capture/build/install.  It must run
@@ -3546,6 +3852,7 @@
       ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
       :edit-protocol {:ok true :protocol edit-protocol-name
                       :durability @edit-durability-state
+                      :last-edit-outcome @last-edit-outcome
                       :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
@@ -3567,6 +3874,7 @@
       :status   {:version (current-seq @co) :facts (hybrid-fact-count)
                  :log (or @flat-log (:log @co)) :boot @last-boot
                  :durability @edit-durability-state
+                 :last-edit-outcome @last-edit-outcome
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
@@ -4955,6 +5263,8 @@
   ;; A fresh process begins healthy; recovery below either deterministically
   ;; resolves the sole sealed intent or throws before the daemon can serve.
   (reset! edit-durability-state {:state :healthy})
+  (reset! edit-committed-outcomes {})
+  (reset! last-edit-outcome nil)
   (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
     (try
       (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
