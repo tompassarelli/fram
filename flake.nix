@@ -196,7 +196,7 @@
       mkGraphEditRuntime = pkgs: fram: beaglePkg:
         let
           framRoot = fram.runtimeRoot;
-          beagleRevision = "989fff80824f0e5a8936ac0d7e0ceba33b810890";
+          beagleRevision = beagle.rev;
           runtimePackages = [
             fram
             beaglePkg
