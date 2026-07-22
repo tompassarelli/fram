@@ -7,5 +7,5 @@ BEAGLE="${BEAGLE:-$HOME/code/beagle}"
 src="${1:-$HOME/code/gjoa/src/gjoa}"
 out="${2:-$(dirname "$0")/../build/gjoa.claims}"
 mkdir -p "$(dirname "$out")"
-"$BEAGLE/bin/beagle-claims" "$src" > "$out"
+"$BEAGLE/bin/beagle-facts" "$src" > "$out"
 echo "emit-corpus: $(grep -c '^@file' "$out") files, $(grep -c '^\[' "$out") claims -> $out" >&2
