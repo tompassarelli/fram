@@ -471,6 +471,74 @@
           (append-tx! co (delta-records co since tx))   ; (5) atomic + fsync
           {:ok (get-in @(store co) [:txs tx :seq])})))))
 
+;; commit-batch! — ATOMIC multi-fact publication for ONE subject (thread 019f9063,
+;; incident 019f8958). The all-or-none primitive the torn-mail bug demands: a send
+;; used to publish from/subject/body/sent_at/to as SEPARATE single-fact commit! txs,
+;; so a crash/disconnect mid-send left a from-only orphan (torn subject). This admits
+;; N facts ABOUT te-name as one unit: EVERY fact is validated FIRST (base_version OCC,
+;; acyclicity, multi idempotency) exactly as commit! does — and if ANY rejects, ZERO
+;; state is minted (finding #2's validate-without-mutating, extended over the set).
+;; Accepted writes then land in ONE tx with ONE append-tx! (one fsync, ONE :commit
+;; marker), so delta-records emits them contiguously — v2 torn-tx replay drops the
+;; whole batch or none, never a partial. Single-fact commit!/`:assert` is UNTOUCHED
+;; (byte-identical); this is an additive second entry point, callers opt in.
+;;   facts = [{:pred p :kind :assert|:link :r r :base <optional>}]
+;; Returns {:ok seq :written [{:pred :kind :r}..] :idempotent [pred..]}
+;;      or {:reject <reason> :version v :at <fact-index> :pred <pred>}  (nothing minted).
+(defn commit-batch! [co agent te-name facts]
+  (locking (:lock co)
+    (let [st  (store co)
+          te0 (s/resolve-name st te-name)
+          ;; PHASE 1 — validate/classify EVERY fact against the pre-batch snapshot,
+          ;; before minting anything. `reduced` on the first reject aborts with no state.
+          plan (reduce
+                (fn [acc [i {:keys [pred kind r base]}]]
+                  (let [pid    (c/value-id st pred)
+                        tgt0   (when (= kind :link) (s/resolve-name st r))
+                        vid    (when (= kind :assert) (c/value-id st r))
+                        single (= "single" (s/cardinality st pred))
+                        bv     (if (and te0 pid) (base-version co te0 pid) 0)
+                        live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
+                        fm     (:facts @st)]
+                    (cond
+                      (and single base (> bv base))
+                      (reduced {:reject :conflict :version (current-seq co) :at i :pred pred})
+
+                      (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
+                           (or (= te-name r) (and te0 tgt0 (reaches? co pid tgt0 te0))))
+                      (reduced {:reject [(str pred " cycle")] :version (current-seq co) :at i :pred pred})
+
+                      ;; multi-valued idempotency: an already-live (te,p,r) is a no-op, not a write
+                      (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get fm %))) live))
+                      (update acc :idempotent conj pred)
+                      (and (not single) (= kind :assert) vid (some #(= vid (:r (get fm %))) live))
+                      (update acc :idempotent conj pred)
+
+                      :else
+                      (update acc :writes conj {:pred pred :kind kind :r r}))))
+                {:writes [] :idempotent []}
+                (map-indexed vector facts))]
+      (cond
+        (:reject plan) plan
+        ;; whole batch was idempotent/empty: no version movement, nothing durable
+        (empty? (:writes plan))
+        {:ok (current-seq co) :written [] :idempotent (:idempotent plan)}
+        :else
+        ;; PHASE 2 — one tx, all writes, one append-tx!. All-or-none at the durable seam.
+        (let [since    (:next-id @st)
+              observed (current-seq co)                 ; the head the batch was decided at
+              tx       (c/begin-tx! st agent)
+              _        (swap! st assoc-in [:txs tx :observed] observed)
+              _        (swap! st assoc-in [:txs tx :ts] (rt/now-ts))]
+          (doseq [{:keys [pred kind r]} (:writes plan)]
+            (let [te (ent! co tx te-name)]
+              (case kind
+                :link   (s/link! st te pred (ent! co tx r) tx)
+                :assert (s/assert! st te pred r tx))))
+          (append-tx! co (delta-records co since tx))
+          {:ok (get-in @st [:txs tx :seq])
+           :written (:writes plan) :idempotent (:idempotent plan)})))))
+
 ;; --- views-as-facts writers (thread E) -------------------------------------
 ;; select! asserts (view selects @cid): `view` now treats fact `cid` as a fact. Multi
 ;; (a view selects many facts); idempotent when it already selects cid. This ONE write

@@ -981,6 +981,38 @@
                :store-root @(:store @co) :schema-root (:schema-root c)})
             (assoc c :version -1)))))))
 
+;; apply-commit-delta-multi! — the batch analogue: ONE version bump (:assert-batch's
+;; single tx) touched several (te,p) groups at once, so patch them all in ONE cache
+;; swap keyed on the SAME `pre`. Calling apply-commit-delta! per pred can't work here
+;; — the first call advances the cache to `post`, so the next sees version != pre and
+;; falls back to whole-rebuild (correct but wasteful). This keeps the incremental cache
+;; the single-flight projection (d3c3b37) relies on. `preds` are all on subject `te`.
+(defn apply-commit-delta-multi! [pre te preds]
+  (let [post (current-seq @co)]
+    (when (and (> post pre) (seq preds))
+      (swap! cache
+        (fn [c]
+          (if (= (:version c) pre)
+            (let [[idx' facts']
+                  (reduce
+                   (fn [[ix cs] p]
+                     (let [old-g  (get-in ix [:by-lp [te p]] #{})
+                           new-g  (lp-live-triples @co te p)
+                           to-del (clojure.set/difference old-g new-g)
+                           to-add (clojure.set/difference new-g old-g)
+                           ix'  (as-> ix i
+                                  (reduce idx-del i to-del)
+                                  (reduce idx-add i to-add))
+                           cs'  (as-> cs s
+                                  (reduce (fn [s t] (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) s to-del)
+                                  (reduce (fn [s t] (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) s to-add))]
+                       [ix' cs']))
+                   [(:idx c) (:facts c)]
+                   (distinct preds))]
+              {:facts facts' :idx idx' :index nil :version post
+               :store-root @(:store @co) :schema-root (:schema-root c)})
+            (assoc c :version -1)))))))
+
 ;; Subscriber delivery is BEST-EFFORT and OFF the write path (finding #3): a slow
 ;; or stuck subscriber (TCP send buffer full) must NOT stall commits, which run
 ;; under dlock. We hand the event to a single-threaded executor so the committing
@@ -1185,6 +1217,77 @@
               (terminal-cascade! te))
             {:ok (:ok res)})
         {:reject (:reject res) :version (:version res)}))))
+
+;; --- ATOMIC multi-fact publication (thread 019f9063 / incident 019f8958) -------
+;; :assert-batch publishes N facts about ONE subject as an all-or-none unit — the
+;; fix for torn mail subjects. A send previously wrote from/subject/body/sent_at/to
+;; as SEPARATE single-fact :assert requests; a crash/disconnect between them left a
+;; from-only orphan (the 019f895c observation). Here the whole set arrives in ONE
+;; request → ONE dlock turn: commit-batch! validates every fact BEFORE the first
+;; mutation and commits accepted writes in ONE store tx, and the flat-log lines flush
+;; in ONE fsync (*flat-batch* + flush-flat-batch!, the do-edit-min* precedent). So a
+;; crash leaves the complete subject or nothing; a client disconnect only costs the
+;; ack (the committed set is whole). ADDITIVE: single :assert is byte-identical and
+;; untouched — a caller opts in by naming :te once and passing :facts [{:p :r :base?}].
+;;
+;; Delivery ordering preserved: the to-last delivery-candidacy mitigation still holds —
+;; trigger preds (to/target, what sub-match? keys on) are committed and notified LAST,
+;; so a subscriber reacting to a "to" push reads a store that already holds the rest.
+(def ^:private delivery-trigger-preds #{"to" "target"})
+(defn- do-assert-batch [te facts base]
+  (assert-flat-corpus-append-boundaries!)
+  (cond
+    (not (and (string? te) (not (str/blank? te))))
+    {:reject ["assert-batch requires a subject :te"] :code :invalid-batch :version (current-seq @co)}
+    (not (and (sequential? facts) (seq facts)))
+    {:reject ["assert-batch requires a non-empty :facts vector"] :code :invalid-batch :version (current-seq @co)}
+    (not (every? #(and (map? %) (string? (:p %)) (some? (:r %))) facts))
+    {:reject ["each :facts entry needs a string :p and a :r"] :code :invalid-batch :version (current-seq @co)}
+    :else
+    (let [normalized (mapv (fn [f] {:pred (:p f) :r (:r f)
+                                    :kind (kind-of (:p f) (:r f))
+                                    :base (if (contains? f :base) (:base f) base)})
+                           facts)]
+      (cond
+        ;; reserved / schema-writable preds route through their own validated paths;
+        ;; batch stays focused on ordinary domain facts. Reject the WHOLE batch (all-or-none).
+        (some #(hard-reserved (:pred %)) normalized)
+        {:reject ["assert-batch rejects reserved predicates (name/store-supersedes)"]
+         :code :reserved-in-batch :version (current-seq @co)}
+        (some #(schema-writable (:pred %)) normalized)
+        {:reject ["assert-batch rejects schema predicates (cardinality/value_kind) — use :assert"]
+         :code :schema-in-batch :version (current-seq @co)}
+        :else
+        (let [pre     (current-seq @co)
+              ;; commit trigger preds (to/target) LAST — preserve to-last delivery candidacy
+              ordered (vec (concat (remove #(delivery-trigger-preds (:pred %)) normalized)
+                                   (filter #(delivery-trigger-preds (:pred %)) normalized)))
+              res     (binding [*flat-batch* (atom [])]
+                        (let [r (commit-batch! @co "coord" te ordered)]
+                          (when (:ok r)
+                            (doseq [{:keys [pred r]} (:written r)]
+                              (append-flat! "assert" te pred r (:ok r))))
+                          (flush-flat-batch!)        ; ONE fsync for the whole batch
+                          r))]
+          (if (:ok res)
+            (let [written (:written res)]
+              (when (seq written)
+                ;; incremental cache patch for every written (te,p) in one swap
+                (apply-commit-delta-multi! pre te (mapv :pred written))
+                (doseq [{:keys [pred]} written]
+                  (when-not (read-hidden-preds pred) (mark-dirty! te)))
+                ;; notify in commit order (triggers last) so delivery candidacy holds
+                (doseq [{:keys [pred r]} written]
+                  (notify-subs! {:event :commit :version (:ok res) :op "assert" :l te :p pred :r r}))
+                ;; parity with do-assert: a written terminal pred cascades in this turn
+                (doseq [{:keys [pred]} written :when (ck/vec-contains? ck/terminal-preds pred)]
+                  (terminal-cascade! te)))
+              {:ok (:ok res)
+               :written (mapv :pred written)
+               :idempotent (:idempotent res)
+               :batch true})
+            {:reject (:reject res) :version (:version res)
+             :at (:at res) :pred (:pred res)}))))))
 
 (defn- do-retract [te p r base]
   (assert-flat-corpus-append-boundaries!)
@@ -2013,7 +2116,7 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-with-fence :assert-at-version :assert-at-version-with-fence
+  #{:assert :assert-batch :assert-with-fence :assert-at-version :assert-at-version-with-fence
     :retract :retract-with-fence :bump})
 
 (defn- prepare-request-reload! [req]
@@ -2689,6 +2792,10 @@
      (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
+      ;; ATOMIC multi-fact publication for ONE subject — all-or-none at every
+      ;; disconnect/timeout boundary (thread 019f9063 / incident 019f8958). Additive:
+      ;; single :assert above is byte-identical; old clients never send this op.
+      :assert-batch (do-assert-batch (:te req) (:facts req) (:base req))
       ;; Lease-fenced fact writes. The fence and mutation share the coordinator
       ;; store lock; a stale holder cannot write after expiry/takeover.
       :assert-with-fence
