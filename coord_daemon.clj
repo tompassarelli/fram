@@ -15,6 +15,7 @@
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
          '[fram.store :as c] '[fram.schema :as s]
          '[fram.kernel :as ck]
+         '[fram.authority :as authority]
          '[fram.fold :as fold] '[fram.query :as q] '[fram.datalog :as d] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
@@ -4389,6 +4390,22 @@
       (.write w (pr-str m)) (.newLine w) (.flush w)
       (edn/read-string (.readLine r)))))
 
+;; ---- authority generation nonce (see the authority kernel section below) ----
+(defn fresh-instance-id
+  "A non-restorable per-boot generation nonce. Never persisted, so a restart mints
+  a fresh identity that a prior boot's frames cannot name."
+  []
+  (let [b (byte-array 32)]
+    (.nextBytes (java.security.SecureRandom.) b)
+    (str "boot-" (str/join (map #(format "%02x" (bit-and % 0xff)) b)))))
+
+(def authority-instance (atom nil))          ; this boot's live generation nonce
+
+(defn mint-authority-instance!
+  "Mint this boot's generation nonce (called once per boot, after CO is installed)."
+  []
+  (reset! authority-instance (fresh-instance-id)))
+
 ;; ---- boot: replay the v2 log (or bootstrap a fresh one) --------------------
 (defn boot!
   ([log] (boot! log nil))
@@ -4404,6 +4421,7 @@
                   (new-coord log))))
     (reset-refers-state!)                 ; S3.3: fresh store -> next materialize is cold
     (index!)
+    (mint-authority-instance!)            ; fresh, non-restorable per-boot generation nonce
     @co)))
 
 (defn serve-daemon [port log flat]
@@ -4903,7 +4921,9 @@
 (defn boot-flat! [flat]
   (when-let [tlog @telemetry-log]
     (reset! telemetry-log (canonical-path tlog)))
-  (boot-flat-canonical! (canonical-path flat)))
+  (let [r (boot-flat-canonical! (canonical-path flat))]
+    (mint-authority-instance!)          ; fresh, non-restorable per-boot generation nonce
+    r))
 
 ;; External flat edits are a two-phase OCC reload.  The writer lock protects only
 ;; capture/install of immutable identities.  Tail I/O, clone mutation, whole-log
@@ -5455,6 +5475,172 @@
           (canonical-path cl))
 
       :else (canonical-path path))))
+
+;; ============================================================================
+;; graph-edit authority coordinator kernel — thread 019f884c
+;; ----------------------------------------------------------------------------
+;; ONE MEANING PER IDENTITY. The authority layer fences three DISTINCT identities,
+;; with no duplicate source of truth for any one of them:
+;;
+;;   * instanceId — a cryptographically fresh, NON-RESTORABLE per-boot generation
+;;     nonce (256 bits of SecureRandom). It is NEVER written to the log, so a
+;;     restart cannot restore or forge it: every daemon boot is a new authority
+;;     generation. This is the sole process-generation source of truth — no
+;;     separate explicit "generation" field exists or is needed, because the
+;;     nonce already defeats the ABA/restart counterexample (a crashed boot that
+;;     never released its lease, whose epoch cell replay restores byte-for-byte,
+;;     still cannot have its in-flight requests replayed: they name the dead
+;;     boot's nonce).
+;;   * lease.epoch — succession WITHIN one boot. Derived by coord.clj's lease from
+;;     the durable GLOBAL transaction sequence, so it is monotonic and survives
+;;     replay; a renewal or takeover rotates it. It is the append-time fence.
+;;   * connection sequence — each authority-opened TLS connection carries an exact
+;;     monotonic, in-order, exactly-once request sequence beginning at 1.
+;;
+;; Every authority request is gated by ALL THREE before any canonical append, so a
+;; stale-generation (post-restart), stale-epoch (post-renew / takeover / expiry /
+;; tombstone), or out-of-order / replayed frame is rejected with the log head
+;; unchanged. Legacy one-request connections never enter this loop.
+;; fresh-instance-id / authority-instance / mint-authority-instance! are defined
+;; above (they must precede boot!, which mints the nonce on each boot).
+;; ============================================================================
+(defn authority-context
+  "One boot's authority context: the coordinator CO plus the live generation nonce.
+  The daemon builds it from process state; a test opens independent contexts to
+  model successive boots on the SAME log/certs."
+  ([] (authority-context @co @authority-instance))
+  ([co instance] {:co co :instance instance}))
+
+(defn authority-session-open
+  "Open the single exclusive authority session on CTX for RES held by HOLDER
+  (identified by CLIENT-SPKI). Acquires the process-local exclusive lease; a
+  second concurrent opener is rejected (:held). Returns {:ok true :handle H} where
+  H binds this boot's generation nonce, the lease epoch, and a fresh in-order
+  request sequence (an atom starting at 0; the first mutation is sequence 1)."
+  [{:keys [co instance]} res holder client-spki ttl-ms]
+  (let [r (acquire-lease! co holder res ttl-ms)]
+    (if (:ok r)
+      {:ok true
+       :handle {:instance instance :res res :holder holder
+                :client-spki client-spki :epoch (:epoch r) :exp (:exp r)
+                :seq (atom 0)}}
+      r)))
+
+(defn authority-session-renew
+  "Renew the session's lease: rotates ONLY epoch and expiry (plus every derived
+  descriptor/receipt digest). Returns a handle re-bound to the new epoch that
+  shares the SAME connection sequence, so the request stream continues unbroken.
+  A lapse or takeover is terminal (renew never reacquires)."
+  [{:keys [co]} handle ttl-ms]
+  (let [r (renew-lease! co (:holder handle) (:res handle) (:epoch handle) ttl-ms)]
+    (if (:ok r)
+      {:ok true :handle (assoc handle :epoch (:epoch r) :exp (:exp r))}
+      r)))
+
+(defn authority-session-release
+  "Tombstone the session's lease. Old handles then fail the fence; a fresh
+  authority-open acquires a new lease at a strictly newer epoch."
+  [{:keys [co]} handle]
+  (release-lease! co (:holder handle) (:res handle) (:epoch handle)))
+
+(defn authority-session-request
+  "Validate ONE authority request against (generation, sequence, lease-fence) and,
+  only if ALL pass, run ACTION (the fenced canonical mutation) exactly once. Every
+  rejection returns BEFORE any append — the log head is unchanged. REQ carries
+  :instance (claimed generation), :epoch (claimed lease epoch) and :seq (claimed
+  connection sequence). ACTION runs inside with-fence!, so the epoch is re-checked
+  under the coordinator's writer lock, atomic with the append."
+  [{:keys [co instance]} handle req action]
+  (let [req-instance (:instance req)
+        req-epoch    (:epoch req)
+        req-seq      (:seq req)
+        {:keys [res holder]} handle
+        expected-seq (inc @(:seq handle))]
+    (cond
+      ;; (1) GENERATION — the request must name THIS boot's non-restorable nonce.
+      ;; A frame minted under a prior boot (replayed after restart) dies here,
+      ;; before the epoch cell or the append is ever touched.
+      (not= req-instance instance)
+      {:reject :wrong-generation :expected instance :got req-instance
+       :version (current-seq co)}
+
+      ;; (2) SEQUENCE — exact monotonic, in-order, exactly-once. A replayed or
+      ;; out-of-order frame never advances the connection and never appends.
+      (not= req-seq expected-seq)
+      {:reject :out-of-order :expected expected-seq :got req-seq
+       :version (current-seq co)}
+
+      ;; (3) FENCE + APPEND, atomic under the writer lock. with-fence! rejects a
+      ;; stale-epoch / wrong-holder / expired / tombstoned lease, so no mutation
+      ;; can land after the lease is gone. The claimed epoch is validated against
+      ;; the LIVE lease — the single epoch source of truth (no shadow copy).
+      :else
+      (let [result (with-fence! co res holder req-epoch action)]
+        (if (:reject result)
+          result                              ; fence-lost: nothing appended, seq NOT consumed
+          (do (reset! (:seq handle) req-seq)  ; consume the slot -> exactly once
+              {:ok true :seq req-seq :epoch req-epoch :result result}))))))
+
+(defn seal-coordinator-descriptor
+  "Seal an authority descriptor binding this boot's generation nonce, the live
+  ENDPOINT, and the session's lease into the supplied SNAPSHOT (runtime / corpus /
+  tools / lifecycle). Identity (bindingDigest + descriptorDigest) is a pure
+  function of the bound fields, so changing the generation nonce ALONE changes
+  both digests, and a renewal changes only the epoch/expiry-derived digests."
+  [{:keys [instance]} handle endpoint snapshot]
+  (authority/seal-authority-descriptor!
+   (assoc snapshot
+          "descriptorVersion" "fram.graph-edit-authority/v1"
+          "candidateProtocol" "graph-edit-candidate-v1"
+          "coordinator"
+          {"instanceId" instance
+           "endpoint" endpoint
+           "lease" {"id" (:holder handle)
+                    "epoch" (str (:epoch handle))
+                    "clientSpkiSha256" (:client-spki handle)
+                    "expiresAtUnixMs" (str (:exp handle))
+                    "state" "active"}})))
+
+;; --- connection dispatch: legacy one-shot vs the multi-request authority loop --
+(defn authority-open-request?
+  "True iff REQ is the authority-loop handshake. Legacy ops are all false, so an
+  existing one-request connection is never diverted into the loop."
+  [req]
+  (and (map? req) (= :authority-open (:op req))))
+
+(defn run-authority-connection
+  "The multi-request loop for ONE authority-opened connection. READ-REQ yields the
+  next request map (nil at EOF); WRITE-RESP emits one response; MAKE-ACTION turns a
+  request into its fenced mutation thunk. The FIRST frame must be :authority-open
+  (acquires the exclusive lease, issues the handle); each subsequent frame is
+  fenced by (generation, sequence, epoch) before any append. A terminal reject or
+  EOF closes the loop. This is the ONLY entry into the loop — legacy one-request
+  connections are dispatched elsewhere and never reach here."
+  [ctx read-req write-resp make-action]
+  (let [open (read-req)]
+    (if-not (authority-open-request? open)
+      (write-resp {:reject :not-authority-open})
+      (let [opened (authority-session-open ctx (:res open) (:holder open)
+                                           (:client-spki open) (:ttl-ms open))]
+        (if-not (:ok opened)
+          (write-resp opened)                 ; :held / :invalid-lease-request
+          (let [handle0 (:handle opened)]
+            (write-resp {:ok true :instance (:instance ctx)
+                         :epoch (:epoch handle0) :holder (:holder open)})
+            (loop [handle handle0]
+              (when-let [req (read-req)]
+                (case (:op req)
+                  :authority-request
+                  (let [r (authority-session-request ctx handle req (make-action req))]
+                    (write-resp r)
+                    (when (:ok r) (recur handle)))
+                  :authority-renew
+                  (let [r (authority-session-renew ctx handle (:ttl-ms req))]
+                    (write-resp r)
+                    (when (:ok r) (recur (:handle r))))
+                  :authority-release
+                  (write-resp (authority-session-release ctx handle))
+                  (write-resp {:reject :unknown-authority-op}))))))))))
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd
