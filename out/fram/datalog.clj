@@ -268,9 +268,15 @@
   (update acc rel (fn [s] (reduce (fn [a h] (conj a h)) (or s #{}) hs))))) {} rules)]
   (new-only cand db rels)))
 
-(defn fixpoint [db0 rules]
+(defn base-index [db0]
+  (build-index db0))
+
+(defn- index-augment [base-idx db0]
+  (reduce (fn [acc rel] (if (contains? base-idx rel) acc (index-rel acc rel (vec (get db0 rel #{}))))) base-idx (vec (keys db0))))
+
+(defn fixpoint-bi [db0 base-idx rules]
   (let [rels (rule-head-rels rules)
-   idx0 (build-index db0)
+   idx0 (index-augment base-idx db0)
    seeded (reduce (fn [d r] (let [rel (:rel (:head r))
    heads (derive-rule-idx db0 idx0 r)]
   (update d rel (fn [s] (reduce (fn [a h] (conj a h)) (or s #{}) heads))))) db0 rules)
@@ -281,6 +287,9 @@
    delta delta0]
   (if (delta-empty? delta rels) db (let [nw (snr-round-idx db idx delta rules rels)]
   (recur (db-merge db nw rels) (index-delta idx nw rels) nw))))))
+
+(defn fixpoint [db0 rules]
+  (fixpoint-bi db0 {} rules))
 
 (defn run-rules [ctx rules]
   (fixpoint (edb ctx) rules))

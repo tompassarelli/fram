@@ -614,10 +614,21 @@
                           max-page-payload-bytes))]
         (recur n rows-size2 (if fits n best))))))
 
+;; A PROJECTION is the reusable, corpus-derived input to a query: the EDB and its
+;; base index. Building it is the O(corpus) cost `run`/`run-page` otherwise pay on
+;; EVERY call (and every page). A caller that serves many queries over one
+;; immutable fact snapshot (the coordinator, per version) builds ONE projection and
+;; threads it through `run-projected`/`run-page-projected`, so paging a large
+;; relation is O(result) per page and concurrent readers at a version share a
+;; single immutable EDB+index rather than each allocating their own.
+(defn project [facts :- (Vec k/Fact)] :- (Map Keyword Any)
+  (let [edb (facts->edb facts)]
+    {:edb edb :base-index (d/base-index edb)}))
+
 ;; Generic, deterministic, bounded query page. The Datalog fixpoint relation may
 ;; exist internally, but at most `limit` rows and max-page-payload-bytes leave
 ;; this function. `after` is nil for the first page.
-(defn run-page [facts :- (Vec k/Fact) q0 :- Any limit :- Any after :- Any] :- Any
+(defn run-page-projected [projection :- (Map Keyword Any) q0 :- Any limit :- Any after :- Any] :- Any
   (cond
     [(or (not (integer? limit)) (< limit 1) (> limit max-page-limit))
      {:error [(str "query page :limit must be an integer from 1 through " max-page-limit)]}]
@@ -633,10 +644,11 @@
              {:error errs}
              (if (map? (:find q))
                {:error ["aggregate :find is not pageable in v1 — use run (aggregates return a bounded group set)"]}
-             (let [edb (facts->edb facts)
+             (let [edb :- (Map String (Set (Vec String))) (:edb projection)
+                   base-idx (:base-index projection)
                    strata (strata-of q)
                    db :- (Map String (Set (Vec String)))
-                   (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint acc stratum)) edb strata)
+                   (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint-bi acc base-idx stratum)) edb strata)
                    find :- Any (:find q)
                    rel :- (Set (Vec String)) (get db find #{})
                    ;; Compute canonical keys exactly once. Sorting then compares
@@ -661,6 +673,10 @@
                      {:error ["query page contains a row too large for the bounded wire response"]
                       :max-bytes max-page-wire-bytes}
                      (page-envelope window n))))))))))]))
+
+;; Back-compatible entry: build a one-shot projection from `facts`, then page.
+(defn run-page [facts :- (Vec k/Fact) q0 :- Any limit :- Any after :- Any] :- Any
+  (run-page-projected (project facts) q0 limit after))
 
 ;; ============================================================================
 ;; AGGREGATES — post-fixpoint reduction over a materialized derived relation.
@@ -802,17 +818,18 @@
 ;; | {:over-limit n :max m :find rel} when the result set exceeds the cap.
 ;; q + return stay Any: q is the open-map query (above); the result is a tagged
 ;; heterogeneous envelope discriminated by key-presence.
-(defn run [facts :- (Vec k/Fact) q0 :- Any] :- Any
+(defn run-projected [projection :- (Map Keyword Any) q0 :- Any] :- Any
   (let [q (canon-q q0)
         errs (validate q)]
     (if (not (empty? errs))
       {:error errs}
-      (let [edb (facts->edb facts)
+      (let [edb :- (Map String (Set (Vec String))) (:edb projection)
+            base-idx (:base-index projection)
             strata (strata-of q)
-            ;; d/fixpoint returns datalog's (Vec Any)-element Db; that Any is
+            ;; d/fixpoint-bi returns datalog's (Vec Any)-element Db; that Any is
             ;; assignable into this stricter (Vec String) accumulator (verified).
             db :- (Map String (Set (Vec String)))
-            (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint acc stratum)) edb strata)
+            (reduce (fn [acc :- (Map String (Set (Vec String))) stratum :- (Vec Any)] :- (Map String (Set (Vec String))) (d/fixpoint-bi acc base-idx stratum)) edb strata)
             find :- Any (:find q)]
         (if (map? find)
           (aggregate-run db find)
@@ -824,3 +841,7 @@
               {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")]
                :over-limit n :max max-results}
               {:ok (d/facts db find)})))))))
+
+;; Back-compatible entry: build a one-shot projection from `facts`, then run.
+(defn run [facts :- (Vec k/Fact) q0 :- Any] :- Any
+  (run-projected (project facts) q0))

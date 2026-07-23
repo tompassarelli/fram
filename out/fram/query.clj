@@ -315,16 +315,21 @@
    fits (and cursor-ok (<= (envelope-size rows-size2 next more) max-page-payload-bytes))]
   (recur n rows-size2 (if fits n best))))))
 
-(defn run-page [facts q0 limit after]
+(defn project [facts]
+  (let [edb (facts->edb facts)]
+  {:edb edb :base-index (d/base-index edb)}))
+
+(defn run-page-projected [projection q0 limit after]
   (cond
   (or (not (integer? limit)) (< limit 1) (> limit max-page-limit)) {:error [(str "query page :limit must be an integer from 1 through " max-page-limit)]}
   (and (some? after) (not (string? after))) {:error ["query page :after must be a cursor string or nil"]}
   :else (let [cursor-result (if (some? after) (decode-page-cursor after) {:ok nil})]
   (if (contains? cursor-result :error) {:error [(:error cursor-result)]} (let [q (canon-q q0)
    errs (validate q)]
-  (if (not (empty? errs)) {:error errs} (if (map? (:find q)) {:error ["aggregate :find is not pageable in v1 — use run (aggregates return a bounded group set)"]} (let [edb (facts->edb facts)
+  (if (not (empty? errs)) {:error errs} (if (map? (:find q)) {:error ["aggregate :find is not pageable in v1 — use run (aggregates return a bounded group set)"]} (let [edb (:edb projection)
+   base-idx (:base-index projection)
    strata (strata-of q)
-   db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
+   db (reduce (fn [acc stratum] (d/fixpoint-bi acc base-idx stratum)) edb strata)
    find (:find q)
    rel (get db find #{})
    keyed (mapv (fn [row] [(row-key row) row]) (vec rel))
@@ -335,6 +340,9 @@
    wanted (min limit (count window))]
   (if (= wanted 0) (page-envelope window 0) (let [n (fitting-prefix window wanted)]
   (if (= n 0) {:error ["query page contains a row too large for the bounded wire response"] :max-bytes max-page-wire-bytes} (page-envelope window n))))))))))))
+
+(defn run-page [facts q0 limit after]
+  (run-page-projected (project facts) q0 limit after))
 
 (defn- as-int [x]
   (if (integer? x) x 0))
@@ -439,13 +447,17 @@
    ns (count survivors)]
   (if (> ns max-results) {:error [(str "aggregate result too large: '" (str rel-name) "' produced " ns " surviving groups, over the FRAM_MAX_RESULTS cap of " max-results " — narrow the query or add :having (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit ns :max max-results} {:ok (vec (sort-by pr-str survivors))})))))))
 
-(defn run [facts q0]
+(defn run-projected [projection q0]
   (let [q (canon-q q0)
    errs (validate q)]
-  (if (not (empty? errs)) {:error errs} (let [edb (facts->edb facts)
+  (if (not (empty? errs)) {:error errs} (let [edb (:edb projection)
+   base-idx (:base-index projection)
    strata (strata-of q)
-   db (reduce (fn [acc stratum] (d/fixpoint acc stratum)) edb strata)
+   db (reduce (fn [acc stratum] (d/fixpoint-bi acc base-idx stratum)) edb strata)
    find (:find q)]
   (if (map? find) (aggregate-run db find) (let [rel (get db find #{})
    n (count rel)]
   (if (> n max-results) {:error [(str "result set too large: '" (str find) "' has " n " tuples, over the FRAM_MAX_RESULTS cap of " max-results " — add constants or narrow the query (raise the cap via env FRAM_MAX_RESULTS if intended)")] :over-limit n :max max-results} {:ok (d/facts db find)})))))))
+
+(defn run [facts q0]
+  (run-projected (project facts) q0))

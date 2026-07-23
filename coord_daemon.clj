@@ -38,6 +38,18 @@
 (def flat-log (atom nil))            ; the flat log, now a PROJECTION the cold CLI folds
 (def cache (atom {:index nil :version -1}))
 (def facts-wire-cache (atom {:version -1 :triples nil}))  ; :facts op — fold-ordered [l p r] wire triples, per version
+;; Datalog PROJECTION cache (the EDB + base index a scan :query / :query-page runs
+;; over). Building it is O(arity x corpus); without this cache every page and every
+;; concurrent reader rebuilt it, so paginating a large derived relation was
+;; O(corpus x pages) and N concurrent cold readers each allocated their own
+;; full-corpus EDB+index — the memory-multiplication behind the load-stress OOM
+;; and the pending-message-page query-time-limit. Keyed on the IDENTITY of the
+;; version-guarded facts set (materialize-query-snapshot reuses one immutable set
+;; object per version), so a hit needs no version arithmetic. `projection-build-lock`
+;; single-flights the cold build: exactly one full-corpus projection is materialized
+;; at a time, and concurrent readers share the one immutable result. {:facts <set> :projection <proj>}
+(def projection-cache (atom nil))
+(def projection-build-lock (Object.))
 (def subscribers (atom []))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
@@ -829,6 +841,27 @@
      :history-co {:store history-store}
      :history-store history-store}))
 
+;; The shared Datalog projection (EDB + base index) for one immutable facts set.
+;; A hit is lock-free (identity check against the last-published set). A miss
+;; single-flights under `projection-build-lock` with a double-check, so exactly one
+;; full-corpus projection is built per cold version and all concurrent scan/page
+;; readers at that version share the one immutable value — bounding peak build
+;; memory to a single corpus regardless of query concurrency. The build runs under
+;; the caller's *query-control* binding, so a cold build is itself deadline/step
+;; bounded (it aborts like any query rather than running unbounded); a partial build
+;; is never published because `reset!` happens only after `q/project` returns.
+(defn- snapshot-projection [facts-set]
+  (let [pc @projection-cache]
+    (if (and pc (identical? (:facts pc) facts-set))
+      (:projection pc)
+      (locking projection-build-lock
+        (let [pc2 @projection-cache]
+          (if (and pc2 (identical? (:facts pc2) facts-set))
+            (:projection pc2)
+            (let [proj (q/project (vec facts-set))]
+              (reset! projection-cache {:facts facts-set :projection proj})
+              proj)))))))
+
 (defn- query-abort-response [t version engine]
   (let [data (ex-data t)
         code (:code data)]
@@ -870,9 +903,9 @@
               res (case (:op req)
                     :query (if use-idx
                              (idx-run (:idx snapshot) (:query req))
-                             (q/run (vec (:facts snapshot)) (:query req)))
-                    :query-page (q/run-page (vec (:facts snapshot)) (:query req)
-                                           (:limit req) (:after req))
+                             (q/run-projected (snapshot-projection (:facts snapshot)) (:query req)))
+                    :query-page (q/run-page-projected (snapshot-projection (:facts snapshot))
+                                                      (:query req) (:limit req) (:after req))
                     :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
                             (if (seq errs)
                               {:error errs}

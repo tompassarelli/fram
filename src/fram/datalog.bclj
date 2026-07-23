@@ -451,11 +451,34 @@
                      {} rules)]
     (new-only cand db rels)))
 
-;; INDEXED fixpoint — public entry point. Same least fixpoint as fixpoint-oracle,
-;; proven set-identical by datalog_diff_test over >=500 generated programs.
-(defn fixpoint [db0 :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
+;; A reusable BASE index over an EDB (Map rel (Set tuple)) — the same value
+;; `build-index` produces, exposed so a caller that runs MANY queries over one
+;; immutable corpus (the coordinator's per-version read snapshot) builds the
+;; O(arity x corpus) base-relation index ONCE and threads it into `fixpoint-bi`
+;; instead of rebuilding it on every query and every stratum. Base relations
+;; ("fact"/"fact-id") are never rule heads (validation forbids it), so their
+;; tuples are invariant across an entire stratified evaluation — the shared
+;; index stays correct for every stratum's db0.
+(defn base-index [db0 :- (Map String (Set (Vec Any)))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (build-index db0))
+
+;; Index db0 REUSING a prebuilt base-idx: relations base-idx already covers are
+;; taken as-is (their tuples are invariant — see base-index); only relations in
+;; db0 NOT in base-idx (the freshly-derived head relations of higher strata) are
+;; indexed here. When base-idx is {} this indexes everything, i.e. it is exactly
+;; `build-index db0`.
+(defn- index-augment [base-idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) db0 :- (Map String (Set (Vec Any)))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+  (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
+            (if (contains? base-idx rel) acc (index-rel acc rel (vec (get db0 rel #{})))))
+          base-idx (vec (keys db0))))
+
+;; INDEXED fixpoint with a SHARED base index — same least fixpoint as
+;; fixpoint-oracle. `base-idx` may cover some of db0's relations (their index is
+;; reused); the rest are indexed here. Passing {} is identical to the classic
+;; `fixpoint` (every relation indexed fresh).
+(defn fixpoint-bi [db0 :- (Map String (Set (Vec Any))) base-idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
   (let [rels (rule-head-rels rules)
-        idx0 (build-index db0)
+        idx0 (index-augment base-idx db0)
         seeded (reduce (fn [d :- (Map String (Set (Vec Any))) r :- (Map Keyword Any)] :- (Map String (Set (Vec Any)))
                          (let [rel (:rel (:head r)) heads (derive-rule-idx db0 idx0 r)]
                            (update d rel (fn [s :- (Set (Vec Any))] :- (Set (Vec Any))
@@ -468,6 +491,12 @@
         db
         (let [nw (snr-round-idx db idx delta rules rels)]
           (recur (db-merge db nw rels) (index-delta idx nw rels) nw))))))
+
+;; INDEXED fixpoint — public entry point. Same least fixpoint as fixpoint-oracle,
+;; proven set-identical by datalog_diff_test over >=500 generated programs. Builds
+;; the whole index fresh (base-idx {}) — the corpus-agnostic path.
+(defn fixpoint [db0 :- (Map String (Set (Vec Any))) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any)))
+  (fixpoint-bi db0 {} rules))
 
 (defn run-rules [ctx :- (Atom t/Store) rules :- (Vec (Map Keyword Any))] :- (Map String (Set (Vec Any))) (fixpoint (edb ctx) rules))
 
