@@ -3,11 +3,32 @@
 ;; ten tools: tell/retract/show/ask/validate + 5 edit verbs), KB reads (show), a
 ;; structured ask/query, the `untell`->`retract` alias, and server-side param rejection.
 ;; FRAM_PORT pins a dead port so no live coordinator can leak into the run.
-;;   bb mcp_test.clj      (run from the repo root)
-(require '[babashka.process :as p] '[cheshire.core :as json] '[clojure.string :as str])
+;;   bb -cp out tests/mcp_test.clj      (run from the repo root)
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json]
+         '[clojure.string :as str]
+         '[fram.fold :as fold]
+         '[fram.rt :as rt]
+         '[fram.tools :as tl])
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
+
+(defn input-schema [params]
+  {:type "object"
+   :properties (reduce (fn [m p]
+                         (assoc m (keyword (:name p))
+                                {:type (:type p) :description (:name p)}))
+                       {} params)
+   :required (vec (keep (fn [p] (when (:required p) (:name p))) params))})
+
+(defn catalog-tool [spec]
+  {:name (:name spec)
+   :description (:desc spec)
+   :inputSchema (input-schema (:params spec))})
+
+(def expected-tools (mapv catalog-tool (tl/catalog [])))
 
 ;; a tiny self-contained log: @a -depends_on-> @b
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-mcp-test-" (System/nanoTime)))
@@ -75,8 +96,78 @@
   (chk "tools/list is EXACTLY the closed catalog (10 tools, retract not untell, no threads)"
        (= names #{"tell" "retract" "show" "ask" "validate"
                   "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"}))
+  (chk "tools/list preserves the canonical catalog descriptions, schemas, and order"
+       (= expected-tools tools))
   (chk "each tool has an inputSchema object"
        (every? (fn [t] (= "object" (get-in t [:inputSchema :type]))) tools)))
+
+;; Cold large-corpus regression. The fixture models 10k graph entities / 30k
+;; kind-v-f0 facts, then appends a newline-terminated corruption sentinel. A
+;; state fold must reject that sentinel, so tools/list returning the exact catalog
+;; is a structural proof that discovery did not read/fold the corpus; no flaky
+;; wall-time threshold is involved. Restoring the valid corpus and issuing show
+;; proves state-dependent calls still take the normal cold fold path.
+(def large-dir (str tmp "/large-corpus"))
+(.mkdirs (java.io.File. large-dir))
+(def large-logpath (str large-dir "/coordination.log"))
+(def large-entity-count 10000)
+(def large-corpus
+  (let [sb (StringBuilder.)]
+    (doseq [n (range large-entity-count)
+            [offset pred object] [[1 "kind" "ast"]
+                                  [2 "v" (str "node-" n)]
+                                  [3 "f0" (str "@node-" (mod (inc n) large-entity-count))]]]
+      (.append sb (pr-str {:tx (+ (* n 3) offset)
+                           :op "assert"
+                           :l (str "@node-" n)
+                           :p pred
+                           :r object
+                           :frame "mcp-large-corpus-test"}))
+      (.append sb "\n"))
+    (str sb)))
+(def large-env {"FRAM_LOG" large-logpath
+                "FRAM_THREADS" large-dir
+                "FRAM_PORT" dead-port})
+
+(spit large-logpath (str large-corpus "{\n"))
+(def large-corpus-fold-rejected?
+  (try
+    (fold/fold (rt/read-log large-logpath))
+    false
+    (catch clojure.lang.ExceptionInfo error
+      (true? (:fram/corrupt-log (ex-data error))))))
+(chk "large-corpus oracle is rejected by the actual read-log/fold path"
+     large-corpus-fold-rejected?)
+(def large-catalog-out
+  (:out (p/shell {:in (str (str/join "\n"
+                              [(json/generate-string {:jsonrpc "2.0" :id 30 :method "initialize" :params {}})
+                               (json/generate-string {:jsonrpc "2.0" :id 31 :method "tools/list" :params {}})])
+                          "\n")
+                  :out :string :err :string :extra-env large-env}
+                 "bin/fram-mcp")))
+(def large-catalog-responses
+  (keep #(try (json/parse-string % true) (catch Exception _ nil))
+        (remove str/blank? (str/split-lines large-catalog-out))))
+(def large-catalog-response (some #(when (= 31 (:id %)) %) large-catalog-responses))
+(chk "tools/list serves the exact closed catalog without folding a cold 30k-fact corpus"
+     (= expected-tools (get-in large-catalog-response [:result :tools])))
+
+(spit large-logpath large-corpus)
+(def large-show-out
+  (:out (p/shell {:in (str (json/generate-string
+                             {:jsonrpc "2.0" :id 32 :method "tools/call"
+                              :params {:name "show" :arguments {:subject "node-9999"}}})
+                         "\n")
+                  :out :string :err :string :extra-env large-env}
+                 "bin/fram-mcp")))
+(def large-show-response
+  (some #(when (= 32 (:id %)) %)
+        (keep #(try (json/parse-string % true) (catch Exception _ nil))
+              (remove str/blank? (str/split-lines large-show-out)))))
+(def large-show-rows
+  (some-> large-show-response (get-in [:result :content 0 :text]) json/parse-string))
+(chk "state-dependent calls still fold and read the cold 30k-fact corpus"
+     (= #{"kind" "v" "f0"} (set (map #(get % "pred") large-show-rows))))
 
 (let [r3 (get by-id 3) txt (get-in r3 [:result :content 0 :text])
       preds (set (map #(get % "pred") (json/parse-string txt)))]
@@ -143,5 +234,6 @@
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (println "\nfram-mcp:" (count cs) "/" (count cs) "PASS")
+    (do (println "\nfram-mcp:" (count cs) "/" (count cs) "PASS")
+        (fs/delete-tree tmp))
     (do (println "\nfram-mcp:" (count fails) "FAILED") (println "--- server stderr/stdout ---") (println out) (System/exit 1))))

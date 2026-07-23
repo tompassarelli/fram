@@ -55,10 +55,14 @@
    "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "
    "(recompile-gated, fail-closed)."))
 
+;; The tool catalog is deliberately closed and corpus-independent. Materialize it
+;; once so discovery never pays the cost of folding the selected corpus.
+(def ^:private closed-catalog (tl/catalog []))
+
 ;; --- per-request state: fold the current log fresh (sees others' writes) -----
 (defn load-state []
   (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))]
-    {:facts facts :idx (k/build-index facts) :cat (tl/catalog facts)}))
+    {:facts facts :idx (k/build-index facts) :cat closed-catalog}))
 
 ;; --- catalog spec -> MCP tool descriptor -------------------------------------
 (defn- input-schema [params]
@@ -68,6 +72,8 @@
 
 (defn- ->tool [spec]
   {:name (:name spec) :description (:desc spec) :inputSchema (input-schema (:params spec))})
+
+(def ^:private closed-tools (mapv ->tool closed-catalog))
 
 ;; --- writes -> through the coordinator (mirrors the CLI's route-write) -------
 (defn- route-write [w]
@@ -614,7 +620,7 @@
                  :instructions instructions})
 
       (= method "tools/list")
-      (reply id {:tools (mapv ->tool (:cat (load-state)))})
+      (reply id {:tools closed-tools})
 
       (= method "tools/call")
       ;; graph-AST edits run a multi-process recompile-gated transaction that far
