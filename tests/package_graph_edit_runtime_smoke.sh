@@ -9,15 +9,18 @@ env_bin="${FRAM_RUNTIME_TEST_ENV:?FRAM_RUNTIME_TEST_ENV is required}"
 grep_bin="${FRAM_RUNTIME_TEST_GREP:?FRAM_RUNTIME_TEST_GREP is required}"
 python="${FRAM_RUNTIME_TEST_PYTHON:?FRAM_RUNTIME_TEST_PYTHON is required}"
 sleep_bin="${FRAM_RUNTIME_TEST_SLEEP:?FRAM_RUNTIME_TEST_SLEEP is required}"
+expected_system="${FRAM_RUNTIME_TEST_SYSTEM:?FRAM_RUNTIME_TEST_SYSTEM is required}"
 
 entrypoint="$package_root/bin/fram-graph-edit-runtime"
 manifest="$package_root/share/fram/graph-edit-runtime-core-v1.json"
+runtime_driver="$package_root/libexec/fram/fram-graph-edit-runtime"
 case "$package_root" in
   /nix/store/*) ;;
   *) echo "graph-edit runtime smoke: non-store package root: $package_root" >&2; exit 2 ;;
 esac
 [[ -x "$entrypoint" ]] || { echo "graph-edit runtime smoke: missing entrypoint" >&2; exit 1; }
 [[ -r "$manifest" ]] || { echo "graph-edit runtime smoke: missing core manifest" >&2; exit 1; }
+[[ -r "$runtime_driver" ]] || { echo "graph-edit runtime smoke: missing runtime driver" >&2; exit 1; }
 
 work="$(mktemp -d)"
 cleanup() {
@@ -38,7 +41,8 @@ trap cleanup EXIT INT TERM
 
 "$bb" -e '
   (require (quote [cheshire.core :as json]))
-  (let [m (json/parse-string (slurp (first *command-line-args*)) true)
+  (let [[manifest expected-system] *command-line-args*
+        m (json/parse-string (slurp manifest) true)
         roots (:storeRoots m)
         store? #(clojure.string/starts-with? (str (:path %)) "/nix/store/")]
     (when-not (and (= "fram.graph-edit-runtime-core/v1" (:manifestVersion m))
@@ -46,11 +50,63 @@ trap cleanup EXIT INT TERM
                    (false? (:selfAttestation m))
                    (nil? (:closureDigest m))
                    (= "graph-edit-authority-v1" (:authorityProfile m))
+                   ;; Exact evaluated Nix system, later bound to descriptor.runtime.system.
+                   (= expected-system (:system m))
                    (= #{"babashka" "beagle" "fram" "jdk" "racket"}
                       (set (map :role roots)))
                    (every? store? roots))
       (binding [*out* *err*] (println (pr-str m)))
-      (System/exit 1)))' "$manifest"
+      (System/exit 1)))' "$manifest" "$expected_system"
+
+# The final env -i is the daemon authority boundary. It must bridge the already
+# validated wrapper values under exactly the five FRAM descriptor input names;
+# the daemon must not retain a NORTH_FRAM_* read or ambient-default expression.
+fram_package="$("$python" -c '
+import json, pathlib, sys
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+matches = [row["path"] for row in manifest["storeRoots"] if row["role"] == "fram"]
+if len(matches) != 1:
+    raise SystemExit("graph-edit runtime smoke: manifest has no unique Fram root")
+print(matches[0])
+' "$manifest")"
+daemon_source="$fram_package/libexec/fram/coord_daemon.clj"
+[[ -r "$daemon_source" ]] || { echo "graph-edit runtime smoke: missing coordinator source" >&2; exit 1; }
+"$python" - "$runtime_driver" "$daemon_source" <<'PY'
+import pathlib
+import re
+import sys
+
+driver = pathlib.Path(sys.argv[1]).read_text()
+daemon = pathlib.Path(sys.argv[2]).read_text()
+marker = 'exec "$FRAM_GRAPH_EDIT_SEALED_ENV" -i \\\n'
+try:
+    final_boundary = driver.rsplit(marker, 1)[1]
+except IndexError:
+    raise SystemExit("graph-edit runtime smoke: final env-i boundary not found")
+
+expected_assignments = {
+    "FRAM_AUTHORITY_CORE_MANIFEST": '"$FRAM_GRAPH_EDIT_SEALED_MANIFEST"',
+    "FRAM_CHECKOUT_ROOT": '"$checkout_root"',
+    "FRAM_SOURCE_ROOT": '"$source_root"',
+    "FRAM_CODE_LOG": '"$code_log"',
+    "FRAM_AUTHORITY_EXPECTED_RUNTIME_CLOSURE_DIGEST": '"$runtime_digest"',
+}
+for name, rhs in expected_assignments.items():
+    line = f"  {name}={rhs} \\"
+    if line not in final_boundary:
+        raise SystemExit(f"graph-edit runtime smoke: final env-i lost exact {name} bridge")
+if "NORTH_FRAM_" in final_boundary:
+    raise SystemExit("graph-edit runtime smoke: NORTH_FRAM_* crossed final env-i")
+
+daemon_bindings = set(re.findall(r'required-launch-binding! "([^"]+)"', daemon))
+if daemon_bindings != set(expected_assignments):
+    raise SystemExit(
+        "graph-edit runtime smoke: daemon authority binding set differs: "
+        + repr(sorted(daemon_bindings))
+    )
+if "NORTH_FRAM_" in daemon:
+    raise SystemExit("graph-edit runtime smoke: daemon retains NORTH_FRAM_* read/fallback")
+PY
 
 checkout="$work/checkout"
 source_root="$checkout/src"
@@ -110,9 +166,12 @@ common_hostile=(
   "$exported_printf"
   BEAGLE_HOME="$evil/home/code/beagle"
   FRAM="$evil/fram"
+  FRAM_AUTHORITY_CORE_MANIFEST="$evil/core.json"
+  FRAM_AUTHORITY_EXPECTED_RUNTIME_CLOSURE_DIGEST="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   FRAM_BIN="$evil/bin"
   FRAM_BUILD_ALL="$evil/bin/beagle-build-all"
   FRAM_CHECK_EMIT="$evil/check-emit.rkt"
+  FRAM_CHECKOUT_ROOT="$evil/checkout"
   FRAM_CODE_LOG="$evil/code.log"
   FRAM_CODE_PORT=1
   FRAM_HOME="$evil/fram"
@@ -122,6 +181,7 @@ common_hostile=(
   FRAM_RACKET="$evil/bin/racket"
   FRAM_RESOLVE="$evil/resolve.clj"
   FRAM_ROUNDTRIP="$evil/roundtrip.rkt"
+  FRAM_SOURCE_ROOT="$evil/source"
   FRAM_SRC="$evil/src"
   FRAM_THREADS="$evil/threads"
   FRAM_GRAPH_EDIT_SEALED_BB="$evil/bin/bb"

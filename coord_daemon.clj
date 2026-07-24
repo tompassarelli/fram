@@ -15,7 +15,8 @@
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
          '[fram.store :as c] '[fram.schema :as s]
          '[fram.kernel :as ck]
-         '[fram.authority :as authority]
+         '[fram.authority :as authority] '[fram.tools :as tools]
+         '[cheshire.core :as json]
          '[fram.fold :as fold] '[fram.query :as q] '[fram.datalog :as d] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
@@ -5580,6 +5581,249 @@
           result                              ; fence-lost: nothing appended, seq NOT consumed
           (do (reset! (:seq handle) req-seq)  ; consume the slot -> exactly once
               {:ok true :seq req-seq :epoch req-epoch :result result}))))))
+
+;; ── live authority descriptor snapshot derivation ───────────────────────────
+;; FRAM strictly derives every descriptor field from the sealed launch boundary
+;; (the Nix-built core manifest + North's launch bindings) and the LIVE coordinator
+;; store — EXCEPT runtime.closureDigest, which stays exactly the North-supplied,
+;; independently verified value FRAM only validates and binds (via the seal). No
+;; field is inferred from ambient JVM/host state. Nothing here activates North,
+;; Gaffer, the SSLSocket serve adapter, a new MCP tool, or an ambient fallback: it
+;; produces the snapshot the (still-dark) authority serve path will seal via the
+;; existing seal-coordinator-descriptor, and is exercised only by tests until that
+;; slice lands. runtime.system comes from the sealed manifest, never the host.
+(def ^:private core-manifest->runtime-seal
+  {"fram.graph-edit-runtime-core/v1" "fram.runtime-seal/v1"})
+(def ^:private tool-catalog-version "fram.graph-edit-tools/v1")
+(def ^:private runtime-root-roles #{"babashka" "beagle" "fram" "jdk" "racket"})
+
+(defn- authority-snapshot-fail! [msg data]
+  (throw (ex-info (str "authority snapshot: " msg) (assoc data :authority/snapshot true))))
+
+(defn- read-sealed-core-manifest!
+  "Parse the Nix-built core manifest JSON at PATH into the exact descriptor runtime
+  inputs. The manifest version selects the runtime seal version; no independent
+  ambient/default seal version exists."
+  [manifest-path]
+  (let [f (java.io.File. (str manifest-path))]
+    (when-not (.isFile f)
+      (authority-snapshot-fail! "sealed core manifest is absent" {:path (str manifest-path)}))
+    (let [m (try (json/parse-string (slurp f) false)
+                 (catch Exception e
+                   (authority-snapshot-fail! "sealed core manifest is not valid JSON"
+                                             {:path (str manifest-path) :cause (str (.getMessage e))})))
+          manifest-version (get m "manifestVersion")
+          seal-version (get core-manifest->runtime-seal manifest-version)
+          system (get m "system")
+          store-roots (get m "storeRoots")
+          roles (when (sequential? store-roots) (mapv #(get % "role") store-roots))
+          roots (when (sequential? store-roots) (mapv #(get % "path") store-roots))]
+      (when-not seal-version
+        (authority-snapshot-fail! "sealed core manifest version has no runtime seal mapping"
+                                  {:path (str manifest-path) :manifest-version manifest-version}))
+      (when-not (and (= "graph-edit-authority-v1" (get m "authorityProfile"))
+                     (= "north" (get m "verificationOwner"))
+                     (false? (get m "selfAttestation"))
+                     (not (contains? m "closureDigest")))
+        (authority-snapshot-fail! "sealed core manifest authority contract is invalid"
+                                  {:path (str manifest-path)}))
+      (when-not (and (string? system) (seq system))
+        (authority-snapshot-fail! "sealed core manifest is missing runtime system"
+                                  {:path (str manifest-path)}))
+      (when (or (not= runtime-root-roles (set roles))
+                (not= (count roles) (count runtime-root-roles))
+                (some (fn [p] (not (and (string? p)
+                                        (str/starts-with? p "/nix/store/")
+                                        (seq p))))
+                      roots)
+                (not= (count roots) (count (set roots))))
+        (authority-snapshot-fail! "sealed core manifest has invalid runtime roots"
+                                  {:path (str manifest-path)}))
+      {:seal-version seal-version :system system :roots (vec (sort roots))})))
+
+(defn- canonical-existing-path!
+  [path label kind]
+  (let [raw (str path)
+        f (java.io.File. raw)]
+    (when-not (and (.isAbsolute f)
+                   (= raw (.getCanonicalPath f))
+                   (case kind :directory (.isDirectory f) :file (.isFile f) false))
+      (authority-snapshot-fail! (str label " is absent, non-canonical, or the wrong kind")
+                                {:label label :path raw}))
+    raw))
+
+(defn- posix-file-key!
+  "dev:<dev>:ino:<ino> from POSIX attributes — a stable file identity that survives
+  path renames. Fails closed if LABEL's path is absent (path-identity drift)."
+  [path label]
+  (try
+    (let [attrs (java.nio.file.Files/readAttributes
+                 (.toPath (java.io.File. (str path)))
+                 "unix:dev,ino"
+                 (into-array java.nio.file.LinkOption []))]
+      (str "dev:" (get attrs "dev") ":ino:" (get attrs "ino")))
+    (catch Exception e
+      (authority-snapshot-fail! (str "cannot resolve file identity of " label)
+                                {:label label :path (str path) :cause (str (.getMessage e))}))))
+
+(defn- log-prefix!
+  "The exact byte length and SHA-256 of the code log's canonical prefix (its whole
+  current content). Fails closed if the log is unreadable."
+  [code-log]
+  (try
+    (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. (str code-log))))
+          md (java.security.MessageDigest/getInstance "SHA-256")]
+      {:bytes (str (alength ^bytes bytes))
+       :sha256 (str "sha256:" (apply str (map #(format "%02x" (bit-and (int %) 255)) (.digest md bytes))))})
+    (catch Exception e
+      (authority-snapshot-fail! "cannot read the code log prefix"
+                                {:path (str code-log) :cause (str (.getMessage e))}))))
+
+(defn- checkout-relative
+  "SOURCE-ROOT expressed relative to CHECKOUT-ROOT, forward-slashed; \"\" denotes the
+  checkout root itself. A source root outside the checkout relativizes to a \"..\"
+  path that normalize-module-manifest! rejects (path drift fails closed)."
+  [checkout-root source-root]
+  (let [c (.toPath (.getAbsoluteFile (java.io.File. (str checkout-root))))
+        s (.toPath (.getAbsoluteFile (java.io.File. (str source-root))))]
+    (str/replace (str (.relativize c s)) "\\" "/")))
+
+(defn- module-id-of-source-path
+  "moduleId derived from a Beagle sourcePath exactly as authority/module-id-for-source-path!
+  (strip the Beagle extension, '/'→'.'). normalize-module-manifest! re-derives and
+  rejects any divergence, so this is a fail-closed convenience, not a second source
+  of truth."
+  [path]
+  (when-let [ext (some (fn [e] (when (str/ends-with? path e) e)) authority/beagle-source-extensions)]
+    (str/replace (subs path 0 (- (count path) (count ext))) "/" ".")))
+
+(defn- live-module-entries
+  "The current module→sourcePath mapping read straight off the live store's
+  @<module>#root `file` facts (never off client input). Superseded facts are
+  excluded, so this is the live snapshot."
+  [co]
+  (let [st (:store co)
+        m @st
+        fp (c/value-id st "file")]
+    (if (nil? fp)
+      []
+      (->> (:facts m)
+           (keep (fn [[cid fact]]
+                   (when (and (= fp (:p fact)) (not (contains? (:superseded m) cid)))
+                     (let [subj (s/name-of st (:l fact))
+                           path (c/literal st (:r fact))]
+                       (when (and (string? subj) (str/ends-with? subj "#root"))
+                         (when-not (string? path)
+                           (authority-snapshot-fail! "module source path is not a string"
+                                                     {:module subj :path path}))
+                         (if-let [mid (module-id-of-source-path path)]
+                           (do
+                             (when-not (= subj (str "@" mid "#root"))
+                               (authority-snapshot-fail! "module root identity disagrees with source path"
+                                                         {:module subj :path path :derived mid}))
+                             {"moduleId" mid "sourcePath" path})
+                           (authority-snapshot-fail! "module source path lacks a Beagle extension"
+                                                     {:module subj :path path})))))))
+           (sort-by #(get % "sourcePath"))
+           vec))))
+
+(defn- input-schema-of [params]
+  {"type" "object"
+   "properties" (reduce (fn [mm p] (assoc mm (:name p) {"type" (:type p) "description" (:name p)})) {} params)
+   "required" (vec (keep (fn [p] (when (:required p) (:name p))) params))})
+
+(defn- live-tool-catalog
+  "The exact five graph-edit tools, live from the tool catalog in served order."
+  []
+  {"catalogVersion" tool-catalog-version
+   "tools" (->> (tools/catalog [])
+                (filterv (fn [spec] (contains? (set authority/expected-tool-order) (:name spec))))
+                (mapv (fn [spec] {"name" (:name spec) "description" (:desc spec)
+                                  "inputSchema" (input-schema-of (:params spec))})))})
+
+(defn- live-lifecycle
+  "Emit the descriptor schema's clean/current lifecycle only from a healthy live
+  coordinator. Poisoned or repair-needed durability cannot advertise authority."
+  [co]
+  (let [state (:state @edit-durability-state)]
+    (when-not (= :healthy state)
+      (authority-snapshot-fail! "coordinator durability is not clean"
+                                {:durability-state state}))
+    {"durability" {"state" "clean"}
+     "projection" {"state" "current"
+                   "generation" (str (current-seq co))}}))
+
+(defn derive-authority-snapshot
+  "Strictly derive the runtime/corpus/tools/lifecycle descriptor snapshot from the
+  sealed launch boundary and the live coordinator store CO. Inputs:
+    :core-manifest-path — FRAM_AUTHORITY_CORE_MANIFEST (roots + system + seal mapping)
+    :checkout-root/:source-root/:code-log — sealed wrapper path bindings
+    :closure-digest — the North-verified runtime closure digest FRAM only binds
+    :co — the live coordinator (module manifest + graph version + lifecycle)
+  Every path/manifest defect fails closed BEFORE the caller can seal or serve."
+  [{:keys [core-manifest-path checkout-root source-root code-log closure-digest co]}]
+  (when-not (and (string? closure-digest)
+                 (re-matches #"sha256:[0-9a-f]{64}" closure-digest))
+    (authority-snapshot-fail! "North runtime closure digest is malformed"
+                              {:closure-digest closure-digest}))
+  (let [core-manifest-path (canonical-existing-path! core-manifest-path
+                                                      "authorityCoreManifest" :file)
+        checkout-root (canonical-existing-path! checkout-root "checkoutRoot" :directory)
+        source-root (canonical-existing-path! source-root "sourceRoot" :directory)
+        code-log (canonical-existing-path! code-log "codeLog" :file)
+        expected-code-log (str checkout-root "/.fram/code.log")
+        _ (when-not (= expected-code-log code-log)
+            (authority-snapshot-fail! "codeLog is not the canonical checkout log"
+                                      {:path code-log :expected expected-code-log}))
+        {seal-version :seal-version system :system roots :roots}
+        (read-sealed-core-manifest! core-manifest-path)
+        entries (live-module-entries co)
+        version (str (current-seq co))
+        src-rel (checkout-relative checkout-root source-root)
+        manifest (authority/normalize-module-manifest! src-rel version entries [])
+        {log-bytes :bytes log-sha :sha256} (log-prefix! code-log)
+        catalog (live-tool-catalog)]
+    {"runtime" {"sealVersion" seal-version
+                "system" system
+                "roots" roots
+                "closureDigest" closure-digest}
+     "corpus" {"checkoutRoot" (str checkout-root)
+               "sourceRoot" (str source-root)
+               "sourceRootRelativeToCheckout" (get manifest "sourceRootRelativeToCheckout")
+               "codeLog" (str code-log)
+               "identity" {"checkoutFileKey" (posix-file-key! checkout-root "checkoutRoot")
+                           "sourceFileKey" (posix-file-key! source-root "sourceRoot")
+                           "logFileKey" (posix-file-key! code-log "codeLog")}
+               "snapshot" {"graphVersion" (get manifest "graphVersion")
+                           "logPrefixBytes" log-bytes
+                           "logPrefixSha256" log-sha
+                           "moduleManifest" (select-keys manifest ["manifestVersion" "mappingDigest"
+                                                                    "snapshotDigest" "entries"])}}
+     "tools" {"catalogVersion" (get catalog "catalogVersion")
+              "catalogDigest" (authority/tool-catalog-digest! catalog)
+              "tools" (get catalog "tools")}
+     "lifecycle" (live-lifecycle co)}))
+
+(defn- required-launch-binding! [binding-name]
+  (let [v (System/getenv binding-name)]
+    (if (and (string? v) (not (str/blank? v)))
+      v
+      (authority-snapshot-fail! (str "missing required sealed launch binding " binding-name)
+                                {:binding binding-name}))))
+
+(defn authority-launch-snapshot
+  "Read the sealed launch boundary from the process environment plus the live
+  coordinator CO, then derive the authority descriptor snapshot. Invoked ONLY by
+  the authority serve path (dark until that slice lands); normal boot never calls
+  it, so no coordinator contact, MCP/catalog change, or ambient fallback occurs."
+  [co]
+  (derive-authority-snapshot
+   {:core-manifest-path (required-launch-binding! "FRAM_AUTHORITY_CORE_MANIFEST")
+    :checkout-root (required-launch-binding! "FRAM_CHECKOUT_ROOT")
+    :source-root (required-launch-binding! "FRAM_SOURCE_ROOT")
+    :code-log (required-launch-binding! "FRAM_CODE_LOG")
+    :closure-digest (required-launch-binding! "FRAM_AUTHORITY_EXPECTED_RUNTIME_CLOSURE_DIGEST")
+    :co co}))
 
 (defn seal-coordinator-descriptor
   "Seal an authority descriptor binding this boot's generation nonce, the live

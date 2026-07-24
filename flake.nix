@@ -193,7 +193,7 @@
       # receipts, and projection lifecycle live in later slices. This output
       # closes the executable/toolchain boundary and refuses to serve until
       # North supplies the future lease and independently computed closure seal.
-      mkGraphEditRuntime = pkgs: fram: beaglePkg:
+      mkGraphEditRuntime = system: pkgs: fram: beaglePkg:
         let
           framRoot = fram.runtimeRoot;
           beagleRevision = beagle.rev;
@@ -214,6 +214,10 @@
             authorityProfile = "graph-edit-authority-v1";
             verificationOwner = "north";
             selfAttestation = false;
+            # The Nix build system the sealed closure was realized for. FRAM binds
+            # this into descriptor.runtime.system; it is NEVER inferred from ambient
+            # JVM/host state at run time.
+            system = system;
             closureDigestField = "intentionally-absent; North computes it from trusted Nix DB NAR hashes";
             sourcePins = {
               beagle = beagleRevision;
@@ -346,6 +350,7 @@
             FRAM_RUNTIME_TEST_GREP="${pkgs.gnugrep}/bin/grep" \
             FRAM_RUNTIME_TEST_PYTHON="${pkgs.python3}/bin/python3" \
             FRAM_RUNTIME_TEST_SLEEP="${pkgs.coreutils}/bin/sleep" \
+            FRAM_RUNTIME_TEST_SYSTEM="${system}" \
               ${pkgs.bash}/bin/bash ${./tests/package_graph_edit_runtime_smoke.sh} "$out"
 
             runHook postInstallCheck
@@ -373,7 +378,7 @@
     {
       packages = forAll (system: pkgs: rec {
         fram = mkFram pkgs clj-nix.packages.${system};
-        fram-graph-edit-runtime = mkGraphEditRuntime pkgs fram beagle.packages.${system}.default;
+        fram-graph-edit-runtime = mkGraphEditRuntime system pkgs fram beagle.packages.${system}.default;
         default = fram;
       });
 
