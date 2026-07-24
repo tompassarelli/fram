@@ -1289,6 +1289,185 @@
             {:reject (:reject res) :version (:version res)
              :at (:at res) :pred (:pred res)}))))))
 
+;; --- one-wire managed-agent identity publication ----------------------------
+;; :managed-agent-publish is the server-side composition of the fresh managed
+;; identity fast path: normalize one @agent subject, derive/acquire its canonical
+;; write lease, atomically commit the complete body + identity manifest marker in
+;; ONE commit-batch! transaction, verify exact readback, and release the lease.
+;;
+;; Fram deliberately does not own North's changing identity vocabulary. The
+;; caller supplies:
+;;   :facts          [{:p <predicate> :r <nonblank string>} ...]
+;;   :identity-preds [<every predicate participating in the manifest> ...]
+;;   :guard-preds    [<additional predicates that must be absent> ...]
+;;   :manifest-sha256 <canonical digest computed by the caller>
+;; The daemon recomputes the digest over the present identity facts as sorted
+;; `predicate NUL value LF` bytes and refuses a mismatch before mutation.
+;; Optional identity predicates may be absent from :facts; their membership in
+;; :identity-preds makes exact readback prove that absence too. :guard-preds is
+;; how a consumer includes terminal/body predicates in the clean-fresh gate
+;; without baking that domain vocabulary into Fram.
+;;
+;; A byte-identical replay after an ack timeout is an idempotent success with no
+;; second identity transaction. Any markerless prefix, competing marker, guarded
+;; body, or other mixed generation rejects without touching the identity subject;
+;; the legacy recovery writer remains authoritative for those reused-subject cases.
+(def ^:private managed-agent-marker-pred "identity_manifest_sha256")
+(def ^:private managed-agent-subject-pattern
+  #"^@agent:[A-Za-z0-9][A-Za-z0-9._:-]*$")
+(def ^:private sha256-pattern #"^[0-9a-f]{64}$")
+
+(defn- normalize-managed-agent-subject [subject]
+  (when (string? subject)
+    (let [raw (str/replace subject #"^@?agent:" "")
+          canonical (str "@agent:" raw)]
+      (when (re-matches managed-agent-subject-pattern canonical)
+        canonical))))
+
+(defn- sha256-hex [value]
+  (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                        (.getBytes (str value)
+                                   java.nio.charset.StandardCharsets/UTF_8))]
+    (format "%064x" (java.math.BigInteger. 1 digest))))
+
+(defn- managed-agent-lease-resource [subject]
+  (str "managed-agent-write:" (sha256-hex subject)))
+
+(defn- managed-agent-manifest [facts identity-preds]
+  (let [by-pred (into {} (map (juxt :p :r)) facts)]
+    (sha256-hex
+     (apply str
+            (for [predicate (sort identity-preds)
+                  :let [value (get by-pred predicate)]
+                  :when (some? value)]
+              (str predicate "\u0000" value "\n"))))))
+
+(defn- live-string-values [subject predicate]
+  (into #{} (map #(nth % 2)) (lp-live-triples @co subject predicate)))
+
+(defn- exact-publish-projection? [subject desired check-preds marker]
+  (every?
+   (fn [predicate]
+     (= (cond
+          (= predicate managed-agent-marker-pred) #{marker}
+          (contains? desired predicate) #{(get desired predicate)}
+          :else #{})
+        (live-string-values subject predicate)))
+   check-preds))
+
+(defn- blank-publish-projection? [subject check-preds]
+  (every? #(empty? (live-string-values subject %)) check-preds))
+
+(defn- invalid-predicate-vector? [predicates]
+  (or (not (sequential? predicates))
+      (some #(or (not (string? %)) (str/blank? %)) predicates)
+      (not= (count predicates) (count (distinct predicates)))))
+
+(defn- do-managed-agent-publish [req]
+  (let [subject (normalize-managed-agent-subject (:te req))
+        facts (:facts req)
+        identity-preds (:identity-preds req)
+        guard-preds (or (:guard-preds req) [])
+        supplied-marker (:manifest-sha256 req)
+        holder (:holder req)
+        ttl-ms (:ttl-ms req)]
+    (cond
+      (nil? subject)
+      {:reject ["managed-agent-publish requires a valid @agent:<id> :te"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (not (and (sequential? facts) (seq facts)))
+      {:reject ["managed-agent-publish requires a non-empty :facts vector"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (not (every? #(and (map? %)
+                         (string? (:p %)) (not (str/blank? (:p %)))
+                         (string? (:r %)) (not (str/blank? (:r %)))
+                         (= (:r %) (str/trim (:r %))))
+                   facts))
+      {:reject ["managed-agent-publish facts require nonblank string :p/:r values without boundary whitespace"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (not= (count facts) (count (distinct (map :p facts))))
+      {:reject ["managed-agent-publish rejects duplicate predicates"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (or (invalid-predicate-vector? identity-preds)
+          (empty? identity-preds)
+          (invalid-predicate-vector? guard-preds))
+      {:reject ["managed-agent-publish requires distinct nonblank :identity-preds and :guard-preds vectors"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (some #{managed-agent-marker-pred} (map :p facts))
+      {:reject ["managed-agent-publish computes and appends its marker; :facts must omit it"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      (or (not (string? supplied-marker))
+          (not (re-matches sha256-pattern supplied-marker)))
+      {:reject ["managed-agent-publish requires a lowercase 64-hex :manifest-sha256"]
+       :code :invalid-managed-agent-publish :version (current-seq @co)}
+
+      :else
+      (let [computed-marker (managed-agent-manifest facts identity-preds)]
+        (if (not= supplied-marker computed-marker)
+          {:reject :manifest-mismatch
+           :code :manifest-mismatch
+           :computed computed-marker
+           :version (current-seq @co)}
+          (let [resource (managed-agent-lease-resource subject)
+                lease-req {:res resource :holder holder :ttl-ms ttl-ms}
+                acquired
+                (lease-flat-mutation!
+                 lease-req
+                 #(acquire-lease! @co holder resource ttl-ms))]
+            (if-not (:epoch acquired)
+              acquired
+              (try
+                (let [desired (into {} (map (juxt :p :r)) facts)
+                      check-preds
+                      (conj (set (concat (keys desired)
+                                         identity-preds
+                                         guard-preds))
+                            managed-agent-marker-pred)]
+                  (cond
+                    (exact-publish-projection?
+                     subject desired check-preds computed-marker)
+                    {:ok (current-seq @co)
+                     :batch true :fenced-publish true :idempotent true
+                     :te subject :resource resource :marker computed-marker
+                     :written []}
+
+                    (not (blank-publish-projection? subject check-preds))
+                    {:reject :publish-conflict
+                     :code :publish-conflict
+                     :version (current-seq @co)
+                     :te subject :resource resource}
+
+                    :else
+                    (let [res
+                          (do-assert-batch
+                           subject
+                           (conj (vec facts)
+                                 {:p managed-agent-marker-pred
+                                  :r computed-marker})
+                           nil)]
+                      (if-not (:ok res)
+                        res
+                        (if (exact-publish-projection?
+                             subject desired check-preds computed-marker)
+                          (assoc res
+                                 :fenced-publish true
+                                 :te subject :resource resource
+                                 :marker computed-marker)
+                          {:reject :publish-readback-mismatch
+                           :code :publish-readback-mismatch
+                           :version (current-seq @co)
+                           :te subject :resource resource})))))
+                (finally
+                  (lease-flat-mutation!
+                   (assoc lease-req :epoch (:epoch acquired))
+                   #(release-lease! @co holder resource (:epoch acquired))))))))))))
+
 (defn- do-retract [te p r base]
   (assert-flat-corpus-append-boundaries!)
   (cond
@@ -2116,7 +2295,8 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-batch :assert-with-fence :assert-at-version :assert-at-version-with-fence
+  #{:assert :assert-batch :managed-agent-publish
+    :assert-with-fence :assert-at-version :assert-at-version-with-fence
     :retract :retract-with-fence :bump})
 
 (defn- prepare-request-reload! [req]
@@ -2796,6 +2976,10 @@
       ;; disconnect/timeout boundary (thread 019f9063 / incident 019f8958). Additive:
       ;; single :assert above is byte-identical; old clients never send this op.
       :assert-batch (do-assert-batch (:te req) (:facts req) (:base req))
+      ;; One-wire managed-agent identity publication: the daemon derives and
+      ;; acquires the canonical per-subject lease, commits body + marker in one
+      ;; batch transaction, verifies exact readback, then releases the lease.
+      :managed-agent-publish (do-managed-agent-publish req)
       ;; Lease-fenced fact writes. The fence and mutation share the coordinator
       ;; store lock; a stale holder cannot write after expiry/takeover.
       :assert-with-fence
