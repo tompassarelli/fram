@@ -2,17 +2,40 @@
 ;; coord_edit_min_core_test.clj — IN-PROCESS green-core proof for the minimal-op
 ;; authoring path (no socket, no Beagle → no #14 flakiness). Proves do-edit-min
 ;; commits the verb's exact delta for the SAFE-on-spelling verbs (set-body /
-;; upsert-form) and that graph RENAME is explicitly REJECTED (identity-deferred),
-;; never silently rewriting only the def.
+;; upsert-form) and that graph RENAME is the O(1) shadow-correct spelling-change
+;; verb — it renames the definition's name claim (references follow refers_to),
+;; and is GUARDED (a colliding rename REJECTS with no mutation).
 ;;   bb -cp out coord_edit_min_core_test.clj
+;;
+;; HERMETIC: boots over the committed single-module fixture
+;; tests/fixtures/edit-min/schema.code.factlog (exactly one canonical `schema`
+;; module) — never the worktree's live .fram/code.log, so `scope "schema"` is
+;; unambiguous, spell-counts are module-exact, and the run is order-independent.
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s] '[clojure.edn :as edn] '[clojure.java.io :as io])
 (def root (System/getProperty "user.dir"))
-(def code-log (str root "/.fram/code.log"))
-(when-not (.exists (io/file code-log)) (println "SKIP — no code.log") (System/exit 0))
+(def fixture (str root "/tests/fixtures/edit-min/schema.code.factlog"))
+(defn- fail-fast! [& xs]
+  (binding [*out* *err*] (apply println "FAIL —" xs))
+  (System/exit 1))
+(when-not (.isFile (io/file fixture)) (fail-fast! "missing required fixture" fixture))
+(def fixture-roots
+  (with-open [reader (io/reader fixture)]
+    (reduce (fn [roots line]
+              (let [{:keys [op l p r]} (edn/read-string line)
+                    root [l r]]
+                (if (= "file" p)
+                  (case op
+                    "assert" (conj roots root)
+                    "retract" (disj roots root)
+                    roots)
+                  roots)))
+            #{} (line-seq reader))))
+(when-not (= #{["@schema#root" "src/fram/schema.bclj"]} fixture-roots)
+  (fail-fast! "fixture must contain exactly the canonical schema root; found" (pr-str fixture-roots)))
 (binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-core-" (System/nanoTime) ".code.log"))
-(io/copy (io/file code-log) (io/file flat))
+(io/copy (io/file fixture) (io/file flat))
 (boot-flat! flat)
 (def st (:store @co))
 (def Vp (c/value-id st "v"))
@@ -25,7 +48,9 @@
 ;; {:reject ...} a client sees, without paying handle's per-call maybe-reload! re-fold.
 (defn edit-min! [spec]
   (try (do-edit-min spec)
-       (catch Throwable t {:reject [(str "edit-min: " (.getMessage t))] :version (current-seq @co)})))
+       (catch Throwable t {:reject [(str "edit-min: " (.getMessage t))]
+                           :reject-data (ex-data t)
+                           :version (current-seq @co)})))
 
 ;; --- set-body: commit a new body carrying a UNIQUE marker token, in-process -----
 (def marker "uniqzzqmarker")
@@ -56,15 +81,30 @@
      (and (pos? card-before) (pos? (spell-count "cardinality"))))
 (chk "upsert REPLACE landed the new body token" (pos? (spell-count upmark)))
 
-;; --- rename: MUST be rejected (identity-deferred), MUST NOT mutate spellings -----
+;; --- rename: the O(1) shadow-correct verb — edits ONLY the definition's name claim
+;; (asserts the new spelling, supersedes the old); references follow refers_to at render
+;; (tests/coord_edit_min_rename.clj is the render+recompile receipt). This is the #25-LOCK
+;; spelling-change verb: the ONLY :edit-min verb that moves a binding's name.
 (def before-replace (spell-count "replace!"))
+(def before-new (spell-count "supersede-prior!"))
 (def rn (edit-min! {:op "rename" :module "schema" :old "replace!" :new "supersede-prior!"}))
-(chk "graph rename REJECTED (not :ok)" (not (:ok rn)))
-(chk "rename reject mentions identity-deferred"
-     (boolean (re-find #"(?i)identity|deferred" (pr-str (:reject rn)))))
-(chk "rename did NOT silently rewrite the def spelling (replace! count unchanged)"
-     (= before-replace (spell-count "replace!")))
-(chk "rename did NOT partially introduce the new spelling" (zero? (spell-count "supersede-prior!")))
+(chk "graph rename committed (ok)" (:ok rn))
+(chk "rename is minimal — 2 ops (assert new name + supersede old)" (= 2 (:ops rn)))
+(chk "rename landed the NEW spelling (supersede-prior! now bound)"
+     (and (zero? before-new) (pos? (spell-count "supersede-prior!"))))
+(chk "rename is identity-preserving — the old name claim was superseded, not duplicated"
+     (= (dec before-replace) (spell-count "replace!")))
+;; GUARD: renaming ONTO an already-bound name is REJECTED with no facts mutated.
+(def guard-before (spell-count "cardinality"))
+(def guard-log-before (slurp flat))
+(def rn-collide (edit-min! {:op "rename" :module "schema" :old "lookup" :new "cardinality"}))
+(chk "rename onto an existing binding REJECTED (guarded, not :ok)" (not (:ok rn-collide)))
+(chk "rename collision reached the verb's guarded code-3 rejection"
+     (= {:reject :verb :code 3}
+        (select-keys (:reject-data rn-collide) [:reject :code])))
+(chk "rejected colliding rename mutated NOTHING (exact log bytes unchanged)"
+     (and (= guard-before (spell-count "cardinality"))
+          (= guard-log-before (slurp flat))))
 
 ;; --- #26: unknown verb rejects cleanly (must NOT hard-exit the daemon) ---
 ;; If the unknown-op path still fell through to run-verb-warm!'s (System/exit 2), this whole

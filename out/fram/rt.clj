@@ -172,6 +172,99 @@
 
 (defn now-ts [] (str (java.time.Instant/now)))
 
+;; graph-edit-candidate-v1 durable receipt envelope.  This is deliberately a
+;; distinct, closed log-record schema rather than metadata on an ordinary fact:
+;; cold receipt recovery needs one unambiguous seal immediately followed by its
+;; exact fact rows, while legacy facts carrying similarly named inert fields must
+;; continue to fold as facts.  Any record that claims the discriminator but does
+;; not satisfy the complete v1 schema is corruption, not an ignorable partial
+;; fact.  The envelope itself has no :tx; operation fact rows remain the sole
+;; version clock.
+(def edit-batch-envelope-version 1)
+(def edit-batch-envelope-keys
+  #{:fram-edit-envelope
+    :fram-edit-log
+    :fram-edit-candidate
+    :fram-edit-batch
+    :fram-edit-module
+    :fram-edit-path
+    :fram-edit-base-version
+    :fram-edit-final-version
+    :fram-edit-ops
+    :fram-edit-installed
+    :fram-edit-ops-digest
+    :fram-edit-edn-digest
+    :fram-edit-line-count
+    :fram-edit-batch-sha
+    :fram-edit-seal-sha})
+(def ^:private edit-batch-envelope-seal-fields
+  [:fram-edit-envelope
+   :fram-edit-log
+   :fram-edit-candidate
+   :fram-edit-batch
+   :fram-edit-module
+   :fram-edit-path
+   :fram-edit-base-version
+   :fram-edit-final-version
+   :fram-edit-ops
+   :fram-edit-installed
+   :fram-edit-ops-digest
+   :fram-edit-edn-digest
+   :fram-edit-line-count
+   :fram-edit-batch-sha])
+
+(defn sha256-text [s]
+  (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                        (.getBytes ^String (str s) "UTF-8"))]
+    (apply str (map #(format "%02x" %) digest))))
+
+(defn edit-batch-envelope-marker? [record]
+  (and (map? record) (contains? record :fram-edit-envelope)))
+
+(defn edit-batch-envelope-seal [record]
+  (sha256-text (pr-str (mapv #(get record %) edit-batch-envelope-seal-fields))))
+
+(defn valid-edit-batch-envelope? [record]
+  (let [base (:fram-edit-base-version record)
+        final (:fram-edit-final-version record)
+        ops (:fram-edit-ops record)
+        installed (:fram-edit-installed record)
+        lines (:fram-edit-line-count record)
+        digest? #(and (string? %) (boolean (re-matches #"[0-9a-f]{64}" %)))
+        nonblank? #(and (string? %) (not (str/blank? %)))]
+    (and (map? record)
+         (= edit-batch-envelope-keys (set (keys record)))
+         (= edit-batch-envelope-version (:fram-edit-envelope record))
+         (nonblank? (:fram-edit-log record))
+         (nonblank? (:fram-edit-candidate record))
+         (= (:fram-edit-candidate record) (:fram-edit-batch record))
+         (nonblank? (:fram-edit-module record))
+         (nonblank? (:fram-edit-path record))
+         (int? base) (not (neg? base))
+         (int? final) (not (neg? final))
+         (int? ops) (not (neg? ops))
+         (int? installed) (not (neg? installed))
+         (int? lines) (not (neg? lines))
+         (= ops installed lines)
+         (= final (+ base installed))
+         (digest? (:fram-edit-ops-digest record))
+         (digest? (:fram-edit-edn-digest record))
+         (digest? (:fram-edit-batch-sha record))
+         (digest? (:fram-edit-seal-sha record))
+         (= (:fram-edit-seal-sha record)
+            (edit-batch-envelope-seal record)))))
+
+(defn validate-edit-batch-envelope! [path byte-offset record]
+  (when-not (valid-edit-batch-envelope? record)
+    (throw
+     (ex-info (str "fram: malformed graph-edit receipt envelope in " path
+                   " at byte " byte-offset " — refusing to fold")
+              {:path path
+               :byte-offset byte-offset
+               :fram/corrupt-log true
+               :fram/malformed-edit-envelope true})))
+  record)
+
 ;; parse an EDN string from the CLI (a `query`/`call` argument) into data;
 ;; nil on parse failure so the caller can report it instead of crashing.
 (defn parse-edn [s] (try (edn/read-string s) (catch Exception _ nil)))
@@ -180,7 +273,9 @@
 ;; appends WITHOUT fsync, so a reader can catch the file mid-write: the FINAL
 ;; line may be truncated (its terminating newline not yet flushed). Policy, at
 ;; the EDN parse boundary:
-;;   * parses to a value          -> a FactOp. An EDN-VALID-but-incomplete line
+;;   * parses to an exact graph-edit envelope -> validate the closed schema and
+;;     skip it (operation facts carry the version and fold normally).
+;;   * parses to any other value -> a FactOp. An EDN-VALID-but-incomplete line
 ;;     (e.g. one missing :r) is NOT corrupt: it still becomes a FactOp (fold
 ;;     filters it out, but max-tx counts its :tx — preserving migrate-flat->co's
 ;;     torn-tail-counts-toward-version invariant).
@@ -226,8 +321,11 @@
                 (cond
                   parsed
                   (let [m (:m parsed)]
-                    (recur next-i (conj! acc (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m)
-                                                            (or (:frame m) (:by m) "legacy")))))
+                    (if (edit-batch-envelope-marker? m)
+                      (do (validate-edit-batch-envelope! path i m)
+                          (recur next-i acc))
+                      (recur next-i (conj! acc (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m)
+                                                              (or (:frame m) (:by m) "legacy"))))))
                   ;; unparseable + no terminating newline: torn tail — recover, warn once.
                   (not terminated?)
                   (let [recovered (persistent! acc)]
