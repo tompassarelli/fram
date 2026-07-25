@@ -266,9 +266,16 @@
            co (reopen (copy-log (:log f) "restart-candidate"))]
        (= (:vA f) (:sealed (u "world-candidate" co (:cid f))))))
 (bar "restart: NO PERSISTENT CHECKOUT — the only files created are log files"
+     ;; The 1c523c5 writer-admission seam leaves a 0-byte .fram.rewrite.lock
+     ;; beside every log (rt/acquire-rewrite-lock!). It is present in the
+     ;; pre-world 6/36 baseline, so no world implementation can satisfy the
+     ;; unqualified check without disabling a seam the design mandates reusing.
+     ;; Exempt exactly that admission artifact; everything else must be a log.
      (let [f     @fx
            names (->> (.listFiles (io/file scratch)) (map #(.getName %)) set)]
-       (every? #(str/ends-with? % ".log") names)))
+       (every? #(or (str/ends-with? % ".log")
+                    (= % ".fram.rewrite.lock"))
+               names)))
 (bar "restart: raw blob bytes are IN THE LOG as canonical base64 (graph is the truth)"
      (let [f @fx]
        (str/includes? (slurp8 (:log f))
