@@ -3768,7 +3768,17 @@
                   :else nil)]
     (when (and ops (every? #(contains? % :op) ops))
       (vec (keep #(or (:form %) (:body %)) ops)))))
-(defn- write-one-form [module raw corpus-types]
+;; `module` is the client-facing name (echoed in every :at/:module field, so error
+;; text matches what the caller sent); `canon` is the SAME module resolved to the
+;; ONE existing corpus source it already matched (see do-write-def's `pre`), used
+;; ONLY for the actual commit below. Minting new nodes under the raw client string
+;; instead of `canon` is the write-def module-lookup defect (thread 019f99b4): a
+;; second-write `(defn ...)` would land under `@schema#N` while the ingested corpus
+;; source is keyed `src.fram.schema`, so module-srcs afterward sees TWO groups
+;; ("src.fram.schema" and "schema") that both exact-match "schema" — ambiguous.
+;; Naming under `canon` instead keeps every def, old and new, under the corpus's
+;; one real source key, so the ambiguity never opens.
+(defn- write-one-form [module canon raw corpus-types]
   (let [cr (canon-form raw)]
     (if (:error cr)
       (update (:error cr) :at #(merge {:module module} %))
@@ -3808,7 +3818,7 @@
           :else
           (let [nm (resolve/writable-disp-name form)]
             (or (static-type-check module form corpus-types)
-                (let [er (try (do-edit-min* {:op "upsert-form" :module module :datum form} nil false)
+                (let [er (try (do-edit-min* {:op "upsert-form" :module canon :datum form} nil false)
                               (catch Throwable t {:ex t}))]
                   (cond
                     (:ex er)     (ex->s-err module nm (:ex er))
@@ -3843,7 +3853,7 @@
               (let [pre (with-resolve-read (:store @co)
                           (let [ss (module-srcs module)]
                             (if (= 1 (count ss))
-                              {:ok true :corpus-types (corpus-type-names)}
+                              {:ok true :canon (first ss) :corpus-types (corpus-type-names)}
                               {:ok false :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5) :count (count ss)})))]
                 (if-not (:ok pre)
                   (s-err :lookup :at {:module module}
@@ -3856,7 +3866,7 @@
                       {:ok true :module module :written (count results) :results results
                        :deep-check (if (identical? @def-check-hook default-def-check) :deferred :ran)
                        :version (current-seq @co)}
-                      (let [res (try (write-one-form module (first fs) (:corpus-types pre))
+                      (let [res (try (write-one-form module (:canon pre) (first fs) (:corpus-types pre))
                                      (catch Throwable t
                                        (ex->s-err module (try (str (second (first fs))) (catch Throwable _ nil)) t)))]
                         (if (:ok res)
@@ -3959,7 +3969,10 @@
       (with-resolve-read (:store @co)
         (let [ss (module-srcs module)]
           (if (not= 1 (count ss))
-            (s-err :lookup :at {:module module} :message (str "no such module `" module "`")
+            ;; count>1 is a DIFFERENT condition than count=0 (thread 019f99b4): say which.
+            (s-err :lookup :at {:module module}
+                   :message (if (> (count ss) 1) (str "module `" module "` is ambiguous (" (count ss) " sources match)")
+                                (str "no such module `" module "`"))
                    :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5)
                    :suggestion "run `index` to list modules")
             (let [src   (first ss)
@@ -3994,7 +4007,9 @@
         {:ok true :modules all-mods :count (count all-mods) :version (current-seq @co)}
         (let [ss (module-srcs want)]
           (if (not= 1 (count ss))
-            (s-err :lookup :at {:module want} :message (str "no such module `" want "`")
+            (s-err :lookup :at {:module want}
+                   :message (if (> (count ss) 1) (str "module `" want "` is ambiguous (" (count ss) " sources match)")
+                                (str "no such module `" want "`"))
                    :nearest (nearest-names want resolve/srcs :n 3 :max-dist 5)
                    :suggestion "call `index` with no :module to list all modules")
             (let [src  (first ss)
@@ -5926,7 +5941,7 @@
 ;; store — EXCEPT runtime.closureDigest, which stays exactly the North-supplied,
 ;; independently verified value FRAM only validates and binds (via the seal). No
 ;; field is inferred from ambient JVM/host state. Nothing here activates North,
-;; Gaffer, the SSLSocket serve adapter, a new MCP tool, or an ambient fallback: it
+;; North orchestration, the SSLSocket serve adapter, a new MCP tool, or an ambient
 ;; produces the snapshot the (still-dark) authority serve path will seal via the
 ;; existing seal-coordinator-descriptor, and is exercised only by tests until that
 ;; slice lands. runtime.system comes from the sealed manifest, never the host.

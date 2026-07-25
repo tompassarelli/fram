@@ -7,7 +7,7 @@
 ;; defect and a malformed North digest must fail BEFORE the descriptor can seal or serve.
 ;;
 ;;   bb -cp out tests/coord_authority_snapshot_test.clj
-;; Scratch /tmp only; never a live coordinator, no socket, no North/Gaffer.
+;; Scratch /tmp only; never a live coordinator, no socket, no North.
 (require '[fram.authority :as a]
          '[fram.tools :as tools]
          '[fram.store :as c]
@@ -238,7 +238,7 @@
 
 ;; ===========================================================================
 ;; DARKNESS — the env-boundary reader fails closed with NO ambient fallback and
-;; NO coordinator/North/Gaffer contact when a launch binding is missing.
+;; NO coordinator or North contact when a launch binding is missing.
 ;; ===========================================================================
 (let [{:keys [code-log]} (make-checkout!)
       co (live-coord-with-modules code-log)]
