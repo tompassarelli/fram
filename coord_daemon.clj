@@ -3724,7 +3724,21 @@
         :else nil))))
 
 ;; ---- module / def resolution over the warm store (call under with-resolve-read)
-(defn- module-srcs [module] (filter #(str/includes? % module) resolve/srcs))
+;; Substring matching alone is ambiguous the moment ANY tracked path happens to
+;; contain the module name, which is how `schema` started reporting "ambiguous
+;; (2 sources match)" while `nearest` cheerfully found it. Prefer sources whose
+;; module SEGMENT matches exactly (basename sans extension, or a path/dot
+;; segment), and fall back to the loose substring match only when that is empty.
+(defn- module-basename [src]
+  (let [base (last (str/split (str src) #"/"))]
+    (first (str/split base #"\."))))
+
+(defn- module-srcs [module]
+  (let [loose (filter #(str/includes? % module) resolve/srcs)
+        exact (filter #(or (= (module-basename %) module)
+                           (some #{module} (str/split (str %) #"[/.]")))
+                      loose)]
+    (if (seq exact) exact loose)))
 (defn- corpus-type-names [] (set (mapcat keys (vals resolve/global-type-exports))))
 (defn- def-node-name [fnode]
   (resolve/sym-val (second (resolve/ordered-children (resolve/unwrap-def fnode)))))
