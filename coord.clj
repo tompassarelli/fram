@@ -26,6 +26,7 @@
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck]
          '[fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
+         '[fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
          '[clojure.edn :as edn] '[clojure.java.io :as io] '[clojure.string :as str])
 
 (defn- store [co] (:store co))
@@ -851,3 +852,249 @@
   (let [m @st]
     (set (for [cid (keys (:facts m)) :when (not (contains? (:superseded m) cid))]
            (let [cl (get (:facts m) cid)] [(:l cl) (:p cl) (:r cl)])))))
+
+;; ============================================================================
+;; WORLDS — the durability layer (thread 019f93bb / authority design 019f9358)
+;; ============================================================================
+;; The world kernel (fram.world, graph-upstream) is PURE: content-addressed ids,
+;; overlay precedence, deterministic composition. Nothing in it touches a log.
+;; This section is the other half: how a world's blobs, candidates, versions,
+;; locks, receipts and head claims BECOME DURABLE — and it does so by REUSING
+;; the coordinator's existing append-only seams rather than inventing a second
+;; durable format:
+;;
+;;   * every world record is ORDINARY FACTS on a content-addressed subject, so
+;;     one world verb == one tx block == records + a terminating :commit marker.
+;;     A crash mid-verb leaves a trailing buffer with no :commit, which `replay`
+;;     already DROPS. There is no world-specific torn-record logic to get wrong.
+;;   * the head is DERIVED — folded from append-only `world.head-claim` facts on
+;;     the world subject, latest cid wins. No stored "canonical"/"current" marker
+;;     exists to survive an incomplete promotion and win a later fold.
+;;   * V1 raw blobs are canonical base64 LITERALS in the log. There is no blob
+;;     filesystem and no persistent checkout: the graph is the source of truth.
+;;   * every candidate begin/op record NAMES its candidate id IN ITS SUBJECT, so
+;;     op contiguity is checkable after byte surgery (a dropped interior record
+;;     leaves a hole that `world.ops` — the count sealed with the candidate —
+;;     exposes). This is the assumption tests/world_persistence_test.clj makes
+;;     explicit and falsifiable.
+;;   * a candidate's sealed VersionId is its digest: promotion RE-DERIVES it from
+;;     the replayed ops and refuses on mismatch, so tampering with op bytes in
+;;     the log cannot be promoted even at equal byte length.
+;;
+;; Every rejection happens BEFORE any append: the reject paths below are pure
+;; reads (value-id lookups never intern), so a refused promotion moves neither
+;; the derived head nor a single log byte.
+;;
+;; SCOPE: receipt/expected-head CAS *validation* is specified separately
+;; (tests/world_promotion_test.clj) and `world-build!` here attests a lock rather
+;; than executing a build adapter — the build/projection slice owns that.
+
+(defn- world-subject [nm] (str "world:" nm))
+(defn- world-cand-subject [cid] (str "world.cand:" cid))
+(defn- world-op-subject [cid i] (str "world.cand:" cid ":op:" i))
+
+;; one durable read: the literal of a write-once (subject, predicate) world fact.
+;; PURE — resolve-name/value-id never intern, so no read can mutate the store.
+(defn- world-fact [co subj pred]
+  (when-let [e (s/resolve-name (store co) subj)]
+    (s/lookup (store co) e pred)))
+
+(defn- world-record [co subj pred]
+  (when-let [t (world-fact co subj pred)] (edn/read-string (str t))))
+
+;; one tx, many (subject predicate literal) asserts. World subjects are fresh and
+;; content-addressed and written once, so none of commit!'s guards apply (no
+;; base_version CAS, no acyclicity, no coexist-elect rivalry); what matters is
+;; that the whole verb lands as ONE contiguous tx block terminated by :commit.
+(defn- world-commit! [co agent triples]
+  (locking (:lock co)
+    (let [st    (store co)
+          since (:next-id @st)
+          tx    (c/begin-tx! st agent)]
+      (swap! st assoc-in [:txs tx :observed] (current-seq co))
+      (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+      (doseq [[subj pred v] triples]
+        (s/assert! st (ent! co tx subj) pred v tx))
+      (append-tx! co (delta-records co since tx))
+      {:ok (get-in @st [:txs tx :seq])})))
+
+;; --- heads are DERIVED, never stored ----------------------------------------
+(defn world-head
+  "The derived head of world `nm`: the latest live world.head-claim, by cid.
+  nil for an unknown world. Never reads a stored status."
+  [co nm]
+  (let [st  (store co)
+        e   (s/resolve-name st (world-subject nm))
+        pid (c/value-id st "world.head-claim")]
+    (when (and e pid)
+      (let [m @(store co)]
+        (->> (get (:idx-by-lp m) [e pid])
+             (remove #(contains? (:superseded m) %))
+             sort
+             last
+             (#(when % (get (:values m) (:r (get (:facts m) %))))))))))
+
+(defn world-create! [co agent nm version-id]
+  (or (w/validate-world-name nm)
+      (if (world-head co nm)
+        {:reject :world-exists}
+        (world-commit! co agent [[(world-subject nm) "world.head-claim" version-id]]))))
+
+(defn world-fork!
+  "O(1): one head claim naming the base VersionId. No blob, manifest or version
+  record is copied — the forked name simply starts deriving from the same node."
+  [co agent new-name version-id]
+  (or (w/validate-world-name new-name)
+      (cond
+        (world-head co new-name) {:reject :world-exists}
+        (nil? version-id)        {:reject :world-version-unknown}
+        :else (world-commit! co agent
+                             [[(world-subject new-name) "world.head-claim" version-id]]))))
+
+;; --- blobs: canonical base64 FACTS (no blob filesystem) ---------------------
+(defn world-blob-put! [co agent ^bytes raw]
+  (or (w/validate-blob raw)
+      (let [id   (w/blob-id raw)
+            subj (str "world.blob:" id)]
+        (when-not (world-fact co subj "world.b64")
+          (world-commit! co agent [[subj "world.b64" (w/blob-b64 raw)]]))
+        {:ok id})))
+
+(defn world-blob ^bytes [co blob-id]
+  (when-let [b64 (world-fact co (str "world.blob:" blob-id) "world.b64")]
+    (.decode (java.util.Base64/getDecoder) (str b64))))
+
+;; --- versions and manifests -------------------------------------------------
+(defn world-version [co version-id]
+  (when version-id (world-record co (str "world.version:" version-id) "world.record")))
+
+(defn- world-chain
+  "The versions map the kernel's resolver needs, walked lazily from `vid` down
+  its :base chain. Absent ancestors simply end the walk (resolve-slot is total)."
+  [co vid]
+  (loop [v vid acc {}]
+    (if (or (nil? v) (contains? acc v))
+      acc
+      (let [r (world-version co v)]
+        (if (nil? r) acc (recur (:base r) (assoc acc v r)))))))
+
+(defn world-manifest [co version-id]
+  (w/manifest (world-chain co version-id) version-id))
+
+;; --- candidates: begin / append / seal --------------------------------------
+(defn- world-candidate-ops
+  "The CONTIGUOUS op prefix of a candidate, read back from the log. Contiguity is
+  the point: a dropped interior op record stops the walk, and the count sealed
+  with the candidate then exposes the hole."
+  [co cid]
+  (loop [i 0 acc []]
+    (if-let [r (world-record co (world-op-subject cid i) "world.record")]
+      (recur (inc i) (conj acc r))
+      acc)))
+
+(defn world-candidate [co cid]
+  (let [subj (world-cand-subject cid)]
+    (when-let [nm (world-fact co subj "world.for")]
+      {:ops      (world-candidate-ops co cid)
+       :sealed   (world-fact co subj "world.sealed")
+       :world    nm
+       :base     (world-fact co subj "world.base")
+       :declared (some-> (world-fact co subj "world.ops") str parse-long)})))
+
+(defn world-begin! [co agent nm expected-head nonce]
+  (cond
+    (not (w/nonce-hex? nonce))              {:reject :world-nonce-inadmissible}
+    (not= expected-head (world-head co nm)) {:reject :world-head-stale}
+    :else
+    (let [cid  (w/candidate-id nm expected-head nonce)
+          subj (world-cand-subject cid)]
+      (if (world-fact co subj "world.for")
+        {:reject :world-candidate-exists}
+        (do (world-commit! co agent
+                           (cond-> [[subj "world.for" nm] [subj "world.nonce" nonce]]
+                             expected-head (conj [subj "world.base" expected-head])))
+            {:ok cid})))))
+
+(defn world-append! [co agent cid op]
+  (let [subj (world-cand-subject cid)]
+    (cond
+      (nil? (world-fact co subj "world.for")) {:reject :world-candidate-unknown}
+      (world-fact co subj "world.sealed")     {:reject :world-candidate-sealed}
+      :else
+      (or (w/validate-slot (:slot op))
+          (when (= :put (:op op)) (w/validate-mode (:mode op)))
+          (let [rendered (w/render-record op)]
+            (or (w/validate-record op)
+                (let [i (count (world-candidate-ops co cid))]
+                  (world-commit! co agent [[(world-op-subject cid i) "world.record" rendered]])
+                  {:ok i})))))))
+
+(defn world-seal!
+  "Freeze a candidate into a content-addressed Version. The sealed VersionId is
+  also the candidate's DIGEST — promotion re-derives it from the replayed ops."
+  [co agent cid]
+  (let [subj (world-cand-subject cid)]
+    (cond
+      (nil? (world-fact co subj "world.for")) {:reject :world-candidate-unknown}
+      (world-fact co subj "world.sealed")     {:ok (world-fact co subj "world.sealed")}
+      :else
+      (let [base (world-fact co subj "world.base")
+            ops  (world-candidate-ops co cid)
+            vid  (w/version-id base ops)
+            rec  (w/version-record base ops)]
+        (or (w/validate-record rec)
+            (do (world-commit! co agent
+                               [[(str "world.version:" vid) "world.record" (w/render-record rec)]
+                                [subj "world.ops" (str (count ops))]
+                                [subj "world.sealed" vid]])
+                {:ok vid}))))))
+
+;; --- locks and receipts -----------------------------------------------------
+(defn world-lock!
+  "A WorldLock is a PURE function of durable, content-addressed inputs: the
+  VersionId and the build spec. No wall clock, pid, nonce or process-local cid
+  enters it, so a fresh process replaying the same bytes recomputes the same id."
+  [co version-id build-spec]
+  (let [rec (w/lock-record version-id build-spec)
+        id  (w/world-lock-id version-id build-spec)]
+    (when-not (world-fact co (str "world.lock:" id) "world.record")
+      (world-commit! co "world" [[(str "world.lock:" id) "world.record" (w/render-record rec)]]))
+    {:ok id :lock rec}))
+
+(defn world-build!
+  "Attest a lock. SCOPE: the build adapter itself (beagle toolchain, git
+  projection) is a separate slice; this records the durable receipt that
+  promotion gates on."
+  [co agent lock-id]
+  (if-let [lock (world-record co (str "world.lock:" lock-id) "world.record")]
+    (let [rec {:kind :world/receipt :lock lock-id :version (:version lock)}
+          rid (w/hash-text w/receipt-tag (w/render-record rec))]
+      (world-commit! co agent [[(str "world.receipt:" rid) "world.record" (w/render-record rec)]])
+      {:ok (assoc rec :receipt rid)})
+    {:reject :world-lock-unknown}))
+
+;; --- promotion: every rejection is a PURE read, before any append -----------
+(defn world-promote! [co agent nm expected-head cid receipt]
+  (let [subj    (world-cand-subject cid)
+        known   (world-fact co subj "world.for")
+        sealed  (world-fact co subj "world.sealed")
+        declared (some-> (world-fact co subj "world.ops") str parse-long)
+        ops     (when sealed (world-candidate-ops co cid))]
+    (cond
+      (nil? known)   {:reject :world-candidate-unknown}
+      ;; a candidate whose seal record never landed (or was cut away) is not a
+      ;; Version and can never become one.
+      (nil? sealed)  {:reject :world-candidate-unsealed}
+      ;; the seal recorded HOW MANY ops it froze; fewer replay => an interior
+      ;; record is missing (log surgery / a hole), so the candidate is not whole.
+      (not= declared (count ops)) {:reject :world-candidate-gapped}
+      ;; the sealed VersionId IS the digest of (base, ops): re-derive it from the
+      ;; bytes that actually replayed. Equal-length tampering fails here.
+      (not= sealed (w/version-id (world-fact co subj "world.base") ops))
+      {:reject :world-candidate-digest-mismatch}
+      (not= expected-head (world-head co nm)) {:reject :world-head-stale}
+      (not (and (map? receipt) (= (:version receipt) sealed)))
+      {:reject :world-receipt-invalid}
+      :else
+      (do (world-commit! co agent [[(world-subject nm) "world.head-claim" sealed]])
+          {:ok sealed}))))
