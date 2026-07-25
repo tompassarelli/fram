@@ -21,6 +21,7 @@
 ;; Diagnostics go to STDERR; stdout is the JSON-RPC channel only.
 ;; ============================================================================
 (require '[cheshire.core :as json]
+         '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc]
@@ -266,24 +267,18 @@
     nil))
 
 ;; ============================================================================
-;; WARM edit path — graph-edit-candidate-v1 against the live coordinator (the
-;; persistent MCP server -> persistent coordinator). The fold stays amortized to
-;; the coordinator's BOOT (no per-edit log re-fold); the edit itself is the
-;; ATOMIC CANDIDATE GATE: :edit-prepare (clone + seal, zero writes) -> render +
-;; Beagle parse/type check the candidate HERE -> :edit-commit (exact-version CAS,
-;; journaled whole-batch install, one root swap) -> write the checked bytes to
-;; the module's TRACKED path. Replaces the commit-first :edit-min warm flow.
+;; WARM edit path — socket :edit-min DIRECTLY to the live coordinator (the persistent
+;; MCP server -> persistent coordinator, one round-trip). The fold is amortized to the
+;; coordinator's BOOT; per-edit pays NO ~3.8s log re-fold (vs cold fram-edit-code which
+;; boots the store from the log EVERY call). This is THE confound-kill.
 ;; ============================================================================
-;; build the warm edit spec (inline datum, no temp file) from the {:edit} payload.
-;; The body/form STRING is parsed to a DATUM here (clojure.edn/read-string) — exactly
-;; what the CLI (bin/fram-edit-code) and the legacy text path (resolve.clj slurp +
-;; read-string of the spec/body file) both do. The old warm path passed the RAW
-;; string through, so the verb minted a STRING-LITERAL body instead of the form —
-;; masked by String-returning test defns. An unreadable payload throws; route-edit
-;; maps that to a typed rejection BEFORE any coordinator contact.
+;; build the warm :edit-min spec (inline datum, no temp file) from the {:edit} payload.
+;; MCP arguments are JSON strings. Parse the datum-bearing arguments exactly as the
+;; legacy path does when resolve.clj reads its spec/body files; otherwise a form such
+;; as `(defn f ...)` becomes a quoted string literal in the graph.
 (defn- edit-min-spec [e]
   (let [datum! (fn [s label]
-                 (try (clojure.edn/read-string s)
+                 (try (edn/read-string s)
                       (catch Exception ex
                         (throw (ex-info (str label " is not readable EDN: " (.getMessage ex))
                                         {:spec-error true})))))]
@@ -307,401 +302,123 @@
 
 (declare route-edit-text)        ; the legacy text path, defined below (forward ref for bb/SCI)
 
-;; canonical-path helper: resolves ., .., and symlinks; defined for a
-;; not-yet-existing leaf (a render target may not exist yet).
-(defn- canon [p] (.getCanonicalPath (io/file p)))
-
-;; graph-edit-candidate-v1 — validate the module's TRACKED source path (the
-;; coordinator resolved it from the sealed graph file fact @<mod>#root `file`)
-;; against the canonical FRAM_SRC checkout root. Refuses non-absolute,
-;; non-canonical (traversal `..`/`.` segments OR any symlink component — the
-;; canonical form differs from the stored form in every such case), and
-;; outside-root paths. nil = confined; else {:err <why>}.
-(defn- validate-tracked-path [p]
-  (let [root (canon fram-src)]
+;; Resolve the downstream view from the graph's @<module>#root `file` fact. Dotted
+;; module ids encode nested paths but are not paths themselves, so constructing
+;; FRAM_SRC/<module>.bclj creates the wrong root-level artifact. The registered path
+;; must be absolute, canonical, and confined beneath FRAM_SRC before the edit mutates
+;; the graph; an older coordinator without :module-path is refused, not guessed around.
+(defn- tracked-module-path [module]
+  (let [resp (try (fram.rt/coord-request-for-log
+                   (Integer/parseInt flip-code-port)
+                   (flip-log)
+                   {:op :module-path :module module})
+                  (catch Throwable t {:reject [(str "module-path socket: " (.getMessage t))]}))]
     (cond
-      (not (string? p))
-      {:err "coordinator returned no tracked source path for the module"}
-      (not (.isAbsolute (io/file p)))
-      {:err (str "tracked source path " (pr-str p) " is not ABSOLUTE — refused before mutation")}
-      (not= p (canon p))
-      {:err (str "tracked source path " (pr-str p) " is not CANONICAL (resolves to "
-                 (pr-str (canon p)) ") — traversal/symlink segments are refused before mutation")}
-      (not (str/starts-with? p (str root "/")))
-      {:err (str "tracked source path " p " is outside FRAM_SRC and therefore outside the source root "
-                 root " — refused before mutation")}
-      :else nil)))
+      (:reject resp)
+      {:error (str "registered source lookup rejected: "
+                   (str/join "; " (map str (:reject resp))))}
 
-;; ---- pinned projection publication (parent-directory identity confinement) --
-;; validate-tracked-path above is PATHNAME-based and one-time; between it and
-;; the projection write the parent directory ENTRY could be replaced (e.g.
-;; swapped for a symlink into an outside tree), redirecting a path-based write
-;; OUTSIDE the checkout. bb's GraalVM image does not register Java's
-;; SecureDirectoryStream methods for reflection (verified: getMethod -> NoSuchMethod),
-;; so this uses the equivalently PINNED relative move: hold an open FileChannel
-;; on the validated parent directory (an fd pins the INODE, not the name) and
-;; address every publication op through /proc/self/fd/<N>/<leaf>, which the
-;; kernel resolves via that pinned inode exactly like openat/renameat relative
-;; ops. Identity is compared by fileKey (dev,ino) through the fd after pinning;
-;; the directory fsync is .force on the pinned channel itself (never on a
-;; re-resolved path). No /proc, an ambiguous fd attribution, or an identity
-;; mismatch FAILS CLOSED before any commit — never a silent fallback to
-;; path-based writes.
-(defn- path-of [s] (java.nio.file.Paths/get (str s) (into-array String [])))
-(defn- file-key-of
-  ;; fileKey (dev,ino) of what `p` RESOLVES to, as a comparable string; nil if unreadable.
-  [p]
-  (try (str (.fileKey (java.nio.file.Files/readAttributes
-                       (path-of p) java.nio.file.attribute.BasicFileAttributes
-                       (into-array java.nio.file.LinkOption []))))
-       (catch Throwable _ nil)))
-(defn- dir-fds-matching
-  ;; the /proc/self/fd entries currently resolving to directory identity `k`.
-  [k]
-  (set (for [f (or (seq (.listFiles (io/file "/proc/self/fd"))) [])
-             :let [n (.getName ^java.io.File f)]
-             :when (= k (file-key-of (str "/proc/self/fd/" n)))]
-         n)))
+      (:error resp)
+      {:error (if (= "unknown op" (:error resp))
+                "the code coordinator predates tracked module paths — restart it with current Fram"
+                (str "registered source lookup failed: " (:error resp)))}
 
-(defn- pin-parent-dir!
-  ;; -> {:ch <FileChannel> :fd-dir "/proc/self/fd/N" :key K :parent P} | {:err ..}
-  ;; Pin protocol: capture the expected identity K from the validated path, scan
-  ;; the fds already on K, open the directory channel, scan again — the single
-  ;; NEW matching fd is ours (the channel keeps it alive, so the number cannot
-  ;; be reused while pinned). Anything other than exactly one candidate refuses.
-  [parent]
-  (if-not (.isDirectory (io/file "/proc/self/fd"))
-    {:err "pinned publication unsupported: /proc/self/fd unavailable on this platform"}
-    (let [k (file-key-of parent)]
-      (if (nil? k)
-        {:err (str "cannot read the identity of tracked parent directory " parent)}
-        (let [before (dir-fds-matching k)
-              ch (try (java.nio.channels.FileChannel/open
-                       (path-of parent)
-                       (into-array java.nio.file.OpenOption [java.nio.file.StandardOpenOption/READ]))
-                      (catch Throwable t t))]
-          (if (instance? Throwable ch)
-            {:err (str "cannot pin tracked parent directory " parent ": " (.getMessage ^Throwable ch))}
-            (let [cands (vec (remove before (dir-fds-matching k)))]
-              (if (= 1 (count cands))
-                {:ch ch :fd-dir (str "/proc/self/fd/" (first cands)) :key k :parent parent}
-                (do (try (.close ^java.nio.channels.FileChannel ch) (catch Throwable _ nil))
-                    {:err (str "cannot attribute a pinned parent-directory fd for " parent
-                               " (" (count cands) " candidates) — the directory identity changed during"
-                               " pinning or fd attribution is ambiguous; refusing (no path-based fallback)")})))))))))
+      (not (:ok resp))
+      {:error (str "registered source lookup returned an unexpected response: " (pr-str resp))}
 
-(defn- write-byte-buffer-all!
-  ;; FileChannel.write is allowed to consume only part of a ByteBuffer. Drive it
-  ;; until drained; zero progress yields and retries, while EOF-like negative
-  ;; progress is a hard I/O failure. `write-one!` is injected so the exact
-  ;; short-write contract has a deterministic direct probe.
-  [write-one! ^java.nio.ByteBuffer buf]
-  (loop [calls 0]
-    (if-not (.hasRemaining buf)
-      calls
-      (let [n (long (write-one! buf))]
+      :else
+      (let [p (:path resp)
+            root (.getCanonicalFile (io/file fram-src))]
         (cond
-          (neg? n) (throw (ex-info "projection FileChannel reported negative write progress"
-                                   {:code :projection-short-write}))
-          (zero? n) (do (Thread/yield) (recur (inc calls)))
-          :else (recur (inc calls)))))))
+          (not (string? p))
+          {:error "the module has no registered source path"}
 
-(defn- publish-projection-pinned!
-  ;; Publish `src-file`'s bytes as `leaf` THROUGH the pinned parent directory:
-  ;; FIRST compare the current parent pathname to the pin, before creating a temp
-  ;; or writing one byte. A parent moved anywhere (including outside FRAM_SRC)
-  ;; and replaced therefore returns :stale with zero writes to both the moved
-  ;; original and replacement. Recheck before the atomic publication, drain the
-  ;; complete ByteBuffer, then fsync the PINNED directory channel. Returns nil on
-  ;; a clean publish; {:stale <why>} when current pathname identity differs;
-  ;; throws on I/O failure.
-  [{:keys [ch fd-dir key parent]} src-file leaf]
-  (cond
-    (not= key (file-key-of fd-dir))
-    (throw (ex-info (str "pinned parent-directory fd no longer matches its validated identity " key)
-                    {:code :pin-identity-lost}))
+          (not (.isDirectory root))
+          {:error (str "FRAM_SRC is not a directory: " (.getPath root))}
 
-    ;; LOAD-BEARING PRE-WRITE CHECK: do not create the same-directory temp and
-    ;; do not consume src-file unless the checkout pathname still names the pin.
-    (not= key (file-key-of parent))
-    {:stale (str "the tracked parent directory " parent
-                 " no longer resolves to its validated identity " key
-                 " — projection NOT published; zero bytes written")}
+          (not (.isAbsolute (io/file p)))
+          {:error (str "registered source path is not absolute: " (pr-str p))}
 
-    :else
-    (let [tmp (str ".fram-proj-" (System/nanoTime) ".tmp")
-          tmp-path (path-of (str fd-dir "/" tmp))]
-      (try
-        (with-open [wch (java.nio.channels.FileChannel/open
-                         tmp-path
-                         (into-array java.nio.file.OpenOption
-                                     [java.nio.file.StandardOpenOption/CREATE_NEW
-                                      java.nio.file.StandardOpenOption/WRITE]))]
-          (let [buf (java.nio.ByteBuffer/wrap
-                     (java.nio.file.Files/readAllBytes (.toPath (io/file src-file))))]
-            (write-byte-buffer-all! #(.write wch ^java.nio.ByteBuffer %) buf))
-          (.force wch true))
-        ;; If identity moved while the temp was being prepared, remove the temp
-        ;; and refuse to replace the leaf. The deterministic move-before-call
-        ;; boundary above performs no create/write at all.
-        (if (not= key (file-key-of parent))
-          (do
-            (java.nio.file.Files/deleteIfExists tmp-path)
-            (.force ^java.nio.channels.FileChannel ch true)
-            {:stale (str "the tracked parent directory " parent
-                         " changed during projection preparation — leaf NOT published")})
-          (do
-            (java.nio.file.Files/move
-             tmp-path (path-of (str fd-dir "/" leaf))
-             (into-array java.nio.file.CopyOption
-                         [java.nio.file.StandardCopyOption/ATOMIC_MOVE
-                          java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
-            (.force ^java.nio.channels.FileChannel ch true)
-            (when (not= key (file-key-of parent))
-              {:stale (str "the tracked parent directory " parent
-                           " changed during atomic publication; canonical graph stands and"
-                           " the projection requires repair")})))
-        (catch Throwable t
-          (try (java.nio.file.Files/deleteIfExists tmp-path) (catch Throwable _ nil))
-          (throw t))))))
+          :else
+          (let [target (.getCanonicalFile (io/file p))
+                root-path (.toPath root)
+                target-path (.toPath target)]
+            (cond
+              (not= p (.getPath target))
+              {:error (str "registered source path is not canonical: " (pr-str p)
+                           " resolves to " (pr-str (.getPath target)))}
 
-(defn- release-pin! [pin]
-  (when-let [ch (:ch pin)]
-    (try (.close ^java.nio.channels.FileChannel ch) (catch Throwable _ nil))))
+              (or (= root-path target-path) (not (.startsWith target-path root-path)))
+              {:error (str "registered source path " p " lies outside FRAM_SRC "
+                           (.getPath root))}
 
-(defn- commit-candidate-exactly [port req]
-  ;; A socket can disappear after the coordinator's append+fsync commit point but
-  ;; before this process receives the receipt. Retry the IDENTICAL request once:
-  ;; graph-edit-candidate-v1 deduplicates it from the durable batch identity, even
-  ;; after coordinator restart. A second transport failure is explicitly UNKNOWN,
-  ;; never mislabeled "nothing committed" and never automatically replayed again.
-  (try
-    (fram.rt/coord-request-for-log port (flip-log) req)
-    (catch Throwable first-error
-      (try
-        (fram.rt/coord-request-for-log port (flip-log) req)
-        (catch Throwable retry-error
-          {:reject [(str "commit response is unknown after one exact-request retry: "
-                         (.getMessage ^Throwable first-error) "; retry: "
-                         (.getMessage ^Throwable retry-error))]
-           :code :commit-response-unknown
-           :candidate (:candidate req)
-           :base-version (:version req)})))))
-
-(defn- coordinator-commit-warning [commit]
-  (when (or (:repair-needed commit) (seq (:warnings commit)))
-    (str " (WARNING: coordinator reports "
-         (let [code (or (:code commit) :committed-with-warning)]
-           (if (keyword? code) (name code) (str code)))
-         " for candidate " (:candidate commit) " at exact version " (:version commit)
-         (when-let [ws (seq (:warnings commit))]
-           (str ": " (str/join "; " (map (fn [w]
-                                             (str (if (keyword? (:stage w))
-                                                    (name (:stage w))
-                                                    (or (:stage w) "unknown-stage"))
-                                                  " — " (or (:message w) "unspecified warning")))
-                                           ws))))
-         ". The graph batch is COMMITTED; DO NOT RETRY."
-         (when (:repair-needed commit) " Restart the coordinator to rebuild derived state.")
-         ")")))
-
-(defn- committed-postprocess-failure [commit op module t]
-  {:text (str "COMMITTED WITH WARNING (graph-edit-candidate-v1, atomic batch): "
-              op " on " module " — candidate " (:candidate commit) ", "
-              (:installed commit) " ops at exact version " (:version commit)
-              ". Post-commit projection/response handling failed: "
-              (or (.getMessage ^Throwable t) (.getSimpleName (class t)))
-              ". The graph batch is COMMITTED; DO NOT RETRY. Repair the tracked view with: "
-              "bin/fram-render-code " module " --port " flip-code-port " "
-              (str/join " " (flip-log-args)) " --out " (:path commit)
-              (coordinator-commit-warning commit))})
+              :else {:path p})))))))
 
 (defn route-edit [e]
   (let [op (:op e) module (:module e)]
     (cond
-      ;; FLIP path (FRAM_FLIP=1 + a code coordinator): the LOG is canonical, and the
-      ;; edit goes through the ATOMIC CANDIDATE GATE (graph-edit-candidate-v1):
-      ;;   1. :edit-prepare — the coordinator runs the verb over an exact-version
-      ;;      clone (ZERO canonical writes), seals the op set, resolves the module's
-      ;;      TRACKED path from the graph file fact, and returns the candidate EDN
-      ;;      + digests. (The legacy warm flow committed FIRST and checked after —
-      ;;      a failing check left broken canonical state — and rendered to
-      ;;      FRAM_SRC/<module>.bclj, minting root-level artifacts for nested
-      ;;      modules like src.fram.world.)
-      ;;   2. the tracked path is confined under the canonical FRAM_SRC root here.
-      ;;   3. the candidate text is rendered and Beagle PARSE + TYPE checked — all
-      ;;      BEFORE any commit; a failing candidate rejects with canonical log,
-      ;;      facts, version, and tracked projection untouched.
-      ;;   4. :edit-commit — the coordinator revalidates log/version/path/digests
-      ;;      (exact-version CAS), publishes a durable identity-bound recovery
-      ;;      intent, awaits the whole-batch append+fsync (THE commit point)
-      ;;      inside its serialized section, and only then swaps the root; an
-      ;;      append failure restores the exact pre-state and rejects typed.
-      ;;   5. the CHECKED candidate bytes are published to the tracked path
-      ;;      THROUGH the parent directory pinned at validation time (identity-
-      ;;      compared fd; temp + force + atomic replace + pinned-dir fsync) —
-      ;;      checked-is-installed, no re-render race, and a replaced parent
-      ;;      entry can never redirect the write outside the checkout (the
-      ;;      reply reports PROJECTION-STALE instead).
-      ;; NO fallback to the commit-first :edit-min flow: a coordinator that cannot
-      ;; prepare/commit candidates gets a typed refusal, never a degraded write.
+      ;; FLIP path (FRAM_FLIP=1 + a code coordinator): the LOG is canonical. The verb
+      ;; runs over the LOG-booted store, recompiles FROM the log, and the AST delta is
+      ;; committed THROUGH the coordinator. NO src/fram/*.bclj is read here — module
+      ;; enumeration, the corpus, the render, and the commit input all come from the log.
       (and flip-on? flip-code-port)
+      ;; WARM path: socket :edit-min to the live coordinator (no per-edit log re-fold).
       (let [spec (try (edit-min-spec e)
                       (catch clojure.lang.ExceptionInfo ex
-                        (if (:spec-error (ex-data ex)) {:spec-error (.getMessage ex)} (throw ex))))]
+                        (if (:spec-error (ex-data ex))
+                          {:spec-error (.getMessage ex)}
+                          (throw ex))))]
         (cond
-          (nil? spec)
-          {:isError true :text (str "unknown edit op: " op)}
-          (:spec-error spec)
-          {:isError true
-           :text (str "REJECTED (nothing prepared, nothing committed): " (:spec-error spec)
-                      " — the edit payload must be a readable EDN form")}
+          (nil? spec) {:isError true :text (str "unknown edit op: " op)}
+          (:spec-error spec) {:isError true
+                              :text (str "REJECTED (nothing committed): " (:spec-error spec))}
           :else
-          (let [port (Integer/parseInt flip-code-port)
-                prep (try (fram.rt/coord-request-for-log port (flip-log) {:op :edit-prepare :spec spec})
-                          (catch Throwable t {:reject [(str "edit-prepare socket: " (.getMessage t))]}))]
+          (let [tracked (tracked-module-path module)]
+            (if-let [path-error (:error tracked)]
+              {:isError true :text (str "REJECTED (nothing committed): " path-error)}
+              (let [target-bclj (:path tracked)
+                    resp (try (fram.rt/coord-request-for-log
+                               (Integer/parseInt flip-code-port)
+                               (flip-log)
+                               {:op :edit-min :spec spec})
+                              (catch Throwable t {:reject [(str "warm edit socket: " (.getMessage t))]}))]
             (cond
-              (= "unknown op" (:error prep))
-              {:isError true
-               :text (str "REJECTED (nothing committed): the coordinator does not speak "
-                          "graph-edit-candidate-v1 (legacy :edit-min-only daemon) — restart it "
-                          "with current Fram (bin/fram-code-on)")}
-              (:reject prep)
-              {:isError true
-               :text (str "REJECTED (graph-edit-candidate-v1 prepare — nothing committed"
-                          (when-let [c (:code prep)] (str ", " (name c))) "): "
-                          (str/join "; " (map str (:reject prep)))
-                          ;; surface the structured disambiguation remedy (replace-in-body
-                          ;; candidates + copy-pastable :within forms) so the model gets HOW
-                          ;; to disambiguate, not just that it was ambiguous.
-                          (when-let [d (:disambiguation prep)] (str "\n" (:message d))))}
-              (not (:ok prep))
-              {:isError true :text (str "edit-prepare unexpected response: " (pr-str prep))}
-              :else
-              (let [target (:path prep)]
-                (if-let [pe (validate-tracked-path target)]
-                  {:isError true :text (str "REJECTED (nothing committed): " (:err pe))}
-                  ;; pin the validated parent directory BEFORE any commit: the
-                  ;; projection publication below goes only through this pinned
-                  ;; identity, and an environment where pinning is unsupported
-                  ;; rejects here with nothing committed (fail closed) instead
-                  ;; of always committing into a stale/unconfined projection.
-                  (let [pin (pin-parent-dir! (.getParent (io/file target)))]
-                    (if (:err pin)
+              (:reject resp)
+              {:isError true :text (str "REJECTED (warm :edit-min, nothing committed): "
+                                        (str/join "; " (map str (:reject resp)))
+                                        ;; surface the structured disambiguation remedy (replace-in-body
+                                        ;; candidates + copy-pastable :within forms) so the model gets HOW
+                                        ;; to disambiguate, not just that it was ambiguous.
+                                        (when-let [d (:disambiguation resp)] (str "\n" (:message d))))}
+              (:ok resp)
+              ;; render the .bclj view WARM (:render, no fold), then TYPE-CHECK the edited module +
+              ;; RETURN pointed Beagle errors so the agent can REPAIR (the beagle repair loop — without
+              ;; this the agent commits broken Beagle syntax + flies blind; WITH it, it fixes + lands green).
+              ;; No re-fold anywhere: render is warm off the coordinator; the check parses ONE module.
+              (let [rr (apply sh {:out (io/file target-bclj) :err :string}
+                              "bb" "-cp" fram-out (str flip-bin-dir "/fram-render-code")
+                              module "--port" flip-code-port (flip-log-args))]
+                (if-not (zero? (:exit rr))
+                  {:text (str "committed (WARM :edit-min): " op " on " module " — " (:ops resp)
+                              " ops (WARNING: view render failed: " (str/trim (:err rr)) ")")}
+                  (let [ednf (str target-bclj ".chk.edn")
+                        ee (sh {:out (io/file ednf) :err :string} "racket" roundtrip-rkt "--emit-edn" target-bclj)]
+                    (if-not (zero? (:exit ee))
                       {:isError true
-                       :text (str "REJECTED (nothing committed): projection parent-directory pin failed: "
-                                  (:err pin))}
-                      (try
-                  (let [work (str (System/getProperty "java.io.tmpdir") "/fram-cand-" (System/nanoTime))
-                        _ (.mkdirs (io/file work))
-                        ext (let [n (.getName (io/file target)) i (.lastIndexOf n ".")]
-                              (if (pos? i) (subs n i) ".bclj"))
-                        ednf  (str work "/candidate" ext ".edn")
-                        candf (str work "/candidate" ext)
-                        _ (spit ednf (:edn prep))
-                        rr (sh {:out (io/file candf) :err :string} "racket" roundtrip-rkt "--render" ednf)]
-                    (if-not (zero? (:exit rr))
-                      (do (sh {} "rm" "-rf" work)
+                       :text (str "Your edit COMMITTED but module `" module "` no longer PARSES — the module "
+                                  "is now broken. Correct it by re-editing the same def with valid Beagle "
+                                  "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n" (str/trim (:err ee)))}
+                      (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt ednf)]
+                        (try (io/delete-file (io/file ednf) true) (catch Throwable _ nil))
+                        (if (zero? (:exit bg))
+                          {:text (str "committed + TYPE-CHECKS CLEAN (WARM :edit-min, no re-fold): "
+                                      op " on " module " — " (:ops resp) " ops")}
                           {:isError true
-                           :text (str "REJECTED — candidate render failed (nothing committed):\n"
-                                      (str/trim (:err rr)))})
-                      ;; sealed Beagle checks — parse, then type — on the candidate, BEFORE commit.
-                      (let [chk-edn (str candf ".chk.edn")
-                            pe2 (sh {:out (io/file chk-edn) :err :string} "racket" roundtrip-rkt "--emit-edn" candf)]
-                        (if-not (zero? (:exit pe2))
-                          (do (sh {} "rm" "-rf" work)
-                              {:isError true
-                               :text (str "REJECTED — candidate module `" module "` does not PARSE "
-                                          "(nothing committed). Re-issue the edit with valid Beagle "
-                                          "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n"
-                                          (str/trim (:err pe2)))})
-                          (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt chk-edn)]
-                            (if-not (zero? (:exit bg))
-                              (do (sh {} "rm" "-rf" work)
-                                  {:isError true
-                                   :text (str "REJECTED — candidate module `" module "` fails the sealed Beagle "
-                                              "parse/type check (nothing committed). Re-issue the edit. Beagle error:\n"
-                                              (str/trim (str (:out bg) (:err bg))))})
-                              ;; checks green — commit the sealed candidate at its exact version.
-                              (let [commit-req {:op :edit-commit
-                                                :candidate (:candidate prep)
-                                                :version (:version prep)
-                                                :module module
-                                                :path target
-                                                :ops-digest (:ops-digest prep)
-                                                :edn-digest (:edn-digest prep)
-                                                :src-root (canon fram-src)}
-                                    commit (commit-candidate-exactly port commit-req)]
-                                (cond
-                                  (:reject commit)
-                                  (do (sh {} "rm" "-rf" work)
-                                      (if (#{:durability-indeterminate :durability-poisoned
-                                             :committed-repair-needed :commit-response-unknown}
-                                           (:code commit))
-                                        {:isError true
-                                         :text (str "STOPPED (graph-edit-candidate-v1, " (name (:code commit))
-                                                    "): " (str/join "; " (map str (:reject commit)))
-                                                    " — outcome is NOT an ordinary rejection and may already be"
-                                                    " committed; DO NOT RETRY. Stop/restart the coordinator and"
-                                                    " inspect :edit-protocol/:status for the exact receipt")}
-                                        {:isError true
-                                         :text (str "REJECTED (graph-edit-candidate-v1 commit — nothing committed"
-                                                    (when-let [c (:code commit)] (str ", " (name c))) "): "
-                                                    (str/join "; " (map str (:reject commit)))
-                                                    (when (= "stale-version" (some-> (:code commit) name))
-                                                      " — a concurrent edit landed first; re-issue this edit"))}))
-                                  (:ok commit)
-                                  ;; the tracked projection: publish the CHECKED candidate bytes
-                                  ;; THROUGH the parent directory pinned before the commit
-                                  ;; (identity-verified fd; temp + force + atomic replace +
-                                  ;; pinned-dir fsync). A parent entry already replaced when
-                                  ;; publication starts is rejected before temp creation or source
-                                  ;; read. A replacement racing the prepared temp can never redirect
-                                  ;; bytes into the replacement: publication stays pinned and the
-                                  ;; reply reports PROJECTION-STALE. Any failure leaves the LOG
-                                  ;; canonical and the projection STALE — reported loudly with the
-                                  ;; repair command.
-                                  (try
-                                    (let [proj (try (publish-projection-pinned!
-                                                     pin (io/file candf) (.getName (io/file target)))
-                                                    (catch Throwable t {:proj-err (str (.getMessage t))}))]
-                                      (sh {} "rm" "-rf" work)
-                                      (cond
-                                        (:proj-err proj)
-                                        {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
-                                                    " — candidate " (:candidate commit) ", "
-                                                    (:installed commit) " ops at exact version " (:version commit)
-                                                    " (WARNING: tracked projection is STALE — writing " target
-                                                    " failed: " (:proj-err proj) "; graph batch is COMMITTED; DO NOT RETRY;"
-                                                    " repair with: bin/fram-render-code "
-                                                    module " --port " flip-code-port " "
-                                                    (str/join " " (flip-log-args)) " --out " target ")"
-                                                    (coordinator-commit-warning commit))}
-                                        (:stale proj)
-                                        {:text (str "committed (graph-edit-candidate-v1, atomic batch): " op " on " module
-                                                    " — candidate " (:candidate commit) ", "
-                                                    (:installed commit) " ops at exact version " (:version commit)
-                                                    " (WARNING: tracked projection is PROJECTION-STALE — "
-                                                    (:stale proj) "; graph batch is COMMITTED; DO NOT RETRY; repair with: "
-                                                    "bin/fram-render-code " module " --port " flip-code-port " "
-                                                    (str/join " " (flip-log-args)) " --out " target ")"
-                                                    (coordinator-commit-warning commit))}
-                                        :else
-                                        {:text (str "committed + TYPE-CHECKS CLEAN (graph-edit-candidate-v1, atomic batch): "
-                                                    op " on " module " — candidate " (:candidate commit) ", "
-                                                    (:installed commit) " ops at exact version "
-                                                    (:version commit) "; tracked view " target " updated"
-                                                    (coordinator-commit-warning commit))}))
-                                    (catch Throwable t
-                                      ;; Any failure after an :ok/:committed receipt is
-                                      ;; presentation/projection repair, never edit failure.
-                                      (try (sh {} "rm" "-rf" work) (catch Throwable _ nil))
-                                      (committed-postprocess-failure commit op module t)))
-                                  :else
-                                  (do (sh {} "rm" "-rf" work)
-                                      {:isError true
-                                       :text (str "edit-commit unexpected response: " (pr-str commit))})))))))))
-                        (finally (release-pin! pin)))))))))))
+                           :text (str "Your edit COMMITTED but module `" module "` does NOT TYPE-CHECK — "
+                                      "the module is now broken. Correct it by re-editing the same def. "
+                                      "Beagle type error:\n" (str/trim (str (:out bg) (:err bg))))}))))))
+              :else
+              {:isError true :text (str "warm :edit-min unexpected response: " (pr-str resp))}))))))
 
       ;; FRAM_FLIP=1 but no code coordinator: fail loud (don't silently text-fallback).
       flip-on?
@@ -799,64 +516,6 @@
 ;; transaction), NOT the query budget. Names match the structural ToolSpecs in tools.bclj.
 (def ^:private edit-tools #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
-
-;; ============================================================================
-;; PROFILES — opt-in restricted tool surfaces (FRAM_MCP_PROFILE; unset = full).
-;; ============================================================================
-;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact ten-tool
-;; closed catalog above — the pre-profile behavior, no new checks anywhere.
-;; "graph-edit-v1" is the RESTRICTED authoring profile for graph-upstream repos
-;; (the fram-code-on wiring): exactly the five graph-edit verbs are EXPOSED
-;; (tools/list) *and* AUTHORIZED (tools/call). The call gate is server-side and
-;; runs BEFORE alias normalization (untell->retract, query<->ask) and BEFORE any
-;; dispatch: a denied name never reaches tl/call, load-state, the coordinator,
-;; or a subprocess — zero mutation by construction. Filtering tools/list alone
-;; would be advisory; the tools/call gate is the authority.
-;; The profile is fixed at STARTUP from the server's own environment — never
-;; from a request, never from a project .mcp.json (this server loads no MCP
-;; config and execs nothing a caller names); the allow-list is a compile-time
-;; constant. Unknown profile names FAIL CLOSED at startup (fence at the bottom).
-(def ^:private profile (or (System/getenv "FRAM_MCP_PROFILE") "full"))
-(def ^:private restricted? (= profile "graph-edit-v1"))
-;; FRAM_MCP_LIBRARY=1: load this file as a LIBRARY (defs only — no profile
-;; fence, no stdio loop). Test seam for driving the pinned projection
-;; publication helpers directly and deterministically (mcp_candidate_test).
-(def ^:private library-mode? (= "1" (System/getenv "FRAM_MCP_LIBRARY")))
-
-;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
-
-;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
-;;   (1) the name must be one of the five edit verbs — everything else
-;;       (tell/retract/show/ask/validate, the query/untell aliases, unknown
-;;       names) is denied AS GIVEN, pre-normalization, pre-dispatch;
-;;   (2) the rendered target FRAM_SRC/<module>.bclj must stay CONFINED under
-;;       the FRAM_SRC root once canonicalized (a module like "../x" would
-;;       otherwise render outside the intended source tree).
-(defn- profile-gate [nm args]
-  (when restricted?
-    (if-not (edit-tool? nm)
-      {:text (str "profile graph-edit-v1: tool '" nm "' is not authorized — this surface is exactly "
-                  "add-def / set-body / rename-def / insert-after / replace-in-body. "
-                  "Denied before alias normalization and dispatch; nothing mutated.")}
-      (let [m (:module args)]
-        (cond
-          (and (some? m) (not (string? m)))
-          {:text "profile graph-edit-v1: 'module' must be a string — refused before dispatch; nothing mutated."}
-          (and (string? m)
-               (not (str/starts-with? (canon (str fram-src "/" m ".bclj"))
-                                      (str (canon fram-src) "/"))))
-          {:text (str "profile graph-edit-v1: module '" m "' renders outside the source root "
-                      fram-src " — refused before dispatch; nothing mutated.")}
-          :else nil)))))
-
-(def ^:private profile-instructions
-  (if restricted?
-    (str instructions
-         "\n\nPROFILE graph-edit-v1 (restricted): only the five graph-edit verbs "
-         "(add-def / set-body / rename-def / insert-after / replace-in-body) are exposed and "
-         "authorized; tell / retract / show / ask / validate (and the untell/query aliases) "
-         "are denied server-side before dispatch.")
-    instructions))
 
 ;; --- dispatch one tools/call (catalog path) ------------------------------------
 (defn- dispatch-call [name a]
@@ -958,148 +617,26 @@
       (reply id {:protocolVersion "2024-11-05"
                  :capabilities {:tools {}}
                  :serverInfo {:name "fram" :version "0.1"}
-                 :instructions profile-instructions})
+                 :instructions instructions})
 
       (= method "tools/list")
-      ;; A restricted profile EXPOSES exactly its allow-list. (Exposure is UX;
-      ;; the profile-gate on tools/call below is the enforcement.) Keeps main's
-      ;; precomputed closed-tools and applies the branch's restricted filter to it
-      ;; — both sides read the same closed-catalog, main just hoists the ->tool.
-      (reply id {:tools (if restricted?
-                          (filterv (fn [t] (edit-tool? (:name t))) closed-tools)
-                          closed-tools)})
+      (reply id {:tools closed-tools})
 
       (= method "tools/call")
-      ;; PROFILE GATE FIRST: under a restricted profile an unauthorized or
-      ;; unconfined call is denied HERE — before alias normalization
-      ;; (handle-call / tl-call), before load-state, before any coordinator or
-      ;; subprocess contact. Zero mutation on the denial path.
-      ;;
-      ;; Then: graph-AST edits run a multi-process recompile-gated transaction that
-      ;; far exceeds the 10s QUERY budget (and is bounded by its own subprocesses,
-      ;; not a CPU-pegged datalog fixpoint), so they BYPASS with-timeout.
-      ;; Reads/queries keep the budget. Classify by tool name against the catalog's
-      ;; edit ops.
-      (let [nm (:name params)]
-        (if-let [denial (profile-gate nm (:arguments params))]
-          (reply id {:content [{:type "text" :text (:text denial)}] :isError true})
-          (let [r (if (edit-tool? nm)
-                    (handle-call nm (:arguments params))
-                    (with-timeout 10000 (fn [] (handle-call nm (:arguments params)))))]
-            (reply id {:content [{:type "text" :text (:text r)}] :isError (boolean (:isError r))}))))
+      ;; graph-AST edits run a multi-process recompile-gated transaction that far
+      ;; exceeds the 10s QUERY budget (and is bounded by its own subprocesses, not a
+      ;; CPU-pegged datalog fixpoint), so they BYPASS with-timeout. Reads/queries keep
+      ;; the budget. Classify by tool name against the catalog's edit ops.
+      (let [nm (:name params)
+            r (if (edit-tool? nm)
+                (handle-call nm (:arguments params))
+                (with-timeout 10000 (fn [] (handle-call nm (:arguments params)))))]
+        (reply id {:content [{:type "text" :text (:text r)}] :isError (boolean (:isError r))}))
 
       :else (reply-err id -32601 (str "method not found: " method)))))
 
-;; ============================================================================
-;; PROFILE STARTUP FENCE — a restricted profile binds its WHOLE identity before
-;; serving a single request; anything short of the exact contract fails closed
-;; (exit 2, diagnostic on stderr, stdout stays a pure JSON-RPC channel).
-;; ============================================================================
-(defn- die! [msg]
-  (log! (str "fram-mcp: REFUSING to start (FRAM_MCP_PROFILE=" profile "): " msg))
-  (System/exit 2))
-
-;; require an env path that is present, ABSOLUTE, already CANONICAL (equal to
-;; its own canonical form — no relative segments, no symlink indirection), and
-;; that exists as a directory/file. Returns the canonical path.
-(defn- require-canonical! [label v dir?]
-  (when (str/blank? (str v)) (die! (str label " is required")))
-  (when-not (.isAbsolute (io/file v))
-    (die! (str label " must be an ABSOLUTE path (got " (pr-str v) ")")))
-  (let [c (canon v)]
-    (when-not (= c v)
-      (die! (str label " must be CANONICAL (got " (pr-str v) "; canonical form " (pr-str c) ")")))
-    (when (and dir? (not (.isDirectory (io/file v))))
-      (die! (str label " is not an existing directory: " v)))
-    (when (and (not dir?) (not (.isFile (io/file v))))
-      (die! (str label " is not an existing file: " v)))
-    c))
-
-;; strict-fence probe (mirrors bin/fram-code-on's coordinator_requires_fence):
-;; an UNWRAPPED {:op :version} must be REJECTED with :code :log-fence-required.
-;; A dead port, a permissive/legacy daemon, or any other answer -> NOT strict.
-(defn- strict-fence-live? [port]
-  (try
-    (with-open [s (java.net.Socket.)]
-      (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
-      (.setSoTimeout s 2000)
-      (let [w (io/writer (.getOutputStream s))
-            r (java.io.BufferedReader. (io/reader (.getInputStream s)))]
-        (.write w "{:op :version}\n") (.flush w)
-        (let [line (.readLine r)]
-          (and (some? line)
-               (= :log-fence-required (:code (clojure.edn/read-string line)))))))
-    (catch Throwable _ false)))
-
-(defn- enforce-graph-edit-v1! []
-  ;; graph-edit MODE is the licensed substrate: FRAM_GRAPH_EDIT declares the
-  ;; fram-code-on wiring and FRAM_FLIP routes every verb graph-sourced (warm
-  ;; :edit-min) — the text-legacy edit path is NOT licensed under this profile.
-  (when-not (= "1" (System/getenv "FRAM_GRAPH_EDIT"))
-    (die! "graph-edit mode is required: FRAM_GRAPH_EDIT=1 (wire with bin/fram-code-on)"))
-  (when-not flip-on?
-    (die! "graph-sourced editing is required: FRAM_FLIP=1 (text-legacy edits are not licensed under graph-edit-v1)"))
-  (let [port (try (Integer/parseInt (str flip-code-port)) (catch Exception _ nil))]
-    (when-not (and port (<= 1 port 65535))
-      (die! (str "FRAM_CODE_PORT must name a TCP port (got " (pr-str flip-code-port) ")")))
-    (let [src (require-canonical! "FRAM_SRC" (System/getenv "FRAM_SRC") true)
-          log (require-canonical! "FRAM_CODE_LOG" (System/getenv "FRAM_CODE_LOG") false)]
-      ;; the code log must live INSIDE the source binding (fram-code-on puts it
-      ;; at <src>/.fram/code.log) — a log outside the tree is a foreign corpus.
-      (when-not (str/starts-with? log (str src "/"))
-        (die! (str "FRAM_CODE_LOG " log " lies OUTSIDE the FRAM_SRC source binding " src)))
-      ;; live coordinator, STRICT fence, EXACT canonical log — all three.
-      (when-not (strict-fence-live? port)
-        (die! (str "no strict-fenced coordinator on 127.0.0.1:" port
-                   " — unwrapped requests must be rejected with :log-fence-required"
-                   " (daemon dead, or permissive/legacy; rerun bin/fram-code-on)")))
-      (let [v (fram.rt/coord-version-for-log port log)]
-        (when (neg? v)
-          (die! (case v
-                  -1 (str "no coordinator answers fenced requests on 127.0.0.1:" port)
-                  -2 (str "coordinator on 127.0.0.1:" port " serves a DIFFERENT log than " log)
-                  -3 (str "coordinator on 127.0.0.1:" port " lacks the log-fence protocol")
-                  (str "coordinator on 127.0.0.1:" port " is unusable")))))
-      ;; PROTOCOL HANDSHAKE — the restricted profile edits ONLY through the atomic
-      ;; candidate gate (:edit-prepare/:edit-commit). A coordinator that cannot
-      ;; answer the capability op is a legacy commit-first daemon (or a future
-      ;; incompatible protocol) — refuse to serve rather than degrade to unsafe
-      ;; commit-before-check editing.
-      (let [pr (try (fram.rt/coord-request-for-log port log {:op :edit-protocol})
-                    (catch Throwable _ nil))]
-        (when-not (= "graph-edit-candidate-v1" (:protocol pr))
-          (die! (str "coordinator on 127.0.0.1:" port " does not speak graph-edit-candidate-v1"
-                     " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
-                     ") — legacy or wrong-protocol coordinator; restart it with current Fram"
-                     " (rerun bin/fram-code-on)")))
-        (let [state (get-in pr [:durability :state])]
-          (when (#{:poisoned :committed-repair-needed} state)
-            (die! (str "coordinator on 127.0.0.1:" port " is "
-                       (if (= :poisoned state)
-                         "DURABILITY-POISONED"
-                         "COMMITTED-REPAIR-NEEDED")
-                       " " (pr-str (:durability pr)) " — REFUSING to serve; stop/restart it"
-                       " for sole-writer recovery/repair before authoring")))))
-      (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
-                 ", strict-fenced coordinator 127.0.0.1:" port
-                 " [graph-edit-candidate-v1]")))))
-
-;; fail-closed profile admission: full = the exact legacy surface (no new
-;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.
-;; FRAM_MCP_LIBRARY=1 skips admission AND the loop — library load, never serving.
-(when-not library-mode?
-  (case profile
-    "full"          nil
-    "graph-edit-v1" (enforce-graph-edit-v1!)
-    (die! "unknown profile — known profiles: full, graph-edit-v1")))
-
-(when library-mode?
-  (log! "fram-mcp: loaded as a library (FRAM_MCP_LIBRARY=1) — no profile fence, no stdio loop"))
-(when-not library-mode?
- (log! (if restricted?
-        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body ONLY)"
-        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)"))
- (loop []
+(log! "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)")
+(loop []
   (let [line (read-line)]
     (when (some? line)
       (when (seq (str/trim line))
@@ -1116,4 +653,4 @@
             (try (handle req)
                  (catch Exception e (log! "handler error:" (.getMessage e))
                    (when (contains? req :id) (reply-err (:id req) -32603 (str (.getMessage e)))))))))
-      (recur)))))
+      (recur))))
