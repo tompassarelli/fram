@@ -15,6 +15,8 @@
 (require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
          '[fram.store :as c] '[fram.schema :as s]
          '[fram.kernel :as ck]
+         '[fram.authority :as authority] '[fram.tools :as tools]
+         '[cheshire.core :as json]
          '[fram.fold :as fold] '[fram.query :as q] '[fram.datalog :as d] '[fram.rt])
 (import '[java.net ServerSocket Socket InetSocketAddress]
         '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
@@ -57,6 +59,77 @@
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
 (def require-log-fence?
   (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
+
+;; A graph edit has only three honest durability states:
+;;   * :healthy — the batch is durably present, OR its exact pre-state plus a
+;;     durably invalidated recovery intent are proven; normal service continues.
+;;   * :poisoned — disk outcome is indeterminate (restore failed, or a still-valid
+;;     replay intent could not be retired). The daemon remains up ONLY as a
+;;     diagnostic surface and refuses every non-diagnostic request. Sole-writer
+;;     boot recovery is the one authority that can resolve this state.
+;;   * :committed-repair-needed — the exact batch is durably present, but a
+;;     critical derived-state transition could not be repaired in-process. Its
+;;     exact retry receipt stays readable; unrelated mutation stops until restart.
+;; This is process state, not a fact in the uncertain log.
+(def edit-durability-state (atom {:state :healthy}))
+(def edit-committed-outcomes (atom {}))
+(def last-edit-outcome (atom nil))
+(def ^:private max-edit-committed-outcomes 64)
+(declare canonical-path)
+
+(defn- poison-edit-durability! [flat phase message]
+  (let [state {:state :poisoned
+               :code :durability-indeterminate
+               :phase phase
+               :log (canonical-path flat)
+               :journal (str (canonical-path flat) ".edit-batch")
+               :message (str message)
+               :at-ms (System/currentTimeMillis)}]
+    (reset! edit-durability-state state)
+    state))
+
+(defn- require-edit-repair! [flat phase message receipt]
+  (let [state {:state :committed-repair-needed
+               :code :committed-repair-needed
+               :phase phase
+               :log (canonical-path flat)
+               :message (str message)
+               :receipt (select-keys receipt [:candidate :batch :module :path
+                                              :base-version :version :ops :installed
+                                              :ops-digest :edn-digest])
+               :at-ms (System/currentTimeMillis)}]
+    (reset! edit-durability-state state)
+    state))
+
+(defn- effective-request-op [req]
+  (if (= :for-log (:op req)) (get-in req [:request :op]) (:op req)))
+
+(def ^:private durability-diagnostic-ops
+  ;; These never read or mutate the uncertain disk tail. :edit-protocol and
+  ;; :status expose the poison/repair record so both new and already-running
+  ;; clients have an explicit stop signal. :edit-commit reaches its own receipt-
+  ;; first admission gate, which returns an already-committed exact retry before
+  ;; rejecting any unrelated candidate. Everything else fails closed.
+  #{:version :version-free :status :edit-protocol :reload-status :edit-commit})
+
+(defn- durability-stop-rejection [req]
+  (let [state @edit-durability-state]
+    (when (and (#{:poisoned :committed-repair-needed} (:state state))
+               (not (durability-diagnostic-ops (effective-request-op req))))
+      {:reject [(if (= :poisoned (:state state))
+                  (str "coordinator durability is INDETERMINATE and POISONED at "
+                       (name (:phase state)) "; no retry or further mutation is safe in this"
+                       " process. Stop it and restart against " (:log state)
+                       " so sole-writer recovery can deterministically resolve the sealed intent")
+                  (str "a graph edit is durably COMMITTED but coordinator repair is required at "
+                       (name (:phase state)) "; DO NOT RETRY the edit or perform further mutation"
+                       " in this process. Restart against " (:log state)
+                       " to rebuild derived state from the canonical committed log"))]
+       :code (if (= :poisoned (:state state))
+               :durability-poisoned
+               :committed-repair-needed)
+       :durability state
+       :version (when @co (current-seq @co))})))
 
 ;; Canonical corpus identity for the log-fenced wire envelope. Clients that know
 ;; which physical log they intend to use send:
@@ -2116,32 +2189,16 @@
             (flush-flat-batch!)))
         (count edges)))))
 
-;; do-edit-min: run the verb over a CLONE, harvest its minimal delta as wire ops, and
-;; commit those through do-assert/do-retract on the REAL `co`. te-naming for new nodes
-;; is assigned here (the verb mints nameless local entities on the clone).
-(defn- do-edit-min* [spec expected-log fenced?]
-  (let [module (:module spec)]
-    (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
-    ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
-    ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
-    ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
-    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
-      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-comment, rename, delete, reorder, replace-in-body)")
-                      {:reject :unknown-verb})))
-    ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
-    ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
-    ;; persisted HERE before the rename so a cold re-render resolves them by IDENTITY, not by spelling
-    ;; (the old failure: coord_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
-    ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
-    ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
-    ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
-    ;; #(a) rename-identity is persisted INSIDE the commit dlock below (ONE acquisition) —
-    ;; NOT in a separate dlock here. A separate lock would leave a lock-free window (the verb
-    ;; compute) in which a concurrent agent could commit a NEW reference AFTER the snapshot but
-    ;; BEFORE the rename commits, landing it with no identity edge (the red-team's snapshot-window
-    ;; race). Folded into the commit lock so persist + rename are atomic.
-    (let [real   (:store @co)
-          clone  (atom @real)                       ; O(1) structural clone; verb writes here only
+;; edit-min-compute: run the verb over a DISCARDABLE clone of store snapshot `snap`
+;; and harvest the minimal wire delta. NO canonical state is touched here — the
+;; clone is thrown away, nothing is appended, `co` is never written; the only
+;; global consumed is a transient name-int reservation (monotonic, collision-free
+;; by construction, harmless to burn). Throws ex-info when the verb rejects.
+;; ONE compute phase shared by the legacy :edit-min commit (do-edit-min*) and the
+;; graph-edit-candidate-v1 :edit-prepare (which seals the harvest WITHOUT committing).
+(defn- edit-min-compute [spec snap]
+  (let [module (:module spec)
+        clone  (atom snap)                          ; O(1) structural clone; verb writes here only
           since  (:next-id @clone)
           ;; SCOPE the verb's frame build to the edited module(s) for the single-module
           ;; verbs (set-body/upsert-form read ONLY their own module's def-binding/frame).
@@ -2227,7 +2284,37 @@
                                 (when-let [vcl (get (:facts m) vcid)]
                                   (when (ast-pred-str? (c/literal clone (:p vcl)))
                                     (->wire vcl))))
-                              victim-cids))
+                              victim-cids))]
+      (when (= "1" (System/getenv "FRAM_PROF"))
+        (binding [*out* *err*] (println (format "PROF harvest=%.1fms" (/ (- (System/nanoTime) t-hv) 1e6)))))
+      {:asserts asserts :retracts retracts :new-eids new-eids :name-ints name-ints}))
+
+;; do-edit-min: run the verb over a CLONE (edit-min-compute), harvest its minimal
+;; delta as wire ops, and commit those through do-assert/do-retract on the REAL
+;; `co`. te-naming for new nodes is assigned in the compute phase (the verb mints
+;; nameless local entities on the clone).
+(defn- do-edit-min* [spec expected-log fenced?]
+  (let [module (:module spec)]
+    (when (str/blank? module) (throw (ex-info "edit-min: :module required" {})))
+    ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
+    ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
+    ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
+    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-comment, rename, delete, reorder, replace-in-body)")
+                      {:reject :unknown-verb})))
+    ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
+    ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
+    ;; persisted HERE before the rename so a cold re-render resolves them by IDENTITY, not by spelling
+    ;; (the old failure: coord_rename_spelling_check.clj — old-spelled refs re-derived to nothing and
+    ;; rendered the OLD name). persist-bound-for-rename! is idempotent + appends bound_to to the flat
+    ;; log (durable). Content-hashes (increment (b)) are explicitly OUT of scope: identity is the
+    ;; existing sequential @mod#int. (The text-path CLI rename still works as a same-process projection.)
+    ;; #(a) rename-identity is persisted INSIDE the commit dlock below (ONE acquisition) —
+    ;; NOT in a separate dlock here. A separate lock would leave a lock-free window (the verb
+    ;; compute) in which a concurrent agent could commit a NEW reference AFTER the snapshot but
+    ;; BEFORE the rename commits, landing it with no identity edge (the red-team's snapshot-window
+    ;; race). Folded into the commit lock so persist + rename are atomic.
+    (let [{:keys [asserts retracts new-eids name-ints]} (edit-min-compute spec @(:store @co))
           t-cm (System/nanoTime)]
       ;; commit through the REAL coordinator wire. Retract old edges first, then
       ;; assert leaves (kind/v) before parent fN re-points. Each op is OCC-checked at
@@ -2239,13 +2326,14 @@
       ;; (warm-cache) + append-flat! (flat log) — the two that would corrupt if left
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
-       ;; The identity check and the first possible mutation share this exact
-       ;; commit lock. Computation above stays lock-free; a mismatched request
-       ;; may consume only transient name reservations, never corpus state.
-       (if-let [fence-reject (when fenced?
-                               (log-fence-rejection expected-log))]
-         fence-reject
-         (do
+       (or (durability-stop-rejection {:op :edit-min})
+           ;; The identity check and the first possible mutation share this exact
+           ;; commit lock. Computation above stays lock-free; a mismatched request
+           ;; may consume only transient name reservations, never corpus state.
+           (if-let [fence-reject (when fenced?
+                                   (log-fence-rejection expected-log))]
+             fence-reject
+             (do
            ;; #(a) persist identity UNDER THE SAME lock as the commit (no lock-free window).
            ;; ensure-refers! re-derives fresh refers_to (so a reference a concurrent agent committed
            ;; BEFORE this lock is captured; one arriving AFTER sees the renamed def — old spelling
@@ -2273,14 +2361,1122 @@
                    (when (:reject res) (reset! rej {:op :assert :te te :p p :r r :res res})))))
              (flush-flat-batch!))                          ; ONE fsync for the whole commit's appends
             (when (= "1" (System/getenv "FRAM_PROF"))
-              (binding [*out* *err*] (println (format "PROF harvest=%.1fms commit=%.1fms" (/ (- t-cm t-hv) 1e6) (/ (- (System/nanoTime) t-cm) 1e6)))))
+              (binding [*out* *err*] (println (format "PROF commit=%.1fms" (/ (- (System/nanoTime) t-cm) 1e6)))))
             (if @rej
               {:reject (:res @rej) :failed-op @rej :module module}
               {:ok true :module module
                :asserts (count asserts) :retracts (count retracts)
                :ops (+ (count asserts) (count retracts))
                :new-nodes (count new-eids) :name-ints name-ints
-               :version (current-seq @co)}))))))))
+               :version (current-seq @co)})))))))))
+
+;; ============================================================================
+;; graph-edit-candidate-v1 — the ATOMIC CANDIDATE GATE (:edit-prepare/:edit-commit).
+;; ============================================================================
+;; Corrects the two audited :edit-min authoring defects:
+;;   (1) COMMIT-BEFORE-CHECK — :edit-min made the delta durable, then the MCP
+;;       edge rendered + Beagle-checked AFTER the fact: a failing check left
+;;       broken canonical state ("your edit COMMITTED but no longer parses").
+;;   (2) NAIVE PATH — the rendered view targeted FRAM_SRC/<module>.bclj, so a
+;;       nested module (src.fram.world) produced a ROOT-LEVEL src.fram.world.bclj
+;;       artifact instead of updating its tracked src/fram/world.bclj.
+;; The protocol:
+;;   :edit-prepare {:spec <edit-min spec>} — LOCK-FREE, ZERO canonical writes.
+;;     * resolves the module's ONE tracked source path from the SEALED graph
+;;       file fact (@<mod>#root `file`); missing/ambiguous reject here, before
+;;       any verb work (client-side the path is additionally confined under the
+;;       canonical FRAM_SRC root — absolute, canonical, inside-root).
+;;     * runs the verb over a discardable exact-version clone (edit-min-compute)
+;;       and SEALS the harvested wire ops (order + PENDING-tie allocation final).
+;;     * REHEARSES the sealed ops on a second exact clone through the SAME
+;;       kernel wire the install uses — an op that cannot apply rejects here.
+;;     * projects the candidate module EDN from the rehearsed clone (what the
+;;       client renders + parse/type-checks IS what the install will produce).
+;;     * returns {:candidate <id> :version V :path P :edn ... :ops-digest
+;;       :edn-digest ...}; the sealed candidate is retained SERVER-SIDE — the
+;;       client can never substitute ops between prepare and commit.
+;;   :edit-commit {:candidate id :version V :module M :path P :ops-digest
+;;                 :edn-digest [:src-root R]} — under dlock:
+;;     * revalidates log fence (envelope), candidate identity, BOTH digests, the
+;;       exact version CAS (current == prepare version), and a FRESH tracked-path
+;;       resolution (+ optional src-root confinement echo). Any mismatch is a
+;;       typed rejection with ZERO canonical operations.
+;;     * applies the sealed ops to an INSTALL CLONE; any op rejection (or the
+;;       env-gated injected-failure test seam, at ANY operation boundary)
+;;       discards the clone — typed rejection, zero canonical operations.
+;;     * installs durably: durable-barrier -> journal = durable RECOVERY INTENT
+;;       (temp + atomic rename + dir fsync; bound to the canonical log identity
+;;       and exact pre-state digest) -> whole-batch append via group commit with
+;;       its ticket AWAITED INSIDE this serialized section — the append's own
+;;       fsync ack IS the commit point -> durable intent removal -> ONE root
+;;       swap. The root/version/projection never advance before the batch is
+;;       known durable. An append/fsync failure (or partial write) earns a typed
+;;       :durability-failure only after exact pre-state restore plus durable
+;;       intent invalidation. If either proof is unavailable, the response is
+;;       :durability-indeterminate and the process poison-stops until sole-writer
+;;       restart recovery. A distinct sealed envelope precedes the exact batch;
+;;       each fact line carries only inert batch identity/index/count metadata.
+;;       Therefore
+;;       a crash after append acknowledgement but before root/receipt publication
+;;       is reconstructed by an exact request after restart. Every operation after
+;;       append acknowledgement is guarded: failure returns COMMITTED with a
+;;       typed warning (or COMMITTED repair-needed), never an ordinary failure.
+;;       Crash/torn-tail safety: an UNREPORTED or indeterminate crash with a sealed
+;;       intent completes the whole batch at boot; an
+;;       already-present BATCH preserves every LATER byte. A torn/foreign/
+;;       rewritten-prefix journal is rejected with the log untouched. Recovery
+;;       runs ONLY at daemon boot under the rewrite gate (sole writer) — never
+;;       from read-only paths.
+;;   :edit-protocol — capability handshake; a restricted MCP profile refuses to
+;;     start against a coordinator that does not answer graph-edit-candidate-v1
+;;     (legacy daemons answer {:error "unknown op"}).
+;; :edit-min stays untouched (CLI fram-edit-code + regression surface); the MCP
+;; warm path no longer calls it.
+;; ============================================================================
+(def edit-protocol-name "graph-edit-candidate-v1")
+(def edit-candidates (atom {}))          ; id -> sealed candidate (server-side seal)
+(def ^:private max-edit-candidates 16)   ; bounded; stale ones die by version CAS anyway
+(declare publish-edit-journal! remove-edit-journal! restore-log-pre-state!
+         sha256-file-prefix ex->s-err)
+;; env-gated test seam (FRAM_EDIT_INJECT=1 + request flag): force a directory-
+;; fsync failure so the fail-closed durability path is provable end to end.
+;; (def'd here, above its binding site in do-edit-commit; used by fsync-dir! below.)
+(def ^:dynamic *inject-dirsync-fail* false)
+
+(defn- sha256-hex [^String s]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))]
+    (apply str (map #(format "%02x" %) d))))
+
+(defn- base-committed-receipt [cand installed final-version]
+  {:ok true
+   :committed true
+   :code :committed
+   :protocol edit-protocol-name
+   :module (:module cand)
+   :candidate (:id cand)
+   :batch (:id cand)
+   :base-version (:version cand)
+   :version final-version
+   :ops (count (:ops cand))
+   :installed installed
+   :path (:path cand)
+   :ops-digest (:ops-digest cand)
+   :edn-digest (:edn-digest cand)
+   :warnings []
+   :repair-needed false})
+
+(defn- remember-edit-outcome! [receipt]
+  (let [receipt (assoc receipt :recorded-at-ms (System/currentTimeMillis))]
+    (swap! edit-committed-outcomes
+           (fn [m]
+             (let [m (assoc m (:candidate receipt) receipt)]
+               (if (> (count m) max-edit-committed-outcomes)
+                 (dissoc m (:candidate (apply min-key :recorded-at-ms (vals m))))
+                 m))))
+    (reset! last-edit-outcome receipt)
+    receipt))
+
+;; A committed candidate is one CLOSED envelope record followed immediately by
+;; its exact indexed fact rows.  Receipt identity never lives on a fact row: old
+;; or manually-authored facts carrying similarly named inert keys remain ordinary
+;; facts and cannot be interpreted as receipts.  The envelope has no :tx, so the
+;; operation facts remain the sole version clock; fram.rt/read-log validates and
+;; skips only the exact v1 envelope schema.
+(def ^:private edit-batch-fact-keys
+  #{:tx :op :l :p :r :ts :by
+    :fram-edit-batch :fram-edit-index :fram-edit-count})
+
+(defn- canonical-edit-op [row]
+  [(keyword (:op row)) (:l row) (:p row) (:r row)])
+
+(defn- edit-ops-digest [ops]
+  (sha256-hex (pr-str (vec ops))))
+
+(defn- annotate-edit-batch-lines [lines receipt]
+  (let [n (count lines)]
+    (mapv (fn [i line]
+            (let [m (edn/read-string line)
+                  m (assoc m
+                           :fram-edit-batch (:batch receipt)
+                           :fram-edit-index i
+                           :fram-edit-count n)]
+              (str (pr-str m) "\n")))
+          (range n) lines)))
+
+(defn- edit-batch-envelope [flat receipt fact-lines]
+  (let [payload {:fram-edit-envelope fram.rt/edit-batch-envelope-version
+                 :fram-edit-log (canonical-path flat)
+                 :fram-edit-candidate (:candidate receipt)
+                 :fram-edit-batch (:batch receipt)
+                 :fram-edit-module (:module receipt)
+                 :fram-edit-path (:path receipt)
+                 :fram-edit-base-version (:base-version receipt)
+                 :fram-edit-final-version (:version receipt)
+                 :fram-edit-ops (:ops receipt)
+                 :fram-edit-installed (:installed receipt)
+                 :fram-edit-ops-digest (:ops-digest receipt)
+                 :fram-edit-edn-digest (:edn-digest receipt)
+                 :fram-edit-line-count (count fact-lines)
+                 :fram-edit-batch-sha (sha256-hex (apply str fact-lines))}]
+    (assoc payload :fram-edit-seal-sha (fram.rt/edit-batch-envelope-seal payload))))
+
+(defn- edit-batch-envelope-line [flat receipt fact-lines]
+  (str (pr-str (edit-batch-envelope flat receipt fact-lines)) "\n"))
+
+(defn- request-matches-receipt? [req receipt]
+  (and (= (:candidate req) (:candidate receipt))
+       (= (:version req) (:base-version receipt))
+       (= (:module req) (:module receipt))
+       (= (:path req) (:path receipt))
+       (= (:ops-digest req) (:ops-digest receipt))
+       (= (:edn-digest req) (:edn-digest receipt))))
+
+(defn- complete-log-records [flat]
+  ;; Only newline-terminated records are eligible for a receipt.  A final
+  ;; EDN-readable-but-unterminated segment is still a torn tail and is omitted.
+  ;; Physical ordinals retain blank/corrupt/interleaved boundaries so they can
+  ;; never be skipped while proving envelope -> immediate batch contiguity.
+  (let [bs (java.nio.file.Files/readAllBytes (.toPath (java.io.File. ^String flat)))
+        text (String. ^bytes bs java.nio.charset.StandardCharsets/UTF_8)
+        terminated-segments (butlast (str/split text #"\n" -1))]
+    (mapv (fn [ordinal segment]
+            {:ordinal ordinal
+             :line (str segment "\n")
+             :record (when-not (str/blank? segment)
+                       (try (edn/read-string segment) (catch Throwable _ nil)))})
+          (range) terminated-segments)))
+
+(defn- valid-edit-batch-fact-row? [row id n index base]
+  (and (map? row)
+       (= edit-batch-fact-keys (set (keys row)))
+       (= id (:fram-edit-batch row))
+       (= index (:fram-edit-index row))
+       (= n (:fram-edit-count row))
+       (= (+ base index 1) (:tx row))
+       (contains? #{"assert" "retract"} (:op row))
+       (string? (:l row))
+       (string? (:p row))
+       (some? (:r row))
+       (string? (:ts row))
+       (= "coord" (:by row))))
+
+(defn- persisted-edit-outcome [flat req]
+  (when (and flat (:candidate req) (.isFile (java.io.File. ^String flat)))
+    (try
+      (let [id (:candidate req)
+            records (complete-log-records flat)
+            envelopes (->> records
+                           (filter (fn [{m :record}]
+                                     (and (fram.rt/edit-batch-envelope-marker? m)
+                                          (or (= id (:fram-edit-candidate m))
+                                              (= id (:fram-edit-batch m))))))
+                           vec)
+            envelope-record (when (= 1 (count envelopes)) (first envelopes))
+            envelope (:record envelope-record)
+            valid-envelope? (and envelope
+                                 (fram.rt/valid-edit-batch-envelope? envelope)
+                                 (= (canonical-path flat) (:fram-edit-log envelope)))
+            n (when valid-envelope? (:fram-edit-line-count envelope))
+            at (when envelope-record (:ordinal envelope-record))
+            end (when (and at n) (+ at 1 n))
+            contiguous (when (and end (<= end (count records)))
+                         (subvec records (inc at) end))
+            batch-records (->> records
+                               (filter (fn [{m :record}]
+                                         (and (not (fram.rt/edit-batch-envelope-marker? m))
+                                              (= id (:fram-edit-batch m)))))
+                               vec)
+            base (:fram-edit-base-version envelope)
+            rows (mapv :record contiguous)
+            rows-valid? (and valid-envelope?
+                             (= n (count contiguous))
+                             (= (mapv :ordinal contiguous)
+                                (mapv :ordinal batch-records))
+                             (every? true?
+                                     (map-indexed
+                                      (fn [index row]
+                                        (valid-edit-batch-fact-row? row id n index base))
+                                      rows)))
+            ops (when rows-valid? (mapv canonical-edit-op rows))
+            batch-bytes (when rows-valid? (apply str (map :line contiguous)))
+            receipt (when (and rows-valid?
+                               (= (:fram-edit-ops-digest envelope)
+                                  (edit-ops-digest ops))
+                               (= (:fram-edit-batch-sha envelope)
+                                  (sha256-hex batch-bytes)))
+                      (assoc
+                       (base-committed-receipt
+                        {:id id
+                         :module (:fram-edit-module envelope)
+                         :path (:fram-edit-path envelope)
+                         :version base
+                         :ops ops
+                         :ops-digest (:fram-edit-ops-digest envelope)
+                         :edn-digest (:fram-edit-edn-digest envelope)}
+                        n
+                        (:fram-edit-final-version envelope))
+                       :code :committed-recovered
+                       :recovered true
+                       :warnings [{:stage :restart-recovery
+                                   :code :committed-recovered
+                                   :message "durable batch receipt reconstructed from the canonical log envelope"}]))]
+        (when (and receipt (request-matches-receipt? req receipt)) receipt))
+      (catch Throwable _ nil))))
+
+(defn- in-memory-committed-edit-outcome [req]
+  (let [receipt (get @edit-committed-outcomes (:candidate req))]
+    (when (and receipt (request-matches-receipt? req receipt)) receipt)))
+
+(defn- committed-edit-outcome [req]
+  (or (in-memory-committed-edit-outcome req)
+      ;; Disk reconstruction is a restart/healthy-state path. Never reinterpret
+      ;; an unacknowledged tail while this process is durability-poisoned.
+      (when (= :healthy (:state @edit-durability-state))
+        (when-let [receipt (persisted-edit-outcome (some-> @flat-log str) req)]
+          (remember-edit-outcome! receipt)))))
+
+(defn- inject-post-publication! [req stage]
+  (when (and (= "1" (System/getenv "FRAM_EDIT_INJECT"))
+             (or (= stage (:inject-post-publication-at req))
+                 (= stage (:inject-post-publication-permanent-at req))))
+    (throw
+     (ex-info (if (= stage :notify)
+                "forced post-publication notification failure"
+                (str "injected post-publication failure at " (name stage)))
+              {:code :injected-post-publication-failure :stage stage}))))
+
+(defn- post-publication-warning [stage t recovered?]
+  {:stage stage
+   :code (or (:code (ex-data t)) :post-publication-failure)
+   :message (or (.getMessage ^Throwable t) (.getSimpleName (class t)))
+   :recovered (boolean recovered?)})
+
+(defn- run-post-publication-step!
+  [req flat receipt warnings stage critical? retry? f]
+  (try
+    (inject-post-publication! req stage)
+    (f)
+    true
+    (catch Throwable first-error
+      (let [retry-error (when retry?
+                          (try
+                            ;; The ordinary seam fails only the first attempt so
+                            ;; idempotent recovery is exercised. This stronger
+                            ;; seam proves the externally visible repair-stop path.
+                            (when (= stage (:inject-post-publication-permanent-at req))
+                              (inject-post-publication! req stage))
+                            (f)
+                            nil
+                            (catch Throwable t t)))
+            recovered? (and retry? (nil? retry-error))
+            warning (post-publication-warning stage first-error recovered?)]
+        (swap! warnings conj
+               (cond-> warning
+                 retry-error
+                 (assoc :recovery-message
+                        (or (.getMessage ^Throwable retry-error)
+                            (.getSimpleName (class retry-error))))))
+        (when (and critical? (not recovered?))
+          (require-edit-repair!
+           flat stage
+           (str (:message warning)
+                (when retry-error (str "; recovery failed: " (:recovery-message (last @warnings)))))
+           receipt))
+        recovered?))))
+
+(defn- finalize-committed-edit!
+  [req cand co3 events flat receipt]
+  (let [warnings (atom (vec (:warnings receipt)))
+        cleanup-first? (atom true)
+        dirty-tes (vec (distinct (keep (fn [[_ te p _]]
+                                         (when-not (read-hidden-preds p) te))
+                                       (:ops cand))))]
+    ;; Source order is intentional and is mirrored exactly by the candidate
+    ;; receipt. Every state transition is either completed, retried idempotently,
+    ;; or converted to an explicit committed-repair-needed admission stop.
+    (run-post-publication-step!
+     req flat receipt warnings :outcome-record true true
+     #(remember-edit-outcome! receipt))
+    (run-post-publication-step!
+     req flat receipt warnings :journal-retire true true
+     #(remove-edit-journal!
+       flat
+       (when (compare-and-set! cleanup-first? true false)
+         (:inject-cleanup-fail-at req))))
+    (run-post-publication-step!
+     req flat receipt warnings :root-swap true true
+     #(reset! (:store @co) @(:store co3)))
+    (run-post-publication-step!
+     req flat receipt warnings :index-cache-invalidate true true
+     #(swap! cache assoc :version -1))
+    (run-post-publication-step!
+     req flat receipt warnings :wire-cache-invalidate true true
+     #(reset! facts-wire-cache {:version -1 :triples nil}))
+    (run-post-publication-step!
+     req flat receipt warnings :mark-dirty true true
+     #(doseq [te dirty-tes] (mark-dirty! te)))
+    ;; Notifications are at-most-once. Retrying a partially delivered fanout can
+    ;; duplicate events, so failure is a typed non-repair warning, never replay.
+    (run-post-publication-step!
+     req flat receipt warnings :notify false false
+     #(doseq [ev events] (notify-subs! ev)))
+    (run-post-publication-step!
+     req flat receipt warnings :candidate-retire false true
+     #(swap! edit-candidates dissoc (:id cand)))
+    (let [warnings*
+          (try
+            (inject-post-publication! req :warning-aggregation)
+            (vec @warnings)
+            (catch Throwable t
+              (conj (vec @warnings)
+                    (post-publication-warning :warning-aggregation t true))))
+          repair? (= :committed-repair-needed (:state @edit-durability-state))
+          build-response
+          (fn [ws]
+            (assoc receipt
+                   :code (cond repair? :committed-repair-needed
+                               (seq ws) :committed-with-warning
+                               :else :committed)
+                   :warnings (vec ws)
+                   :warning-count (count ws)
+                   :repair-needed repair?
+                   :durability @edit-durability-state))
+          response
+          (try
+            (inject-post-publication! req :response-construction)
+            (build-response warnings*)
+            (catch Throwable t
+              ;; This literal fallback is deliberately simpler than the primary
+              ;; builder: a response-formatting defect may never erase the known
+              ;; durable receipt or reach the socket wrapper as a generic error.
+              (assoc receipt
+                     :code (if repair?
+                             :committed-repair-needed
+                             :committed-with-warning)
+                     :warnings (conj warnings*
+                                     (post-publication-warning
+                                      :response-construction t true))
+                     :warning-count (inc (count warnings*))
+                     :repair-needed repair?
+                     :durability @edit-durability-state)))]
+      (try (remember-edit-outcome! response) (catch Throwable _ nil))
+      response)))
+
+;; sealed op vocabulary: the AST preds a code delta may touch, plus bound_to (the
+;; rename identity migration, sealed INTO the batch so it installs atomically with
+;; the rename instead of as separate pre-writes).
+(defn- candidate-pred-ok? [p] (or (ast-pred-str? p) (= "bound_to" p)))
+
+;; the module's ONE canonical tracked source path from the sealed graph file fact
+;; (@<module>#root `file` <path>). {:path p} | {:reject [..] :code ..}. Read off the
+;; given store snapshot — never off anything the client supplies.
+(defn- tracked-path-of [st module]
+  (let [m @st
+        root-id (s/resolve-name st (str "@" module "#root"))
+        fp (c/value-id st "file")
+        vals (when (and root-id fp)
+               (->> (get (:idx-by-lp m) [root-id fp])
+                    (remove #(contains? (:superseded m) %))
+                    (map #(c/literal st (:r (c/fact-of st %))))
+                    distinct vec))]
+    (cond
+      (empty? vals)
+      {:reject [(str "module '" module "' has no live @" module "#root file fact in the code log (not ingested?)")]
+       :code :no-tracked-path}
+      (> (count vals) 1)
+      {:reject [(str "module '" module "' has " (count vals) " live tracked-path file facts (" (str/join ", " (map pr-str vals)) ") — ambiguous; refuse before mutation")]
+       :code :ambiguous-tracked-path}
+      (not (string? (first vals)))
+      {:reject [(str "module '" module "' tracked-path file fact is not a string literal: " (pr-str (first vals)))]
+       :code :no-tracked-path}
+      :else {:path (first vals)})))
+
+;; apply sealed wire ops IN ORDER to co2 (a throwaway rehearsal clone OR the install
+;; clone) through the SAME kernel wire every commit uses (commit!/retract!). Because
+;; rehearsal and install run this one function over the SAME store value (the version
+;; CAS guarantees it), rehearsal IS a dress rehearsal of the install. inject-at (the
+;; env-gated test seam) forces a rejection at that operation boundary, 0..n inclusive.
+;; -> {:ok {:lines [..] :events [..] :installed-ops [..]}}
+;;    | {:reject r :at i [:op op] :code ..}
+;; installed-ops is the canonical effective candidate: kernel-confirmed
+;; idempotent asserts produce no line/event and are omitted.  Prepare seals this
+;; exact vector, so cold recovery can recompute its digest from persisted fact
+;; rows without storing or guessing discarded no-ops.
+(defn- apply-candidate-ops! [co2 ops base inject-at]
+  (let [n (count ops)]
+    (loop [i 0 lines [] events [] installed-ops []]
+      (cond
+        (and inject-at (= i inject-at))
+        {:reject [(str "injected failure at operation boundary " i " of " n " (FRAM_EDIT_INJECT test seam)")]
+         :at i :code :injected-failure}
+        (= i n) {:ok {:lines lines :events events :installed-ops installed-ops}}
+        :else
+        (let [[verb te p r :as op] (nth ops i)]
+          (if-not (and (#{:assert :retract} verb) (string? te) (string? p) (some? r)
+                       (candidate-pred-ok? p))
+            {:reject [(str "candidate op " i " is outside the sealed AST vocabulary: " (pr-str op))]
+             :at i :op op :code :sealed-vocabulary}
+            (let [res (case verb
+                        :assert  (commit! co2 "coord" te p (kind-of p r) r base)
+                        :retract (retract! co2 "coord" te p r base))]
+              (cond
+                (:reject res) {:reject (:reject res) :at i :op op :code :op-rejected}
+                ;; multi-valued idempotent assert: no line, no event (do-assert parity).
+                (and (= verb :assert) (:idempotent res))
+                (recur (inc i) lines events installed-ops)
+                :else (recur (inc i)
+                             (conj lines (flat-line (name verb) te p r (:ok res)))
+                             (conj events {:event :commit :version (:ok res)
+                                           :op (name verb) :l te :p p :r r})
+                             (conj installed-ops op))))))))))
+
+;; project one module's resolved EDN off a store (read-only; refers_to must already
+;; be current for that module on THIS store). Used by :edit-prepare to project the
+;; rehearsed candidate clone. (The warm :render op keeps its own inline binding —
+;; it also opens a read tx on the REAL store; this one binds read-only over a
+;; throwaway clone and must not touch any real seq-space.)
+(defn- project-module-edn [st module]
+  (let [tmp (str (System/getProperty "java.io.tmpdir") "/fram-projedn-" (System/nanoTime))
+        _   (.mkdirs (java.io.File. ^String tmp))
+        edn-out (str tmp "/resolved-" module ".bclj.edn")]
+    (try
+      (with-resolve-read st
+        (let [the-src (some #(when (= module %) %) resolve/srcs)]
+          (if-not the-src
+            {:error (str "no such module in the corpus: " module) :srcs (vec resolve/srcs)}
+            (do (resolve/extract-file! the-src edn-out)
+                {:edn (slurp edn-out)}))))
+      (finally (.delete (java.io.File. ^String edn-out))
+               (.delete (java.io.File. ^String tmp))))))
+
+;; refresh refers_to for ONE module on a CLONE store (the candidate rehearsal):
+;; scoped strip + scoped walk + seq-space restore — the clone-local mirror of
+;; materialize-refers-scoped!, with no global dirty/export state touched.
+(defn- clone-refresh-refers! [st module]
+  (let [before @st
+        keep-ids (module-node-ids st #{module})]
+    (strip-resolve-facts! st (or keep-ids #{}))
+    (resolve/resolve-modules! st #{module} (fn [] nil))
+    (restore-seq-space! st before)))
+
+;; RENAME identity edges, computed CLONE-SIDE and sealed into the batch: whole-corpus
+;; refers_to over the clone (the same ground-truth walk refers-keyset uses), then the
+;; persist-bound! edge rule (every live reference leaf resolving to a binding NODE and
+;; lacking a durable bound_to) as [:assert leaf "bound_to" target] wire ops. Zero real-
+;; store writes at prepare; the edges install atomically with the rename or not at all.
+(defn- candidate-bound-ops [snap]
+  (let [st (atom snap)
+        before @st]
+    (strip-resolve-facts! st)
+    (resolve/resolve-warm-store! st)
+    (restore-seq-space! st before)
+    (let [REFp (c/value-id st "refers_to")]
+      (if-not REFp
+        []
+        (let [BND     (c/value-id st "bound_to")
+              already (if BND (set (map #(:l (c/fact-of st %)) (c/by-p st BND))) #{})]
+          (->> (c/by-p st REFp)
+               (map #(c/fact-of st %))
+               (filter (fn [cl] (and (integer? (:r cl)) (not (already (:l cl))))))
+               (map (fn [cl] [(:l cl) (:r cl)]))
+               distinct
+               (keep (fn [[leaf B]]
+                       (let [ln (s/name-of st leaf) bn (s/name-of st B)]
+                         (when (and ln bn) [:assert ln "bound_to" bn]))))
+               vec))))))
+
+(defn- do-edit-prepare [req]
+  (try
+    (let [spec (:spec req)
+          module (:module spec)]
+      (when-not (map? spec)
+        (throw (ex-info "edit-prepare: :spec map required" {:reject :invalid-spec})))
+      (when (str/blank? (str module))
+        (throw (ex-info "edit-prepare: :module required" {:reject :invalid-spec})))
+      (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+        (throw (ex-info (str "edit-prepare: unknown verb '" (:op spec) "'") {:reject :unknown-verb})))
+      ;; ONE snapshot deref: the candidate's version, verb clone, rehearsal clone, and
+      ;; tracked path all come from the same immutable store value.
+      (let [snap @(:store @co)
+            v0   (or (:next-seq snap) 0)
+            tp   (tracked-path-of (atom snap) module)]
+        (if (:reject tp)
+          (assoc tp :version v0)
+          (let [{:keys [asserts retracts new-eids]} (edit-min-compute spec snap)
+                asserts (allocate-positions asserts)   ; seal PENDING ties NOW — the sealed ops are final
+                leaf? (fn [[_ p _]] (#{"kind" "v"} p))
+                proposed-ops (vec (concat
+                                   (when (= "rename" (:op spec)) (candidate-bound-ops snap))
+                                   (map (fn [[te p r]] [:retract te p r]) retracts)
+                                   (map (fn [[te p r]] [:assert te p r])
+                                        (concat (filter leaf? asserts) (remove leaf? asserts)))))
+                co2 {:store (atom snap) :log nil :lock (Object.)}
+                ap (apply-candidate-ops! co2 proposed-ops v0 nil)
+                ap (if (:reject ap) ap
+                       (try (clone-refresh-refers! (:store co2) module)
+                            (assoc ap :edn (project-module-edn (:store co2) module))
+                            (catch Throwable t {:reject [(str "candidate projection failed: " (.getMessage t))]
+                                                :code :candidate-render-failed})))]
+            (cond
+              (:reject ap)
+              (merge {:reject (:reject ap) :version v0}
+                     (select-keys ap [:at :op :code]))
+              (:error (:edn ap))
+              {:reject [(str "candidate projection failed: " (:error (:edn ap)))]
+               :code :candidate-render-failed :version v0}
+              :else
+              (let [edn-str (:edn (:edn ap))
+                    ops (get-in ap [:ok :installed-ops])
+                    id (str (java.util.UUID/randomUUID))
+                    ops-digest (sha256-hex (pr-str ops))
+                    edn-digest (sha256-hex edn-str)
+                    cand {:id id :module module :verb (:op spec) :ops ops :version v0
+                          :path (:path tp) :ops-digest ops-digest :edn-digest edn-digest
+                          :created (System/currentTimeMillis)}]
+                (swap! edit-candidates
+                       (fn [cm] (let [cm (assoc cm id cand)]
+                                  (if (> (count cm) max-edit-candidates)
+                                    (dissoc cm (:id (apply min-key :created (vals cm))))
+                                    cm))))
+                {:ok true :protocol edit-protocol-name :candidate id :module module
+                 :version v0 :path (:path tp) :edn edn-str
+                 :ops-digest ops-digest :edn-digest edn-digest
+                 :ops (count ops)
+                 :asserts (count (filter #(= :assert (first %)) ops))
+                 :retracts (count (filter #(= :retract (first %)) ops))
+                 :new-nodes (count new-eids)}))))))
+    (catch Throwable t
+      (let [d (ex-data t)
+            msg (or (not-empty (str (.getMessage t))) (:message d)
+                    (str "internal error: " (.getSimpleName (class t))))]
+        (cond-> {:reject [(str "edit-prepare: " msg)]
+                 :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
+                 :version (current-seq @co)}
+          (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
+
+(defn- do-edit-commit [req expected-log fenced?]
+  (locking dlock
+    (or (committed-edit-outcome req)
+        (durability-stop-rejection req)
+        (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
+          fence-reject
+          (let [id (:candidate req)
+            cand (get @edit-candidates id)
+            head (current-seq @co)
+            fail (fn [code & msg] {:reject [(apply str msg)] :code code :version head})]
+        (cond
+          (not @flat-log)
+          (fail :unsupported-mode "edit-commit requires drop-in (flat-log) mode")
+          (nil? cand)
+          (fail :unknown-candidate "unknown candidate " (pr-str id) " (expired, already installed, or never prepared)")
+          (not= (:module req) (:module cand))
+          (fail :candidate-mismatch "candidate module " (pr-str (:module cand)) " != request module " (pr-str (:module req)))
+          (not= (:version req) (:version cand))
+          (fail :candidate-mismatch "candidate version " (:version cand) " != request version " (pr-str (:version req)))
+          (not= (:ops-digest req) (:ops-digest cand))
+          (fail :digest-mismatch "ops-digest mismatch — the request does not describe the sealed candidate")
+          (not= (:edn-digest req) (:edn-digest cand))
+          (fail :digest-mismatch "edn-digest mismatch — what was checked is not what this candidate installs")
+          (not= (:path req) (:path cand))
+          (fail :path-mismatch "candidate tracked path " (pr-str (:path cand)) " != request path " (pr-str (:path req)))
+          ;; THE CAS — exact-version install: any interleaved commit rejects the batch whole.
+          (not= head (:version cand))
+          (do (swap! edit-candidates dissoc id)
+              (fail :stale-version "stale candidate: prepared at version " (:version cand)
+                    " but canonical is " head " — re-prepare against the current version"))
+          :else
+          (let [tp (tracked-path-of (:store @co) (:module cand))]
+            (cond
+              (:reject tp) (assoc tp :version head)
+              (not= (:path tp) (:path cand))
+              (fail :path-mismatch "tracked path moved since prepare: " (pr-str (:path tp)) " != sealed " (pr-str (:path cand)))
+              (and (string? (:src-root req))
+                   (not (str/starts-with? (str (:path cand)) (str (:src-root req) "/"))))
+              (fail :path-unconfined "tracked path " (:path cand) " lies OUTSIDE the declared source root " (:src-root req))
+              :else
+              (let [snap @(:store @co)
+                    co3 {:store (atom snap) :log nil :lock (Object.)}
+                    inject (when (= "1" (System/getenv "FRAM_EDIT_INJECT")) (:inject-fail-at req))
+                    ap (apply-candidate-ops! co3 (:ops cand) (:version cand) inject)]
+                (if (:reject ap)
+                  (do (swap! edit-candidates dissoc id)
+                      (merge {:reject (:reject ap) :version (current-seq @co)}
+                             (select-keys ap [:at :op :code])))
+                  (let [{raw-lines :lines events :events installed-ops :installed-ops} (:ok ap)
+                        _ (when-not (= (:ops cand) installed-ops)
+                            (throw (ex-info "effective candidate operations changed between prepare and commit"
+                                            {:code :candidate-effective-ops-mismatch})))
+                        flat (str @flat-log)
+                        inject? (= "1" (System/getenv "FRAM_EDIT_INJECT"))
+                        final-version (current-seq co3)
+                        receipt (base-committed-receipt cand (count raw-lines) final-version)
+                        fact-lines (annotate-edit-batch-lines raw-lines receipt)
+                        lines (into [(edit-batch-envelope-line flat receipt fact-lines)] fact-lines)
+                        ;; DURABLE ATOMIC INSTALL. Order: (1) barrier — every previously
+                        ;; enqueued append is on disk, so the intent's :pre-bytes/:pre-sha
+                        ;; describe the exact pre-state; (2) durable RECOVERY INTENT
+                        ;; (temp + atomic rename + dir fsync, bound to the canonical log
+                        ;; identity + exact pre-state digest) — NOT the commit point: an
+                        ;; unreported crash from here redoes the whole batch at boot;
+                        ;; (3) whole-batch append via
+                        ;; group commit, ticket awaited INLINE — the append's fsync ack
+                        ;; IS the commit point; (4) durable intent removal (post-commit;
+                        ;; a failure here cannot un-commit — boot redo is byte-exact
+                        ;; idempotent); (5) ONE root swap, only after durability is
+                        ;; KNOWN. On append/fsync failure or partial write, a typed
+                        ;; :durability-failure is definitive ONLY after exact pre-state
+                        ;; restore (truncate + fsync + digest verify) and durable intent
+                        ;; invalidation. Otherwise return :durability-indeterminate,
+                        ;; poison-stop the process, and leave the sealed intent to boot
+                        ;; recovery. Lock-free readers see the pre state until the single
+                        ;; reset! — never a partial batch.
+                        durable
+                        (let [cleanup-at (when inject? (:inject-cleanup-fail-at req))
+                                ;; Conservative source-order oracle for the outer
+                                ;; catch. Once publication starts, no unexpected
+                                ;; exception may be called a definitive failure
+                                ;; until replay has been durably invalidated.
+                                durability-stage (atom :before-intent)
+                                indeterminate
+                                (fn [phase msg]
+                                  (let [state (poison-edit-durability! flat phase msg)]
+                                    {:reject [(str "DURABILITY INDETERMINATE — outcome is not a definitive"
+                                                   " failure and MUST NOT be retried in this process: " msg
+                                                   ". Coordinator is POISONED; stop and restart for"
+                                                   " sole-writer recovery")]
+                                     :code :durability-indeterminate
+                                     :durability state}))
+                                failed
+                                (fn [msg]
+                                  {:reject [(str "durable install failed with the batch proven absent: " msg)]
+                                   :code :durability-failure})]
+                            (try
+                              (durable-barrier!)
+                              (let [pre (.length (java.io.File. ^String flat))
+                                    pre-sha (sha256-file-prefix flat pre)
+                                    pub-err
+                                    (try
+                                      (binding [*inject-dirsync-fail*
+                                                (boolean (and inject? (:inject-dirsync-fail req)))]
+                                        (reset! durability-stage :intent-may-replay)
+                                        (publish-edit-journal! flat lines pre))
+                                      nil
+                                      (catch Throwable t t))]
+                                (if pub-err
+                                  ;; Publication can fail after ATOMIC_MOVE but before
+                                  ;; directory fsync, so prove the intent invalid before
+                                  ;; claiming the batch (which never touched the log) failed.
+                                  (let [retire-err (try (remove-edit-journal! flat) nil
+                                                        (catch Throwable t t))
+                                        retired? (or (nil? retire-err)
+                                                     (= false (:intent-valid? (ex-data retire-err))))]
+                                    (when retired? (reset! durability-stage :intent-invalid))
+                                    (if (and retire-err
+                                             (not= false (:intent-valid? (ex-data retire-err))))
+                                      (indeterminate :intent-publication
+                                                     (str (.getMessage ^Throwable pub-err)
+                                                          "; valid intent retirement also failed: "
+                                                          (.getMessage ^Throwable retire-err)))
+                                      (failed (str "intent publication rejected before log append ("
+                                                   (.getMessage ^Throwable pub-err) ")"
+                                                   (when retire-err
+                                                     (str "; invalid intent cleanup incomplete ("
+                                                          (.getMessage ^Throwable retire-err) ")"))))))
+                                  (try
+                                    (when (and inject? (:inject-durable-fail req))
+                                      ;; Simulate the appender landing a PARTIAL
+                                      ;; batch and then failing before a durable ack.
+                                      (let [payload (.getBytes ^String (apply str lines) "UTF-8")
+                                            cut (max 1 (quot (alength payload) 2))]
+                                        (with-open [os (java.io.FileOutputStream. flat true)]
+                                          (.write os payload 0 cut))
+                                        (throw (ex-info (str "injected durable-append failure after a partial write of "
+                                                             cut " bytes (FRAM_EDIT_INJECT test seam)")
+                                                        {:code :injected-durable-failure}))))
+                                    ;; THE COMMIT POINT: this call returns only
+                                    ;; after this exact batch append+fsync succeeds.
+                                    (binding [*durable-tickets* nil]
+                                      (enqueue-durable! flat (vec lines)
+                                                        (fn [flush]
+                                                          (advance-owned-append-stamp!
+                                                           flat-mtime flush))))
+                                    (reset! durability-stage :batch-committed)
+                                    ;; Hard crash seam: the self-identifying batch is
+                                    ;; fsynced, but no in-memory receipt/root and no
+                                    ;; journal retirement have happened yet.
+                                    (when (and inject? (:inject-crash-after-append-ack req))
+                                      (.halt (Runtime/getRuntime) 86))
+                                    {:ok true}
+                                    (catch Throwable append-err
+                                      ;; No durable ack: only exact restore followed
+                                      ;; by proven invalidation earns a definitive
+                                      ;; failure. Every other state poisons the process.
+                                      (let [restore-err
+                                            (try (restore-log-pre-state!
+                                                  flat pre pre-sha
+                                                  (boolean (and inject? (:inject-restore-fail req))))
+                                                 nil
+                                                 (catch Throwable t t))]
+                                        (if restore-err
+                                          (indeterminate :pre-state-restore
+                                                         (str (.getMessage ^Throwable append-err)
+                                                              "; exact pre-state restore failed: "
+                                                              (.getMessage ^Throwable restore-err)
+                                                              "; sealed intent retained as recovery authority"))
+                                          (let [retire-err
+                                                (try (remove-edit-journal! flat cleanup-at) nil
+                                                     (catch Throwable t t))
+                                                retired? (or (nil? retire-err)
+                                                             (= false (:intent-valid? (ex-data retire-err))))]
+                                            (when retired? (reset! durability-stage :intent-invalid))
+                                            (if (and retire-err
+                                                     (not= false (:intent-valid? (ex-data retire-err))))
+                                              (indeterminate :intent-retirement
+                                                             (str (.getMessage ^Throwable append-err)
+                                                                  "; pre-state restored but a valid replay intent"
+                                                                  " may survive: "
+                                                                  (.getMessage ^Throwable retire-err)))
+                                              (failed (str (.getMessage ^Throwable append-err)
+                                                           "; exact pre-state restored and intent "
+                                                           (if retire-err
+                                                             (str "durably invalidated (later cleanup incomplete: "
+                                                                  (.getMessage ^Throwable retire-err) ")")
+                                                             "durably retired")))))))))))
+                              (catch Throwable unexpected
+                                (if (= :batch-committed @durability-stage)
+                                  ;; The exact self-identifying batch is already
+                                  ;; fsynced. Never relabel this as a failure.
+                                  {:ok true
+                                   :post-commit-unexpected unexpected}
+                                  (if (= :intent-may-replay @durability-stage)
+                                  (indeterminate :unexpected-durability-transition
+                                                 (str "unexpected failure at "
+                                                      (name @durability-stage) ": "
+                                                      (.getMessage ^Throwable unexpected)))
+                                  ;; :before-intent means this batch has no replay
+                                  ;; authority; :intent-invalid means retirement
+                                  ;; already proved it cannot replay after restart.
+                                  (failed (str "pre-state/replay absence is proven after unexpected "
+                                               (name @durability-stage) " failure: "
+                                               (.getMessage ^Throwable unexpected))))))))]
+                    (if-not (:ok durable)
+                      (do (swap! edit-candidates dissoc id)
+                          (merge {:version (current-seq @co)} durable))
+                      (let [receipt (if-let [t (:post-commit-unexpected durable)]
+                                      (assoc receipt
+                                             :code :committed-with-warning
+                                             :warnings [(post-publication-warning
+                                                         :durable-transition t false)])
+                                      receipt)]
+                        (finalize-committed-edit! req cand co3 events flat receipt))))))))))))))
+
+(defn- edit-commit-response [req expected-log fenced?]
+  (try
+    (do-edit-commit req expected-log fenced?)
+    (catch Throwable t
+      ;; Last-resort protocol boundary: if the durable self-identifying batch is
+      ;; already present, an exception from any overlooked post-publication path
+      ;; is a COMMITTED repair warning, never a generic socket error/rejection.
+      (if-let [receipt (committed-edit-outcome req)]
+        (let [warning (post-publication-warning :protocol-response-wrapper t false)
+              state (require-edit-repair! (str @flat-log)
+                                          :protocol-response-wrapper
+                                          (:message warning)
+                                          receipt)
+              response (assoc receipt
+                              :code :committed-repair-needed
+                              :committed true
+                              :ok true
+                              :warnings (conj (vec (:warnings receipt)) warning)
+                              :warning-count (inc (count (:warnings receipt)))
+                              :repair-needed true
+                              :durability state)]
+          (try (remember-edit-outcome! response) (catch Throwable _ nil))
+          response)
+        (throw t)))))
+
+;; ---- the batch journal (crash/torn-tail safety) -----------------------------
+;; The journal is durable RECOVERY INTENT for one atomic batch — NOT an
+;; acknowledged commit by itself. It binds to the canonical log identity
+;; (:log, the canonical path) and the exact pre-state digest (:pre-sha over the
+;; first :pre-bytes bytes), so boot recovery redoes a batch ONLY onto the log
+;; it was sealed for, in the exact state it was sealed against. A sidecar
+;; copied beside another log, or a log whose prefix was rewritten, is REJECTED
+;; and that log stays byte-identical. Publication and removal are directory-
+;; durable: same-directory temp + atomic rename + parent fsync on publish;
+;; invalidate + delete + parent fsync on removal. Unsupported durability
+;; primitives (no atomic move, no directory fsync) FAIL CLOSED with a typed
+;; error instead of claiming a guarantee.
+(defn- edit-journal-path [flat] (str flat ".edit-batch"))
+
+(defn- fsync-dir! [dir]
+  ;; Directory durability: force the containing directory so a just-published
+  ;; rename (or a just-removed entry) survives power loss. bb + JVM both open a
+  ;; directory READ on Linux; where the platform cannot (open or force throws),
+  ;; this FAILS CLOSED with a typed error — callers must not claim durability
+  ;; they did not observe.
+  (when *inject-dirsync-fail*
+    (throw (ex-info (str "injected directory-fsync failure on " dir " (FRAM_EDIT_INJECT test seam)")
+                    {:code :injected-dirsync-failure})))
+  (try
+    (with-open [ch (java.nio.channels.FileChannel/open
+                    (.toPath (java.io.File. (str dir)))
+                    (into-array java.nio.file.OpenOption [java.nio.file.StandardOpenOption/READ]))]
+      (.force ch true))
+    (catch Throwable t
+      (throw (ex-info (str "directory durability (fsync) failed/unsupported on " dir ": " (.getMessage t))
+                      {:code :dir-durability-unsupported} t)))))
+
+(defn- sha256-file-prefix
+  ;; streaming SHA-256 of the first n bytes of path (the exact pre-state digest
+  ;; the journal binds to). Throws if the file is shorter than n.
+  [path n]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        buf (byte-array 65536)]
+    (with-open [in (java.io.FileInputStream. (str path))]
+      (loop [remaining (long n)]
+        (if (zero? remaining)
+          (apply str (map #(format "%02x" %) (.digest md)))
+          (let [want (int (min remaining (long (alength buf))))
+                got (.read in buf 0 want)]
+            (when (neg? got)
+              (throw (ex-info (str "log is shorter than the expected " n "-byte prefix") {:code :short-prefix})))
+            (.update md buf 0 got)
+            (recur (- remaining (long got)))))))))
+
+(defn- publish-edit-journal!
+  ;; Durably publish the recovery intent for ONE atomic batch: the canonical
+  ;; log identity, the pre-append length `pre`, the exact pre-state digest, the
+  ;; exact lines, and their digest. Same-directory temp -> fsync -> ATOMIC_MOVE
+  ;; -> parent-directory fsync. Any failure (including an unsupported atomic
+  ;; move or directory fsync) throws typed — the caller rejects the commit;
+  ;; nothing of the batch has touched the main log yet.
+  [flat lines pre]
+  (let [payload (pr-str {:fram-edit-batch 2
+                         :log (canonical-path flat)
+                         :pre-bytes pre
+                         :pre-sha (sha256-file-prefix flat pre)
+                         :lines (vec lines)
+                         :sha (sha256-hex (apply str lines))})
+        jf  (java.io.File. ^String (edit-journal-path flat))
+        dir (or (.getParent jf) ".")
+        tmp (java.io.File. ^String (str (edit-journal-path flat) ".tmp"))]
+    (try
+      (with-open [fos (java.io.FileOutputStream. tmp)]
+        (.write fos (.getBytes payload "UTF-8"))
+        (.force (.getChannel fos) true))                 ; bb-safe fsync (group-appender idiom)
+      (java.nio.file.Files/move
+       (.toPath tmp) (.toPath jf)
+       (into-array java.nio.file.CopyOption
+                   [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                    java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+      (fsync-dir! dir)
+      (catch Throwable t
+        (.delete tmp)
+        (throw (ex-info (str "edit-batch journal publication failed: " (.getMessage t))
+                        {:code (or (:code (ex-data t)) :journal-publication-failed)} t))))))
+
+(defn- remove-edit-journal!
+  ;; Durably retire the recovery intent. INVALIDATE first (truncate + fsync the
+  ;; file): if the unlink below never becomes durable and the directory entry
+  ;; resurrects after a crash, it resurrects INVALID and boot recovery discards
+  ;; it instead of redoing a batch whose outcome was already reported. Then
+  ;; delete + parent-directory fsync.
+  ;;
+  ;; Failure metadata is load-bearing. :intent-valid? true means a valid replay
+  ;; authority may still survive, so a failed append cannot be reported as a
+  ;; definitive failure. false means invalidation was observed durable before
+  ;; the later cleanup failure; retry/restart can never apply the batch from it.
+  ;; fail-at is an env-gated test seam selected by do-edit-commit; direct probes
+  ;; exercise every source-order boundary.
+  ([flat] (remove-edit-journal! flat nil))
+  ([flat fail-at]
+   (let [jf  (java.io.File. ^String (edit-journal-path flat))
+         dir (or (.getParent jf) ".")
+         stage (atom :before-invalidate)
+         valid? (atom (.exists jf))
+         inject! (fn [at]
+                   (when (= fail-at at)
+                     (throw (ex-info (str "injected recovery-intent cleanup failure at " (name at))
+                                     {:code :injected-intent-cleanup-failure :stage at}))))]
+     (try
+       (when (.exists jf)
+         (inject! :before-invalidate)
+         (reset! stage :invalidating)
+         (with-open [fos (java.io.FileOutputStream. jf)] ; truncates to 0 = invalid journal
+           (.force (.getChannel fos) true))
+         ;; Only a successful file force proves that a resurrected directory
+         ;; entry cannot contain the old valid replay intent.
+         (reset! valid? false)
+         (reset! stage :after-invalidate)
+         (inject! :after-invalidate)
+         (java.nio.file.Files/deleteIfExists (.toPath jf))
+         (reset! stage :after-unlink)
+         (inject! :after-unlink))
+       ;; Force the directory even when a prior attempt already unlinked the
+       ;; sidecar. This is the idempotent recovery path for a failure between
+       ;; unlink and its original directory fsync.
+       (fsync-dir! dir)
+       (reset! stage :retired)
+       {:retired true :intent-valid? false :stage @stage}
+       (catch Throwable t
+         (throw (ex-info (str "recovery-intent retirement failed at " (name @stage)
+                              ": " (.getMessage t))
+                         (merge {:code :intent-retirement-failed
+                                 :stage @stage
+                                 :intent-valid? @valid?}
+                                (select-keys (ex-data t) [:injected :at]))
+                         t)))))))
+
+(defn- restore-log-pre-state!
+  ;; Synchronously restore the exact pre-batch state after a failed/partial
+  ;; durable append: truncate to `pre`, fsync, verify, and re-stamp so the
+  ;; daemon's own repair is never mistaken for an external edit. group-io-lock
+  ;; orders this against the appender's write+stamp critical section.
+  ([flat pre] (restore-log-pre-state! flat pre nil false))
+  ([flat pre inject-fail?] (restore-log-pre-state! flat pre nil inject-fail?))
+  ([flat pre expected-pre-sha inject-fail?]
+   (locking group-io-lock
+     (when inject-fail?
+       (throw (ex-info "injected exact pre-state restore failure"
+                       {:code :injected-restore-failure})))
+     (with-open [raf (java.io.RandomAccessFile. (java.io.File. ^String flat) "rw")]
+       (.setLength raf (long pre))
+       (.force (.getChannel raf) true))
+     (let [len (.length (java.io.File. ^String flat))]
+       (when (not= (long pre) len)
+         (throw (ex-info (str "pre-state restore verified length " len " != expected " pre)
+                         {:code :restore-verify-failed})))
+       (when (and expected-pre-sha
+                  (not= expected-pre-sha (sha256-file-prefix flat pre)))
+         (throw (ex-info "pre-state restore digest differs from the sealed exact prefix"
+                         {:code :restore-digest-mismatch}))))
+     (reset! flat-mtime (stamp flat)))))
+
+(defn- read-file-region
+  ;; Exact positioned read used by recovery's byte oracle. Returns n bytes or
+  ;; throws; a short read must never be silently treated as a prefix match.
+  [flat offset n]
+  (let [buf (byte-array (int n))]
+    (with-open [raf (java.io.RandomAccessFile. (java.io.File. ^String flat) "r")]
+      (.seek raf (long offset))
+      (loop [at 0]
+        (when (< at (alength buf))
+          (let [got (.read raf buf at (- (alength buf) at))]
+            (when (neg? got)
+              (throw (ex-info (str "short recovery read at " (+ (long offset) at)
+                                   " while reading " n " bytes")
+                              {:code :short-recovery-read})))
+            (recur (+ at got)))))
+      buf)))
+
+(defn- bytes-prefix-of? [^bytes prefix ^bytes whole]
+  (and (<= (alength prefix) (alength whole))
+       (loop [i 0]
+         (or (= i (alength prefix))
+             (and (= (aget prefix i) (aget whole i))
+                  (recur (inc i)))))))
+
+(defn recover-edit-journal!
+  "SOLE-WRITER boot repair for a crashed :edit-commit. Called by serve-flat-daemon
+  BEFORE the boot fold, holding the rewrite gate — NEVER from read-only paths.
+  The v2 recovery intent binds canonical log identity, exact pre-state digest,
+  and exact BATCH bytes. Recovery classifies the bytes after :pre-bytes without
+  truncation: empty/proper BATCH prefix is completed; complete BATCH is kept;
+  complete BATCH+LATER preserves every later byte; any other tail refuses boot
+  with log and valid intent untouched. Foreign, rewritten, torn, and legacy
+  intents are rejected and durably retired with the log byte-identical."
+  [flat]
+  (let [jf (java.io.File. ^String (edit-journal-path flat))
+        discard! (fn [why]
+                   (binding [*out* *err*]
+                     (println (str "[fram] edit-batch journal: " why)))
+                   ;; Never fall back to a non-durable plain unlink: a rejected
+                   ;; intent that can resurrect is not actually rejected.
+                   (try (remove-edit-journal! flat)
+                        (catch Throwable t
+                          (throw (ex-info (str "cannot durably retire rejected recovery intent: "
+                                               (.getMessage t))
+                                          {:code :recovery-retirement-failed} t)))))
+        retire! (fn []
+                  ;; If retirement fails before invalidation, a still-valid
+                  ;; intent is safe: the next boot recognizes BATCH(+LATER),
+                  ;; preserves the later tail, and retries retirement.
+                  (try (remove-edit-journal! flat)
+                       (catch Throwable t
+                         (binding [*out* *err*]
+                           (println (str "[fram] WARNING: recovery intent retirement failed after"
+                                         " byte-exact recovery (" (.getMessage t)
+                                         "); future recovery preserves BATCH+LATER"))))))]
+    (when (.isFile jf)
+      (let [j (try (edn/read-string (slurp jf)) (catch Throwable _ nil))
+            valid? (and (map? j) (= 2 (:fram-edit-batch j))
+                        (string? (:log j)) (string? (:pre-sha j)) (string? (:sha j))
+                        (vector? (:lines j)) (every? string? (:lines j))
+                        (integer? (:pre-bytes j)) (<= 0 (:pre-bytes j))
+                        (= (:sha j) (sha256-hex (apply str (:lines j)))))]
+        (cond
+          (not valid?)
+          (discard! "torn/invalid/legacy journal — discarding (no proven batch to replay; log untouched)")
+
+          (not= (canonical-path flat) (:log j))
+          (discard! (str "journal is bound to a DIFFERENT canonical log (" (pr-str (:log j))
+                         " != " (pr-str (canonical-path flat))
+                         ") — rejecting copied sidecar; log untouched"))
+
+          :else
+          (let [f (java.io.File. ^String flat)
+                pre (long (:pre-bytes j))]
+            (cond
+              (< (.length f) pre)
+              (discard! (str "pre-bytes " pre " exceeds log length " (.length f)
+                             " (external rewrite?) — discarding unapplicable intent"))
+
+              (not= (:pre-sha j) (sha256-file-prefix flat pre))
+              (discard! (str "pre-state digest mismatch over first " pre
+                             " bytes — rejecting rewritten/foreign state; log untouched"))
+
+              :else
+              (let [batch (.getBytes ^String (apply str (:lines j)) "UTF-8")
+                    batch-n (long (alength ^bytes batch))
+                    tail-n (- (.length f) pre)
+                    observed-n (long (min tail-n batch-n))
+                    observed (read-file-region flat pre observed-n)
+                    prefix? (bytes-prefix-of? observed batch)
+                    batch-present? (and (>= tail-n batch-n) prefix?)]
+                (cond
+                  batch-present?
+                  (do
+                    (binding [*out* *err*]
+                      (println (str "[fram] edit-batch journal: batch already present at byte " pre
+                                    "; preserving " (- tail-n batch-n)
+                                    " later bytes and retiring stale intent")))
+                    (retire!))
+
+                  (and (< tail-n batch-n) prefix?)
+                  (do
+                    (binding [*out* *err*]
+                      (println (str "[fram] edit-batch journal: completing atomic batch from byte "
+                                    (+ pre tail-n) " of " flat)))
+                    (with-open [raf (java.io.RandomAccessFile. f "rw")]
+                      ;; Preserve the byte-exact prefix already present; append
+                      ;; only the missing suffix, then force the complete batch.
+                      (.seek raf (+ pre tail-n))
+                      (.write raf batch (int tail-n) (int (- batch-n tail-n)))
+                      (.force (.getChannel raf) true))
+                    (retire!))
+
+                  :else
+                  ;; A valid applicable intent and a non-BATCH tail disagree.
+                  ;; Leave both authorities byte-identical and stop boot.
+                  (throw (ex-info (str "recovery intent conflicts with " tail-n
+                                       " bytes after its exact pre-state; tail is not a prefix of"
+                                       " sealed BATCH — refusing boot without changing log or intent")
+                                  {:code :recovery-tail-conflict
+                                   :log (canonical-path flat)
+                                   :pre-bytes pre
+                                   :tail-bytes tail-n
+                                   :batch-bytes batch-n})))))))))))
 
 (declare maybe-reload!)
 (def ^:dynamic *reload-checked* false)
@@ -2289,7 +3485,7 @@
   ;; must never make their client pay for an unrelated external corpus import.
   ;; The pending physical stamp remains visible to the next freshness-sensitive
   ;; read or fact mutation.
-  #{:version :status :built-through
+  #{:version :version-free :status :edit-protocol :reload-status :built-through
     :acquire-lease :renew-lease :release-lease :fence-ok})
 (def ^:private reload-mutation-ops
   ;; A first fact mutation after an external edit must absorb/validate that edit
@@ -2872,6 +4068,12 @@
   ;; is a no-op in v2-log mode (the code daemon, where :edit-min lives), so skipping it here is
   ;; safe; the commit still serializes under dlock and is OCC-checked per (te,p) at commit time.
   (cond
+    ;; An indeterminate append outcome poisons the process. Diagnostics remain
+    ;; live and expose the reason; every other request stops before reload,
+    ;; compute, or mutation so no later commit can outrun recovery authority.
+    (durability-stop-rejection req)
+    (durability-stop-rejection req)
+
     ;; Query fencing covers only reload/fence validation and capture of one
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
     ;; expensive or abandoned read can never block writes, leases, or status.
@@ -2916,6 +4118,19 @@
                                 (log-fence-rejection expected))]
           fence-reject
           (edit-min-response inner expected true))
+
+        ;; graph-edit-candidate-v1: prepare is LOCK-FREE compute (like :edit-min's
+        ;; compute) behind a cheap fence preflight; it writes NOTHING canonical, so
+        ;; no fence recheck is needed at its end. Commit takes dlock itself and
+        ;; rechecks the fence inside it (do-edit-commit).
+        (= :edit-prepare (:op inner))
+        (if-let [fence-reject (locking dlock
+                                (log-fence-rejection expected))]
+          fence-reject
+          (do-edit-prepare inner))
+
+        (= :edit-commit (:op inner))
+        (edit-commit-response inner expected true)
 
         :else
         (do
@@ -2962,6 +4177,10 @@
        :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + defcheck_gate.clj)"
        :version (current-seq @co)})
     (= :edit-min (:op req)) (edit-min-response req nil false)
+    ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence
+    ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
+    (= :edit-prepare (:op req)) (do-edit-prepare req)
+    (= :edit-commit (:op req)) (edit-commit-response req nil false)
   :else
   (do
     ;; maybe-reload! performs its own two-phase capture/build/install.  It must run
@@ -2969,7 +4188,10 @@
     ;; recursive dispatch from repeating it while the outer fence holds the monitor.
     (when-not *reload-checked* (prepare-request-reload! req))
     (locking dlock                     ; serialize writes + short immutable captures
-     (case (:op req)
+     ;; Recheck after acquiring dlock: a concurrent request may have passed the
+     ;; outer guard before the failing edit poisoned the process.
+     (or (durability-stop-rejection req)
+         (case (:op req)
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       ;; ATOMIC multi-fact publication for ONE subject — all-or-none at every
@@ -3035,6 +4257,13 @@
               (release-lease! @co (:holder req) (:res req) (:epoch req))
               (release-lease! @co (:holder req) (:res req))))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
+      ;; graph-edit-candidate-v1 capability handshake — the restricted MCP profile
+      ;; refuses to start against a daemon that cannot answer this (legacy daemons
+      ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
+      :edit-protocol {:ok true :protocol edit-protocol-name
+                      :durability @edit-durability-state
+                      :last-edit-outcome @last-edit-outcome
+                      :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
@@ -3054,6 +4283,8 @@
       ;; this id are out of rollback support for generation-managed corpora.
       :status   {:version (current-seq @co) :facts (hybrid-fact-count)
                  :log (or @flat-log (:log @co)) :boot @last-boot
+                 :durability @edit-durability-state
+                 :last-edit-outcome @last-edit-outcome
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
@@ -3233,7 +4464,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      {:error "unknown op"})))))
+      {:error "unknown op"}))))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
@@ -3484,6 +4715,22 @@
       (.write w (pr-str m)) (.newLine w) (.flush w)
       (edn/read-string (.readLine r)))))
 
+;; ---- authority generation nonce (see the authority kernel section below) ----
+(defn fresh-instance-id
+  "A non-restorable per-boot generation nonce. Never persisted, so a restart mints
+  a fresh identity that a prior boot's frames cannot name."
+  []
+  (let [b (byte-array 32)]
+    (.nextBytes (java.security.SecureRandom.) b)
+    (str "boot-" (str/join (map #(format "%02x" (bit-and % 0xff)) b)))))
+
+(def authority-instance (atom nil))          ; this boot's live generation nonce
+
+(defn mint-authority-instance!
+  "Mint this boot's generation nonce (called once per boot, after CO is installed)."
+  []
+  (reset! authority-instance (fresh-instance-id)))
+
 ;; ---- boot: replay the v2 log (or bootstrap a fresh one) --------------------
 (defn boot!
   ([log] (boot! log nil))
@@ -3499,6 +4746,7 @@
                   (new-coord log))))
     (reset-refers-state!)                 ; S3.3: fresh store -> next materialize is cold
     (index!)
+    (mint-authority-instance!)            ; fresh, non-restorable per-boot generation nonce
     @co)))
 
 (defn serve-daemon [port log flat]
@@ -3767,12 +5015,16 @@
                       (cond
                         parsed
                         (let [x  (:x parsed)
-                              tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
-                              past? (and tx (> tx (long from-tx)))
-                              m  (when (and past? (:l x) (:p x) (:r x)) x)]
-                          (recur next-i false
-                                 (if m (conj! acc m) acc)
-                                 (if (and past? (> tx mx)) tx mx)))
+                              envelope? (fram.rt/edit-batch-envelope-marker? x)]
+                          (if envelope?
+                            (do (fram.rt/validate-edit-batch-envelope! path abs x)
+                                (recur next-i false acc mx))
+                            (let [tx (when (and (map? x) (int? (:tx x))) (long (:tx x)))
+                                  past? (and tx (> tx (long from-tx)))
+                                  m  (when (and past? (:l x) (:p x) (:r x)) x)]
+                              (recur next-i false
+                                     (if m (conj! acc m) acc)
+                                     (if (and past? (> tx mx)) tx mx)))))
                         ;; unparseable torn tail (no terminating newline): recover + warn once.
                         (not terminated?)
                         (let [recovered (persistent! acc)]
@@ -3994,7 +5246,9 @@
 (defn boot-flat! [flat]
   (when-let [tlog @telemetry-log]
     (reset! telemetry-log (canonical-path tlog)))
-  (boot-flat-canonical! (canonical-path flat)))
+  (let [r (boot-flat-canonical! (canonical-path flat))]
+    (mint-authority-instance!)          ; fresh, non-restorable per-boot generation nonce
+    r))
 
 ;; External flat edits are a two-phase OCC reload.  The writer lock protects only
 ;; capture/install of immutable identities.  Tail I/O, clone mutation, whole-log
@@ -4439,12 +5693,22 @@
   ;; no peer append or generation flip can race between truncating/finalizing an
   ;; unacknowledged tail and observing the repaired bytes. Once serving begins,
   ;; every append re-takes the shared rewrite lock and refuses a non-LF boundary.
+  ;; A fresh process begins healthy; recovery below either deterministically
+  ;; resolves the sole sealed intent or throws before the daemon can serve.
+  (reset! edit-durability-state {:state :healthy})
+  (reset! edit-committed-outcomes {})
+  (reset! last-edit-outcome nil)
   (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
     (try
       (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
         (when-not (= :clean (:state healed))
           (println (str "[fram] boot: healed crashed rewrite on " flat
                         " (" (name (:state healed)) ")"))))
+      ;; A committed graph-edit batch is repaired before generic tail handling:
+      ;; its durable journal determines whether the entire batch is redone or
+      ;; discarded, while the exclusive rewrite lock prevents any peer from
+      ;; observing an intermediate recovery state.
+      (recover-edit-journal! (str flat))
       (repair-flat-corpus-tails! flat)
       (boot-flat! flat)
          (finally (fram.rt/close-rewrite-lock! gate))))
@@ -4536,6 +5800,415 @@
           (canonical-path cl))
 
       :else (canonical-path path))))
+
+;; ============================================================================
+;; graph-edit authority coordinator kernel — thread 019f884c
+;; ----------------------------------------------------------------------------
+;; ONE MEANING PER IDENTITY. The authority layer fences three DISTINCT identities,
+;; with no duplicate source of truth for any one of them:
+;;
+;;   * instanceId — a cryptographically fresh, NON-RESTORABLE per-boot generation
+;;     nonce (256 bits of SecureRandom). It is NEVER written to the log, so a
+;;     restart cannot restore or forge it: every daemon boot is a new authority
+;;     generation. This is the sole process-generation source of truth — no
+;;     separate explicit "generation" field exists or is needed, because the
+;;     nonce already defeats the ABA/restart counterexample (a crashed boot that
+;;     never released its lease, whose epoch cell replay restores byte-for-byte,
+;;     still cannot have its in-flight requests replayed: they name the dead
+;;     boot's nonce).
+;;   * lease.epoch — succession WITHIN one boot. Derived by coord.clj's lease from
+;;     the durable GLOBAL transaction sequence, so it is monotonic and survives
+;;     replay; a renewal or takeover rotates it. It is the append-time fence.
+;;   * connection sequence — each authority-opened TLS connection carries an exact
+;;     monotonic, in-order, exactly-once request sequence beginning at 1.
+;;
+;; Every authority request is gated by ALL THREE before any canonical append, so a
+;; stale-generation (post-restart), stale-epoch (post-renew / takeover / expiry /
+;; tombstone), or out-of-order / replayed frame is rejected with the log head
+;; unchanged. Legacy one-request connections never enter this loop.
+;; fresh-instance-id / authority-instance / mint-authority-instance! are defined
+;; above (they must precede boot!, which mints the nonce on each boot).
+;; ============================================================================
+(defn authority-context
+  "One boot's authority context: the coordinator CO plus the live generation nonce.
+  The daemon builds it from process state; a test opens independent contexts to
+  model successive boots on the SAME log/certs."
+  ([] (authority-context @co @authority-instance))
+  ([co instance] {:co co :instance instance}))
+
+(defn authority-session-open
+  "Open the single exclusive authority session on CTX for RES held by HOLDER
+  (identified by CLIENT-SPKI). Acquires the process-local exclusive lease; a
+  second concurrent opener is rejected (:held). Returns {:ok true :handle H} where
+  H binds this boot's generation nonce, the lease epoch, and a fresh in-order
+  request sequence (an atom starting at 0; the first mutation is sequence 1)."
+  [{:keys [co instance]} res holder client-spki ttl-ms]
+  (let [r (acquire-lease! co holder res ttl-ms)]
+    (if (:ok r)
+      {:ok true
+       :handle {:instance instance :res res :holder holder
+                :client-spki client-spki :epoch (:epoch r) :exp (:exp r)
+                :seq (atom 0)}}
+      r)))
+
+(defn authority-session-renew
+  "Renew the session's lease: rotates ONLY epoch and expiry (plus every derived
+  descriptor/receipt digest). Returns a handle re-bound to the new epoch that
+  shares the SAME connection sequence, so the request stream continues unbroken.
+  A lapse or takeover is terminal (renew never reacquires)."
+  [{:keys [co]} handle ttl-ms]
+  (let [r (renew-lease! co (:holder handle) (:res handle) (:epoch handle) ttl-ms)]
+    (if (:ok r)
+      {:ok true :handle (assoc handle :epoch (:epoch r) :exp (:exp r))}
+      r)))
+
+(defn authority-session-release
+  "Tombstone the session's lease. Old handles then fail the fence; a fresh
+  authority-open acquires a new lease at a strictly newer epoch."
+  [{:keys [co]} handle]
+  (release-lease! co (:holder handle) (:res handle) (:epoch handle)))
+
+(defn authority-session-request
+  "Validate ONE authority request against (generation, sequence, lease-fence) and,
+  only if ALL pass, run ACTION (the fenced canonical mutation) exactly once. Every
+  rejection returns BEFORE any append — the log head is unchanged. REQ carries
+  :instance (claimed generation), :epoch (claimed lease epoch) and :seq (claimed
+  connection sequence). ACTION runs inside with-fence!, so the epoch is re-checked
+  under the coordinator's writer lock, atomic with the append."
+  [{:keys [co instance]} handle req action]
+  (let [req-instance (:instance req)
+        req-epoch    (:epoch req)
+        req-seq      (:seq req)
+        {:keys [res holder]} handle
+        expected-seq (inc @(:seq handle))]
+    (cond
+      ;; (1) GENERATION — the request must name THIS boot's non-restorable nonce.
+      ;; A frame minted under a prior boot (replayed after restart) dies here,
+      ;; before the epoch cell or the append is ever touched.
+      (not= req-instance instance)
+      {:reject :wrong-generation :expected instance :got req-instance
+       :version (current-seq co)}
+
+      ;; (2) SEQUENCE — exact monotonic, in-order, exactly-once. A replayed or
+      ;; out-of-order frame never advances the connection and never appends.
+      (not= req-seq expected-seq)
+      {:reject :out-of-order :expected expected-seq :got req-seq
+       :version (current-seq co)}
+
+      ;; (3) FENCE + APPEND, atomic under the writer lock. with-fence! rejects a
+      ;; stale-epoch / wrong-holder / expired / tombstoned lease, so no mutation
+      ;; can land after the lease is gone. The claimed epoch is validated against
+      ;; the LIVE lease — the single epoch source of truth (no shadow copy).
+      :else
+      (let [result (with-fence! co res holder req-epoch action)]
+        (if (:reject result)
+          result                              ; fence-lost: nothing appended, seq NOT consumed
+          (do (reset! (:seq handle) req-seq)  ; consume the slot -> exactly once
+              {:ok true :seq req-seq :epoch req-epoch :result result}))))))
+
+;; ── live authority descriptor snapshot derivation ───────────────────────────
+;; FRAM strictly derives every descriptor field from the sealed launch boundary
+;; (the Nix-built core manifest + North's launch bindings) and the LIVE coordinator
+;; store — EXCEPT runtime.closureDigest, which stays exactly the North-supplied,
+;; independently verified value FRAM only validates and binds (via the seal). No
+;; field is inferred from ambient JVM/host state. Nothing here activates North,
+;; Gaffer, the SSLSocket serve adapter, a new MCP tool, or an ambient fallback: it
+;; produces the snapshot the (still-dark) authority serve path will seal via the
+;; existing seal-coordinator-descriptor, and is exercised only by tests until that
+;; slice lands. runtime.system comes from the sealed manifest, never the host.
+(def ^:private core-manifest->runtime-seal
+  {"fram.graph-edit-runtime-core/v1" "fram.runtime-seal/v1"})
+(def ^:private tool-catalog-version "fram.graph-edit-tools/v1")
+(def ^:private runtime-root-roles #{"babashka" "beagle" "fram" "jdk" "racket"})
+
+(defn- authority-snapshot-fail! [msg data]
+  (throw (ex-info (str "authority snapshot: " msg) (assoc data :authority/snapshot true))))
+
+(defn- read-sealed-core-manifest!
+  "Parse the Nix-built core manifest JSON at PATH into the exact descriptor runtime
+  inputs. The manifest version selects the runtime seal version; no independent
+  ambient/default seal version exists."
+  [manifest-path]
+  (let [f (java.io.File. (str manifest-path))]
+    (when-not (.isFile f)
+      (authority-snapshot-fail! "sealed core manifest is absent" {:path (str manifest-path)}))
+    (let [m (try (json/parse-string (slurp f) false)
+                 (catch Exception e
+                   (authority-snapshot-fail! "sealed core manifest is not valid JSON"
+                                             {:path (str manifest-path) :cause (str (.getMessage e))})))
+          manifest-version (get m "manifestVersion")
+          seal-version (get core-manifest->runtime-seal manifest-version)
+          system (get m "system")
+          store-roots (get m "storeRoots")
+          roles (when (sequential? store-roots) (mapv #(get % "role") store-roots))
+          roots (when (sequential? store-roots) (mapv #(get % "path") store-roots))]
+      (when-not seal-version
+        (authority-snapshot-fail! "sealed core manifest version has no runtime seal mapping"
+                                  {:path (str manifest-path) :manifest-version manifest-version}))
+      (when-not (and (= "graph-edit-authority-v1" (get m "authorityProfile"))
+                     (= "north" (get m "verificationOwner"))
+                     (false? (get m "selfAttestation"))
+                     (not (contains? m "closureDigest")))
+        (authority-snapshot-fail! "sealed core manifest authority contract is invalid"
+                                  {:path (str manifest-path)}))
+      (when-not (and (string? system) (seq system))
+        (authority-snapshot-fail! "sealed core manifest is missing runtime system"
+                                  {:path (str manifest-path)}))
+      (when (or (not= runtime-root-roles (set roles))
+                (not= (count roles) (count runtime-root-roles))
+                (some (fn [p] (not (and (string? p)
+                                        (str/starts-with? p "/nix/store/")
+                                        (seq p))))
+                      roots)
+                (not= (count roots) (count (set roots))))
+        (authority-snapshot-fail! "sealed core manifest has invalid runtime roots"
+                                  {:path (str manifest-path)}))
+      {:seal-version seal-version :system system :roots (vec (sort roots))})))
+
+(defn- canonical-existing-path!
+  [path label kind]
+  (let [raw (str path)
+        f (java.io.File. raw)]
+    (when-not (and (.isAbsolute f)
+                   (= raw (.getCanonicalPath f))
+                   (case kind :directory (.isDirectory f) :file (.isFile f) false))
+      (authority-snapshot-fail! (str label " is absent, non-canonical, or the wrong kind")
+                                {:label label :path raw}))
+    raw))
+
+(defn- posix-file-key!
+  "dev:<dev>:ino:<ino> from POSIX attributes — a stable file identity that survives
+  path renames. Fails closed if LABEL's path is absent (path-identity drift)."
+  [path label]
+  (try
+    (let [attrs (java.nio.file.Files/readAttributes
+                 (.toPath (java.io.File. (str path)))
+                 "unix:dev,ino"
+                 (into-array java.nio.file.LinkOption []))]
+      (str "dev:" (get attrs "dev") ":ino:" (get attrs "ino")))
+    (catch Exception e
+      (authority-snapshot-fail! (str "cannot resolve file identity of " label)
+                                {:label label :path (str path) :cause (str (.getMessage e))}))))
+
+(defn- log-prefix!
+  "The exact byte length and SHA-256 of the code log's canonical prefix (its whole
+  current content). Fails closed if the log is unreadable."
+  [code-log]
+  (try
+    (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. (str code-log))))
+          md (java.security.MessageDigest/getInstance "SHA-256")]
+      {:bytes (str (alength ^bytes bytes))
+       :sha256 (str "sha256:" (apply str (map #(format "%02x" (bit-and (int %) 255)) (.digest md bytes))))})
+    (catch Exception e
+      (authority-snapshot-fail! "cannot read the code log prefix"
+                                {:path (str code-log) :cause (str (.getMessage e))}))))
+
+(defn- checkout-relative
+  "SOURCE-ROOT expressed relative to CHECKOUT-ROOT, forward-slashed; \"\" denotes the
+  checkout root itself. A source root outside the checkout relativizes to a \"..\"
+  path that normalize-module-manifest! rejects (path drift fails closed)."
+  [checkout-root source-root]
+  (let [c (.toPath (.getAbsoluteFile (java.io.File. (str checkout-root))))
+        s (.toPath (.getAbsoluteFile (java.io.File. (str source-root))))]
+    (str/replace (str (.relativize c s)) "\\" "/")))
+
+(defn- module-id-of-source-path
+  "moduleId derived from a Beagle sourcePath exactly as authority/module-id-for-source-path!
+  (strip the Beagle extension, '/'→'.'). normalize-module-manifest! re-derives and
+  rejects any divergence, so this is a fail-closed convenience, not a second source
+  of truth."
+  [path]
+  (when-let [ext (some (fn [e] (when (str/ends-with? path e) e)) authority/beagle-source-extensions)]
+    (str/replace (subs path 0 (- (count path) (count ext))) "/" ".")))
+
+(defn- live-module-entries
+  "The current module→sourcePath mapping read straight off the live store's
+  @<module>#root `file` facts (never off client input). Superseded facts are
+  excluded, so this is the live snapshot."
+  [co]
+  (let [st (:store co)
+        m @st
+        fp (c/value-id st "file")]
+    (if (nil? fp)
+      []
+      (->> (:facts m)
+           (keep (fn [[cid fact]]
+                   (when (and (= fp (:p fact)) (not (contains? (:superseded m) cid)))
+                     (let [subj (s/name-of st (:l fact))
+                           path (c/literal st (:r fact))]
+                       (when (and (string? subj) (str/ends-with? subj "#root"))
+                         (when-not (string? path)
+                           (authority-snapshot-fail! "module source path is not a string"
+                                                     {:module subj :path path}))
+                         (if-let [mid (module-id-of-source-path path)]
+                           (do
+                             (when-not (= subj (str "@" mid "#root"))
+                               (authority-snapshot-fail! "module root identity disagrees with source path"
+                                                         {:module subj :path path :derived mid}))
+                             {"moduleId" mid "sourcePath" path})
+                           (authority-snapshot-fail! "module source path lacks a Beagle extension"
+                                                     {:module subj :path path})))))))
+           (sort-by #(get % "sourcePath"))
+           vec))))
+
+(defn- input-schema-of [params]
+  {"type" "object"
+   "properties" (reduce (fn [mm p] (assoc mm (:name p) {"type" (:type p) "description" (:name p)})) {} params)
+   "required" (vec (keep (fn [p] (when (:required p) (:name p))) params))})
+
+(defn- live-tool-catalog
+  "The exact five graph-edit tools, live from the tool catalog in served order."
+  []
+  {"catalogVersion" tool-catalog-version
+   "tools" (->> (tools/catalog [])
+                (filterv (fn [spec] (contains? (set authority/expected-tool-order) (:name spec))))
+                (mapv (fn [spec] {"name" (:name spec) "description" (:desc spec)
+                                  "inputSchema" (input-schema-of (:params spec))})))})
+
+(defn- live-lifecycle
+  "Emit the descriptor schema's clean/current lifecycle only from a healthy live
+  coordinator. Poisoned or repair-needed durability cannot advertise authority."
+  [co]
+  (let [state (:state @edit-durability-state)]
+    (when-not (= :healthy state)
+      (authority-snapshot-fail! "coordinator durability is not clean"
+                                {:durability-state state}))
+    {"durability" {"state" "clean"}
+     "projection" {"state" "current"
+                   "generation" (str (current-seq co))}}))
+
+(defn derive-authority-snapshot
+  "Strictly derive the runtime/corpus/tools/lifecycle descriptor snapshot from the
+  sealed launch boundary and the live coordinator store CO. Inputs:
+    :core-manifest-path — FRAM_AUTHORITY_CORE_MANIFEST (roots + system + seal mapping)
+    :checkout-root/:source-root/:code-log — sealed wrapper path bindings
+    :closure-digest — the North-verified runtime closure digest FRAM only binds
+    :co — the live coordinator (module manifest + graph version + lifecycle)
+  Every path/manifest defect fails closed BEFORE the caller can seal or serve."
+  [{:keys [core-manifest-path checkout-root source-root code-log closure-digest co]}]
+  (when-not (and (string? closure-digest)
+                 (re-matches #"sha256:[0-9a-f]{64}" closure-digest))
+    (authority-snapshot-fail! "North runtime closure digest is malformed"
+                              {:closure-digest closure-digest}))
+  (let [core-manifest-path (canonical-existing-path! core-manifest-path
+                                                      "authorityCoreManifest" :file)
+        checkout-root (canonical-existing-path! checkout-root "checkoutRoot" :directory)
+        source-root (canonical-existing-path! source-root "sourceRoot" :directory)
+        code-log (canonical-existing-path! code-log "codeLog" :file)
+        expected-code-log (str checkout-root "/.fram/code.log")
+        _ (when-not (= expected-code-log code-log)
+            (authority-snapshot-fail! "codeLog is not the canonical checkout log"
+                                      {:path code-log :expected expected-code-log}))
+        {seal-version :seal-version system :system roots :roots}
+        (read-sealed-core-manifest! core-manifest-path)
+        entries (live-module-entries co)
+        version (str (current-seq co))
+        src-rel (checkout-relative checkout-root source-root)
+        manifest (authority/normalize-module-manifest! src-rel version entries [])
+        {log-bytes :bytes log-sha :sha256} (log-prefix! code-log)
+        catalog (live-tool-catalog)]
+    {"runtime" {"sealVersion" seal-version
+                "system" system
+                "roots" roots
+                "closureDigest" closure-digest}
+     "corpus" {"checkoutRoot" (str checkout-root)
+               "sourceRoot" (str source-root)
+               "sourceRootRelativeToCheckout" (get manifest "sourceRootRelativeToCheckout")
+               "codeLog" (str code-log)
+               "identity" {"checkoutFileKey" (posix-file-key! checkout-root "checkoutRoot")
+                           "sourceFileKey" (posix-file-key! source-root "sourceRoot")
+                           "logFileKey" (posix-file-key! code-log "codeLog")}
+               "snapshot" {"graphVersion" (get manifest "graphVersion")
+                           "logPrefixBytes" log-bytes
+                           "logPrefixSha256" log-sha
+                           "moduleManifest" (select-keys manifest ["manifestVersion" "mappingDigest"
+                                                                    "snapshotDigest" "entries"])}}
+     "tools" {"catalogVersion" (get catalog "catalogVersion")
+              "catalogDigest" (authority/tool-catalog-digest! catalog)
+              "tools" (get catalog "tools")}
+     "lifecycle" (live-lifecycle co)}))
+
+(defn- required-launch-binding! [binding-name]
+  (let [v (System/getenv binding-name)]
+    (if (and (string? v) (not (str/blank? v)))
+      v
+      (authority-snapshot-fail! (str "missing required sealed launch binding " binding-name)
+                                {:binding binding-name}))))
+
+(defn authority-launch-snapshot
+  "Read the sealed launch boundary from the process environment plus the live
+  coordinator CO, then derive the authority descriptor snapshot. Invoked ONLY by
+  the authority serve path (dark until that slice lands); normal boot never calls
+  it, so no coordinator contact, MCP/catalog change, or ambient fallback occurs."
+  [co]
+  (derive-authority-snapshot
+   {:core-manifest-path (required-launch-binding! "FRAM_AUTHORITY_CORE_MANIFEST")
+    :checkout-root (required-launch-binding! "FRAM_CHECKOUT_ROOT")
+    :source-root (required-launch-binding! "FRAM_SOURCE_ROOT")
+    :code-log (required-launch-binding! "FRAM_CODE_LOG")
+    :closure-digest (required-launch-binding! "FRAM_AUTHORITY_EXPECTED_RUNTIME_CLOSURE_DIGEST")
+    :co co}))
+
+(defn seal-coordinator-descriptor
+  "Seal an authority descriptor binding this boot's generation nonce, the live
+  ENDPOINT, and the session's lease into the supplied SNAPSHOT (runtime / corpus /
+  tools / lifecycle). Identity (bindingDigest + descriptorDigest) is a pure
+  function of the bound fields, so changing the generation nonce ALONE changes
+  both digests, and a renewal changes only the epoch/expiry-derived digests."
+  [{:keys [instance]} handle endpoint snapshot]
+  (authority/seal-authority-descriptor!
+   (assoc snapshot
+          "descriptorVersion" "fram.graph-edit-authority/v1"
+          "candidateProtocol" "graph-edit-candidate-v1"
+          "coordinator"
+          {"instanceId" instance
+           "endpoint" endpoint
+           "lease" {"id" (:holder handle)
+                    "epoch" (str (:epoch handle))
+                    "clientSpkiSha256" (:client-spki handle)
+                    "expiresAtUnixMs" (str (:exp handle))
+                    "state" "active"}})))
+
+;; --- connection dispatch: legacy one-shot vs the multi-request authority loop --
+(defn authority-open-request?
+  "True iff REQ is the authority-loop handshake. Legacy ops are all false, so an
+  existing one-request connection is never diverted into the loop."
+  [req]
+  (and (map? req) (= :authority-open (:op req))))
+
+(defn run-authority-connection
+  "The multi-request loop for ONE authority-opened connection. READ-REQ yields the
+  next request map (nil at EOF); WRITE-RESP emits one response; MAKE-ACTION turns a
+  request into its fenced mutation thunk. The FIRST frame must be :authority-open
+  (acquires the exclusive lease, issues the handle); each subsequent frame is
+  fenced by (generation, sequence, epoch) before any append. A terminal reject or
+  EOF closes the loop. This is the ONLY entry into the loop — legacy one-request
+  connections are dispatched elsewhere and never reach here."
+  [ctx read-req write-resp make-action]
+  (let [open (read-req)]
+    (if-not (authority-open-request? open)
+      (write-resp {:reject :not-authority-open})
+      (let [opened (authority-session-open ctx (:res open) (:holder open)
+                                           (:client-spki open) (:ttl-ms open))]
+        (if-not (:ok opened)
+          (write-resp opened)                 ; :held / :invalid-lease-request
+          (let [handle0 (:handle opened)]
+            (write-resp {:ok true :instance (:instance ctx)
+                         :epoch (:epoch handle0) :holder (:holder open)})
+            (loop [handle handle0]
+              (when-let [req (read-req)]
+                (case (:op req)
+                  :authority-request
+                  (let [r (authority-session-request ctx handle req (make-action req))]
+                    (write-resp r)
+                    (when (:ok r) (recur handle)))
+                  :authority-renew
+                  (let [r (authority-session-renew ctx handle (:ttl-ms req))]
+                    (write-resp r)
+                    (when (:ok r) (recur (:handle r))))
+                  :authority-release
+                  (write-resp (authority-session-release ctx handle))
+                  (write-resp {:reject :unknown-authority-op}))))))))))
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd
