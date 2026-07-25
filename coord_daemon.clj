@@ -845,6 +845,17 @@
 (defn warm-facts [] (vec (:facts (warm!))))
 (defn warm-idx [] (:idx (warm!)))
 
+(defn- facts-wire-snapshot []
+  (let [v (current-seq @co)
+        cc @facts-wire-cache
+        triples (if (= v (:version cc))
+                  (:triples cc)
+                  (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
+                                 (fold/refold-order (client-view-facts @co)))]
+                    (reset! facts-wire-cache {:version v :triples ts})
+                    ts))]
+    {:version v :triples triples}))
+
 (def ^:dynamic *request-query-control* nil)
 
 (defn- query-request? [req]
@@ -4308,6 +4319,15 @@
                       :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
       :validate {:violations (all-violations (index!))}
+      ;; Narrow MCP show: preserve the cold path's fold-emission order without
+      ;; transferring the whole live graph or re-folding history. The same
+      ;; versioned projection cache backs :facts below.
+      :show (let [{:keys [version triples]} (facts-wire-snapshot)
+                  te (:te req)]
+              {:version version
+               :rows (reduce (fn [rows [l p r]]
+                               (if (= l te) (conj rows [p r]) rows))
+                             [] triples)})
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
       :warm-check (let [inc (warm!) fresh (client-view-facts @co) fidx (idx-build fresh)]
                     {:consistent (and (= (:triples (:idx inc)) (:triples fidx))
@@ -4343,15 +4363,8 @@
       ;; re-orders. :log echoes which log this daemon serves so a client can refuse
       ;; a mismatched daemon (fram.rt/coord-live-facts checks it). Clients ask with
       ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
-      :facts   (let [v (current-seq @co)
-                      cc @facts-wire-cache
-                      triples (if (= v (:version cc))
-                                (:triples cc)
-                                (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
-                                               (fold/refold-order (client-view-facts @co)))]
-                                  (reset! facts-wire-cache {:version v :triples ts})
-                                  ts))]
-                  {:version v
+      :facts   (let [{:keys [version triples]} (facts-wire-snapshot)]
+                  {:version version
                    :log (or @flat-log (:log @co))
                    :facts triples})
       ;; thread 019f100f-7fff — snapshot/compaction surface:

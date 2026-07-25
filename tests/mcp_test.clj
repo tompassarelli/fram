@@ -7,6 +7,7 @@
 (require '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[cheshire.core :as json]
+         '[clojure.java.io :as io]
          '[clojure.string :as str]
          '[fram.fold :as fold]
          '[fram.rt :as rt]
@@ -105,8 +106,8 @@
 ;; kind-v-f0 facts, then appends a newline-terminated corruption sentinel. A
 ;; state fold must reject that sentinel, so tools/list returning the exact catalog
 ;; is a structural proof that discovery did not read/fold the corpus; no flaky
-;; wall-time threshold is involved. Restoring the valid corpus and issuing show
-;; proves state-dependent calls still take the normal cold fold path.
+;; wall-time threshold is involved. Restoring the valid corpus and issuing show in
+;; a fresh offline server proves its initial state snapshot still has a cold fallback.
 (def large-dir (str tmp "/large-corpus"))
 (.mkdirs (java.io.File. large-dir))
 (def large-logpath (str large-dir "/coordination.log"))
@@ -166,8 +167,42 @@
               (remove str/blank? (str/split-lines large-show-out)))))
 (def large-show-rows
   (some-> large-show-response (get-in [:result :content 0 :text]) json/parse-string))
-(chk "state-dependent calls still fold and read the cold 30k-fact corpus"
+(chk "an offline server's initial state snapshot cold-folds and reads the 30k-fact corpus"
      (= #{"kind" "v" "f0"} (set (map #(get % "pred") large-show-rows))))
+
+;; Process-lifetime regression: after the first offline show builds its snapshot,
+;; append a completed corrupt row that any second whole-log fold MUST reject. The
+;; repeat show must still return from the cached snapshot. This is structural proof
+;; of fold lifetime, independent of wall-clock thresholds.
+(def cache-pb
+  (doto (ProcessBuilder. (into-array String ["bin/fram-mcp"]))
+    (.directory (io/file (System/getProperty "user.dir")))))
+(doseq [[k v] large-env]
+  (.put (.environment cache-pb) k v))
+(def cache-process (.start cache-pb))
+(try
+  (with-open [writer (io/writer (.getOutputStream cache-process))
+              reader (io/reader (.getInputStream cache-process))]
+    (let [call! (fn [request]
+                  (.write writer (str (json/generate-string request) "\n"))
+                  (.flush writer)
+                  (json/parse-string (.readLine reader) true))
+          initialized (call! {:jsonrpc "2.0" :id 40 :method "initialize" :params {}})
+          first-show (call! {:jsonrpc "2.0" :id 41 :method "tools/call"
+                             :params {:name "show" :arguments {:subject "node-9999"}}})
+          _ (spit large-logpath "{\n" :append true)
+          repeat-show (call! {:jsonrpc "2.0" :id 42 :method "tools/call"
+                              :params {:name "show" :arguments {:subject "node-9999"}}})
+          first-text (get-in first-show [:result :content 0 :text])
+          repeat-text (get-in repeat-show [:result :content 0 :text])]
+      (chk "cache regression process initializes"
+           (= "fram" (get-in initialized [:result :serverInfo :name])))
+      (chk "repeat show reuses the process snapshot instead of folding the grown log"
+           (and (not (get-in repeat-show [:result :isError]))
+                (= first-text repeat-text)))))
+  (finally
+    (.destroyForcibly cache-process)
+    (spit large-logpath large-corpus)))
 
 (let [r3 (get by-id 3) txt (get-in r3 [:result :content 0 :text])
       preds (set (map #(get % "pred") (json/parse-string txt)))]

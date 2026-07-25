@@ -12,7 +12,8 @@
 ;; a predicate is an entity, so `show <pred>` reveals its cardinality/value_kind facts
 ;; and `ask` enumerates it. `threads` and `dependents-of` are NOT here — threads are a
 ;; NORTH concept (north serves them) and a reverse edge is an `ask`.
-;; Reads fold the current log; writes route through the coordinator.
+;; Reads reuse a versioned snapshot of the coordinator's warm store; writes route
+;; through the coordinator.
 ;; cheshire keywordizes the JSON arguments into exactly the EDN shape fram.tools /
 ;; fram.query expect, so a model fills typed params (or, for `ask`, emits a
 ;; structured Datalog-shaped object) and can't author broken syntax.
@@ -58,10 +59,57 @@
 ;; once so discovery never pays the cost of folding the selected corpus.
 (def ^:private closed-catalog (tl/catalog []))
 
-;; --- per-request state: fold the current log fresh (sees others' writes) -----
+;; --- process-lifetime read state ---------------------------------------------
+;; The coordinator's :facts response is one internally consistent {version,facts}
+;; snapshot over the configured split corpus. Build the kernel index once per
+;; coordinator version, then reuse it across calls. A write between calls moves the
+;; cheap fenced :version probe and refreshes from the daemon's already-folded store.
+;;
+;; Offline compatibility is explicit: when no compatible daemon is available, cold
+;; fold once and keep that snapshot until this MCP process restarts (the explicit
+;; re-fold policy). Never put a whole-log fold back on the per-call path.
+(def ^:private state-cache (atom nil))
+
+(defn- indexed-state [log source version facts]
+  {:log log
+   :source source
+   :version version
+   :facts facts
+   :idx (k/build-index facts)
+   :cat closed-catalog})
+
 (defn load-state []
-  (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))]
-    {:facts facts :idx (k/build-index facts) :cat closed-catalog}))
+  (let [port (fram.rt/coord-port)
+        log (fram.rt/canonical-log-path (fram.rt/log-path))
+        version (fram.rt/coord-version-for-log port log)
+        cached @state-cache]
+    (cond
+      (and (not (neg? version))
+           (= log (:log cached))
+           (= :coordinator (:source cached))
+           (= version (:version cached)))
+      cached
+
+      (not (neg? version))
+      (if-let [{:keys [version facts]} (fram.rt/coord-live-state port log)]
+        (let [state (indexed-state log :coordinator version facts)]
+          (reset! state-cache state)
+          state)
+        (if (= log (:log cached))
+          cached
+          (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))
+                state (indexed-state log :cold nil facts)]
+            (reset! state-cache state)
+            state)))
+
+      (= log (:log cached))
+      cached
+
+      :else
+      (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))
+            state (indexed-state log :cold nil facts)]
+        (reset! state-cache state)
+        state))))
 
 ;; --- catalog spec -> MCP tool descriptor -------------------------------------
 (defn- input-schema [params]
@@ -860,17 +908,27 @@
 
 ;; --- dispatch one tools/call (catalog path) ------------------------------------
 (defn- dispatch-call [name a]
-  ;; WARM READ PATH (interface investigation #1): serve `query` off the daemon's warm
-  ;; store instead of a COLD full-log fold per request (~60x: ~450ms cold vs ~7ms warm
-  ;; on the canonical log). coord-query returns nil if the daemon is DOWN or PREDATES
-  ;; the warm :query op ({:error "unknown op"}) -> fall through to the cold path, so
-  ;; this is safe even against an older live daemon (no coordinated restart required).
-  ;; The warm :query op returns the SAME q/run envelope the cold path produces, so the
-  ;; formatting is identical. Rep-stable: keys on (l,p,r)/Datalog, no fN ordering.
-  (if-let [warm (when (= name "query")
-                  (fram.rt/coord-query-for-log
-                   (fram.rt/coord-port) (fram.rt/log-path) (:query a)))]
+  ;; WARM NARROW READ PATH: serve `query` from the daemon's maintained query index
+  ;; and single-subject `show` from its cached fold-ordered projection. Whole-graph
+  ;; validate uses load-state's versioned warm snapshot and built-index cache. A nil
+  ;; response means daemon down/old/mismatched -> fall through to the cached state
+  ;; path, so this is safe against an older live daemon.
+  (if-let [warm (case name
+                  "query" (fram.rt/coord-query-for-log
+                           (fram.rt/coord-port) (fram.rt/log-path) (:query a))
+                  "show" (when (some? (:subject a))
+                           (fram.rt/coord-show-for-log
+                            (fram.rt/coord-port) (fram.rt/log-path)
+                            (let [subject (:subject a)]
+                              (if (and (string? subject)
+                                       (not (str/starts-with? subject "@")))
+                                (str "@" subject)
+                                subject))))
+                  nil)]
     (cond (:error warm)        {:isError true :text (str/join "\n" (:error warm))}
+          (and (= name "show") (contains? warm :rows))
+          {:text (json/generate-string
+                  (mapv (fn [[pred value]] {:pred pred :value value}) (:rows warm)))}
           (contains? warm :ok) {:text (json/generate-string (:ok warm))}
           :else                {:text (json/generate-string warm)})
     (let [{:keys [facts idx cat]} (load-state)

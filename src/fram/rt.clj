@@ -1337,6 +1337,9 @@
 (defn coord-resolved-for-log
   [port log te pred]
   (warm-read-for-log port log {:op :resolved :te te :p pred}))
+(defn coord-show-for-log
+  [port log te]
+  (warm-read-for-log port log {:op :show :te te}))
 
 ;; :facts — the daemon's WHOLE live view as [l p r] triples: the daemon-first read
 ;; path (thread 019f2190). The CLI rebuilds its kernel index from this instead of
@@ -1346,13 +1349,12 @@
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
 ;; Asked with {:fmt :json} DELIBERATELY: this is a multi-megabyte whole-corpus
 ;; payload, and bb parses JSON (cheshire, native) substantially faster than EDN.
-;; Returns a (Vec kernel/Fact), or [] when the warm path is unavailable — daemon
-;; down, an older daemon without the op (its {"error" ...} reply has no "facts"),
-;; or a daemon serving a DIFFERENT log than the caller's (the :log echo mismatches —
-;; never silently read another store). [] is safe as the sentinel: a real log always
-;; folds to a non-empty view (an empty log has no daemon serving it worth trusting).
-;; Callers fall back to the cold fold on [].
-(defn coord-live-facts [port log]
+;; coord-live-state retains the response version beside the facts so long-lived
+;; clients can cache one built projection and refresh only after the coordinator
+;; version moves. nil is the capability sentinel: daemon down, old daemon, malformed
+;; response, or a daemon serving another log. coord-live-facts preserves the older
+;; Vec-only interface for Beagle/CLI callers.
+(defn coord-live-state [port log]
   (let [facts-timeout
         (coord-timeout-ms "FRAM_COORD_FACTS_TIMEOUT_MS" 30000)]
     (try
@@ -1368,15 +1370,19 @@
                       (read-coord-terminal-line-with-timeout!
                        reader
                        facts-timeout))]
-            (if (and (map? resp)
-                     (= (canonical-log-path log)
-                        (canonical-log-path (get resp "log")))
-                     (vector? (get resp "facts")))
-              (mapv
-               (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2)))
-               (get resp "facts"))
-              []))))
-      (catch Exception _ []))))
+            (when (and (map? resp)
+                       (number? (get resp "version"))
+                       (= (canonical-log-path log)
+                          (canonical-log-path (get resp "log")))
+                       (vector? (get resp "facts")))
+              {:version (long (get resp "version"))
+               :facts (mapv
+                       (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2)))
+                       (get resp "facts"))}))))
+      (catch Exception _ nil))))
+
+(defn coord-live-facts [port log]
+  (or (:facts (coord-live-state port log)) []))
 
 ;; subscribe + stream commit events (one EDN line each) until disconnect.
 ;; TLS setup has its own absolute handshake deadline. After the request write, the

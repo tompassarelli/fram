@@ -6,11 +6,12 @@
 # minted per-predicate: the vocabulary is DATA in the graph (a predicate is an
 # entity — `show <pred>` reveals its cardinality/value_kind), so the tool count is
 # O(1). `untell` is accepted as an alias for `retract`, `query` for `ask`. Reads
-# fold the log; writes route through the coordinator. Point a model's MCP client
-# at this command.
+# reuse a versioned snapshot of the coordinator's warm store (or one process-
+# lifetime cold snapshot when offline); writes route through the coordinator.
+# Point a model's MCP client at this command.
 #
 #   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
-#   names its split telemetry half. Reads fold the pair into one logical store.
+#   names its split telemetry half. Reads expose the pair as one logical store.
 #   FRAM_MCP_PROFILE (optional; unset = "full", the exact ten-tool surface):
 #   "graph-edit-v1" exposes AND server-authorizes ONLY the five graph-edit verbs
 #   (denials pre-alias, pre-dispatch, zero mutation) and refuses to start unless
