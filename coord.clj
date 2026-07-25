@@ -981,6 +981,22 @@
 (defn world-manifest [co version-id]
   (w/manifest (world-chain co version-id) version-id))
 
+(defn world-compose
+  "Mixed composition over DURABLE versions: gather every participating version's
+  chain out of the log, then hand the PURE kernel one versions map. `selections`
+  is [[slot source-version-id] ...] — each named slot is taken from its source,
+  every other slot inherits the base.
+
+  A READ, deliberately: it appends nothing. The result is an ORDINARY Version
+  record whose :overlay is exactly the op list a candidate opened on
+  `base-version-id` must append to become that version, so composition needs no
+  second promotion path — it reuses begin/append/seal/promote unchanged."
+  [co base-version-id selections]
+  (let [versions (reduce (fn [acc v] (merge acc (world-chain co v)))
+                         (world-chain co base-version-id)
+                         (map second selections))]
+    (w/compose versions base-version-id selections)))
+
 ;; --- candidates: begin / append / seal --------------------------------------
 (defn- world-candidate-ops
   "The CONTIGUOUS op prefix of a candidate, read back from the log. Contiguity is
