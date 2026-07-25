@@ -133,12 +133,47 @@
       (do (doseq [p problems] (println (str "  " p)))
           (println (str "\n" (count problems) " violation(s)."))))))
 
+;; --- provenance (thread 019f9aa1): the log carries :by on every fact-op
+;; (fram.rt/read-log folds a legacy :frame or a current :by into FactOp's
+;; :frame field), but the plain k/Fact triples cmd-show prints drop it —
+;; fold/fold keeps only l/p/r. Rebuild a (l|p|r) -> writer map straight from
+;; a COLD read of the log (fold/fold-latest keeps :frame) so evidence facts
+;; can name who wrote them without touching the write path or the k/Fact shape.
+(defn- fact-sig3 [l :- String p :- String r :- String] :- String (str l "|" p "|" r))
+
+;; a fresh cold fold's Latest records carry :frame (the writer, mapped from
+;; :by by fram.rt/read-log) — key every current fact by its (l|p|r) triple so
+;; cmd-show can look up "who wrote this" without changing what a Fact is.
+(defn- by-map-for [log :- String] :- (Map String String)
+  (reduce (fn [m :- (Map String String) v :- fold/Latest] :- (Map String String)
+            (assoc m (fact-sig3 (:l v) (:p v) (:r v)) (:frame v)))
+          {}
+          (fold/fold-latest (fram.rt/read-log log))))
+
+;; predicates whose provenance matters most — the failures this fixes were all
+;; "who wrote this evidence/progress/outcome", never e.g. "who wrote the title".
+(def evidence-preds :- (Vec String) ["bar_evidence" "progress" "outcome"])
+
+(defn- evidence-pred? [p :- String] :- Bool
+  (some? (some (fn [e :- String] :- Bool (= e p)) evidence-preds)))
+
+;; dim ANSI marker (SGR 2 = dim, 0 = reset) — matches the "· by <writer>"
+;; shape sketched on the thread. Terminal-only; grep/log capture just sees
+;; the plain escape bytes, same as any other CLI color code.
+(defn- by-marker [frame :- String] :- String
+  (let [esc (str (char 27))]
+    (str " " esc "[2m· by " frame esc "[0m")))
+
 ;; show is full-fidelity: values print WHOLE, never elided — the handoff protocol
 ;; reads note/learning facts in full. Resolution: exact @id first, then a UNIQUE
 ;; uuidv7 id-PREFIX (the short form people paste); a blank token never prefix-matches
 ;; (it would match every thread), and an ambiguous prefix lists the candidates and
-;; picks none.
-(defn cmd-show [log :- String id :- String] :- Nil
+;; picks none. Evidence-bearing facts (bar_evidence/progress/outcome) render a
+;; dim trailing "· by <writer>" sourced from the log's :by/:frame field, so
+;; reading evidence shows who produced it without grepping the raw log
+;; (thread 019f9aa1: consuming evidence without checking its provenance).
+;; `--provenance` widens that marker to every fact, not just the evidence set.
+(defn cmd-show [log :- String id :- String provenance? :- Bool] :- Nil
   (let [facts (live-facts log)
         te (str "@" id)
         exact (k/q-by-l facts te)
@@ -150,13 +185,20 @@
                   ;; O(facts). Same subjects, same uniq fact order, so the match
                   ;; list (and the ambiguous-prefix listing) is byte-identical.
                   (filterv (fn [t :- String] :- Bool (str/starts-with? (short-id t) id))
-                           (k/thread-ids-i (k/build-index facts))))]
+                           (k/thread-ids-i (k/build-index facts))))
+        ;; cold re-read for :by — daemon's warm facts (live-facts) are plain
+        ;; k/Fact triples with no writer attached, so a fresh fold/fold-latest
+        ;; over the log is the only place :by survives.
+        by-map (by-map-for log)
+        line (fn [c :- k/Fact] :- Nil
+               (let [want? (or provenance? (evidence-pred? (:p c)))
+                     w (if want? (get by-map (fact-sig3 (:l c) (:p c) (:r c))) nil)]
+                 (println (str "  " (:p c) "  " (:r c) (if (some? w) (by-marker w) "")))))]
     (cond
       [(not (empty? exact))
-       (doseq [c exact] (println (str "  " (:p c) "  " (:r c))))]
+       (doseq [c exact] (line c))]
       [(= (count matches) 1)
-       (doseq [c (k/q-by-l facts (first matches))]
-         (println (str "  " (:p c) "  " (:r c))))]
+       (doseq [c (k/q-by-l facts (first matches))] (line c))]
       [(> (count matches) 1)
        (do (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
            (doseq [m matches]
@@ -375,7 +417,9 @@
       [(= cmd "validate") (cmd-validate log)]
       [(= cmd "watch")    (cmd-watch log)]
       [(= cmd "doctor")   (cmd-doctor log)]
-      [(= cmd "show")     (cmd-show log (if (> (count args) 1) (nth args 1) ""))]
+      [(= cmd "show")
+       (cmd-show log (if (> (count args) 1) (nth args 1) "")
+                 (and (> (count args) 2) (= (nth args 2) "--provenance")))]
       [(= cmd "history")
        (if (> (count args) 1)
          (fram.rt/history log (nth args 1))

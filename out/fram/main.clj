@@ -59,16 +59,35 @@
   (println (str "  " p)))
   (println (str "\n" (count problems) " violation(s)."))))))
 
-(defn cmd-show [^String log ^String id]
+(defn- ^String fact-sig3 [^String l ^String p ^String r]
+  (str l "|" p "|" r))
+
+(defn- by-map-for [^String log]
+  (reduce (fn [m v] (assoc m (fact-sig3 (:l v) (:p v) (:r v)) (:frame v))) {} (fold/fold-latest (fram.rt/read-log log))))
+
+(def evidence-preds ["bar_evidence" "progress" "outcome"])
+
+(defn- ^Boolean evidence-pred? [^String p]
+  (some? (some (fn [e] (= e p)) evidence-preds)))
+
+(defn- ^String by-marker [^String frame]
+  (let [esc (str (char 27))]
+  (str " " esc "[2m· by " frame esc "[0m")))
+
+(defn cmd-show [^String log ^String id ^Boolean provenance?]
   (let [facts (live-facts log)
    te (str "@" id)
    exact (k/q-by-l facts te)
-   matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids-i (k/build-index facts))))]
+   matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids-i (k/build-index facts))))
+   by-map (by-map-for log)
+   line (fn [c] (let [want? (or provenance? (evidence-pred? (:p c)))
+   w (if want? (get by-map (fact-sig3 (:l c) (:p c) (:r c))) nil)]
+  (println (str "  " (:p c) "  " (:r c) (if (some? w) (by-marker w) "")))))]
   (cond
   (not (empty? exact)) (doseq [c exact]
-  (println (str "  " (:p c) "  " (:r c))))
+  (line c))
   (= (count matches) 1) (doseq [c (k/q-by-l facts (first matches))]
-  (println (str "  " (:p c) "  " (:r c))))
+  (line c))
   (> (count matches) 1) (do
   (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
   (doseq [m matches]
@@ -198,7 +217,7 @@
   (= cmd "validate") (cmd-validate log)
   (= cmd "watch") (cmd-watch log)
   (= cmd "doctor") (cmd-doctor log)
-  (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) ""))
+  (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) "") (and (> (count args) 2) (= (nth args 2) "--provenance")))
   (= cmd "history") (if (> (count args) 1) (fram.rt/history log (nth args 1)) (println "usage: history <id>"))
   (= cmd "tools") (cmd-tools log)
   (= cmd "query") (if (> (count args) 1) (cmd-query log (nth args 1)) (println "usage: query '<edn>'  e.g. '{:find \"reaches\" :rules [...]}'"))
