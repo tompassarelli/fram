@@ -3739,6 +3739,19 @@
                            (some #{module} (str/split (str %) #"[/.]")))
                       loose)]
     (if (seq exact) exact loose)))
+;; nearest-names on the whole dotted path (e.g. "src.fram.schema") drowns a typo of
+;; the meaningful segment ("shema") in an always-> max-dist edit distance no caller
+;; passes (11 for "shema"~"src.fram.schema" vs. the callers' max-dist 5) — the
+;; module never surfaces as a suggestion even though it's the obvious one-letter fix.
+;; Score each candidate by its BEST distance (whole path OR trailing dot/path
+;; segment — the token a human actually typed), keeping the exact-match precedent
+;; module-srcs already set for lookup itself.
+(defn- module-tail [src] (last (str/split (str src) #"[/.]")))
+(defn- nearest-modules [target candidates & {:keys [n max-dist] :or {n 3 max-dist 5}}]
+  (->> candidates
+       (map (fn [c] [(str c) (min (levenshtein target (str c)) (levenshtein target (module-tail c)))]))
+       (filter (fn [[_ d]] (<= d max-dist)))
+       (sort-by second) (take n) (mapv first)))
 (defn- corpus-type-names [] (set (mapcat keys (vals resolve/global-type-exports))))
 (defn- def-node-name [fnode]
   (resolve/sym-val (second (resolve/ordered-children (resolve/unwrap-def fnode)))))
@@ -3854,7 +3867,7 @@
                           (let [ss (module-srcs module)]
                             (if (= 1 (count ss))
                               {:ok true :canon (first ss) :corpus-types (corpus-type-names)}
-                              {:ok false :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5) :count (count ss)})))]
+                              {:ok false :nearest (nearest-modules module resolve/srcs :n 3 :max-dist 5) :count (count ss)})))]
                 (if-not (:ok pre)
                   (s-err :lookup :at {:module module}
                          :message (if (> (:count pre) 1) (str "module `" module "` is ambiguous (" (:count pre) " sources match)")
@@ -3973,7 +3986,7 @@
             (s-err :lookup :at {:module module}
                    :message (if (> (count ss) 1) (str "module `" module "` is ambiguous (" (count ss) " sources match)")
                                 (str "no such module `" module "`"))
-                   :nearest (nearest-names module resolve/srcs :n 3 :max-dist 5)
+                   :nearest (nearest-modules module resolve/srcs :n 3 :max-dist 5)
                    :suggestion "run `index` to list modules")
             (let [src   (first ss)
                   addr  (addressable-forms src)
@@ -4010,7 +4023,7 @@
             (s-err :lookup :at {:module want}
                    :message (if (> (count ss) 1) (str "module `" want "` is ambiguous (" (count ss) " sources match)")
                                 (str "no such module `" want "`"))
-                   :nearest (nearest-names want resolve/srcs :n 3 :max-dist 5)
+                   :nearest (nearest-modules want resolve/srcs :n 3 :max-dist 5)
                    :suggestion "call `index` with no :module to list all modules")
             (let [src  (first ss)
                   defs (mapv #(select-keys % [:name :head :sig]) (addressable-forms src))]
