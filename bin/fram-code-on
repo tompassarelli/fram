@@ -87,8 +87,17 @@ verify_managed_coordinator() {
 #    The extension only picks the emit target (.bclj->clj .bcljs->cljs .bjs->js .bnix->nix
 #    .bgl->neutral .bodin->odin); the parsed AST is target-independent, so ingest is too.
 #    fram-ingest-code is non-recursive, so we find + feed it every Beagle file here.
+#
+#    EXCLUDE docs/private/ — it is gitignored scratch (agent notes, status dumps,
+#    handoffs, recovery snapshots), definitionally NOT source. A recovery dump of a
+#    vendored beagle checkout landed there and contributed 229 of the 280 files this
+#    glob was feeding in, against 51 real modules: the code graph grew to 264MB /
+#    1.03M facts, and since every fram-edit-code operation and every MCP read folds
+#    the whole log, one --no-commit edit ran over twenty minutes where the same
+#    command against a 36MB clone finished in under one. Test fixtures and fuzz
+#    repros are not the corpus; ingesting them made the authoring loop unusable.
 echo "  [1/3] ingesting code -> facts …"
-mapfile -t SRCS < <(find "$SRC" -regextype posix-extended -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' -not -path '*/.fram/*' | sort)
+mapfile -t SRCS < <(find "$SRC" -regextype posix-extended -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' -not -path '*/.fram/*' -not -path '*/docs/private/*' | sort)
 [ "${#SRCS[@]}" -eq 0 ] && { echo "        no Beagle source (.bclj/.bcljs/.bjs/.bnix/.bgl/.bodin) under $SRC"; exit 1; }
 ( cd "$HERE" && BEAGLE_HOME="$BEAGLE_HOME" bin/fram-ingest-code "${SRCS[@]}" --root "$SRC" --out "$CODE_LOG" ) \
   && echo "        ${#SRCS[@]} modules, $(wc -l <"$CODE_LOG") facts -> $CODE_LOG"
