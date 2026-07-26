@@ -40,6 +40,20 @@ RACKET="${FRAM_RACKET:-$(direnv exec "$BEAGLE" which racket 2>/dev/null)}"
 # and force a mask. A stable path keeps the comparison a straight cmp with ZERO
 # masks — the run-to-run difference is removed at the source, not filtered out.
 WORK="${TMPDIR:-/tmp}/resolve-golden-run"
+
+# …and because the path is FIXED, two concurrent runs (two agent lanes, a rerun
+# while the first is still going) rm -rf each other's corpus mid-flight. That
+# failure does NOT read as a lock error — it reads as a bogus
+#   resolve_golden: emit-edn failed for /tmp/resolve-golden-run/corpus/<m>.bclj
+#   cat: /tmp/resolve-golden-run/fram-<m>.edn.err: No such file or directory
+# (the .err file the shell itself just created is already gone), which is easy to
+# misread as a code defect. Observed 2026-07-27; it cost a whole lane. So take a
+# lock for the run. The lock lives OUTSIDE $WORK because $WORK is deleted below.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$WORK.lock"
+  flock -w 1800 9 || { echo "resolve_golden: another run holds $WORK.lock" >&2; exit 2; }
+fi
+
 rm -rf "${WORK:?}"; mkdir -p "$WORK"
 
 # ---------------------------------------------------------------- corpora ---
