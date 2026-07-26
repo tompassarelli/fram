@@ -66,7 +66,7 @@
             runHook preInstall
 
             mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
-            cp -r out bin src coord.clj coord_daemon.clj resolve.clj pull.clj fri.clj \
+            cp -r out bin src coord.clj coord_daemon.clj resolve.clj fri.clj \
               rotations.clj defcheck_gate.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/

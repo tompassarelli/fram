@@ -31,9 +31,14 @@
 (load-file "coord.clj")          ; the reified coordinator library (ns coord)
 (refer 'coord)                   ; this file calls coord's vars UNQUALIFIED throughout
 (load-file "fri.clj")            ; FRAM_MMAP_IMAGE V1: the .fri columnar mmap image (ns fri)
-(load-file "pull.clj")           ; the PULL API (ns pull) — MUST load after coord.clj:
-                                 ; pull references coord.clj's readers as coord/… and SCI
-                                 ; resolves those qualified symbols at analysis time.
+(require 'pull)                  ; the PULL API (ns pull) — GRAPH-AUTHORED Beagle: its
+                                 ; upstream is .fram/code.log, src/pull.bclj is the
+                                 ; rendered view, out/pull.clj the emitted artifact (on
+                                 ; the classpath via deps.edn :paths ["out"] for the JVM
+                                 ; daemon and `bb -cp out` for every bb consumer). MUST
+                                 ; still come after coord.clj: pull references coord.clj's
+                                 ; readers as coord/… and SCI resolves those qualified
+                                 ; symbols at analysis time.
 ;; resolve.clj — the store-parameterized lexical resolver (S3.1/S3.2), loaded as a
 ;; LIBRARY: its -main is guarded behind a recognized MODES arg, and the daemon's
 ;; *command-line-args* ("serve-flat" ...) is not one, so load-file runs NOTHING — it

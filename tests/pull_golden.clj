@@ -2,7 +2,8 @@
 ;; Runs the SAME script against the original ns `pull` (load-file pull.clj) and the
 ;; ported ns `pull` (require 'pull from out/), and prints a fully deterministic
 ;; transcript on stdout.
-;;   bb -cp out tests/pull_golden.clj orig   # the hand-written pull.clj
+;;   bb -cp out tests/pull_golden.clj orig   # the hand-written pull.clj (DELETED after
+;;                                           # adoption — restore it from git history first)
 ;;   bb -cp out tests/pull_golden.clj port   # the Beagle-emitted out/pull.clj
 ;; Capture + compare:
 ;;   bb -cp out tests/pull_golden.clj orig > tests/goldens/pull/transcript.txt
@@ -15,7 +16,15 @@
          '[clojure.walk :as walk])
 (load-file "coord.clj")
 (if (= "orig" (first *command-line-args*))
-  (load-file "pull.clj")
+  (do (when-not (.exists (java.io.File. "pull.clj"))
+        (binding [*out* *err*]
+          (println "pull_golden: pull.clj is GONE — the hand-written original was deleted once")
+          (println "the graph-authored module reached byte-identical parity. The committed")
+          (println "tests/goldens/pull/transcript.txt IS the frozen oracle. To re-capture from")
+          (println "the original, restore it first:")
+          (println "  git show \"$(git log --diff-filter=D --format=%H -1 -- pull.clj)^:pull.clj\" > pull.clj"))
+        (System/exit 2))
+      (load-file "pull.clj"))
   (require 'pull))
 (def V (resolve 'pull/validate))
 (def R (resolve 'pull/run))

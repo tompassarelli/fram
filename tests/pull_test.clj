@@ -5,7 +5,8 @@
 ;;   bb -cp out tests/pull_test.clj
 (require '[fram.store :as c] '[fram.schema :as s])
 (load-file "coord.clj")   ; coord readers land in `user` (pull references them as user/…)
-(load-file "pull.clj")    ; MUST follow coord.clj (analysis-time qualified-symbol resolution)
+(require 'pull)           ; the graph-authored module (out/pull.clj). MUST follow coord.clj
+                          ; (analysis-time qualified-symbol resolution)
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm (boolean ok)]))
