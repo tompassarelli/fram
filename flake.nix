@@ -67,7 +67,7 @@
 
             mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
             cp -r out bin src coord.clj coord_daemon.clj resolve.clj pull.clj fri.clj \
-              defcheck_gate.clj deps.edn \
+              rotations.clj defcheck_gate.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
             # Only codegraph's source is executable runtime input. build/ is a
