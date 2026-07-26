@@ -20,7 +20,8 @@
 ;; ============================================================================
 (ns resolve
   (:require [clojure.edn :as edn] [clojure.string :as str] [fram.store :as c]
-            [fram.datalog :as d] [cheshire.core :as json]))   ; datalog+json: the `callgraph` mode
+            [fram.datalog :as d] [cheshire.core :as json]   ; datalog+json: the `callgraph` mode
+            [resolve-core :as rc]))  ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -173,28 +174,18 @@
 ;; Compare by (path, tie). DUAL parser: also reads the OLD "f<int>" format (path
 ;; [(inc i)*STEP], tie 0) so the resolver keeps working during corpus migration.
 ;; Library confirmed standalone in cnf_ordkey_test.clj (Stage A, 12/12).
-(def ORD-STEP 65536)
-(defn ord-parse [p]                            ; -> {:path [int...] :tie int} | nil
-  (when (string? p)
-    (if-let [[_ ps ts] (re-matches #"f(\d+(?:\.\d+)*)~(\d+)" p)]
-      {:path (mapv #(Long/parseLong %) (str/split ps #"\.")) :tie (Long/parseLong ts)}
-      (when-let [[_ d] (re-matches #"f(\d+)" p)]
-        {:path [(* (inc (Long/parseLong d)) ORD-STEP)] :tie 0}))))
-(defn ord-pos? [p] (boolean (ord-parse p)))    ; is p a child-position predicate (old or new)?
-(defn ord-str [path tie] (str "f" (str/join "." path) "~" tie))
-(defn ord-veccmp [a b]
-  (loop [a (seq a) b (seq b)]
-    (cond (and (nil? a) (nil? b)) 0 (nil? a) -1 (nil? b) 1
-          :else (let [c (compare (long (first a)) (long (first b)))] (if (zero? c) (recur (next a) (next b)) c)))))
-(defn ord-cmp [x y] (let [c (ord-veccmp (:path x) (:path y))] (if (zero? c) (compare (:tie x) (:tie y)) c)))
-(defn ord-append [last-path] (if (empty? last-path) [ORD-STEP] (conj (vec (butlast last-path)) (+ (long (last last-path)) ORD-STEP))))
-(defn ord-between [lo hi]                       ; a path strictly between lo and hi (nil = open end)
-  (cond (and (nil? lo) (nil? hi)) [ORD-STEP]
-        (nil? hi) (ord-append lo)
-        :else (let [lo (or lo [0])]
-                (loop [i 0 acc []]
-                  (let [a (long (get lo i 0)) b (long (get hi i (+ a (* 2 ORD-STEP))))]
-                    (if (> (- b a) 1) (conj acc (quot (+ a b) 2)) (recur (inc i) (conj acc a))))))))
+;; #36 CRDT ORDER KEYS — now Beagle (src/resolve_core.bclj), aliased here so every
+;; call site in this file, in coord_daemon.clj and in tests/coord_crdt_*.clj keeps
+;; its unqualified spelling. ord-parse returns a resolve-core/OrdKey record; it
+;; answers :path and :tie exactly as the map it replaced did.
+(def ORD-STEP rc/ORD-STEP)
+(def ord-parse rc/ord-parse)
+(def ord-pos? rc/ord-pos?)
+(def ord-str rc/ord-str)
+(def ord-veccmp rc/ord-veccmp)
+(def ord-cmp rc/ord-cmp)
+(def ord-append rc/ord-append)
+(def ord-between rc/ord-between)
 
 (defn ordered-children [e]                     ; fN children, in CRDT-key (path,tie) order
   (->> (c/by-l ctx e) (map #(c/fact-of ctx %))
@@ -230,10 +221,10 @@
 (defn live-node? [e] (seq (c/by-lp ctx e KIND)))
 
 ;; --- binding extraction -----------------------------------------------------
-(def PARAM-FORMS #{"defn" "defn-" "fn" "defmacro" "fn*"})   ; have a [param] vector
-(def DEF-FORMS   #{"def" "def-" "defonce"})    ; module value binding: (def name :- T val)
-(def VALUE-DEFS  (into PARAM-FORMS DEF-FORMS)) ; everything that binds a value at module scope
-(def TYPE-DEFS   #{"defrecord" "deftype" "defprotocol" "definterface" "defunion"})
+(def PARAM-FORMS rc/PARAM-FORMS)   ; have a [param] vector
+(def DEF-FORMS   rc/DEF-FORMS)    ; module value binding: (def name :- T val)
+(def VALUE-DEFS  rc/VALUE-DEFS) ; everything that binds a value at module scope
+(def TYPE-DEFS   rc/TYPE-DEFS)
 ;; EFFECT-DEFS — top-level forms whose effect is a REGISTRATION (a multimethod method,
 ;; a defmulti dispatch table, a protocol extension) rather than a fresh value binding.
 ;; They ARE addressable (read-def surfaces them: defmethod as `M:dispatch`, extensions
@@ -242,11 +233,11 @@
 ;; write-def gate accepted only VALUE-DEFS, so it rejected defmethod with the wrong
 ;; medicine ("wrap it as (def <name> (defmethod …))" — a multimethod registration is a
 ;; top-level effect, not a value, so the wrap misleads the model into churn).
-(def EXTEND-FORMS #{"extend-type" "extend-protocol" "extend"})
-(def EFFECT-DEFS  (into #{"defmulti" "defmethod"} EXTEND-FORMS))
+(def EXTEND-FORMS rc/EXTEND-FORMS)
+(def EFFECT-DEFS  rc/EFFECT-DEFS)
 ;; every top-level head write-def / upsert-form accepts.
-(def WRITABLE-DEFS (into (into VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
-(defn writable-def-head? [h] (contains? WRITABLE-DEFS h))
+(def WRITABLE-DEFS rc/WRITABLE-DEFS)
+(def writable-def-head? rc/writable-def-head?)
 ;; a writable form whose IDENTITY is its def-name (def/defn/type/protocol/defmulti) — as
 ;; opposed to defmethod (name+dispatch) and the extend forms (head+target), which key
 ;; differently and coexist under a shared head/name.
@@ -285,11 +276,10 @@
                           "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) "
                           "form instead")
          :nearest (mapv pr-str bad)}))))
-(def TYPE-COLON  #{":-" ":"})  ; inline type-annotation markers (`:` is legal in field/param position)
-(def LET-FORMS   #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding"
-                   "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})
-(def FOR-FORMS   #{"doseq" "for"})             ; binding vector carries :when/:while/:let modifiers
-(def MATCH-FORMS #{"match"})                    ; (match expr [pattern body] ...) — patterns bind + ref ctors
+(def TYPE-COLON  rc/TYPE-COLON)  ; inline type-annotation markers (`:` is legal in field/param position)
+(def LET-FORMS   rc/LET-FORMS)
+(def FOR-FORMS   rc/FOR-FORMS)             ; binding vector carries :when/:while/:let modifiers
+(def MATCH-FORMS rc/MATCH-FORMS)                    ; (match expr [pattern body] ...) — patterns bind + ref ctors
 (defn brackets? [e] (= "#%brackets" (head-sym e)))
 (defn map-node? [e] (= "#%map" (head-sym e)))
 (defn collect-bind-syms [node]                 ; symbol leaves bound by a (destructuring) pattern
@@ -392,10 +382,7 @@
     (swap! n-xmod inc)
     true))
 ;; ->Name / map->Name auto-constructor prefix in a spelling (bare OR alias-qualified), else nil.
-(defn ctor-prefix [nm]
-  (cond (or (str/starts-with? (or nm "") "map->") (str/includes? (or nm "") "/map->")) "map->"
-        (or (str/starts-with? (or nm "") "->") (str/includes? (or nm "") "/->")) "->"
-        :else nil))
+(def ctor-prefix rc/ctor-prefix)
 ;; #(a) identity RE-RENDER: a reference carrying a DURABLE bound_to edge resolves by IDENTITY
 ;; (the binding's stable @mod#int), but its render MARKERS (qualifier / ctor_prefix /
 ;; accessor_field / keep_spelling) are spelling-derived resolve-preds that a strip+re-resolve
@@ -1809,7 +1796,7 @@
 (defn- crumb-label [n]
   (or (head-sym n) (cond (map-node? n) "{}" (brackets? n) "[]" :else "(...)")))
 ;; DISAMBIG-CAP — at most this many candidates in a reject payload (report the total).
-(def DISAMBIG-CAP 8)
+(def DISAMBIG-CAP rc/DISAMBIG-CAP)
 ;; build the reject candidate for match site `site`, relative to search-root `root`,
 ;; given the OTHER sites (to find the smallest enclosing form that isolates THIS one).
 (defn- reject-candidate [root site others idx]
@@ -2215,7 +2202,7 @@
 ;; one `resolve-edn!` binding scope, so dispatch reads the freshly-bound store /
 ;; tables / counters exactly as the old top-level code did. GUARDED: loaded as a
 ;; library (no recognized mode), nothing runs — no load-edn over mis-sliced args.
-(def MODES #{"resolve" "rename" "delete" "reorder" "callgraph" "upsert-form" "set-body" "replace-in-body"})
+(def MODES rc/MODES)
 (defn -main []
   (let [;; strip an optional `--within-file <path>` flag (replace-in-body's scope-narrower)
         ;; so it never lands in the edn-paths slice below (load-edn would slurp it as a file).
