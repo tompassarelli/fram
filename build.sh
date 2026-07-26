@@ -20,6 +20,22 @@ for m in types store schema datalog kernel fold import export query tools author
   echo "  built fram/$m"
 done
 
+# Coordinator-layer modules being migrated off hand-written Clojure (engine core
+# port, north thread 019f9f0e-de2a-7759-bb10-db8b14be6fad). They live in src/
+# rather than src/fram/ because their namespaces are bare (`pull`, `resolve-core`)
+# — coord_daemon.clj load-file's the coordinator layer instead of requiring it.
+#   pull         M0: the full port. out/pull.clj is behaviour-identical to the
+#                hand-written pull.clj, which is still what the daemon load-file's
+#                until the adoption commit switches consumers over.
+#   resolve_core M1 Cut A: the CRDT order-key algebra + form vocabulary that
+#                resolve.clj now aliases (rc/*), and which coord_daemon.clj and
+#                tests/coord_crdt_*.clj read through it.
+for m in pull resolve_core; do
+  BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
+    "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
+  echo "  built $m"
+done
+
 # codegraph — the code-as-facts analysis driver. Lives outside src/fram (it is a
 # TENANT of the engine, renting only fram.store + fram.datalog; see
 # tests/codegraph_seam_test.clj) and emits to out/codegraph.clj, so
