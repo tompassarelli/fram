@@ -17,7 +17,7 @@ for f in "$@"; do
     edns+=("$e")
 done
 
-bb -cp "$FRAM/out" "$HERE/src/rename.clj" "$old" "$new" "$target" "${edns[@]}"
+bb -cp "$FRAM/out" -m rename "$old" "$new" "$target" "${edns[@]}"
 echo
 for f in "$@"; do
     echo "----- projected source: $(basename "$f") -----"
