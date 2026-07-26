@@ -1143,7 +1143,13 @@
 ;; under a classpath root would rewrite the nix package layout, build.sh, the
 ;; bench harnesses and all 88 call sites at once; that is a separate change.
 ;; Until then load-file is the loader and this bridge is the seam.
+;; `refer` exports only PUBLICS on the JVM (SCI is laxer), but the shared-`user`
+;; world had no privacy at all — so the bridge LIFTS the (inert) :private marker
+;; before referring, keeping the callable surface byte-for-byte what it was. The
+;; definition-site `defn-` is retained as the authorial intent marker for the
+;; eventual real decoupling; only the exported surface is widened, here, once.
 (let [target (create-ns 'user)]
+  (doseq [[_ v] (ns-interns 'coord)] (alter-meta! v dissoc :private))
   (binding [*ns* target]
     (refer 'coord)
     (doseq [[a n] (ns-aliases 'coord)] (alias a (ns-name n)))))
