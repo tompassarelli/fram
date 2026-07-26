@@ -7,7 +7,8 @@
             [clojure.string :as str]
             [fram.tools :as tl]
             [fram.query :as q]
-            [fram.rt :as rt]))
+            [fram.rt :as rt]
+            [fram.authority-json :as ajson]))
 
 (defn- ^String short-id [^String te]
   (if (str/starts-with? te "@") (subs te 1) te))
@@ -74,20 +75,51 @@
   (let [esc (str (char 27))]
   (str " " esc "[2m· by " frame esc "[0m")))
 
+(def ^String evidence-arrow " → ")
+
+(def ^String ambiguous-reporter "?ambiguous?")
+
+(defn- ^String reporter-label [^String reporter]
+  (if (str/starts-with? reporter "@agent:") (subs reporter 7) (short-id reporter)))
+
+(defn- reporter-map-for [facts ^String te]
+  (reduce (fn [m c] (if (or (not (= (:p c) "run_bar_evidence")) (not (str/includes? (:r c) te))) m (let [rec (try
+  (ajson/decode-strict (:r c))
+  (catch Throwable _
+    nil))
+   thread (if (map? rec) (get rec "thread") nil)
+   reporter (if (map? rec) (get rec "reporter") nil)
+   bar (if (map? rec) (get rec "bar") nil)
+   observed (if (map? rec) (get rec "observed") nil)]
+  (if (and (= thread te) (string? reporter) (string? bar) (string? observed)) (let [key (str bar evidence-arrow observed)
+   prior (get m key)]
+  (cond
+  (nil? prior) (assoc m key reporter)
+  (= prior reporter) m
+  :else (assoc m key ambiguous-reporter))) m)))) {} facts))
+
+(defn- ^String provenance-marker [reporter writer]
+  (cond
+  (nil? reporter) (if (some? writer) (by-marker writer) "")
+  (= reporter ambiguous-reporter) (if (some? writer) (by-marker (str writer " · reporter ambiguous (see run subjects)")) (by-marker "? · reporter ambiguous (see run subjects)"))
+  :else (let [lane (reporter-label reporter)]
+  (if (or (nil? writer) (= writer lane)) (by-marker lane) (by-marker (str lane " via " writer))))))
+
 (defn cmd-show [^String log ^String id ^Boolean provenance?]
   (let [facts (live-facts log)
    te (str "@" id)
    exact (k/q-by-l facts te)
    matches (if (or (not (empty? exact)) (str/blank? id)) [] (filterv (fn [t] (str/starts-with? (short-id t) id)) (k/thread-ids-i (k/build-index facts))))
    by-map (by-map-for log)
-   line (fn [c] (let [want? (or provenance? (evidence-pred? (:p c)))
-   w (if want? (get by-map (fact-sig3 (:l c) (:p c) (:r c))) nil)]
-  (println (str "  " (:p c) "  " (:r c) (if (some? w) (by-marker w) "")))))]
+   render (fn [subj cs] (let [rmap (reporter-map-for facts subj)]
+  (doseq [c cs]
+  (let [want? (or provenance? (evidence-pred? (:p c)))
+   w (if want? (get by-map (fact-sig3 (:l c) (:p c) (:r c))) nil)
+   r (if (= (:p c) "bar_evidence") (get rmap (:r c)) nil)]
+  (println (str "  " (:p c) "  " (:r c) (if (or (some? w) (some? r)) (provenance-marker r w) "")))))))]
   (cond
-  (not (empty? exact)) (doseq [c exact]
-  (line c))
-  (= (count matches) 1) (doseq [c (k/q-by-l facts (first matches))]
-  (line c))
+  (not (empty? exact)) (render te exact)
+  (= (count matches) 1) (render (first matches) (k/q-by-l facts (first matches)))
   (> (count matches) 1) (do
   (println (str "ambiguous prefix @" id " matches " (count matches) " threads:"))
   (doseq [m matches]
