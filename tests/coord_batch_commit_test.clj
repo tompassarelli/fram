@@ -23,7 +23,7 @@
     (if (and pid teid)
       (set (map #(let [r (:r (fram.store/fact-of st %))]
                    (or (fram.schema/name-of st r) (fram.store/literal st r)))
-                (#'user/live-cids-lp co teid pid)))
+                (#'coord/live-cids-lp co teid pid)))
       #{})))
 
 ;; (1) happy path — three multi facts land as one unit
@@ -84,7 +84,7 @@
       cids-of (fn [te p]
                 (let [pid (fram.store/value-id st p)
                       teid (fram.schema/resolve-name st te)]
-                  (#'user/live-cids-lp co teid pid)))
+                  (#'coord/live-cids-lp co teid pid)))
       batch-cids (mapcat #(cids-of "@msg:5" %) ["from" "subject" "to"])
       txs (set (map #(get (:tx-of @st) %) batch-cids))
       after (:next-seq @(:store co))]

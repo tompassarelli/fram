@@ -2,8 +2,9 @@
 ;; ============================================================================
 ;; Coordinator-layer, PLAIN Clojure (NOT Beagle). Loaded by coord_daemon.clj via
 ;; (load-file "pull.clj") right AFTER coord.clj, so coord.clj's reader vars live in
-;; `user` and resolve here as `user/…` (SCI resolves qualified symbols at analysis
-;; time — coord MUST be loaded first, which the daemon and the tests both guarantee).
+;; namespace `coord` and resolve here as `coord/…` (SCI resolves qualified symbols
+;; at analysis time — coord MUST be loaded first, which the daemon and the tests
+;; both guarantee).
 ;;
 ;; Two entry points, both pure over the captured store snapshot (no locks, no writes):
 ;;   (validate root pattern opts) -> [] | [err-string …]   ; total, never throws
@@ -84,7 +85,7 @@
       (let [st        store-atom
             co0       {:store store-atom}
             asof      (:as-of opts)
-            asof-set  (when asof (user/live-as-of co0 asof))   ; historical live cid set
+            asof-set  (when asof (coord/live-as-of co0 asof))   ; historical live cid set
             prov?     (boolean (:provenance opts))
             max-depth (clamp (:max-depth opts) default-max-depth)
             max-nodes (clamp (:max-nodes opts) default-max-nodes)
@@ -100,7 +101,7 @@
                     ;; provenance surfaces WITHDRAWN members too (add-wins resurrects a
                     ;; cancelled value while a genuine overwrite still hides) — that is
                     ;; what makes :withdrawn/:withdrawn_by meaningful in the current view.
-                    prov?    (vec (user/live-members co0 lid pid :add-wins))
+                    prov?    (vec (coord/live-members co0 lid pid :add-wins))
                     :else    (flive (get (:idx-by-lp @st) [lid pid] []))))
                 (rev-cids [pid rid] (flive (get (:idx-by-pr @st) [pid rid] [])))
                 ;; a leaf value: literal or (for a ref) the target's name string. In
@@ -113,19 +114,19 @@
                     (if-not prov?
                       v
                       (let [tx   (c/fact-tx st cid)
-                            wd   (when-not asof (user/withdrawn? co0 cid))
+                            wd   (when-not asof (coord/withdrawn? co0 cid))
                             ;; wall-clock of the asserting tx (ISO-8601 string). DISPLAY-ONLY
                             ;; metadata: :seq stays the causal address, :ts never drives as-of.
                             ;; nil for pre-existing v2 txs whose record predates the :ts field
                             ;; (and for internal txs that never stamped) -> the key is OMITTED.
-                            ts   (user/ts-of co0 cid)
+                            ts   (coord/ts-of co0 cid)
                             base (cond-> {:val v :cid cid
-                                          :by (user/agent-of co0 cid)
+                                          :by (coord/agent-of co0 cid)
                                           :seq (c/tx-seq st tx)
                                           :withdrawn (boolean wd)}
                                    (some? ts) (assoc :ts ts))]
                         (if wd
-                          (let [w (user/withdrawal-of co0 cid)]
+                          (let [w (coord/withdrawal-of co0 cid)]
                             (assoc base :withdrawn_by (:by w)
                                         :withdrawn_at (:at w)
                                         :withdrawn_reason (:reason w)))

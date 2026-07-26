@@ -24,10 +24,17 @@
 ;;
 ;;   bb -cp out coord.clj test
 ;; ============================================================================
-(require '[fram.store :as c] '[fram.schema :as s] '[fram.kernel :as ck]
-         '[fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
-         '[fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
-         '[clojure.edn :as edn] '[clojure.java.io :as io] '[clojure.string :as str])
+;; NAMESPACE. This file used to have no `ns` form at all, so every one of its
+;; ~90 defs landed in whatever namespace load-file'd it — in practice `user`,
+;; shared with coord_daemon.clj and 88 loading scripts/tests. It now owns the
+;; real namespace `coord`; the compat bridge at the BOTTOM of the file re-exports
+;; those vars into `user` so the existing load-file callers keep working
+;; unchanged. See the bridge comment for why load-file (not require) remains.
+(ns coord
+  (:require [fram.store :as c] [fram.schema :as s] [fram.kernel :as ck]
+            [fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
+            [fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
+            [clojure.edn :as edn] [clojure.java.io :as io] [clojure.string :as str]))
 
 (defn- store [co] (:store co))
 
@@ -1114,3 +1121,29 @@
       :else
       (do (world-commit! co agent [[(world-subject nm) "world.head" sealed]])
           {:ok sealed}))))
+
+;; ============================================================================
+;; COMPAT BRIDGE — `coord` re-exported into `user`.
+;; ============================================================================
+;; 88 callers (coord_daemon.clj, the bench harnesses, bin/fram-selfcheck-probe,
+;; ~80 tests) reach this file with `(load-file "coord.clj")` from a bare bb
+;; script, i.e. from `user`, and then call new-coord/commit!/select!/… with NO
+;; qualifier. Before this file had an `ns`, that worked because the defs landed
+;; in `user` directly. It keeps working because we refer every var of `coord`
+;; — publics AND privates, which several callers legitimately use (live-cids-lp,
+;; append-tx!, delta-records, read-lease, ent!) because privacy was a no-op in
+;; the shared-`user` world — plus this namespace's require ALIASES (c/, s/, ck/,
+;; rt/, w/, edn/, io/, str/), which callers also inherited from the old bare
+;; `(require ...)`. `refer` installs the REAL vars (not copies), so dynamic
+;; rebinding of `*durable-tickets*` from `user` still hits this namespace's var.
+;;
+;; WHY load-file AND NOT require. coord.clj sits at the repo ROOT, and every
+;; entry point runs with `-cp out` (the compiled Beagle output) — the root is
+;; not on the classpath, so `(require 'coord)` cannot find it. Moving the file
+;; under a classpath root would rewrite the nix package layout, build.sh, the
+;; bench harnesses and all 88 call sites at once; that is a separate change.
+;; Until then load-file is the loader and this bridge is the seam.
+(let [target (create-ns 'user)]
+  (binding [*ns* target]
+    (refer 'coord)
+    (doseq [[a n] (ns-aliases 'coord)] (alias a (ns-name n)))))
