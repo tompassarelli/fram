@@ -1347,12 +1347,12 @@
               ordered (vec (concat (remove #(delivery-trigger-preds (:pred %)) normalized)
                                    (filter #(delivery-trigger-preds (:pred %)) normalized)))
               res     (binding [*flat-batch* (atom [])]
-                        (let [r (commit-batch! @co "coord" te ordered)]
-                          (when (:ok r)
-                            (doseq [{:keys [pred r]} (:written r)]
-                              (append-flat! "assert" te pred r (:ok r))))
+                        (let [batch-result (commit-batch! @co "coord" te ordered)]
+                          (when (:ok batch-result)
+                            (doseq [{:keys [pred r]} (:written batch-result)]
+                              (append-flat! "assert" te pred r (:ok batch-result))))
                           (flush-flat-batch!)        ; ONE fsync for the whole batch
-                          r))]
+                          batch-result))]
           (if (:ok res)
             (let [written (:written res)]
               (when (seq written)
