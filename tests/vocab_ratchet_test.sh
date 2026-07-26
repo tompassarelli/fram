@@ -27,10 +27,14 @@ cd "$HERE" || exit 2
 BASELINE_REL="tests/vocab_ratchet_baseline.txt"
 BASELINE="$HERE/$BASELINE_REL"
 
-# count<TAB>path for every tracked, non-exempt file with at least one hit,
-# sorted by PATH so the baseline diffs cleanly when a count changes.
+# count<TAB>path for every tracked-or-untracked, non-exempt file with at least
+# one hit, sorted by PATH so the baseline diffs cleanly when a count changes.
+# Untracked (non-ignored) files are INCLUDED deliberately: scanning only
+# `git ls-files` let a new claim-bearing file pass vacuously when the baseline
+# was regenerated before `git add` — the gate then went red on main at commit
+# (fd63c83). Same file set in scan and regen keeps the comparison honest.
 scan() {
-  git ls-files -z | while IFS= read -r -d '' f; do
+  git ls-files -z --cached --others --exclude-standard | while IFS= read -r -d '' f; do
     case "$f" in
       LICENSE*|*/LICENSE*) continue ;;
       "$BASELINE_REL")     continue ;;
