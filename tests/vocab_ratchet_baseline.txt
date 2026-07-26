@@ -1,3 +1,4 @@
+8	README.md
 1	bin/fram-graph-edit-runtime
 1	build.sh
 26	codegraph/RESULTS.md

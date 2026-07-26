@@ -27,6 +27,25 @@ conceded, is in **[docs/WHY_FRAM_EXISTS.md](docs/WHY_FRAM_EXISTS.md)**.
 > statement-level reification as a bolt-on. Concurrency, Datalog, and schema-as-data are
 > *not* why Fram exists (off-the-shelf stores tie or win there) — the primitive is.
 
+**Contents:**
+[Terminology](#terminology--its-a-fact) ·
+[Consumers](#one-engine-many-consumers) ·
+[Reasoning + repair](#what-the-graph-buys-you-reasoning--repair) ·
+[Try it](#try-it-verbatim--every-command-here-is-run-by-ci) ·
+[How it works](#how-it-works) ·
+[Multi-agent safety](#multi-agent-safety) ·
+[AI-native surface](#ai-native-tools-not-a-query-dsl) ·
+[Pull](#pull--nested-reads-over-the-graph) ·
+[Worlds & claims](#worlds-and-claims--versions-and-verification) ·
+[Identity-addressed code](#identity-addressed-code-codegraph) ·
+[Anti-rot](#anti-rot-the-engine-is-the-source-of-truth) ·
+[Measured](#measured-each-pinned-to-a-receipt--a-regen-command) ·
+[Isolation](#isolation-separate-graphs-not-access-control) ·
+[Built on Beagle](#built-on-beagle) ·
+[What it isn't](#what-it-isnt) ·
+[Tests](#tests) ·
+[License](#license)
+
 ## Terminology — it's a *fact*
 
 The substrate atom is a **fact**: an immutable, addressable triple `(subject predicate
@@ -341,6 +360,26 @@ never throws) instead of erroring. `:ts` is the asserting tx's wall-clock instan
 metadata only — `:as-of` stays addressed by causal `:seq`, and the key is omitted for
 txs whose log records predate it. **Limit:** `pull` is daemon-only (needs the live
 index) — the cold CLI fold doesn't serve it.
+
+## Worlds and claims — versions and verification
+
+Two optional layers, both pure derivations over the same fact substrate (zero engine
+change — their executable specs prove it):
+
+- **Worlds** — a named, forkable lineage of immutable versions; a version fixes *which
+  facts are in scope*, the thing you evaluate queries "at." Fork is O(1) (one head fact);
+  a new version is an immutable base + a **sparse overlay**, so incremental ingestion
+  supersedes only what changed and inherits the rest — old generations stay queryable.
+  Why it's called a world: [the naming ledger](docs/naming.md).
+- **fram.claims** — assertion under verification: a claim is an ordinary fact + evidence
+  edges + a status **derived from view membership** (`verified` is never stored, never
+  even interned). Rejection is a view convention; add `evidence.world` and "which
+  verified claims does this generation-transition invalidate?" is one Datalog rule
+  between two world heads. Design: [docs/claims-design.md](docs/claims-design.md);
+  contract: [tests/claims_spec_test.clj](tests/claims_spec_test.clj).
+- **Both composed, end to end:** an addendum to a plan set as a fork + sparse overlay,
+  with exactly the affected verified claims dropping back to pending —
+  [tests/world_claims_addendum_demo.clj](tests/world_claims_addendum_demo.clj).
 
 ## Identity-addressed code (Codegraph)
 
