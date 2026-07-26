@@ -1,10 +1,10 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; Turtle #4 — graph-native authoring: a SCOPE-CORRECT rename as a claim edit.
+;; Turtle #4 — graph-native authoring: a SCOPE-CORRECT rename as a fact edit.
 ;; ============================================================================
-;; Loads two modules' reader-claims into ONE Fram store, then renames a symbol
-;; in ONE module by SUPERSEDING its `v` claims (claim-native: nothing is
-;; overwritten — the old claims stay, marked not-live, fully recoverable). The
+;; Loads two modules' reader-facts into ONE Fram store, then renames a symbol
+;; in ONE module by SUPERSEDING its `v` facts (fact-native: nothing is
+;; overwritten — the old facts stay, marked not-live, fully recoverable). The
 ;; other module's identically-named symbol is untouched. Re-projects each file's
 ;; (mutated) source. A text `sed` rename would corrupt both files; the graph
 ;; edit is correct by construction because scope is structural, not lexical.
@@ -86,11 +86,11 @@
 
 (def renamed (atom 0))
 (when OLDv
-  (doseq [cid (vec (c/by-pr ctx Vp OLDv))]          ; every [e v old] claim
+  (doseq [cid (vec (c/by-pr ctx Vp OLDv))]          ; every [e v old] fact
     (let [e (:l (c/fact-of ctx cid))]
       (when (and (target-ents e) (symbol-leaf? e))
         (let [ncid (c/fact! ctx e Vp NEWv tx)]     ; assert new value
-          (c/fact! ctx ncid SUP cid tx))           ; supersede the old value-claim
+          (c/fact! ctx ncid SUP cid tx))           ; supersede the old value-fact
         (swap! renamed inc)))))
 
 ;; occurrences of `old` left untouched in OTHER files (proof of scope-correctness)
@@ -107,7 +107,7 @@
     (binding [*out* w]
       (println (str "@file " src))
       (doseq [e (@file->ents src)
-              cid (c/by-l ctx e)]                    ; LIVE claims only (superseded excluded)
+              cid (c/by-l ctx e)]                    ; LIVE facts only (superseded excluded)
         (let [cl (c/fact-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
           (when (not= ps "supersedes")
             (if (c/value-object? ctx r)
@@ -123,6 +123,6 @@
   (println (str "edit: rename symbol `" old-name "` -> `" new-name "` in files matching \"" target-substr "\""))
   (println (str "renamed (target file): " @renamed " symbol occurrences"))
   (println (str "preserved (other files, same name, untouched): " preserved " occurrences"))
-  (println (str "superseded claims (recoverable, nothing deleted): " @renamed))
-  (println (str "live claims in store: " (count (c/current-facts ctx))))
+  (println (str "superseded facts (recoverable, nothing deleted): " @renamed))
+  (println (str "live facts in store: " (count (c/current-facts ctx))))
   (doseq [src srcs] (println (str "projected -> " (outs src) "   <- " src))))

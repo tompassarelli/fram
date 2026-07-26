@@ -11,7 +11,7 @@
 ;; into the workflow the design was written for, in one continuous log:
 ;;
 ;;   1. CREATE world A and graph-edit it into a real two-slot manifest.
-;;   2. FORK B from A in O(1) — one head claim, no blob/manifest/Version copy,
+;;   2. FORK B from A in O(1) — one head fact, no blob/manifest/Version copy,
 ;;      NO PERSISTENT CHECKOUT anywhere on disk.
 ;;   3. GRAPH-EDIT BOTH and BUILD each against its EXACT per-world lock: A and B
 ;;      resolve their own content and neither edit bleeds into the other.
@@ -182,7 +182,7 @@
           len-post-fork (flen slice-log)
           fork-tail (subs (slurp8 slice-log) len-pre-fork)
           ;; observed AT FORK TIME — both names diverge later in this same log,
-          ;; so the fork-time claims must be captured here, not re-read later.
+          ;; so the fork-time facts must be captured here, not re-read later.
           fork-obs {:head-a (u "world-head" co "A")
                     :head-b (u "world-head" co "B")
                     :man-a (u "world-manifest" co (u "world-head" co "A"))
@@ -286,7 +286,7 @@
        (and (not (str/includes? (:fork-tail f) slot-core))
             (not (str/includes? (:fork-tail f) slot-util)))))
 ;; observed: the fork does not even re-emit the VersionId STRING — the value is
-;; already interned in the log, so the head claim carries a reference to it. A
+;; already interned in the log, so the head fact carries a reference to it. A
 ;; fork that copied anything content-addressed would have to spell a 64-hex id.
 (bar "fork B: the fork re-emits NO content id at all — it REFERENCES the interned one"
      (let [f @fx] (empty? (re-seq #"[0-9a-f]{64}" (:fork-tail f)))))

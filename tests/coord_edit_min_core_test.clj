@@ -3,7 +3,7 @@
 ;; authoring path (no socket, no Beagle → no #14 flakiness). Proves do-edit-min
 ;; commits the verb's exact delta for the SAFE-on-spelling verbs (set-body /
 ;; upsert-form) and that graph RENAME is the O(1) shadow-correct spelling-change
-;; verb — it renames the definition's name claim (references follow refers_to),
+;; verb — it renames the definition's name fact (references follow refers_to),
 ;; and is GUARDED (a colliding rename REJECTS with no mutation).
 ;;   bb -cp out coord_edit_min_core_test.clj
 ;;
@@ -81,7 +81,7 @@
      (and (pos? card-before) (pos? (spell-count "cardinality"))))
 (chk "upsert REPLACE landed the new body token" (pos? (spell-count upmark)))
 
-;; --- rename: the O(1) shadow-correct verb — edits ONLY the definition's name claim
+;; --- rename: the O(1) shadow-correct verb — edits ONLY the definition's name fact
 ;; (asserts the new spelling, supersedes the old); references follow refers_to at render
 ;; (tests/coord_edit_min_rename.clj is the render+recompile receipt). This is the #25-LOCK
 ;; spelling-change verb: the ONLY :edit-min verb that moves a binding's name.
@@ -92,7 +92,7 @@
 (chk "rename is minimal — 2 ops (assert new name + supersede old)" (= 2 (:ops rn)))
 (chk "rename landed the NEW spelling (supersede-prior! now bound)"
      (and (zero? before-new) (pos? (spell-count "supersede-prior!"))))
-(chk "rename is identity-preserving — the old name claim was superseded, not duplicated"
+(chk "rename is identity-preserving — the old name fact was superseded, not duplicated"
      (= (dec before-replace) (spell-count "replace!")))
 ;; GUARD: renaming ONTO an already-bound name is REJECTED with no facts mutated.
 (def guard-before (spell-count "cardinality"))

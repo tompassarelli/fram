@@ -3,13 +3,13 @@
 ;; callgraph — the SCOPE-CORRECT call-graph engine (Layer 2, on Fram).
 ;; ============================================================================
 ;; Derives the scope-correct call graph of a beagle source tree from its CNF
-;; claim projection, with the transitive blast radius computed by Fram Datalog.
+;; fact projection, with the transitive blast radius computed by Fram Datalog.
 ;; A call binds the defn in its OWN module (module-local lexical scope; else a
 ;; unique global; else ambiguous/external -> dropped), so same-named functions
 ;; across modules never collide — the failure mode of bare-symbol text matching.
 ;;
 ;; This is the CNF-projection call-graph core, used by chartroom.clj's gjoa BENCHMARK.
-;; LIMITATION: the CNF projection (beagle-claims) does not emit require/:as info, so a
+;; LIMITATION: the CNF projection (beagle-facts) does not emit require/:as info, so a
 ;; QUALIFIED cross-module call (a/f, fully-qualified m/f) cannot be resolved here and is
 ;; dropped (under-counting cross-module blast). The PRODUCTION call graph (beagle-callgraph
 ;; / cascade) does NOT use this — it derives the graph from resolve.clj's converged
@@ -18,14 +18,14 @@
 ;; correct-vs-bare-symbol point still holds; reprojecting gjoa to the AST is a follow-up.
 ;; Requirable as a library; runnable as a CLI:
 ;;
-;;   bb -cp <fram/out>:<chartroom/src> -m callgraph <claims-file>   ; -> JSON on stdout
+;;   bb -cp <fram/out>:<chartroom/src> -m callgraph <facts-file>   ; -> JSON on stdout
 (ns callgraph
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [cheshire.core :as json]
             [resolve :as rsv]))   ; rsv/blast-closure: the ONE reaches-closure impl
 
-;; ---- parse the @file-delimited claim stream (from beagle-claims) -----------
+;; ---- parse the @file-delimited fact stream (from beagle-facts) -------------
 ;; NOTE: Racket ~s emits some escapes (\e, \a, ...) Clojure's EDN reader rejects.
 ;; Those only appear in LEAF literal objects (never the call-graph predicates
 ;; name/calls/child/form-kind), so we skip-and-count them — the call graph is
@@ -109,10 +109,10 @@
 ;; per-query throwaway recursion store now lives in exactly that one helper (decision J).
 (defn blast-radius [edges] (rsv/blast-closure edges))
 
-;; ---- CLI: claims-file -> JSON {defns, edges, blast} ------------------------
+;; ---- CLI: facts-file -> JSON {defns, edges, blast} ------------------------
 (defn -main [& args]
-  (let [claims-path (first args)
-        blocks (parse-corpus claims-path)
+  (let [facts-path (first args)
+        blocks (parse-corpus facts-path)
         {:keys [defns edges]} (build-graph blocks)
         {:keys [blast reaches]} (blast-radius edges)
         key->str (fn [k] (str (first k) "#" (second k)))
@@ -125,7 +125,7 @@
                        (count defns) (count edges) (count reaches))))
     (println (json/generate-string {:defns defns-out :edges edges-out :blast blast-out}))))
 
-;; runnable directly (bb src/callgraph.clj <claims>) without -m, but NOT on require
+;; runnable directly (bb src/callgraph.clj <facts>) without -m, but NOT on require
 (when (and (System/getProperty "babashka.file")
            (= (System/getProperty "babashka.file") *file*))
   (apply -main *command-line-args*))

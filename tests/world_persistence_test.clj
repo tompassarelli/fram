@@ -12,10 +12,10 @@
 ;; so every other FAIL is the missing kernel, not the test.
 ;;
 ;; WHAT MUST HOLD. The graph is the source of truth: world/blob/version/candidate/
-;; receipt/head-claim facts live in the existing append-only FRAM log and V1 raw
+;; receipt/head facts live in the existing append-only FRAM log and V1 raw
 ;; blobs are canonical base64 FACTS, so there is no persistent checkout and no
 ;; blob filesystem. A head is DERIVED by folding append-only create/fork/promote
-;; claims — never a stored status. Therefore:
+;; facts — never a stored status. Therefore:
 ;;   * only COMPLETE, committed, sealed records replay;
 ;;   * a crash before a complete promotion record leaves the OLD derived head;
 ;;   * every truncated, gapped, unsealed or tampered candidate is UNPROMOTABLE;
@@ -331,13 +331,13 @@
      (let [f   @fx
            log (copy-log (:log f) "partial-promote")]
        (truncate-to! log (:len-before-promote f))
-       (write-raw! log (str "{:k :world/head-claim :world \"A\" :version \"" (:vA f)) true)
+       (write-raw! log (str "{:k :world/head :world \"A\" :version \"" (:vA f)) true)
        (= (:head0 f) (u "world-head" (reopen log) "A"))))
 (bar "torn: an unterminated tail also blocks any further append (no concatenation)"
      (let [f   @fx
            log (copy-log (:log f) "partial-append-guard")]
        (truncate-to! log (:len-before-promote f))
-       (write-raw! log "{:k :world/head-claim :world \"A\"" true)
+       (write-raw! log "{:k :world/head :world \"A\"" true)
        (try (assert-flat-append-boundary! log) false
             (catch clojure.lang.ExceptionInfo e
               (true? (:fram/unterminated-flat-tail (ex-data e)))))))
@@ -354,7 +354,7 @@
        (u "world-head" (reopen log) "A")
        (= before (log-sha log))))
 (bar "torn: an incomplete promotion leaves NO Version claiming to be canonical"
-     ;; the head is DERIVED from claims, so a missing promote claim must not leave
+     ;; the head is DERIVED from facts, so a missing promote fact must not leave
      ;; any stored \"canonical\"/\"current\" marker behind that could win a fold
      (let [f   @fx
            log (copy-log (:log f) "no-marker")]

@@ -1,8 +1,8 @@
 #!/usr/bin/env bb
-;; Falsify "superseded (not deleted)": after a rename, show the OLD red claim
+;; Falsify "superseded (not deleted)": after a rename, show the OLD red fact
 ;; and its LIVE crimson successor COEXISTING on the same entity, old marked
 ;; not-live, and the live view excluding it. If this is real, supersession is a
-;; claim graph; if not, "superseded" was a euphemism for overwrite.
+;; fact graph; if not, "superseded" was a euphemism for overwrite.
 (require '[clojure.edn :as edn] '[clojure.string :as str] '[fram.store :as c])
 
 (def ctx (c/new-store))
@@ -19,7 +19,7 @@
 (def OLDv (c/value-id ctx "red")) (def NEWv (c/value! ctx "crimson"))
 (defn sym? [e] (some #(= SYM (:r (c/fact-of ctx %))) (c/by-lp ctx e KIND)))
 
-;; rename one symbol `red`, remembering the exact claim ids involved
+;; rename one symbol `red`, remembering the exact fact ids involved
 (def evidence (atom nil))
 (doseq [cid (vec (c/by-pr ctx Vp OLDv))]
   (let [e (:l (c/fact-of ctx cid))]
@@ -31,21 +31,21 @@
 (let [{:keys [e old new sup]} @evidence]
   (println "entity (the symbol node):" e)
   (println)
-  (println "OLD value-claim  cid=" old "  ->" (c/fact-of ctx old)
+  (println "OLD value-fact  cid=" old "  ->" (c/fact-of ctx old)
            "  value=" (pr-str (c/literal ctx (:r (c/fact-of ctx old))))
            "  LIVE?=" (c/live? ctx old))
-  (println "NEW value-claim  cid=" new "  ->" (c/fact-of ctx new)
+  (println "NEW value-fact  cid=" new "  ->" (c/fact-of ctx new)
            "  value=" (pr-str (c/literal ctx (:r (c/fact-of ctx new))))
            "  LIVE?=" (c/live? ctx new))
-  (println "SUPERSEDES claim cid=" sup "  ->" (c/fact-of ctx sup)
-           "  (l=new-claim, p=supersedes, r=old-claim)")
+  (println "SUPERSEDES fact cid=" sup "  ->" (c/fact-of ctx sup)
+           "  (l=new-fact, p=supersedes, r=old-fact)")
   (println)
   (println "same entity for old & new?   " (= (:l (c/fact-of ctx old)) (:l (c/fact-of ctx new)) e))
   (println "old still retrievable (history preserved)? " (some? (c/fact-of ctx old)))
-  (println "live view of entity's v-claims (by-l is live-only):"
+  (println "live view of entity's v-facts (by-l is live-only):"
            (mapv (fn [cid] (pr-str (c/literal ctx (:r (c/fact-of ctx cid)))))
                  (filter (fn [cid] (= Vp (:p (c/fact-of ctx cid)))) (c/by-l ctx e))))
-  (println "=> old red claim EXISTS, marked not-live; new crimson claim is live; same node. Supersession is real:"
+  (println "=> old red fact EXISTS, marked not-live; new crimson fact is live; same node. Supersession is real:"
            (and (some? (c/fact-of ctx old))
                 (not (c/live? ctx old))
                 (c/live? ctx new)

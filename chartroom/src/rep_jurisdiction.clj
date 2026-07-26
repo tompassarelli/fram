@@ -1,10 +1,10 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; rep_jurisdiction — the compiler's REPRESENTATION JUDGMENT as a queryable claim.
+;; rep_jurisdiction — the compiler's REPRESENTATION JUDGMENT as a queryable fact.
 ;; ============================================================================
 ;; Beagle's emit-js decides, per allocation site, native-JS-coll vs $$bc HAMT.
 ;; Today that judgment escapes only as a per-MODULE comment (// collection-rep).
-;; `beagle-rep-claims` projects it as a CNF claim PER DEF instead:
+;; `beagle-rep-facts` projects it as a CNF fact PER DEF instead:
 ;;
 ;;   [<id> "form-kind" "rep-def"]  [<id> "name" "<def>"]
 ;;   [<id> "rep-regime" "native"|"hamt"|"mixed"]
@@ -22,10 +22,10 @@
 ;;
 ;; Run:
 ;;   bb -cp ~/code/fram/out:chartroom/src chartroom/src/rep_jurisdiction.clj \
-;;      <rep.claims> [<callgraph.claims>]
+;;      <rep.facts> [<callgraph.facts>]
 ;;
-;; <rep.claims>       : output of `beagle-rep-claims <src.bjs>...`
-;; <callgraph.claims> : OPTIONAL — output of `beagle-claims <src>...`; when given,
+;; <rep.facts>       : output of `beagle-rep-facts <src.bjs>...`
+;; <callgraph.facts> : OPTIONAL — output of `beagle-facts <src>...`; when given,
 ;;                      Q4 derives the transitive HAMT blast radius over the call graph.
 ;; ============================================================================
 (ns rep-jurisdiction
@@ -38,7 +38,7 @@
 (def rep-path (first *command-line-args*))
 (def cg-path  (second *command-line-args*))
 
-;; ---- parse the @file-delimited rep-claim stream ----------------------------
+;; ---- parse the @file-delimited rep-fact stream -----------------------------
 ;; Each rep-def block keys its triples by a per-file integer id; we re-key by the
 ;; def NAME (carried in the "name" triple) so a def is one stable graph entity.
 (defn parse-rep-blocks [path]
@@ -70,19 +70,19 @@
 (defn -main []
   (let [blocks  (parse-rep-blocks rep-path)
         rep-defs (vec (mapcat block->defs blocks))]
-    (println "================ REP JURISDICTION — compiler judgment as claims ================")
+    (println "================ REP JURISDICTION — compiler judgment as facts =================")
     (println "rep corpus:" rep-path)
-    (println "rep-def claims:" (count rep-defs)
+    (println "rep-def facts:" (count rep-defs)
              " across" (count (distinct (map :module rep-defs))) "module(s)")
 
-    ;; ---- load rep claims into a real Fram store --------------------------
+    ;; ---- load rep facts into a real Fram store --------------------------
     (let [ctx     (c/new-store)
           tx      (c/begin-tx! ctx "rep")
           REGIME  (c/value! ctx "rep-regime")
           n->ent  (volatile! {})
           ent     (fn [nm] (or (get @n->ent nm)
                                (let [e (c/entity! ctx)] (vswap! n->ent assoc nm e) e)))
-          ;; assert one claim per def: (def-entity rep-regime <"native"|"hamt"|"mixed">)
+          ;; assert one fact per def: (def-entity rep-regime <"native"|"hamt"|"mixed">)
           _ (doseq [d rep-defs]
               (c/fact! ctx (ent (:name d)) REGIME (c/value! ctx (:regime d)) tx))
           ent->n (into {} (map (fn [[k v]] [v k]) @n->ent))]
@@ -91,7 +91,7 @@
       (let [defs-with-regime
             (fn [reg]
               (let [R (c/value! ctx reg)]
-                (->> (c/by-pr ctx REGIME R)             ; live claims with this regime
+                (->> (c/by-pr ctx REGIME R)             ; live facts with this regime
                      (map #(c/fact-of ctx %))
                      (map #(ent->n (:l %)))
                      sort vec)))]
@@ -129,7 +129,7 @@
               gent  (fn [nm] (or (get @gname->ent* nm)
                                  (let [e (c/entity! gctx)] (vswap! gname->ent* assoc nm e) e)))
               ;; ALL call-graph def names (not just allocating ones) — a non-allocating
-              ;; def like `run` has no rep-def claim but still forces a HAMT if it CALLS
+              ;; def like `run` has no rep-def fact but still forces a HAMT if it CALLS
               ;; one. Seed every defn so its entity exists in the reverse map.
               _ (doseq [d defns] (when (:name d) (gent (:name d))))
               _ (doseq [[a b] name-edges] (c/fact! gctx (gent a) CALLS (gent b) gtx))
@@ -153,7 +153,7 @@
           (println (format "\nHAMT-shipping defs: %d ; defs that FORCE a HAMT downstream: %d"
                            (count hamt-names) (count forced)))
           (println "  ^ THIS is the query grep-the-comment cannot answer: the comment is")
-          (println "    per-module and disconnected from the call graph; the claim is a")
+          (println "    per-module and disconnected from the call graph; the fact is a")
           (println "    graph node you JOIN against scope-correct edges — blast radius of a")
           (println "    rep decision, across module boundaries, in one fixpoint."))))))
 

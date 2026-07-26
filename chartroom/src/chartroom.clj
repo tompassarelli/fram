@@ -1,15 +1,15 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; Chartroom — code-as-claims on Fram.
+;; Chartroom — code-as-facts on Fram.
 ;; ============================================================================
-;; Loads a beagle source tree (already projected to CNF claim triples by
-;; `beagle-claims`) into a Fram claim store, derives the NAMESPACE-CORRECT
+;; Loads a beagle source tree (already projected to CNF fact triples by
+;; `beagle-facts`) into a Fram fact store, derives the NAMESPACE-CORRECT
 ;; function call graph, and runs two benchmarks that validate-or-kill the bet:
 ;;
 ;;   A. caller precision on name collisions   (graph resolves scope; bare-symbol can't)
 ;;   B. transitive leverage / blast radius     (one fixpoint; a one-hop tool can't)
 ;;
-;; Run:  bb -cp ~/code/fram/out src/chartroom.clj build/gjoa.claims
+;; Run:  bb -cp ~/code/fram/out src/chartroom.clj build/gjoa.facts
 ;; ============================================================================
 (ns chartroom
   (:require [clojure.edn :as edn]
@@ -18,9 +18,9 @@
             [fram.store :as c]
             [fram.datalog :as d]))
 
-(def corpus-path (or (first *command-line-args*) "build/gjoa.claims"))
+(def corpus-path (or (first *command-line-args*) "build/gjoa.facts"))
 
-;; ---- claim parsing + scope-correct call graph: RENTED from callgraph.clj ----
+;; ---- fact parsing + scope-correct call graph: RENTED from callgraph.clj ----
 ;; parse-corpus / derive-block / build-graph used to be copy-pasted here AND in
 ;; beagle's _beagle-callgraph.clj. They now live ONCE in callgraph.clj (the shared
 ;; Layer-2 engine); this benchmark harness and beagle's CLI both rent it. build-graph
@@ -71,7 +71,7 @@
         direct (into {} (map (fn [k] [k (count (get radj k #{}))]) defn-keys))
         blast  (into {} (map (fn [k] [k (count (transitive radj k))]) defn-keys))]
 
-    (println "================ CHARTROOM — code-as-claims on Fram ================")
+    (println "================ CHARTROOM — code-as-facts on Fram =================")
     (println "corpus:" corpus-path)
     (println "files:" (count blocks)
              " defns:" (count defns)

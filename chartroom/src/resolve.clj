@@ -50,7 +50,7 @@
 ;; *resolve-walk?* — does resolve-warm-store! run the whole-corpus lexical walk
 ;; (run-resolution!, ~the dominant verb-setup cost)? The walk WRITES refers_to over
 ;; every module. The MINIMAL-OP authoring path (daemon :edit-min) does NOT need that
-;; walk: set-body/upsert-form mint/supersede AST claims and never read refers_to, and
+;; walk: set-body/upsert-form mint/supersede AST facts and never read refers_to, and
 ;; rename's no-capture check reads refers_to that the daemon has ALREADY materialized
 ;; on the store (the clone inherits it) — so re-walking is pure waste AND would double
 ;; the inherited edges. Bound false by do-edit-min => corpus tables only, no walk. The
@@ -65,7 +65,7 @@
 ;; rename, which walks consumers' require/frame tables cross-module, leaves it nil).
 (def ^:dynamic *corpus-scope* nil)
 ;; *corpus-cache* — when bound (by the daemon), the module->entity-ids map to use INSTEAD of the
-;; O(total) name-claim reduce in corpus-from-store!. The daemon maintains it incrementally (add the
+;; O(total) name-fact reduce in corpus-from-store!. The daemon maintains it incrementally (add the
 ;; commit's new named nodes to their module — O(delta)), so the per-verb corpus build drops from
 ;; O(total-app) to O(edited-module-frame). Valid because the verb's clone == the committed store at
 ;; clone time, which the cache reflects. nil => full reduce (cold path, reads, the CLI). Just the
@@ -85,7 +85,7 @@
         (c/fact! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
     src))
 
-;; --- claim-graph accessors --------------------------------------------------
+;; --- fact-graph accessors --------------------------------------------------
 ;; render-mode marker predicate value-ids — DYNAMIC, rebound (recomputed against
 ;; the fresh store) inside `resolve-edn!`; store-local ids must match their store.
 (def ^:dynamic Vp nil) (def ^:dynamic KIND nil) (def ^:dynamic REFERS nil)
@@ -95,7 +95,7 @@
 (def ^:dynamic ACC  nil)    ; a synth field accessor `<lower(Name)>-<field>`: stores the field
 ;; --- read-time path-selection: the "default-main view" -----------------------
 ;; Fram is view-relative (docs/VIEWS_AND_BRANCHES.md): a node's live (l,p) group MAY hold
-;; more than one claim, and choosing one is a VIEW decision. Today there is exactly one view —
+;; more than one fact, and choosing one is a VIEW decision. Today there is exactly one view —
 ;; default-main — and its policy is "first live". `select-main-1` is THE explicit selection
 ;; point: it does NOT prove uniqueness, it SELECTS the default-main member of a possibly-multi
 ;; group. Routing the former bare `(first …)` take-firsts through it makes the selection named
@@ -104,11 +104,11 @@
 ;; *view* — the read-side attach point first-class views land on (VIEWS_AND_BRANCHES §8;
 ;; thread E). nil = the privileged default-main view (today's only view): elect the whole
 ;; group, byte-identical to before. Bound to a view-subject NAME = a named branch overlay:
-;; restrict the election to the cids that view selects ((view selects @cid) claims), so the
+;; restrict the election to the cids that view selects ((view selects @cid) facts), so the
 ;; resolver renders a *branch's* line of the code, isolated from main and sibling branches.
 (def ^:dynamic *view* nil)
 (defn view-cids
-  "cids of `cids` that view `v` selects via live (v selects @cid) claims — the resolve-layer
+  "cids of `cids` that view `v` selects via live (v selects @cid) facts — the resolve-layer
    twin of cnf_coord/view-selects. nil/empty when v selects NONE of them, so the caller
    inherits the default-main election (one head + named overlays). The view subject and
    `selects` predicate are store value-ids; an unknown view resolves to nil -> selects nothing."
@@ -119,7 +119,7 @@
         (filter sel cids)))))
 (defn select-main-1
   "Coexist-elect, VIEW-RELATIVE read-time election of the `*view*` member of a (live) (l,p)
-   claim-id group `cids`: the winner is the EARLIEST claim by the total key [cid, writing-agent].
+   fact-id group `cids`: the winner is the EARLIEST fact by the total key [cid, writing-agent].
    cids are cid-ascending under the single allocator, so the default (*view*=nil = main) is
    BYTE-IDENTICAL to (first cids); the agent tiebreak only keeps the order total if cid
    allocation is ever sharded. A bound `*view*` restricts the group to that view's selected cids
@@ -143,7 +143,7 @@
    instead of [cid, agent]: the winner is the member whose writer DECIDED earliest (lowest :observed
    stamp — the global seq it had seen), tie-broken by commit order then agent. So rival drivers/roles
    resolve by 'who had the earlier causal view', not 'who committed first' — every reader elects the
-   same with zero coordination. :observed is nil for legacy/non-causal claims, so it falls back to
+   same with zero coordination. :observed is nil for legacy/non-causal facts, so it falls back to
    the tx :seq (commit order) and degrades EXACTLY to select-main-1 — a strict refinement, never a
    regression. Returns nil on an empty group; degrades to (first cids) when no store is bound."
   [cids]
@@ -862,7 +862,7 @@
 ;; ============================================================================
 ;; S3.2 — resolve WARM, over the daemon's live store (no EDN reload).
 ;; The daemon holds a populated store whose AST nodes are entities carrying the
-;; same kind/v/fN claims an --emit-edn projection has, PLUS a `name` claim
+;; same kind/v/fN facts an --emit-edn projection has, PLUS a `name` fact
 ;; `@<module>#<int>` (fram.schema/name!). Grouping there is by the name prefix,
 ;; not by load-edn's per-src tracking — so the ONLY thing that differs from the
 ;; EDN path is how the corpus structure (file->ents/srcs + frame/export tables)
@@ -1026,11 +1026,11 @@
 (defn binding-name [B] (sym-val (ultimate B)))
 
 ;; ============================================================================
-;; AUTHORING — mint a NEW datum subtree into the SAME claim store (the inverse of
-;; claims-roundtrip.rkt's datum->claims). This is what makes add-def / set-body a
-;; CLAIM OPERATION, not a text splice: a Clojure EDN datum (the structured edit
+;; AUTHORING — mint a NEW datum subtree into the SAME fact store (the inverse of
+;; facts-roundtrip.rkt's datum->facts). This is what makes add-def / set-body a
+;; FACT OPERATION, not a text splice: a Clojure EDN datum (the structured edit
 ;; spec the agent emits, e.g. `(defn add-two [x :- Int] :- Int (+ x 2))`) is walked
-;; into fresh entities carrying `kind`/`v`/`fN` claims — exactly the reader-datum
+;; into fresh entities carrying `kind`/`v`/`fN` facts — exactly the reader-datum
 ;; shape --emit-edn projects — and registered in file->ents so extract-file! emits
 ;; them. The wrapper/body fN edges are then wired (append) or SUPERSEDED (replace),
 ;; reusing the rename template (assert new, supersede old; reads filter superseded).
@@ -1039,7 +1039,7 @@
 ;; pass over forms-of after minting), giving scope-correctness for free.
 ;; ============================================================================
 (defn register! [src e] (swap! file->ents update src (fnil conj []) e) e)
-;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->claims:55-64).
+;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->facts:55-64).
 ;; Beagle reads [..] as (#%brackets ..) and {..} as (#%map ..), so a vector/map datum
 ;; in the spec is minted as a `list` headed by that desugaring symbol — identical to
 ;; what --emit-edn produces, keeping the projection lossless.
@@ -1080,7 +1080,7 @@
     (symbol? d)     (mint-leaf! src "symbol"  (str d))
     ;; A `:foo` token is a SYMBOL leaf with the colon RETAINED — beagle reads .bclj via
     ;; Racket's reader, which has no keyword syntax: `:enable`/`:-` come back as the symbol
-    ;; |:enable|/|:-| (kind="symbol", v=":enable"). claims-roundtrip's emit/decode shares
+    ;; |:enable|/|:-| (kind="symbol", v=":enable"). facts-roundtrip's emit/decode shares
     ;; that convention, so a `keyword`-kind leaf (colon stripped) decodes to a Clojure keyword
     ;; that renders as `#:-` — corrupting the `:-` type marker and rejecting the build. The
     ;; authoring spec is parsed by clojure.edn (where `:-` IS a keyword), so we MUST re-encode
@@ -1105,7 +1105,7 @@
     ;; Reader forms the host LispReader hands us as OBJECTS (write-def raw-source path),
     ;; not as `#%…`-headed lists like beagle's Racket reader emits. Re-encode them into
     ;; the SAME `(#%regex "pat")` / `(#%set e…)` list node --emit-edn mints, so the
-    ;; renderer (claims-roundtrip datum->src + node->str) inverts them back to the reader
+    ;; renderer (facts-roundtrip datum->src + node->str) inverts them back to the reader
     ;; literal. Without this a regex/set fell to the :else leaf and was pr-str'd — a
     ;; `#","` became the STRING `"#\",\""`, corrupting the def. (EXP-025 b1 substrate defect.)
     (instance? java.util.regex.Pattern d)
@@ -1113,18 +1113,18 @@
     (set? d)
     (mint-datum! src (cons (symbol "#%set") (seq d)))
     :else (mint-leaf! src "other" (pr-str d)))))
-;; the body fN edges of a defn form = the consecutive fN child claims whose slot is
+;; the body fN edges of a defn form = the consecutive fN child facts whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
-(defn fN-claims [parent]            ; -> [[N claim-id child-node] ...] over LIVE fN edges, ordered
+(defn fN-facts [parent]            ; -> [[N fact-id child-node] ...] over LIVE fN edges, ordered
   (->> (c/by-l ctx parent) (map (fn [cid] [cid (c/fact-of ctx cid)]))
        (keep (fn [[cid cl]] (let [p (c/literal ctx (:p cl))]
                               (when (and (string? p) (re-matches #"f\d+" p))
                                 [(parse-long (subs p 1)) cid (:r cl)]))))
        (sort-by first)))
-;; supersede a claim WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
+;; supersede a fact WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
 ;; The supersedes edge needs a subject; a fresh entity is fine — the live-view filter
-;; keys off the superseded :r (the old claim id), not the subject (cnf.bclj:105-106,116).
-(defn retire-claim! [oldc] (c/fact! ctx (c/entity! ctx) SUP oldc tx))
+;; keys off the superseded :r (the old fact id), not the subject (cnf.bclj:105-106,116).
+(defn retire-fact! [oldc] (c/fact! ctx (c/entity! ctx) SUP oldc tx))
 
 ;; --- delete projection: omit a top-level form + its subtree, renumber siblings ---
 ;; The renderer reads fN children CONSECUTIVELY and includes only nodes reachable from
@@ -1337,7 +1337,7 @@
 ;; resolve-edn! of emit-edn(text)) AND the GRAPH path (run-verb-warm!, over a
 ;; LOG-booted warm store via resolve-warm-store!). They are store-agnostic by
 ;; construction — they read the dynamic ctx/tx/SUP/srcs/frame tables and write
-;; via c/fact!/retire-claim!/mint-datum!, never touching text — so the same code
+;; via c/fact!/retire-fact!/mint-datum!, never touching text — so the same code
 ;; runs unchanged under either binding scope.
 ;;
 ;; *project-srcs* selects which module(s) author-emit! / extract-file! project.
@@ -1348,12 +1348,12 @@
 (def ^:dynamic *project-srcs* nil)
 (defn- emit-srcs [] (or *project-srcs* srcs))
 ;; *capture-only?* — the MINIMAL-OP graph edit (daemon :edit-min) runs the verb ONLY
-;; to capture its claim mint/supersede ops; it does NOT want the verb's two heavy
+;; to capture its fact mint/supersede ops; it does NOT want the verb's two heavy
 ;; downstream SIDE EFFECTS: (1) re-resolve! (a whole-corpus lexical re-walk that
 ;; writes DERIVED refers_to edges — discarded, since the daemon re-resolves SCOPED
 ;; over the real store after the commit), and (2) author-emit-scoped! (rendering the
-;; module's resolved EDN to disk — the minimal path commits claim ops, not text).
-;; Bound true by do-edit-min so the verb does its claim work and stops. The CLI/text
+;; module's resolved EDN to disk — the minimal path commits fact ops, not text).
+;; Bound true by do-edit-min so the verb does its fact work and stops. The CLI/text
 ;; path leaves it false => verbatim behavior (re-resolve + project EDN).
 (def ^:dynamic *capture-only?* false)
 ;; like author-emit!, but only over *project-srcs* (the affected module on the graph path).
@@ -1365,7 +1365,7 @@
       (println detail)
       (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
 
-;; rename — every INVARIANT + claim mutation from the old `rename` case arm.
+;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target]
   (let [target-srcs (filter #(str/includes? % target) srcs)
         edits (atom 0)]
@@ -1409,14 +1409,14 @@
         (println (str "REJECTED — no binding named `" old "` found in \"" target
                       "\" (nothing to rename; no facts mutated).")))
       (*reject!* 5))
-    ;; capture-only (daemon :edit-min): the name claim is mutated above; SKIP the
+    ;; capture-only (daemon :edit-min): the name fact is mutated above; SKIP the
     ;; whole-corpus projection — the daemon commits the captured op + re-resolves scoped.
     (when-not *capture-only?*
       (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
       (binding [*out* *err*]
         (println "================ Turtle #5 — O(1) shadow-correct rename ================")
         (println (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
-        (println (str "CLAIMS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
+        (println (str "FACTS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
         (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src)))))))
 
 ;; upsert-form — add/replace a top-level def from an EDN datum spec.
@@ -1524,7 +1524,7 @@
       (if victim-entry
         ;; REPLACE in place: reuse the victim's PATH (new tie), retire the victim.
         (let [[k cid _] victim-entry]
-          (retire-claim! cid)
+          (retire-fact! cid)
           (c/fact! ctx wrap (c/value! ctx (ord-str (:path k) (ord-tie))) new-root tx))
         ;; APPEND: a path strictly after the last form (CRDT). Concurrent appends compute
         ;; the same path on identical clones -> distinct tie (name-int) -> both land (commute).
@@ -1533,7 +1533,7 @@
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "upsert-form"
                     (str (if victim-entry "replaced" "added") " top-level def `" disp-name
-                         "` in \"" scope "\" (1 form minted as claims; refs resolved via refers_to)")))))
+                         "` in \"" scope "\" (1 form minted as facts; refs resolved via refers_to)")))))
 
 ;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a CRDT
 ;; path strictly between the anchor and its next sibling. Concurrent inserts after the
@@ -1567,7 +1567,7 @@
 
 ;; insert-comment — author a standalone LINE comment (Turtle #6) leading/trailing an
 ;; anchor def. Comments do NOT live in the wrapper fN order; they attach to their anchor
-;; FORM via a `commentN` edge (claims-roundtrip.rkt comment-edn-lines). This mints a
+;; FORM via a `commentN` edge (facts-roundtrip.rkt comment-edn-lines). This mints a
 ;; kind="comment" node + one `text` seg (the lexeme) + the commentN edge — the FIRST
 ;; incremental authoring of a comment node (text->graph ingest was previously the only
 ;; way one entered the graph). The seg is a single `text` run (renders verbatim); symbol
@@ -1634,7 +1634,7 @@
           (println (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope
                         "\" (set-body needs a value binding; no facts mutated).")))
         (*reject!* 5))
-      (let [kids     (fN-claims d)
+      (let [kids     (fN-facts d)
             param?   (PARAM-FORMS (head-sym d))
             ;; body follows the [param] vector (defn) or the NAME (plain value-def).
             anchor-n (if param?
@@ -1648,19 +1648,19 @@
           (binding [*out* *err*]
             (println (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated.")))
           (*reject!* 5))
-        (doseq [[_ cid _] body-slots] (retire-claim! cid))
+        (doseq [[_ cid _] body-slots] (retire-fact! cid))
         (c/fact! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "set-body"
                       (str "replaced body of `" name "` in \"" scope "\" ("
-                           (count body-slots) " body slot(s) superseded; new body minted as claims)"))))))
+                           (count body-slots) " body slot(s) superseded; new body minted as facts)"))))))
 
 ;; ============================================================================
 ;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a def,
 ;; addressed by an ANCHOR datum (the OLD form, as it reads in source), with a NEW
 ;; form — WITHOUT re-emitting the whole def. Kills the mega-def floor (duel lever #2):
 ;; changing one case in a 1,768-line def costs ONE fN-edge swap, not a whole-def
-;; re-mint. Same claim-op discipline as set-body — supersede exactly the touched fN
+;; re-mint. Same fact-op discipline as set-body — supersede exactly the touched fN
 ;; edge, mint the replacement, recompile-gated + fail-closed — but at INTERIOR
 ;; granularity. Because only one edge moves and the def is never re-minted, EVERY
 ;; sibling form + all attached comments (the def's leading comments, other cases)
@@ -1669,7 +1669,7 @@
 ;; ADDRESSING — anchor-form match (Edit-tool old_string, but on the AST). The model
 ;; emits the OLD interior form + the NEW one; we canonicalize both STRUCTURALLY (kind
 ;; + rendered spelling + child shape, whitespace/formatting ignored) and require the
-;; anchor to match EXACTLY ONE interior node. 0 or >1 matches REFUSE (no claims
+;; anchor to match EXACTLY ONE interior node. 0 or >1 matches REFUSE (no facts
 ;; mutated) — the model disambiguates by supplying a larger enclosing form, exactly
 ;; like old_string uniqueness. Structural (not textual) match is why the model need
 ;; not reproduce whitespace: it emits the form, we compare shape.
@@ -1924,7 +1924,7 @@
             ;; retire the matched fN edge + re-point the SAME position literal at the
             ;; freshly-minted form — by-l filters superseded, so reads see only the new
             ;; child; the integer fN is reused verbatim -> byte-stable outside the edit.
-            (retire-claim! cid)
+            (retire-fact! cid)
             (c/fact! ctx parent (c/value! ctx pos) new-root tx)
             (when-not *capture-only?* (re-resolve!))
             (author-emit-scoped! "replace-in-body"
@@ -1933,14 +1933,14 @@
                                "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
                                "def NOT re-emitted — siblings + comments preserved; refs via refers_to)")))))))))
 
-;; delete — remove a top-level def by name. CLAIM-NATIVE + fail-closed: the same
+;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the same
 ;; victim/subtree/orphan computation as the CLI `delete` arm, but the EFFECT is a
-;; supersede of the wrapper's fN form-edge claim(s) pointing at the deleted form(s).
+;; supersede of the wrapper's fN form-edge fact(s) pointing at the deleted form(s).
 ;; Retiring that edge makes the form unreachable from the beagle-file wrapper, so
 ;; (a) the minimal-op harvest (do-edit-min) sees a RETRACT of the wrapper edge and
 ;; (b) the render path's reachability filter (root=wrapper, descendants-only) drops
 ;; the orphaned subtree — ONE mechanism serves both drivers, no projection flag.
-;; Fail-closed: a delete that would ORPHAN a surviving reference REFUSES (no claims
+;; Fail-closed: a delete that would ORPHAN a surviving reference REFUSES (no facts
 ;; mutated) — exactly the CLI invariant, just routed through *reject!*.
 (defn verb-delete! [name scope]
   (let [target-srcs (filter #(str/includes? % scope) srcs)
@@ -1973,14 +1973,14 @@
         (doseq [o (take 5 orphans)] (println (str "  orphan: reference node " o " (`" (sym-val o) "`)"))))
       (*reject!* 6))
     ;; SAFE: retire each wrapper fN edge that points at a deleted form root. by-l filters
-    ;; superseded claims, so the form drops out of the wrapper's children everywhere — the
+    ;; superseded facts, so the form drops out of the wrapper's children everywhere — the
     ;; render reachability filter + the minimal-op harvest both follow from this one supersede.
     (let [retired (atom 0)]
       (doseq [src srcs
               :let [wrap (wrapper-of src)]
               [_ cid r] (when wrap (wrap-forms wrap))
               :when (all-forms r)]
-        (retire-claim! cid) (swap! retired inc))
+        (retire-fact! cid) (swap! retired inc))
       (when-not *capture-only?* (re-resolve!))
       (author-emit-scoped! "delete"
                     (str "deleted def `" name "` in \"" scope "\" (" @retired
@@ -2028,7 +2028,7 @@
                         [(:path (first (nth others a-pos)))
                          (when (< (inc a-pos) (count others)) (:path (first (nth others (inc a-pos)))))]))
             [_ mover-cid _] mover-entry]
-        (retire-claim! mover-cid)
+        (retire-fact! mover-cid)
         (c/fact! ctx wrap (c/value! ctx (ord-str (ord-between lo hi) (ord-tie))) mover-form tx)
         (when-not *capture-only?* (re-resolve!))
         (author-emit-scoped! "reorder"
@@ -2039,10 +2039,10 @@
 ;; run-verb-warm! — THE GRAPH EDIT PATH. Run an authoring verb over a LOG-booted
 ;; warm store (NOT emit-edn of text). `store` is `(migrate-flat->co code.log)`'s
 ;; :store; resolve-warm-store! binds ctx=store + tx + the store-local value-ids +
-;; corpus-from-store! (srcs/frames derived from the store's `name` claims), runs
+;; corpus-from-store! (srcs/frames derived from the store's `name` facts), runs
 ;; the lexical walk, then invokes our body. Inside that scope we bind
 ;; *project-srcs* to the affected module and call the SAME verb function the text
-;; path calls — minting/superseding claim ops against LOG-RESIDENT node identity,
+;; path calls — minting/superseding fact ops against LOG-RESIDENT node identity,
 ;; projecting render EDN for ONLY that module. NO src/fram/*.bclj is ever read:
 ;; the corpus, the verb's targets, and the projection all come from the store.
 ;;
@@ -2249,7 +2249,7 @@
     (verb-rename! old new target))
 
   ;; delete : remove a top-level def by name. Delegates to verb-delete! (the SAME
-  ;; claim-native body the warm/minimal-op path runs) — the default *reject!* is
+  ;; fact-native body the warm/minimal-op path runs) — the default *reject!* is
   ;; System/exit, so the CLI keeps its exit-code contract (5 no-victim, 6 orphan).
   "delete"
   (let [[name target] (drop 1 *command-line-args*)]
@@ -2261,7 +2261,7 @@
     (verb-reorder! name target after))
 
   ;; ============================================================================
-  ;; AUTHORING VERBS — the GAP closed: a claim operation for novel authoring.
+  ;; AUTHORING VERBS — the GAP closed: a fact operation for novel authoring.
   ;; upsert-form : add a NEW top-level def (append a wrapper fN edge) OR replace an
   ;;               existing top-level def by name (supersede its wrapper fN edge to
   ;;               point at a freshly-minted subtree). The form is given as an EDN

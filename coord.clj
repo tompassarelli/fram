@@ -859,7 +859,7 @@
 ;; The world kernel (fram.world, graph-upstream) is PURE: content-addressed ids,
 ;; overlay precedence, deterministic composition. Nothing in it touches a log.
 ;; This section is the other half: how a world's blobs, candidates, versions,
-;; locks, receipts and head claims BECOME DURABLE — and it does so by REUSING
+;; locks, receipts and head facts BECOME DURABLE — and it does so by REUSING
 ;; the coordinator's existing append-only seams rather than inventing a second
 ;; durable format:
 ;;
@@ -867,7 +867,7 @@
 ;;     one world verb == one tx block == records + a terminating :commit marker.
 ;;     A crash mid-verb leaves a trailing buffer with no :commit, which `replay`
 ;;     already DROPS. There is no world-specific torn-record logic to get wrong.
-;;   * the head is DERIVED — folded from append-only `world.head-claim` facts on
+;;   * the head is DERIVED — folded from append-only `world.head` facts on
 ;;     the world subject, latest cid wins. No stored "canonical"/"current" marker
 ;;     exists to survive an incomplete promotion and win a later fold.
 ;;   * V1 raw blobs are canonical base64 LITERALS in the log. There is no blob
@@ -920,12 +920,12 @@
 
 ;; --- heads are DERIVED, never stored ----------------------------------------
 (defn world-head
-  "The derived head of world `nm`: the latest live world.head-claim, by cid.
+  "The derived head of world `nm`: the latest live world.head, by cid.
   nil for an unknown world. Never reads a stored status."
   [co nm]
   (let [st  (store co)
         e   (s/resolve-name st (world-subject nm))
-        pid (c/value-id st "world.head-claim")]
+        pid (c/value-id st "world.head")]
     (when (and e pid)
       (let [m @(store co)]
         (->> (get (:idx-by-lp m) [e pid])
@@ -938,10 +938,10 @@
   (or (w/validate-world-name nm)
       (if (world-head co nm)
         {:reject :world-exists}
-        (world-commit! co agent [[(world-subject nm) "world.head-claim" version-id]]))))
+        (world-commit! co agent [[(world-subject nm) "world.head" version-id]]))))
 
 (defn world-fork!
-  "O(1): one head claim naming the base VersionId. No blob, manifest or version
+  "O(1): one head fact naming the base VersionId. No blob, manifest or version
   record is copied — the forked name simply starts deriving from the same node."
   [co agent new-name version-id]
   (or (w/validate-world-name new-name)
@@ -949,7 +949,7 @@
         (world-head co new-name) {:reject :world-exists}
         (nil? version-id)        {:reject :world-version-unknown}
         :else (world-commit! co agent
-                             [[(world-subject new-name) "world.head-claim" version-id]]))))
+                             [[(world-subject new-name) "world.head" version-id]]))))
 
 ;; --- blobs: canonical base64 FACTS (no blob filesystem) ---------------------
 (defn world-blob-put! [co agent ^bytes raw]
@@ -1112,5 +1112,5 @@
       (not (and (map? receipt) (= (:version receipt) sealed)))
       {:reject :world-receipt-invalid}
       :else
-      (do (world-commit! co agent [[(world-subject nm) "world.head-claim" sealed]])
+      (do (world-commit! co agent [[(world-subject nm) "world.head" sealed]])
           {:ok sealed}))))

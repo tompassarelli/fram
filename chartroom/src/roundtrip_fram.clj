@@ -1,11 +1,11 @@
 #!/usr/bin/env bb
-;; roundtrip_fram — load reader-level claims into a real Fram store, then
+;; roundtrip_fram — load reader-level facts into a real Fram store, then
 ;; re-extract them FROM the store. Proves the program persists through the
-;; engine (not just an in-memory map): source -> claims -> Fram -> claims.
+;; engine (not just an in-memory map): source -> facts -> Fram -> facts.
 ;;
-;;   racket .../claims-roundtrip.rkt --emit-edn FILE > A.edn
+;;   racket .../facts-roundtrip.rkt --emit-edn FILE > A.edn
 ;;   bb -cp ~/code/fram/out src/roundtrip_fram.clj A.edn > B.edn
-;;   racket .../claims-roundtrip.rkt --verify B.edn FILE
+;;   racket .../facts-roundtrip.rkt --verify B.edn FILE
 (ns roundtrip-fram
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
@@ -29,9 +29,9 @@
     (c/fact! ctx L P R tx)))
 
 (binding [*out* *err*]
-  (println "loaded" (count (c/current-facts ctx)) "claims into a Fram store"))
+  (println "loaded" (count (c/current-facts ctx)) "facts into a Fram store"))
 
-;; re-extract every live claim straight from the store, back to EDN triples.
+;; re-extract every live fact straight from the store, back to EDN triples.
 ;; value-object? distinguishes a leaf value (string) from a node entity (int ref).
 (doseq [cid (c/current-facts ctx)]
   (let [cl (c/fact-of ctx cid)

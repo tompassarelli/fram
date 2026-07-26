@@ -1,7 +1,7 @@
 # Chartroom
 
-**Code as claims, on [Fram](https://github.com/tompassarelli/fram).** Chartroom
-projects a beagle source tree into the same reified claim graph that North
+**Code as facts, on [Fram](https://github.com/tompassarelli/fram).** Chartroom
+projects a beagle source tree into the same reified fact graph that North
 uses for life and work, then *derives* code intelligence — call graphs, scope-correct caller
 resolution, transitive leverage — as queries over that graph instead of as
 bespoke passes over text.
@@ -15,16 +15,16 @@ one-hop tools we already have — or not.
 ## The pipeline
 
 ```
-*.bjs ──beagle-claims──▶ CNF triples ──load──▶ Fram claim store ──Datalog──▶ leverage / callers
-  (AST as claims)         [s "p" o]        (interned graph)      (transitive closure)
+*.bjs ──beagle-facts───▶ CNF triples ──load──▶ Fram fact store ──Datalog──▶ leverage / callers
+  (AST as facts)          [s "p" o]        (interned graph)      (transitive closure)
 ```
 
-1. **`beagle-claims`** (in [beagle](https://github.com/tompassarelli/beagle), `bin/beagle-claims`) reflects a
-   file's AST into newline-separated EDN claim triples `[subj "pred" obj]` —
+1. **`beagle-facts`** (in [beagle](https://github.com/tompassarelli/beagle), `bin/beagle-facts`) reflects a
+   file's AST into newline-separated EDN fact triples `[subj "pred" obj]` —
    `form-kind`, `name`, `calls`, and a uniform **`child`** containment edge.
-   It's a cross-cutting *analysis* projection, not a compile target: it claims
+   It's a cross-cutting *analysis* projection, not a compile target: it projects
    `.bjs` / `.bclj` / `.bnix` alike, ignoring each file's `#lang`.
-2. **`bin/emit-corpus`** runs that over a source tree → `build/<name>.claims`.
+2. **`bin/emit-corpus`** runs that over a source tree → `build/<name>.facts`.
 3. **`src/chartroom.clj`** folds the triples into a Fram store, derives the
    **namespace-correct** function call graph (a call binds the defn in its own
    module — the scope a bare-symbol match ignores), and runs the benchmarks.
@@ -35,10 +35,10 @@ Chartroom is the glue layer over three sibling projects; clone them next to this
 repo (the `~/code/<name>` layout the commands below assume) and have
 [Babashka](https://github.com/babashka/babashka) (`bb`) on `PATH`:
 
-- **[fram](https://github.com/tompassarelli/fram)** — the claim store + Datalog
+- **[fram](https://github.com/tompassarelli/fram)** — the fact store + Datalog
   engine. Build its classpath dir (`fram/out`); the runner loads `-cp ~/code/fram/out`.
-- **[beagle](https://github.com/tompassarelli/beagle)** — provides `bin/beagle-claims`
-  and `bin/beagle-roundtrip` (the AST→claims projectors). `bin/*` here resolve it
+- **[beagle](https://github.com/tompassarelli/beagle)** — provides `bin/beagle-facts`
+  and `bin/beagle-roundtrip` (the AST→facts projectors). `bin/*` here resolve it
   via `$BEAGLE` (default `$HOME/code/beagle`); override if you check it out elsewhere.
 - **[gjoa](https://github.com/tompassarelli/gjoa)** — the live corpus the benchmarks
   in RESULTS.md run against. Any beagle source tree works; gjoa is just the one measured.
@@ -46,8 +46,8 @@ repo (the `~/code/<name>` layout the commands below assume) and have
 ## Run it
 
 ```sh
-bin/emit-corpus  ~/code/gjoa/src ~/code/gjoa/tools ~/code/gjoa/tests  build/gjoa.claims
-bb -cp ~/code/fram/out:src  src/chartroom.clj  build/gjoa.claims
+bin/emit-corpus  ~/code/gjoa/src ~/code/gjoa/tools ~/code/gjoa/tests  build/gjoa.facts
+bb -cp ~/code/fram/out:src  src/chartroom.clj  build/gjoa.facts
 ```
 
 ## What it proves (and doesn't)
@@ -59,10 +59,10 @@ callers** (perfect precision where bare-symbol match is 33–67% wrong) and
 surface) — and Fram's Datalog computes the real call-graph closure correctly.
 
 Two projections, two jobs (both derived from the same source):
-- **Query projection** (`beagle-claims`) — compact AST claims with semantic
+- **Query projection** (`beagle-facts`) — compact AST facts with semantic
   overlays (`calls`/`name`/`child`). Great for leverage queries; lossy (drops
   types/params). ~18 triples/form.
-- **Truth projection** (`beagle-roundtrip`) — verbose reader-datum claims that
+- **Truth projection** (`beagle-roundtrip`) — verbose reader-datum facts that
   round-trip the program **losslessly** (types survive as tokens, comments as
   resolved references). The graph as a *source of truth*; text as a regenerable
   view. ~238 triples/form.
