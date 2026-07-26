@@ -151,7 +151,7 @@ FRAM_SERVER_JSON=$(cat <<JSON
     "FRAM_COORD_READ_TIMEOUT_MS": "180000",
     "_comment_fram_log": "read verbs (show/ask/validate) bind FRAM_LOG, the EDIT verbs bind FRAM_CODE_LOG. Omitting FRAM_LOG made rt/log-path fall back to \$PWD/coordination.log — a file that does not exist here — so every read answered [] for a graph with facts, instead of refusing. Same value the doctor probe above already uses.",
     "FRAM_LOG": "$CODE_LOG",
-    "FRAM_SRC": "$DIR",
+    "FRAM_SRC": "$SRC",
     "FRAM_OUT": "$HERE/out",
     "FRAM_BIN": "$HERE/bin",
     "FRAM_RESOLVE": "$HERE/resolve.clj",
