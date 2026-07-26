@@ -2079,7 +2079,7 @@
 ;; call graph — the scope-correct calls_defn edges + transitive blast radius.
 ;; ============================================================================
 ;; Factored out of the `callgraph` MODE so the daemon's warm :blast/:concern-overlap,
-;; the offline `callgraph` mode, and codegraph/src/callgraph.clj all share ONE derivation
+;; the offline `callgraph` mode, and codegraph/src/callgraph.bclj all share ONE derivation
 ;; (call-edges) and ONE reaches closure (blast-closure) — the per-query throwaway-store
 ;; rebuild now lives in exactly one place (decision J: "one implementation shared by
 ;; concern-overlap and who-calls").

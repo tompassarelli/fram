@@ -98,7 +98,7 @@ The rejected bench:
 
 - **chartroom** — an experiment's codename doing a shipped subsystem's job. Nautical
   charm buys nothing at the call site and costs a sentence of explanation forever.
-- **callgraph** — already taken, one layer down (`codegraph/src/callgraph.clj`), and
+- **callgraph** — already taken, one layer down (`codegraph/src/callgraph.bclj`), and
   narrower than the surface: call edges are one query the graph answers, not the graph.
 - **codeintel** — accurate and joyless; also an IDE-vendor prior (LSP, Sourcegraph) that
   drags in editor-plumbing expectations this surface doesn't serve.
