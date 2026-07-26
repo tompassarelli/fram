@@ -30,7 +30,10 @@ done
 #   resolve_core M1 Cut A: the CRDT order-key algebra + form vocabulary that
 #                resolve.clj now aliases (rc/*), and which coord_daemon.clj and
 #                tests/coord_crdt_*.clj read through it.
-for m in pull resolve_core; do
+#   resolve_read M1 Cut B: the view-relative read layer (election, node reads,
+#                ordered-tree navigation) that resolve.clj now wraps as rr/*.
+#                The ^:dynamic state stays in resolve.clj and is passed in.
+for m in pull resolve_core resolve_read; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"

@@ -21,7 +21,8 @@
 (ns resolve
   (:require [clojure.edn :as edn] [clojure.string :as str] [fram.store :as c]
             [fram.datalog :as d] [cheshire.core :as json]   ; datalog+json: the `callgraph` mode
-            [resolve-core :as rc]))  ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
+            [resolve-core :as rc]    ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
+            [resolve-read :as rr]))  ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -108,65 +109,21 @@
 ;; restrict the election to the cids that view selects ((view selects @cid) facts), so the
 ;; resolver renders a *branch's* line of the code, isolated from main and sibling branches.
 (def ^:dynamic *view* nil)
-(defn view-cids
-  "cids of `cids` that view `v` selects via live (v selects @cid) facts — the resolve-layer
-   twin of cnf_coord/view-selects. nil/empty when v selects NONE of them, so the caller
-   inherits the default-main election (one head + named overlays). The view subject and
-   `selects` predicate are store value-ids; an unknown view resolves to nil -> selects nothing."
-  [v cids]
-  (let [SEL (c/value-id ctx "selects") ve (c/value-id ctx v)]
-    (when (and SEL ve)
-      (let [sel (set (keep (fn [scid] (:r (c/fact-of ctx scid))) (c/by-lp ctx ve SEL)))]
-        (filter sel cids)))))
-(defn select-main-1
-  "Coexist-elect, VIEW-RELATIVE read-time election of the `*view*` member of a (live) (l,p)
-   fact-id group `cids`: the winner is the EARLIEST fact by the total key [cid, writing-agent].
-   cids are cid-ascending under the single allocator, so the default (*view*=nil = main) is
-   BYTE-IDENTICAL to (first cids); the agent tiebreak only keeps the order total if cid
-   allocation is ever sharded. A bound `*view*` restricts the group to that view's selected cids
-   (per-branch isolation), inheriting main where the view is silent. Every reader computes it
-   identically with zero coordination — the same election the engine coordinator runs
-   (cnf_coord/elect). Returns nil on an empty group. Degrades to (first cids) when no store is
-   bound (pure cid-vector callers, e.g. the honesty-pass unit), so it stays a function of cids
-   alone there."
-  [cids]
-  (when (seq cids)
-    (if (nil? ctx)
-      (first cids)
-      (let [in-view (when *view* (view-cids *view* cids))
-            pool    (if (seq in-view) in-view cids)]
-        (first (sort-by (fn [cid] [cid (str (get-in @ctx [:txs (get (:tx-of @ctx) cid) :agent]))]) pool))))))
+;; M1 Cut B — the view-relative READ layer is now Beagle (src/resolve_read.bclj).
+;; The ^:dynamic vars STAY here: coord_daemon.clj and tests/coord_*.clj `binding`
+;; them by qualified name (resolve/ctx, resolve/*view*, ...), and a var cannot be
+;; moved to another namespace without breaking that — a value alias would no
+;; longer see the binding, and a :refer alias leaves resolve/ctx unresolvable
+;; (qualified-symbol lookup is findInternedVar, which ignores referred vars). So
+;; each name below is a one-line wrapper that reads the dynamic state and hands
+;; it to the ported function explicitly. Docstrings live with the logic.
+(defn view-cids      [v cids]  (rr/view-cids ctx v cids))
+(defn select-main-1  [cids]    (rr/select-main-1 ctx *view* cids))
+(defn select-causal-1 [cids]   (rr/select-causal-1 ctx *view* cids))
 
-(defn select-causal-1
-  "The CAUSAL read-time election (thread H, Part C) — the resolve-layer twin of the engine's
-   cnf_coord/elect-causal, and the elects_by=causal policy alongside select-main-1's elects_by=cid.
-   Same view-relative pool as select-main-1, but ordered by the CAUSAL key [observed, cid, agent]
-   instead of [cid, agent]: the winner is the member whose writer DECIDED earliest (lowest :observed
-   stamp — the global seq it had seen), tie-broken by commit order then agent. So rival drivers/roles
-   resolve by 'who had the earlier causal view', not 'who committed first' — every reader elects the
-   same with zero coordination. :observed is nil for legacy/non-causal facts, so it falls back to
-   the tx :seq (commit order) and degrades EXACTLY to select-main-1 — a strict refinement, never a
-   regression. Returns nil on an empty group; degrades to (first cids) when no store is bound."
-  [cids]
-  (when (seq cids)
-    (if (nil? ctx)
-      (first cids)
-      (let [in-view (when *view* (view-cids *view* cids))
-            pool    (if (seq in-view) in-view cids)
-            tx-meta (fn [cid] (get-in @ctx [:txs (get (:tx-of @ctx) cid)]))]
-        (first (sort-by (fn [cid] (let [m (tx-meta cid)]
-                                    [(or (:observed m) (:seq m) 0) cid (str (:agent m))]))
-                        pool))))))
-
-(defn pred-val
-  "The default-main value of predicate `pname` on node `e`. `pname` may be multi-valued in the
-   graph; this SELECTS the main view's one (via select-main-1), it does not assume uniqueness."
-  [e pname]
-  (let [P (c/value-id ctx pname)]
-    (when P (let [cs (c/by-lp ctx e P)]
-              (when-let [cid (select-main-1 cs)] (c/literal ctx (:r (c/fact-of ctx cid))))))))
-(defn kind-of [e] (pred-val e "kind"))                                  ; default-main kind of node e
-(defn sym-val [e] (when (= "symbol" (kind-of e)) (pred-val e "v")))     ; default-main spelling of a symbol
+(defn pred-val [e pname] (rr/pred-val ctx *view* e pname))
+(defn kind-of  [e] (rr/kind-of ctx *view* e))                           ; default-main kind of node e
+(defn sym-val  [e] (rr/sym-val ctx *view* e))                           ; default-main spelling of a symbol
 ;; ---- CRDT order keys (#36): positions as DATA, insert-anywhere commute ----------
 ;; A child-position predicate is "f<path>~<tie>": path = logoot int-vector (dense — a
 ;; path strictly between any two always exists), tie = the child node's atomic name-int
@@ -187,38 +144,13 @@
 (def ord-append rc/ord-append)
 (def ord-between rc/ord-between)
 
-(defn ordered-children [e]                     ; fN children, in CRDT-key (path,tie) order
-  (->> (c/by-l ctx e) (map #(c/fact-of ctx %))
-       (keep (fn [cl] (when-let [k (ord-parse (c/literal ctx (:p cl)))] [k (:r cl)])))
-       (sort-by first ord-cmp) (mapv second)))
-(defn ordered-segs [e]                         ; Turtle #6: a comment node's segN children, in order
-  (->> (c/by-l ctx e) (map #(c/fact-of ctx %))
-       (keep (fn [cl] (let [p (c/literal ctx (:p cl))]
-                        (when (and (string? p) (re-matches #"seg\d+" p)) [(parse-long (subs p 3)) (:r cl)]))))
-       (sort-by first) (mapv second)))
-(defn head-sym [e] (when (= "list" (kind-of e)) (sym-val (first (ordered-children e)))))
-;; D2: peel leading (#%meta <metadata> <target>) wrappers to reach the bound form.
-;; A metadata-annotated def NAME — `(def ^:dynamic *x* 1)` ingests its name slot as
-;; `(#%meta {:dynamic true} *x*)` — hides the symbol from a bare `sym-val`. Metas nest
-;; left (`^a ^b x` = `(#%meta a (#%meta b x))`), so loop to the innermost target (the
-;; 3rd child). nil-safe: a malformed/absent target falls through to nil (head-sym nil).
-(defn unwrap-meta [e]
-  (loop [e e n 0]
-    (if (and e (< n 64) (= "#%meta" (head-sym e)))
-      (recur (nth (ordered-children e) 2 nil) (inc n))
-      e)))
-(defn bound-target
-  "The DURABLE identity target of reference `L` — the bound_to edge points at the binding's
-   stable @mod#int node-id, not its spelling. nil if L carries no durable edge (legacy/unedged
-   refs fall back to the spelling-derived refers_to)."
-  [L] (when BOUND (let [cs (c/by-lp ctx L BOUND)] (when-let [cid (select-main-1 cs)] (:r (c/fact-of ctx cid))))))
-(defn refers-target
-  "The binding node reference `L` resolves to (default-main view). Prefers the DURABLE bound_to
-   identity edge; falls back to the derived refers_to (spelling-walk) for unedged/legacy refs.
-   Not a uniqueness proof (select-main-1)."
-  [L] (or (bound-target L)
-          (let [cs (c/by-lp ctx L REFERS)] (when-let [cid (select-main-1 cs)] (:r (c/fact-of ctx cid))))))
-(defn live-node? [e] (seq (c/by-lp ctx e KIND)))
+(defn ordered-children [e] (rr/ordered-children ctx e))   ; fN children, in CRDT-key (path,tie) order
+(defn ordered-segs [e] (rr/ordered-segs ctx e))           ; Turtle #6: a comment node's segN children, in order
+(defn head-sym [e] (rr/head-sym ctx *view* e))
+(defn unwrap-meta [e] (rr/unwrap-meta ctx *view* e))      ; D2: peel leading (#%meta …) wrappers off a bound form
+(defn bound-target [L] (rr/bound-target ctx *view* BOUND L))   ; DURABLE identity edge (bound_to)
+(defn refers-target [L] (rr/refers-target ctx *view* BOUND REFERS L)) ; bound_to, else derived refers_to
+(defn live-node? [e] (rr/live-node? ctx KIND e))
 
 ;; --- binding extraction -----------------------------------------------------
 (def PARAM-FORMS rc/PARAM-FORMS)   ; have a [param] vector

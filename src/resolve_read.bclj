@@ -1,0 +1,229 @@
+#lang beagle/clj
+
+;; ============================================================================
+;; resolve-read — the view-relative READ layer over the fact graph.
+;; ============================================================================
+;; Stage M1 Cut B of the engine core port (north thread
+;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). Everything a reader needs to turn a
+;; pile of facts back into an ordered syntax tree: which member of a live (l,p)
+;; group the current VIEW elects, what a predicate says about a node, and the
+;; node's children in CRDT-key order.
+;;
+;; WHY THE STORE IS A PARAMETER HERE AND A DYNAMIC VAR THERE. resolve.clj holds
+;; `ctx`/`*view*`/`BOUND`/`REFERS`/`KIND` in ^:dynamic vars, and coord_daemon.clj
+;; plus tests/coord_*.clj `binding` them by their QUALIFIED names (resolve/ctx,
+;; resolve/*view*, ...). A dynamic var cannot be moved to another namespace
+;; without breaking those: a `(def ctx rr/ctx)` alias copies the value (so
+;; `binding` no longer reaches the reader) and a `:refer` alias leaves
+;; `resolve/ctx` unresolvable (Clojure's qualified-symbol lookup is
+;; findInternedVar, which ignores referred vars). So the VARS stay in resolve.clj
+;; as the host state seam and the LOGIC moves here with the state passed
+;; explicitly; resolve.clj keeps a one-line wrapper per name that reads the var.
+;; Every call site in resolve.clj, coord_daemon.clj and the tests is unchanged.
+;;
+;; Consumed by resolve.clj (aliases these behind wrappers) — so the emitted
+;; out/resolve_read.clj must stay on the classpath.
+;; ============================================================================
+(ns resolve-read
+  (:require [fram.types :as t] [fram.store :as c] [resolve-core :as rc]))
+
+(define-mode strict)
+
+;; A (child-position-key, child-node) pair, sorted to produce ordered-children.
+;; A record rather than the original's 2-vector because the pair is fixed-shape
+;; and the sort key is typed: sorting a (Vec Any) by `first` would hand ord-cmp
+;; an Any and lose the OrdKey contract the comparator actually needs.
+(defrecord OrdPair [key :- rc/OrdKey child :- Int])
+;; The segN twin: comment segments carry an integer index, not an order key.
+(defrecord SegPair [idx :- Int child :- Int])
+
+;; --------------------------------------------------------------- election ---
+
+(defn view-cids [ctx :- (Atom t/Store) v :- Any cids :- (Vec Int)] :- (U (Vec Int) Nil)
+  ;; cids of `cids` that view `v` selects via live (v selects @cid) facts — the
+  ;; resolve-layer twin of cnf_coord/view-selects. nil/empty when v selects NONE
+  ;; of them, so the caller inherits the default-main election (one head + named
+  ;; overlays). The view subject and `selects` predicate are store value-ids; an
+  ;; unknown view resolves to nil -> selects nothing.
+  (let [SEL (c/value-id ctx "selects")
+        ve  (c/value-id ctx v)]
+    (if (or (nil? SEL) (nil? ve))
+      nil
+      (let [sel (reduce (fn [acc :- (Set Any) scid :- Int] :- (Set Any)
+                          (let [f (c/fact-of ctx scid)]
+                            (if (nil? f) acc (conj acc (get f :r)))))
+                        #{}
+                        (c/by-lp ctx ve SEL))]
+        (filterv (fn [cid :- Int] :- Bool (contains? sel cid)) cids)))))
+
+;; The election pool: a bound view narrows the group to the cids it selects, and
+;; inherits main wherever it selects none of them.
+(defn- pool-of [ctx :- (Atom t/Store) view :- Any cids :- (Vec Int)] :- (Vec Int)
+  (let [in-view (if (nil? view) nil (view-cids ctx view cids))]
+    (if (or (nil? in-view) (empty? in-view)) cids in-view)))
+
+;; The writing agent of the tx that committed `cid`, as a string. "" when the
+;; fact carries no tx (legacy/synthetic) — matching (str nil).
+(defn- agent-of [s :- t/Store cid :- Int] :- String
+  (let [txid (get (:tx-of s) cid)
+        m    (if (nil? txid) nil (get (:txs s) txid))]
+    (if (nil? m) "" (str (get m :agent)))))
+
+(defn select-main-1 [ctx :- (U (Atom t/Store) Nil) view :- Any cids :- (Vec Int)] :- Int?
+  ;; Coexist-elect, VIEW-RELATIVE read-time election of the `view` member of a
+  ;; (live) (l,p) fact-id group `cids`: the winner is the EARLIEST fact by the
+  ;; total key [cid, writing-agent]. cids are cid-ascending under the single
+  ;; allocator, so the default (view=nil = main) is BYTE-IDENTICAL to
+  ;; (first cids); the agent tiebreak only keeps the order total if cid
+  ;; allocation is ever sharded. Every reader computes it identically with zero
+  ;; coordination — the same election the engine coordinator runs
+  ;; (cnf_coord/elect). Returns nil on an empty group. Degrades to (first cids)
+  ;; when no store is bound (pure cid-vector callers, e.g. the honesty-pass
+  ;; unit), so it stays a function of cids alone there.
+  (if (empty? cids)
+    nil
+    (if (nil? ctx)
+      (first cids)
+      (let [s :- t/Store (deref ctx)]
+        (first (sort-by (fn [cid :- Int] :- (Vec Any) [cid (agent-of s cid)])
+                        (pool-of ctx view cids)))))))
+
+(defn select-causal-1 [ctx :- (U (Atom t/Store) Nil) view :- Any cids :- (Vec Int)] :- Int?
+  ;; The CAUSAL read-time election (thread H, Part C) — the resolve-layer twin of
+  ;; the engine's cnf_coord/elect-causal, and the elects_by=causal policy
+  ;; alongside select-main-1's elects_by=cid. Same view-relative pool, but
+  ;; ordered by the CAUSAL key [observed, cid, agent] instead of [cid, agent]:
+  ;; the winner is the member whose writer DECIDED earliest (lowest :observed
+  ;; stamp — the global seq it had seen), tie-broken by commit order then agent.
+  ;; So rival drivers/roles resolve by "who had the earlier causal view", not
+  ;; "who committed first". :observed is nil for legacy/non-causal facts, so it
+  ;; falls back to the tx :seq (commit order) and degrades EXACTLY to
+  ;; select-main-1 — a strict refinement, never a regression.
+  (if (empty? cids)
+    nil
+    (if (nil? ctx)
+      (first cids)
+      (let [s :- t/Store (deref ctx)]
+        (first (sort-by (fn [cid :- Int] :- (Vec Any)
+                          (let [txid (get (:tx-of s) cid)
+                                m    (if (nil? txid) nil (get (:txs s) txid))
+                                obs  (if (nil? m) nil (get m :observed))
+                                sq   (if (nil? m) nil (get m :seq))]
+                            [(if (nil? obs) (if (nil? sq) 0 sq) obs)
+                             cid
+                             (if (nil? m) "" (str (get m :agent)))]))
+                        (pool-of ctx view cids)))))))
+
+;; ------------------------------------------------------------- node reads ---
+
+;; The :r (right/object) slot of a fact as a node id. Every fact the readers
+;; below reach carries an Int there; a nil cid, a missing fact or a non-int slot
+;; all read as "no target", which is what the original's nil-propagation did.
+(defn- fact-r [ctx :- (Atom t/Store) cid :- Int?] :- Int?
+  (let [f (if (nil? cid) nil (c/fact-of ctx cid))
+        r :- Any (if (nil? f) nil (get f :r))]
+    (if (int? r) r nil)))
+
+(defn pred-val [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int? pname :- Any] :- Any
+  ;; The default-main value of predicate `pname` on node `e`. `pname` may be
+  ;; multi-valued in the graph; this SELECTS the view's one (via select-main-1),
+  ;; it does not assume uniqueness. A nil node reads as absent — the original
+  ;; reached the same answer by indexing the store with a nil subject, which
+  ;; misses every index bucket.
+  (if (or (nil? ctx) (nil? e))
+    nil
+    (let [P (c/value-id ctx pname)]
+      (if (nil? P)
+        nil
+        (let [r (fact-r ctx (select-main-1 ctx view (c/by-lp ctx e P)))]
+          (if (nil? r) nil (c/literal ctx r)))))))
+
+;; default-main kind of node e
+(defn kind-of [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (pred-val ctx view e "kind"))
+
+;; default-main spelling of a symbol
+(defn sym-val [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (if (= "symbol" (kind-of ctx view e)) (pred-val ctx view e "v") nil))
+
+;; ---------------------------------------------------------- ordered reads ---
+
+;; fN children, in CRDT-key (path,tie) order.
+(defn ordered-children [ctx :- (U (Atom t/Store) Nil) e :- Int?] :- (Vec Int)
+  (if (or (nil? ctx) (nil? e))
+    []
+    (let [pairs (reduce (fn [acc :- (Vec OrdPair) cid :- Int] :- (Vec OrdPair)
+                          (let [f  (c/fact-of ctx cid)
+                                pi :- Any (if (nil? f) nil (get f :p))
+                                k  (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)
+                                r  (fact-r ctx cid)]
+                            (if (or (nil? k) (nil? r)) acc (conj acc (->OrdPair k r)))))
+                        []
+                        (c/by-l ctx e))]
+      (mapv (fn [pr :- OrdPair] :- Int (:child pr))
+            (sort-by (fn [pr :- OrdPair] :- rc/OrdKey (:key pr)) rc/ord-cmp pairs)))))
+
+;; Turtle #6: a comment node's segN children, in order.
+(defn ordered-segs [ctx :- (U (Atom t/Store) Nil) e :- Int?] :- (Vec Int)
+  (if (or (nil? ctx) (nil? e))
+    []
+    (let [pairs (reduce (fn [acc :- (Vec SegPair) cid :- Int] :- (Vec SegPair)
+                          (let [f  (c/fact-of ctx cid)
+                                pi :- Any (if (nil? f) nil (get f :p))
+                                p  :- Any (if (int? pi) (c/literal ctx pi) nil)
+                                r  (fact-r ctx cid)]
+                            (if (and (string? p) (some? (re-matches #"seg\d+" (str p))) (some? r))
+                              (let [n (parse-long (subs (str p) 3))]
+                                (if (nil? n) acc (conj acc (->SegPair n r))))
+                              acc)))
+                        []
+                        (c/by-l ctx e))]
+      (mapv (fn [pr :- SegPair] :- Int (:child pr))
+            (sort-by (fn [pr :- SegPair] :- Int (:idx pr)) pairs)))))
+
+(defn head-sym [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (if (= "list" (kind-of ctx view e))
+    (sym-val ctx view (first (ordered-children ctx e)))
+    nil))
+
+;; D2: peel leading (#%meta <metadata> <target>) wrappers to reach the bound form.
+;; A metadata-annotated def NAME — `(def ^:dynamic *x* 1)` ingests its name slot
+;; as `(#%meta {:dynamic true} *x*)` — hides the symbol from a bare `sym-val`.
+;; Metas nest left (`^a ^b x` = `(#%meta a (#%meta b x))`), so loop to the
+;; innermost target (the 3rd child). nil-safe: a malformed/absent target falls
+;; through to nil.
+(defn unwrap-meta [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Int?
+  (loop [e :- Int? e
+         n 0]
+    (if (and (some? e) (< n 64) (= "#%meta" (head-sym ctx view e)))
+      (recur (nth (ordered-children ctx e) 2 nil) (inc n))
+      e)))
+
+;; ------------------------------------------------------------- identity ----
+
+(defn bound-target [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? L :- Int?] :- Int?
+  ;; The DURABLE identity target of reference `L` — the bound_to edge points at
+  ;; the binding's stable @mod#int node-id, not its spelling. nil if L carries no
+  ;; durable edge (legacy/unedged refs fall back to the spelling-derived
+  ;; refers_to).
+  (if (or (nil? ctx) (nil? BOUND) (nil? L))
+    nil
+    (fact-r ctx (select-main-1 ctx view (c/by-lp ctx L BOUND)))))
+
+(defn refers-target [ctx :- (U (Atom t/Store) Nil) view :- Any
+                     BOUND :- Int? REFERS :- Int? L :- Int?] :- Int?
+  ;; The binding node reference `L` resolves to (default-main view). Prefers the
+  ;; DURABLE bound_to identity edge; falls back to the derived refers_to
+  ;; (spelling-walk) for unedged/legacy refs. Not a uniqueness proof.
+  (let [bt (bound-target ctx view BOUND L)]
+    (if (some? bt)
+      bt
+      (if (or (nil? ctx) (nil? REFERS) (nil? L))
+        nil
+        (fact-r ctx (select-main-1 ctx view (c/by-lp ctx L REFERS)))))))
+
+;; Does the node still carry a `kind` — i.e. was it not retired out of the graph?
+(defn live-node? [ctx :- (U (Atom t/Store) Nil) KIND :- Int? e :- Int?] :- Bool
+  (if (or (nil? ctx) (nil? KIND) (nil? e))
+    false
+    (not (empty? (c/by-lp ctx e KIND)))))
