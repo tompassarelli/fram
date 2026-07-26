@@ -8,7 +8,7 @@
 
 (def default-max-nodes 1000)
 
-(def reserved-preds #{"name" "store-supersedes" "cardinality" "value_kind" "withdrawn_by" "withdrawn_at" "withdrawn_reason"})
+(def reserved-preds #{"withdrawn_reason" "value_kind" "withdrawn_by" "store-supersedes" "name" "withdrawn_at" "cardinality"})
 
 (defn- ^Boolean reserved-pred? [p]
   (contains? reserved-preds p))
