@@ -1,0 +1,10 @@
+;; Benchmark-harness-only dependency. DataScript 1.7.3, EPL-1.0 (checked
+;; 2026-07-27 against the jar's bundled META-INF/leiningen/.../LICENSE) —
+;; usable as a benchmark comparison dep; nothing here ships in the product.
+;; :paths pulls in the already-compiled fram namespaces (fram.rt/read-log,
+;; fram.fold/fold) from the repo's own `out/` so the corpus is folded to its
+;; final live-fact set with the SAME code the daemon uses, not a re-guess.
+{:paths ["../../out"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        datascript/datascript {:mvn/version "1.7.3"}
+        cheshire/cheshire {:mvn/version "5.13.0"}}}
