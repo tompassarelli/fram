@@ -12,20 +12,27 @@
 ;;   bb -cp out coord_daemon.clj serve [port] [v2-log]
 ;;   bb -cp out coord_daemon.clj test  [port]
 ;; ============================================================================
-(require '[clojure.string :as str] '[clojure.edn :as edn] '[clojure.set]
-         '[fram.store :as c] '[fram.schema :as s]
-         '[fram.kernel :as ck]
-         '[fram.authority :as authority] '[fram.tools :as tools]
-         '[cheshire.core :as json]
-         '[fram.fold :as fold] '[fram.query :as q] '[fram.datalog :as d] '[fram.rt])
-(import '[java.net ServerSocket Socket InetSocketAddress]
-        '[java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
-        '[javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
-        '[java.security KeyStore])
-(load-file "coord.clj")          ; the reified coordinator library
+;; NAMESPACE. This file used to have no `ns` form, so its ~385 defs landed in the
+;; loader's namespace — `user`, shared with coord.clj and ~80 loading tests. It now
+;; owns the real namespace `coord-daemon`; the compat bridge just above the
+;; command-line dispatch at the BOTTOM re-exports those vars into `user` so the
+;; existing load-file callers keep working unchanged.
+(ns coord-daemon
+  (:require [clojure.string :as str] [clojure.edn :as edn] [clojure.set]
+            [fram.store :as c] [fram.schema :as s]
+            [fram.kernel :as ck]
+            [fram.authority :as authority] [fram.tools :as tools]
+            [cheshire.core :as json]
+            [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d] [fram.rt])
+  (:import [java.net ServerSocket Socket InetSocketAddress]
+           [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
+           [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
+           [java.security KeyStore]))
+(load-file "coord.clj")          ; the reified coordinator library (ns coord)
+(refer 'coord)                   ; this file calls coord's vars UNQUALIFIED throughout
 (load-file "fri.clj")            ; FRAM_MMAP_IMAGE V1: the .fri columnar mmap image (ns fri)
 (load-file "pull.clj")           ; the PULL API (ns pull) — MUST load after coord.clj:
-                                 ; pull references coord.clj's readers as user/… and SCI
+                                 ; pull references coord.clj's readers as coord/… and SCI
                                  ; resolves those qualified symbols at analysis time.
 ;; resolve.clj — the store-parameterized lexical resolver (S3.1/S3.2), loaded as a
 ;; LIBRARY: its -main is guarded behind a recognized MODES arg, and the daemon's
@@ -6264,6 +6271,39 @@
                   :authority-release
                   (write-resp (authority-session-release ctx handle))
                   (write-resp {:reject :unknown-authority-op}))))))))))
+
+;; ============================================================================
+;; COMPAT BRIDGE — `coord-daemon` re-exported into `user`.
+;; ============================================================================
+;; ~80 callers (the tests, the bench harnesses, bin/fram-selfcheck-probe) reach
+;; this file with `(load-file "coord_daemon.clj")` from a bare bb script, i.e.
+;; from `user`, and then call boot-flat!/serve-daemon/handle-op/… with NO
+;; qualifier. Before this file had an `ns`, that worked because the defs landed
+;; in `user` directly. It keeps working because we refer every var of
+;; `coord-daemon` — publics AND privates, several of which are used from outside
+;; today because privacy was a no-op in the shared-`user` world — plus this
+;; namespace's require aliases (str/, edn/, c/, s/, ck/, authority/, tools/,
+;; json/, fold/, q/, d/), which callers also inherited from the old bare
+;; `(require ...)`. `refer` installs the REAL vars, so a caller that resets! an
+;; atom or rebinds a dynamic var still hits this namespace's var. coord.clj's own
+;; vars reached `user` through coord.clj's bridge when it was load-file'd above.
+;;
+;; WHY load-file AND NOT require: same as coord.clj — this file sits at the repo
+;; ROOT and every entry point runs `-cp out`, so `(require 'coord-daemon)` cannot
+;; resolve it without relocating the file and rewriting the nix package layout,
+;; build.sh, the bench harnesses and every call site.
+;;
+;; MUST stay ABOVE the command-line dispatch below: `serve`/`serve-flat` block
+;; forever, so a bridge placed after them would never run for a serving daemon.
+;; Same privacy lift as coord.clj's bridge: `refer` exports only publics on the
+;; JVM, while the shared-`user` world had no privacy at all, so the (inert)
+;; :private marker is dropped before referring. Definition-site `defn-` stays as
+;; the intent marker.
+(let [target (create-ns 'user)]
+  (doseq [[_ v] (ns-interns 'coord-daemon)] (alter-meta! v dissoc :private))
+  (binding [*ns* target]
+    (refer 'coord-daemon)
+    (doseq [[a n] (ns-aliases 'coord-daemon)] (alias a (ns-name n)))))
 
 (let [[cmd p log flat] *command-line-args*]
   (case cmd

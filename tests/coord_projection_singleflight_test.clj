@@ -26,21 +26,21 @@
 (def facts-b (corpus "b" 500))
 
 ;; reset the cache to a known-empty state before probing.
-(reset! user/projection-cache nil)
+(reset! coord-daemon/projection-cache nil)
 
 ;; --- (1) same facts set: cached, single build, identical object ---------------
 (def build-count (atom 0))
 (with-redefs [q/project (let [orig q/project]
                           (fn [facts] (swap! build-count inc) (orig facts)))]
-  (let [p1 (user/snapshot-projection facts-a)
-        p2 (user/snapshot-projection facts-a)]
+  (let [p1 (coord-daemon/snapshot-projection facts-a)
+        p2 (coord-daemon/snapshot-projection facts-a)]
     (chk "same facts set returns the identical projection object" (identical? p1 p2))
     (chk "same facts set builds the projection exactly once" (= 1 @build-count))
-    (chk "cache holds that facts set" (identical? facts-a (:facts @user/projection-cache)))
+    (chk "cache holds that facts set" (identical? facts-a (:facts @coord-daemon/projection-cache)))
 
     ;; --- (2) concurrency: many readers, still exactly one materialization -----
     (reset! build-count 0)
-    (reset! user/projection-cache nil)
+    (reset! coord-daemon/projection-cache nil)
     (let [n 32
           barrier (java.util.concurrent.CountDownLatch. 1)
           results (atom [])
@@ -48,7 +48,7 @@
                           (Thread.
                            (fn []
                              (.await barrier)
-                             (swap! results conj (user/snapshot-projection facts-a)))))
+                             (swap! results conj (coord-daemon/snapshot-projection facts-a)))))
                         (range n))]
       (doseq [t threads] (.start t))
       (.countDown barrier)
@@ -61,15 +61,15 @@
 
     ;; --- (3) a new facts set (new version) rebuilds once, cache advances ------
     (reset! build-count 0)
-    (let [pa (user/snapshot-projection facts-a)   ; still cached from (2)
-          pb (user/snapshot-projection facts-b)]  ; miss → one rebuild
+    (let [pa (coord-daemon/snapshot-projection facts-a)   ; still cached from (2)
+          pb (coord-daemon/snapshot-projection facts-b)]  ; miss → one rebuild
       (chk "cached version is a hit (no rebuild)" (= 1 @build-count))
       (chk "new version yields a distinct projection" (not (identical? pa pb)))
       (chk "cache advances to the new facts set (single retained entry)"
-           (identical? facts-b (:facts @user/projection-cache))))))
+           (identical? facts-b (:facts @coord-daemon/projection-cache))))))
 
 ;; --- (4) the cached projection actually answers the production page query -----
-(let [proj (user/snapshot-projection facts-a)
+(let [proj (coord-daemon/snapshot-projection facts-a)
       pending {:find "pending_message"
                :strata [[{:head {:rel "message_candidate" :args [{:var "e"}]}
                           :body [{:rel "fact" :args [{:var "e"} "to" "@me"]}]}]
