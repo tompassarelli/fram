@@ -34,10 +34,6 @@
 
 (def ^String verdict-view-relation "claim.verdict-view")
 
-(def ^String re-verified-relation "claim.re-verified")
-
-(def no-such-id -1)
-
 (def default-views {:verified verified-view :rejected rejected-view})
 
 (defn ^String scoped-view [^String root ^String agent]
@@ -132,22 +128,6 @@
   (if (nil? selp) [] (vec (sort (vec (distinct (reduce (fn [acc cid] (let [l (:l (c/fact-of st cid))]
   (if (family? (:verified views) (s/name-of st l)) (conj acc l) acc))) [] (c/by-p st selp)))))))))
 
-(defn- all-selections [co claim-cid]
-  (let [st (sto co)
-   m (deref st)
-   selp (c/value-id st select-pred)]
-  (if (nil? selp) [] (vec (get (:idx-by-pr m) [selp claim-cid] [])))))
-
-(defn- ^Boolean re-verified? [co views claim-cid]
-  (let [v (verdict co views claim-cid)]
-  (if (or (nil? v) (not (= :verified (:verdict v)))) false (not (empty? (filterv (fn [sel] (and (< sel (:cid v)) (and (not (c/live? (sto co) sel)) (some? (verdict-of co views sel))))) (all-selections co claim-cid)))))))
-
-(defn- re-verified-claims [co views]
-  (let [st (sto co)
-   selp (c/value-id st select-pred)]
-  (if (nil? selp) [] (vec (sort (vec (distinct (reduce (fn [acc cid] (let [f (c/fact-of st cid)]
-  (if (and (family? (:verified views) (s/name-of st (:l f))) (re-verified? co views (:r f))) (conj acc (:r f)) acc))) [] (c/by-p st selp)))))))))
-
 (defn reverification-rules
   ([co from to]
     (reverification-rules co default-views from to))
@@ -160,7 +140,7 @@
    fromv (if (nil? from) nil (c/value-id st from))
    slots (if (nil? from) [] (filterv (fn [i] (some? i)) (mapv (fn [k] (c/value-id st k)) (changed-slots st from to))))
    vids (verdict-view-ids co views)]
-  (if (or (nil? evp) (or (nil? srp) (or (nil? wlp) (or (nil? selp) (or (nil? fromv) (or (empty? slots) (empty? vids))))))) [[] []] [(vec (concat (mapv (fn [sid] (d/rule changed-slot-relation [sid] [])) slots) (concat (mapv (fn [v] (d/rule verdict-view-relation [v] [])) vids) (concat [(d/rule re-verified-relation [no-such-id] [])] (mapv (fn [x] (d/rule re-verified-relation [x] [])) (re-verified-claims co views)))))) [(d/rule reverification-relation [(d/v :x)] [(d/lit "triple" [(d/v :e) wlp fromv]) (d/lit "triple" [(d/v :e) srp (d/v :s)]) (d/lit changed-slot-relation [(d/v :s)]) (d/lit "triple" [(d/v :x) evp (d/v :e)]) (d/lit "fact-id" [(d/v :x) (d/v :l) (d/v :p) (d/v :r)]) (d/lit "triple" [(d/v :view) selp (d/v :x)]) (d/lit verdict-view-relation [(d/v :view)]) (d/nlit re-verified-relation [(d/v :x)])])]]))))
+  (if (or (nil? evp) (or (nil? srp) (or (nil? wlp) (or (nil? selp) (or (nil? fromv) (or (empty? slots) (empty? vids))))))) [[] []] [(vec (concat (mapv (fn [sid] (d/rule changed-slot-relation [sid] [])) slots) (mapv (fn [v] (d/rule verdict-view-relation [v] [])) vids))) [(d/rule reverification-relation [(d/v :x)] [(d/lit "triple" [(d/v :e) wlp fromv]) (d/lit "triple" [(d/v :e) srp (d/v :s)]) (d/lit changed-slot-relation [(d/v :s)]) (d/lit "triple" [(d/v :x) evp (d/v :e)]) (d/lit "fact-id" [(d/v :x) (d/v :l) (d/v :p) (d/v :r)]) (d/lit "triple" [(d/v :view) selp (d/v :x)]) (d/lit verdict-view-relation [(d/v :view)])])]]))))
 
 (defn needs-reverification
   ([co from to]

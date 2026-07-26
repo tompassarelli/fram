@@ -261,7 +261,7 @@
           _      (supersede! co "extractor" dead)
           _      (cite! c7 e1)
           _      (cite! c8 e1)
-          _      (cite! c10 e1)
+          _      (cite! c10 e2)
           ;; ---- verdicts ----------------------------------------------------
           s1  (verdict! alice-v c1)
           _   (verdict! alice-v c2)
