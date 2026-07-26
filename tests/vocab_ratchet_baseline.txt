@@ -1,4 +1,5 @@
 1	bin/fram-graph-edit-runtime
+1	build.sh
 26	chartroom/RESULTS.md
 1	chartroom/bin/rename-demo
 1	chartroom/bin/safe-rename
@@ -8,8 +9,10 @@
 5	coord_daemon.clj
 38	docs/claims-design.md
 9	docs/naming.md
+36	out/fram/claims.clj
 1	out/fram/rt.clj
 2	out/fram/world.clj
+39	src/fram/claims.bclj
 3	src/fram/main.bclj
 1	src/fram/rt.clj
 3	src/fram/world.bclj
