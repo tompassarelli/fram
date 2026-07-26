@@ -26,7 +26,8 @@
             [resolve-binds :as rb]   ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
             [resolve-modules :as rm] ; M1 Cut D: one module's frame + its import/export surface
             [resolve-render :as rv]  ; M1 Cut E: render a node back to source + the anchor search
-            [resolve-query :as rq]))  ; M1 Cut F: the code queries — call graph, blast closure, dead private
+            [resolve-query :as rq]   ; M1 Cut F: the code queries — call graph, blast closure, dead private
+            [resolve-walk :as rw]))  ; M1 Cut G: the lexical walk — every reference to its nearest binding
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -247,235 +248,32 @@
 (def ^:dynamic *xresolve* (fn [_] nil))          ; cross-module value resolver: name -> {:node :mode :alias}
 (def ^:dynamic *tresolve* (fn [_] nil))          ; type-name -> type-def node (module-local)
 (def ^:dynamic *aresolve* (fn [_] nil))          ; accessor-name `point-x` -> [type-def-leaf field-string]
-(defn bind! [L target] (c/fact! ctx L REFERS target tx) (swap! n-resolved inc))
-(defn bind-xmod! [node x]   ; x = {:target :mode :alias :accessor} from *xresolve*; refers_to + render markers
-  (when (and x (:target x))
-    (bind! node (:target x))
-    (case (:mode x)
-      :fixed (c/fact! ctx node FIXED (c/value! ctx "1") tx)   ; :rename — keep own spelling
-      :qual  (c/fact! ctx node QUAL (c/value! ctx (:alias x)) tx) ; x/name — show alias/newname
-      nil)                                                      ; :tracking — render def's current name
-    (when (:accessor x)                                         ; cross-module synth accessor: render <lower(name)>-field
-      (c/fact! ctx node ACC (c/value! ctx (:accessor x)) tx))
-    (swap! n-xmod inc)
-    true))
+;; M1 Cut G — THE LEXICAL WALK is now Beagle (src/resolve_walk.bclj): the whole
+;; descend-and-bind engine (walk / walk-all / walk-fn-arity / walk-pat-heads /
+;; walk-quasi / walk-quasi-seq, the binding writes bind! / bind-xmod! /
+;; bound-render!, the type-position resolvers, the comment resolver and the
+;; per-src driver). As in Cuts B–F the ^:dynamic vars STAY here — coord_daemon.clj
+;; and tests/coord_*.clj `binding` them by qualified name — so `walk-env` reads the
+;; dynamic state at call time and hands it over as ONE explicit record. Docstrings
+;; and the per-def rationale live with the logic, in the module header.
+(defn walk-env []
+  (rw/->Walk ctx *view* tx REFERS BOUND FIXED QUAL CTOR ACC
+             n-resolved n-unresolved n-xmod n-type n-comment
+             *xresolve* *tresolve* *aresolve*))
+(defn bind! [L target] (rw/bind! (walk-env) L target))
+(defn bind-xmod! [node x] (rw/bind-xmod! (walk-env) node x))
 ;; ->Name / map->Name auto-constructor prefix in a spelling (bare OR alias-qualified), else nil.
 (def ctor-prefix rc/ctor-prefix)
-;; #(a) identity RE-RENDER: a reference carrying a DURABLE bound_to edge resolves by IDENTITY
-;; (the binding's stable @mod#int), but its render MARKERS (qualifier / ctor_prefix /
-;; accessor_field / keep_spelling) are spelling-derived resolve-preds that a strip+re-resolve
-;; (whole/scoped materialize, cold boot) CLEARS. So on the bound path we bind refers_to to the
-;; DURABLE target and RE-DERIVE the markers from the reference's own spelling — a cross-module
-;; `a/foo`, a `->Ctor`, or a synth accessor keeps rendering correctly after a rename or cold
-;; restart, not just a bare module-local ref. The identity target always wins over spelling.
-(defn bound-render! [node nm bt]
-  (bind! node bt)                                  ; the durable identity edge
-  (let [x   (*xresolve* nm)
-        pfx (ctor-prefix nm)
-        acc (*aresolve* nm)]
-    (cond
-      (and x (:target x))                          ; cross-module import: qualifier/keep_spelling/accessor markers
-      (do (case (:mode x)
-            :fixed (c/fact! ctx node FIXED (c/value! ctx "1") tx)
-            :qual  (c/fact! ctx node QUAL (c/value! ctx (:alias x)) tx)
-            nil)
-          (when (:accessor x) (c/fact! ctx node ACC (c/value! ctx (:accessor x)) tx)))
-      (and pfx (or (*tresolve* (str/replace nm pfx "")) (:target (*xresolve* (str/replace nm pfx "")))))
-      (c/fact! ctx node CTOR (c/value! ctx pfx) tx) ; module-local/x-mod auto-constructor factory
-      acc                                           ; module-local synth field accessor
-      (c/fact! ctx node ACC (c/value! ctx (second acc)) tx)
-      :else nil)))
-(declare walk walk-quasi walk-quasi-seq walk-fn-arity walk-pat-heads)
-(defn walk-type [node]                           ; resolve a TYPE position to its type definition
-  (cond
-    (sym-val node) (let [nm (sym-val node)]      ; module-local type, else cross-module (:refer/:as) type
-                     (or (when-let [b (*tresolve* nm)] (bind! node b) (swap! n-type inc) true)
-                         (bind-xmod! node (*xresolve* nm))))
-    (= "list" (kind-of node)) (doseq [c (ordered-children node)] (walk-type c))   ; compound type (Vec Int)
-    (brackets? node) (doseq [c (rest (ordered-children node))] (walk-type c))
-    :else nil))
-(defn resolve-type-after-colon! [nodes]          ; in a flat seq, walk-type the node after `:-`/`:`
-  (loop [xs nodes]
-    (when (seq xs)
-      (if (TYPE-COLON (sym-val (first xs)))
-        (when (second xs) (walk-type (second xs)))
-        (recur (rest xs))))))
-(defn resolve-types-in-bracket! [bracket]        ; resolve every `:- T`/`: T` in a param/field vector
-  (loop [ks (rest (ordered-children bracket))]
-    (when (seq ks)
-      (let [k (first ks)]
-        (cond
-          (TYPE-COLON (sym-val k)) (do (when (second ks) (walk-type (second ks))) (recur (drop 2 ks)))
-          (= "list" (kind-of k)) (do (resolve-type-after-colon! (ordered-children k)) ; paren `(x :- T)`
-                                     (recur (rest ks)))
-          :else (recur (rest ks)))))))
-(defn walk-all [nodes scope] (doseq [n nodes] (walk n scope)))
-(defn walk-fn-arity [forms scope]                ; one fn arity: (param-bracket (:- Ret)? body...)
-  (let [pv (first (filter brackets? forms))
-        binds (if pv (param-binds pv) [])
-        _ (when pv (resolve-types-in-bracket! pv))            ; resolve PARAM types -> type defs
-        or-vals (when pv (mapcat collect-or-vals (rest (ordered-children pv))))  ; :or defaults: live refs
-        frame (frame-of binds)
-        body (loop [xs (rest (drop-while #(not (brackets? %)) forms))]   ; drop (:- T)/(:raises T) pairs
-               (if (#{":-" ":" ":raises"} (sym-val (first xs)))
-                 (do (when (second xs) (walk-type (second xs))) (recur (drop 2 xs)))
-                 xs))]
-    (walk-all or-vals scope)                     ; :or defaults evaluate in the OUTER scope (before params bind)
-    (walk-all body (cons frame scope))))         ; param names bind in body; types resolved to type defs
-(defn walk-pat-heads [pat scope]                 ; resolve constructor heads in a (nested) match pattern as type refs
-  (when (= "list" (kind-of pat))
-    (walk (first (ordered-children pat)) scope)  ; ctor head -> type ref (walk's *tresolve* fallback handles it)
-    (doseq [c (rest (ordered-children pat))] (walk-pat-heads c scope))))   ; recurse nested sub-patterns
-(defn walk [node scope]
-  (case (kind-of node)
-    "symbol"
-    (let [nm (sym-val node)
-          local (some #(get % nm) scope)]       ; nearest frame binding nm
-      (cond
-        ;; #(a) identity: a reference with a DURABLE bound_to edge resolves by IDENTITY
-        ;; (binding's stable @mod#int), not by spelling — so a target rename (display-name only)
-        ;; leaves this intact and render follows it to the target's CURRENT name. Spelling is the
-        ;; fallback. bound-render! also re-derives the spelling-side render markers (qualifier/
-        ;; ctor/accessor) so cross-module/factory refs survive a strip+re-resolve and cold restart.
-        (bound-target node) (bound-render! node nm (bound-target node))
-        local (bind! node local)
-        ;; free symbol: cross-module value/type import (:refer/:rename/:as), else a
-        ;; module-local TYPE used in value position (a constructor `(Point ...)` /
-        ;; defunion variant `(Circle ...)` — its name leaf IS the type def), else native.
-        (bind-xmod! node (*xresolve* nm)) nil
-        (when-let [b (*tresolve* nm)] (bind! node b) (swap! n-type inc) true) nil
-        ;; auto-constructor factory — `->Name` (positional) or `map->Name` (map), bare OR alias-qualified
-        ;; (`a/->Name`). Strip the prefix, resolve type Name (module-local then cross-module), store the
-        ;; prefix so render re-applies it — a rename of the type carries every factory with it.
-        (when-let [pfx (cond (or (str/starts-with? (or nm "") "map->") (str/includes? (or nm "") "/map->")) "map->"
-                             (or (str/starts-with? (or nm "") "->") (str/includes? (or nm "") "/->")) "->"
-                             :else nil)]
-          (let [stripped (str/replace nm pfx "")]    ; a/map->Point -> a/Point ; ->Point -> Point
-            (or (when-let [b (*tresolve* stripped)]
-                  (bind! node b) (c/fact! ctx node CTOR (c/value! ctx pfx) tx) (swap! n-type inc) true)
-                (when (bind-xmod! node (*xresolve* stripped))
-                  (c/fact! ctx node CTOR (c/value! ctx pfx) tx) true)))) nil
-        ;; synthesized field accessor `<lower(Record)>-<field>` — bind to the record, store the field so
-        ;; render reconstructs `<lower(newName)>-<field>` when the record is renamed.
-        (when-let [a (*aresolve* nm)]
-          (bind! node (first a)) (c/fact! ctx node ACC (c/value! ctx (second a)) tx) (swap! n-type inc) true) nil
-        :else (swap! n-unresolved inc)))         ; builtin/native — correctly NO refers_to
-    "list"
-    (let [kids (ordered-children node) h (head-sym node)]
-      (cond
-        (#{"quote"} h) nil                       ; quoted data are not references
-        (#{"quasiquote"} h) (walk-quasi node scope false)   ; template: bare module refs live, quotes data, unquotes escape
-        (TYPE-DEFS h)                            ; skip the type name; resolve field/variant/method-param types
-        (doseq [c (drop 2 kids)]
-          (cond
-            (brackets? c) (resolve-types-in-bracket! c)          ; defrecord/deftype direct field vector
-            (= "list" (kind-of c))                               ; defunion variant / defprotocol method sig
-            (do (doseq [b (filter brackets? (ordered-children c))] (resolve-types-in-bracket! b))
-                ;; a method sig (m [params] :- Ret) also carries a RETURN type after the bracket
-                (resolve-type-after-colon! (rest (drop-while #(not (brackets? %)) (ordered-children c)))))
-            ;; a BARE union member (defunion Result Ok Err) that names an existing type is a REFERENCE to
-            ;; it — bind so a rename of the record cascades; a true nullary variant resolves to itself (skip).
-            (sym-val c) (let [b (*tresolve* (sym-val c))] (when (and b (not= b c)) (bind! c b) (swap! n-type inc)))
-            :else nil))
-        (DEF-FORMS h)                            ; (def name :- T val) — skip name, resolve T, walk val
-        (let [after-name (drop 2 kids)]
-          (if (= ":-" (sym-val (first after-name)))
-            (do (when (second after-name) (walk-type (second after-name)))
-                (walk-all (drop 2 after-name) scope))
-            (walk-all after-name scope)))
-        (PARAM-FORMS h)                          ; single-arity (top-level [params]) OR multi-arity (([p]..)([p]..))
-        (let [after-name (if (#{"defn" "defn-" "defmacro"} h) (drop 2 kids) (rest kids))]
-          (if (some brackets? after-name)
-            (walk-fn-arity after-name scope)     ; single arity
-            (doseq [a after-name :when (and (= "list" (kind-of a)) (brackets? (first (ordered-children a))))]
-              (walk-fn-arity (ordered-children a) scope))))   ; each ([params] :- Ret body...) arity
-        (LET-FORMS h)
-        (let [bracket (second kids)
-              _ (when (and bracket (brackets? bracket)) (resolve-types-in-bracket! bracket))  ; `:- T` annotations
-              pairs (if (and bracket (brackets? bracket)) (let-bind-pairs bracket) [])
-              ;; SEQUENTIAL: binding i's value + :or defaults see bindings 0..i-1
-              final (reduce (fn [sc [bsyms vnode orvals]]
-                              (walk-all orvals sc) (when vnode (walk vnode sc))
-                              (cons (frame-of bsyms) sc))
-                            scope pairs)]
-          (walk-all (drop 2 kids) final))        ; body sees all bindings
-        (FOR-FORMS h)
-        (let [bracket (second kids)
-              _ (when (and bracket (brackets? bracket)) (resolve-types-in-bracket! bracket))  ; `:- T` annotations
-              entries (if (and bracket (brackets? bracket)) (for-bind-pairs bracket) [])
-              final (reduce (fn [sc e]
-                              (if (= :expr (first e))
-                                (do (walk (second e) sc) sc)         ; :when/:while expr sees prior binds
-                                (let [[_ bsyms vnode orvals] e]
-                                  (walk-all orvals sc) (when vnode (walk vnode sc))
-                                  (cons (frame-of bsyms) sc))))
-                            scope entries)]
-          (walk-all (drop 2 kids) final))        ; body sees all for bindings
-        (MATCH-FORMS h)                          ; (match expr [pattern body] ...) — patterns bind + ref ctors
-        (let [kids (ordered-children node)]
-          (walk (second kids) scope)             ; the matched expression
-          (doseq [clause (drop 2 kids) :when (brackets? clause)]
-            (let [cc (rest (ordered-children clause)) pat (first cc) body (rest cc)]
-              (walk-pat-heads pat scope)         ; constructor heads are TYPE references
-              (walk-all body (cons (frame-of (match-pat-binds pat)) scope)))))  ; body sees pattern binds
-        (= h "letfn")                            ; (letfn [(name [params] :- Ret body...) ...] body...)
-        (let [bracket (second kids)              ; fn NAMES are mutually-recursive bindings
-              fnlists (when (and bracket (brackets? bracket)) (filter #(= "list" (kind-of %)) (rest (ordered-children bracket))))
-              frame (frame-of (keep #(first (ordered-children %)) fnlists))
-              bodyscope (cons frame scope)]
-          (doseq [fl fnlists] (walk-fn-arity (rest (ordered-children fl)) bodyscope))  ; each fn body sees all names + own params
-          (walk-all (drop 2 kids) bodyscope))    ; letfn body sees all fn names
-        (#{"extend-type" "extend-protocol"} h)   ; (extend-type T Proto (method [params] body...) ...)
-        (doseq [c (rest kids)]
-          (cond
-            (sym-val c) (walk c scope)           ; Type / Protocol — type references
-            (= "list" (kind-of c)) (let [ic (ordered-children c)]
-                                     (walk (first ic) scope)           ; method name — protocol-method ref
-                                     (walk-fn-arity (rest ic) scope))  ; impl params bind in the impl body
-            :else nil))
-        (= h "as->")                             ; (as-> init name step...) — `name` binds the accumulator
-        (let [init (nth kids 1 nil) name (nth kids 2 nil)
-              frame (frame-of (when (sym-val name) [name]))]
-          (when init (walk init scope))          ; init evaluated in the OUTER scope (before name binds)
-          (walk-all (drop 3 kids) (cons frame scope)))   ; each step sees the accumulator name
-        :else (walk-all kids scope)))            ; ordinary call: head + args are all references
-    nil))
-
-;; quasiquote: most of a template is quoted DATA. What an `,x` (unquote) / `,@x`
-;; (unquote-splicing) escapes is evaluated code (real references). AND — a bare
-;; template symbol that names a MODULE DEF or IMPORT is itself a live reference:
-;; Clojure `` ` `` namespace-qualifies it and beagle hygiene-aliases it (`base__hyg`),
-;; so renaming the def must follow it. A symbol bound by a real LOCAL (param/let —
-;; an inner frame) or a free gensym is hygiene/quote data and must be left alone.
-;; `quoted?` tracks being inside a `(quote ..)` WITHIN the template: there a bare symbol
-;; is inert DATA (not hygiene-aliased), so it must NOT resolve — BUT an `(unquote ..)`
-;; still escapes to evaluated code even inside a quote (Clojure: `(quote ~(inc 1)) => (quote 2)),
-;; so unquotes are always live regardless of quote nesting.
-(defn walk-quasi [node scope quoted?]
-  (cond
-    (sym-val node)
-    (when-not quoted?                                    ; bare symbol in (quote ..) = data; outside = live ref
-      (let [nm (sym-val node)]
-        (cond
-          (some #(get % nm) (butlast scope)) nil          ; a real local/gensym binding — leave it
-          (get (last scope) nm) (bind! node (get (last scope) nm))  ; module def — live qualified ref
-          (bind-xmod! node (*xresolve* nm)) nil           ; cross-module import — live ref
-          :else nil)))                                    ; truly free symbol — quoted data, leave it
-    (= "list" (kind-of node))
-    (let [h (head-sym node)]
-      (cond
-        (#{"unquote" "unquote-splicing"} h) (walk-all (rest (ordered-children node)) scope)  ; explicit (unquote ..)
-        (#{"quote"} h) (walk-quasi-seq (ordered-children node) scope true)   ; inside a quote: bare syms = data
-        :else (walk-quasi-seq (ordered-children node) scope quoted?)))       ; still template; scan siblings
-    :else nil))
-;; scan template siblings: a bare `~`/`,` (or `~@`/`,@`) TOKEN — beagle's reader form for unquote (it does
-;; NOT emit an (unquote ..) wrapper) — escapes its FOLLOWING sibling back to live code, even inside a quote.
-(defn walk-quasi-seq [children scope quoted?]
-  (loop [cs children]
-    (when (seq cs)
-      (if (#{"~" "," "~@" ",@"} (sym-val (first cs)))
-        (do (when (second cs) (walk (second cs) scope)) (recur (drop 2 cs)))   ; ~EXPR — live escape
-        (do (walk-quasi (first cs) scope quoted?) (recur (rest cs)))))))
+(defn bound-render! [node nm bt] (rw/bound-render! (walk-env) node nm bt))
+(defn walk-type [node] (rw/walk-type! (walk-env) node))
+(defn resolve-type-after-colon! [nodes] (rw/resolve-type-after-colon! (walk-env) (vec nodes)))
+(defn resolve-types-in-bracket! [bracket] (rw/resolve-types-in-bracket! (walk-env) bracket))
+(defn walk [node scope] (rw/walk! (walk-env) node (vec scope)))
+(defn walk-all [nodes scope] (rw/walk-all! (walk-env) (vec nodes) (vec scope) rw/walk!))
+(defn walk-fn-arity [forms scope] (rw/walk-fn-arity! (walk-env) (vec forms) (vec scope) rw/walk!))
+(defn walk-pat-heads [pat scope] (rw/walk-pat-heads! (walk-env) pat (vec scope) rw/walk!))
+(defn walk-quasi [node scope quoted?] (rw/walk-quasi! (walk-env) node (vec scope) quoted? rw/walk! rw/walk-quasi-seq!))
+(defn walk-quasi-seq [children scope quoted?] (rw/walk-quasi-seq! (walk-env) (vec children) (vec scope) quoted? rw/walk!))
 
 ;; module frame = all top-level defs (so forward references resolve) ----------
 ;; M1 Cut D — one module's frame + its import/export surface is now Beagle
@@ -551,34 +349,28 @@
 ;; it, exactly like code. A `red-zone` token is one symbol (≠ `red`) and a quoted
 ;; `"red"` was demoted to text by beagle's lexer, so neither resolves: the rename
 ;; win without the sed corruption. Module scope (comments-in-bodies are a follow-up).
-(defn cbind! [L target] (c/fact! ctx L REFERS target tx) (swap! n-comment inc))
-(defn resolve-comment [e src]
-  (doseq [seg (ordered-segs e) :when (= "symbol" (kind-of seg))]
-    (let [nm (sym-val seg)
-          b  (or (def-binding src nm)              ; module value/type def (forward refs ok)
-                 (:target (*xresolve* nm)))]        ; refer/rename/alias import -> tracks current name
-      (when b (cbind! seg b)))))
-(defn walk-comments [src]
-  (doseq [e (@file->ents src) :when (= "comment" (kind-of e))]
-    (resolve-comment e src)))
-
-(defn run-resolution-over! [walk-srcs]   ; the lexical walk over a CHOSEN subset of srcs (reads bound tables)
-  ;; The cross-module tables (global-exports / *xresolve* / file-typeframe / ...) are
-  ;; already bound from the WHOLE corpus, so each walked module's imports resolve
-  ;; against every other module's exports exactly as a full walk would — we just
-  ;; restrict WHICH modules we re-walk (and re-write refers_to for). This is the
-  ;; resolver half of S3.3 scoped re-resolve: full tables, partial walk.
-  (doseq [src walk-srcs]
-    (binding [*xresolve* (make-xresolve src)
-              *tresolve* (fn [nm] (get (file-typeframe src) nm))
-              *aresolve* (fn [nm] (get (file-accessors src) nm))]
-      (let [forms (forms-of src)]
-        (swap! walked-modules conj src)
-        (swap! n-forms-walked + (count forms))
-        (walk-all forms (list (file-modframe src))))
-      (walk-comments src))))
+;; M1 Cut G — the comment resolver and the per-src walk driver are Beagle too
+;; (src/resolve_walk.bclj). `walk-corpus` packages the four corpus tables the
+;; driver reads; `make-xresolve` stays here (it closes over parse-require and the
+;; global export tables) and is handed over as the per-src resolver factory, which
+;; is why the ^:dynamic *xresolve*/*tresolve*/*aresolve* are no longer rebound on
+;; this path — the module builds each src's three resolvers itself. re-resolve! still
+;; binds them, and reads them through walk-env.
+(defn walk-corpus [] (rw/->Corpus (vec srcs) file-modframe file-typeframe file-accessors @file->ents))
+(defn cbind! [L target] (rw/cbind! (walk-env) L target))
+(defn resolve-comment [e src] (rw/resolve-comment! (walk-env) (walk-corpus) e src))
+(defn walk-comments [src] (rw/walk-comments! (walk-env) (walk-corpus) src))
+;; the lexical walk over a CHOSEN subset of srcs (reads bound tables). The
+;; cross-module tables (global-exports / file-typeframe / ...) are already bound
+;; from the WHOLE corpus, so each walked module's imports resolve against every
+;; other module's exports exactly as a full walk would — we just restrict WHICH
+;; modules we re-walk (and re-write refers_to for). This is the resolver half of
+;; S3.3 scoped re-resolve: full tables, partial walk.
+(defn run-resolution-over! [walk-srcs]
+  (rw/run-resolution-over! (walk-env) (walk-corpus) (vec walk-srcs) make-xresolve
+                           n-forms-walked walked-modules))
 (defn run-resolution! []        ; the lexical walk over every bound src (reads bound tables)
-  (run-resolution-over! srcs))
+  (rw/run-resolution! (walk-env) (walk-corpus) make-xresolve n-forms-walked walked-modules))
 
 ;; #(a) LIFT — make the materialized refers_to identity-COMPLETE: every DURABLE bound_to
 ;; edge (leaf -> binding node) must be reflected as a refers_to edge, so identity-first reads
@@ -625,17 +417,16 @@
        ;; load EDN into the FRESH bound store, then compute the corpus tables from
        ;; THOSE srcs (set! the thread-local binding — never the root value).
        (set! srcs (mapv load-edn edn-paths))
-       (set! file-modframe (into {} (map (fn [s] [s (module-defs s)]) srcs)))
-       (set! file-typeframe (into {} (map (fn [s] [s (module-types s)]) srcs)))
-       (set! file-accessors (into {} (map (fn [s] [s (module-accessors s)]) srcs)))
-       (set! global-exports
-             (into {} (map (fn [s] [(module-name s)
-                                    (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
-                           (filter module-name srcs))))
-       (set! global-type-exports
-             (into {} (map (fn [s] [(module-name s) (module-types s)]) (filter module-name srcs))))
-       (set! global-accessor-exports
-             (into {} (map (fn [s] [(module-name s) (module-accessors s)]) (filter module-name srcs))))
+       ;; M1 Cut G: the six per-run tables are one Beagle call (rw/corpus-tables);
+       ;; the `binding`/`set!` scaffolding stays here because the ^:dynamic vars
+       ;; themselves cannot move namespace.
+       (let [tb (rw/corpus-tables ctx *view* (vec srcs) @file->ents)]
+         (set! file-modframe (:modframe tb))
+         (set! file-typeframe (:typeframe tb))
+         (set! file-accessors (:accessors tb))
+         (set! global-exports (:exports tb))
+         (set! global-type-exports (:type-exports tb))
+         (set! global-accessor-exports (:accessor-exports tb)))
        (run-resolution!)
        (body)))))
 

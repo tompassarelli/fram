@@ -1,0 +1,550 @@
+#lang beagle/clj
+
+;; ============================================================================
+;; resolve-walk — THE LEXICAL WALK: every reference resolves to its NEAREST
+;; enclosing binding, by identity.
+;; ============================================================================
+;; Stage M1 Cut G of the engine core port (north thread
+;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). This is the turtle-#5 heart of the
+;; resolver: descend the ordered AST, carry a scope stack of frames, and for each
+;; symbol leaf write the `refers_to` edge that names WHICH binding it means —
+;; nearest-frame first, then the durable `bound_to` identity edge, then the
+;; cross-module import surface, then module-local types / auto-constructors /
+;; synthesized field accessors, else "native" (correctly no edge).
+;;
+;; Two structural adaptations, both forced and both behavior-preserving:
+;;
+;;   1. STATE IS A PARAMETER. resolve.clj's ^:dynamic vars cannot change
+;;      namespace (coord_daemon.clj and tests/coord_*.clj `binding` them by
+;;      qualified name), so — exactly as Cuts B–F — the store, view, tx,
+;;      predicate value-ids, counters and the three resolver closures arrive
+;;      HERE as one explicit `Walk` record, built by a one-line wrapper in
+;;      resolve.clj that reads the dynamic state at call time.
+;;
+;;   2. NO FORWARD REFERENCES. walk / walk-all / walk-fn-arity / walk-pat-heads
+;;      / walk-quasi / walk-quasi-seq are mutually recursive, and Beagle's clj
+;;      emitter has no `declare` — the emitted namespace must be definable
+;;      top-to-bottom. So the callee that would need a forward reference takes
+;;      the function as a VALUE parameter (`wf` = the node walker, `qsf` = the
+;;      quasiquote sibling scanner) and `walk!`, defined last, passes itself.
+;;      A self-reference inside a defn body is fine (the var exists by the time
+;;      the body runs); only the forward one is not.
+;;
+;; Everything that mutates the store carries a `!` suffix here that the raw
+;; originals did not — Beagle's purity gate makes the write visible. resolve.clj
+;; keeps the old bare spellings in its wrappers, so no caller moves.
+;;
+;; PER-DEF NOTES (adoption strips interior comments; the rationale lives here):
+;;   bind!        one refers_to edge + the resolved counter. THE write.
+;;   bind-xmod!   cross-module hit: refers_to plus the RENDER markers —
+;;                :fixed (a :rename'd local keeps its own spelling),
+;;                :qual (an alias-qualified `a/foo` shows the alias),
+;;                :tracking (render the target def's CURRENT name), and the
+;;                synth-accessor field when the import is a `point-x`.
+;;   bound-render!  #(a) identity re-render. A reference carrying the DURABLE
+;;                bound_to edge resolves by identity (@mod#int), but its
+;;                spelling-derived markers were CLEARED by the strip+re-resolve
+;;                that materialize/cold-boot performs — so re-derive them from
+;;                the reference's own spelling. Identity always wins over
+;;                spelling for the TARGET; spelling only picks the markers.
+;;   walk-type!   a TYPE position: module-local type frame first, then the
+;;                cross-module import surface; a compound `(Vec Int)` or a
+;;                bracket vector recurses elementwise.
+;;   resolve-type-after-colon!  in a FLAT seq, the node after the first `:-`/`:`
+;;                is a type — used for a method sig's return type.
+;;   resolve-types-in-bracket!  every `:- T` / `: T` inside a param or field
+;;                vector, including the parenthesized `(x :- T)` shape.
+;;   walk-all!    walk each node in the SAME scope, in order. Order is
+;;                load-bearing: the goldens compare byte-for-byte.
+;;   walk-pat-heads!  a `match` pattern's constructor heads are TYPE references,
+;;                nested sub-patterns included.
+;;   walk-fn-arity!  one arity: params bind in the body, param types resolve to
+;;                type defs, `:or` defaults evaluate in the OUTER scope (before
+;;                the params bind — a real capture bug if walked inside), and
+;;                the `(:- Ret)` / `(:raises T)` pairs are consumed off the front.
+;;   walk!        the dispatcher. Symbol → the resolution ladder; list → the
+;;                binding-form vocabulary (type defs, def, fn/defn arities, let,
+;;                for/doseq, match, letfn, extend-type, as->), else an ordinary
+;;                call whose head and args are all references.
+;;   walk-quasi!  inside a quasiquote template most symbols are DATA, but a bare
+;;                template symbol naming a module def or import IS live (Clojure
+;;                ns-qualifies it, beagle hygiene-aliases it), so a rename must
+;;                follow it. `quoted?` tracks an inner (quote ..) — there a bare
+;;                symbol is inert — but an unquote escapes to live code at ANY
+;;                quote depth.
+;;   walk-quasi-seq!  scans template siblings for beagle's bare `~`/`,` token
+;;                form of unquote (the reader emits NO (unquote ..) wrapper), and
+;;                escapes the FOLLOWING sibling back to live code.
+;;   cbind! / resolve-comment! / walk-comments!  turtle #6: a comment segment
+;;                that EXACTLY names an in-scope binding gets refers_to too, so
+;;                a rename carries the prose with it (and only the exact token —
+;;                `red-zone` is one symbol, not `red`).
+;;   run-resolution-over! / run-resolution!  the driver: per src, install that
+;;                module's three resolvers, walk its forms in a scope of exactly
+;;                its module frame, then its comments. The cross-module tables
+;;                are always WHOLE-corpus; only the walked SUBSET narrows (the
+;;                S3.3 scoped re-resolve: full tables, partial walk).
+;;   corpus-tables  the per-run frame/export tables resolve-edn! computes from
+;;                the freshly loaded srcs — the portable half of resolve-edn!
+;;                (its `binding`/`set!` scaffolding must stay in resolve.clj,
+;;                because the dynamic vars themselves cannot move namespace).
+;;
+;; Consumed by resolve.clj — the emitted out/resolve_walk.clj must stay on the
+;; classpath.
+;; ============================================================================
+(ns resolve-walk
+  (:require [clojure.string :as str]
+    [fram.types :as t]
+    [fram.store :as c]
+    [resolve-core :as rc]
+    [resolve-read :as rr]
+    [resolve-binds :as rb]
+    [resolve-modules :as rm]))
+
+(define-mode strict)
+
+(defrecord Walk [ctx :- (Atom t/Store)
+                 view :- Any
+                 tx :- Int
+                 REFERS :- Int
+                 BOUND :- Int
+                 FIXED :- Int
+                 QUAL :- Int
+                 CTOR :- Int
+                 ACC :- Int
+                 nres :- (Atom Int)
+                 nunres :- (Atom Int)
+                 nxmod :- (Atom Int)
+                 ntype :- (Atom Int)
+                 ncomment :- (Atom Int)
+                 xres :- Any
+                 tres :- Any
+                 ares :- Any])
+
+(defrecord Corpus [srcs :- (Vec Any)
+                   modframe :- Any
+                   typeframe :- Any
+                   accessors :- Any
+                   ents :- Any])
+
+(defn- nn [e :- Int?] :- Int (if (nil? e) -1 e))
+
+(def RET-COLON :- (Set String) #{":-" ":" ":raises"})
+
+(def UNQUOTE-TOKENS :- (Set String) #{"~" "," "~@" ",@"})
+
+(defn- sv [w :- Walk e :- Int?] :- Any
+  (rr/sym-val (:ctx w) (:view w) e))
+
+(defn- kd [w :- Walk e :- Int?] :- Any
+  (rr/kind-of (:ctx w) (:view w) e))
+
+(defn- hd [w :- Walk e :- Int?] :- Any
+  (rr/head-sym (:ctx w) (:view w) e))
+
+(defn- kids [w :- Walk e :- Int?] :- (Vec Int)
+  (rr/ordered-children (:ctx w) e))
+
+(defn- brk? [w :- Walk e :- Int?] :- Bool
+  (rb/brackets? (:ctx w) (:view w) e))
+
+(defn- list? [w :- Walk e :- Int?] :- Bool
+  (= "list" (kd w e)))
+
+(defn- xr [w :- Walk nm :- Any] :- Any
+  (let [f (:xres w)] (f nm)))
+
+(defn- tr [w :- Walk nm :- Any] :- Any
+  (let [f (:tres w)] (f nm)))
+
+(defn- ar [w :- Walk nm :- Any] :- Any
+  (let [f (:ares w)] (f nm)))
+
+(defn- scope-lookup [scope :- (Vec Any) nm :- Any] :- Int?
+  (loop [i 0]
+    (if (>= i (count scope))
+      nil
+      (let [hit (get (nth scope i) nm)]
+        (if (nil? hit) (recur (inc i)) hit)))))
+
+(defn- push [frame :- Any scope :- (Vec Any)] :- (Vec Any)
+  (into [frame] scope))
+
+(defn bind! [w :- Walk L :- Int? target :- Int?] :- Any
+  (do (c/fact! (:ctx w) (nn L) (:REFERS w) (nn target) (:tx w))
+      (swap! (:nres w) (fn [n :- Int] :- Int (inc n)))))
+
+(defn bind-xmod! [w :- Walk node :- Int? x :- Any] :- Any
+  (if (or (nil? x) (nil? (get x :target)))
+    nil
+    (let [mode (get x :mode) acc (get x :accessor)]
+      (do (bind! w node (get x :target))
+          (cond
+            (= :fixed mode) (c/fact! (:ctx w) (nn node) (:FIXED w) (c/value! (:ctx w) "1") (:tx w))
+            (= :qual mode) (c/fact! (:ctx w) (nn node) (:QUAL w) (c/value! (:ctx w) (get x :alias)) (:tx w))
+            :else nil)
+          (when (some? acc)
+            (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) acc) (:tx w)))
+          (swap! (:nxmod w) (fn [n :- Int] :- Int (inc n)))
+          true))))
+
+(defn bound-render! [w :- Walk node :- Int? nm :- Any bt :- Int?] :- Any
+  (do (bind! w node bt)
+      (let [x (xr w nm)
+            pfx (rc/ctor-prefix (if (string? nm) nm nil))
+            acc (ar w nm)
+            stripped (if (nil? pfx) nil (str/replace (str nm) pfx ""))]
+        (cond
+          (and (some? x) (some? (get x :target)))
+          (let [mode (get x :mode) xacc (get x :accessor)]
+            (do (cond
+                  (= :fixed mode) (c/fact! (:ctx w) (nn node) (:FIXED w) (c/value! (:ctx w) "1") (:tx w))
+                  (= :qual mode) (c/fact! (:ctx w) (nn node) (:QUAL w) (c/value! (:ctx w) (get x :alias)) (:tx w))
+                  :else nil)
+                (when (some? xacc)
+                  (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) xacc) (:tx w)))))
+          (and (some? pfx)
+            (or (some? (tr w stripped))
+              (some? (get (xr w stripped) :target))))
+          (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w))
+          (some? acc)
+          (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) (nth acc 1)) (:tx w))
+          :else nil))))
+
+(defn walk-type! [w :- Walk node :- Int?] :- Any
+  (cond
+    (some? (sv w node))
+    (let [nm (sv w node)
+          b (tr w nm)]
+      (if (some? b)
+        (do (bind! w node b) (swap! (:ntype w) (fn [n :- Int] :- Int (inc n))) true)
+        (bind-xmod! w node (xr w nm))))
+    (= "list" (kd w node))
+    (doseq [ch (kids w node)] (walk-type! w ch))
+    (brk? w node)
+    (doseq [ch (vec (rest (kids w node)))] (walk-type! w ch))
+    :else nil))
+
+(defn- colon? [w :- Walk e :- Int?] :- Bool
+  (let [v (sv w e)]
+    (and (some? v) (contains? rc/TYPE-COLON (str v)))))
+
+(defn resolve-type-after-colon! [w :- Walk nodes :- (Vec Int)] :- Any
+  (loop [xs :- (Vec Int) nodes]
+    (if (empty? xs)
+      nil
+      (if (colon? w (nth xs 0 nil))
+        (let [nxt (nth xs 1 nil)]
+          (when (some? nxt) (walk-type! w nxt)))
+        (recur (vec (rest xs)))))))
+
+(defn resolve-types-in-bracket! [w :- Walk bracket :- Int?] :- Any
+  (loop [ks :- (Vec Int) (vec (rest (kids w bracket)))]
+    (if (empty? ks)
+      nil
+      (let [k (nth ks 0)]
+        (cond
+          (colon? w k)
+          (do (when (some? (nth ks 1 nil)) (walk-type! w (nth ks 1 nil)))
+              (recur (vec (drop 2 ks))))
+          (= "list" (kd w k))
+          (do (resolve-type-after-colon! w (kids w k))
+              (recur (vec (rest ks))))
+          :else
+          (recur (vec (rest ks))))))))
+
+(defn walk-all! [w :- Walk nodes :- (Vec Int) scope :- (Vec Any) wf :- Any] :- Any
+  (doseq [n nodes] (wf w n scope)))
+
+(defn walk-pat-heads! [w :- Walk pat :- Int? scope :- (Vec Any) wf :- Any] :- Any
+  (when (= "list" (kd w pat))
+    (let [cs (kids w pat)]
+      (do (wf w (nth cs 0 nil) scope)
+          (doseq [ch (vec (rest cs))] (walk-pat-heads! w ch scope wf))))))
+
+(defn walk-fn-arity! [w :- Walk forms :- (Vec Int) scope :- (Vec Any) wf :- Any] :- Any
+  (let [bi (loop [i 0]
+             (if (>= i (count forms))
+               nil
+               (if (brk? w (nth forms i)) i (recur (inc i)))))
+        pv (if (nil? bi) nil (nth forms bi))
+        binds (if (nil? pv) [] (rb/param-binds (:ctx w) (:view w) pv))
+        _ (when (some? pv) (resolve-types-in-bracket! w pv))
+        or-vals (if (nil? pv)
+                  []
+                  (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int)
+                            (into acc (rb/collect-or-vals (:ctx w) (:view w) k)))
+                    []
+                    (vec (rest (kids w pv)))))
+        frame (rb/frame-of (:ctx w) (:view w) binds)
+        body (loop [xs :- (Vec Int) (if (nil? bi) [] (vec (drop (inc bi) forms)))]
+               (let [v (sv w (nth xs 0 nil))]
+                 (if (and (some? v) (contains? RET-COLON (str v)))
+                   (do (when (some? (nth xs 1 nil)) (walk-type! w (nth xs 1 nil)))
+                       (recur (vec (drop 2 xs))))
+                   xs)))]
+    (do (walk-all! w or-vals scope wf)
+        (walk-all! w body (push frame scope) wf))))
+
+(defn walk-quasi! [w :- Walk node :- Int? scope :- (Vec Any) quoted? :- Bool wf :- Any qsf :- Any] :- Any
+  (cond
+    (some? (sv w node))
+    (when (not quoted?)
+      (let [nm (sv w node)
+            outer (if (empty? scope) [] (vec (butlast scope)))
+            modframe (if (empty? scope) nil (last scope))
+            inner (scope-lookup outer nm)
+            mod-hit (get modframe nm)]
+        (cond
+          (some? inner) nil
+          (some? mod-hit) (bind! w node mod-hit)
+          (some? (bind-xmod! w node (xr w nm))) nil
+          :else nil)))
+    (= "list" (kd w node))
+    (let [h (hd w node)]
+      (cond
+        (contains? #{"unquote" "unquote-splicing"} (str h))
+        (walk-all! w (vec (rest (kids w node))) scope wf)
+        (= "quote" (str h))
+        (qsf w (kids w node) scope true wf)
+        :else
+        (qsf w (kids w node) scope quoted? wf)))
+    :else nil))
+
+(defn walk-quasi-seq! [w :- Walk children :- (Vec Int) scope :- (Vec Any) quoted? :- Bool wf :- Any] :- Any
+  (loop [cs :- (Vec Int) children]
+    (if (empty? cs)
+      nil
+      (let [v (sv w (nth cs 0 nil))]
+        (if (and (some? v) (contains? UNQUOTE-TOKENS (str v)))
+          (do (when (some? (nth cs 1 nil)) (wf w (nth cs 1 nil) scope))
+              (recur (vec (drop 2 cs))))
+          (do (walk-quasi! w (nth cs 0 nil) scope quoted? wf walk-quasi-seq!)
+              (recur (vec (rest cs)))))))))
+
+(defn- try-type! [w :- Walk node :- Int? nm :- Any] :- Bool
+  (let [b (tr w nm)]
+    (if (nil? b)
+      false
+      (do (bind! w node b) (swap! (:ntype w) (fn [n :- Int] :- Int (inc n))) true))))
+
+(defn- try-ctor! [w :- Walk node :- Int? nm :- Any] :- Bool
+  (let [pfx (rc/ctor-prefix (if (string? nm) nm nil))]
+    (if (nil? pfx)
+      false
+      (let [stripped (str/replace (str nm) pfx "")
+            b (tr w stripped)]
+        (if (some? b)
+          (do (bind! w node b)
+              (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w))
+              (swap! (:ntype w) (fn [n :- Int] :- Int (inc n)))
+              true)
+          (if (some? (bind-xmod! w node (xr w stripped)))
+            (do (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w)) true)
+            false))))))
+
+(defn- try-accessor! [w :- Walk node :- Int? nm :- Any] :- Bool
+  (let [a (ar w nm)]
+    (if (nil? a)
+      false
+      (do (bind! w node (nth a 0))
+          (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) (nth a 1)) (:tx w))
+          (swap! (:ntype w) (fn [n :- Int] :- Int (inc n)))
+          true))))
+
+(defn- walk-type-def! [w :- Walk ks :- (Vec Int)] :- Any
+  (doseq [ch (vec (drop 2 ks))]
+    (cond
+      (brk? w ch)
+      (resolve-types-in-bracket! w ch)
+      (= "list" (kd w ch))
+      (let [cc (kids w ch)]
+        (do (doseq [b (vec (filter (fn [k :- Int] :- Bool (brk? w k)) cc))]
+              (resolve-types-in-bracket! w b))
+            (let [bi (loop [i 0]
+                       (if (>= i (count cc)) nil (if (brk? w (nth cc i)) i (recur (inc i)))))]
+              (resolve-type-after-colon! w (if (nil? bi) [] (vec (drop (inc bi) cc)))))))
+      (some? (sv w ch))
+      (let [b (tr w (sv w ch))]
+        (when (and (some? b) (not= b ch))
+          (do (bind! w ch b) (swap! (:ntype w) (fn [n :- Int] :- Int (inc n))))))
+      :else nil)))
+
+(defn walk! [w :- Walk node :- Int? scope :- (Vec Any)] :- Any
+  (let [k (kd w node)]
+    (cond
+      (= "symbol" k)
+      (let [nm (sv w node)
+            local (scope-lookup scope nm)
+            bt (rr/bound-target (:ctx w) (:view w) (:BOUND w) node)]
+        (cond
+          (some? bt) (bound-render! w node nm bt)
+          (some? local) (bind! w node local)
+          (some? (bind-xmod! w node (xr w nm))) nil
+          (try-type! w node nm) nil
+          (try-ctor! w node nm) nil
+          (try-accessor! w node nm) nil
+          :else (swap! (:nunres w) (fn [n :- Int] :- Int (inc n)))))
+      (= "list" k)
+      (let [ks (kids w node)
+            h (hd w node)
+            hs (str h)]
+        (cond
+          (= "quote" hs) nil
+          (= "quasiquote" hs) (walk-quasi! w node scope false walk! walk-quasi-seq!)
+          (contains? rc/TYPE-DEFS hs)
+          (walk-type-def! w ks)
+          (contains? rc/DEF-FORMS hs)
+          (let [after-name (vec (drop 2 ks))]
+            (if (= ":-" (str (sv w (nth after-name 0 nil))))
+              (do (when (some? (nth after-name 1 nil)) (walk-type! w (nth after-name 1 nil)))
+                  (walk-all! w (vec (drop 2 after-name)) scope walk!))
+              (walk-all! w after-name scope walk!)))
+          (contains? rc/PARAM-FORMS hs)
+          (let [after-name (if (contains? #{"defn" "defn-" "defmacro"} hs)
+                             (vec (drop 2 ks))
+                             (vec (rest ks)))]
+            (if (some? (some (fn [f :- Int] :- Any (if (brk? w f) true nil)) after-name))
+              (walk-fn-arity! w after-name scope walk!)
+              (doseq [a (vec (filter (fn [f :- Int] :- Bool
+                                       (and (= "list" (kd w f))
+                                         (brk? w (nth (kids w f) 0 nil))))
+                               after-name))]
+                (walk-fn-arity! w (kids w a) scope walk!))))
+          (contains? rc/LET-FORMS hs)
+          (let [bracket (nth ks 1 nil)
+                ok (and (some? bracket) (brk? w bracket))
+                _ (when ok (resolve-types-in-bracket! w bracket))
+                pairs (if ok (rb/let-bind-pairs (:ctx w) (:view w) bracket) [])
+                final (reduce (fn [sc :- (Vec Any) p :- Any] :- (Vec Any)
+                                (let [bsyms (nth p 0) vnode (nth p 1) orvals (nth p 2)]
+                                  (do (walk-all! w orvals sc walk!)
+                                      (when (some? vnode) (walk! w vnode sc))
+                                      (push (rb/frame-of (:ctx w) (:view w) bsyms) sc))))
+                        scope
+                        pairs)]
+            (walk-all! w (vec (drop 2 ks)) final walk!))
+          (contains? rc/FOR-FORMS hs)
+          (let [bracket (nth ks 1 nil)
+                ok (and (some? bracket) (brk? w bracket))
+                _ (when ok (resolve-types-in-bracket! w bracket))
+                entries (if ok (rb/for-bind-pairs (:ctx w) (:view w) bracket) [])
+                final (reduce (fn [sc :- (Vec Any) e :- Any] :- (Vec Any)
+                                (if (= :expr (nth e 0))
+                                  (do (walk! w (nth e 1) sc) sc)
+                                  (let [bsyms (nth e 1) vnode (nth e 2) orvals (nth e 3)]
+                                    (do (walk-all! w orvals sc walk!)
+                                        (when (some? vnode) (walk! w vnode sc))
+                                        (push (rb/frame-of (:ctx w) (:view w) bsyms) sc)))))
+                        scope
+                        entries)]
+            (walk-all! w (vec (drop 2 ks)) final walk!))
+          (contains? rc/MATCH-FORMS hs)
+          (do (walk! w (nth ks 1 nil) scope)
+              (doseq [clause (vec (filter (fn [cl :- Int] :- Bool (brk? w cl)) (vec (drop 2 ks))))]
+                (let [cc (vec (rest (kids w clause)))
+                      pat (nth cc 0 nil)
+                      body (vec (rest cc))]
+                  (do (walk-pat-heads! w pat scope walk!)
+                      (walk-all! w body
+                        (push (rb/frame-of (:ctx w) (:view w)
+                                (rb/match-pat-binds (:ctx w) (:view w) pat))
+                          scope)
+                        walk!)))))
+          (= "letfn" hs)
+          (let [bracket (nth ks 1 nil)
+                fnlists (if (and (some? bracket) (brk? w bracket))
+                          (vec (filter (fn [f :- Int] :- Bool (= "list" (kd w f)))
+                                 (vec (rest (kids w bracket)))))
+                          [])
+                frame (rb/frame-of (:ctx w) (:view w)
+                        (vec (keep (fn [f :- Int] :- Int? (nth (kids w f) 0 nil)) fnlists)))
+                bodyscope (push frame scope)]
+            (do (doseq [fl fnlists]
+                  (walk-fn-arity! w (vec (rest (kids w fl))) bodyscope walk!))
+                (walk-all! w (vec (drop 2 ks)) bodyscope walk!)))
+          (contains? #{"extend-type" "extend-protocol"} hs)
+          (doseq [ch (vec (rest ks))]
+            (cond
+              (some? (sv w ch)) (walk! w ch scope)
+              (= "list" (kd w ch))
+              (let [ic (kids w ch)]
+                (do (walk! w (nth ic 0 nil) scope)
+                    (walk-fn-arity! w (vec (rest ic)) scope walk!)))
+              :else nil))
+          (= "as->" hs)
+          (let [init (nth ks 1 nil)
+                name (nth ks 2 nil)
+                frame (rb/frame-of (:ctx w) (:view w)
+                        (if (some? (sv w name)) [name] []))]
+            (do (when (some? init) (walk! w init scope))
+                (walk-all! w (vec (drop 3 ks)) (push frame scope) walk!)))
+          :else (walk-all! w ks scope walk!)))
+      :else nil)))
+
+(defn cbind! [w :- Walk L :- Int? target :- Int?] :- Any
+  (do (c/fact! (:ctx w) (nn L) (:REFERS w) (nn target) (:tx w))
+      (swap! (:ncomment w) (fn [n :- Int] :- Int (inc n)))))
+
+(defn- def-binding [cp :- Corpus src :- Any nm :- Any] :- Any
+  (let [v (get (get (:modframe cp) src) nm)]
+    (if (some? v) v (get (get (:typeframe cp) src) nm))))
+
+(defn resolve-comment! [w :- Walk cp :- Corpus e :- Int? src :- Any] :- Any
+  (doseq [seg (vec (filter (fn [s :- Int] :- Bool (= "symbol" (kd w s)))
+                     (rr/ordered-segs (:ctx w) e)))]
+    (let [nm (sv w seg)
+          local (def-binding cp src nm)
+          b (if (some? local) local (get (xr w nm) :target))]
+      (when (some? b) (cbind! w seg b)))))
+
+(defn walk-comments! [w :- Walk cp :- Corpus src :- Any] :- Any
+  (doseq [e (vec (filter (fn [x :- Int] :- Bool (= "comment" (kd w x)))
+                   (vec (get (:ents cp) src []))))]
+    (resolve-comment! w cp e src)))
+
+(defn- for-src [w :- Walk cp :- Corpus src :- Any xres-for :- Any] :- Walk
+  (->Walk (:ctx w) (:view w) (:tx w) (:REFERS w) (:BOUND w) (:FIXED w) (:QUAL w) (:CTOR w) (:ACC w)
+    (:nres w) (:nunres w) (:nxmod w) (:ntype w) (:ncomment w)
+    (xres-for src)
+    (fn [nm :- Any] :- Any (get (get (:typeframe cp) src) nm))
+    (fn [nm :- Any] :- Any (get (get (:accessors cp) src) nm))))
+
+(defn run-resolution-over! [w :- Walk cp :- Corpus walk-srcs :- (Vec Any) xres-for :- Any
+                            n-forms :- (Atom Int) walked :- Any] :- Any
+  (doseq [src walk-srcs]
+    (let [w2 (for-src w cp src xres-for)
+          ents (vec (get (:ents cp) src []))
+          forms (rm/forms-of (:ctx w) (:view w) ents)]
+      (do (swap! walked conj src)
+          (swap! n-forms + (count forms))
+          (walk-all! w2 forms [(get (:modframe cp) src)] walk!)
+          (walk-comments! w2 cp src)))))
+
+(defn run-resolution! [w :- Walk cp :- Corpus xres-for :- Any
+                       n-forms :- (Atom Int) walked :- Any] :- Any
+  (run-resolution-over! w cp (:srcs cp) xres-for n-forms walked))
+
+(defn corpus-tables [ctx :- (U (Atom t/Store) Nil) view :- Any srcs :- (Vec Any) ents-of :- Any] :- (Map Keyword Any)
+  (let [per (fn [f :- Any] :- Any
+              (reduce (fn [m :- (Map Any Any) s :- Any] :- (Map Any Any)
+                        (assoc m s (f (vec (get ents-of s [])))))
+                {}
+                srcs))
+        named (vec (filter (fn [s :- Any] :- Bool
+                             (some? (rm/module-name ctx view (vec (get ents-of s [])))))
+                     srcs))
+        by-mod (fn [f :- Any] :- Any
+                 (reduce (fn [m :- (Map Any Any) s :- Any] :- (Map Any Any)
+                           (let [ents (vec (get ents-of s []))]
+                             (assoc m (rm/module-name ctx view ents) (f ents))))
+                   {}
+                   named))]
+    {:modframe (per (fn [ents :- (Vec Int)] :- Any (rm/module-defs ctx view ents)))
+     :typeframe (per (fn [ents :- (Vec Int)] :- Any (rm/module-types ctx view ents)))
+     :accessors (per (fn [ents :- (Vec Int)] :- Any (rm/module-accessors ctx view ents)))
+     :exports (by-mod (fn [ents :- (Vec Int)] :- Any
+                        (let [e (rm/module-exports ctx view ents)]
+                          (if (empty? e) (rm/module-defs ctx view ents) e))))
+     :type-exports (by-mod (fn [ents :- (Vec Int)] :- Any (rm/module-types ctx view ents)))
+     :accessor-exports (by-mod (fn [ents :- (Vec Int)] :- Any (rm/module-accessors ctx view ents)))}))

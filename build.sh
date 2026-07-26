@@ -43,10 +43,13 @@ done
 #   resolve_render M1 Cut E: render a node back to source (render-sym,
 #                node->str, node->canon) and the O(N) anchor search over a def
 #                subtree that replace-in-body addresses (rv/*).
+#   resolve_walk  M1 Cut G: the lexical walk itself — descend the ordered AST,
+#                carry the scope stack, and write each reference's refers_to
+#                (plus the comment resolver and the per-src walk driver) (rw/*).
 #   resolve_query M1 Cut F: the code queries that run ON the resolved graph
 #                — call-edges, blast-closure, binding-privacy and the
 #                stratified-Datalog dead-private query (rq/*).
-for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query; do
+for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"
