@@ -8,7 +8,7 @@
 ;; unique global; else ambiguous/external -> dropped), so same-named functions
 ;; across modules never collide — the failure mode of bare-symbol text matching.
 ;;
-;; This is the CNF-projection call-graph core, used by chartroom.clj's gjoa BENCHMARK.
+;; This is the CNF-projection call-graph core, used by codegraph.clj's gjoa BENCHMARK.
 ;; LIMITATION: the CNF projection (beagle-facts) does not emit require/:as info, so a
 ;; QUALIFIED cross-module call (a/f, fully-qualified m/f) cannot be resolved here and is
 ;; dropped (under-counting cross-module blast). The PRODUCTION call graph (beagle-callgraph
@@ -18,7 +18,7 @@
 ;; correct-vs-bare-symbol point still holds; reprojecting gjoa to the AST is a follow-up.
 ;; Requirable as a library; runnable as a CLI:
 ;;
-;;   bb -cp <fram/out>:<chartroom/src> -m callgraph <facts-file>   ; -> JSON on stdout
+;;   bb -cp <fram/out>:<codegraph/src> -m callgraph <facts-file>   ; -> JSON on stdout
 (ns callgraph
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
@@ -80,7 +80,7 @@
 ;; ---- global resolution: callname -> the defn it actually binds -------------
 ;; same-file local definition wins (module-local lexical scope); else a unique
 ;; global defn; else ambiguous/external -> dropped. THIS is the scope-correctness
-;; the bare-symbol regex incumbent skips. Returns :by-name too (chartroom's
+;; the bare-symbol regex incumbent skips. Returns :by-name too (codegraph's
 ;; benchmark uses it; the CLI ignores it).
 (defn build-graph [blocks]
   (let [derived  (mapv derive-block blocks)

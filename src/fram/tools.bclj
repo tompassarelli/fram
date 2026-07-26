@@ -30,7 +30,7 @@
   a tagged heterogeneous open-map discriminated by key-presence in main/fram_mcp, which
   a record (all keys always present) would defeat — the open-map gap. {:edit ..} is the
   GRAPH-AST authoring envelope: unlike {:write} (one coordinator triple), it carries a
-  whole-form/body datum the host applies OUT-OF-BAND via chartroom's resolve.clj verbs
+  whole-form/body datum the host applies OUT-OF-BAND via the engine's resolve.clj verbs
   (mint/supersede many facts), recompile-gated and fail-closed.")
 
 (require fram.kernel :as k)
@@ -41,7 +41,7 @@
 ;; are the single-triple KB writes (assert/retract of ANY predicate); `:query` backs
 ;; `ask`; `:show`/`:validate` are the reads. The trailing five are GRAPH-AST EDIT ops:
 ;; they author a graph-upstream Beagle module by minting/superseding kind/v/fN facts via
-;; chartroom's resolve.clj verbs (NOT a single coordinator triple), so they return a
+;; the engine's resolve.clj verbs (NOT a single coordinator triple), so they return a
 ;; distinct {:edit ...} envelope the host runs out-of-band, recompile-gated and fail-closed.
 ;; :insert-after is the CRDT insert-anywhere (commute) op — insert a NEW top-level def
 ;; AFTER an anchor def, at a (path,tie) order-key strictly between the anchor and its

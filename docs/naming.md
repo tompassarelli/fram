@@ -72,6 +72,50 @@ Practical tie-breakers, all of which "world" wins: it compounds cleanly (`world.
 `world.sealed`, `fork-head`), pluralizes naturally ("the two worlds diverged"), and
 verbs naturally ("fork a world"). Try `reality.sealed` with a straight face.
 
+## codegraph — chosen 2026-07-26
+
+The thing: the code-intelligence surface. Point the engine at a Beagle source tree,
+project it to facts, and *derive* the answers — scope-correct who-calls, transitive
+blast radius, safe rename — as Datalog over a reference graph instead of as bespoke
+passes over text. What it does **not** promise: to be the authoring path (that's the
+engine's edit verbs), to preserve formatting, or to work on anything but Beagle.
+
+It was called **chartroom** because that was the name of the *experiment* — a nautical
+room where you spread the charts out and plot the course, cute for a bet on "can a graph
+beat grep." The bet cleared its kill lines, the experiment shipped and got folded into
+fram (ADR 0001), and the museum placard stayed nailed to the door.
+
+The prior decided it, and the prior had already spoken: the agent skill fronting this
+surface was named **codegraph** by the same hands that wrote `chartroom/`, without
+deliberation, because that's the word you reach for when you have to *use* the thing
+rather than remember its origin story. That is revealed preference, and under the rule
+at the top of this file it is the strongest evidence available — a name nobody had to be
+taught. "chartroom" is a metaphor you must be told; "codegraph" is a description you
+already know. `codegraph` also compounds without apology (`codegraph/src`, "the code
+graph") and tells an LLM what it holds in one token pair.
+
+The rejected bench:
+
+- **chartroom** — an experiment's codename doing a shipped subsystem's job. Nautical
+  charm buys nothing at the call site and costs a sentence of explanation forever.
+- **callgraph** — already taken, one layer down (`codegraph/src/callgraph.clj`), and
+  narrower than the surface: call edges are one query the graph answers, not the graph.
+- **codeintel** — accurate and joyless; also an IDE-vendor prior (LSP, Sourcegraph) that
+  drags in editor-plumbing expectations this surface doesn't serve.
+- **code-as-facts** — the right description of the *bet*, which is why it survives as
+  prose and as the skill's tagline; too long and too hyphenated to be a directory.
+
+The same move split the directory: `resolve.clj` — the lexical resolver and the
+minimal-op AST edit verbs the coordinator daemon `load-file`s — was never
+code-intelligence. It is tier-3 engine code that happened to be born in the experiment's
+folder, so it was promoted to the engine root beside `coord.clj`, where its address now
+says what it is. `codegraph/` keeps only the analysis surface.
+
+One honest sentence for keeping "chartroom" nowhere load-bearing: an experiment earns a
+verdict, not a permanent namespace, and the only places the old name survives are the
+records that would be lies without it — ADR 0001, the benchmark `RESULTS.md`, and this
+entry.
+
 ## Appending an entry
 
 When a name fight happens, record: what the thing *is* (its actual semantics, including

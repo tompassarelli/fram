@@ -2,7 +2,7 @@
 ;; core_code_blind_test.clj — the fold guard (corrected, predicate-precise).
 ;;
 ;; INVARIANT: fram-core (src/fram/*.bclj — the GENERIC facts + Datalog engine) must
-;; stay BLIND to beagle-as-SUBJECT. This exists so that folding chartroom (beagle
+;; stay BLIND to beagle-as-SUBJECT. This exists so that folding codegraph (beagle
 ;; source code-intelligence) into this repo cannot let beagle-shaped logic seep into
 ;; the generic core once the cross-repo friction that used to enforce that seam is gone.
 ;;
@@ -18,14 +18,14 @@
 ;;   `(defn f [..] ..)`            -> dissolves -> axis 1 -> NOT banned.
 ;;   `(contains? DEF-FORMS "defn")`-> survives  -> axis 2 -> BANNED.
 ;;
-;; The ban-set MIRRORS chartroom's actual beagle-as-subject signature (resolve.clj's
+;; The ban-set MIRRORS codegraph's actual beagle-as-subject signature (resolve.clj's
 ;; PARAM-FORMS/TYPE-DEFS/... string-head sets). It deliberately does NOT include generic
 ;; graph vocabulary (calls, refers_to — domain-neutral edge labels any facts domain may
 ;; use) nor beagle import keywords (:require/:as/:refer — those appear in fram's OWN ns
 ;; forms as axis-1 implementation). It matches QUOTED tokens in CODE (comment lines skipped),
 ;; anchored to the quotes, never bare substrings (so "recalls"/"syscalls"/prose don't trip).
 ;;
-;; The folded chartroom module lives OUTSIDE src/fram/ (its own build target) and is
+;; The folded codegraph module lives OUTSIDE src/fram/ (its own build target) and is
 ;; intentionally exempt — its whole job is beagle-as-subject.
 
 (require '[clojure.string :as str])

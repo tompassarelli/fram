@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; ============================================================================
-;; Chartroom — code-as-facts on Fram.
+;; Codegraph — code-as-facts on Fram.
 ;; ============================================================================
 ;; Loads a beagle source tree (already projected to CNF fact triples by
 ;; `beagle-facts`) into a Fram fact store, derives the NAMESPACE-CORRECT
@@ -9,9 +9,9 @@
 ;;   A. caller precision on name collisions   (graph resolves scope; bare-symbol can't)
 ;;   B. transitive leverage / blast radius     (one fixpoint; a one-hop tool can't)
 ;;
-;; Run:  bb -cp ~/code/fram/out src/chartroom.clj build/gjoa.facts
+;; Run:  bb -cp ~/code/fram/out src/codegraph.clj build/gjoa.facts
 ;; ============================================================================
-(ns chartroom
+(ns codegraph
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [callgraph :as cg]                 ; the scope-correct call-graph engine (shared, single source)
@@ -71,7 +71,7 @@
         direct (into {} (map (fn [k] [k (count (get radj k #{}))]) defn-keys))
         blast  (into {} (map (fn [k] [k (count (transitive radj k))]) defn-keys))]
 
-    (println "================ CHARTROOM — code-as-facts on Fram =================")
+    (println "================ CODEGRAPH — code-as-facts on Fram =================")
     (println "corpus:" corpus-path)
     (println "files:" (count blocks)
              " defns:" (count defns)

@@ -42,7 +42,7 @@
 (def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
                                  (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
-                                 (str fram-home "/chartroom/src/resolve.clj")))
+                                 (str fram-home "/resolve.clj")))
 ;; D3: `--render` loads facts-roundtrip's .zo, compiled for beagle's flake-pinned
 ;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve the
 ;; pinned racket like bin/fram-ingest-code (FRAM_RACKET overrides, direnv fallback). NO

@@ -156,7 +156,7 @@
 ;; subtree of kind/v/fN facts. The coordinator wire is single-(te,p,r) ONLY, so
 ;; this runs the SAME loop the code-as-facts gate proves (authoring-verbs.sh):
 ;;   project .bclj -> AST facts (facts-roundtrip --emit-edn)
-;;   apply the verb as a FACT OP (chartroom resolve.clj <mode>) -> $RESOLVE_OUT EDN
+;;   apply the verb as a FACT OP (engine resolve.clj <mode>) -> $RESOLVE_OUT EDN
 ;;   regenerate byte-stable text (--render)
 ;;   recompile-gate (beagle-build-all '0 error') over the regenerated tree
 ;; On PASS: overwrite the source .bclj (graph-upstream text is a downstream view).
@@ -174,7 +174,7 @@
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
 ;; refs), so unchanged modules need no work. Kills the .bclj round-trip handicap.
 (def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")))
-(def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj")))
+(def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/resolve.clj")))
 (def ^:private fram-out      (env-or "FRAM_OUT"       (str (System/getProperty "user.dir") "/out")))
 ;; the source tree graph-upstream modules live in (the .bclj scope is resolved here).
 (def ^:private fram-src      (env-or "FRAM_SRC"       (str (System/getProperty "user.dir") "/src/fram")))

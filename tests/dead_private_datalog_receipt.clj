@@ -13,7 +13,7 @@
 ;;   D4 public roots                         (pub, pubM, util) -> never dead
 ;;   D5 SAME-SPELLING cross-module distinct  (mod1#helper dead, mod2#helper root live)
 ;; ============================================================================
-(binding [*command-line-args* []] (load-file "chartroom/src/resolve.clj"))
+(binding [*command-line-args* []] (load-file "resolve.clj"))
 
 ;; call-edges shape: {:defn-meta {leaf -> meta} :edges [[caller callee]]}. Leaves are the
 ;; @mod#int identity keys (here strings standing in for node ids — dead-private-bindings is

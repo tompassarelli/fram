@@ -21,7 +21,7 @@
 ;;        per-module comment can't reach: "who is downstream of the HAMT?")
 ;;
 ;; Run:
-;;   bb -cp ~/code/fram/out:chartroom/src chartroom/src/rep_jurisdiction.clj \
+;;   bb -cp ~/code/fram/out:codegraph/src codegraph/src/rep_jurisdiction.clj \
 ;;      <rep.facts> [<callgraph.facts>]
 ;;
 ;; <rep.facts>       : output of `beagle-rep-facts <src.bjs>...`

@@ -22,7 +22,7 @@
 ;;       diagnostic, and the .bclj is BYTE-UNCHANGED (fail-closed on the build gate).
 ;;
 ;;   bb mcp_edit_test.clj      (run from the fram repo root)
-;; Needs: racket + bb + out/ + chartroom/src/resolve.clj + beagle (facts-roundtrip
+;; Needs: racket + bb + out/ + resolve.clj + beagle (facts-roundtrip
 ;; + beagle-build-all). Skips with a clear message if a prerequisite is missing.
 (require '[babashka.process :as p] '[cheshire.core :as json]
          '[clojure.string :as str] '[clojure.java.io :as io])
@@ -36,7 +36,7 @@
 (def needed
   [[(str beagle-home "/beagle-lib/private/facts-roundtrip.rkt") "facts-roundtrip.rkt"]
    [(str beagle-home "/bin/beagle-build-all") "beagle-build-all"]
-   [(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
+   [(str root "/resolve.clj") "engine resolve.clj"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
    [(str root "/src/fram/schema.bclj") "src/fram/schema.bclj"]])
 (doseq [[p label] needed]
@@ -57,7 +57,7 @@
   {"FRAM_LOG" logpath "FRAM_THREADS" tmp
    "FRAM_SRC" src-dir          ; <- the edit channel authors into the hermetic copy
    "FRAM_OUT" (str root "/out")
-   "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")
+   "FRAM_RESOLVE" (str root "/resolve.clj")
    "BEAGLE_HOME" beagle-home
    "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
    "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")})

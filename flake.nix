@@ -32,7 +32,7 @@
           };
 
           # The bin/ scripts resolve HERE = $(dirname $0)/.. and load out/ (compiled
-          # Clojure), coord*.clj, chartroom/, defcheck_gate.clj, tests/, and src/
+          # Clojure), coord*.clj, resolve.clj, codegraph/, defcheck_gate.clj, tests/, and src/
           # from there. The CLI + MCP run on babashka against committed out/. The
           # daemon's exact JVM classpath is resolved once during the build from the
           # pure cache above, then Java runs it directly at runtime.
@@ -65,15 +65,15 @@
           installPhase = ''
             runHook preInstall
 
-            mkdir -p $out/libexec/fram/tests $out/libexec/fram/chartroom $out/bin
-            cp -r out bin src coord.clj coord_daemon.clj pull.clj fri.clj \
+            mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
+            cp -r out bin src coord.clj coord_daemon.clj resolve.clj pull.clj fri.clj \
               defcheck_gate.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
-            # Only chartroom's source is executable runtime input. build/ is a
+            # Only codegraph's source is executable runtime input. build/ is a
             # generated analysis corpus with checkout-local paths; docs/tests are
             # development assets and do not belong in the closure.
-            cp -r chartroom/src $out/libexec/fram/chartroom/
+            cp -r codegraph/src $out/libexec/fram/codegraph/
             chmod -R u+w $out/libexec/fram
 
             # Resolve tools.deps only while building, against the store-backed
@@ -145,7 +145,7 @@
                 --set FRAM_HOME "$out/libexec/fram" \
                 --set FRAM_BIN "$out/libexec/fram/bin" \
                 --set FRAM_OUT "$out/libexec/fram/out" \
-                --set FRAM_RESOLVE "$out/libexec/fram/chartroom/src/resolve.clj" \
+                --set FRAM_RESOLVE "$out/libexec/fram/resolve.clj" \
                 --set FRAM_PACKAGED "1" \
                 --set FRAM_JAVA "${pkgs.jdk}/bin/java" \
                 --set FRAM_DAEMON_CLASSPATH_FILE "$out/libexec/fram/daemon.classpath"
@@ -241,7 +241,7 @@
               beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
               factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
               factsRoundtrip = "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt";
-              framResolve = "${framRoot}/chartroom/src/resolve.clj";
+              framResolve = "${framRoot}/resolve.clj";
             };
             environment = {
               acceptedNorthBindings = [
@@ -333,7 +333,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
-              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/chartroom/src/resolve.clj" \
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/resolve.clj" \
               --set FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt"
             set -u
 

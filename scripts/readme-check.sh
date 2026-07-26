@@ -22,7 +22,7 @@ bad()  { printf 'FAIL: %s\n' "$*"; fail=1; }
 
 # (1) stale repo URLs — wrong org/repo forms. (tompassarelli/north is CORRECT; not listed.)
 echo "== (1) repo URLs =="
-BANNED='tompassarelli/(fram|beagle|eddy|chartroom)|Autonymy/(north|eddy|chartroom)'
+BANNED='tompassarelli/(fram|beagle|eddy|codegraph|chartroom)|Autonymy/(north|eddy|codegraph|chartroom)'
 if hits=$(grep -rnE "$BANNED" "$README" .github 2>/dev/null); then
   bad "stale/wrong repo URL(s):"; printf '%s\n' "$hits" | sed 's/^/    /'
 else note "ok — no stale org/repo forms"; fi
@@ -62,10 +62,10 @@ expect_text() {
 expect_sha LICENSE 51bd50bac830296b4e643a0fb74995b6a36592aca2a039c5587cdae0fa4115dd
 expect_sha LICENSE-APACHE 481d039b296107335037f88f33e435b75f931cf3605f222d5c3c634a4b70ec5f
 expect_sha LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
-expect_sha chartroom/LICENSE 361f8dc2cdf2e37f8ec56468127d0f54d679b78f450ca72ac0b226a46cccc3de
-expect_sha chartroom/LICENSE-APACHE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
-expect_sha chartroom/LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
-for readme in README.md chartroom/README.md; do
+expect_sha codegraph/LICENSE 361f8dc2cdf2e37f8ec56468127d0f54d679b78f450ca72ac0b226a46cccc3de
+expect_sha codegraph/LICENSE-APACHE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+expect_sha codegraph/LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
+for readme in README.md codegraph/README.md; do
   expect_text "$readme" '[MIT License](LICENSE-MIT)'
   expect_text "$readme" '[Apache License, Version 2.0](LICENSE-APACHE)'
   expect_text "$readme" '`MIT OR Apache-2.0`'

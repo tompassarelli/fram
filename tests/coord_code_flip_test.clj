@@ -26,7 +26,7 @@
 ;; experiments/flip/run-gates.sh; this in-process test covers K + 3/4/5.
 ;;
 ;;   bb -cp out coord_code_flip_test.clj      (run from the fram repo root)
-;; Needs: racket + bb + out/ + chartroom/src/resolve.clj + beagle + .fram/code.log
+;; Needs: racket + bb + out/ + resolve.clj + beagle + .fram/code.log
 ;; (run bin/fram-ingest-code first). Skips with a clear message if a prereq is missing.
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]
@@ -48,7 +48,7 @@
 (def needed
   [[roundtrip-rkt "facts-roundtrip.rkt"]
    [build-all "beagle-build-all"]
-   [(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
+   [(str root "/resolve.clj") "engine resolve.clj"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
    [(str root "/src/fram/schema.bclj") "src/fram/schema.bclj"]
    [code-log ".fram/code.log (run bin/fram-ingest-code first)"]])
@@ -58,7 +58,7 @@
 
 ;; --- load the daemon machinery + resolver IN-PROCESS (coord_dropin_test pattern) --
 (load-file "coord_daemon.clj")
-(load-file (str root "/chartroom/src/resolve.clj"))
+(load-file (str root "/resolve.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY of the code log ----------------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/code-flip-" (System/nanoTime) ".code.log"))
@@ -192,7 +192,7 @@
 (def rfl (str kbuild "/render-from-log.bclj"))
 (def rft (str kbuild "/render-from-text.bclj"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
+               "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/resolve.clj")})
 ;; render-from-log over a FRESH copy of the committed code log (no bridge fact).
 (def klog (str kbuild "/code.log")) (io/copy (io/file code-log) (io/file klog))
 (proc/shell {:extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" klog "--out" rfl)
@@ -200,7 +200,7 @@
 (def kresolve (str kbuild "/resolve-out")) (.mkdirs (io/file kresolve))
 (proc/sh {:out (io/file (str kresolve "/schema-emit.edn")) :err :string} "racket" roundtrip-rkt "--emit-edn" (str root "/src/fram/schema.bclj"))
 (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kresolve)}
-         "bb" "-cp" "out" "chartroom/src/resolve.clj" "resolve" (str kresolve "/schema-emit.edn"))
+         "bb" "-cp" "out" "resolve.clj" "resolve" (str kresolve "/schema-emit.edn"))
 (proc/sh {:out (io/file rft) :err :string} "racket" roundtrip-rkt "--render" (str kresolve "/resolved-schema.bclj.edn"))
 (def k-byte-identical
   (and (.exists (io/file rfl)) (.exists (io/file rft))
@@ -238,7 +238,7 @@
                    "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
                    "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))"))
 (def kc-verb (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kc-resolve)}
-                      "bb" "-cp" "out" "chartroom/src/resolve.clj" "set-body" "cardinality" "schema" kc-body
+                      "bb" "-cp" "out" "resolve.clj" "set-body" "cardinality" "schema" kc-body
                       (str kc-resolve "/schema-emit.edn")))
 (def kc-verb-ok (zero? (:exit kc-verb)))
 (chk "KEYSTONE-C: set-body verb produced a render (fact op)" kc-verb-ok)

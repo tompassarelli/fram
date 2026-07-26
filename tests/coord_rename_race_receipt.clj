@@ -26,14 +26,14 @@
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
                "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
-               "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")})
+               "FRAM_RESOLVE" (str root "/resolve.clj")})
 
 ;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —
 ;; its modules are file-path-derived (`src.fram.schema`, not bare `schema`). `wrapper`
 ;; below does an EXACT "@<module>#" prefix match (no suffix tolerance — that's its own
 ;; contract), so it needs the module's exact identity. Resolve it from the store's own
 ;; wrapper NAME facts (the same "@<module>#N" values `wrapper` reads), mirroring
-;; production's dot-segment-boundary rule (chartroom/src/resolve.clj scope-match?)
+;; production's dot-segment-boundary rule (resolve.clj scope-match?)
 ;; instead of hardcoding a new prefix.
 (defn store-modules [st]
   (let [NAME (c/value-id st "name")]

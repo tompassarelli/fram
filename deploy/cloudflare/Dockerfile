@@ -17,11 +17,10 @@ RUN clojure -P
 # exactly what coord_daemon.clj needs at runtime:
 #   out/                 compiled engine namespaces (classpath, deps.edn :paths)
 #   coord.clj            reified coordinator library (load-file'd)
-#   chartroom/src/       resolver (load-file'd: chartroom/src/resolve.clj)
+#   resolve.clj          resolver (load-file'd, engine root)
 #   defcheck_gate.clj    conditional load (FRAM_DEFCHECK=1)
 COPY out/ out/
-COPY coord.clj coord_daemon.clj defcheck_gate.clj ./
-COPY chartroom/src/ chartroom/src/
+COPY coord.clj coord_daemon.clj resolve.clj defcheck_gate.clj ./
 COPY bin/fram-daemon bin/fram-daemon
 
 # The wire protocol is UNAUTHENTICATED — 0.0.0.0 is safe ONLY because

@@ -81,7 +81,7 @@
                 "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
                 "(version mismatch with beagle's compiled .zo bytecode)."))))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
-                                 (str fram-home "/chartroom/src/resolve.clj")))
+                                 (str fram-home "/resolve.clj")))
 (def ^:private fram-out      (or (System/getenv "FRAM_OUT") (str fram-home "/out")))
 (def ^:private bin-dir       (or (System/getenv "FRAM_BIN") (str fram-home "/bin")))
 

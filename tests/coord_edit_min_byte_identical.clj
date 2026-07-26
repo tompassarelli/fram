@@ -29,7 +29,7 @@
           "FRAM_HOME" root
           "FRAM_OUT" (str root "/out")
           "FRAM_ROUNDTRIP" roundtrip-rkt
-          "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")
+          "FRAM_RESOLVE" (str root "/resolve.clj")
           "FRAM_BIN" (str root "/bin")}))
 (defn- fail-fast! [& xs]
   (binding [*out* *err*] (apply println "FAIL —" xs))

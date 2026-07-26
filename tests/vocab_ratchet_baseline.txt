@@ -1,11 +1,11 @@
 1	bin/fram-graph-edit-runtime
 1	build.sh
-26	chartroom/RESULTS.md
-1	chartroom/bin/rename-demo
-1	chartroom/bin/safe-rename
-5	chartroom/docs/build-log.md
-2	chartroom/test/comment-falsifier.sh
-1	chartroom/test/faith.rkt
+26	codegraph/RESULTS.md
+1	codegraph/bin/rename-demo
+1	codegraph/bin/safe-rename
+5	codegraph/docs/build-log.md
+2	codegraph/test/comment-falsifier.sh
+1	codegraph/test/faith.rkt
 5	coord_daemon.clj
 38	docs/claims-design.md
 9	docs/naming.md

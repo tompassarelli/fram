@@ -12,7 +12,7 @@
 ;; stripped). beagle's decoder then rebuilt that as the Clojure keyword `:-`, which
 ;; renders as `#:-` — `(def base #:- String "Howdy")` — and the build REJECTS it.
 ;;
-;; Root fix (chartroom/src/resolve.clj mint-datum!): a keyword datum mints as a
+;; Root fix (resolve.clj mint-datum!): a keyword datum mints as a
 ;; SYMBOL leaf with the colon retained, matching beagle's reader convention so the
 ;; whole graph→EDN→beagle path round-trips the `:-` marker intact.
 ;;
@@ -24,7 +24,7 @@
 ;;      type annotation survives (^String reaches the emitted Clojure).
 ;;
 ;;   bb -cp out tests/store_colon_marker_roundtrip_test.clj   (from the repo root)
-;; Needs: racket + bb + chartroom/src/resolve.clj + beagle (facts-roundtrip.rkt +
+;; Needs: racket + bb + resolve.clj + beagle (facts-roundtrip.rkt +
 ;; beagle-build-all). Skips with a clear message if a beagle prereq is missing.
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
@@ -37,13 +37,13 @@
 (def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 
-(doseq [[p label] [[(str root "/chartroom/src/resolve.clj") "chartroom resolve.clj"]
+(doseq [[p label] [[(str root "/resolve.clj") "engine resolve.clj"]
                    [roundtrip-rkt "facts-roundtrip.rkt"]
                    [build-all "beagle-build-all"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))
 
-(load-file (str root "/chartroom/src/resolve.clj"))
+(load-file (str root "/resolve.clj"))
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm (boolean ok)]))

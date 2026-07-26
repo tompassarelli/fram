@@ -179,7 +179,7 @@
 ;; Boot the daemon's co/schema/cache state in-process (no socket) and drive the real
 ;; execute-query path, proving edits #2/#3 (query-request? + the :pull case branch) wire
 ;; the op end-to-end. If loading coord_daemon.clj fails standalone (it also load-files
-;; chartroom/src/resolve.clj + requires fram.{fold,query,datalog,rt}), we SKIP loudly
+;; resolve.clj + requires fram.{fold,query,datalog,rt}), we SKIP loudly
 ;; rather than fake the dispatch.
 (let [loaded? (try (load-file "coord_daemon.clj") true
                    (catch Throwable t

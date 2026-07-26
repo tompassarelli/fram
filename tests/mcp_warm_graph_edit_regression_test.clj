@@ -58,7 +58,7 @@
    "FRAM_RACKET" racket-bin
    "FRAM_OUT" (str root "/out")
    "FRAM_BIN" (str root "/bin")
-   "FRAM_RESOLVE" (str root "/chartroom/src/resolve.clj")
+   "FRAM_RESOLVE" (str root "/resolve.clj")
    "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
    "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")
    "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")})

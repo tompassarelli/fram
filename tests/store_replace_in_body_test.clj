@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; replace-in-body — SUB-DEF surgical edit verb (chartroom/src/resolve.clj).
+;; replace-in-body — SUB-DEF surgical edit verb (resolve.clj).
 ;; Proves: a unique anchor swaps ONE interior fN edge (mint new + supersede one), the
 ;; def is NOT re-emitted, and the three fail-closed paths (0-match / ambiguous / no-def)
 ;; refuse with NO store mutation. Uses the real schema module (emit-edn'd) as the corpus.

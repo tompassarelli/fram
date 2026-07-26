@@ -33,7 +33,7 @@
 ;; only defines `resolve/resolve-warm-store!` + the read accessors. Loaded here, at
 ;; daemon-namespace-load time, so the `resolve/...`-qualified symbols in callers-of /
 ;; with-resolve-read resolve at compile time (load-file is run-once by nature).
-(load-file (str (System/getProperty "user.dir") "/chartroom/src/resolve.clj"))
+(load-file (str (System/getProperty "user.dir") "/resolve.clj"))
 
 ;; ---- state: one reified coordinator + a cached read index ------------------
 (def co (atom nil))                  ; {:store :log :lock} — reified canonical (v2 log)
@@ -4996,7 +4996,7 @@
 ;; validated (fail closed).
 (def ^:private fold-fingerprint-files
   ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/store.clj"
-   "out/fram/rt.clj" "chartroom/src/resolve.clj" "coord.clj" "coord_daemon.clj"])
+   "out/fram/rt.clj" "resolve.clj" "coord.clj" "coord_daemon.clj"])
 (defn fold-fingerprint []
   (try
     (let [root (System/getProperty "user.dir")

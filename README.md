@@ -58,14 +58,14 @@ engine answers questions for very different domains — each in its **own** grap
 
 - **[North](https://github.com/tompassarelli/north)** — life/work coordination
   (the `ready` / `blocked` / `leverage` verbs live there, not in the engine).
-- **[Chartroom](chartroom/)** — code-as-facts (a module *inside* this repo): a Beagle
+- **[Codegraph](codegraph/)** — code-as-facts (a module *inside* this repo): a Beagle
   module's AST *is* the facts, the `.bclj` text is a view.
 - **[Beagle](https://github.com/Autonymy/beagle)** — the typed Lisp Fram itself is
-  authored in; it projects source into the graph through Chartroom.
+  authored in; it projects source into the graph through Codegraph.
 
 The engine ships **no** domain verbs of its own — new domain, new graph, same engine.
 *How each consumer projects onto the facts is the [How it works](#how-it-works) section
-below; the deep code story is [Identity-addressed code](#identity-addressed-code-chartroom).*
+below; the deep code story is [Identity-addressed code](#identity-addressed-code-codegraph).*
 
 ## What the graph buys you: reasoning + repair
 
@@ -75,7 +75,7 @@ These are the two reasons to put something in a fact graph instead of files.
 depends on this? what's unused? who calls this? what unblocks the most other work?" are
 *relationship* questions, and over a graph a relationship question *is* a Datalog query —
 no reconstruction tax, because the graph is canonical and incremental, not rebuilt per
-question. Pointed at code (Chartroom), the same engine answers "what breaks if I change
+question. Pointed at code (Codegraph), the same engine answers "what breaks if I change
 this?" **scope-correctly**: a call binds the definition in its own module, so two
 same-named functions in different modules don't collide — what bare-text grep gets wrong.
 
@@ -146,7 +146,7 @@ North-shaped *only because Fram was extracted from North* — that's the one rea
 "threads" appear in the engine repo at all. `export` is the verified-lossless inverse of
 `import` (`tests/roundtrip_test.clj`): the files are a view, not a second source of truth.
 
-**Fram with Beagle (code-as-facts).** [Chartroom](chartroom/) projects **Beagle source** into
+**Fram with Beagle (code-as-facts).** [Codegraph](codegraph/) projects **Beagle source** into
 the graph with the fact log **canonical**: a module's AST *is* the facts; the `.bclj` text is
 a rendered view. No threads here — the unit is the *def*, the projection is the *resolver*, and
 references carry the binding's identity (`bound_to`), so a rename is a ~2-fact edit and code
@@ -187,7 +187,7 @@ vocabulary is **data in the graph**, not tools.
 
 - **The closed TELL/ASK catalog — exactly ten tools.** `tell` (assert a fact) /
   `retract` (remove one) / `show` (all facts on a subject) / `ask` (structured query) /
-  `validate`, plus the five code-authoring verbs Chartroom adds (`add-def` / `set-body` /
+  `validate`, plus the five code-authoring verbs the resolver adds (`add-def` / `set-body` /
   `rename-def` / `insert-after` / `replace-in-body`). A single-valued predicate replaces
   its value; a multi-valued one accumulates — and **cardinality is itself a fact**
   (`tell <pred> cardinality single|multi`), so `tell` = assert subsumes the old
@@ -342,9 +342,9 @@ metadata only — `:as-of` stays addressed by causal `:seq`, and the key is omit
 txs whose log records predate it. **Limit:** `pull` is daemon-only (needs the live
 index) — the cold CLI fold doesn't serve it.
 
-## Identity-addressed code (Chartroom)
+## Identity-addressed code (Codegraph)
 
-[Chartroom](chartroom/) points the engine at *code*. The fact log is canonical: a
+[Codegraph](codegraph/) points the engine at *code*. The fact log is canonical: a
 module's AST is the facts, and the `.bclj` source text is a rendered view of the log.
 
 - **References carry identity, not spelling.** A call site resolves to the binding's
@@ -357,7 +357,7 @@ module's AST is the facts, and the `.bclj` source text is a rendered view of the
 - **The render is a pure function of the log.** `render(log) == render(text)`,
   byte-identical *to each other* (both derived from the graph). The general round-trip is
   *datum*-identical, not byte-identical to hand-authored source — comments and exact
-  whitespace are not preserved (`chartroom/`).
+  whitespace are not preserved (`codegraph/`).
 - **Code intelligence as Datalog.** Scope-correct call graphs and transitive blast
   radius are queries, computed scope-correctly by binding identity (not name-match).
 
@@ -488,8 +488,10 @@ also served over MCP by `bin/fram-mcp`. The life verbs (`ready` / `blocked` / `l
 - `src/fram/*.bclj` — the engine, authored in Beagle: kernel, fold, Datalog, schema,
   import/export, CLI.
 - `src/fram/rt.clj` — the thin Clojure host-interop runtime.
+- `resolve.clj` — the engine's lexical resolver + minimal-op AST edit verbs
+  (`load-file`'d by the coordinator daemon).
 - `out/` — the **committed** compiled Clojure (so Fram runs without Beagle).
-- `chartroom/` — code-as-facts: the resolver, minimal-op authoring verbs, code
+- `codegraph/` — code-as-facts: minimal-op authoring verbs, code
   intelligence.
 - `docs/` — conceptual sources of truth: `WHY_FRAM_EXISTS.md`,
   `VIEWS_AND_BRANCHES.md` (the write/read model), `adr/` (project boundaries).

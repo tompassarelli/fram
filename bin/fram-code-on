@@ -106,7 +106,7 @@ mapfile -t SRCS < <(find "$SRC" -regextype posix-extended -regex '.*\.b(clj|cljs
 #     AST (tree); the corpus is the resolved who-calls/blast-radius GRAPH (callgraph needs it).
 CORPUS="$DIR/.fram/corpus.facts"
 echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
-( cd "$HERE/chartroom" && BEAGLE_HOME="$BEAGLE_HOME" bin/emit-corpus "$SRC" "$CORPUS" >/dev/null 2>&1 ) \
+( cd "$HERE/codegraph" && BEAGLE_HOME="$BEAGLE_HOME" bin/emit-corpus "$SRC" "$CORPUS" >/dev/null 2>&1 ) \
   && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) facts -> $CORPUS" \
   || echo "        (corpus skipped — authoring still works; reasoning needs emit-corpus)"
 
@@ -154,7 +154,7 @@ FRAM_SERVER_JSON=$(cat <<JSON
     "FRAM_SRC": "$DIR",
     "FRAM_OUT": "$HERE/out",
     "FRAM_BIN": "$HERE/bin",
-    "FRAM_RESOLVE": "$HERE/chartroom/src/resolve.clj",
+    "FRAM_RESOLVE": "$HERE/resolve.clj",
     "FRAM_ROUNDTRIP": "$BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt",
     "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
     "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
@@ -172,7 +172,7 @@ Authoring: (re)start Claude Code in $DIR — you now have mcp__fram__add-def /
   set-body / rename-def / insert-after, authoring INTO the fact graph (warm,
   no re-fold; edits type-checked + pointed Beagle errors returned for repair).
 Reason over the code graph (blast-radius / who-calls), any time:
-  bb -cp $HERE/out:$HERE/chartroom/src $HERE/chartroom/src/callgraph.clj $CORPUS
+  bb -cp $HERE/out:$HERE/codegraph/src $HERE/codegraph/src/callgraph.clj $CORPUS
 Or race it vs grep on any function:
   $HERE/../after-text/experiments/authoring-bakeoff/race/reason-race.sh <fn>
 Turn OFF: $HERE/bin/fram-code-off $DIR
