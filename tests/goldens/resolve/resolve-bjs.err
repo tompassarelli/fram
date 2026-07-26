@@ -1,0 +1,16 @@
+================ Turtle #5 — lexical resolution pass ================
+references resolved (carry refers_to → a binding node): 42  (4 cross-module, 3 type references)
+unresolved (builtins / native — correctly NO refers_to): 52
+comment identifier mentions resolved (rename-correct doc comments): 2
+  trap.bjs: 7 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-trap.bjs.edn
+  mod-a.bjs: 2 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-mod-a.bjs.edn
+  mod-b.bjs: 2 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-mod-b.bjs.edn
+  trap-collision.bjs: 4 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-trap-collision.bjs.edn
+  shadow.bjs: 6 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-shadow.bjs.edn
+  forshadow.bjs: 6 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-forshadow.bjs.edn
+  mapshadow.bjs: 6 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-mapshadow.bjs.edn
+  torture.bjs: 2 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-torture.bjs.edn
+  types.bjs: 4 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-types.bjs.edn
+  re-a.bjs: 1 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-re-a.bjs.edn
+  re-b.bjs: 2 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-re-b.bjs.edn
+  re-c.bjs: 2 references carry refers_to; projected (identity) -> /tmp/resolve-golden-jwgLE5/resolve-bjs.d/resolved-re-c.bjs.edn
