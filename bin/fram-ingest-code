@@ -28,6 +28,18 @@
 ;; The default ingests every .bclj it finds (staged adoption uses this); the flip
 ;; experiment passes `--module schema` so ONLY schema.bclj is folded.
 ;;
+;; ADDING A MODULE TO A **LIVE** STORE (`--append`, no daemon restart): the running
+;; coordinator absorbs the appended tail through maybe-reload!, but the graph-edit
+;; ops (:edit-min / :edit-prepare / :edit-commit) deliberately BYPASS
+;; prepare-request-reload! (their compute is lock-free), so the FIRST edit verb
+;; after an append still sees the pre-append store and rejects with
+;; "module '<mod>' has no live @<mod>#root file fact in the code log (not
+;; ingested?)" — a stale-store artifact, NOT a bad ingest. Send one non-edit
+;; request first (e.g. `{:op :for-log :expected-log <log> :request {:op :read-def
+;; :spec {:module "<mod>" :name "<any-def>"}}}`); it triggers the reload, and every
+;; edit verb works from then on. (Observed 2026-07-26 consolidating
+;; codegraph.src.codegraph into the live :32915 store.)
+;;
 ;; Env (overridable for CI/tests; defaults match the live tree):
 ;;   BEAGLE_HOME   (default ~/code/beagle)
 ;;   FRAM_ROUNDTRIP (default $BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt)
