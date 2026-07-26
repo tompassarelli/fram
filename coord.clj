@@ -570,6 +570,42 @@
           (append-tx! co (delta-records co since tx))
           {:ok (get-in @(store co) [:txs tx :seq]) :cid cid})))))
 
+;; about! writes one fact whose SUBJECT is an existing fact cid. This is the
+;; public coordinator seam for modules such as fram.claims that model
+;; participation with facts-about-facts. The v2 log preserves cid identity, so
+;; the write replays byte-for-byte like select! and retract!'s withdrawal facts.
+;; kind = :assert (literal) | :link (named entity). Exact live duplicates are
+;; idempotent. The caller owns any higher-level policy around the target fact.
+(defn about! [co agent cid pred kind r-spec]
+  (locking (:lock co)
+    (let [st      (store co)
+          victim (c/fact-of st cid)
+          pid     (c/value-id st pred)
+          target  (when (= kind :link) (s/resolve-name st r-spec))
+          value   (when (= kind :assert) (c/value-id st r-spec))
+          live    (if pid (live-cids-lp co cid pid) [])
+          facts   (:facts @st)
+          wanted  (if (= kind :link) target value)]
+      (cond
+        (or (nil? victim) (not (c/live? st cid)))
+        {:reject :fact-not-live :version (current-seq co)}
+
+        (and (= kind :link) (nil? target))
+        {:reject :target-not-found :version (current-seq co)}
+
+        (some #(= wanted (:r (get facts %))) live)
+        {:ok (current-seq co) :idempotent true :subject-cid cid}
+
+        :else
+        (let [since (:next-id @st)
+              tx    (c/begin-tx! st agent)
+              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))]
+          (case kind
+            :link   (s/link! st cid pred target tx)
+            :assert (s/assert! st cid pred r-spec tx))
+          (append-tx! co (delta-records co since tx))
+          {:ok (get-in @st [:txs tx :seq]) :subject-cid cid})))))
+
 ;; commit-on-view! — write a rival fact AND select it into `view` in one breath: the
 ;; "write on a branch" verb. Always coexists (no base -> never staleness-rejected); the
 ;; new rival is the highest live cid on (te,pred), so THAT cid is selected into the branch.
