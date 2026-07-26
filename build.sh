@@ -38,7 +38,10 @@ done
 #                binds, and in what order (rb/*).
 #   resolve_modules M1 Cut D: one module's frame (top-level defs, types,
 #                synthesized accessors) and its import/export surface (rm/*).
-for m in pull resolve_core resolve_read resolve_binds resolve_modules; do
+#   resolve_render M1 Cut E: render a node back to source (render-sym,
+#                node->str, node->canon) and the O(N) anchor search over a def
+#                subtree that replace-in-body addresses (rv/*).
+for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"

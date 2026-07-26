@@ -24,7 +24,8 @@
             [resolve-core :as rc]    ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
             [resolve-read :as rr]    ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
             [resolve-binds :as rb]   ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
-            [resolve-modules :as rm]))  ; M1 Cut D: one module's frame + its import/export surface
+            [resolve-modules :as rm] ; M1 Cut D: one module's frame + its import/export surface
+            [resolve-render :as rv]))  ; M1 Cut E: render a node back to source + the anchor search
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -800,8 +801,9 @@
 ;; --- projection: emit EDN for beagle --render, names resolved via refers_to --
 ;; follow refers_to transitively (re-export chains: a (js/export name) re-export is
 ;; itself a reference) to the ULTIMATE binding, and render its current name.
-(defn ultimate [B] (loop [b B n 0] (let [t (refers-target b)] (if (and t (< n 64)) (recur t (inc n)) b))))
-(defn binding-name [B] (sym-val (ultimate B)))
+;; M1 Cut E — the render-back-to-source layer is now Beagle (src/resolve_render.bclj).
+(defn ultimate [B] (rv/ultimate ctx *view* BOUND REFERS B))        ; follow refers_to to the node that HOLDS the name
+(defn binding-name [B] (rv/binding-name ctx *view* BOUND REFERS B))
 
 ;; ============================================================================
 ;; AUTHORING — mint a NEW datum subtree into the SAME fact store (the inverse of
@@ -1458,21 +1460,7 @@
 ;; literal symbol shows its stored v. Matching the anchor against the RENDERED
 ;; spelling (not the stored v) is what makes the model's old-form — read off the
 ;; current source text — line up with the graph even after a prior graph rename.
-(defn render-sym [e]
-  (let [v (pred-val e "v")]
-    (if-let [D (refers-target e)]
-      (let [fixed?  (seq (c/by-lp ctx e FIXED))
-            qual    (pred-val e "qualifier")
-            cpfx    (pred-val e "ctor_prefix")
-            afield  (pred-val e "accessor_field")
-            nm      (binding-name D)
-            nm      (cond cpfx   (str cpfx nm)
-                          afield (str (str/lower-case nm) "-" afield)
-                          :else  nm)]
-        (cond fixed? v
-              qual  (str qual "/" nm)
-              :else nm))
-      v)))
+(defn render-sym [e] (rv/render-sym ctx *view* BOUND REFERS FIXED e))
 ;; canonical comparison form — structural, formatting-insensitive. Leaf -> [:leaf kind
 ;; spelling]; list -> [:list child-canon...]. Both an anchor DATUM (as clojure.edn read
 ;; it) and a graph NODE canonicalize into the SAME shape, re-encoding EDN nil/bool/
@@ -1504,27 +1492,8 @@
 ;; Children are visited in CRDT (ord-key) order so the list canon matches datum order.
 ;; The def-form ROOT itself is never a candidate (only CHILDREN are recorded) — replacing
 ;; a whole top-level def is upsert-form's job, not this verb's.
-(defn ord-edges [n]                     ; [ord-key pos-lit cid child] fN edges of n, CRDT-ordered
-  (->> (c/by-l ctx n)
-       (keep (fn [cid] (let [cl (c/fact-of ctx cid) p (c/literal ctx (:p cl))]
-                         (when (and (string? p) (ord-pos? p) (integer? (:r cl)))
-                           [(ord-parse p) p cid (:r cl)]))))
-       (sort-by first ord-cmp)))
-(defn anchor-matches [root target]
-  (let [matches (atom [])]
-    (letfn [(go [n]
-              (if (= "list" (kind-of n))
-                (into [:list]
-                      (mapv (fn [[_ pos cid ch]]
-                              (let [cc (go ch)]
-                                (when (= cc target) (swap! matches conj [n pos cid ch]))
-                                cc))
-                            (ord-edges n)))
-                (if (= "symbol" (kind-of n))
-                  [:leaf "symbol" (render-sym n)]
-                  [:leaf (kind-of n) (pred-val n "v")])))]
-      (go root)
-      @matches)))
+(defn ord-edges [n] (rv/ord-edges ctx n))   ; [ord-key pos-lit cid child] fN edges of n, CRDT-ordered
+(defn anchor-matches [root target] (rv/anchor-matches ctx *view* BOUND REFERS FIXED root target))
 
 ;; ============================================================================
 ;; AUTO-DISAMBIGUATION (019f22bd-137d) — on an ambiguous/failed anchor, hand the
@@ -1541,51 +1510,16 @@
 ;; the SAME canonical shape datum->canon + anchor-match-sites compute, so a suggested
 ;; :within is SELF-VALIDATING: we offer it only when (datum->canon (edn/read it)) ==
 ;; the node's canon (round-trips) AND it matches exactly one interior form.
-(defn node->str [n]
-  (case (kind-of n)
-    "list"   (let [kids (ordered-children n)
-                   hs   (when (seq kids) (when (= "symbol" (kind-of (first kids))) (render-sym (first kids))))]
-               (cond
-                 (= hs "#%brackets") (str "[" (str/join " " (map node->str (rest kids))) "]")
-                 (= hs "#%map")      (str "{" (str/join " " (map node->str (rest kids))) "}")
-                 (= hs "#%set")      (str "#{" (str/join " " (map node->str (rest kids))) "}")
-                 ;; regex child is a raw "string" leaf — emit the pattern INSIDE #"…",
-                 ;; never pr-str it (that would double-quote it into a plain string).
-                 (= hs "#%regex")    (str "#\"" (pred-val (second kids) "v") "\"")
-                 :else               (str "(" (str/join " " (map node->str kids)) ")")))
-    "symbol" (render-sym n)
-    "string" (pr-str (pred-val n "v"))
-    "number" (str (pred-val n "v"))
-    "char"   (str "\\" (pred-val n "v"))
-    (str (pred-val n "v"))))
-(defn node->canon [n]
-  (if (= "list" (kind-of n))
-    (into [:list] (map node->canon (ordered-children n)))
-    (if (= "symbol" (kind-of n)) [:leaf "symbol" (render-sym n)] [:leaf (kind-of n) (pred-val n "v")])))
+(defn node->str [n] (rv/node->str ctx *view* BOUND REFERS FIXED n))
+(defn node->canon [n] (rv/node->canon ctx *view* BOUND REFERS FIXED n))
 ;; anchor-match-sites — anchor-matches, but each match also carries its ENCLOSING
 ;; ANCESTOR CHAIN (def-root .. immediate-parent, descent order) so a reject can build
 ;; breadcrumbs + a distinctive :within suggestion. Still ONE O(N) post-order pass
 ;; (canon computed once per node). Returns [{:parent :pos :cid :child :chain} ...];
 ;; the search ROOT itself is never a candidate (only its interior children).
-(defn anchor-match-sites [root target]
-  (let [matches (atom [])]
-    (letfn [(go [n chain]
-              (if (= "list" (kind-of n))
-                (into [:list]
-                      (mapv (fn [[_ pos cid ch]]
-                              (let [cc (go ch (conj chain n))]
-                                (when (= cc target)
-                                  (swap! matches conj {:parent n :pos pos :cid cid :child ch :chain (conj chain n)}))
-                                cc))
-                            (ord-edges n)))
-                (if (= "symbol" (kind-of n))
-                  [:leaf "symbol" (render-sym n)]
-                  [:leaf (kind-of n) (pred-val n "v")])))]
-      (go root [])
-      @matches)))
+(defn anchor-match-sites [root target] (rv/anchor-match-sites ctx *view* BOUND REFERS FIXED root target))
 ;; a short, distinctive label for one breadcrumb rung (an enclosing form's head).
-(defn- crumb-label [n]
-  (or (head-sym n) (cond (map-node? n) "{}" (brackets? n) "[]" :else "(...)")))
+(defn- crumb-label [n] (rv/crumb-label ctx *view* n))
 ;; DISAMBIG-CAP — at most this many candidates in a reject payload (report the total).
 (def DISAMBIG-CAP rc/DISAMBIG-CAP)
 ;; build the reject candidate for match site `site`, relative to search-root `root`,
