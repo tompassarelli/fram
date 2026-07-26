@@ -7,10 +7,10 @@
 1	chartroom/test/faith.rkt
 5	coord_daemon.clj
 1	out/fram/rt.clj
-3	out/fram/world.clj
+2	out/fram/world.clj
 3	src/fram/main.bclj
 1	src/fram/rt.clj
-4	src/fram/world.bclj
+3	src/fram/world.bclj
 1	tests/apparatus_r1/README.md
 2	tests/apparatus_r1/cells/negcontrol.clj
 1	tests/apparatus_r1/cells/perf_104k.clj
@@ -19,6 +19,6 @@
 1	tests/package_graph_edit_runtime_smoke.sh
 3	tests/show_reporter_join_test.clj
 11	tests/vocab_ratchet_test.sh
-27	tests/world_kernel_test.clj
+9	tests/world_kernel_test.clj
 1	tests/world_persistence_test.clj
 2	tests/world_vertical_slice_test.clj
