@@ -41,6 +41,12 @@
 ;; daemon-namespace-load time, so the `resolve/...`-qualified symbols in callers-of /
 ;; with-resolve-read resolve at compile time (load-file is run-once by nature).
 (load-file (str (System/getProperty "user.dir") "/resolve.clj"))
+;; rotations.clj — the SPO/POS/OSP covering read index (ns `rotations`). A pure
+;; library: defines the index value, its O(delta) maintenance, the covering probe,
+;; the O(1) Datalog projection, and the content-addressed segment format. Loaded
+;; here so `rotations/...` resolves at daemon-namespace-load time (SCI analyses
+;; qualified symbols eagerly), exactly like resolve.clj/pull.clj above.
+(load-file (str (System/getProperty "user.dir") "/rotations.clj"))
 
 ;; ---- state: one reified coordinator + a cached read index ------------------
 (def co (atom nil))                  ; {:store :log :lock} — reified canonical (v2 log)
@@ -58,6 +64,9 @@
 ;; single-flights the cold build: exactly one full-corpus projection is materialized
 ;; at a time, and concurrent readers share the one immutable result. {:facts <set> :projection <proj>}
 (def projection-cache (atom nil))
+;; the rotation-segment layer (thread 019f9e66) lives at the bottom of this file,
+;; next to the checkpoint writer; :status reaches back for its ops surface.
+(declare rotation-index-status start-rotation-compactor! rotation-stats)
 (def projection-build-lock (Object.))
 (def subscribers (atom []))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
@@ -706,47 +715,28 @@
 ;; ---- index-accelerated read path (warm) ------------------------------------
 ;; The scan path (fram.query/run) pulls the WHOLE "triple" relation per literal
 ;; (datalog match-lit). For the common shape — ONE non-recursive rule whose body is
-;; "triple" literals with bound predicate+object — we instead probe a by-[p r] index.
+;; "triple" literals with bound predicate+object — we instead probe the index.
 ;; The index is STRING-KEYED and built from the SAME facts the scan sees, so it is
 ;; provably a regrouping of the scan's own tuples: NO int<->string translation, hence
 ;; no silent-mistranslation hazard. q/run stays the untouched ORACLE; anything not of
 ;; the simple shape (recursion, negation, derived rels, unbound p/r) falls back to it.
-;; Positional by-l/by-p/by-r indexes plus by-[l p]/by-[p r] compound indexes let
-;; every grounded literal probe its narrowest bucket. by-[l p] also scopes a write
-;; delta, so a superseding assert drops its victim without scanning the corpus.
+;;
+;; The index is `rotations` (rotations.clj): the SPO/POS/OSP covering set over the
+;; flat value space. It supersedes the old ad-hoc bucket collection
+;; (by-l/by-p/by-r + by-[l p]/by-[p r]), which covered five of the six proper
+;; prefixes — the sixth, subject+object with the predicate free, had no exact
+;; bucket and fell back to the smaller of by-l/by-r. Three cyclic rotations cover
+;; all six, and the SAME level-1 buckets are handed to fram.datalog as its base
+;; index in O(1), which is what removes the whole-corpus projection rebuild from
+;; the read path. Rotation :sp also scopes a write delta, so a superseding assert
+;; drops its victim without scanning the corpus.
 (defn- idx-build [facts]
   (reduce (fn [acc c]
             (query-check)
-            (let [t [(:l c) (:p c) (:r c)]]
-              (-> acc (update :triples conj t)
-                  (update-in [:by-l (:l c)] (fnil conj #{}) t)
-                  (update-in [:by-p (:p c)] (fnil conj #{}) t)
-                  (update-in [:by-r (:r c)] (fnil conj #{}) t)
-                  (update-in [:by-pr [(:p c) (:r c)]] (fnil conj #{}) t)
-                  (update-in [:by-lp [(:l c) (:p c)]] (fnil conj #{}) t))))
-          {:triples #{} :by-l {} :by-p {} :by-r {} :by-pr {} :by-lp {}} facts))
-;; Drop a key whose bucket emptied (DON'T leave it mapped to #{}) — idx-build never
-;; emits an empty-set entry, it just omits the key, so the incremental index must do
-;; the same or its REPRESENTATION drifts from a fresh fold (warm-check :by-pr-eq
-;; false: equal triple-set, dangling empty bucket — queries stay correct since
-;; lit-candidates treats #{} and an absent key identically, but the tripwire fires).
-(defn- bucket-update [m k v]
-  (let [nb (disj (get m k #{}) v)] (if (empty? nb) (dissoc m k) (assoc m k nb))))
-;; O(1) delta maintenance per bucket (sets => add/remove + dedup).
-(defn- idx-add [idx t]
-  (-> idx (update :triples conj t)
-      (update-in [:by-l (nth t 0)] (fnil conj #{}) t)
-      (update-in [:by-p (nth t 1)] (fnil conj #{}) t)
-      (update-in [:by-r (nth t 2)] (fnil conj #{}) t)
-      (update-in [:by-pr [(nth t 1) (nth t 2)]] (fnil conj #{}) t)
-      (update-in [:by-lp [(nth t 0) (nth t 1)]] (fnil conj #{}) t)))
-(defn- idx-del [idx t]
-  (-> idx (update :triples disj t)
-      (update :by-l (fn [m] (bucket-update m (nth t 0) t)))
-      (update :by-p (fn [m] (bucket-update m (nth t 1) t)))
-      (update :by-r (fn [m] (bucket-update m (nth t 2) t)))
-      (update :by-pr (fn [m] (bucket-update m [(nth t 1) (nth t 2)] t)))
-      (update :by-lp (fn [m] (bucket-update m [(nth t 0) (nth t 1)] t)))))
+            (rotations/add acc [(:l c) (:p c) (:r c)]))
+          rotations/empty-index facts))
+(defn- idx-add [idx t] (rotations/add idx t))
+(defn- idx-del [idx t] (rotations/del idx t))
 
 (defn- var-term? [t] (and (map? t) (contains? t :var)))
 (declare query-check)
@@ -767,17 +757,12 @@
 ;; corpus scan; joins acquire by-lp/by-pr selectivity as substitutions accumulate.
 (defn- lit-candidates [idx litt s]
   (let [args (:args litt)
-        l (resolve-arg (nth args 0) s)
-        p (resolve-arg (nth args 1) s)
-        r (resolve-arg (nth args 2) s)
-        bound? #(not= % ::unbound)
-        buckets (cond-> []
-                  (and (bound? l) (bound? p)) (conj (get (:by-lp idx) [l p] #{}))
-                  (and (bound? p) (bound? r)) (conj (get (:by-pr idx) [p r] #{}))
-                  (bound? l) (conj (get (:by-l idx) l #{}))
-                  (bound? p) (conj (get (:by-p idx) p #{}))
-                  (bound? r) (conj (get (:by-r idx) r #{})))]
-    (if (seq buckets) (apply min-key count buckets) (:triples idx))))
+        g (fn [i] (let [v (resolve-arg (nth args i) s)] (when-not (= v ::unbound) v)))]
+    ;; EXACT bucket for whatever subset is ground — the covering property means
+    ;; there is never a choice to make between overlapping buckets, so this is
+    ;; O(1) where the old min-key over up-to-five candidate buckets was O(k) and
+    ;; could still pick a non-exact one.
+    (rotations/candidates idx (g 0) (g 1) (g 2))))
 (defn- conj-query-row [acc row]
   (if (nil? row)
     acc
@@ -932,16 +917,55 @@
      :history-co {:store history-store}
      :history-store history-store}))
 
-;; The shared Datalog projection (EDB + base index) for one immutable facts set.
-;; A hit is lock-free (identity check against the last-published set). A miss
-;; single-flights under `projection-build-lock` with a double-check, so exactly one
-;; full-corpus projection is built per cold version and all concurrent scan/page
-;; readers at that version share the one immutable value — bounding peak build
-;; memory to a single corpus regardless of query concurrency. The build runs under
-;; the caller's *query-control* binding, so a cold build is itself deadline/step
-;; bounded (it aborts like any query rather than running unbounded); a partial build
-;; is never published because `reset!` happens only after `q/project` returns.
-(defn- snapshot-projection [facts-set]
+;; The shared Datalog projection (EDB + base index) a scan :query / :query-page
+;; runs over.
+;;
+;; THE DEFECT THIS REPLACES. `q/project` is O(corpus): facts->edb materializes two
+;; whole tuple-sets and d/base-index buckets every tuple by all three positions.
+;; The cache below was keyed on the IDENTITY of the version-guarded facts set, and
+;; every commit produces a new set — so ONE write invalidated the whole projection
+;; and the next reader had to refold the entire corpus inside its own 5s query
+;; deadline. Measured on the 83MB / 350k-fact corpus: the rebuild took ~4.4-5.0s,
+;; so under agent write traffic a scan query was a coin-flip between "answers in
+;; ~4.8s" and "aborts with query-time-limit" — reads starved, admission timed out.
+;; The cost was O(history), so it got strictly worse every day the log grew.
+;;
+;; THE FIX. The warm cache's `:idx` is the SPO/POS/OSP covering rotation set and is
+;; ALREADY maintained incrementally by apply-commit-delta! (O(group), not O(corpus)).
+;; Its level-1 buckets ARE the base index fram.datalog wants, and its :tuples set IS
+;; the "fact" EDB relation — so the projection is three map references, built in
+;; O(1) with no rebuild, no lock, and no deadline exposure. A write no longer
+;; invalidates anything.
+;;
+;; THE ONE EXCEPTION. The "fact-id" base relation numbers cids POSITIONALLY by fold
+;; order (fram.query/facts->edb), so it is not incrementally maintainable without
+;; changing cid values. A query that actually mentions fact-id therefore still gets
+;; the whole-corpus projection, cached and single-flighted exactly as before. Every
+;; other query never observes fact-id's absence, because fram.datalog only consults
+;; relations the rules name. This keeps query semantics BYTE-identical rather than
+;; redefining cids for a performance win.
+(defn- mentions-fact-id?
+  "Does this query name the fact-id base relation anywhere (rules, strata, :find)?
+   Conservative: any unexpected shape answers true and takes the safe slow path."
+  [q]
+  (let [found (atom false)]
+    (letfn [(walk [x]
+              (cond @found nil
+                    (and (string? x) (= "fact-id" x)) (reset! found true)
+                    (map? x) (do (run! walk (keys x)) (run! walk (vals x)))
+                    (coll? x) (run! walk x)
+                    :else nil))]
+      (walk q))
+    @found))
+
+;; whole-corpus fallback (unchanged semantics): a hit is lock-free (identity check
+;; against the last-published set); a miss single-flights under
+;; `projection-build-lock` with a double-check, so exactly one full-corpus
+;; projection is built per cold version and all concurrent readers at that version
+;; share the one immutable value. The build runs under the caller's *query-control*
+;; binding, so it is deadline/step bounded; a partial build is never published
+;; because `reset!` happens only after `q/project` returns.
+(defn- whole-corpus-projection [facts-set]
   (let [pc @projection-cache]
     (if (and pc (identical? (:facts pc) facts-set))
       (:projection pc)
@@ -952,6 +976,12 @@
             (let [proj (q/project (vec facts-set))]
               (reset! projection-cache {:facts facts-set :projection proj})
               proj)))))))
+
+;; `snapshot` is the immutable per-version read snapshot (facts set + rotations).
+(defn- snapshot-projection [snapshot q]
+  (if (mentions-fact-id? q)
+    (whole-corpus-projection (:facts snapshot))
+    (rotations/datalog-projection (:idx snapshot))))
 
 (defn- query-abort-response [t version engine]
   (let [data (ex-data t)
@@ -994,8 +1024,9 @@
               res (case (:op req)
                     :query (if use-idx
                              (idx-run (:idx snapshot) (:query req))
-                             (q/run-projected (snapshot-projection (:facts snapshot)) (:query req)))
-                    :query-page (q/run-page-projected (snapshot-projection (:facts snapshot))
+                             (q/run-projected (snapshot-projection snapshot (:query req))
+                                              (:query req)))
+                    :query-page (q/run-page-projected (snapshot-projection snapshot (:query req))
                                                       (:query req) (:limit req) (:after req))
                     :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
                             (if (seq errs)
@@ -1050,21 +1081,26 @@
 ;; cold — a genuine cache bug the gate's supersede step caught). Group-reconcile drops
 ;; the victim AND adds the new tuple in one correct step, op-agnostically (assert /
 ;; retract / supersede / ref all flow through it). Cost is O(group cardinality) — the
-;; cache's by-[l p] gives the old group, the store gives the new — not O(corpus).
+;; cache's :sp rotation gives the old group, the store gives the new — not O(corpus).
 (defn apply-commit-delta! [pre te p]
   (let [post (current-seq @co)]
     (when (> post pre)
       (swap! cache
         (fn [c]
           (if (= (:version c) pre)
-            (let [old (get-in c [:idx :by-lp] {})
+            (let [old (get-in c [:idx :sp] {})
                   old-g (get old [te p] #{})                ; cache's tuples on (te,p)
                   new-g (lp-live-triples @co te p)          ; store's live tuples on (te,p)
                   to-del (clojure.set/difference old-g new-g)
                   to-add (clojure.set/difference new-g old-g)
                   idx' (as-> (:idx c) ix
                          (reduce idx-del ix to-del)
-                         (reduce idx-add ix to-add))
+                         (reduce idx-add ix to-add)
+                         ;; novelty = what has changed since the last published
+                         ;; segment set; the background compactor drains it. Pure
+                         ;; bookkeeping — it can never change a query answer.
+                         (reduce #(rotations/note-del %1 %2 post) ix to-del)
+                         (reduce #(rotations/note-add %1 %2 post) ix to-add))
                   facts' (as-> (:facts c) cs
                             (reduce (fn [s t] (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-del)
                             (reduce (fn [s t] (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) cs to-add))]
@@ -1087,13 +1123,15 @@
             (let [[idx' facts']
                   (reduce
                    (fn [[ix cs] p]
-                     (let [old-g  (get-in ix [:by-lp [te p]] #{})
+                     (let [old-g  (get-in ix [:sp [te p]] #{})
                            new-g  (lp-live-triples @co te p)
                            to-del (clojure.set/difference old-g new-g)
                            to-add (clojure.set/difference new-g old-g)
                            ix'  (as-> ix i
                                   (reduce idx-del i to-del)
-                                  (reduce idx-add i to-add))
+                                  (reduce idx-add i to-add)
+                                  (reduce #(rotations/note-del %1 %2 post) i to-del)
+                                  (reduce #(rotations/note-add %1 %2 post) i to-add))
                            cs'  (as-> cs s
                                   (reduce (fn [s t] (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) s to-del)
                                   (reduce (fn [s t] (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))) s to-add))]
@@ -4336,15 +4374,15 @@
                                (if (= l te) (conj rows [p r]) rows))
                              [] triples)})
       ;; gate: is the incrementally-maintained warm cache == a fresh whole rebuild?
+      ;; Compares EVERY rotation bucket, not just the triple set: an index that
+      ;; answers today's queries correctly but has drifted in representation (a
+      ;; dangling empty bucket, a stale compound key) is caught here before it can
+      ;; become a wrong answer for a query shape nobody has run yet.
       :warm-check (let [inc (warm!) fresh (client-view-facts @co) fidx (idx-build fresh)]
-                    {:consistent (and (= (:triples (:idx inc)) (:triples fidx))
-                                      (= (:by-l (:idx inc)) (:by-l fidx))
-                                      (= (:by-p (:idx inc)) (:by-p fidx))
-                                      (= (:by-r (:idx inc)) (:by-r fidx))
-                                      (= (:by-pr (:idx inc)) (:by-pr fidx))
-                                      (= (:by-lp (:idx inc)) (:by-lp fidx))
+                    {:consistent (and (every? (fn [k] (= (get (:idx inc) k) (get fidx k)))
+                                              [:tuples :s :p :o :sp :po :os])
                                       (= (:facts inc) (set fresh)))
-                     :inc-triples (count (:triples (:idx inc))) :fresh-triples (count (:triples fidx))
+                     :inc-triples (count (:tuples (:idx inc))) :fresh-triples (count (:tuples fidx))
                      :version (current-seq @co)})
       ;; :boot echoes HOW this process booted ({:mode :snapshot|:fold :ms .. :reason ..})
       ;; — the post-bounce verification surface for snapshot boot (thread 019f2190).
@@ -4358,6 +4396,11 @@
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
                            :generation @reload-generation}
+                 ;; :index — the covering rotation layer (thread 019f9e66): how the
+                 ;; warm index was seeded this boot, the published segment set, and
+                 ;; how much novelty is waiting for the compactor. The ops surface
+                 ;; for "is the read path still O(1) in history?".
+                 :index (rotation-index-status)
                  :rollback_floor fram.rt/rollback-floor}
       ;; :facts — the WHOLE live view as flat [l p r] triples IN FOLD EMISSION ORDER
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
@@ -5241,6 +5284,26 @@
          (.length (java.io.File. (str flat))))   "byte offset past EOF (log truncated below checkpoint)"
       :else nil)))
 
+;; the rotation-segment layer is defined below (it needs fold-fingerprint /
+;; log-identity-of / warm!); boot reaches back for it.
+(declare load-rotations! rotation-stats)
+
+;; Boot the warm covering index from a published segment set instead of folding
+;; the store's live view. Returns true when the segments were consumed. The
+;; version/provenance gate lives in load-rotations!; this only rebinds the cache.
+(defn- warm-from-segments! []
+  (let [co-root @co
+        store-root @(:store co-root)
+        schema-root @schema-view
+        v (current-seq co-root)]
+    (when-let [idx (load-rotations! @flat-log v)]
+      (reset! cache {:facts (into #{} (map (fn [t] (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                                  (:tuples idx))
+                     :idx idx :index nil :version v
+                     :store-root store-root :schema-root schema-root})
+      (swap! rotation-stats assoc :boot :segments)
+      true)))
+
 (defn- boot-flat-canonical! [flat]
   (reset! flat-canonical? true)
   (let [t0   (System/nanoTime)
@@ -5291,7 +5354,12 @@
     ;; mmap-cold + unmaterialized: SKIP the eager warm-cache build (index!) — that
     ;; 5-way String projection is the dominant RSS multiplier this slice defers. The
     ;; first whole-corpus op materializes and warms (ensure-materialized!).
-    (when-not @cold-image (index!))
+    ;; Prefer the published covering rotations (mmap scan of sorted fixed-width
+    ;; rows) over refolding the store's live view; falls through to (index!) on
+    ;; any gate failure.
+    (when-not @cold-image
+      (warm-from-segments!)
+      (index!))
     (let [ms (quot (- (System/nanoTime) t0) 1000000)]
       (reset! last-boot (if ib
                           {:mode :snapshot :ms ms :image (or (:fri_image snap) (:image snap)) :covers (:seq snap)
@@ -5749,6 +5817,115 @@
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn [] (snapshot-if-dirty! "shutdown"))))))
 
+;; ---- rotation segments: persistence + background compaction ---------------
+;; The in-memory rotations are rebuilt from the store on every boot, which is
+;; O(live facts) of fold work. Publishing them as immutable content-addressed
+;; segments turns that into an mmap scan of fixed-width sorted rows.
+;;
+;; SAFETY. Everything here is DERIVED: the flat log stays the sole source of
+;; truth, and deleting the whole segment tree only costs the next boot a refold.
+;; A set is consumed only when ALL of: format matches, every file's sha256 equals
+;; its name, the fold fingerprint matches (fold logic unchanged since publish),
+;; the log identity matches (not a rotated/reset log), and the watermark equals
+;; the booted version EXACTLY. The index is a pure function of the store at a
+;; version, so watermark equality is the same argument the checkpoint image
+;; itself rests on. Any disagreement falls back to the fold — slower boot, never
+;; wrong state.
+;;
+;; The compactor holds NO lock across a write. It snapshots the immutable index
+;; value, writes segments outside dlock, and publishes by atomic rename.
+(def rotation-set (atom nil))          ; the currently-open segment set (or nil)
+(def rotation-stats (atom {:compactions 0 :last-ms nil :last-watermark nil
+                           :boot :fold :last-error nil}))
+(def rotation-compact-interval-ms
+  (max 1000 (or (some-> (System/getenv "FRAM_ROTATION_COMPACT_MS") parse-long) 300000)))  ; 5 min
+
+(defn- rotation-provenance [flat]
+  ;; Under log-split routing the coordination log's identity alone does not pin
+  ;; the corpus, so the telemetry log's identity joins the provenance.
+  (cond-> {:fold-fingerprint (fold-fingerprint) :log-identity (log-identity-of flat)}
+    @telemetry-log (assoc :telemetry-identity (log-identity-of @telemetry-log))))
+
+(defn compact-rotations!
+  "Drain the in-memory novelty into a fresh immutable covering segment set and
+   publish it. Returns the manifest, or nil when there is nothing to publish."
+  [why]
+  (let [flat @flat-log]
+    (when flat
+      (let [t0 (System/nanoTime)
+            ;; ONE consistent read of the immutable cache value: version and index
+            ;; come from the same snapshot, so the watermark can never overstate.
+            c (warm!)
+            idx (:idx c)
+            version (:version c)
+            prov (rotation-provenance flat)]
+        (if-not (:fold-fingerprint prov)
+          nil                                  ; unstampable -> never publish
+          (let [root (rotations/index-root flat)
+                manifest (rotations/write-set!
+                          root (:tuples idx)
+                          (merge prov {:watermark version
+                                       :byte-offset (.length (java.io.File. (str flat)))
+                                       :published-at (str (java.time.Instant/now))
+                                       :why why}))
+                ms (quot (- (System/nanoTime) t0) 1000000)]
+            (rotations/gc-segments! root)      ; retire the superseded generation
+            (swap! cache (fn [c2] (if (= (:version c2) version)
+                                    (assoc c2 :idx (rotations/drain-novelty (:idx c2)))
+                                    c2)))
+            (swap! rotation-stats #(-> % (update :compactions inc)
+                                       (assoc :last-ms ms :last-watermark version
+                                              :last-error nil)))
+            (println (str "[fram] rotations (" why "): watermark " version ", "
+                          (count (:tuples idx)) " triples -> " root " in " ms " ms"))
+            manifest))))))
+
+(defn- compact-rotations-quietly! [why]
+  (try (compact-rotations! why)
+       (catch Throwable t
+         (swap! rotation-stats assoc :last-error (str why ": " (.getMessage t)))
+         (binding [*out* *err*]
+           (println (str "[fram] rotations (" why ") FAILED: " (.getMessage t))))
+         nil)))
+
+(defn load-rotations!
+  "Boot path: build the warm index from a published segment set instead of
+   folding the store, IFF the set verifies AND its watermark equals `version`.
+   Returns the index, or nil to tell the caller to fold."
+  [flat version]
+  (try
+    (let [root (rotations/index-root flat)
+          opened (rotations/open-set root (rotation-provenance flat))]
+      (when opened
+        (if (= (long version) (long (get-in opened [:manifest :watermark] -1)))
+          (let [idx (rotations/build (rotations/segment-triples opened))]
+            (reset! rotation-set opened)
+            idx)
+          (do (rotations/close-set! opened) nil))))
+    (catch Throwable _ nil)))
+
+(defn rotation-index-status []
+  (merge @rotation-stats
+         {:root (some-> @flat-log rotations/index-root)
+          :novelty (count (:novelty (:idx @cache)))
+          :set (rotations/set-summary @rotation-set)}))
+
+(defn start-rotation-compactor! []
+  ;; Background, daemon thread, never on the commit path. Unlike the checkpoint
+  ;; writer this runs under log-split routing too: a rotation set is version-
+  ;; stamped and provenance-gated, so it is safe wherever the fold is.
+  (when @flat-log
+    (doto (Thread. (fn []
+                     (compact-rotations-quietly! "post-boot")
+                     (loop []
+                       (Thread/sleep (long rotation-compact-interval-ms))
+                       ;; only republish when commits actually moved past the set
+                       (when (not= (long (current-seq @co))
+                                   (long (or (:last-watermark @rotation-stats) -1)))
+                         (compact-rotations-quietly! "interval"))
+                       (recur))))
+      (.setName "fram-rotation-compactor") (.setDaemon true) (.start))))
+
 (defn serve-flat-daemon [port flat]
   ;; Boot owns the corpus EXCLUSIVELY across intent healing, torn-tail repair,
   ;; and the fold. This is stronger than steady-state shared append admission:
@@ -5775,9 +5952,11 @@
       (boot-flat! flat)
          (finally (fram.rt/close-rewrite-lock! gate))))
   (start-snapshot-writer!)
+  (start-rotation-compactor!)
   (println (str "reified coordinator (drop-in over flat log): "
                 (count (c/current-facts (:store @co))) " live facts, canonical=" flat
-                (when @snapshot-boot-enabled? " [snapshot-boot ON]")))
+                (when @snapshot-boot-enabled? " [snapshot-boot ON]")
+                (str " [index: " (name (:boot @rotation-stats)) "]")))
   (serve port))
 
 ;; ---- adversarial socket test (mirrors coord.clj's run-test) ----------------
