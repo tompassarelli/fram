@@ -25,7 +25,7 @@ one-hop tools we already have — or not.
    It's a cross-cutting *analysis* projection, not a compile target: it projects
    `.bjs` / `.bclj` / `.bnix` alike, ignoring each file's `#lang`.
 2. **`bin/emit-corpus`** runs that over a source tree → `build/<name>.facts`.
-3. **`src/codegraph.clj`** folds the triples into a Fram store, derives the
+3. **`src/codegraph.bclj`** folds the triples into a Fram store, derives the
    **namespace-correct** function call graph (a call binds the defn in its own
    module — the scope a bare-symbol match ignores), and runs the benchmarks.
 
@@ -47,7 +47,7 @@ repo (the `~/code/<name>` layout the commands below assume) and have
 
 ```sh
 bin/emit-corpus  ~/code/gjoa/src ~/code/gjoa/tools ~/code/gjoa/tests  build/gjoa.facts
-bb -cp ~/code/fram/out:src  src/codegraph.clj  build/gjoa.facts
+bb -cp ~/code/fram/out:src:~/code/fram  -m codegraph  build/gjoa.facts
 ```
 
 ## What it proves (and doesn't)

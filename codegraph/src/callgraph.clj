@@ -8,7 +8,7 @@
 ;; unique global; else ambiguous/external -> dropped), so same-named functions
 ;; across modules never collide — the failure mode of bare-symbol text matching.
 ;;
-;; This is the CNF-projection call-graph core, used by codegraph.clj's gjoa BENCHMARK.
+;; This is the CNF-projection call-graph core, used by codegraph.bclj's gjoa BENCHMARK.
 ;; LIMITATION: the CNF projection (beagle-facts) does not emit require/:as info, so a
 ;; QUALIFIED cross-module call (a/f, fully-qualified m/f) cannot be resolved here and is
 ;; dropped (under-counting cross-module blast). The PRODUCTION call graph (beagle-callgraph

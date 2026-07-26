@@ -19,4 +19,14 @@ for m in types store schema datalog kernel fold import export query tools author
     "$SRC/fram/$m.bclj" "$OUT/fram/$m.clj" >/dev/null
   echo "  built fram/$m"
 done
+
+# codegraph — the code-as-facts analysis driver. Lives outside src/fram (it is a
+# TENANT of the engine, renting only fram.store + fram.datalog; see
+# tests/codegraph_seam_test.clj) and emits to out/codegraph.clj, so
+# `bb -cp out:codegraph/src:. -m codegraph <corpus.facts>` runs it. Its upstream
+# is the FACT GRAPH (`;; @upstream:graph`): the .bclj is a regenerated view, so
+# edit it with the graph-edit verbs, never as text — then rerun this script.
+BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
+  "$HERE/codegraph/src/codegraph.bclj" "$OUT/codegraph.clj" >/dev/null
+echo "  built codegraph"
 echo "fram built -> $OUT"

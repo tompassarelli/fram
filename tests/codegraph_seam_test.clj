@@ -24,7 +24,10 @@
     (->> (file-seq (clojure.java.io/file codegraph-src))
          (filter #(.isFile %))
          (map #(.getPath %))
-         (filter #(str/ends-with? % ".clj"))
+         ;; .bclj too: the analysis driver is now a graph-authored Beagle module
+         ;; (codegraph.bclj), and the seam it rents must stay guarded across that
+         ;; migration — a .clj-only glob would have silently stopped watching it.
+         (filter #(or (str/ends-with? % ".clj") (str/ends-with? % ".bclj")))
          sort)))
 
 (when (empty? src-files)
