@@ -25,6 +25,7 @@
 1	tests/package_graph_edit_runtime_smoke.sh
 3	tests/show_reporter_join_test.clj
 11	tests/vocab_ratchet_test.sh
+50	tests/world_claims_addendum_demo.clj
 9	tests/world_kernel_test.clj
 1	tests/world_persistence_test.clj
 2	tests/world_vertical_slice_test.clj
