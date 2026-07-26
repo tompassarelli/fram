@@ -254,7 +254,7 @@
       (render-record {:kind :world/candidate :world world-name :expected-head expected-head :nonce nonce}))
     (throw (ex-info "fram.world: candidate nonce must be exactly 32 lowercase hex" {:reject :world-nonce-inadmissible}))))
 
-(defn fork-claim [world-name :- String version :- String] :- Any
+(defn fork-head [world-name :- String version :- String] :- Any
   {:kind :world/head :world world-name :version version})
 
 (defn derive-head [claims :- Any world-name :- Any] :- Any

@@ -12,12 +12,12 @@
 ;; implement fram.world through the mcp__fram graph-edit verbs (the .bclj carries
 ;; the @upstream:graph sentinel — a text edit would desync the graph).
 ;;
-;; WHAT A WORLD IS. A world is a versioned VIEW over the claim graph, never a
+;; WHAT A WORLD IS. A world is a versioned VIEW over the fact graph, never a
 ;; copy. A Version is IMMUTABLE and content-addressed as (immutable base
 ;; VersionId + canonical sparse overlay); an overlay entry is PUT(mode, BlobId),
-;; DELETE, or INHERIT. Fork therefore appends ONE head claim pointing at an
+;; DELETE, or INHERIT. Fork therefore appends ONE head fact pointing at an
 ;; existing VersionId — O(1), with no blob and no manifest copy. Canonical-ness
-;; is itself a claims layer, so head succession is DERIVED from the version layer
+;; is itself a facts layer, so head succession is DERIVED from the version layer
 ;; rather than stored.
 ;;
 ;; NORMATIVE SURFACE this suite pins (all in fram.world; every durable id is a
@@ -45,7 +45,7 @@
 ;;   (compose versions base-version-id selections) -> an ORDINARY Version record
 ;;   (candidate-id world-name expected-head nonce) -> 64-hex CandidateId
 ;;   (nonce-hex? s)                      -> true only for exactly 32 lowercase hex
-;;   (fork-claim world-name version-id)  -> the ONE head claim a fork appends
+;;   (fork-head world-name version-id)  -> the ONE head fact a fork appends
 ;;   (lock-record version-id build-spec) (world-lock-id version-id build-spec)
 ;;   (derive-head claims world-name)     -> derived head VersionId (nil when unknown)
 ;;
@@ -512,46 +512,46 @@
       {:v v :r r :versions {v r}})))
 
 (bar "fork: appends exactly ONE head claim record"
-     (map? (k "fork-claim" "B" (:v @small-base))))
+     (map? (k "fork-head" "B" (:v @small-base))))
 (bar "fork: the claim carries the EXACT base VersionId (a fork is a reference)"
      (let [v (:v @small-base)]
-       (str/includes? (k "render-record" (k "fork-claim" "B" v)) v)))
-;; the STRUCTURAL O(1) proof: fork-claim is handed the name and the VersionId and
+       (str/includes? (k "render-record" (k "fork-head" "B" v)) v)))
+;; the STRUCTURAL O(1) proof: fork-head is handed the name and the VersionId and
 ;; nothing else, so it has no blob store, no versions map and no manifest to copy.
 (bar "fork: takes only (world-name version-id) — it CANNOT copy what it cannot see"
-     (let [al (:arglists (meta (kv "fork-claim")))]
+     (let [al (:arglists (meta (kv "fork-head")))]
        (and (seq al)
             (every? #(= 2 (count %)) al)
             ;; plural/collection words only: a param legitimately named
             ;; `version-id` is the POINT of the fork, `versions` would be the leak
             (not-any? #(re-find #"(?i)store|versions|blobs|bytes|manifest|slots|overlay" %)
-                      (arg-names (kv "fork-claim"))))))
+                      (arg-names (kv "fork-head"))))))
 (bar "fork: the claim is BYTE-CONSTANT in base size (512-slot base == 1-slot base)"
-     (= (blen (k "render-record" (k "fork-claim" "B" (:v @small-base))))
-        (blen (k "render-record" (k "fork-claim" "B" (:v @big-base))))))
+     (= (blen (k "render-record" (k "fork-head" "B" (:v @small-base))))
+        (blen (k "render-record" (k "fork-head" "B" (:v @big-base))))))
 (bar "fork: the claim is under 512 B in absolute terms regardless of base size"
-     (< (blen (k "render-record" (k "fork-claim" "B" (:v @big-base)))) 512))
+     (< (blen (k "render-record" (k "fork-head" "B" (:v @big-base)))) 512))
 (bar "fork: NO BLOB COPY — the claim's render contains no BlobId from the base"
-     (not (str/includes? (k "render-record" (k "fork-claim" "B" (:v @big-base))) @bid-a)))
+     (not (str/includes? (k "render-record" (k "fork-head" "B" (:v @big-base))) @bid-a)))
 (bar "fork: NO MANIFEST COPY — the claim's render contains no base slot path"
-     (let [txt (k "render-record" (k "fork-claim" "B" (:v @big-base)))]
+     (let [txt (k "render-record" (k "fork-head" "B" (:v @big-base)))]
        (and (not (str/includes? txt "src/pkg/f0.bclj"))
             (not (str/includes? txt "src/pkg/f511.bclj")))))
 (bar "fork: the claim carries NO overlay, manifest, blobs or slots key at all"
-     (let [c (k "fork-claim" "B" (:v @big-base))]
+     (let [c (k "fork-head" "B" (:v @big-base))]
        (and (not (contains? c :overlay)) (not (contains? c :manifest))
             (not (contains? c :blobs)) (not (contains? c :slots)))))
 (bar "fork: MINTS NO NEW VERSION — a head claim is not shaped like a Version record"
-     (let [c (k "fork-claim" "B" (:v @small-base))
+     (let [c (k "fork-head" "B" (:v @small-base))
            v (k "version-record" nil [(k "put-op" slot-a mode @bid-a)])]
        (not= (set (keys c)) (set (keys v)))))
 (bar "fork: the forked name's DERIVED head IS the base VersionId (two names, one Version)"
      (let [v (:v @big-base)]
-       (= v (k "derive-head" [(k "fork-claim" "B" v)] "B"))))
+       (= v (k "derive-head" [(k "fork-head" "B" v)] "B"))))
 (bar "fork: forking leaves the versions map untouched; both names read one manifest"
      (let [{:keys [v versions]} @big-base
            before versions]
-       (k "fork-claim" "B" v)
+       (k "fork-head" "B" v)
        (and (= before versions)
             (= 512 (count (k "manifest" versions v))))))
 (bar "fork: an unknown world's derived head is nil (heads are DERIVED, never stored)"

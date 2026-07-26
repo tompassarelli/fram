@@ -200,7 +200,7 @@
 (defn ^String candidate-id [^String world-name expected-head ^String nonce]
   (if (nonce-hex? nonce) (hash-text candidate-tag (render-record {:kind :world/candidate :world world-name :expected-head expected-head :nonce nonce})) (throw (ex-info "fram.world: candidate nonce must be exactly 32 lowercase hex" {:reject :world-nonce-inadmissible}))))
 
-(defn fork-claim [^String world-name ^String version]
+(defn fork-head [^String world-name ^String version]
   {:kind :world/head :world world-name :version version})
 
 (defn derive-head [claims world-name]
