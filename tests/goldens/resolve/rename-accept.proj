@@ -1,5 +1,5 @@
 ===== resolved-mod-a.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/mod-a.bjs
+@file /tmp/resolve-golden-run/corpus/mod-a.bjs
 [11 "kind" "list"]
 [11 "f0" 14]
 [11 "child" 14]
@@ -176,7 +176,7 @@
 [11 "f2" 40]
 [11 "f3" 157]
 ===== resolved-mod-b.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/mod-b.bjs
+@file /tmp/resolve-golden-run/corpus/mod-b.bjs
 [254 "kind" "list"]
 [254 "f0" 256]
 [254 "child" 256]

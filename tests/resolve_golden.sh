@@ -35,8 +35,12 @@ ROUNDTRIP="${FRAM_ROUNDTRIP:-$BEAGLE/beagle-lib/private/facts-roundtrip.rkt}"
 RACKET="${FRAM_RACKET:-$(direnv exec "$BEAGLE" which racket 2>/dev/null)}"
 [ -x "$RACKET" ] || { echo "resolve_golden: no pinned racket (set FRAM_RACKET)" >&2; exit 2; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/resolve-golden-XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+# FIXED work dir, deliberately not mktemp: resolve echoes the absolute path of
+# every file it projects to stderr, so a randomized dir would differ run-to-run
+# and force a mask. A stable path keeps the comparison a straight cmp with ZERO
+# masks — the run-to-run difference is removed at the source, not filtered out.
+WORK="${TMPDIR:-/tmp}/resolve-golden-run"
+rm -rf "${WORK:?}"; mkdir -p "$WORK"
 
 # ---------------------------------------------------------------- corpora ---
 # fram corpus: the 14 engine modules already authored in Beagle.
@@ -49,14 +53,23 @@ emit () { # emit <src> <dest.edn>
     echo "resolve_golden: emit-edn failed for $1" >&2; cat "$2.err" >&2; exit 2; }
 }
 
+# The corpus is COPIED to a stable path before emitting. resolve keys every
+# callgraph node by its source's ABSOLUTE path, so emitting straight out of
+# $HERE would bake this checkout's directory into the golden and make it
+# unverifiable from any other clone or worktree. Copying first makes the golden
+# location-independent without masking anything.
+CORPUS="$WORK/corpus"; mkdir -p "$CORPUS"
+
 FRAM_EDN=""
 for m in $FRAM_MODULES; do
-  emit "$HERE/src/fram/$m.bclj" "$WORK/fram-$m.edn"
+  cp "$HERE/src/fram/$m.bclj" "$CORPUS/$m.bclj"
+  emit "$CORPUS/$m.bclj" "$WORK/fram-$m.edn"
   FRAM_EDN="$FRAM_EDN $WORK/fram-$m.edn"
 done
 BJS_EDN=""
 for b in $BJS; do
-  emit "$HERE/codegraph/test/$b.bjs" "$WORK/bjs-$b.edn"
+  cp "$HERE/codegraph/test/$b.bjs" "$CORPUS/$b.bjs"
+  emit "$CORPUS/$b.bjs" "$WORK/bjs-$b.edn"
   BJS_EDN="$BJS_EDN $WORK/bjs-$b.edn"
 done
 

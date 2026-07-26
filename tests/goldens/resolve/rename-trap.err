@@ -1,4 +1,4 @@
 ================ Turtle #5 — O(1) shadow-correct rename ================
 edit: rename def `red` -> `rouge` in "trap"
 FACTS EDITED: 1  (just the definition's name; references follow refers_to)
-projected -> /tmp/resolve-golden-jwgLE5/rename-trap.d/resolved-trap.bjs.edn   <- /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/trap.bjs
+projected -> /tmp/resolve-golden-run/rename-trap.d/resolved-trap.bjs.edn   <- /tmp/resolve-golden-run/corpus/trap.bjs

@@ -1,5 +1,5 @@
 ===== resolved-forshadow.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/forshadow.bjs
+@file /tmp/resolve-golden-run/corpus/forshadow.bjs
 [1728 "kind" "list"]
 [1728 "f0" 1730]
 [1728 "child" 1730]
@@ -267,7 +267,7 @@
 [1728 "f2" 1749]
 [1728 "f3" 1852]
 ===== resolved-mapshadow.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/mapshadow.bjs
+@file /tmp/resolve-golden-run/corpus/mapshadow.bjs
 [2059 "kind" "list"]
 [2059 "f0" 2061]
 [2059 "child" 2061]
@@ -567,7 +567,7 @@
 [2059 "f2" 2080]
 [2059 "f3" 2183]
 ===== resolved-mod-a.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/mod-a.bjs
+@file /tmp/resolve-golden-run/corpus/mod-a.bjs
 [618 "kind" "list"]
 [618 "f0" 620]
 [618 "child" 620]
@@ -744,7 +744,7 @@
 [618 "f2" 639]
 [618 "f3" 742]
 ===== resolved-mod-b.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/mod-b.bjs
+@file /tmp/resolve-golden-run/corpus/mod-b.bjs
 [839 "kind" "list"]
 [839 "f0" 841]
 [839 "child" 841]
@@ -921,7 +921,7 @@
 [839 "f2" 860]
 [839 "f3" 963]
 ===== resolved-re-a.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/re-a.bjs
+@file /tmp/resolve-golden-run/corpus/re-a.bjs
 [3531 "kind" "list"]
 [3531 "f0" 3533]
 [3531 "child" 3533]
@@ -1061,7 +1061,7 @@
 [3531 "f2" 3552]
 [3531 "f3" 3581]
 ===== resolved-re-b.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/re-b.bjs
+@file /tmp/resolve-golden-run/corpus/re-b.bjs
 [3712 "kind" "list"]
 [3712 "f0" 3714]
 [3712 "child" 3714]
@@ -1190,7 +1190,7 @@
 [3712 "f2" 3733]
 [3712 "f3" 3740]
 ===== resolved-re-c.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/re-c.bjs
+@file /tmp/resolve-golden-run/corpus/re-c.bjs
 [3879 "kind" "list"]
 [3879 "f0" 3881]
 [3879 "child" 3881]
@@ -1371,7 +1371,7 @@
 [3879 "f2" 3900]
 [3879 "f3" 3907]
 ===== resolved-shadow.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/shadow.bjs
+@file /tmp/resolve-golden-run/corpus/shadow.bjs
 [1398 "kind" "list"]
 [1398 "f0" 1400]
 [1398 "child" 1400]
@@ -1639,7 +1639,7 @@
 [1398 "f2" 1419]
 [1398 "f3" 1522]
 ===== resolved-torture.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/torture.bjs
+@file /tmp/resolve-golden-run/corpus/torture.bjs
 [2427 "kind" "list"]
 [2427 "f0" 2429]
 [2427 "child" 2429]
@@ -2288,7 +2288,7 @@
 [2427 "f9" 3052]
 [2427 "f10" 3175]
 ===== resolved-trap.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/trap.bjs
+@file /tmp/resolve-golden-run/corpus/trap.bjs
 [11 "kind" "list"]
 [11 "f0" 14]
 [11 "child" 14]
@@ -2725,7 +2725,7 @@
 [11 "f5" 352]
 [11 "f6" 409]
 ===== resolved-trap-collision.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/trap-collision.bjs
+@file /tmp/resolve-golden-run/corpus/trap-collision.bjs
 [1059 "kind" "list"]
 [1059 "f0" 1061]
 [1059 "child" 1061]
@@ -3001,7 +3001,7 @@
 [1059 "f3" 1183]
 [1059 "f4" 1118]
 ===== resolved-types.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/types.bjs
+@file /tmp/resolve-golden-run/corpus/types.bjs
 [3235 "kind" "list"]
 [3235 "f0" 3237]
 [3235 "child" 3237]

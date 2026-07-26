@@ -1,5 +1,5 @@
 ===== resolved-trap.bjs.edn
-@file /tmp/fram-lane-lane-ms2aeg8w-4bd3d5f4-7b9d-4076-bf14-33204792623b/codegraph/test/trap.bjs
+@file /tmp/resolve-golden-run/corpus/trap.bjs
 [11 "kind" "list"]
 [11 "f0" 14]
 [11 "child" 14]
