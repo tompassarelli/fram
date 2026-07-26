@@ -1,0 +1,50 @@
+#lang beagle/clj
+
+;; @upstream:graph — the code lives in the Fram fact graph; this text is
+;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
+;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
+;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
+;; text; that is a deliberate workflow change. SEEDED 2026-07-26 (engine
+;; migration: the hand-Clojure roundtrip_fram.clj becomes a graph-authored
+;; Beagle module) — seed only: the ns/require header, no substantive forms.
+;; ============================================================================
+;; roundtrip_fram — load reader-level facts into a real Fram store, then
+;; re-extract them FROM the store. Proves the program persists through the
+;; engine (not just an in-memory map): source -> facts -> Fram -> facts.
+;;
+;;   racket .../facts-roundtrip.rkt --emit-edn FILE > A.edn
+;;   bb -cp ~/code/fram/out -m roundtrip-fram A.edn > B.edn
+;;   racket .../facts-roundtrip.rkt --verify B.edn FILE
+;; ============================================================================
+(ns roundtrip-fram)
+
+(require fram.store :as c)
+
+(require clojure.edn :as edn)
+
+(require clojure.string :as str)
+
+(defn ent! [ctx :- Any cache :- (Atom (Map Any Any)) lid :- Any] :- Int
+  (let [hit (get (deref cache) lid)]
+    (if (nil? hit)
+      (let [e (c/entity! ctx)] (swap! cache assoc lid e) e)
+      (int hit))))
+
+(defn load-line! [ctx :- Any tx :- Int cache :- (Atom (Map Any Any)) line :- String] :- Nil
+  (let [trip (edn/read-string line) s (nth trip 0) p (nth trip 1) o (nth trip 2) L (ent! ctx cache s) P (c/value! ctx p) R (if (integer? o) (ent! ctx cache o) (c/value! ctx o))]
+    (c/fact! ctx L P R tx)
+    nil))
+
+(defn dump-fact! [ctx :- Any cid :- Int] :- Nil
+  (let [cl (c/fact-of ctx cid) l (get cl :l) p (get cl :p) r (get cl :r) ps (c/literal ctx p)]
+    (if (c/value-object? ctx r)
+      (println (str "[" l " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]"))
+      (println (str "[" l " " (pr-str ps) " " r "]")))))
+
+(defn -main [& args] :- Nil
+  (let [edn-path (str (nth (vec args) 0)) ctx (c/new-store) tx (c/begin-tx! ctx "code") cache :- (Atom (Map Any Any)) (atom {}) lines (str/split-lines (slurp edn-path))]
+    (doseq [line lines]
+      (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil))
+    (binding [*out* *err*]
+      (println "loaded" (count (c/current-facts ctx)) "facts into a Fram store"))
+    (doseq [cid (c/current-facts ctx)] (dump-fact! ctx cid))))
