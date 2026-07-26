@@ -22,7 +22,8 @@
   (:require [clojure.edn :as edn] [clojure.string :as str] [fram.store :as c]
             [fram.datalog :as d] [cheshire.core :as json]   ; datalog+json: the `callgraph` mode
             [resolve-core :as rc]    ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
-            [resolve-read :as rr]))  ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
+            [resolve-read :as rr]    ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
+            [resolve-binds :as rb]))  ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -212,81 +213,23 @@
 (def LET-FORMS   rc/LET-FORMS)
 (def FOR-FORMS   rc/FOR-FORMS)             ; binding vector carries :when/:while/:let modifiers
 (def MATCH-FORMS rc/MATCH-FORMS)                    ; (match expr [pattern body] ...) — patterns bind + ref ctors
-(defn brackets? [e] (= "#%brackets" (head-sym e)))
-(defn map-node? [e] (= "#%map" (head-sym e)))
-(defn collect-bind-syms [node]                 ; symbol leaves bound by a (destructuring) pattern
-  (cond
-    (sym-val node) (let [v (sym-val node)] (if (#{"&" "_"} v) [] [node]))
-    (brackets? node) (mapcat collect-bind-syms (rest (ordered-children node)))      ; [a b & rest]
-    (map-node? node)                                                                ; {:keys [a]} / {x :k} / :as
-    (loop [ks (rest (ordered-children node)) acc []]
-      (if (empty? ks) acc
-        (let [k (first ks) kv (sym-val k) v (second ks)]
-          (cond
-            (#{":keys" ":strs" ":syms"} kv) (recur (drop 2 ks) (into acc (when (and v (brackets? v))
-                                                                           (filter sym-val (rest (ordered-children v))))))
-            (= ":as" kv)  (recur (drop 2 ks) (into acc (collect-bind-syms v)))
-            (= ":or" kv)  (recur (drop 2 ks) acc)                                   ; defaults; keys bound elsewhere
-            (sym-val k)   (recur (drop 2 ks) (conj acc k))                          ; {sym :keyword} -> sym binds
-            :else         (recur (drop 2 ks) (into acc (collect-bind-syms k)))))))  ; nested destructuring key
-    ;; typed PAREN binding `(name :- T)` / `(name : T)` — a legal param/field surface.
-    ;; The bound name(s) are the symbols BEFORE the type marker; without this they fall
-    ;; through to [] and the body use of `name` wrongly resolves to a same-named outer
-    ;; def (capture). Stop at `:-` OR `:` so the type (e.g. Int) is NOT mis-collected.
-    (= "list" (kind-of node))
-    (mapcat collect-bind-syms (take-while #(not (TYPE-COLON (sym-val %))) (ordered-children node)))
-    :else []))
-(defn collect-or-vals [node]                   ; :or DEFAULT value-exprs inside a destructuring pattern
-  (cond                                        ; (live refs — evaluated when the key is absent)
-    (map-node? node)
-    (loop [ks (rest (ordered-children node)) acc []]
-      (if (empty? ks) acc
-        (let [k (first ks) kv (sym-val k) v (second ks)]
-          (cond
-            (= ":or" kv) (recur (drop 2 ks) (into acc (when (and v (map-node? v))   ; {sym default ...}
-                                                        (keep-indexed (fn [i c] (when (odd? i) c))
-                                                                      (rest (ordered-children v))))))
-            (#{":keys" ":strs" ":syms" ":as"} kv) (recur (drop 2 ks) acc)
-            (sym-val k)  (recur (drop 2 ks) acc)
-            :else        (recur (drop 2 ks) (into acc (collect-or-vals k)))))))      ; nested destructuring
-    (brackets? node) (mapcat collect-or-vals (rest (ordered-children node)))
-    :else []))
-(defn param-binds [bracket]                    ; param names from [x :- T y], skipping types
-  (loop [ks (rest (ordered-children bracket)) binds [] skip false]
-    (if (empty? ks) binds
-      (let [k (first ks) v (sym-val k)]
-        (cond skip            (recur (rest ks) binds false)
-              (TYPE-COLON v)  (recur (rest ks) binds true)
-              :else           (recur (rest ks) (into binds (collect-bind-syms k)) false))))))
+;; M1 Cut C — the binding extractor is now Beagle (src/resolve_binds.bclj):
+;; what a destructuring pattern / param vector / let-or-for binding vector /
+;; match pattern BINDS, and in what order. Wrappers as in Cut B — the ^:dynamic
+;; state stays here and is handed over explicitly.
+(defn brackets?         [e] (rb/brackets? ctx *view* e))
+(defn map-node?         [e] (rb/map-node? ctx *view* e))
+(defn collect-bind-syms [node]    (rb/collect-bind-syms ctx *view* node))  ; symbol leaves a pattern binds
+(defn collect-or-vals   [node]    (rb/collect-or-vals ctx *view* node))    ; :or DEFAULT value-exprs (live refs)
+(defn param-binds       [bracket] (rb/param-binds ctx *view* bracket))     ; param names from [x :- T y]
 ;; let/loop bindings are SEQUENTIAL — binding i's value (and :or defaults) see bindings
-;; 0..i-1. Return ORDERED entries [bind-syms value-node or-default-vals] so walk/capture
-;; can build the frame incrementally (a flat outer-scope walk misses sibling shadowing —
-;; a real capture / mis-resolve bug).
-(defn let-bind-pairs [bracket]                 ; -> [ [syms value-node or-vals] ... ] in source order
-  (loop [ks (rest (ordered-children bracket)) acc []]
-    (if (empty? ks) acc
-      (let [pat (first ks)
-            after (if (TYPE-COLON (sym-val (second ks))) (drop 3 ks) (rest ks))   ; skip a `:- T` annotation
-            val (first after)]
-        (recur (rest after) (conj acc [(collect-bind-syms pat) val (collect-or-vals pat)]))))))
-(defn for-bind-pairs [bracket]                 ; for/doseq, ordered: [:bind syms vnode orvals] | [:expr node]
-  (loop [ks (rest (ordered-children bracket)) acc []]
-    (if (empty? ks) acc
-      (let [k (first ks) kv (sym-val k) v (second ks)]
-        (cond
-          (#{":when" ":while"} kv) (recur (drop 2 ks) (conj acc [:expr v]))        ; modifier expr (sees prior binds)
-          (= ":let" kv)            (recur (drop 2 ks) (into acc (when (and v (brackets? v))
-                                                                  (map (fn [[s vn ov]] [:bind s vn ov])
-                                                                       (let-bind-pairs v)))))
-          (TYPE-COLON (sym-val v)) (recur (drop 4 ks) (conj acc [:bind (collect-bind-syms k) (nth ks 3 nil) (collect-or-vals k)]))  ; [x :- T coll]
-          :else                    (recur (drop 2 ks) (conj acc [:bind (collect-bind-syms k) v (collect-or-vals k)])))))))
-(defn frame-of [bsyms] (into {} (map (fn [b] [(sym-val b) b]) bsyms)))
-(defn match-pat-binds [pat]                     ; symbols a match pattern binds: the NON-head leaves of a
-  (cond                                         ; (Ctor a b) pattern, recursively (the head is a type ref)
-    (sym-val pat) (let [v (sym-val pat)] (if (#{"_"} v) [] [pat]))
-    (= "list" (kind-of pat)) (mapcat match-pat-binds (rest (ordered-children pat)))   ; skip the ctor head
-    (brackets? pat) (mapcat match-pat-binds (rest (ordered-children pat)))            ; [a b] seq pattern
-    :else []))                                                                        ; literals bind nothing
+;; 0..i-1. let-bind-pairs returns ORDERED entries [bind-syms value-node or-default-vals]
+;; so walk/capture can build the frame incrementally (a flat outer-scope walk misses
+;; sibling shadowing — a real capture / mis-resolve bug).
+(defn let-bind-pairs    [bracket] (rb/let-bind-pairs ctx *view* bracket))
+(defn for-bind-pairs    [bracket] (rb/for-bind-pairs ctx *view* bracket))  ; [:bind syms vnode orvals] | [:expr node]
+(defn frame-of          [bsyms]   (rb/frame-of ctx *view* bsyms))
+(defn match-pat-binds   [pat]     (rb/match-pat-binds ctx *view* pat))     ; the NON-head leaves of a (Ctor a b) pattern
 
 ;; --- the lexical walk: resolve each reference to its nearest binding ---------
 ;; resolution counters — DYNAMIC (fresh atoms per `resolve-edn!` call), so a

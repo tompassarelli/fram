@@ -1,0 +1,228 @@
+#lang beagle/clj
+
+;; ============================================================================
+;; resolve-binds — what a binding form BINDS.
+;; ============================================================================
+;; Stage M1 Cut C of the engine core port (north thread
+;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). Given a destructuring pattern, a param
+;; vector, a let/loop/for binding vector or a `match` pattern, answer which
+;; symbol LEAVES it binds — and, for let/for, in what ORDER, because those
+;; bindings are sequential and a flat outer-scope walk would miss sibling
+;; shadowing (a real capture / mis-resolve bug, not a nicety).
+;;
+;; Nothing here writes; it is a pure reading of the tree that resolve-read
+;; navigates. As in Cut B the store and the view arrive as EXPLICIT parameters —
+;; resolve.clj's ^:dynamic vars cannot move namespace (coord_daemon.clj and
+;; tests/coord_*.clj `binding` them by qualified name), so resolve.clj keeps a
+;; one-line wrapper per name and this module stays a function of its arguments.
+;;
+;; Consumed by resolve.clj — so the emitted out/resolve_binds.clj must stay on
+;; the classpath.
+;; ============================================================================
+(ns resolve-binds
+  (:require [fram.types :as t] [fram.store :as c]
+            [resolve-core :as rc] [resolve-read :as rr]))
+
+(define-mode strict)
+
+;; The spelling of a symbol leaf, or nil. Every predicate below asks this first.
+(defn- sv [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (rr/sym-val ctx view e))
+
+;; `:-` / `:` — an inline type annotation, NOT a bound name. Guarded on string so
+;; a nil spelling can never be read as a marker.
+(defn- type-colon? [v :- Any] :- Bool
+  (and (string? v) (contains? rc/TYPE-COLON (str v))))
+
+(defn brackets? [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Bool
+  (= "#%brackets" (rr/head-sym ctx view e)))
+
+(defn map-node? [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Bool
+  (= "#%map" (rr/head-sym ctx view e)))
+
+;; The children of a node past its head — the slot every binding form's payload
+;; lives in.
+(defn- tail [ctx :- (U (Atom t/Store) Nil) e :- Int?] :- (Vec Int)
+  (vec (rest (rr/ordered-children ctx e))))
+
+;; ------------------------------------------------------- bound leaves ------
+
+;; Symbol leaves bound by a (destructuring) pattern.
+(defn collect-bind-syms [ctx :- (U (Atom t/Store) Nil) view :- Any node :- Int?] :- (Vec Int)
+  (if (nil? node)
+    []
+    (let [v (sv ctx view node)]
+      (cond
+        ;; a bare symbol binds itself, except `&` (rest marker) and `_` (discard)
+        (some? v) (if (contains? #{"&" "_"} (str v)) [] [node])
+
+        ;; [a b & rest]
+        (brackets? ctx view node)
+        (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int)
+                  (into acc (collect-bind-syms ctx view k)))
+                []
+                (tail ctx node))
+
+        ;; {:keys [a]} / {x :k} / :as / :or
+        (map-node? ctx view node)
+        (loop [ks  :- (Vec Int) (tail ctx node)
+               acc :- (Vec Int) []]
+          (if (empty? ks)
+            acc
+            (let [k  (first ks)
+                  kv (sv ctx view k)
+                  v2 (nth ks 1 nil)
+                  ks2 (vec (drop 2 ks))]
+              (cond
+                (contains? #{":keys" ":strs" ":syms"} (str kv))
+                (recur ks2 (into acc (if (and (some? v2) (brackets? ctx view v2))
+                                       (filterv (fn [c :- Int] :- Bool (some? (sv ctx view c)))
+                                                (tail ctx v2))
+                                       [])))
+                (= ":as" (str kv)) (recur ks2 (into acc (collect-bind-syms ctx view v2)))
+                ;; defaults; the keys they default are bound elsewhere
+                (= ":or" (str kv)) (recur ks2 acc)
+                ;; {sym :keyword} -> sym binds
+                (some? kv) (recur ks2 (if (nil? k) acc (conj acc k)))
+                ;; nested destructuring in key position
+                :else (recur ks2 (into acc (collect-bind-syms ctx view k)))))))
+
+        ;; typed PAREN binding `(name :- T)` / `(name : T)` — a legal param/field
+        ;; surface. The bound name(s) are the symbols BEFORE the type marker;
+        ;; without this they fall through to [] and the body use of `name`
+        ;; wrongly resolves to a same-named outer def (capture). Stop at `:-` OR
+        ;; `:` so the type (e.g. Int) is NOT mis-collected.
+        (= "list" (rr/kind-of ctx view node))
+        (loop [ks  :- (Vec Int) (rr/ordered-children ctx node)
+               acc :- (Vec Int) []]
+          (if (empty? ks)
+            acc
+            (let [k (first ks)]
+              (if (type-colon? (sv ctx view k))
+                acc
+                (recur (vec (rest ks)) (into acc (collect-bind-syms ctx view k)))))))
+
+        :else []))))
+
+;; :or DEFAULT value-exprs inside a destructuring pattern — live references,
+;; evaluated when the key is absent, so the walk must see them.
+(defn collect-or-vals [ctx :- (U (Atom t/Store) Nil) view :- Any node :- Int?] :- (Vec Int)
+  (if (nil? node)
+    []
+    (cond
+      (map-node? ctx view node)
+      (loop [ks  :- (Vec Int) (tail ctx node)
+             acc :- (Vec Int) []]
+        (if (empty? ks)
+          acc
+          (let [k   (first ks)
+                kv  (sv ctx view k)
+                v2  (nth ks 1 nil)
+                ks2 (vec (drop 2 ks))]
+            (cond
+              ;; {sym default ...} — the odd-indexed children are the defaults
+              (= ":or" (str kv))
+              (recur ks2 (into acc (if (and (some? v2) (map-node? ctx view v2))
+                                     (vec (keep-indexed (fn [i :- Int cc :- Int] :- Int?
+                                                          (if (odd? i) cc nil))
+                                                        (tail ctx v2)))
+                                     [])))
+              (contains? #{":keys" ":strs" ":syms" ":as"} (str kv)) (recur ks2 acc)
+              (some? kv) (recur ks2 acc)
+              :else (recur ks2 (into acc (collect-or-vals ctx view k)))))))
+
+      (brackets? ctx view node)
+      (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int)
+                (into acc (collect-or-vals ctx view k)))
+              []
+              (tail ctx node))
+
+      :else [])))
+
+;; ------------------------------------------------------- binding vectors ---
+
+;; Param names from [x :- T y], skipping the types.
+(defn param-binds [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Int)
+  (loop [ks    :- (Vec Int) (tail ctx bracket)
+         binds :- (Vec Int) []
+         skip  :- Bool false]
+    (if (empty? ks)
+      binds
+      (let [k   (first ks)
+            v   (sv ctx view k)
+            ks2 (vec (rest ks))]
+        (cond
+          skip              (recur ks2 binds false)
+          (type-colon? v)   (recur ks2 binds true)
+          :else             (recur ks2 (into binds (collect-bind-syms ctx view k)) false))))))
+
+;; let/loop bindings are SEQUENTIAL — binding i's value (and :or defaults) see
+;; bindings 0..i-1. Returns ORDERED entries [bind-syms value-node or-default-vals]
+;; so walk/capture can build the frame incrementally.
+(defn let-bind-pairs [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Any)
+  (loop [ks  :- (Vec Int) (tail ctx bracket)
+         acc :- (Vec Any) []]
+    (if (empty? ks)
+      acc
+      (let [pat   (first ks)
+            ;; skip a `:- T` annotation between the pattern and its value
+            after (if (type-colon? (sv ctx view (nth ks 1 nil)))
+                    (vec (drop 3 ks))
+                    (vec (rest ks)))
+            val   (nth after 0 nil)]
+        (recur (vec (rest after))
+               (conj acc [(collect-bind-syms ctx view pat) val (collect-or-vals ctx view pat)]))))))
+
+;; for/doseq, ordered: [:bind syms vnode orvals] | [:expr node].
+(defn for-bind-pairs [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Any)
+  (loop [ks  :- (Vec Int) (tail ctx bracket)
+         acc :- (Vec Any) []]
+    (if (empty? ks)
+      acc
+      (let [k   (first ks)
+            kv  (sv ctx view k)
+            v   (nth ks 1 nil)
+            ks2 (vec (drop 2 ks))]
+        (cond
+          ;; a modifier expr — it sees the bindings made before it
+          (contains? #{":when" ":while"} (str kv)) (recur ks2 (conj acc [:expr v]))
+
+          (= ":let" (str kv))
+          (recur ks2 (into acc (if (and (some? v) (brackets? ctx view v))
+                                 (mapv (fn [p :- Any] :- Any
+                                         [:bind (nth p 0 nil) (nth p 1 nil) (nth p 2 nil)])
+                                       (let-bind-pairs ctx view v))
+                                 [])))
+
+          ;; [x :- T coll]
+          (type-colon? (sv ctx view v))
+          (recur (vec (drop 4 ks))
+                 (conj acc [:bind (collect-bind-syms ctx view k) (nth ks 3 nil)
+                            (collect-or-vals ctx view k)]))
+
+          :else
+          (recur ks2 (conj acc [:bind (collect-bind-syms ctx view k) v
+                                (collect-or-vals ctx view k)])))))))
+
+;; spelling -> binding node, for one scope level.
+(defn frame-of [ctx :- (U (Atom t/Store) Nil) view :- Any bsyms :- (Vec Int)] :- (Map Any Int)
+  (reduce (fn [acc :- (Map Any Int) b :- Int] :- (Map Any Int)
+            (assoc acc (sv ctx view b) b))
+          {}
+          bsyms))
+
+;; Symbols a `match` pattern binds: the NON-head leaves of a (Ctor a b) pattern,
+;; recursively — the head is a TYPE reference, not a binding. Literals bind nothing.
+(defn match-pat-binds [ctx :- (U (Atom t/Store) Nil) view :- Any pat :- Int?] :- (Vec Int)
+  (if (nil? pat)
+    []
+    (let [v (sv ctx view pat)]
+      (cond
+        (some? v) (if (= "_" (str v)) [] [pat])
+        ;; skip the ctor head
+        (or (= "list" (rr/kind-of ctx view pat)) (brackets? ctx view pat))
+        (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int)
+                  (into acc (match-pat-binds ctx view k)))
+                []
+                (tail ctx pat))
+        :else []))))

@@ -33,7 +33,10 @@ done
 #   resolve_read M1 Cut B: the view-relative read layer (election, node reads,
 #                ordered-tree navigation) that resolve.clj now wraps as rr/*.
 #                The ^:dynamic state stays in resolve.clj and is passed in.
-for m in pull resolve_core resolve_read; do
+#   resolve_binds M1 Cut C: the binding extractor — what a destructuring
+#                pattern, param vector, let/for binding vector or match pattern
+#                binds, and in what order (rb/*).
+for m in pull resolve_core resolve_read resolve_binds; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"
