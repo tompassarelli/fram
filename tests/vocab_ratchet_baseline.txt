@@ -23,7 +23,9 @@
 1	tests/apparatus_r1/lib/r1/harness.clj
 1	tests/authority_primitives_test.clj
 108	tests/claims_spec_test.clj
+1	tests/goldens/resolve/callgraph-fram.out
 1	tests/package_graph_edit_runtime_smoke.sh
+1	tests/resolve_golden.sh
 3	tests/show_reporter_join_test.clj
 12	tests/vocab_ratchet_test.sh
 50	tests/world_claims_addendum_demo.clj
