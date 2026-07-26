@@ -26,9 +26,10 @@ done
 # `bb -cp out:codegraph/src:. -m codegraph <corpus.facts>` runs it. Its upstream
 # is the FACT GRAPH (`;; @upstream:graph`): the .bclj is a regenerated view, so
 # edit it with the graph-edit verbs, never as text — then rerun this script.
-# The analysis modules alongside it (roundtrip_fram, ...) are graph-upstream too;
+# The analysis modules alongside it (roundtrip_fram, supersession_check, ...) are
+# graph-upstream too;
 # each emits to out/<module>.clj so `bb -cp out -m <ns> ...` runs it.
-for m in codegraph roundtrip_fram; do
+for m in codegraph roundtrip_fram supersession_check; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$HERE/codegraph/src/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"
