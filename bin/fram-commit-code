@@ -13,8 +13,8 @@
 ;; and the module name. We:
 ;;   1. emit-edn the NEW .bclj, re-key file-local ids to @<mod>#n (the SAME mapping
 ;;      bin/fram-ingest-code uses) -> POST fact-triple set.
-;;   2. read the module's CURRENT @<mod>#* AST fact-triples off the coordinator
-;;      (via :query over the warm store) -> PRE fact-triple set.
+;;   2. render the module's CURRENT AST off the coordinator, then run it through
+;;      the same render -> emit round-trip used by ingest -> PRE fact-triple set.
 ;;   3. delta = (adds = POST\PRE) ++ (removes = PRE\POST).
 ;;   4. commit through the coordinator at base version, retrying on :conflict
 ;;      (mirrors fram_mcp.clj route-write): retract removes FIRST (supersede old
@@ -76,6 +76,16 @@
 
 (defn- nodename [module n] (str "@" module "#" n))
 
+;; Parse facts-roundtrip's emitted lines, re-keying file-local ids to the module.
+(defn- emitted-lines->triples [module lines]
+  (->> lines
+       (keep (fn [line]
+               (when (str/starts-with? line "[")
+                 (let [[s p o] (edn/read-string line)]
+                   [(nodename module s) (str p)
+                    (if (integer? o) (nodename module o) (str o))]))))
+       set))
+
 ;; emit-edn the NEW .bclj -> the POST fact-triple set [l p r], re-keyed @<mod>#n.
 ;; Identical mapping to bin/fram-ingest-code (subject int -> name; int object ->
 ;; @mod#o link; string object -> literal). Plus the @<mod>#root file fact.
@@ -83,17 +93,8 @@
   (let [r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--emit-edn" path)]
     (when (not (zero? (:exit r))) (die "emit-edn FAILED:\n" (:err r)))
     (into #{[(str "@" module "#root") "file" path]}
-          (->> (str/split-lines (:out r))
-               (keep (fn [line]
-                       (when (str/starts-with? line "[")
-                         (let [[s p o] (edn/read-string line)]
-                           [(nodename module s) (str p)
-                            (if (integer? o) (nodename module o) (str o))]))))))))
+          (emitted-lines->triples module (str/split-lines (:out r))))))
 
-;; the module's CURRENT @<mod>#* AST fact-triples, read off the coordinator's warm
-;; store via :query (a Datalog triple scan). The query returns [l p r] rows for
-;; every fact whose subject begins "@<mod>#". refers_to/render markers are filtered
-;; out of :query by the daemon (fact->triple), so this is the raw AST exactly.
 (defn- coord-rt [port log-path req]
   (fram.rt/coord-request-for-log port log-path req))
 
@@ -102,23 +103,34 @@
 (defn- coord-version [port log-path]
   (:version (coord-rt port log-path {:op :version})))
 
-;; pull every AST triple for the module via :query: triple(l p r) with l bound by a
-;; module-prefix test is not expressible directly, so we scan all triples and filter
-;; in-process. The :query base relation `triple` yields [l p r] rows.
+;; Pull one module through the daemon's existing module-scoped :render surface.
+;; Re-render and emit it so file-local ids use the same deterministic traversal
+;; mapping as POST. This avoids the former whole-corpus Datalog scan, whose server
+;; query budget was exhausted on the canonical code log.
 (defn- pre-triples [port log-path module]
-  (let [q {:find "out"
-           :rules [{:head {:rel "out" :args [{:var "l"} {:var "p"} {:var "r"}]}
-                    :body [{:rel "triple" :args [{:var "l"} {:var "p"} {:var "r"}]}]}]}
-        resp (coord-rt port log-path {:op :query :query q :scan true})
-        rows (:ok resp)]
+  (let [resp (coord-rt port log-path {:op :render :module module})]
     (when (:reject resp)
-      (die "coord :query log fence rejected:" (pr-str resp)))
-    (when (:error resp) (die "coord :query failed:" (pr-str (:error resp))))
-    (when-not (sequential? rows)
-      (die "coord :query returned no row collection:" (pr-str resp)))
-    (into #{} (->> rows
-                   (map (fn [row] (mapv str row)))
-                   (filter (fn [[l _ _]] (str/starts-with? l (str "@" module "#"))))))))
+      (die "coord :render log fence rejected:" (pr-str resp)))
+    (when (:error resp) (die "coord :render failed:" (pr-str (:error resp))))
+    (when-not (string? (:edn resp))
+      (die "coord :render returned no module EDN:" (pr-str resp)))
+    (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
+                           (str "fram-commit-pre-" (System/nanoTime)))
+          edn-path (io/file tmp-dir (str module ".edn"))
+          bclj-path (io/file tmp-dir (str module ".bclj"))]
+      (.mkdirs tmp-dir)
+      (try
+        (spit edn-path (:edn resp))
+        (let [rendered (proc/sh {:out :string :err :string}
+                                racket-bin roundtrip-rkt "--render" (str edn-path))]
+          (when-not (zero? (:exit rendered))
+            (die "render CURRENT module FAILED:\n" (:err rendered)))
+          (spit bclj-path (:out rendered))
+          (bclj->triples module (str bclj-path)))
+        (finally
+          (.delete bclj-path)
+          (.delete edn-path)
+          (.delete tmp-dir))))))
 
 (defn- ref? [r] (and (string? r) (str/starts-with? r "@")))
 
