@@ -48,7 +48,8 @@ fact. The word keeps two extra-precise senses that don't conflict with the gener
    substrate has no view-free *settled* facts.
 
 Everywhere — docs, MCP `instructions`, prompts, CLI help, lifecycle prose — the word is
-**fact**.
+**fact**. Why names win the job here at all — and how "world" won its own fight — is
+recorded in the naming ledger: [docs/naming.md](docs/naming.md).
 
 ## One engine, many consumers
 
