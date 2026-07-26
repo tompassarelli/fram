@@ -13,10 +13,16 @@
   (let [v (parse-long s)]
   (if (nil? v) 0 v)))
 
+(def ORD-RE (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+)"))
+
+(def ORD-DOT-RE (re-pattern "\\."))
+
+(def ORD-FLAT-RE (re-pattern "f(\\d+)"))
+
 (defn ord-parse [p]
   (if (string? p) (do
-  (let [m (re-matches #"f(\d+(?:\.\d+)*)~(\d+)" (str p))]
-  (if (some? m) (->OrdKey (mapv digits (vec (str/split (nth m 1) #"\."))) (digits (nth m 2))) (let [d (re-matches #"f(\d+)" (str p))]
+  (let [m (re-matches ORD-RE (str p))]
+  (if (some? m) (->OrdKey (mapv digits (vec (str/split (nth m 1) ORD-DOT-RE))) (digits (nth m 2))) (let [d (re-matches ORD-FLAT-RE (str p))]
   (if (some? d) (do
   (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))))
 
@@ -55,13 +61,13 @@
    b (if (< i (count hi)) (nth hi i) (+ a (* 2 ORD-STEP)))]
   (if (> (- b a) 1) (conj acc (quot (+ a b) 2)) (recur (inc i) (conj acc a))))))))
 
-(def PARAM-FORMS #{"defn" "defn-" "fn" "defmacro" "fn*"})
+(def PARAM-FORMS #{"defn" "fn" "fn*" "defn-" "defmacro"})
 
-(def DEF-FORMS #{"def" "def-" "defonce"})
+(def DEF-FORMS #{"def-" "defonce" "def"})
 
-(def TYPE-DEFS #{"defrecord" "deftype" "defprotocol" "definterface" "defunion"})
+(def TYPE-DEFS #{"defunion" "defrecord" "definterface" "defprotocol" "deftype"})
 
-(def EXTEND-FORMS #{"extend-type" "extend-protocol" "extend"})
+(def EXTEND-FORMS #{"extend-protocol" "extend" "extend-type"})
 
 (def EFFECT-DEFS (into #{"defmulti" "defmethod"} EXTEND-FORMS))
 
@@ -74,7 +80,7 @@
 
 (def TYPE-COLON #{":-" ":"})
 
-(def LET-FORMS #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding" "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})
+(def LET-FORMS #{"binding" "with-local-vars" "loop" "when-some" "when-let*" "if-let" "with-redefs" "let" "when-let" "if-some" "with-open" "if-let*" "dotimes"})
 
 (def FOR-FORMS #{"doseq" "for"})
 
@@ -82,7 +88,7 @@
 
 (def DISAMBIG-CAP 8)
 
-(def MODES #{"resolve" "rename" "delete" "reorder" "callgraph" "upsert-form" "set-body" "replace-in-body"})
+(def MODES #{"reorder" "rename" "resolve" "delete" "replace-in-body" "set-body" "callgraph" "upsert-form"})
 
 (defn ctor-prefix [nm]
   (let [s (if (nil? nm) "" nm)]

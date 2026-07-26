@@ -40,7 +40,7 @@
   (contains? rc/VALUE-DEFS (str h)) (let [nl (rr/unwrap-meta ctx view (nth (rr/ordered-children ctx d) 1 nil))
    nm (sv ctx view nl)]
   (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))
-  (contains? #{"defprotocol" "definterface"} (str h)) (reduce (fn [a m] (if (= "list" (rr/kind-of ctx view m)) (let [nl (nth (rr/ordered-children ctx m) 0 nil)
+  (contains? #{"definterface" "defprotocol"} (str h)) (reduce (fn [a m] (if (= "list" (rr/kind-of ctx view m)) (let [nl (nth (rr/ordered-children ctx m) 0 nil)
    nm (sv ctx view nl)]
   (if (or (nil? nm) (nil? nl)) a (assoc a nm nl))) a)) acc (vec (drop 2 (rr/ordered-children ctx d))))
   :else acc))) {} (forms-of ctx view ents)))

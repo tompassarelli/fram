@@ -1,5 +1,11 @@
 #lang beagle/clj
 
+;; @upstream:graph — the code lives in the Fram fact graph; this text is
+;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
+;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
+;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
+;; text; that is a deliberate workflow change. ADOPTED 2026-07-27 (engine core
+;; port link 3: the M1 resolve cuts become graph-authored modules).
 ;; ============================================================================
 ;; resolve-query — the code queries that run ON the resolved graph.
 ;; ============================================================================
@@ -39,219 +45,172 @@
 ;; ============================================================================
 (ns resolve-query
   (:require [clojure.string :as str]
-            [fram.types :as t] [fram.store :as c] [fram.datalog :as d]
-            [resolve-core :as rc] [resolve-read :as rr]
-            [resolve-modules :as rm] [resolve-render :as rv]))
+    [fram.types :as t]
+    [fram.store :as c]
+    [fram.datalog :as d]
+    [resolve-core :as rc]
+    [resolve-read :as rr]
+    [resolve-modules :as rm]
+    [resolve-render :as rv]))
 
 (define-mode strict)
 
-;; ------------------------------------------------------------ call-edges ---
+(def SLASH-RE :- Any (re-pattern "/"))
 
-;; ALL resolved reference symbols in a subtree — any position: head call,
-;; value-pass, threaded step, `:- T` annotation. Every reference to a defn is a
-;; blast dependency.
-(defn- call-refs [ctx :- (U (Atom t/Store) Nil) view :- Any
-                  BOUND :- Int? REFERS :- Int? node :- Int?] :- (Vec Int)
+(def EXT-RE :- Any (re-pattern "\\.[^.]+$"))
+
+(defn- call-refs [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? REFERS :- Int? node :- Int?] :- (Vec Int)
   (if (some? (rr/refers-target ctx view BOUND REFERS node))
     (if (nil? node) [] [node])
     (if (= "list" (rr/kind-of ctx view node))
-      (reduce (fn [acc :- (Vec Int) ch :- Int] :- (Vec Int)
-                (into acc (call-refs ctx view BOUND REFERS ch)))
-              []
-              (rr/ordered-children ctx node))
+      (reduce (fn [acc :- (Vec Int) ch :- Int] :- (Vec Int) (into acc (call-refs ctx view BOUND REFERS ch)))
+        []
+        (rr/ordered-children ctx node))
       [])))
 
-;; The module label for a src path when the file has no ns form: its basename,
-;; extension stripped.
-(defn- src-label [ctx :- (U (Atom t/Store) Nil) view :- Any
-                  src :- String ents :- (Vec Int)] :- Any
+(defn- src-label [ctx :- (U (Atom t/Store) Nil) view :- Any src :- String ents :- (Vec Int)] :- Any
   (let [mn (rm/module-name ctx view ents)]
     (if (some? mn)
       mn
-      (str/replace (str (last (str/split src #"/"))) #"\.[^.]+$" ""))))
+      (str/replace (str (last (str/split src SLASH-RE))) EXT-RE ""))))
 
-;; {leaf -> {:key :file :module :name}} over every top-level binding in the bound
-;; corpus, in srcs order then frame order — `into {}` semantics, so a later entry
-;; for the same leaf wins, exactly as before.
-(defn- defn-meta-of [ctx :- (U (Atom t/Store) Nil) view :- Any
-                     srcs :- (Vec String) file-modframe :- Any ents-of :- Any] :- (Map Any Any)
-  (reduce
-    (fn [acc :- (Map Any Any) src :- String] :- (Map Any Any)
-      (let [frame (get file-modframe src {})
-            label (src-label ctx view src (get ents-of src []))]
-        (reduce (fn [a :- (Map Any Any) nm :- Any] :- (Map Any Any)
-                  (let [leaf (get frame nm)]
-                    (assoc a leaf {:key (str src "#" (str leaf)) :file src
-                                   :module label :name nm})))
-                acc
-                (vec (keys frame)))))
+(defn- defn-meta-of [ctx :- (U (Atom t/Store) Nil) view :- Any srcs :- (Vec String) file-modframe :- Any ents-of :- Any] :- (Map Any Any)
+  (reduce (fn [acc :- (Map Any Any) src :- String] :- (Map Any Any) (let [frame (get file-modframe src {}) label (src-label ctx view src (get ents-of src []))] (reduce (fn [a :- (Map Any Any) nm :- Any] :- (Map Any Any) (let [leaf (get frame nm)] (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (vec (keys frame)))))
     {}
     srcs))
 
-;; [[caller-leaf body-node] ...] — the top-level defns (and extend-type /
-;; extend-protocol method bodies) whose interiors are searched for calls.
-(defn- callers-of [ctx :- (U (Atom t/Store) Nil) view :- Any
-                   BOUND :- Int? REFERS :- Int?
-                   srcs :- (Vec String) ents-of :- Any defn-meta :- (Map Any Any)] :- (Vec Any)
-  (reduce
-    (fn [acc :- (Vec Any) src :- String] :- (Vec Any)
-      (reduce
-        (fn [a :- (Vec Any) form :- Int] :- (Vec Any)
-          (let [d (rm/unwrap-def ctx view form)
-                h (rr/head-sym ctx view d)]
-            (cond
-              (contains? rc/VALUE-DEFS (str h))
-              (let [cl (nth (rr/ordered-children ctx d) 1 nil)]
-                (if (contains? defn-meta cl) (conj a [cl d]) a))
-
-              (contains? #{"extend-type" "extend-protocol"} (str h))
-              (reduce (fn [b :- (Vec Any) cc :- Int] :- (Vec Any)
-                        (if (= "list" (rr/kind-of ctx view cc))
-                          (let [mnode (nth (rr/ordered-children ctx cc) 0 nil)
-                                cl (if (some? (rr/sym-val ctx view mnode))
-                                     (rv/ultimate ctx view BOUND REFERS
-                                                  (rr/refers-target ctx view BOUND REFERS mnode))
-                                     nil)]
-                            (if (and (some? cl) (contains? defn-meta cl)) (conj b [cl cc]) b))
-                          b))
-                      a
-                      (vec (rest (rr/ordered-children ctx d))))
-
-              :else a)))
-        acc
-        (rm/forms-of ctx view (get ents-of src []))))
+(defn- callers-of [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? REFERS :- Int? srcs :- (Vec String) ents-of :- Any defn-meta :- (Map Any Any)] :- (Vec Any)
+  (reduce (fn [acc :- (Vec Any) src :- String] :- (Vec Any) (reduce (fn [a :- (Vec Any) form :- Int] :- (Vec Any) (let [d (rm/unwrap-def ctx view form) h (rr/head-sym ctx view d)] (cond (contains? rc/VALUE-DEFS (str h)) (let [cl (nth (rr/ordered-children ctx d) 1 nil)] (if (contains? defn-meta cl) (conj a [cl d]) a)) (contains? #{"extend-protocol" "extend-type"} (str h)) (reduce (fn [b :- (Vec Any) cc :- Int] :- (Vec Any) (if (= "list" (rr/kind-of ctx view cc)) (let [mnode (nth (rr/ordered-children ctx cc) 0 nil) cl (if (some? (rr/sym-val ctx view mnode)) (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS mnode)) nil)] (if (and (some? cl) (contains? defn-meta cl)) (conj b [cl cc]) b)) b)) a (vec (rest (rr/ordered-children ctx d)))) :else a))) acc (rm/forms-of ctx view (get ents-of src []))))
     []
     srcs))
 
-;; {:defn-meta {leaf -> {...}} :edges [[caller-leaf callee-leaf]] :defn-set #{leaf}}
-;; — the daemon joins footprint @concern->@node against :edges; the CLI maps
-;; leaf -> :key for JSON.
-(defn call-edges [ctx :- (U (Atom t/Store) Nil) view :- Any
-                  BOUND :- Int? REFERS :- Int?
-                  srcs :- (Vec String) file-modframe :- Any ents-of :- Any] :- (Map Keyword Any)
-  (let [defn-meta (defn-meta-of ctx view srcs file-modframe ents-of)
-        defn-set  (set (keys defn-meta))
-        callers   (callers-of ctx view BOUND REFERS srcs ents-of defn-meta)
-        edges     (reduce
-                    (fn [acc :- (Vec Any) pair :- Any] :- (Vec Any)
-                      (let [caller-leaf (nth pair 0)
-                            body        (nth pair 1)]
-                        (reduce (fn [a :- (Vec Any) r :- Int] :- (Vec Any)
-                                  ;; follow refers_to to the bound defn
-                                  (let [callee (rv/ultimate ctx view BOUND REFERS
-                                                            (rr/refers-target ctx view BOUND REFERS r))]
-                                    (if (and (contains? defn-set callee) (not= callee caller-leaf))
-                                      (conj a [caller-leaf callee])
-                                      a)))
-                                acc
-                                (call-refs ctx view BOUND REFERS body))))
-                    []
-                    callers)]
+(defn call-edges [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? REFERS :- Int? srcs :- (Vec String) file-modframe :- Any ents-of :- Any] :- (Map Keyword Any)
+  (let [defn-meta (defn-meta-of ctx view srcs file-modframe ents-of) defn-set (set (keys defn-meta)) callers (callers-of ctx view BOUND REFERS srcs ents-of defn-meta) edges (reduce (fn [acc :- (Vec Any) pair :- Any] :- (Vec Any) (let [caller-leaf (nth pair 0) body (nth pair 1)] (reduce (fn [a :- (Vec Any) r :- Int] :- (Vec Any) (let [callee (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS r))] (if (and (contains? defn-set callee) (not= callee caller-leaf)) (conj a [caller-leaf callee]) a))) acc (call-refs ctx view BOUND REFERS body)))) [] callers)]
     {:defn-meta defn-meta :edges (vec (distinct edges)) :defn-set defn-set}))
 
-;; -------------------------------------------------------------- privacy ----
-
-;; A top-level `def-`/`defn-` is PRIVATE; every other top-level value binding is
-;; PUBLIC — a reachability ROOT. Keyed on the binding NODE, so a private `helper`
-;; in module A stays distinct from a public `helper` in module B.
-(defn binding-privacy [ctx :- (U (Atom t/Store) Nil) view :- Any
-                       srcs :- (Vec String) ents-of :- Any] :- (Map Any Keyword)
-  (reduce
-    (fn [acc :- (Map Any Keyword) src :- String] :- (Map Any Keyword)
-      (reduce (fn [a :- (Map Any Keyword) f :- Int] :- (Map Any Keyword)
-                (let [d (rm/unwrap-def ctx view f)
-                      h (rr/head-sym ctx view d)]
-                  (if (contains? rc/VALUE-DEFS (str h))
-                    (let [nl (rr/unwrap-meta ctx view (nth (rr/ordered-children ctx d) 1 nil))]
-                      (if (some? (rr/sym-val ctx view nl))
-                        (assoc a nl (if (contains? #{"def-" "defn-"} (str h)) :private :public))
-                        a))
-                    a)))
-              acc
-              (rm/forms-of ctx view (get ents-of src []))))
+(defn binding-privacy [ctx :- (U (Atom t/Store) Nil) view :- Any srcs :- (Vec String) ents-of :- Any] :- (Map Any Keyword)
+  (reduce (fn [acc :- (Map Any Keyword) src :- String] :- (Map Any Keyword) (reduce (fn [a :- (Map Any Keyword) f :- Int] :- (Map Any Keyword) (let [d (rm/unwrap-def ctx view f) h (rr/head-sym ctx view d)] (if (contains? rc/VALUE-DEFS (str h)) (let [nl (rr/unwrap-meta ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} (str h)) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src []))))
     {}
     srcs))
 
-;; --------------------------------------------------------------- datalog ---
-
-;; Intern an arbitrary hashable edge key as an entity in the throwaway store.
 (defn- ent! [ctx :- (Atom t/Store) k->id :- (Atom (Map Any Int)) k :- Any] :- Int
   (let [cur (get (deref k->id) k)]
-    (if (int? cur)
-      cur
-      (let [e (c/entity! ctx)]
-        (do (swap! k->id assoc k e) e)))))
+    (if (int? cur) cur (let [e (c/entity! ctx)] (do (swap! k->id assoc k e) e)))))
 
 (defn- invert [k->id :- (Atom (Map Any Int))] :- (Map Int Any)
-  (reduce (fn [m :- (Map Int Any) k :- Any] :- (Map Int Any)
-            (let [v (get (deref k->id) k)]
-              (if (int? v) (assoc m v k) m)))
-          {}
-          (vec (keys (deref k->id)))))
+  (reduce (fn [m :- (Map Int Any) k :- Any] :- (Map Int Any) (let [v (get (deref k->id) k)] (if (int? v) (assoc m v k) m)))
+    {}
+    (vec (keys (deref k->id)))))
 
-;; blast(D) = {x | x transitively calls D} — D's transitive callers. Edge keys
-;; are any hashable (node ids on the warm path, "src#leaf" strings for JSON).
-;; Returns {:reaches #{[x y]} :blast {callee -> #{transitive-callers}}}.
 (defn blast-closure! [edges :- (Vec Any)] :- (Map Keyword Any)
-  (let [ctx   (c/new-store)
-        tx    (c/begin-tx! ctx "code")
-        EDGE  (c/value! ctx "calls-defn")
-        k->id :- (Atom (Map Any Int)) (atom {})]
+  (let [ctx (c/new-store) tx (c/begin-tx! ctx "code") EDGE (c/value! ctx "calls-defn") k->id :- (Atom (Map Any Int)) (atom {})]
     (do
       (doseq [e edges]
-        (c/fact! ctx (ent! ctx k->id (nth e 0)) EDGE (ent! ctx k->id (nth e 1)) tx))
-      (let [id->k (invert k->id)
-            db (d/run-rules ctx
-                 [(d/rule "reaches" [(d/v :x) (d/v :y)]
-                          [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])
-                  (d/rule "reaches" [(d/v :x) (d/v :z)]
-                          [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])
-                           (d/lit "reaches" [(d/v :y) (d/v :z)])])])
-            reaches (set (mapv (fn [row :- Any] :- Any
-                                 [(get id->k (nth row 0)) (get id->k (nth row 1))])
-                               (vec (d/facts db "reaches"))))
-            blast (reduce (fn [m :- (Map Any Any) row :- Any] :- (Map Any Any)
-                            (let [x (nth row 0)
-                                  y (nth row 1)]
-                              (assoc m y (conj (get m y #{}) x))))
-                          {}
-                          (vec reaches))]
+        (c/fact! ctx
+          (ent! ctx k->id (nth e 0))
+          EDGE
+          (ent! ctx k->id (nth e 1))
+          tx))
+      (let [id->k (invert k->id) db (d/run-rules ctx [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])]) (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)]) (d/lit "reaches" [(d/v :y) (d/v :z)])])]) reaches (set (mapv (fn [row :- Any] :- Any [(get id->k (nth row 0)) (get id->k (nth row 1))]) (vec (d/facts db "reaches")))) blast (reduce (fn [m :- (Map Any Any) row :- Any] :- (Map Any Any) (let [x (nth row 0) y (nth row 1)] (assoc m y (conj (get m y #{}) x)))) {} (vec reaches))]
         {:reaches reaches :blast blast}))))
 
-;; The identity-keyed stratified-Datalog code query: over the scope-correct call
-;; graph, the PRIVATE top-level bindings UNREACHABLE from any PUBLIC binding.
-;; `privacy` maps leaf -> :public|:private; a leaf absent from it (e.g. a
-;; protocol method) is treated as a non-private root and is never dead.
 (defn dead-private-bindings! [cg :- (Map Keyword Any) privacy :- Any] :- (Set Any)
-  (let [defn-meta (get cg :defn-meta {})
-        edges     (get cg :edges [])
-        ctx    (c/new-store)
-        tx     (c/begin-tx! ctx "dead")
-        CALLS  (c/value! ctx "calls-defn")
-        ISROOT (c/value! ctx "is-root")
-        ISPRIV (c/value! ctx "is-priv")
-        k->id :- (Atom (Map Any Int)) (atom {})]
+  (let [defn-meta (get cg :defn-meta {}) edges (get cg :edges []) ctx (c/new-store) tx (c/begin-tx! ctx "dead") CALLS (c/value! ctx "calls-defn") ISROOT (c/value! ctx "is-root") ISPRIV (c/value! ctx "is-priv") k->id :- (Atom (Map Any Int)) (atom {})]
     (do
       (doseq [e edges]
-        (c/fact! ctx (ent! ctx k->id (nth e 0)) CALLS (ent! ctx k->id (nth e 1)) tx))
-      ;; every top-level binding is a NODE; public => root self-loop,
-      ;; private => priv self-loop.
+        (c/fact! ctx
+          (ent! ctx k->id (nth e 0))
+          CALLS
+          (ent! ctx k->id (nth e 1))
+          tx))
       (doseq [leaf (vec (keys defn-meta))]
         (let [e (ent! ctx k->id leaf)]
           (if (= :private (get privacy leaf))
             (c/fact! ctx e ISPRIV e tx)
             (c/fact! ctx e ISROOT e tx))))
-      (let [id->k (invert k->id)
-            db (d/run-strata ctx
-                 [;; stratum 1 — positive recursive live reachability from public roots
-                  [(d/rule "live" [(d/v :x)]
-                           [(d/lit "triple" [(d/v :x) ISROOT (d/v :x)])])
-                   (d/rule "live" [(d/v :y)]
-                           [(d/lit "triple" [(d/v :x) CALLS (d/v :y)])
-                            (d/lit "live"   [(d/v :x)])])]
-                  ;; stratum 2 — negated dead(private): private AND not (transitively) live
-                  [(d/rule "dead" [(d/v :p)]
-                           [(d/lit "triple" [(d/v :p) ISPRIV (d/v :p)])
-                            (d/nlit "live"  [(d/v :p)])])]])]
-        (set (vec (keep (fn [row :- Any] :- Any (get id->k (nth row 0)))
-                        (vec (d/facts db "dead")))))))))
+      (let [id->k (invert k->id) db (d/run-strata ctx [[(d/rule "live" [(d/v :x)] [(d/lit "triple" [(d/v :x) ISROOT (d/v :x)])]) (d/rule "live" [(d/v :y)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "live" [(d/v :x)])])] [(d/rule "dead" [(d/v :p)] [(d/lit "triple" [(d/v :p) ISPRIV (d/v :p)]) (d/nlit "live" [(d/v :p)])])]])]
+        (set (vec (keep (fn [row :- Any] :- Any (get id->k (nth row 0))) (vec (d/facts db "dead")))))))))
+
+;; ------------------------------------------------------------ call-edges ---
+
+;; ALL resolved reference symbols in a subtree — any position: head call,
+
+;; value-pass, threaded step, `:- T` annotation. Every reference to a defn is a
+
+;; blast dependency.
+
+;; `#"…"` cannot cross the graph-edit datum channel (EDN reader), so these two
+
+;; patterns are re-pattern defs hoisted to the top level — compiled once at load,
+
+;; exactly like the literals they replace.
+
+;; PER-DEF NOTES (the graph-edit datum channel carries FORMS, not text, so a
+
+;; comment cannot ride inside an authored form; the load-bearing prose lives
+
+;; here instead — same convention as src/pull.bclj).
+
+;; ---------------------------------------------------------------------------
+
+;;   src-label
+
+;;     The module label for a src path when the file has no ns form: its basename,
+
+;;     extension stripped.
+
+;;   defn-meta-of
+
+;;     {leaf -> {:key :file :module :name}} over every top-level binding in the bound
+
+;;     corpus, in srcs order then frame order — `into {}` semantics, so a later entry
+
+;;     for the same leaf wins, exactly as before.
+
+;;   callers-of
+
+;;     [[caller-leaf body-node] ...] — the top-level defns (and extend-type /
+
+;;     extend-protocol method bodies) whose interiors are searched for calls.
+
+;;   call-edges
+
+;;     {:defn-meta {leaf -> {...}} :edges [[caller-leaf callee-leaf]] :defn-set #{leaf}}
+
+;;     — the daemon joins footprint @concern->@node against :edges; the CLI maps
+
+;;     leaf -> :key for JSON.
+
+;;   binding-privacy
+
+;;     -------------------------------------------------------------- privacy ----
+
+;;     A top-level `def-`/`defn-` is PRIVATE; every other top-level value binding is
+
+;;     PUBLIC — a reachability ROOT. Keyed on the binding NODE, so a private `helper`
+
+;;     in module A stays distinct from a public `helper` in module B.
+
+;;   ent!
+
+;;     --------------------------------------------------------------- datalog ---
+
+;;     Intern an arbitrary hashable edge key as an entity in the throwaway store.
+
+;;   blast-closure!
+
+;;     blast(D) = {x | x transitively calls D} — D's transitive callers. Edge keys
+
+;;     are any hashable (node ids on the warm path, "src#leaf" strings for JSON).
+
+;;     Returns {:reaches #{[x y]} :blast {callee -> #{transitive-callers}}}.
+
+;;   dead-private-bindings!
+
+;;     The identity-keyed stratified-Datalog code query: over the scope-correct call
+
+;;     graph, the PRIVATE top-level bindings UNREACHABLE from any PUBLIC binding.
+
+;;     `privacy` maps leaf -> :public|:private; a leaf absent from it (e.g. a
+
+;;     protocol method) is treated as a non-private root and is never dead.

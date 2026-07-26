@@ -22,7 +22,7 @@
 (defn collect-bind-syms [ctx view node]
   (if (nil? node) [] (let [v (sv ctx view node)]
   (cond
-  (some? v) (if (contains? #{"&" "_"} (str v)) [] [node])
+  (some? v) (if (contains? #{"_" "&"} (str v)) [] [node])
   (brackets? ctx view node) (reduce (fn [acc k] (into acc (collect-bind-syms ctx view k))) [] (tail ctx node))
   (map-node? ctx view node) (loop [ks (tail ctx node)
    acc []]
@@ -52,7 +52,7 @@
    ks2 (vec (drop 2 ks))]
   (cond
   (= ":or" (str kv)) (recur ks2 (into acc (if (and (some? v2) (map-node? ctx view v2)) (vec (keep-indexed (fn [i cc] (if (odd? i) cc nil)) (tail ctx v2))) [])))
-  (contains? #{":keys" ":strs" ":syms" ":as"} (str kv)) (recur ks2 acc)
+  (contains? #{":as" ":keys" ":strs" ":syms"} (str kv)) (recur ks2 acc)
   (some? kv) (recur ks2 acc)
   :else (recur ks2 (into acc (collect-or-vals ctx view k)))))))
   (brackets? ctx view node) (reduce (fn [acc k] (into acc (collect-or-vals ctx view k))) [] (tail ctx node))

@@ -3,6 +3,8 @@
             [fram.store :as c]
             [resolve-core :as rc]))
 
+(def SEG-RE (re-pattern "seg\\d+"))
+
 (defrecord OrdPair [key child])
 
 (defn ordpair-key [r] (:key r))
@@ -72,7 +74,7 @@
    pi (if (nil? f) nil (:p f))
    p (if (int? pi) (c/literal ctx pi) nil)
    r (fact-r ctx cid)]
-  (if (and (string? p) (some? (re-matches #"seg\d+" (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))]
+  (if (and (string? p) (some? (re-matches SEG-RE (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))]
   (if (nil? n) acc (conj acc (->SegPair n r)))) acc))) [] (c/by-l ctx e))]
   (mapv (fn [pr] (:child pr)) (sort-by (fn [pr] (:idx pr)) pairs)))))
 

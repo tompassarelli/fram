@@ -1,5 +1,11 @@
 #lang beagle/clj
 
+;; @upstream:graph — the code lives in the Fram fact graph; this text is
+;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
+;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
+;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
+;; text; that is a deliberate workflow change. ADOPTED 2026-07-27 (engine core
+;; port link 3: the M1 resolve cuts become graph-authored modules).
 ;; ============================================================================
 ;; resolve-core — the CRDT order-key algebra + the form vocabulary.
 ;; ============================================================================
@@ -19,130 +25,136 @@
 ;; and tests/coord_crdt_*.clj — so the emitted out/resolve_core.clj must stay on
 ;; the classpath.
 ;; ============================================================================
-(ns resolve-core
-  (:require [clojure.string :as str]))
+(ns resolve-core (:require [clojure.string :as str]))
 
 (define-mode strict)
 
-;; ---------------------------------------------------------------- ord keys ---
-
-;; The gap left between adjacent siblings. Big enough that inserting between two
-;; neighbours can halve it many times before the path has to grow a segment.
 (def ORD-STEP :- Int 65536)
 
-;; A parsed position. This is a RECORD, not the bare map the Clojure original
-;; returned, because the shape is fixed and the checker should say so — every
-;; consumer reads exactly :path and :tie, and record keyword access is identical
-;; to map keyword access at the call sites (resolve.clj:201, :1428, :1733,
-;; coord_daemon.clj:2040, tests/coord_crdt_commute_order.clj:85).
 (defrecord OrdKey [path :- (Vec Int) tie :- Int])
 
-;; parse-long is nullable, but every call below is guarded by a \d+ regex group
-;; that already proved the digits are there. Narrowing here keeps OrdKey's fields
-;; honestly non-null instead of leaking Int? through the whole order algebra.
-(defn- digits [s :- String] :- Int
-  (let [v (parse-long s)] (if (nil? v) 0 v)))
+(defn- digits [s :- String] :- Int (let [v (parse-long s)] (if (nil? v) 0 v)))
 
-;; Dual-parse: the NEW CRDT spelling "f<a.b.c>~<tie>" and the OLD flat "f<int>".
-;; An old f<N> is read as the new key it would have been minted as, so a corpus
-;; written before the CRDT keys still sorts correctly against one written after.
+(def ORD-RE :- Any (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+)"))
+
+(def ORD-DOT-RE :- Any (re-pattern "\\."))
+
+(def ORD-FLAT-RE :- Any (re-pattern "f(\\d+)"))
+
 (defn ord-parse [p :- Any] :- (U OrdKey Nil)
   (when (string? p)
-    (let [m (re-matches #"f(\d+(?:\.\d+)*)~(\d+)" (str p))]
+    (let [m (re-matches ORD-RE (str p))]
       (if (some? m)
-        (->OrdKey (mapv digits (vec (str/split (nth m 1) #"\.")))
-                  (digits (nth m 2)))
-        (let [d (re-matches #"f(\d+)" (str p))]
-          (when (some? d)
-            (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))
+        (->OrdKey (mapv digits (vec (str/split (nth m 1) ORD-DOT-RE)))
+          (digits (nth m 2)))
+        (let [d (re-matches ORD-FLAT-RE (str p))]
+          (when (some? d) (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))
 
-;; Is this predicate a child position at all (old or new spelling)?
 (defn ord-pos? [p :- Any] :- Bool (some? (ord-parse p)))
 
 (defn ord-str [path :- (Vec Int) tie :- Int] :- String
   (str "f" (str/join "." path) "~" tie))
 
-;; Lexicographic over the path, SHORTER-FIRST on a common prefix: [1] precedes
-;; [1 5], which is what makes a nested insert land inside its parent's slot.
 (defn ord-veccmp [a :- (Vec Int) b :- (Vec Int)] :- Int
   (loop [i 0]
-    (let [ae (>= i (count a))
-          be (>= i (count b))]
+    (let [ae (>= i (count a)) be (>= i (count b))]
       (cond
-        (and ae be) 0
-        ae -1
-        be 1
-        :else (let [c (compare (nth a i) (nth b i))]
-                (if (zero? c) (recur (inc i)) c))))))
+        (and ae be)
+        0
+        ae
+        -1
+        be
+        1
+        :else
+        (let [c (compare (nth a i) (nth b i))] (if (zero? c) (recur (inc i)) c))))))
 
-;; Ties are broken by the minting agent's tie number, so two agents that pick the
-;; SAME path still get a total order rather than a coin flip.
 (defn ord-cmp [x :- OrdKey y :- OrdKey] :- Int
   (let [c (ord-veccmp (:path x) (:path y))]
     (if (zero? c) (compare (:tie x) (:tie y)) c)))
 
-;; Append after the last sibling: bump the final segment by a whole step.
 (defn ord-append [last-path :- (U (Vec Int) Nil)] :- (Vec Int)
   (if (or (nil? last-path) (empty? last-path))
     [ORD-STEP]
     (conj (vec (butlast last-path))
-          (+ (nth last-path (dec (count last-path))) ORD-STEP))))
+      (+ (nth last-path (dec (count last-path))) ORD-STEP))))
 
-;; A path strictly between lo and hi (nil = open end). Walks down segment by
-;; segment and takes the midpoint at the first segment with room; if every
-;; segment is adjacent the path GROWS, which is the property that makes inserts
-;; between neighbours always possible without renumbering anyone.
 (defn ord-between [lo :- (U (Vec Int) Nil) hi :- (U (Vec Int) Nil)] :- (Vec Int)
   (cond
-    (and (nil? lo) (nil? hi)) [ORD-STEP]
-    (nil? hi) (ord-append lo)
-    :else (let [lo2 (if (nil? lo) [0] lo)]
-            (loop [i 0 acc :- (Vec Int) []]
-              (let [a (if (< i (count lo2)) (nth lo2 i) 0)
-                    b (if (< i (count hi)) (nth hi i) (+ a (* 2 ORD-STEP)))]
-                (if (> (- b a) 1)
-                  (conj acc (quot (+ a b) 2))
-                  (recur (inc i) (conj acc a))))))))
+    (and (nil? lo) (nil? hi))
+    [ORD-STEP]
+    (nil? hi)
+    (ord-append lo)
+    :else
+    (let [lo2 (if (nil? lo) [0] lo)]
+      (loop [i 0 acc :- (Vec Int) []]
+        (let [a (if (< i (count lo2)) (nth lo2 i) 0) b (if (< i (count hi)) (nth hi i) (+ a (* 2 ORD-STEP)))]
+          (if (> (- b a) 1)
+            (conj acc (quot (+ a b) 2))
+            (recur (inc i) (conj acc a))))))))
 
-;; ------------------------------------------------------- form vocabulary ---
-;; Which top-level heads the authoring verbs accept, and which forms bind names.
-;; Plain data, but load-bearing: write-def's refusal ladder and the whole lexical
-;; walk are built out of these.
-;;
-;; They are SETS, not vectors, and that is not a style choice — resolve.clj calls
-;; every one of them AS A FUNCTION (`(TYPE-COLON (sym-val %))`, `(LET-FORMS h)`,
-;; `(MODES mode)` in the CLI guard, 40+ sites). A vector would still type-check
-;; and would silently answer by INDEX instead of membership, so the set type is
-;; carrying real semantics here.
+(def PARAM-FORMS :- (Set String) #{"defn" "fn" "fn*" "defn-" "defmacro"})
 
-(def PARAM-FORMS :- (Set String) #{"defn" "defn-" "fn" "defmacro" "fn*"})
-(def DEF-FORMS :- (Set String) #{"def" "def-" "defonce"})
-(def TYPE-DEFS :- (Set String) #{"defrecord" "deftype" "defprotocol" "definterface" "defunion"})
-(def EXTEND-FORMS :- (Set String) #{"extend-type" "extend-protocol" "extend"})
+(def DEF-FORMS :- (Set String) #{"def-" "defonce" "def"})
+
+(def TYPE-DEFS :- (Set String)
+  #{"defunion" "defrecord" "definterface" "defprotocol" "deftype"})
+
+(def EXTEND-FORMS :- (Set String) #{"extend-protocol" "extend" "extend-type"})
+
 (def EFFECT-DEFS :- (Set String) (into #{"defmulti" "defmethod"} EXTEND-FORMS))
+
 (def VALUE-DEFS :- (Set String) (into PARAM-FORMS DEF-FORMS))
-(def WRITABLE-DEFS :- (Set String) (into (into VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
+
+(def WRITABLE-DEFS :- (Set String)
+  (into (into VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
 
 (defn writable-def-head? [h :- String] :- Bool (contains? WRITABLE-DEFS h))
 
-;; Type-annotation markers. `:` is legal in field/param position, `:-` everywhere.
 (def TYPE-COLON :- (Set String) #{":-" ":"})
+
 (def LET-FORMS :- (Set String)
-  #{"let" "loop" "when-let" "if-let" "when-some" "if-some" "binding"
-    "with-open" "with-local-vars" "dotimes" "with-redefs" "if-let*" "when-let*"})
+  #{"binding"
+    "with-local-vars"
+    "loop"
+    "when-some"
+    "when-let*"
+    "if-let"
+    "with-redefs"
+    "let"
+    "when-let"
+    "if-some"
+    "with-open"
+    "if-let*"
+    "dotimes"})
+
 (def FOR-FORMS :- (Set String) #{"doseq" "for"})
+
 (def MATCH-FORMS :- (Set String) #{"match"})
 
 (def DISAMBIG-CAP :- Int 8)
-(def MODES :- (Set String)
-  #{"resolve" "rename" "delete" "reorder" "callgraph" "upsert-form" "set-body" "replace-in-body"})
 
-;; An auto-constructor reference renders as its prefix plus the type's name, so
-;; a rename of the TYPE has to move `->Foo` and `map->Foo` too. Checked
-;; qualified-first: "a/map->Foo" must not be read as a bare "->" reference.
+(def MODES :- (Set String)
+  #{"reorder"
+    "rename"
+    "resolve"
+    "delete"
+    "replace-in-body"
+    "set-body"
+    "callgraph"
+    "upsert-form"})
+
 (defn ctor-prefix [nm :- (U String Nil)] :- (U String Nil)
   (let [s (if (nil? nm) "" nm)]
     (cond
-      (or (str/starts-with? s "map->") (str/includes? s "/map->")) "map->"
-      (or (str/starts-with? s "->") (str/includes? s "/->")) "->"
-      :else nil)))
+      (or (str/starts-with? s "map->") (str/includes? s "/map->"))
+      "map->"
+      (or (str/starts-with? s "->") (str/includes? s "/->"))
+      "->"
+      :else
+      nil)))
+
+;; ---------------------------------------------------------------- ord keys ---
+
+;; The gap left between adjacent siblings. Big enough that inserting between two
+
+;; neighbours can halve it many times before the path has to grow a segment.
