@@ -25,7 +25,8 @@
             [resolve-read :as rr]    ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
             [resolve-binds :as rb]   ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
             [resolve-modules :as rm] ; M1 Cut D: one module's frame + its import/export surface
-            [resolve-render :as rv]))  ; M1 Cut E: render a node back to source + the anchor search
+            [resolve-render :as rv]  ; M1 Cut E: render a node back to source + the anchor search
+            [resolve-query :as rq]))  ; M1 Cut F: the code queries — call graph, blast closure, dead private
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -1806,79 +1807,21 @@
 ;; {:defn-meta {leaf -> {:key :file :module :name}} :edges [[caller-leaf callee-leaf]]
 ;; :defn-set #{leaf}} — the daemon joins footprint @concern->@node against :edges; the
 ;; CLI maps leaf->:key for JSON.
-(defn call-edges []
-  (let [dkey      (fn [src leaf] (str src "#" leaf))
-        defn-meta (into {} (for [src srcs, [nm leaf] (file-modframe src)]
-                             [leaf {:key (dkey src leaf) :file src
-                                    :module (or (module-name src)
-                                                (-> src (str/split #"/") last (str/replace #"\.[^.]+$" "")))
-                                    :name nm}]))
-        defn-set  (set (keys defn-meta))
-        ;; ALL resolved reference symbols in a subtree (any position — head call,
-        ;; value-pass, threaded step, `:- T` annotation): every reference to a defn is a
-        ;; blast dependency; head-only under-reports (proven on shipped fram/src).
-        call-refs (fn call-refs [node]
-                    (if (refers-target node) [node]
-                      (when (= "list" (kind-of node)) (mapcat call-refs (ordered-children node)))))
-        callers (mapcat
-                 (fn [form]
-                   (let [d (unwrap-def form) h (head-sym d)]
-                     (cond
-                       (VALUE-DEFS h)
-                       (let [cl (second (ordered-children d))] (when (defn-meta cl) [[cl d]]))
-                       (#{"extend-type" "extend-protocol"} h)
-                       (keep (fn [c] (when (= "list" (kind-of c))
-                                       (let [mnode (first (ordered-children c))
-                                             cl (when (sym-val mnode) (ultimate (refers-target mnode)))]
-                                         (when (and cl (defn-meta cl)) [cl c]))))
-                             (rest (ordered-children d))))))
-                 (mapcat forms-of srcs))
-        edges (vec (distinct
-                    (for [[caller-leaf body] callers
-                          r (call-refs body)
-                          :let [callee (ultimate (refers-target r))]   ; follow refers_to to the bound defn
-                          :when (and (defn-set callee) (not= callee caller-leaf))]
-                      [caller-leaf callee])))]
-    {:defn-meta defn-meta :edges edges :defn-set defn-set}))
+(defn call-edges [] (rq/call-edges ctx *view* BOUND REFERS (vec srcs) file-modframe @file->ents))
 
 ;; blast-closure — transitive blast radius over a set of [caller callee] edges via Fram
 ;; Datalog: blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks
 ;; if D changes). Edge keys are any hashable (node-ids for the warm path, "src#leaf"
 ;; strings for JSON). Returns {:reaches #{[x y]} :blast {callee -> #{transitive-callers}}}.
 ;; The ONE reaches implementation; the throwaway recursion store lives only here.
-(defn blast-closure [edges]
-  (let [ctx   (c/new-store)
-        tx    (c/begin-tx! ctx "code")
-        EDGE  (c/value! ctx "calls-defn")
-        k->id (volatile! {})
-        ent   (fn [k] (or (get @k->id k)
-                          (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
-        _     (doseq [[a b] edges] (c/fact! ctx (ent a) EDGE (ent b) tx))
-        id->k (into {} (map (fn [[k v]] [v k]) @k->id))
-        db    (d/run-rules ctx
-                [(d/rule "reaches" [(d/v :x) (d/v :y)]
-                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])])
-                 (d/rule "reaches" [(d/v :x) (d/v :z)]
-                         [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])
-                          (d/lit "reaches" [(d/v :y) (d/v :z)])])])
-        reaches (set (map (fn [[xid yid]] [(id->k xid) (id->k yid)]) (d/facts db "reaches")))
-        blast (reduce (fn [m [x y]] (update m y (fnil conj #{}) x)) {} reaches)]
-    {:reaches reaches :blast blast}))
+(defn blast-closure [edges] (rq/blast-closure! (vec edges)))
 
 ;; binding-privacy — {binding-leaf -> :public | :private} over the CURRENTLY BOUND corpus.
 ;; A top-level `def-`/`defn-` is PRIVATE; every other top-level value binding (def/defn/
 ;; defonce/fn/…) is PUBLIC — a reachability ROOT. Keyed on the binding NODE (identity), so
 ;; same-spelling bindings in different modules stay DISTINCT (a private `helper` in mod A is a
 ;; different node than a public `helper` in mod B). Call under with-resolve-read / resolve-edn!.
-(defn binding-privacy []
-  (into {}
-    (for [src srcs
-          f   (forms-of src)
-          :let [d (unwrap-def f) h (head-sym d)]
-          :when (VALUE-DEFS h)
-          :let [nl (unwrap-meta (second (ordered-children d)))]
-          :when (sym-val nl)]
-      [nl (if (#{"def-" "defn-"} h) :private :public)])))
+(defn binding-privacy [] (rq/binding-privacy ctx *view* (vec srcs) @file->ents))
 
 ;; dead-private-bindings — the identity-keyed STRATIFIED-Datalog code query. Over the
 ;; scope-correct call graph (call-edges), derive the PRIVATE top-level bindings UNREACHABLE
@@ -1891,35 +1834,7 @@
 ;; classified independently. Returns the set of dead private binding leaves. `privacy` maps
 ;; leaf -> :public|:private (binding-privacy); a leaf absent from it (e.g. a protocol method)
 ;; is treated as a non-private root, never dead.
-(defn dead-private-bindings [{:keys [defn-meta edges]} privacy]
-  (let [ctx    (c/new-store)
-        tx     (c/begin-tx! ctx "dead")
-        CALLS  (c/value! ctx "calls-defn")
-        ISROOT (c/value! ctx "is-root")
-        ISPRIV (c/value! ctx "is-priv")
-        k->id  (volatile! {})
-        ent    (fn [k] (or (get @k->id k)
-                           (let [e (c/entity! ctx)] (vswap! k->id assoc k e) e)))
-        _      (doseq [[a b] edges] (c/fact! ctx (ent a) CALLS (ent b) tx))
-        ;; every top-level binding is a NODE; public => root self-loop, private => priv self-loop.
-        _      (doseq [leaf (keys defn-meta)]
-                 (let [e (ent leaf)]
-                   (if (= :private (privacy leaf))
-                     (c/fact! ctx e ISPRIV e tx)
-                     (c/fact! ctx e ISROOT e tx))))
-        id->k  (into {} (map (fn [[k v]] [v k]) @k->id))
-        strata [;; stratum 1 — positive recursive live reachability from public roots
-                [(d/rule "live" [(d/v :x)]
-                         [(d/lit "triple" [(d/v :x) ISROOT (d/v :x)])])
-                 (d/rule "live" [(d/v :y)]
-                         [(d/lit "triple" [(d/v :x) CALLS (d/v :y)])
-                          (d/lit "live"   [(d/v :x)])])]
-                ;; stratum 2 — negated dead(private): private AND not (transitively) live
-                [(d/rule "dead" [(d/v :p)]
-                         [(d/lit "triple" [(d/v :p) ISPRIV (d/v :p)])
-                          (d/nlit "live"  [(d/v :p)])])]]
-        db     (d/run-strata ctx strata)]
-    (set (keep (fn [[pid]] (id->k pid)) (d/facts db "dead")))))
+(defn dead-private-bindings [cg privacy] (rq/dead-private-bindings! cg privacy))
 
 ;; ============================================================================
 ;; CLI entry. Slice the edn paths off *command-line-args* per mode (the old
