@@ -23,7 +23,8 @@
             [fram.datalog :as d] [cheshire.core :as json]   ; datalog+json: the `callgraph` mode
             [resolve-core :as rc]    ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
             [resolve-read :as rr]    ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
-            [resolve-binds :as rb]))  ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
+            [resolve-binds :as rb]   ; M1 Cut C: what a binding form binds (patterns, params, let/for vectors)
+            [resolve-modules :as rm]))  ; M1 Cut D: one module's frame + its import/export surface
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -475,106 +476,21 @@
         (do (walk-quasi (first cs) scope quoted?) (recur (rest cs)))))))
 
 ;; module frame = all top-level defs (so forward references resolve) ----------
-(defn unwrap-def [form] (if (= "js/export" (head-sym form)) (second (ordered-children form)) form))
-(defn module-defs [src]
-  (let [wrapper (some (fn [e] (when (= "beagle-file" (head-sym e)) e)) (@file->ents src))
-        forms (rest (ordered-children wrapper))]
-    (into {} (mapcat (fn [f] (let [d (unwrap-def f)]
-                               (cond
-                                 (VALUE-DEFS (head-sym d))   ; def/defn — value binding
-                                 ;; D2: unwrap a leading (#%meta …) so a metadata-annotated NAME
-                                 ;; — (def ^:dynamic *x* …) — still enters the frame as `*x*`.
-                                 (let [nl (unwrap-meta (second (ordered-children d)))] (when (sym-val nl) [[(sym-val nl) nl]]))
-                                 ;; defprotocol/definterface methods are public callable VARS — each method
-                                 ;; sig (name [params] :- Ret) defines `name`; collect so it renames + resolves.
-                                 (#{"defprotocol" "definterface"} (head-sym d))
-                                 (keep (fn [m] (when (= "list" (kind-of m))
-                                                 (let [nl (first (ordered-children m))]
-                                                   (when (sym-val nl) [(sym-val nl) nl]))))
-                                       (drop 2 (ordered-children d)))
-                                 :else nil)))
-                     forms))))
+;; M1 Cut D — one module's frame + its import/export surface is now Beagle
+;; (src/resolve_modules.bclj). Wrappers as in Cuts B/C; the entity list comes out
+;; of the ^:dynamic `file->ents` atom here and is handed over explicitly.
+(defn unwrap-def [form] (rm/unwrap-def ctx *view* form))
+(defn module-defs [src] (rm/module-defs ctx *view* (@file->ents src)))
 ;; --- cross-module: parse ns/:require (imports) and js/export (exports) -------
-(defn forms-of [src]
-  (rest (ordered-children (some (fn [e] (when (= "beagle-file" (head-sym e)) e)) (@file->ents src)))))
-(defn ns-form [src] (some (fn [f] (when (= "ns" (head-sym f)) f)) (forms-of src)))
-(defn module-name [src] (when-let [nf (ns-form src)] (sym-val (second (ordered-children nf)))))
-(defn merge-import-opts [acc modn kids]   ; kids = tokens after the module name; fold :refer/:as/:rename
-  (let [idx (fn [kw] (first (keep-indexed (fn [i k] (when (= kw (sym-val k)) i)) kids)))
-        ri (idx ":refer") ai (idx ":as") rri (idx ":rename")
-        nb (when ri (nth kids (inc ri) nil))
-        refers (when (and nb (brackets? nb)) (keep sym-val (rest (ordered-children nb))))
-        alias (when ai (sym-val (nth kids (inc ai) nil)))
-        rmap (when rri (let [mb (nth kids (inc rri) nil)]   ; {srcname -> localname}
-                         (when (and mb (map-node? mb))
-                           (loop [cs (rest (ordered-children mb)) m {}]
-                             (if (< (count cs) 2) m
-                               (recur (drop 2 cs) (assoc m (sym-val (first cs)) (sym-val (second cs)))))))))]
-    (cond-> acc
-      (seq refers) (update :refer into (map (fn [n] [n modn]) refers))
-      alias        (update :as assoc alias modn)
-      (seq rmap)   (update :rename into (map (fn [[sn ln]] [ln [modn sn]]) rmap)))))
-(defn parse-require [src]   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
-  (let [empty {:refer {} :as {} :rename {}}
-        ;; bare top-level beagle requires: (require modn :as a :refer [..] :rename {..})
-        bare (reduce (fn [acc f]
-                       (if (= "require" (head-sym f))
-                         (let [kids (ordered-children f)]
-                           (merge-import-opts acc (sym-val (nth kids 1 nil)) (drop 2 kids)))
-                         acc))
-                     empty (forms-of src))]
-    (if-let [nf (ns-form src)]
-      (if-let [reqs (some (fn [c] (when (and (= "list" (kind-of c))
-                                             (= ":require" (sym-val (first (ordered-children c))))) c))
-                          (ordered-children nf))]
-        (reduce (fn [acc spec]                      ; ns-form specs: [modn :refer [..] :as a ...]
-                  (if-not (brackets? spec) acc
-                    (let [kids (rest (ordered-children spec))]
-                      (merge-import-opts acc (sym-val (first kids)) (rest kids)))))
-                bare (rest (ordered-children reqs)))
-        bare)
-      bare)))
-(defn module-exports [src]            ; {exported-name -> binding-node}  (js/export def OR re-export)
-  (into {} (keep (fn [f]
-                   (when (= "js/export" (head-sym f))
-                     (let [d (second (ordered-children f))]
-                       (cond
-                         (VALUE-DEFS (head-sym d)) (let [nl (second (ordered-children d))] [(sym-val nl) nl])
-                         (sym-val d)               [(sym-val d) d]))))   ; (js/export red) — re-export
-                 (forms-of src))))
-(defn type-name-leaf [d]              ; a type def's name-leaf, unwrapping a parameterized (Name Params) head
-  (let [nl0 (second (ordered-children d))]
-    (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)))
-(defn module-types [src]              ; {type-name -> name-leaf}  (defrecord/deftype/.../defunion + variants)
-  (let [defs (filter #(TYPE-DEFS (head-sym (unwrap-def %))) (forms-of src))
-        names (into {} (keep (fn [f] (let [nl (type-name-leaf (unwrap-def f))]
-                                       (when (sym-val nl) [(sym-val nl) nl]))) defs))
-        ;; defunion variant constructors: inline (Variant [fields]) OR bare nullary `None`. A bare member
-        ;; that is ALSO a top-level type name (e.g. (defunion Result Ok Err) over defrecords) is NOT a new
-        ;; binding — `merge names` below makes the type-def name authoritative, and walk binds the member
-        ;; occurrence to it as a reference, so the whole type renames together (no defrecord/union split).
-        variants (into {} (mapcat (fn [f] (let [d (unwrap-def f)]
-                                            (when (= "defunion" (head-sym d))
-                                              (keep (fn [v] (cond
-                                                              (= "list" (kind-of v))
-                                                              (let [vn (first (ordered-children v))]
-                                                                (when (sym-val vn) [(sym-val vn) vn]))
-                                                              (sym-val v) [(sym-val v) v]))
-                                                    (drop 2 (ordered-children d))))))
-                                  defs))]
-    (merge variants names)))
-;; beagle synthesizes a field accessor `<lower(RecordName)>-<field>` per defrecord/deftype field.
-;; A renamed record must carry its accessor CALL sites, so map each accessor name to its type + field.
-(defn module-accessors [src]          ; {"point-x" -> [Point-name-leaf "x"]}
-  (into {} (mapcat (fn [f] (let [d (unwrap-def f)]
-                             (when (#{"defrecord" "deftype"} (head-sym d))
-                               (let [nl (type-name-leaf d)
-                                     fb (first (filter brackets? (drop 2 (ordered-children d))))]
-                                 (when (and (sym-val nl) fb)
-                                   (let [pfx (str/lower-case (sym-val nl))]
-                                     (map (fn [fld] [(str pfx "-" fld) [nl fld]])
-                                          (keep sym-val (param-binds fb)))))))))
-                   (forms-of src))))
+(defn forms-of [src] (rm/forms-of ctx *view* (@file->ents src)))
+(defn ns-form [src] (rm/ns-form ctx *view* (@file->ents src)))
+(defn module-name [src] (rm/module-name ctx *view* (@file->ents src)))
+(defn merge-import-opts [acc modn kids] (rm/merge-import-opts ctx *view* acc modn (vec kids)))
+(defn parse-require [src] (rm/parse-require ctx *view* (@file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
+(defn module-exports [src] (rm/module-exports ctx *view* (@file->ents src))) ; {exported-name -> binding-node}
+(defn type-name-leaf [d] (rm/type-name-leaf ctx *view* d))                   ; a type def's name-leaf, (Name Params) head unwrapped
+(defn module-types [src] (rm/module-types ctx *view* (@file->ents src)))     ; {type-name -> name-leaf}
+(defn module-accessors [src] (rm/module-accessors ctx *view* (@file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
 
 ;; --- corpus tables (DYNAMIC, inert root) ------------------------------------
 ;; The loaded sources + every frame/export table derived from them. INERT at root

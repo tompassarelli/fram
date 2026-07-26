@@ -36,7 +36,9 @@ done
 #   resolve_binds M1 Cut C: the binding extractor — what a destructuring
 #                pattern, param vector, let/for binding vector or match pattern
 #                binds, and in what order (rb/*).
-for m in pull resolve_core resolve_read resolve_binds; do
+#   resolve_modules M1 Cut D: one module's frame (top-level defs, types,
+#                synthesized accessors) and its import/export surface (rm/*).
+for m in pull resolve_core resolve_read resolve_binds resolve_modules; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"

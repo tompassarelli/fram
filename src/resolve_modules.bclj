@@ -1,0 +1,264 @@
+#lang beagle/clj
+
+;; ============================================================================
+;; resolve-modules — one module's frame, and its import/export surface.
+;; ============================================================================
+;; Stage M1 Cut D of the engine core port (north thread
+;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). Everything the resolver needs to know
+;; about a MODULE before it walks a single reference: which names the module
+;; binds at top level (so forward references resolve), which names it exports,
+;; which types and synthesized field accessors it defines, and what its
+;; ns/:require or bare `require` forms pull in.
+;;
+;; The entity list arrives as a parameter. resolve.clj holds it in the ^:dynamic
+;; atom `file->ents`; as in Cuts B and C the var cannot change namespace
+;; (coord_daemon.clj and tests/coord_*.clj `binding` these by qualified name), so
+;; resolve.clj derefs and hands the module's entities over, and every function
+;; here is a function of its arguments.
+;;
+;; Consumed by resolve.clj — so the emitted out/resolve_modules.clj must stay on
+;; the classpath.
+;; ============================================================================
+(ns resolve-modules
+  (:require [clojure.string :as str]
+            [fram.types :as t] [fram.store :as c]
+            [resolve-core :as rc] [resolve-read :as rr] [resolve-binds :as rb]))
+
+(define-mode strict)
+
+(defn- sv [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (rr/sym-val ctx view e))
+
+(defn- hd [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+  (rr/head-sym ctx view e))
+
+;; The `(beagle-file …)` wrapper node among a module's entities. One linear scan,
+;; exactly as the original's `some`.
+(defn- wrapper [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- Int?
+  (loop [i 0]
+    (if (>= i (count ents))
+      nil
+      (let [e (nth ents i)]
+        (if (= "beagle-file" (hd ctx view e)) e (recur (inc i)))))))
+
+;; A top-level form, with a `(js/export …)` wrapper peeled off if present.
+(defn unwrap-def [ctx :- (U (Atom t/Store) Nil) view :- Any form :- Int?] :- Int?
+  (if (= "js/export" (hd ctx view form))
+    (nth (rr/ordered-children ctx form) 1 nil)
+    form))
+
+;; The module's top-level forms, in source order.
+(defn forms-of [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Vec Int)
+  (vec (rest (rr/ordered-children ctx (wrapper ctx view ents)))))
+
+(defn ns-form [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- Int?
+  (let [fs (forms-of ctx view ents)]
+    (loop [i 0]
+      (if (>= i (count fs))
+        nil
+        (let [f (nth fs i)]
+          (if (= "ns" (hd ctx view f)) f (recur (inc i))))))))
+
+(defn module-name [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- Any
+  (let [nf (ns-form ctx view ents)]
+    (if (nil? nf) nil (sv ctx view (nth (rr/ordered-children ctx nf) 1 nil)))))
+
+;; ---------------------------------------------------------------- frame ----
+
+;; {top-level-name -> binding-node} for every value binding the module makes, so
+;; a forward reference still resolves.
+(defn module-defs [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Map Any Int)
+  (reduce
+    (fn [acc :- (Map Any Int) f :- Int] :- (Map Any Int)
+      (let [d (unwrap-def ctx view f)
+            h (hd ctx view d)]
+        (cond
+          ;; def/defn — a value binding. D2: unwrap a leading (#%meta …) so a
+          ;; metadata-annotated NAME — (def ^:dynamic *x* …) — still enters the
+          ;; frame as `*x*`.
+          (contains? rc/VALUE-DEFS (str h))
+          (let [nl (rr/unwrap-meta ctx view (nth (rr/ordered-children ctx d) 1 nil))
+                nm (sv ctx view nl)]
+            (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))
+
+          ;; defprotocol/definterface methods are public callable VARS — each
+          ;; method sig (name [params] :- Ret) defines `name`; collect them so
+          ;; they rename and resolve.
+          (contains? #{"defprotocol" "definterface"} (str h))
+          (reduce (fn [a :- (Map Any Int) m :- Int] :- (Map Any Int)
+                    (if (= "list" (rr/kind-of ctx view m))
+                      (let [nl (nth (rr/ordered-children ctx m) 0 nil)
+                            nm (sv ctx view nl)]
+                        (if (or (nil? nm) (nil? nl)) a (assoc a nm nl)))
+                      a))
+                  acc
+                  (vec (drop 2 (rr/ordered-children ctx d))))
+
+          :else acc)))
+    {}
+    (forms-of ctx view ents)))
+
+;; ------------------------------------------------- imports and exports -----
+
+;; kids = the tokens after the module name; fold :refer/:as/:rename into acc.
+(defn merge-import-opts [ctx :- (U (Atom t/Store) Nil) view :- Any
+                         acc :- (Map Keyword Any) modn :- Any kids :- (Vec Int)] :- (Map Keyword Any)
+  (let [idx (fn [kw :- String] :- Int?
+              (loop [i 0]
+                (if (>= i (count kids))
+                  nil
+                  (if (= kw (str (sv ctx view (nth kids i)))) i (recur (inc i))))))
+        ri  (idx ":refer")
+        ai  (idx ":as")
+        rri (idx ":rename")
+        nb  (if (nil? ri) nil (nth kids (inc ri) nil))
+        refers (if (and (some? nb) (rb/brackets? ctx view nb))
+                 (vec (keep (fn [k :- Int] :- Any (sv ctx view k))
+                            (vec (rest (rr/ordered-children ctx nb)))))
+                 [])
+        alias (if (nil? ai) nil (sv ctx view (nth kids (inc ai) nil)))
+        ;; {srcname -> localname}
+        rmap (let [mb (if (nil? rri) nil (nth kids (inc rri) nil))]
+               (if (and (some? mb) (rb/map-node? ctx view mb))
+                 (loop [cs :- (Vec Int) (vec (rest (rr/ordered-children ctx mb)))
+                        m  :- (Vec Any) []]
+                   (if (< (count cs) 2)
+                     m
+                     (recur (vec (drop 2 cs))
+                            (conj m [(sv ctx view (nth cs 0)) (sv ctx view (nth cs 1))]))))
+                 []))
+        a1 (if (empty? refers)
+             acc
+             (assoc acc :refer (reduce (fn [m :- (Map Any Any) n :- Any] :- (Map Any Any)
+                                         (assoc m n modn))
+                                       (get acc :refer {}) refers)))
+        a2 (if (nil? alias) a1 (assoc a1 :as (assoc (get a1 :as {}) alias modn)))]
+    (if (empty? rmap)
+      a2
+      (assoc a2 :rename (reduce (fn [m :- (Map Any Any) p :- Any] :- (Map Any Any)
+                                  (assoc m (nth p 1) [modn (nth p 0)]))
+                                (get a2 :rename {}) rmap)))))
+
+;; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
+(defn parse-require [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Map Keyword Any)
+  (let [fs (forms-of ctx view ents)
+        ;; bare top-level beagle requires: (require modn :as a :refer [..] :rename {..})
+        bare (reduce (fn [acc :- (Map Keyword Any) f :- Int] :- (Map Keyword Any)
+                       (if (= "require" (hd ctx view f))
+                         (let [kids (rr/ordered-children ctx f)]
+                           (merge-import-opts ctx view acc (sv ctx view (nth kids 1 nil))
+                                              (vec (drop 2 kids))))
+                         acc))
+                     {:refer {} :as {} :rename {}}
+                     fs)
+        nf (ns-form ctx view ents)
+        reqs (if (nil? nf)
+               nil
+               (loop [cs :- (Vec Int) (rr/ordered-children ctx nf)]
+                 (if (empty? cs)
+                   nil
+                   (let [c (nth cs 0)]
+                     (if (and (= "list" (rr/kind-of ctx view c))
+                              (= ":require" (str (sv ctx view (nth (rr/ordered-children ctx c) 0 nil)))))
+                       c
+                       (recur (vec (rest cs))))))))]
+    (if (nil? reqs)
+      bare
+      ;; ns-form specs: [modn :refer [..] :as a ...]
+      (reduce (fn [acc :- (Map Keyword Any) spec :- Int] :- (Map Keyword Any)
+                (if (rb/brackets? ctx view spec)
+                  (let [kids (vec (rest (rr/ordered-children ctx spec)))]
+                    (merge-import-opts ctx view acc (sv ctx view (nth kids 0 nil))
+                                       (vec (rest kids))))
+                  acc))
+              bare
+              (vec (rest (rr/ordered-children ctx reqs)))))))
+
+;; {exported-name -> binding-node} — a (js/export def …) OR a bare re-export.
+;; DELIBERATELY unguarded on a nil name, unlike module-defs/module-types just
+;; above: the original entered `[(sym-val nl) nl]` into the map whatever sym-val
+;; answered, so an exported def whose name slot is a (#%meta …) wrapper produced
+;; a nil key. Guarding here would silently change a (degenerate) result, and this
+;; cut's contract is parity, not repair.
+(defn module-exports [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Map Any Any)
+  (reduce
+    (fn [acc :- (Map Any Any) f :- Int] :- (Map Any Any)
+      (if (= "js/export" (hd ctx view f))
+        (let [d (nth (rr/ordered-children ctx f) 1 nil)]
+          (cond
+            (contains? rc/VALUE-DEFS (str (hd ctx view d)))
+            (let [nl (nth (rr/ordered-children ctx d) 1 nil)]
+              (assoc acc (sv ctx view nl) nl))
+            ;; (js/export red) — re-export
+            (some? (sv ctx view d)) (assoc acc (sv ctx view d) d)
+            :else acc))
+        acc))
+    {}
+    (forms-of ctx view ents)))
+
+;; ----------------------------------------------- types and accessors -------
+
+;; A type def's name-leaf, unwrapping a parameterized (Name Params) head.
+(defn type-name-leaf [ctx :- (U (Atom t/Store) Nil) view :- Any d :- Int?] :- Int?
+  (let [nl0 (nth (rr/ordered-children ctx d) 1 nil)]
+    (if (= "list" (rr/kind-of ctx view nl0))
+      (nth (rr/ordered-children ctx nl0) 0 nil)
+      nl0)))
+
+;; {type-name -> name-leaf} for defrecord/deftype/.../defunion, plus a defunion's
+;; variant constructors: inline (Variant [fields]) OR bare nullary `None`. A bare
+;; member that is ALSO a top-level type name (e.g. (defunion Result Ok Err) over
+;; defrecords) is NOT a new binding — the type-def names are merged over the
+;; variants so the type-def name stays authoritative, and walk binds the member
+;; occurrence to it as a reference, so the whole type renames together.
+(defn module-types [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Map Any Int)
+  (let [defs (filterv (fn [f :- Int] :- Bool
+                        (contains? rc/TYPE-DEFS (str (hd ctx view (unwrap-def ctx view f)))))
+                      (forms-of ctx view ents))
+        names (reduce (fn [acc :- (Map Any Int) f :- Int] :- (Map Any Int)
+                        (let [nl (type-name-leaf ctx view (unwrap-def ctx view f))
+                              nm (sv ctx view nl)]
+                          (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl))))
+                      {} defs)
+        variants (reduce
+                   (fn [acc :- (Map Any Int) f :- Int] :- (Map Any Int)
+                     (let [d (unwrap-def ctx view f)]
+                       (if (= "defunion" (hd ctx view d))
+                         (reduce (fn [a :- (Map Any Int) v :- Int] :- (Map Any Int)
+                                   (cond
+                                     (= "list" (rr/kind-of ctx view v))
+                                     (let [vn (nth (rr/ordered-children ctx v) 0 nil)
+                                           nm (sv ctx view vn)]
+                                       (if (or (nil? nm) (nil? vn)) a (assoc a nm vn)))
+                                     (some? (sv ctx view v)) (assoc a (sv ctx view v) v)
+                                     :else a))
+                                 acc
+                                 (vec (drop 2 (rr/ordered-children ctx d))))
+                         acc)))
+                   {} defs)]
+    (merge variants names)))
+
+;; beagle synthesizes a field accessor `<lower(RecordName)>-<field>` per
+;; defrecord/deftype field. A renamed record must carry its accessor CALL sites,
+;; so map each accessor name to its type name-leaf + field.
+;;   {"point-x" -> [Point-name-leaf "x"]}
+(defn module-accessors [ctx :- (U (Atom t/Store) Nil) view :- Any ents :- (Vec Int)] :- (Map Any Any)
+  (reduce
+    (fn [acc :- (Map Any Any) f :- Int] :- (Map Any Any)
+      (let [d (unwrap-def ctx view f)]
+        (if (contains? #{"defrecord" "deftype"} (str (hd ctx view d)))
+          (let [nl (type-name-leaf ctx view d)
+                nm (sv ctx view nl)
+                fb (first (filterv (fn [k :- Int] :- Bool (rb/brackets? ctx view k))
+                                   (vec (drop 2 (rr/ordered-children ctx d)))))]
+            (if (or (nil? nm) (nil? fb))
+              acc
+              (let [pfx (str/lower-case (str nm))]
+                (reduce (fn [a :- (Map Any Any) b :- Int] :- (Map Any Any)
+                          (let [fld (sv ctx view b)]
+                            (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld]))))
+                        acc
+                        (rb/param-binds ctx view fb)))))
+          acc)))
+    {}
+    (forms-of ctx view ents)))
