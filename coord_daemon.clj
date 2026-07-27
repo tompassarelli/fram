@@ -5348,27 +5348,33 @@
         ;; line must be dropped pre-fold. A torn line is an incomplete write that
         ;; must NOT apply (the writer retries).
         raw (read-logs-merged flat)
+        input-plan (cc/migrate-input-plan (vec raw))
         ;; max :tx over ALL parsed lines — same set fold/max-tx (doctor's log-v)
         ;; counts, INCLUDING a torn tail (EDN-valid but missing :r). Seeding over
         ;; only the filtered asserts would lag by one when the tail is torn and make
         ;; doctor report STALE; matching fold keeps doctor FRESH.
-        flat-max-tx (reduce max 0 (map #(or (:tx %) 0) raw))
-        asserts (filter #(and (:l %) (:p %) (:r %)) raw)
+        flat-max-tx (:flat-max-tx input-plan)
+        asserts (:asserts input-plan)
         ;; schema-as-facts: predname->is-single from the log's own cardinality facts
         ;; (CLI-parity map). Authoritative over ck/single? at every classification below.
         cmap (log-card-map asserts)
         facts (:facts (fold/fold (vec asserts)))
         by-pred (group-by :p facts)
+        schema-plan (cc/migrate-schema-plan
+                     (vec (keys by-pred))
+                     (vec (card-only-preds cmap asserts))
+                     (set (keys by-pred))
+                     schema-preds)
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]
     (s/setup! st tx)
-    (doseq [p (keys by-pred) :when (not (schema-preds p))]   ; skip reserved engine preds (defensive)
+    (doseq [p (:domain schema-plan)]   ; skip reserved engine preds (defensive)
       (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi")
                             (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx))
     ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
     ;; NO domain facts (absent from by-pred). Materialize the fact so s/cardinality (the
     ;; write-path authority) matches the CLI map; no value facts ⇒ value_kind "literal".
-    (doseq [p (card-only-preds cmap asserts) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
+    (doseq [p (:card-only schema-plan)]
       (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi") "literal" tx))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
     ;; present in the flat log AND not classified by a cardinality fact still get their
@@ -5378,8 +5384,14 @@
     ;; The `cmap` guard means a log `@p cardinality multi` on a kernel-single pred is NOT
     ;; force-seeded back to single (the fact wins). The loops above already seeded in-log
     ;; + cardinality-only preds, so the guard skips them and preserves their ref/literal kind.
-    (doseq [p ck/single-valued :when (and (not (schema-preds p)) (not (contains? cmap p)) (not= "single" (s/cardinality st p)))]
-      (s/def-predicate! st p "single" "literal" tx))
+    (let [current-single
+          (into #{} (filter #(= "single" (s/cardinality st %)))
+                ck/single-valued)
+          kernel-seeds
+          (cc/migrate-kernel-seed-plan
+           (vec ck/single-valued) schema-preds cmap current-single)]
+      (doseq [p kernel-seeds]
+        (s/def-predicate! st p "single" "literal" tx)))
     (let [memo (atom {})
           ent! (fn [sid] (or (get @memo sid)
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]

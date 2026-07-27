@@ -161,3 +161,15 @@
 
 (defn reload-result-decision [result attempt max-attempts]
   (if (= result :retry) (if (< attempt (dec max-attempts)) :retry :exhausted) :return))
+
+(defn migrate-input-plan [raw]
+  (let [flat-max-tx (reduce max 0 (map (fn [line] (let [tx (:tx line)]
+  (if (int? tx) tx 0))) raw))
+   asserts (filterv (fn [line] (boolean (and (:l line) (:p line) (:r line)))) raw)]
+  {:flat-max-tx flat-max-tx :asserts asserts}))
+
+(defn migrate-schema-plan [predicates card-only by-pred schema-preds]
+  {:domain (filterv (fn [pred] (not (contains? schema-preds pred))) predicates) :card-only (filterv (fn [pred] (and (not (contains? schema-preds pred)) (not (contains? by-pred pred)))) card-only)})
+
+(defn migrate-kernel-seed-plan [single-valued schema-preds cmap current-single]
+  (filterv (fn [pred] (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred)))) single-valued))

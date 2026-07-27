@@ -215,3 +215,19 @@
   (if (= result :retry)
     (if (< attempt (dec max-attempts)) :retry :exhausted)
     :return))
+
+(defn migrate-input-plan [raw :- (Vec Any)] :- (Map Keyword Any)
+  (let [flat-max-tx (reduce max 0 (map (fn [line :- Any] :- Int (let [tx (get line :tx)] (if (int? tx) tx 0))) raw)) asserts (filterv (fn [line :- Any] :- Bool (boolean (and (get line :l) (get line :p) (get line :r)))) raw)]
+    {:flat-max-tx flat-max-tx :asserts asserts}))
+
+(defn migrate-schema-plan [predicates :- (Vec String) card-only :- (Vec String) by-pred :- (Set String) schema-preds :- (Set String)] :- (Map Keyword Any)
+  {:domain
+   (filterv (fn [pred :- String] :- Bool (not (contains? schema-preds pred)))
+     predicates)
+   :card-only
+   (filterv (fn [pred :- String] :- Bool (and (not (contains? schema-preds pred)) (not (contains? by-pred pred))))
+     card-only)})
+
+(defn migrate-kernel-seed-plan [single-valued :- (Vec String) schema-preds :- (Set String) cmap :- (Map String Bool) current-single :- (Set String)] :- (Vec String)
+  (filterv (fn [pred :- String] :- Bool (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred))))
+    single-valued))
