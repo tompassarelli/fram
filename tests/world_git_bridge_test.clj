@@ -212,6 +212,18 @@
      (= (select-keys (:ok render-a) [:tree :commit])
         (select-keys (:ok render-b) [:tree :commit])))
 
+(def head-before-format-reject (git rendered-a "rev-parse" "HEAD"))
+(def format-reject
+  (bridge.world-git/render-version!
+   co main-version rendered-a {:object-format "sha256"}))
+
+(bar "format: an existing repository rejects an explicit object-format mismatch"
+     (and (= :git-object-format-mismatch (:reject format-reject))
+          (= "sha256" (:requested format-reject))
+          (= "sha1" (:actual format-reject))
+          (= head-before-format-reject
+             (git rendered-a "rev-parse" "HEAD"))))
+
 (def replay-log (str scratch "/replay.log"))
 (io/copy (io/file log) (io/file replay-log))
 (def rendered-process (str scratch "/rendered-process"))

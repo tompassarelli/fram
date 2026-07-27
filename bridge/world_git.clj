@@ -98,8 +98,13 @@
                  object-format
                  (conj (str "--object-format=" object-format))
                  true
-                 (conj (str repo)))))))
-  repo)
+                 (conj (str repo))))))
+    (let [actual (git-text repo "rev-parse" "--show-object-format")]
+      (when (and object-format (not= object-format actual))
+        (reject! {:reject :git-object-format-mismatch
+                  :requested object-format
+                  :actual actual}))
+      actual)))
 
 (defn- parse-ls-tree-entry [commit entry]
   (let [[header slot] (str/split entry #"\t" 2)
@@ -424,9 +429,9 @@
 (defn- render-version*
   [co version-id repo {:keys [ref object-format]
                        :or {ref "refs/heads/main"
-                            object-format "sha1"}}]
-  (init-repo! repo object-format)
-  (let [chain (version-chain co version-id)
+                            object-format nil}}]
+  (let [actual-object-format (init-repo! repo object-format)
+        chain (version-chain co version-id)
         rendered
         (reduce
          (fn [{:keys [commit] :as acc} {:keys [version]}]
@@ -445,7 +450,7 @@
     (assoc rendered
            :version version-id
            :ref ref
-           :object-format object-format
+           :object-format actual-object-format
            :versions (mapv :version chain))))
 
 (defn render-version!
