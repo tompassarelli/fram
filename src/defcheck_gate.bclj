@@ -1,0 +1,15 @@
+#lang beagle/clj
+
+;; @upstream:graph — the code lives in the Fram fact graph; this text is a
+;; generated view. Author substantive forms only through the Fram graph-edit
+;; verbs. SEEDED 2026-07-27 for core-port M2 wave 3.
+;; ============================================================================
+;; fram.defcheck — incremental typed and untyped definition checks.
+;; ============================================================================
+(ns fram.defcheck
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.edn :as edn]
+            [cheshire.core :as json]))
+
+(define-mode strict)
