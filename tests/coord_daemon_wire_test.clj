@@ -125,7 +125,22 @@
     (check "limit plan uses explicit clock and rejects invalid overrides"
            (and (= 5001000000 (:deadline-ns invalid))
                 (= 5000 (:timeout-ms invalid))
-                (= 10000000 (:max-steps invalid))))))
+                (= 10000000 (:max-steps invalid)))))
 
-(println "coord_daemon_wire:" (- 19 @failures) "/ 19 PASS")
+  (let [bad (wire/connection-error-selection
+             :request :throwable {:type :edn-too-deep} "Exception")
+        timeout (wire/connection-error-selection
+                 :request :socket-timeout nil "SocketTimeoutException")
+        setup (wire/connection-error-selection
+               :connection :throwable nil "IOException")]
+    (check "request failure selects the legacy bad-request envelope"
+           (= {:action :reply
+               :response {:error "bad request: :edn-too-deep"}}
+              bad))
+    (check "slow request selects close without a reply"
+           (= {:action :close} timeout))
+    (check "pre-writer connection failure always selects close"
+           (= {:action :close} setup))))
+
+(println "coord_daemon_wire:" (- 22 @failures) "/ 22 PASS")
 (System/exit (if (zero? @failures) 0 1))

@@ -357,8 +357,25 @@
 (defn unknown-op-response [] :- Any
   {:error "unknown op"})
 
-(defn bad-request-response [t :- Any] :- Any
-  {:error
-   (str "bad request: "
-        (or (:type (ex-data t))
-            (.getSimpleName (class t))))})
+(defn bad-request-response
+  [error-data :- Any class-name :- String] :- Any
+  {:error (str "bad request: " (or (:type error-data) class-name))})
+
+;; Catching exceptions and writing/closing sockets are host mechanisms. This
+;; function selects the observable action and, only where a request writer is
+;; known to exist, the protocol envelope.
+(defn connection-error-selection
+  [scope :- Keyword
+   error-kind :- Keyword
+   error-data :- Any
+   class-name :- String] :- Any
+  (cond
+    (not= scope :request)
+    {:action :close}
+
+    (= error-kind :socket-timeout)
+    {:action :close}
+
+    :else
+    {:action :reply
+     :response (bad-request-response error-data class-name)}))

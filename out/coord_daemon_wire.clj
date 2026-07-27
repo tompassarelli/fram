@@ -180,5 +180,11 @@
 (defn unknown-op-response []
   {:error "unknown op"})
 
-(defn bad-request-response [t]
-  {:error (str "bad request: " (or (:type (ex-data t)) (.getSimpleName (class t))))})
+(defn bad-request-response [error-data ^String class-name]
+  {:error (str "bad request: " (or (:type error-data) class-name))})
+
+(defn connection-error-selection [scope error-kind error-data ^String class-name]
+  (cond
+  (not= scope :request) {:action :close}
+  (= error-kind :socket-timeout) {:action :close}
+  :else {:action :reply :response (bad-request-response error-data class-name)}))

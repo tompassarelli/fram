@@ -4857,6 +4857,19 @@
   ([^BufferedWriter w resp fmt]
    (try (.write w (serialize-resp fmt resp)) (.newLine w) (.flush w) (catch Throwable _ nil))))
 
+(defn- connection-error-selection [scope t]
+  (wire/connection-error-selection
+   scope
+   (if (instance? java.net.SocketTimeoutException t)
+     :socket-timeout
+     :throwable)
+   (ex-data t)
+   (.getSimpleName (class t))))
+
+(defn- apply-request-error! [^BufferedWriter w fmt selection]
+  (when (= :reply (:action selection))
+    (try-reply w (:response selection) fmt)))
+
 (defn- monitor-query-disconnect [^Socket s ^BufferedReader r control]
   ;; serve-conn has completely parsed the protocol's single request line before
   ;; starting this future. From this point until close, this monitor is the sole
@@ -4982,9 +4995,13 @@
               nil)))
         ;; StackOverflowError is an Error (not Exception); catching Throwable here
         ;; keeps a deep-nest / malformed line from taking down the conn thread.
-        (catch java.net.SocketTimeoutException _ nil)   ; slow client: just close
+        (catch java.net.SocketTimeoutException t
+          ;; Slow client: the pure selector closes without an envelope.
+          (apply-request-error!
+           w nil (connection-error-selection :request t)))
         (catch Throwable t
-          (try-reply w (wire/bad-request-response t)))))
+          (apply-request-error!
+           w nil (connection-error-selection :request t)))))
     (catch Throwable _ nil)
     (finally
       (swap! subscription-sockets disj s)
