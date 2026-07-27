@@ -52,3 +52,31 @@
 
 (defn ^String repeat-str [^String s n]
   (apply str (repeat (max 0 (long n)) s)))
+
+(def EDIT-BATCH-ENVELOPE-VERSION 1)
+
+(def EDIT-BATCH-ENVELOPE-KEYS #{:fram-edit-seal-sha :fram-edit-candidate :fram-edit-line-count :fram-edit-path :fram-edit-ops :fram-edit-ops-digest :fram-edit-edn-digest :fram-edit-envelope :fram-edit-base-version :fram-edit-installed :fram-edit-log :fram-edit-final-version :fram-edit-module :fram-edit-batch-sha :fram-edit-batch})
+
+(def DIGEST-RE (re-pattern "[0-9a-f]{64}"))
+
+(defn ^Boolean edit-batch-envelope-marker? [record]
+  (and (map? record) (contains? record :fram-edit-envelope)))
+
+(defn ^Boolean digest? [value]
+  (and (string? value) (boolean (re-matches DIGEST-RE value))))
+
+(defn ^Boolean nonblank? [value]
+  (and (string? value) (not (str/blank? value))))
+
+(defn ^Boolean generation-record? [op]
+  (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
+
+(defn ^Boolean valid-edit-batch-envelope? [record ^String expected-seal]
+  (let [base (:fram-edit-base-version record)
+   final (:fram-edit-final-version record)
+   ops (:fram-edit-ops record)
+   installed (:fram-edit-installed record)
+   lines (:fram-edit-line-count record)]
+  (and (map? record) (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record))) (= EDIT-BATCH-ENVELOPE-VERSION (:fram-edit-envelope record)) (nonblank? (:fram-edit-log record)) (nonblank? (:fram-edit-candidate record)) (= (:fram-edit-candidate record) (:fram-edit-batch record)) (nonblank? (:fram-edit-module record)) (nonblank? (:fram-edit-path record)) (int? base) (not (neg? base)) (int? final) (not (neg? final)) (int? ops) (not (neg? ops)) (int? installed) (not (neg? installed)) (int? lines) (not (neg? lines)) (= ops installed) (= installed lines) (= final (+ base installed)) (digest? (:fram-edit-ops-digest record)) (digest? (:fram-edit-edn-digest record)) (digest? (:fram-edit-batch-sha record)) (digest? (:fram-edit-seal-sha record)) (= (:fram-edit-seal-sha record) expected-seal))))
+
+(def EDIT-BATCH-ENVELOPE-SEAL-FIELDS [:fram-edit-envelope :fram-edit-log :fram-edit-candidate :fram-edit-batch :fram-edit-module :fram-edit-path :fram-edit-base-version :fram-edit-final-version :fram-edit-ops :fram-edit-installed :fram-edit-ops-digest :fram-edit-edn-digest :fram-edit-line-count :fram-edit-batch-sha])
