@@ -9,12 +9,14 @@
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
 (defn free-port []
   (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s)))
-(defn eventually [f]
-  (loop [remaining 200]
-    (cond
-      (try (f) (catch Throwable _ false)) true
-      (zero? remaining) false
-      :else (do (Thread/sleep 25) (recur (dec remaining))))))
+(defn eventually
+  ([f] (eventually 200 f))
+  ([attempts f]
+   (loop [remaining attempts]
+     (cond
+       (try (f) (catch Throwable _ false)) true
+       (zero? remaining) false
+       :else (do (Thread/sleep 25) (recur (dec remaining)))))))
 (defn client [port request]
   (with-open [socket (java.net.Socket.)]
     (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1000)
@@ -87,8 +89,14 @@
                            "clojure" "-M" "coord_daemon.clj" "serve-flat"
                            (str port) (.getPath log))]
   (try
-    (check! "daemon starts with fixture"
-            (eventually #(integer? (:version (client port {:op :status})))))
+    ;; JVM clojure boot + 4000-row fold can exceed the default 5s window on a
+    ;; loaded runner (the historical flake): give startup 40s, and abort with a
+    ;; clear message instead of letting the next raw client call throw a bare
+    ;; connection-refused stack.
+    (let [up? (eventually 1600 #(integer? (:version (client port {:op :status}))))]
+      (check! "daemon starts with fixture" up?)
+      (when-not up?
+        (throw (ex-info "daemon never became ready within 40s" {:port port}))))
     (let [boot-ms (get-in (client port {:op :status}) [:boot :ms])]
       (check! (str "boot builds the warm index before listen within 15 seconds (observed "
                    boot-ms "ms)")
