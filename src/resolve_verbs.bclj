@@ -13,7 +13,7 @@
 ;; mutates nothing.
 ;;
 ;; The verbs are STORE-AGNOSTIC by construction — they read the corpus tables and
-;; write via fact!/value!/retire, so the SAME body runs on the text path (-main,
+;; write via fact!, value!, and retire, so the SAME body runs on the text path (-main,
 ;; over resolve-edn! of emit-edn(text)) and on the graph path (run-verb-warm!,
 ;; over a LOG-booted warm store).
 ;;
