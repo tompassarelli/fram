@@ -242,3 +242,144 @@
   (reduce (fn [acc :- Any form :- Any] :- Any (if-not (and (seq? form) (symbol? (first form))) acc (let [h (first form) nm (when (>= (count form) 2) (first (rest form))) base (fn [a :- Any s :- Any] :- Any (if (symbol? s) (update a :names conj (symbol (name s))) a))] (cond (or (= h (quote defn)) (= h (quote defn-)) (= h (quote defmacro)) (= h (quote definline))) (let [nm* (symbol (name nm))] (assoc-in (base acc nm) [:arities nm*] (fn-arities (drop 2 form)))) (or (= h (quote def)) (= h (quote defonce)) (= h (quote def-)) (= h (quote defstruct)) (= h (quote defmulti))) (base acc nm) (= (quote declare) h) (reduce base acc (rest form)) (or (= h (quote deftype)) (= h (quote defrecord))) (update (base acc nm) :names into (when (symbol? nm) [(symbol (str "->" (name nm))) (symbol (str "map->" (name nm))) (symbol (str (name nm) "."))])) (= (quote defprotocol) h) (reduce (fn [a :- Any sig :- Any] :- Any (if (and (seq? sig) (symbol? (first sig))) (base a (first sig)) a)) (base acc nm) (drop 2 form)) :else acc))))
     {:names #{} :arities {}}
     forms))
+
+(defn- parse-require-spec [acc :- Any spec :- Any] :- Any
+  (cond
+    (symbol? spec)
+    (update acc :ns-names conj spec)
+    (vector? spec)
+    (let [nsym (first spec) opts (when (and (keyword? (second spec)) (even? (count (rest spec)))) (apply hash-map (rest spec)))]
+      (let [a0 (update acc :ns-names conj nsym) a1 (if (get opts :as) (update a0 :aliases conj (get opts :as)) a0) a2 (if (get opts :as-alias) (update a1 :aliases conj (get opts :as-alias)) a1) a3 (if (= :all (get opts :refer)) (assoc a2 :refer-all? true) a2)]
+        (if (sequential? (get opts :refer))
+          (update a3 :refers into (get opts :refer))
+          a3)))
+    :else
+    acc))
+
+(defn- parse-ns-env "Extract {:aliases #{} :refers #{} :ns-names #{} :imports #{class-syms}\n  :refer-all? bool} from the module's forms (ns form + top-level require/use/import)."
+  [forms :- Any]
+  :-
+  Any
+  (let [empty' {:aliases #{} :refers #{} :ns-names #{} :imports #{} :refer-all? false} add-import (fn [acc :- Any spec :- Any] :- Any (cond (symbol? spec) (update acc :imports conj (symbol (peek (str/split (name spec) DOT-RE)))) (sequential? spec) (update acc :imports into (map (fn* [%1] (symbol (name %1))) (rest spec))) :else acc)) handle-clause (fn [acc :- Any clause :- Any] :- Any (if-not (seq? clause) acc (let [k (first clause)] (cond (contains? #{:require :require-macros} k) (reduce parse-require-spec acc (rest clause)) (= :use k) (assoc acc :refer-all? true) (= :import k) (reduce add-import acc (rest clause)) :else acc))))]
+    (reduce (fn [acc :- Any form :- Any] :- Any (if-not (and (seq? form) (symbol? (first form))) acc (let [head (first form)] (cond (= head (quote ns)) (reduce handle-clause acc (drop 2 form)) (= head (quote require)) (reduce parse-require-spec acc (map (fn [x :- Any] :- Any (if (and (seq? x) (= (quote quote) (first x))) (second x) x)) (rest form))) (= head (quote use)) (assoc acc :refer-all? true) (= head (quote import)) (reduce add-import acc (rest form)) :else acc))))
+      empty'
+      forms)))
+
+(defn- lev [a :- Any b :- Any] :- Int
+  (let [a (str a) b (str b) m (count a) n (count b)]
+    (if (or (zero? m) (zero? n))
+      (max m n)
+      (loop [i 1 prev (vec (range (inc n)))]
+        (if (> i m)
+          (peek prev)
+          (recur (inc i)
+            (reduce (fn [cur :- (Vec Int) j :- Int] :- (Vec Int) (conj cur (if (= (.charAt a (dec i)) (.charAt b (dec j))) (nth prev (dec j)) (inc (min (nth prev j) (peek cur) (nth prev (dec j)))))))
+              [i]
+              (range 1 (inc n)))))))))
+
+(defn- nearest [sym :- Any candidates :- Any] :- (Vec String)
+  (let [s (name sym) thr (max 2 (quot (count s) 3))]
+    (mapv (comp str first)
+      (take 2
+        (sort-by second
+          (filter (fn [pair :- Any] :- Bool (<= (nth pair 1) thr))
+            (map (fn [c :- Any] :- Any [c (lev s (name c))]) candidates)))))))
+
+(defn- anon-arg? [s :- Any] :- Bool (boolean (re-matches ANON-ARG-RE (name s))))
+
+(defn- interop-sym? [s :- Any] :- Bool
+  (let [n (name s)]
+    (or (str/starts-with? n ".")
+      (str/ends-with? n ".")
+      (str/includes? n "/")
+      (str/includes? n "."))))
+
+(defn- class-like? [s :- Any] :- Bool
+  (boolean (re-matches CLASS-LIKE-RE (name s))))
+
+(defn- qualifier-known? [env :- Any s :- Any] :- Bool
+  (let [q (namespace s)]
+    (or (nil? q)
+      (contains? (:aliases env) (symbol q))
+      (contains? (:ns-names env) (symbol q))
+      (contains? (:imports env) (symbol q))
+      (str/includes? q ".")
+      (re-matches CLASS-LIKE-RE q))))
+
+(defn- resolved-sym? [env :- Any defs :- Any locals :- Any s :- Any] :- Bool
+  (or (contains? locals s)
+    (= s (quote &))
+    (anon-arg? s)
+    (if (namespace s)
+      (qualifier-known? env s)
+      (let [n (symbol (name s))]
+        (or (contains? special-forms n)
+          (contains? (:names defs) n)
+          (contains? (:refers env) n)
+          (contains? (clojure.core/deref core-names) n)
+          (interop-sym? s)
+          (class-like? s))))))
+
+(defn- unresolved-error [module :- String def-name :- Any env :- Any defs :- Any s :- Any] :- Any
+  (let [cands (into (vec (:names defs)) (:refers env))]
+    {:ok
+     false
+     :stage
+     :type
+     :at
+     (if def-name {:module module :def def-name} {:module module})
+     :message
+     (str "unresolved symbol `"
+       s
+       "` in "
+       def-name
+       " — not a local, an own def, a :require refer/alias, clojure.core, or interop")
+     :got
+     (str s)
+     :suggestion
+     "define it, require/refer it, or fix the name"
+     :nearest
+     (nearest s cands)
+     :kind
+     "unresolved-symbol"}))
+
+(defn- arity-error [module :- String def-name :- Any f :- Any n :- Int arities :- Any] :- Any
+  (let [{:keys [fixed variadic]} arities]
+    {:nearest
+     [(str f)]
+     :stage
+     :type
+     :suggestion
+     (str "call `" f "` with " (str/join " or " (sort fixed)) " argument(s)")
+     :got
+     (str n)
+     :ok
+     false
+     :kind
+     "arity-mismatch"
+     :at
+     (if def-name {:module module :def def-name} {:module module})
+     :expected
+     (str/join "/" (sort fixed))
+     :message
+     (str "arity mismatch: `"
+       f
+       "` called with "
+       n
+       " arg(s), but is defined for "
+       (str/join "/" (sort fixed))
+       (when variadic (str " (or " variadic "+)")))}))
+
+(defn- walk-fn-tail "Walk a fn/defn tail (`([params] body…)` or `(([p] b)…)`), seeding each arity's\n  params as locals. `rec` recurses a subform, `ls0` is the enclosing scope."
+  [rec :- Any ls0 :- Any tail :- Any]
+  :-
+  Any
+  (let [tail (if (string? (first tail)) (rest tail) tail) tail (if (map? (first tail)) (rest tail) tail)]
+    (cond
+      (vector? (first tail))
+      (let [ls (into ls0 (arglist-locals (first tail)))]
+        (doseq [b (rest tail)] (rec b ls)))
+      :else
+      (doseq [a tail :when (and (seq? a) (vector? (first a)))]
+        (let [ls (into ls0 (arglist-locals (first a)))]
+          (doseq [b (rest a)] (rec b ls)))))))
