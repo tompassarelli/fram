@@ -5067,23 +5067,28 @@
                              (into-array Class [Integer/TYPE]))
           descriptor (.invoke new-fd nil (object-array [(int fd)]))
           channel-class (Class/forName "sun.nio.ch.ServerSocketChannelImpl")
+          provider-class (Class/forName "java.nio.channels.spi.SelectorProvider")
+          provider (.invoke (.getMethod provider-class "provider"
+                                        (make-array Class 0))
+                            nil
+                            (object-array 0))
           ctor (.getDeclaredConstructor
                 channel-class
                 (into-array
                  Class
-                 [java.nio.channels.spi.SelectorProvider
-                  java.net.ProtocolFamily
-                  java.io.FileDescriptor
+                 [provider-class
+                  (Class/forName "java.net.ProtocolFamily")
+                  (Class/forName "java.io.FileDescriptor")
                   Boolean/TYPE]))]
       (.setAccessible ctor true)
       (let [channel (.newInstance
                      ctor
                      (object-array
-                      [(java.nio.channels.spi.SelectorProvider/provider)
+                      [provider
                        java.net.StandardProtocolFamily/INET
                        descriptor
                        Boolean/TRUE]))]
-        (.socket ^java.nio.channels.ServerSocketChannel channel)))
+        (.socket channel)))
     (catch Throwable t
       (throw
        (ex-info
