@@ -1,5 +1,6 @@
 (ns resolve-mint
-  (:require [fram.types :as t]
+  (:require [clojure.string :as str]
+            [fram.types :as t]
             [fram.store :as c]
             [resolve-core :as rc]
             [resolve-read :as rr]
@@ -198,3 +199,80 @@
   (reduce (fn [acc b] (into acc (capture-refs m b (push frame scope) B newnm))) head (vec (drop 3 kids))))
   :else (reduce (fn [acc b] (into acc (capture-refs m b scope B newnm))) [] kids)))
   :else [])))
+
+(def INTERNAL-PREDS #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
+
+(defrecord Emit [ctx view BOUND REFERS FIXED ents wrapper-of descendants deleted-forms deleted-subtree])
+
+(defn emit-ctx [r] (:ctx r))
+
+(defn emit-view [r] (:view r))
+
+(defn emit-BOUND [r] (:BOUND r))
+
+(defn emit-REFERS [r] (:REFERS r))
+
+(defn emit-FIXED [r] (:FIXED r))
+
+(defn emit-ents [r] (:ents r))
+
+(defn emit-wrapper-of [r] (:wrapper-of r))
+
+(defn emit-descendants [r] (:descendants r))
+
+(defn emit-deleted-forms [r] (:deleted-forms r))
+
+(defn emit-deleted-subtree [r] (:deleted-subtree r))
+
+(defn- emit-line [^Emit m wrap e cid]
+  (let [ctx (:ctx m)
+   view (:view m)
+   cl (c/fact-of ctx cid)
+   p (if (nil? cl) nil (:p cl))
+   r (if (nil? cl) nil (:r cl))
+   ps (if (int? p) (c/literal ctx p) nil)]
+  (cond
+  (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0")) nil
+  (contains? INTERNAL-PREDS (str ps)) nil
+  (and (= ps "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e))) (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
+   fixed? (not (empty? (c/by-lp ctx e (:FIXED m))))
+   qual (rr/pred-val ctx view e "qualifier")
+   cpfx (rr/pred-val ctx view e "ctor_prefix")
+   afield (rr/pred-val ctx view e "accessor_field")
+   nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D)
+   nm (cond
+  (some? cpfx) (str cpfx nm0)
+  (some? afield) (str (str/lower-case (str nm0)) "-" afield)
+  :else nm0)]
+  (str "[" e " \"v\" " (pr-str (cond
+  fixed? (c/literal ctx r)
+  (some? qual) (str qual "/" nm)
+  :else nm)) "]"))
+  (c/value-object? ctx r) (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")
+  :else (str "[" e " " (pr-str ps) " " r "]"))))
+
+(defn extract-lines [^Emit m ^String src]
+  (let [ctx (:ctx m)
+   wrapf (:wrapper-of m)
+   desc (:descendants m)
+   dforms (:deleted-forms m)
+   dsub (:deleted-subtree m)
+   wrap (wrapf src)
+   root (if (empty? dforms) (wrapf src) nil)
+   live (if (some? root) (desc root) nil)
+   ents (vec (get (:ents m) src []))
+   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line m wrap e cid)]
+  (if (nil? line) a (conj a line)))) acc (c/by-l ctx e)))) [] ents)
+   forms (if (some? wrap) (vec (remove (fn [f] (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) [])
+   formlines (mapv (fn [i] (str "[" wrap " \"f" (+ i 1) "\" " (nth forms i) "]")) (vec (range (count forms))))]
+  (into (into [(str "@file " src)] rows) formlines)))
+
+(defn author-emit-lines [op detail srcs outp]
+  (let [f outp]
+  (into [(str "================ authoring: " op " ================") detail] (mapv (fn [s] (str "projected -> " (f s) "   <- " s)) srcs))))
+
+(defn re-resolve-frames [srcs mdefs mtypes maccs]
+  (let [fd mdefs
+   ft mtypes
+   fa maccs]
+  {:modframe (reduce (fn [acc s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc s] (assoc acc s (fa s))) {} srcs)}))

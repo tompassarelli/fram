@@ -665,56 +665,19 @@
                 nl (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)]   ; (Name Params) head
             (when (= victim nl) f)))
         (rest (ordered-children (wrapper-of src)))))
+;; extract-file! — THE PROJECTION (M1 Cut I; line construction, the #36 wrapper
+;; renumber and the reachability filter all in src/resolve_mint.bclj). Only the
+;; writer + `binding [*out* w]` scaffolding stays here — a host dynamic var cannot
+;; change namespace — so the module returns the LINES and this printlns them, one
+;; per line, byte-for-byte as before.
+(defn emit-env []
+  (rmi/->Emit ctx *view* BOUND REFERS FIXED @file->ents
+              wrapper-of descendants *deleted-forms* *deleted-subtree*))
 (defn extract-file! [src out-path]
   (with-open [w (clojure.java.io/writer out-path)]
     (binding [*out* w]
-      (println (str "@file " src))
-      (let [wrap (wrapper-of src)   ; #36: ALWAYS renumber wrapper form-edges to consecutive
-                                    ;; integers. The graph keeps CRDT keys (f<path>~<tie>); the
-                                    ;; .bclj view must be clean integer fN so racket --render (which
-                                    ;; only understands integer fN) sees every form. Previously this
-                                    ;; ran ONLY under deletes, so a CRDT-keyed insert survived raw
-                                    ;; and racket silently dropped it. Idempotent for clean modules.
-            ;; REACHABILITY filter: emit ONLY nodes reachable from the beagle-file
-            ;; wrapper via LIVE structural edges (fN/tail/segN/commentN/child). An
-            ;; authoring verb that SUPERSEDES a body/form fN edge (set-body, upsert
-            ;; REPLACE) leaves the OLD subtree's nodes in file->ents with their parent
-            ;; edge retired — so they become parentless ROOT CANDIDATES that the
-            ;; renderer's edn-root may pick instead of the real wrapper (observed:
-            ;; render of a re-edited module collapsed to just the orphaned old body).
-            ;; Restricting to descendants(wrapper) drops those orphans cleanly. (Skip
-            ;; the filter under the delete path, which has its own subtree machinery.)
-            root  (when (empty? *deleted-forms*) (wrapper-of src))
-            live  (when root (descendants root))
-            keep? (fn [e] (or (nil? live) (contains? live e)))]
-        (doseq [e (@file->ents src) :when (and (not (*deleted-subtree* e)) (keep? e)), cid (c/by-l ctx e)]
-          (let [cl (c/fact-of ctx cid) p (:p cl) r (:r cl) ps (c/literal ctx p)]
-            (cond
-              ;; wrapper form-edges: drop them all (except f0, the beagle-file head); the
-              ;; surviving forms are re-emitted at consecutive integer fN below.
-              (and (= e wrap) (string? ps) (ord-pos? ps) (not= ps "f0")) nil   ; #36: wrapper form-edge (old f<int> OR new CRDT key) except f0 (beagle-file head) — renumbered consecutively below
-              (#{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"} ps) nil  ; internal edges
-              (and (= ps "v") (refers-target e))              ; a resolved reference: render per mode
-              (let [D (refers-target e)
-                    fixed? (seq (c/by-lp ctx e FIXED))        ; :rename alias — keep own spelling
-                    qual (pred-val e "qualifier")             ; x/name — show alias/current-name
-                    cpfx (pred-val e "ctor_prefix")           ; "->" / "map->" auto-constructor — re-prefix
-                    afield (pred-val e "accessor_field")      ; synth accessor — render <lower(name)>-<field>
-                    nm (binding-name D)
-                    nm (cond cpfx   (str cpfx nm)
-                             afield (str (str/lower-case nm) "-" afield)
-                             :else  nm)]
-                (println (str "[" e " \"v\" "
-                              (pr-str (cond fixed? (c/literal ctx r)
-                                            qual   (str qual "/" nm)
-                                            :else  nm))
-                              "]")))
-              (c/value-object? ctx r) (println (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]"))
-              :else (println (str "[" e " " (pr-str ps) " " r "]")))))
-        (when wrap                                            ; re-emit surviving forms at consecutive fN
-          (let [forms (remove *deleted-forms* (rest (ordered-children wrap)))]
-            (doseq [[i f] (map-indexed vector forms)]
-              (println (str "[" wrap " \"f" (inc i) "\" " f "]")))))))))
+      (doseq [line (rmi/extract-lines (emit-env) src)] (println line)))))
+
 ;; render output dir honors *resolve-out* (default $RESOLVE_OUT, then /tmp) so
 ;; concurrent gate runs / agents don't collide on a global /tmp/resolved-*.edn —
 ;; the gates set it to a per-run temp dir. *resolve-out* is the IN-PROCESS override
@@ -738,22 +701,26 @@
 ;; re-resolve!: after a mint, the module frame is stale (a new def, or a new body's
 ;; references). Recompute every module's frame + re-walk forms so fresh references
 ;; carry refers_to. Idempotent — bind! only adds an edge where one resolves.
+;; PARTIAL port (M1 Cut I): the three per-src frame tables come from
+;; rmi/re-resolve-frames; the `binding` of *xresolve*/*tresolve*/*aresolve* IS the
+;; dynamic scope the re-walk reads and cannot change namespace, so it stays here.
 (defn re-resolve! []
-  (let [modframe  (into {} (map (fn [s] [s (module-defs s)]) srcs))
-        typeframe (into {} (map (fn [s] [s (module-types s)]) srcs))
-        accessors (into {} (map (fn [s] [s (module-accessors s)]) srcs))]
+  (let [frames    (rmi/re-resolve-frames (vec srcs) module-defs module-types module-accessors)
+        modframe  (:modframe frames)
+        typeframe (:typeframe frames)
+        accessors (:accessors frames)]
     (doseq [src srcs]
       (binding [*xresolve* (make-xresolve src)
                 *tresolve* (fn [nm] (get (get typeframe src) nm))
                 *aresolve* (fn [nm] (get (get accessors src) nm))]
         (walk-all (forms-of src) (list (get modframe src)))
         (walk-comments src)))))
+;; author-emit! — project every src, then report to stderr (M1 Cut I; the report
+;; lines in src/resolve_mint.bclj). `detail` is printed as a VALUE, never str'd.
 (defn author-emit! [op detail]
   (doseq [src srcs] (extract-file! src (out-path src)))
   (binding [*out* *err*]
-    (println (str "================ authoring: " op " ================"))
-    (println detail)
-    (doseq [src srcs] (println (str "projected -> " (out-path src) "   <- " src)))))
+    (doseq [line (rmi/author-emit-lines op detail (vec srcs) out-path)] (println line))))
 
 ;; ============================================================================
 ;; STANDALONE AUTHORING VERBS — the SAME arm bodies as the -main case, lifted to

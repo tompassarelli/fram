@@ -43,7 +43,8 @@
 ;; classpath.
 ;; ============================================================================
 (ns resolve-mint
-  (:require [fram.types :as t]
+  (:require [clojure.string :as str]
+    [fram.types :as t]
     [fram.store :as c]
     [resolve-core :as rc]
     [resolve-read :as rr]
@@ -393,3 +394,125 @@
                   [] kids)))
 
       :else [])))
+
+;; ---------------------------------------------------------------------------
+;; the PROJECTION — a module's resolved fact set, back out as render EDN
+;; ---------------------------------------------------------------------------
+;; extract-lines builds the EXACT lines extract-file! printed; resolve.clj keeps
+;; only the `with-open` writer + `binding [*out* w]` scaffolding, which cannot
+;; change namespace (a host dynamic var), and printlns them one per LINE — the
+;; goldens compare bytes, so line content and order are preserved verbatim.
+;;
+;; Two filters, both load-bearing:
+;;   #36  wrapper form-edges are ALWAYS renumbered to consecutive integer fN.
+;;        The graph keeps CRDT keys (f<path>~<tie>); the .bclj view must be clean
+;;        integer fN so racket --render (which only understands integer fN) sees
+;;        every form. Previously this ran ONLY under deletes, so a CRDT-keyed
+;;        insert survived raw and racket silently dropped it. Idempotent for
+;;        clean modules.
+;;   REACHABILITY  emit ONLY nodes reachable from the beagle-file wrapper via
+;;        LIVE structural edges. A verb that SUPERSEDES a body/form fN edge
+;;        (set-body, upsert REPLACE) leaves the OLD subtree in file->ents with
+;;        its parent edge retired — parentless ROOT CANDIDATES the renderer's
+;;        edn-root may pick INSTEAD of the real wrapper (observed: a re-edited
+;;        module rendered as just the orphaned old body). Skipped under the
+;;        delete path, which has its own subtree machinery.
+(def INTERNAL-PREDS :- (Set String)
+  #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
+
+;; The projection environment. `ents` is a SNAPSHOT (@file->ents) — unlike Mint's
+;; atom, nothing here mutates. wrapper-of / descendants ride as closures: they
+;; read the same dynamic state and stayed in resolve.clj with the delete
+;; machinery (Cut H's Verb record carries the identical pair).
+(defrecord Emit [ctx :- (Atom t/Store)
+                 view :- Any
+                 BOUND :- Int
+                 REFERS :- Int
+                 FIXED :- Int
+                 ents :- Any
+                 wrapper-of :- Any
+                 descendants :- Any
+                 deleted-forms :- Any
+                 deleted-subtree :- Any])
+
+(defn- emit-line [m :- Emit wrap :- Int? e :- Int cid :- Int] :- Any
+  (let [ctx (:ctx m)
+        view (:view m)
+        cl (c/fact-of ctx cid)
+        p :- Any (if (nil? cl) nil (get cl :p))
+        r :- Any (if (nil? cl) nil (get cl :r))
+        ps (if (int? p) (c/literal ctx p) nil)]
+    (cond
+      ;; wrapper form-edges: drop them all (except f0, the beagle-file head); the
+      ;; surviving forms are re-emitted at consecutive integer fN by extract-lines.
+      (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0")) nil
+      (contains? INTERNAL-PREDS (str ps)) nil
+      (and (= ps "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)))
+      ;; a resolved reference: render per mode
+      (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
+            fixed? (not (empty? (c/by-lp ctx e (:FIXED m))))    ; :rename alias — keep own spelling
+            qual (rr/pred-val ctx view e "qualifier")           ; x/name — show alias/current-name
+            cpfx (rr/pred-val ctx view e "ctor_prefix")         ; "->" / "map->" auto-constructor — re-prefix
+            afield (rr/pred-val ctx view e "accessor_field")    ; synth accessor — render <lower(name)>-<field>
+            nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D)
+            nm (cond (some? cpfx)   (str cpfx nm0)
+                     (some? afield) (str (str/lower-case (str nm0)) "-" afield)
+                     :else          nm0)]
+        (str "[" e " \"v\" "
+          (pr-str (cond fixed?       (c/literal ctx r)
+                        (some? qual) (str qual "/" nm)
+                        :else        nm))
+          "]"))
+      (c/value-object? ctx r) (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")
+      :else (str "[" e " " (pr-str ps) " " r "]"))))
+
+(defn extract-lines [m :- Emit src :- String] :- (Vec Any)
+  (let [ctx (:ctx m)
+        wrapf (:wrapper-of m)
+        desc (:descendants m)
+        dforms (:deleted-forms m)
+        dsub (:deleted-subtree m)
+        wrap :- Int? (wrapf src)
+        root :- Int? (if (empty? dforms) (wrapf src) nil)
+        live (if (some? root) (desc root) nil)
+        ents (vec (get (:ents m) src []))
+        rows (reduce (fn [acc :- (Vec Any) e :- Int] :- (Vec Any)
+                       (if (or (contains? dsub e)
+                             (and (some? live) (not (contains? live e))))
+                         acc
+                         (reduce (fn [a :- (Vec Any) cid :- Int] :- (Vec Any)
+                                   (let [line (emit-line m wrap e cid)]
+                                     (if (nil? line) a (conj a line))))
+                           acc
+                           (c/by-l ctx e))))
+                []
+                ents)
+        forms (if (some? wrap)
+                (vec (remove (fn [f :- Int] :- Bool (contains? dforms f))
+                       (vec (rest (rr/ordered-children ctx wrap)))))
+                [])
+        formlines (mapv (fn [i :- Int] :- Any (str "[" wrap " \"f" (+ i 1) "\" " (nth forms i) "]"))
+                    (vec (range (count forms))))]
+    (into (into [(str "@file " src)] rows) formlines)))
+
+;; author-emit! — the stderr report of an authoring run. The `binding [*out* *err*]`
+;; stays in resolve.clj (a host dynamic var cannot change namespace), so this builds
+;; the LINES it printed, in order; `detail` rides through as a VALUE, never str'd, so
+;; println renders it exactly as the original did (a map prints unreadably either way).
+(defn author-emit-lines [op :- Any detail :- Any srcs :- (Vec String) outp :- Any] :- (Vec Any)
+  (let [f outp]
+    (into [(str "================ authoring: " op " ================") detail]
+      (mapv (fn [s :- String] :- Any (str "projected -> " (f s) "   <- " s)) srcs))))
+
+;; re-resolve! — after a mint the module frame is stale (a new def, or a new body's
+;; references), so recompute every module's three frames and re-walk. The `binding`
+;; of *xresolve*/*tresolve*/*aresolve* IS the dynamic scope and cannot move, so this
+;; ports the portable half: the three per-src tables the re-walk reads. Idempotent —
+;; bind! only adds an edge where one resolves.
+(defn re-resolve-frames [srcs :- (Vec String) mdefs :- Any mtypes :- Any maccs :- Any] :- (Map Keyword Any)
+  (let [fd mdefs
+        ft mtypes
+        fa maccs]
+    {:modframe  (reduce (fn [acc :- (Map Any Any) s :- String] :- (Map Any Any) (assoc acc s (fd s))) {} srcs)
+     :typeframe (reduce (fn [acc :- (Map Any Any) s :- String] :- (Map Any Any) (assoc acc s (ft s))) {} srcs)
+     :accessors (reduce (fn [acc :- (Map Any Any) s :- String] :- (Map Any Any) (assoc acc s (fa s))) {} srcs)}))
