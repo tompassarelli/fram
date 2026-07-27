@@ -65,7 +65,19 @@
                 "(def dead :- String \"x\")\n"
                 "(defn greet [who :- String] :- String (str base \" \" who punct))\n"))
 (def seed-edn (str work "/demo.edn"))
-(def emit-r (proc/sh {:out :string :err :string} "racket" roundtrip-rkt "--emit-edn" seed))
+;; Pinned racket, the way bin/fram-ingest-code resolves it (FRAM_RACKET, else
+;; the beagle direnv): bare `racket` is the stale-bytecode trap — an ambient
+;; binary mismatches beagle's compiled .zo. No pin => SKIP (CI has no toolchain).
+(def racket-bin
+  (or (System/getenv "FRAM_RACKET")
+      (let [p (try (str/trim (:out (proc/sh {:out :string :err :string}
+                                            "direnv" "exec" beagle-home "which" "racket")))
+                   (catch Throwable _ ""))]
+        (when-not (str/blank? p) p))))
+(when-not racket-bin
+  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
+  (System/exit 0))
+(def emit-r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--emit-edn" seed))
 
 (if-not (zero? (:exit emit-r))
   (chk "B0: emit-edn seed module" false)

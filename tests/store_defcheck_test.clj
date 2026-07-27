@@ -70,6 +70,17 @@
 (proc/sh "bash" "-c" (str "rm -rf " arena))
 (io/make-parents (io/file (str arena "/gw/x")))
 (doseq [[m src] modules] (spit (str arena "/gw/" m ".bclj") src))
+;; bin/fram-ingest-code resolves the Beagle-pinned racket itself and fails
+;; loud without it; predict that here and SKIP (CI runners carry no toolchain).
+(when-not (or (System/getenv "FRAM_RACKET")
+              (let [bh (or (System/getenv "BEAGLE_HOME")
+                           (str (System/getProperty "user.home") "/code/beagle"))
+                    p (try (str/trim (:out (proc/sh {:out :string :err :string}
+                                                    "direnv" "exec" bh "which" "racket")))
+                           (catch Throwable _ ""))]
+                (not (str/blank? p))))
+  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
+  (System/exit 0))
 (log! "ingesting arena modules ->" code-log)
 (let [r (proc/sh {:dir repo} "bin/fram-ingest-code" (str arena "/gw") "--out" code-log)]
   (when-not (zero? (:exit r)) (log! "INGEST FAILED:" (:err r)) (System/exit 3)))
