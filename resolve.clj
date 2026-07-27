@@ -616,7 +616,7 @@
 ;; ^:dynamic vars STAY here, so `mint-env` reads the dynamic state at call time and
 ;; hands it over as ONE record; `file->ents` rides as the ATOM ITSELF (register!
 ;; must mutate the var the projection reads, not a snapshot).
-(defn mint-env [] (rmi/->Mint ctx tx SUP KIND Vp file->ents))
+(defn mint-env [] (rmi/->Mint ctx tx SUP KIND Vp file->ents *view* BOUND REFERS FIXED))
 (defn register! [src e] (rmi/register! (mint-env) src e))
 ;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->facts:55-64).
 ;; Beagle reads [..] as (#%brackets ..) and {..} as (#%map ..), so a vector/map datum
@@ -725,102 +725,14 @@
                           "/resolved-" (-> src (str/split #"/") last) ".edn"))
 
 ;; --- no-capture invariant ---------------------------------------------------
-;; Renaming def B to `new` is UNSOUND if a reference to B would, after rendering
-;; as `new`, be captured by a LOCAL binding `new` in scope at that reference —
-;; e.g. (def src 1)(defn f [dst] (+ dst src)), rename src->dst yields (+ dst dst).
-;; This is the lexical dual of the def-vs-def collision guard: a reference that
-;; resolves to B (unqualified, name-tracking — not a :rename-fixed or x/qualified
-;; ref, which don't render as a bare `new`) is captured iff `new` is in its scope.
-;; capture-refs reuses walk's exact frame construction so the check is scope-precise.
-(defn renders-as-tracked-name? [node]            ; reference that will render the binding's CURRENT name
-  (and (not (seq (c/by-lp ctx node FIXED)))      ; :rename — keeps its own spelling
-       (not (pred-val node "qualifier"))))        ; x/name — renders alias/, can't be captured by a bare local
-(defn capture-refs [node scope B new]            ; refs to B that a local `new` in scope would capture
-  (case (kind-of node)
-    "symbol" (if (and (refers-target node) (= B (ultimate (refers-target node)))
-                      (renders-as-tracked-name? node) (some #(get % new) scope))
-               [node] [])
-    "list"
-    (let [kids (ordered-children node) h (head-sym node)]
-      (cond
-        (PARAM-FORMS h)                          ; single- OR multi-arity (mirror walk)
-        (let [after-name (if (#{"defn" "defn-" "defmacro"} h) (drop 2 kids) (rest kids))
-              cap-arity (fn [forms]
-                          (let [pv (first (filter brackets? forms))
-                                frame (frame-of (if pv (param-binds pv) []))
-                                or-vals (when pv (mapcat collect-or-vals (rest (ordered-children pv))))
-                                body (loop [xs (rest (drop-while #(not (brackets? %)) forms))]
-                                       (if (#{":-" ":" ":raises"} (sym-val (first xs))) (recur (drop 2 xs)) xs))]
-                            (concat (mapcat #(capture-refs % scope B new) or-vals)        ; :or defaults: outer scope
-                                    (mapcat #(capture-refs % (cons frame scope) B new) body))))]
-          (if (some brackets? after-name)
-            (cap-arity after-name)
-            (mapcat (fn [a] (if (and (= "list" (kind-of a)) (brackets? (first (ordered-children a))))
-                              (cap-arity (ordered-children a)) []))
-                    after-name)))
-        (LET-FORMS h)                            ; SEQUENTIAL: value/:or of binding i see bindings 0..i-1
-        (let [bracket (second kids)
-              pairs (if (and bracket (brackets? bracket)) (let-bind-pairs bracket) [])
-              [final vcaps] (reduce (fn [[sc caps] [bsyms vnode orvals]]
-                                      [(cons (frame-of bsyms) sc)
-                                       (into caps (concat (mapcat #(capture-refs % sc B new) orvals)
-                                                          (when vnode (capture-refs vnode sc B new))))])
-                                    [scope []] pairs)]
-          (concat vcaps (mapcat #(capture-refs % final B new) (drop 2 kids))))
-        (FOR-FORMS h)
-        (let [bracket (second kids)
-              entries (if (and bracket (brackets? bracket)) (for-bind-pairs bracket) [])
-              [final vcaps] (reduce (fn [[sc caps] e]
-                                      (if (= :expr (first e))
-                                        [sc (into caps (capture-refs (second e) sc B new))]
-                                        (let [[_ bsyms vnode orvals] e]
-                                          [(cons (frame-of bsyms) sc)
-                                           (into caps (concat (mapcat #(capture-refs % sc B new) orvals)
-                                                              (when vnode (capture-refs vnode sc B new))))])))
-                                    [scope []] entries)]
-          (concat vcaps (mapcat #(capture-refs % final B new) (drop 2 kids))))
-        (MATCH-FORMS h)                          ; match clause bodies see the pattern's bound names
-        (let [kids (ordered-children node)]
-          (concat (capture-refs (second kids) scope B new)
-                  (mapcat (fn [clause]
-                            (if (brackets? clause)
-                              (let [cc (rest (ordered-children clause)) pat (first cc) body (rest cc)
-                                    frame (frame-of (match-pat-binds pat))]
-                                (concat (capture-refs pat scope B new)   ; ctor heads (bind-vars have no refers_to)
-                                        (mapcat #(capture-refs % (cons frame scope) B new) body)))
-                              []))
-                          (drop 2 kids))))
-        (= h "letfn")                            ; fn names + each fn's params are bindings
-        (let [bracket (second kids)
-              fnlists (when (and bracket (brackets? bracket)) (filter #(= "list" (kind-of %)) (rest (ordered-children bracket))))
-              frame (frame-of (keep #(first (ordered-children %)) fnlists))
-              bodyscope (cons frame scope)
-              cap-arity (fn [forms]              ; one fn impl: param frame over bodyscope
-                          (let [pv (first (filter brackets? forms))
-                                pframe (frame-of (if pv (param-binds pv) []))
-                                fbody (loop [xs (rest (drop-while #(not (brackets? %)) forms))]
-                                        (if (#{":-" ":" ":raises"} (sym-val (first xs))) (recur (drop 2 xs)) xs))]
-                            (mapcat #(capture-refs % (cons pframe bodyscope) B new) fbody)))]
-          (concat (mapcat (fn [fl] (cap-arity (rest (ordered-children fl)))) fnlists)
-                  (mapcat #(capture-refs % bodyscope B new) (drop 2 kids))))
-        (#{"extend-type" "extend-protocol"} h)   ; impl method params are bindings
-        (mapcat (fn [c]
-                  (if (= "list" (kind-of c))
-                    (let [ic (ordered-children c) pv (first (filter brackets? (rest ic)))
-                          pframe (frame-of (if pv (param-binds pv) []))
-                          fbody (loop [xs (rest (drop-while #(not (brackets? %)) (rest ic)))]
-                                  (if (#{":-" ":" ":raises"} (sym-val (first xs))) (recur (drop 2 xs)) xs))]
-                      (concat (capture-refs (first ic) scope B new)        ; method name ref
-                              (mapcat #(capture-refs % (cons pframe scope) B new) fbody)))
-                    (capture-refs c scope B new)))                          ; Type / Proto refs
-                (rest kids))
-        (= h "as->")                             ; accumulator `name` binds in every step
-        (let [init (nth kids 1 nil) name (nth kids 2 nil)
-              frame (frame-of (when (sym-val name) [name]))]
-          (concat (when init (capture-refs init scope B new))
-                  (mapcat #(capture-refs % (cons frame scope) B new) (drop 3 kids))))
-        :else (mapcat #(capture-refs % scope B new) kids)))
-    []))
+;; capture-refs — the LEXICAL DUAL of the def-vs-def collision guard (M1 Cut I;
+;; logic in src/resolve_mint.bclj). Renaming def B to `new` is UNSOUND if a
+;; reference to B would, after rendering as `new`, be captured by a LOCAL binding
+;; `new` in scope at that reference — e.g. (def src 1)(defn f [dst] (+ dst src)),
+;; rename src->dst yields (+ dst dst). It reuses walk's EXACT frame construction,
+;; so the check is scope-precise. `scope` is vec'd here: the module threads
+;; cons-lists, Cut G's walk (and now this) uses an innermost-first vector.
+(defn capture-refs [node scope B new] (rmi/capture-refs (mint-env) node (vec scope) B new))
 
 ;; --- authoring support (used by the upsert-form / set-body case arms) -------
 ;; re-resolve!: after a mint, the module frame is stale (a new def, or a new body's
