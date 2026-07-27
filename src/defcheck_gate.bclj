@@ -38,7 +38,7 @@
 
 (defn- rpc [port :- Int line :- String] :- Any
   (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)))
+    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 3000)
     (let [w (io/writer (.getOutputStream s)) r (io/reader (.getInputStream s))]
       (.write w (str line "\n"))
       (.flush w)
