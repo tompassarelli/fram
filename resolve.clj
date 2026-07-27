@@ -855,25 +855,10 @@
 ;; it) and a graph NODE canonicalize into the SAME shape, re-encoding EDN nil/bool/
 ;; keyword the beagle way (mint-datum!'s conventions: beagle reads .b* via Racket, so
 ;; nil/true/false/:kw are all SYMBOL leaves) so `nil`/`true`/`:foo` match their storage.
-(defn datum->canon [d]
-  (cond
-    (nil? d)      [:leaf "symbol" "nil"]
-    (symbol? d)   [:leaf "symbol" (str d)]
-    (keyword? d)  [:leaf "symbol" (str d)]
-    (boolean? d)  [:leaf "symbol" (if d "true" "false")]
-    (string? d)   [:leaf "string" d]
-    (char? d)     [:leaf "char"   (str d)]
-    (number? d)   [:leaf "number" (str d)]
-    (vector? d)   (into [:list [:leaf "symbol" "#%brackets"]] (map datum->canon d))
-    (map? d)      (into [:list [:leaf "symbol" "#%map"]] (map datum->canon (apply concat (seq d))))
-    ;; regex/set: SAME `#%…`-headed canon mint-datum! + node->canon produce, so anchor
-    ;; matching + :within self-validation round-trip these reader forms (mirror of the
-    ;; write-def mint fix — a bare :else pr-str leaf here mismatches the stored node).
-    (instance? java.util.regex.Pattern d)
-                  [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern ^java.util.regex.Pattern d)]]
-    (set? d)      (into [:list [:leaf "symbol" "#%set"]] (map datum->canon d))
-    (or (list? d) (seq? d)) (into [:list] (map datum->canon d))
-    :else         [:leaf "other" (pr-str d)]))
+;; M1 Cut J: the LOGIC is Beagle now (src/resolve_verbs.bclj) — it lives with the two
+;; verbs that consume it. This wrapper stays because resolve.clj-local callers
+;; (writable-victim, reject-candidate) and the port's ns-qualified surface use it.
+(defn datum->canon [d] (rvb/datum->canon d))
 ;; anchor-matches — single POST-ORDER pass over a def form's subtree that computes each
 ;; node's canon EXACTLY ONCE (O(N), not O(N^2) — a naive "canonize every candidate" re-walks
 ;; each subtree per candidate and blows up on a 10k-node mega-def). Returns every
@@ -991,7 +976,7 @@
               BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
               retire-fact! re-resolve! @file->ents
               mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts
-              FIXED datum->canon disambig-payload (fn [code] (System/exit code))))
+              FIXED disambig-payload (fn [code] (System/exit code))))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))

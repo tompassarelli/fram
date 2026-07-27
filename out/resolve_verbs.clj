@@ -8,7 +8,7 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED datum-canon disambig exit])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED disambig exit])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -87,8 +87,6 @@
 (defn verb-fn-facts [r] (:fn-facts r))
 
 (defn verb-FIXED [r] (:FIXED r))
-
-(defn verb-datum-canon [r] (:datum-canon r))
 
 (defn verb-disambig [r] (:disambig r))
 
@@ -175,6 +173,22 @@
 
 (defn- ^String ord-str* [path ^String tie]
   (str "f" (str/join "." path) "~" tie))
+
+(defn datum->canon [d]
+  (cond
+  (nil? d) [:leaf "symbol" "nil"]
+  (symbol? d) [:leaf "symbol" (str d)]
+  (keyword? d) [:leaf "symbol" (str d)]
+  (boolean? d) [:leaf "symbol" (if d "true" "false")]
+  (string? d) [:leaf "string" d]
+  (char? d) [:leaf "char" (str d)]
+  (number? d) [:leaf "number" (str d)]
+  (vector? d) (into [:list [:leaf "symbol" "#%brackets"]] (mapv datum->canon d))
+  (map? d) (into [:list [:leaf "symbol" "#%map"]] (mapv datum->canon (apply concat (seq d))))
+  (instance? java.util.regex.Pattern d) [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern d)]]
+  (set? d) (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
+  (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
+  :else [:leaf "other" (pr-str d)]))
 
 (defn verb-delete! [^Verb v ^String name ^String scope]
   (let [ctx (:ctx v)
@@ -468,7 +482,6 @@
   (reject 3)))
   (let [dbind (:def-binding v)
    ffv (:form-for-victim v)
-   dcanon (:datum-canon v)
    dis (:disambig v)
    src (first target-srcs)
    B (dbind src name)
@@ -477,7 +490,7 @@
   (if (nil? form) (do
   (warn (str "REJECTED — no def named `" name "` found in \"" scope "\" (nothing to edit; no facts mutated)."))
   (reject2 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")})))
-  (let [search-root (if (nil? within-datum) form (let [wcanon (dcanon within-datum)
+  (let [search-root (if (nil? within-datum) form (let [wcanon (datum->canon within-datum)
    wsites (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn form) wcanon)]
   (cond
   (= 0 (count wsites)) (do
@@ -487,7 +500,7 @@
   (warn (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" (" (count wsites) " matches; no facts mutated)."))
   (reject2 5 (dis :ambiguous-within name scope form wsites)))
   :else (:child (first wsites)))))
-   target-canon (dcanon old-datum)
+   target-canon (datum->canon old-datum)
    matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
   (cond
   (= 0 (count matches)) (do

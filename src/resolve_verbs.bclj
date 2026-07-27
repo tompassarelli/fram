@@ -130,7 +130,6 @@
                  writable-disp-name :- Any  ; (fn [datum]) -> the human label for the upserted form
                  fn-facts :- Any        ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
                  FIXED :- Int           ; the :rename keep-spelling render marker predicate id
-                 datum-canon :- Any     ; (fn [datum]) -> datum->canon: the structural comparison form
                  disambig :- Any        ; (fn [reason name scope root sites]) -> the reject payload
                  exit :- Any])          ; (fn [code]) — System/exit, the unknown-op arm's hard stop
 
@@ -246,6 +245,46 @@
 
 (defn- ord-str* [path :- (Vec Int) tie :- String] :- String
   (str "f" (str/join "." path) "~" tie))
+
+;; ---------------------------------------------------------------------------
+;; datum->canon (M1 Cut J) — the canonical comparison form of an EDN DATUM:
+;; structural, formatting-insensitive. Leaf -> [:leaf kind spelling]; list ->
+;; [:list child-canon…]. Deliberately the SAME shape rv/node->canon computes for
+;; a graph NODE, which is what makes anchor matching representation-independent:
+;; the model's `old` form (as clojure.edn read it) and the stored subtree reduce
+;; to one vector and are compared with `=`.
+;;
+;; THE HOST BOUNDARY IS THE POINT (this is the leftover the port kept naming).
+;; It re-encodes the reader's Clojure values the BEAGLE way — beagle reads .b*
+;; via Racket, so nil/true/false/:kw are all SYMBOL leaves — and it must reach
+;; java.util.regex.Pattern/.pattern for a regex literal, because a `#"…"` cannot
+;; cross the graph-edit EDN datum channel and is stored `#%regex`-headed. Cut I
+;; probed exactly these surfaces (Pattern, .pattern, pr-str) through `beagle
+;; check` AND emit-clj: they cross intact. So this needs no declare-extern shim
+;; and no raw host owner — it needs the module that CALLS it, which is this one
+;; (verb-upsert-form!'s victim identity + verb-replace-in-body!'s anchor).
+;; The `.pattern` call emits unhinted (reflective) rather than with the
+;; original's ^Pattern hint; it is guarded by the instance? test and runs once
+;; per regex leaf, so the cost is a reflection lookup on a rare arm.
+;; ---------------------------------------------------------------------------
+(defn datum->canon [d :- Any] :- Any
+  (cond
+    (nil? d)      [:leaf "symbol" "nil"]
+    (symbol? d)   [:leaf "symbol" (str d)]
+    (keyword? d)  [:leaf "symbol" (str d)]
+    (boolean? d)  [:leaf "symbol" (if d "true" "false")]
+    (string? d)   [:leaf "string" d]
+    (char? d)     [:leaf "char" (str d)]
+    (number? d)   [:leaf "number" (str d)]
+    (vector? d)   (into [:list [:leaf "symbol" "#%brackets"]] (mapv datum->canon d))
+    (map? d)      (into [:list [:leaf "symbol" "#%map"]] (mapv datum->canon (apply concat (seq d))))
+    ;; regex/set: the SAME `#%…`-headed canon mint-datum! + node->canon produce,
+    ;; so anchor matching + :within self-validation round-trip these reader forms.
+    (instance? java.util.regex.Pattern d)
+                  [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern d)]]
+    (set? d)      (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
+    (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
+    :else         [:leaf "other" (pr-str d)]))
 
 ;; ---------------------------------------------------------------------------
 ;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
@@ -657,7 +696,6 @@
       (reject 3))
     (let [dbind (:def-binding v)
           ffv (:form-for-victim v)
-          dcanon (:datum-canon v)
           dis (:disambig v)
           src (first target-srcs)
           B (dbind src name)
@@ -672,7 +710,7 @@
       (let [search-root
             (if (nil? within-datum)
               form
-              (let [wcanon (dcanon within-datum)
+              (let [wcanon (datum->canon within-datum)
                     wsites (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn form) wcanon)]
                 (cond
                   (= 0 (count wsites))
@@ -685,7 +723,7 @@
                                  (count wsites) " matches; no facts mutated)."))
                       (reject2 5 (dis :ambiguous-within name scope form wsites)))
                   :else (:child (first wsites)))))
-            target-canon (dcanon old-datum)
+            target-canon (datum->canon old-datum)
             matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
         (cond
           (= 0 (count matches))
