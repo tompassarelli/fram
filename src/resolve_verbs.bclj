@@ -131,7 +131,8 @@
                  fn-facts :- Any        ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
                  FIXED :- Int           ; the :rename keep-spelling render marker predicate id
                  datum-canon :- Any     ; (fn [datum]) -> datum->canon: the structural comparison form
-                 disambig :- Any])      ; (fn [reason name scope root sites]) -> the reject payload
+                 disambig :- Any        ; (fn [reason name scope root sites]) -> the reject payload
+                 exit :- Any])          ; (fn [code]) — System/exit, the unknown-op arm's hard stop
 
 ;; ---------------------------------------------------------------------------
 ;; rename — every INVARIANT + fact mutation of the old `rename` case arm.
@@ -719,3 +720,38 @@
                        (when (some? within-datum) "\" (scoped by :within)")
                        "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
                        "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
+
+;; ---------------------------------------------------------------------------
+;; dispatch-verb! — run-verb-warm!'s OP TABLE: the portable half of THE GRAPH
+;; EDIT PATH. run-verb-warm! itself stays in resolve.clj because it is dynamic
+;; scaffolding — it `binding`s *resolve-out* and *project-srcs* around
+;; resolve-warm-store!, and a ^:dynamic var cannot change namespace (Cut B's
+;; reason). Inside that scope the op table is ordinary dispatch, and it is here:
+;; the SAME verb functions the text path calls, over a LOG-booted warm store,
+;; minting/superseding fact ops against log-resident node identity.
+;;
+;; An unknown op is a hard stop (System/exit 2, via the `exit` closure), not a
+;; *reject!* — a bad op is a caller bug, not a refused edit.
+;; ---------------------------------------------------------------------------
+(defn dispatch-verb! [v :- Verb spec :- Any] :- Any
+  (let [op (:op spec)
+        module (:module spec)]
+    (cond
+      (= op "rename")          (verb-rename! v (:old spec) (:new spec) module)
+      (= op "upsert-form")     (verb-upsert-form! v module (:datum spec))
+      ;; CRDT mid-insert (#36)
+      (= op "insert-form")     (verb-insert-form! v module (:after spec) (:datum spec))
+      ;; Turtle #6 comment authoring (#30)
+      (= op "insert-comment")  (verb-insert-comment! v module (:after spec) (:text spec) (:placement spec))
+      (= op "set-body")        (verb-set-body! v (:name spec) module (:datum spec))
+      ;; SUB-DEF surgical edit — swap one interior form (the mega-def floor);
+      ;; optional :within narrows the scope
+      (= op "replace-in-body") (verb-replace-in-body! v (:name spec) module (:old spec) (:new spec) (:within spec))
+      ;; remove a top-level def (fail-closed on orphans)
+      (= op "delete")          (verb-delete! v (:name spec) module)
+      ;; move a def — re-spell the order key, no node churn
+      (= op "reorder")         (verb-reorder! v (:name spec) module (:after spec))
+      :else (let [warn (:warn v)
+                  exit (:exit v)]
+              (warn (str "run-verb-warm!: unknown op " (:op spec)))
+              (exit 2)))))

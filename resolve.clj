@@ -1173,7 +1173,7 @@
               BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
               retire-fact! re-resolve! @file->ents
               mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts
-              FIXED datum->canon disambig-payload))
+              FIXED datum->canon disambig-payload (fn [code] (System/exit code))))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
@@ -1246,6 +1246,12 @@
 ;; module). The store is mutated IN PLACE; the caller renders the affected module
 ;; FROM the projected EDN — the .bclj is downstream of the log.
 ;; ============================================================================
+;; M1 Cut H — the OP TABLE is now Beagle (rvb/dispatch-verb!). What stays here is
+;; the dynamic scaffolding it runs inside: *resolve-out* (the in-process projection
+;; dir) and *project-srcs* (the affected module, so the verb projects ONLY that one
+;; instead of the whole warm corpus) are ^:dynamic vars, and a var cannot change
+;; namespace. Inside that scope the dispatch is ordinary — the SAME verb functions
+;; the text path calls, over the LOG-booted warm store.
 (defn run-verb-warm! [store spec]
   (let [module (:module spec)]
     (binding [*resolve-out* (:resolve-out spec)]      ; nil => env/$RESOLVE_OUT/tmp
@@ -1254,18 +1260,7 @@
        (fn []
          (binding [*project-srcs* (when module
                                     (filter #(str/includes? % module) srcs))]
-           (case (:op spec)
-             "rename"      (verb-rename! (:old spec) (:new spec) module)
-             "upsert-form" (verb-upsert-form! module (:datum spec))
-             "insert-form" (verb-insert-form! module (:after spec) (:datum spec))   ; CRDT mid-insert (#36)
-             "insert-comment" (verb-insert-comment! module (:after spec) (:text spec) (:placement spec))  ; Turtle #6 comment authoring (#30)
-             "set-body"    (verb-set-body! (:name spec) module (:datum spec))
-             "replace-in-body" (verb-replace-in-body! (:name spec) module (:old spec) (:new spec) (:within spec))  ; SUB-DEF surgical edit — swap one interior form (mega-def floor); optional :within narrows the scope
-
-             "delete"      (verb-delete! (:name spec) module)   ; remove a top-level def (fail-closed on orphans)
-             "reorder"     (verb-reorder! (:name spec) module (:after spec))   ; move a def — re-spell order key, no node churn
-             (do (binding [*out* *err*] (println (str "run-verb-warm!: unknown op " (:op spec))))
-                 (System/exit 2)))))))
+           (rvb/dispatch-verb! (verb-env) spec)))))
     module))
 
 ;; ============================================================================

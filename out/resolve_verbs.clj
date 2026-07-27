@@ -8,7 +8,7 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED datum-canon disambig])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED datum-canon disambig exit])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -91,6 +91,8 @@
 (defn verb-datum-canon [r] (:datum-canon r))
 
 (defn verb-disambig [r] (:disambig r))
+
+(defn verb-exit [r] (:exit r))
 
 (defn- ^Boolean upper-first? [^String s]
   (and (> (count s) 0) (let [c (subs s 0 1)]
@@ -506,3 +508,20 @@
   (rr!))))
   (emit "replace-in-body" (str "replaced 1 interior form inside `" name "` in \"" scope (if (some? within-datum) (do
   "\" (scoped by :within)")) "\" (1 fN edge superseded + re-pointed at a freshly-minted form; " "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))
+
+(defn dispatch-verb! [^Verb v spec]
+  (let [op (:op spec)
+   module (:module spec)]
+  (cond
+  (= op "rename") (verb-rename! v (:old spec) (:new spec) module)
+  (= op "upsert-form") (verb-upsert-form! v module (:datum spec))
+  (= op "insert-form") (verb-insert-form! v module (:after spec) (:datum spec))
+  (= op "insert-comment") (verb-insert-comment! v module (:after spec) (:text spec) (:placement spec))
+  (= op "set-body") (verb-set-body! v (:name spec) module (:datum spec))
+  (= op "replace-in-body") (verb-replace-in-body! v (:name spec) module (:old spec) (:new spec) (:within spec))
+  (= op "delete") (verb-delete! v (:name spec) module)
+  (= op "reorder") (verb-reorder! v (:name spec) module (:after spec))
+  :else (let [warn (:warn v)
+   exit (:exit v)]
+  (warn (str "run-verb-warm!: unknown op " (:op spec)))
+  (exit 2)))))
