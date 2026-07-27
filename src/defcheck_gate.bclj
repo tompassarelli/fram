@@ -383,3 +383,231 @@
       (doseq [a tail :when (and (seq? a) (vector? (first a)))]
         (let [ls (into ls0 (arglist-locals (first a)))]
           (doseq [b (rest a)] (rec b ls)))))))
+
+(defn walk-body-with-state! "Analyze `form` for free-symbol + arity errors, threading lexical `locals`.\n  Appends ERROR maps to the `errs` atom. Conservative: unknown binding forms\n  over-collect locals (suppress, never false-flag)."
+  [arity-check?
+   :-
+   Bool
+   module
+   :-
+   String
+   def-name
+   :-
+   Any
+   env
+   :-
+   Any
+   defs
+   :-
+   Any
+   errs
+   :-
+   (Atom Any)
+   form
+   :-
+   Any
+   locals
+   :-
+   Any]
+  :-
+  Any
+  (let [rec (fn [f :- Any ls :- Any] :- Any (walk-body-with-state! arity-check? module def-name env defs errs f ls)) rec-no-arity (fn [f :- Any ls :- Any] :- Any (walk-body-with-state! false module def-name env defs errs f ls)) emit (fn [e :- Any] :- Any (swap! errs conj e)) classify (fn [s :- Any ls :- Any] :- Any (when (and (symbol? s) (not (:refer-all? env)) (not (resolved-sym? env defs ls s))) (emit (unresolved-error module def-name env defs s))))]
+    (cond
+      (symbol? form)
+      (classify form locals)
+      (or (vector? form) (set? form))
+      (doseq [x form] (rec x locals))
+      (map? form)
+      (doseq [x (mapcat identity form)] (rec x locals))
+      (seq? form)
+      (let [h (first form)]
+        (cond
+          (empty? form)
+          nil
+          (= (quote quote) h)
+          nil
+          (= (quote var) h)
+          nil
+          (= (quote as->) h)
+          (do
+            (rec-no-arity (second form) locals)
+            (let [ls (into locals (when (symbol? (nth form 2 nil)) [(nth form 2)]))]
+              (doseq [b (drop 3 form)] (rec-no-arity b ls))))
+          (contains? thread-heads h)
+          (doseq [x (rest form)] (rec-no-arity x locals))
+          (or (= h (quote defn))
+            (= h (quote defn-))
+            (= h (quote defmacro))
+            (= h (quote definline)))
+          (walk-fn-tail rec locals (drop 2 form))
+          (or (= h (quote def)) (= h (quote defonce)) (= h (quote def-)))
+          (doseq [b (drop 2 form)] (rec b locals))
+          (or (= h (quote defmulti))
+            (= h (quote defstruct))
+            (= h (quote declare)))
+          nil
+          (or (= h (quote fn)) (= h (quote fn*)))
+          (let [named? (symbol? (second form)) ls0 (into locals (when named? [(second form)])) tail (if named? (drop 2 form) (drop 1 form))]
+            (walk-fn-tail rec ls0 tail))
+          (contains? binding-vec-heads h)
+          (let [bvec (second form) [ls _] (reduce (fn [pair :- Any binding-pair :- Any] :- Any (let [ls (nth pair 0) pat (nth binding-pair 0) e (nth binding-pair 1)] (rec e ls) [(into ls (pattern-locals pat)) nil])) [locals nil] (partition 2 (if (vector? bvec) bvec [])))]
+            (doseq [b (drop 2 form)] (rec b ls)))
+          (or (= h (quote for)) (= h (quote doseq)))
+          (let [bvec (if (vector? (second form)) (second form) []) ls (loop [pairs (partition 2 bvec) ls locals] (if-let [[k v] (first pairs)] (cond (= k :let) (recur (rest pairs) (reduce (fn [l :- Any pair :- Any] :- Any (let [p (nth pair 0) e (nth pair 1)] (rec e l) (into l (pattern-locals p)))) ls (partition 2 (if (vector? v) v [])))) (contains? #{:when :while} k) (do (rec v ls) (recur (rest pairs) ls)) :else (do (rec v ls) (recur (rest pairs) (into ls (pattern-locals k))))) ls))]
+            (doseq [b (drop 2 form)] (rec b ls)))
+          (= (quote letfn) h)
+          (let [fspecs (if (vector? (second form)) (second form) []) fnames (into #{} (keep (fn [x :- Any] :- Any (when (and (seq? x) (symbol? (first x))) (first x))) fspecs)) ls0 (into locals fnames)]
+            (doseq [fs fspecs]
+              (when (and (seq? fs) (vector? (second fs)))
+                (let [ls (into ls0 (arglist-locals (second fs)))]
+                  (doseq [b (drop 2 fs)] (rec b ls)))))
+            (doseq [b (drop 2 form)] (rec b ls0)))
+          (= (quote catch) h)
+          (let [ls (into locals (when (symbol? (nth form 2 nil)) [(nth form 2)]))]
+            (doseq [b (drop 3 form)] (rec b ls)))
+          (or (= h (quote new))
+            (= h (quote .))
+            (= h (quote ..))
+            (= h (quote set!))
+            (= h (quote monitor-enter))
+            (= h (quote monitor-exit)))
+          (doseq [x (rest form)] (when-not (symbol? x) (rec x locals)))
+          (= (quote defmethod) h)
+          (let [after (drop 2 form)]
+            (rec (first after) locals)
+            (let [pv (second after)]
+              (when (vector? pv)
+                (let [ls (into locals (arglist-locals pv))]
+                  (doseq [b (drop 2 after)] (rec b ls))))))
+          (or (= h (quote deftype))
+            (= h (quote defrecord))
+            (= h (quote reify))
+            (= h (quote extend-type))
+            (= h (quote extend-protocol))
+            (= h (quote proxy))
+            (= h (quote definterface)))
+          (let [fields (nth form 2 nil) base (into locals (when (and (or (= h (quote deftype)) (= h (quote defrecord))) (vector? fields)) (arglist-locals fields)))]
+            (doseq [x (rest form)]
+              (cond
+                (and (seq? x) (vector? (second x)))
+                (let [ls (into base (arglist-locals (second x)))]
+                  (doseq [b (drop 2 x)] (rec b ls)))
+                (vector? x)
+                (doseq [e x] (when (coll? e) (rec e base)))
+                :else
+                nil)))
+          :else
+          (do
+            (when (symbol? h)
+              (classify h locals)
+              (when-let [ar (and (not (contains? locals h)) (get-in defs [:arities (symbol (name h))]))]
+                (let [n (count (rest form)) {:keys [fixed variadic]} ar]
+                  (when (and arity-check? (seq fixed) (not (contains? fixed n)) (or (nil? variadic) (< n variadic)))
+                    (emit (arity-error module def-name h n ar))))))
+            (let [child-locals (into locals (mapcat (fn [x :- Any] :- Any (when (vector? x) (arglist-locals x))) (rest form)))]
+              (doseq [x (rest form)] (rec x child-locals))))))
+      :else
+      nil)))
+
+(defn- def-target-name [form :- Any] :- Any
+  (when (and (seq? form) (>= (count form) 2))
+    (let [nm (first (rest form))]
+      (cond
+        (symbol? nm)
+        (symbol (name nm))
+        (and (seq? nm) (symbol? (second nm)))
+        (symbol (name (second nm)))
+        :else
+        nil))))
+
+(defn analyze-untyped-module-with-state! "In-process untyped def-check for `module` from rendered Clojure `src`.\n  Returns a vector of ERROR-shape maps (empty when clean)."
+  [arity-check? :- Bool module :- String src :- String]
+  :-
+  (Vec Any)
+  (let [{:keys [forms read-error]} (read-forms src)]
+    (if read-error
+      [{:ok
+        false
+        :stage
+        :parse
+        :at
+        {:module module}
+        :message
+        (str "module did not read as Clojure: " read-error)
+        :kind
+        "read-error"
+        :suggestion
+        "fix the malformed form so the module parses"}]
+      (let [env (parse-ns-env forms) defs (collect-defs forms) errs :- (Atom Any) (atom [])]
+        (doseq [form forms :when (and (seq? form) (symbol? (first form)) (contains? def-heads (first form)))]
+          (walk-body-with-state! arity-check?
+            module
+            (def-target-name form)
+            env
+            defs
+            errs
+            form
+            #{}))
+        (clojure.core/deref errs)))))
+
+(defn check-module-errors-any-with-state! "Render `module` to text once; route to the untyped in-process analyzer (no\n  beagle type-check) when the module carries no `:-` annotation (or the env forces\n  it), else the typed sidecar checker. Returns a vector of ERROR-shape maps."
+  [state :- DefcheckState module :- String]
+  :-
+  (Vec Any)
+  (let [src (module-src-text-with-state! state module)]
+    (if (untyped-mode? src)
+      (analyze-untyped-module-with-state! (:arity-check? state) module src)
+      (check-module-errors-with-state! state module))))
+
+(defn check-def-with-state! "Incremental def-level type check. Returns nil when `module` type-checks\n  against its cached sibling environment, else the adapter-v2 ERROR shape for\n  the offending def (preferring `name`), with the full diagnostic list under\n  :errors. Never throws for a type error — only for infra faults (coordinator or\n  sidecar unreachable), which surface as {:ok false :stage :type :message …}.\n\n  AUTHORITY: catches errors IN `module` (the edited def + its use of siblings).\n  A sibling in ANOTHER module that calls a now-broken `name` is NOT re-checked\n  here — that is whole-tree-check's job (adapter-v2 spec gap 3, deliverable 4b)."
+  [module :- String name :- Any ensure-sidecar-fn :- Any check-errors-fn :- Any]
+  :-
+  Any
+  (try
+    (ensure-sidecar-fn)
+    (let [errs (check-errors-fn module)]
+      (when (seq errs) (assoc (pick-primary name errs) :errors errs)))
+    (catch Exception
+      e
+      {:ok
+       false
+       :stage
+       :type
+       :at
+       {:module module :def name}
+       :message
+       (str "def-check unavailable: " (.getMessage e))})))
+
+(defn whole-tree-check-with-state! "Type-check EVERY live module against the whole (refreshed) tree and aggregate.\n  nil when the tree is clean, else {:ok false :stage :gate …} with the first\n  offending diagnostic promoted to the top level and ALL diagnostics under\n  :errors (each tagged :stage :gate). This is where a def that checks alone but\n  breaks a caller in another module is caught — the authoritative pre-promotion\n  gate the S-profile `check {}` verb calls. Still warm (N × ~50ms), because it\n  reuses the persistent checker; the harness's build-all remains the final\n  byte-level acceptance oracle at commit."
+  [ensure-sidecar-fn
+   :-
+   Any
+   prime-gwdir-fn
+   :-
+   Any
+   live-modules-fn
+   :-
+   Any
+   check-errors-fn
+   :-
+   Any]
+  :-
+  Any
+  (try
+    (ensure-sidecar-fn)
+    (prime-gwdir-fn)
+    (let [all (vec (mapcat check-errors-fn (live-modules-fn)))]
+      (when (seq all)
+        (assoc (first all)
+          :stage
+          :gate
+          :errors
+          (mapv (fn [e :- Any] :- Any (assoc e :stage :gate)) all))))
+    (catch Exception
+      e
+      {:ok
+       false
+       :stage
+       :gate
+       :message
+       (str "whole-tree-check unavailable: " (.getMessage e))})))
