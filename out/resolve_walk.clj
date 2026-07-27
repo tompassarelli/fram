@@ -435,10 +435,10 @@
   (let [NAME (c/value-id ctx "name")]
   (cond
   (some? cache) cache
-  (some? NAME) (reduce (fn [groups cid] (let [claim (c/fact-of ctx cid)
-   node-name (c/literal ctx (:r claim))
+  (some? NAME) (reduce (fn [groups cid] (let [fact (c/fact-of ctx cid)
+   node-name (c/literal ctx (:r fact))
    module (name->module node-name)]
-  (if (some? module) (update groups module (fnil conj []) (:l claim)) groups))) {} (c/by-p ctx NAME))
+  (if (some? module) (update groups module (fnil conj []) (:l fact)) groups))) {} (c/by-p ctx NAME))
   :else {})))
 
 (defn scoped-corpus-tables [ctx view groups scope]
@@ -496,8 +496,8 @@
 
 (defn lift-bound-to-refers! [ctx tx KIND BOUND REFERS]
   (doseq [cid (c/by-p ctx BOUND)]
-  (let [claim (c/fact-of ctx cid)
-   leaf (:l claim)
-   target (:r claim)]
+  (let [fact (c/fact-of ctx cid)
+   leaf (:l fact)
+   target (:r fact)]
   (if (and (integer? target) (rr/live-node? ctx KIND target) (empty? (c/by-lp ctx leaf REFERS))) (do
   (c/fact! ctx leaf REFERS target tx))))))

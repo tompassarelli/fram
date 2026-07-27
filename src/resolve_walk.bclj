@@ -568,11 +568,11 @@
       (some? cache) cache
       (some? NAME)
       (reduce (fn [groups :- Any cid :- Int] :- Any
-                (let [claim (c/fact-of ctx cid)
-                      node-name (c/literal ctx (:r claim))
+                (let [fact (c/fact-of ctx cid)
+                      node-name (c/literal ctx (:r fact))
                       module (name->module node-name)]
                   (if (some? module)
-                    (update groups module (fnil conj []) (:l claim))
+                    (update groups module (fnil conj []) (:l fact))
                     groups)))
         {}
         (c/by-p ctx NAME))
@@ -680,9 +680,9 @@
 (defn lift-bound-to-refers! [ctx :- (Atom t/Store) tx :- Int
                              KIND :- Int BOUND :- Int REFERS :- Int] :- Any
   (doseq [cid (c/by-p ctx BOUND)]
-    (let [claim (c/fact-of ctx cid)
-          leaf (:l claim)
-          target (:r claim)]
+    (let [fact (c/fact-of ctx cid)
+          leaf (:l fact)
+          target (:r fact)]
       (when (and (integer? target)
                  (rr/live-node? ctx KIND target)
                  (empty? (c/by-lp ctx leaf REFERS)))
