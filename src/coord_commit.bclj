@@ -1,0 +1,16 @@
+#lang beagle/clj
+
+;; @upstream:graph — the code lives in the Fram fact graph; this text is a
+;; generated view. Author substantive forms only through the Fram graph-edit
+;; verbs. SEEDED 2026-07-28 for engine-core M5 Cut B.
+;; ============================================================================
+;; coord-commit — pure coordinator commit decisions.
+;; ============================================================================
+;; Store snapshots and proposed writes enter explicitly. Mutation, coordinator
+;; locks, queues, futures, promises, fsync, group commit, and dynamic vars stay
+;; in coord.clj.
+;; ============================================================================
+(ns coord-commit
+  (:require [fram.types :as t]))
+
+(define-mode strict)
