@@ -717,3 +717,39 @@
     (catch Exception e
       {:ok false :stage :gate
        :message (str "whole-tree-check unavailable: " (.getMessage e))})))
+
+;; M2 delegation seam. The dynamic runtime configuration remains in this host
+;; adapter while every behavior-bearing form above is replaced by the emitted
+;; graph-authored implementation over an explicit DefcheckState.
+(load-file (str (System/getProperty "user.dir") "/out/defcheck_gate.clj"))
+
+(defn- current-state []
+  (->DefcheckState *coord-port* *sidecar-port* *gwdir* *autostart?*
+                   *render-fn* *modules-fn* *arity-check?*))
+
+(defn- coord [req] (coord-with-state (current-state) req))
+(defn- sidecar [line] (sidecar-with-state (current-state) line))
+(defn- sidecar-up? [] (sidecar-up-with-state? (current-state)))
+(defn ensure-sidecar! [] (ensure-sidecar-with-state! (current-state)))
+(defn- gwdir [] (gwdir-with-state (current-state)))
+(defn- src-path [module] (src-path-with-state (current-state) module))
+(defn- edn-path [module] (edn-path-with-state (current-state) module))
+(defn- live-modules [] (live-modules-with-state (current-state)))
+(defn- render-edn! [module] (render-edn-with-state! (current-state) module))
+(defn- refresh-sibling! [module] (refresh-sibling-with-state! (current-state) module))
+(defn prime-gwdir! [] (prime-gwdir-with-state! (current-state)))
+(defn- check-module-errors [module]
+  (check-module-errors-with-state! (current-state) module))
+(defn- module-src-text! [module]
+  (module-src-text-with-state! (current-state) module))
+(defn- walk-body [module def-name env defs errs form locals]
+  (walk-body-with-state! *arity-check?* module def-name env defs errs form locals))
+(defn- analyze-untyped-module [module src]
+  (analyze-untyped-module-with-state! *arity-check?* module src))
+(defn- check-module-errors-any [module]
+  (check-module-errors-any-with-state! (current-state) module))
+(defn check-def [module name]
+  (check-def-with-state! module name ensure-sidecar! check-module-errors-any))
+(defn whole-tree-check []
+  (whole-tree-check-with-state! ensure-sidecar! prime-gwdir! live-modules
+                                check-module-errors-any))
