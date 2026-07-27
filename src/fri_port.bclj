@@ -676,3 +676,118 @@
      :tx-of tx-of
      :txs txs
      :superseded superd}))
+
+(defn literal* [img :- Any id :- Int] :- String?
+  (let [c (:lit-cache img)
+        v (cache-get c id)]
+    (if (some? v)
+      v
+      (let [r (literal img id)]
+        (do (when (some? r) (cache-put c id r (:cache-cap img))) r)))))
+
+(defn name-of* [img :- Any subj :- Int] :- String?
+  (let [c (:name-cache img)
+        v (cache-get c subj)]
+    (if (some? v)
+      v
+      (let [r (name-of img subj)]
+        (do (when (some? r) (cache-put c subj r (:cache-cap img))) r)))))
+
+(defn render [img :- Any cid :- Int] :- Any
+  (when-let [f (fact-of img cid)]
+    [(name-of img (:l f))
+     (literal img (:p f))
+     (let [r (:r f)] (or (literal img r) (name-of img r)))]))
+
+(defn render-ord [img :- Any ord :- Int] :- Any
+  [(name-of* img (ord-l img ord))
+   (literal* img (ord-p img ord))
+   (let [r (ord-r img ord)] (or (literal* img r) (name-of* img r)))])
+
+(defn by-lp-ords [img :- Any lid :- Int pid :- Int] :- (Vec Int)
+  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        []
+        (let [mid (quot (+ lo hi) 2)
+              base (* mid 28)
+              kl (seg-long img :postings-lp base)
+              kp (seg-long img :postings-lp (+ base 8))
+              cmp (if (< kl lid)
+                    -1
+                    (if (> kl lid)
+                      1
+                      (if (< kp pid) -1 (if (> kp pid) 1 0))))]
+          (cond
+            (zero? cmp)
+            (let [off (seg-long img :postings-lp (+ base 16))
+                  len (seg-int img :postings-lp (+ base 24))]
+              (reduce
+               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
+                 (if (superseded-ord? img ord) acc (conj acc ord)))
+               []
+               (run-ords img :plp-runs off len)))
+            (neg? cmp) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
+
+(defn render-lp [img :- Any subj-name :- String pred-name :- String] :- Any
+  (let [lid (resolve-name img subj-name)
+        pid (pred-id img pred-name)]
+    (when (and (some? lid) (some? pid))
+      (let [c (:render-cache img)
+            k [lid pid]
+            hit (cache-get c k)]
+        (if (some? hit)
+          hit
+          (let [v (mapv
+                   (fn [ord :- Int] :- Any (render-ord img ord))
+                   (by-lp-ords img lid pid))]
+            (cache-put c k v (:cache-cap img))))))))
+
+(defn cold-name-triples
+  [img :- Any schema-pred? :- [String -> Bool] read-hidden-pred? :- [String -> Bool]]
+  :- Any
+  (let [n (nfacts img)]
+    (reduce
+     (fn [acc :- Any ord :- Int] :- Any
+       (if (superseded-ord? img ord)
+         acc
+         (let [l (ord-l img ord)
+               p (ord-p img ord)
+               r (ord-r img ord)
+               pstr (literal img p)]
+           (if (or (nil? pstr) (schema-pred? pstr) (read-hidden-pred? pstr))
+             acc
+             (let [lname (name-of img l)
+                   rrend (if (value-object? img r)
+                           (literal img r)
+                           (name-of img r))]
+               (conj acc [lname pstr rrend]))))))
+     #{}
+     (range n))))
+
+(defn verify-segments? [img :- Any seg-table :- Any] :- Bool
+  (and
+   (map? seg-table)
+   (every?
+    (fn [row :- Any] :- Bool
+      (let [seg (first row)
+            want (:sha256 (second row))
+            chunks (get-in img [:maps seg])
+            md (MessageDigest/getInstance "SHA-256")]
+        (do
+          (doseq [chunk chunks]
+            (let [csz (nth chunk 1)
+                  mbb (nth chunk 2)
+                  b (byte-array csz)
+                  dup (.duplicate mbb)]
+              (do
+                (.position dup 0)
+                (.get dup b)
+                (.update md b))))
+          (= want
+             (apply
+              str
+              (map (fn [x :- Any] :- String (format "%02x" x))
+                   (.digest md)))))))
+    seg-table)))
