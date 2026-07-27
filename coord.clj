@@ -35,9 +35,13 @@
             [fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
             [fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
             [coord-read :as cr]
+            [coord-commit :as cc]
             [clojure.edn :as edn] [clojure.java.io :as io] [clojure.string :as str]))
 
 (defn- store [co] (:store co))
+(defn- version-conflict? [single bv base] (cc/version-conflict? single bv base))
+(defn- expected-value-match? [live-values expected] (cc/expected-value-match? live-values expected))
+(defn- plan-commits [head intents] (cc/commit-plan head intents))
 
 ;; --- GROUP COMMIT: the durable-append engine (fsync OUT of the write lock) ---
 ;; The convoy this kills: every commit used to hold the coordinator lock (and, in
@@ -393,7 +397,7 @@
         ;; subject, bv=0), still checked — only a MISSING base means LWW. The
         ;; id-collision / reserved-predicate rejections are base-independent (below) and
         ;; untouched.
-        (and single base (> bv base))
+        (version-conflict? single bv base)
         {:reject :conflict :version (current-seq co)}
 
         ;; (2)(3) obligation: acyclicity — pure pre-check, before any mutation
@@ -402,9 +406,9 @@
         {:reject [(str pred " cycle")] :version (current-seq co)}
 
         ;; (4) multi-valued idempotency: no-op if the live (l,p,r) already exists
-        (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get facts %))) live))
-        {:ok (current-seq co) :idempotent true}
-        (and (not single) (= kind :assert) vid (some #(= vid (:r (get facts %))) live))
+        (and (not single)
+             (expected-value-match? (set (keep #(get-in facts [% :r]) live))
+                                    (if (= kind :link) tgt0 vid)))
         {:ok (current-seq co) :idempotent true}
 
         :else
@@ -440,8 +444,9 @@
           te0 (s/resolve-name st te-name)
           ;; PHASE 1 — validate/classify EVERY fact against the pre-batch snapshot,
           ;; before minting anything. `reduced` on the first reject aborts with no state.
-          plan (reduce
-                (fn [acc [i {:keys [pred kind r base]}]]
+          intents
+          (mapv
+           (fn [[i {:keys [pred kind r base]}]]
                   (let [pid    (c/value-id st pred)
                         tgt0   (when (= kind :link) (s/resolve-name st r))
                         vid    (when (= kind :assert) (c/value-id st r))
@@ -449,24 +454,14 @@
                         bv     (if (and te0 pid) (base-version co te0 pid) 0)
                         live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
                         fm     (:facts @st)]
-                    (cond
-                      (and single base (> bv base))
-                      (reduced {:reject :conflict :version (current-seq co) :at i :pred pred})
-
-                      (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
-                           (or (= te-name r) (and te0 tgt0 (reaches? co pid tgt0 te0))))
-                      (reduced {:reject [(str pred " cycle")] :version (current-seq co) :at i :pred pred})
-
-                      ;; multi-valued idempotency: an already-live (te,p,r) is a no-op, not a write
-                      (and (not single) (= kind :link) tgt0 (some #(= tgt0 (:r (get fm %))) live))
-                      (update acc :idempotent conj pred)
-                      (and (not single) (= kind :assert) vid (some #(= vid (:r (get fm %))) live))
-                      (update acc :idempotent conj pred)
-
-                      :else
-                      (update acc :writes conj {:pred pred :kind kind :r r}))))
-                {:writes [] :idempotent []}
-                (map-indexed vector facts))]
+                    (cc/->CommitIntent
+                     i pred kind r single bv base
+                     (set (keep #(get-in fm [% :r]) live))
+                     (if (= kind :link) tgt0 vid)
+                     (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
+                          (or (= te-name r) (and te0 tgt0 (reaches? co pid tgt0 te0)))))))
+           (map-indexed vector facts))
+          plan (plan-commits (current-seq co) intents)]
       (cond
         (:reject plan) plan
         ;; whole batch was idempotent/empty: no version movement, nothing durable
@@ -617,7 +612,7 @@
       (if (or (nil? te0) (nil? pid))
         {:ok (current-seq co)}                              ; nothing to retract
         (let [bv (base-version co te0 pid)]
-          (if (and single base (> bv base))   ; move-C: :base optional here too (symmetric, nil-safe)
+          (if (version-conflict? single bv base)   ; move-C: :base optional here too (symmetric, nil-safe)
             {:reject :conflict :version (current-seq co)}
             (let [tgt (if (and r-spec (str/starts-with? (str r-spec) "@"))
                         (s/resolve-name (store co) r-spec)
