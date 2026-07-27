@@ -609,6 +609,32 @@
           (append-tx! co (delta-records co since tx))
           {:ok (get-in @st [:txs tx :seq]) :subject-cid cid :cid new})))))
 
+;; supersede-cid! retires ONE fact by cid with the store's own supersession
+;; marker — the exact write retract! performs internally, reachable by cid
+;; instead of by (subject, predicate, value). retract!'s name-oriented
+;; signature cannot NAME a selection fact, so un-verifying a claim (supersede
+;; the verdict SELECTION, leave claim + evidence untouched, the withdrawn
+;; verdict still in the log — docs/claims-design.md) needed this seam.
+;; Idempotent on an already-superseded cid: nothing new to retire.
+(defn supersede-cid! [co agent cid]
+  (locking (:lock co)
+    (let [st (store co)]
+      (cond
+        (nil? (c/fact-of st cid))
+        {:reject :fact-not-found :version (current-seq co)}
+
+        (not (c/live? st cid))
+        {:ok (current-seq co) :idempotent true :cid cid}
+
+        :else
+        (let [since (:next-id @st)
+              tx    (c/begin-tx! st agent)
+              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+              sup   (c/value! st "store-supersedes")]
+          (c/fact! st cid sup cid tx)
+          (append-tx! co (delta-records co since tx))
+          {:ok (get-in @st [:txs tx :seq]) :cid cid})))))
+
 ;; commit-on-view! — write a rival fact AND select it into `view` in one breath: the
 ;; "write on a branch" verb. Always coexists (no base -> never staleness-rejected); the
 ;; new rival is the highest live cid on (te,pred), so THAT cid is selected into the branch.

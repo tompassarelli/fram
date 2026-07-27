@@ -1428,17 +1428,36 @@
 ;; vocabulary + read/rule layer; these verbs expose the coordinator writes its
 ;; design already prescribes. They require the v2 log because the flat
 ;; projection cannot preserve cid subjects/objects across restart.
-(defn- claim-cid [te pred]
-  (let [st  (:store @co)
-        lid (s/resolve-name st te)
-        pid (c/value-id st pred)
-        cids (if (and lid pid)
-               (vec (distinct (live-cids-lp @co lid pid)))
-               [])]
-    (cond
-      (empty? cids) nil
-      (= 1 (count cids)) (first cids)
-      :else :ambiguous)))
+;; claim-cid — which claim fact does this request address? Default is the
+;; (te,pred) locator; an explicit :cid (every claim op returns one) is the
+;; disambiguator for when rivals coexist on the locator. An explicit cid must
+;; be LIVE, and when the locator is also present it must AGREE — a client
+;; holding a stale cid must not silently decorate the wrong rival. Returns the
+;; cid, nil (not found / not live), :ambiguous, or :mismatch.
+(defn- claim-cid [req]
+  (let [st (:store @co)
+        explicit (:cid req)
+        te (:te req) pred (:p req)]
+    (if (some? explicit)
+      (let [fact (when (int? explicit) (c/fact-of st explicit))]
+        (cond
+          (or (nil? fact) (not (c/live? st explicit))) nil
+          (and (some? te) (not= (s/resolve-name st te) (:l fact))) :mismatch
+          (and (some? pred) (not= (c/value-id st pred) (:p fact))) :mismatch
+          :else explicit))
+      (let [lid (s/resolve-name st te)
+            pid (c/value-id st pred)
+            cids (if (and lid pid)
+                   (vec (distinct (live-cids-lp @co lid pid)))
+                   [])]
+        (cond
+          (empty? cids) nil
+          (= 1 (count cids)) (first cids)
+          :else :ambiguous)))))
+
+(defn- claim-locator-mismatch []
+  {:reject ["explicit :cid does not match the (te,pred) locator"]
+   :code :claim-locator-mismatch :version (current-seq @co)})
 
 (defn- claims-v2-required []
   {:reject ["fram.claims daemon writes require the v2 log; serve-flat cannot preserve cid identity"]
@@ -1448,7 +1467,7 @@
 (defn- do-claim-cite [req]
   (if @flat-log
     (claims-v2-required)
-    (let [cid (claim-cid (:te req) (:p req))
+    (let [cid (claim-cid req)
           evidence (:evidence req)
           agent (:agent req)]
       (cond
@@ -1457,8 +1476,11 @@
          :version (current-seq @co)}
 
         (= :ambiguous cid)
-        {:reject ["claim subject and predicate resolve to multiple live facts"]
+        {:reject ["claim subject and predicate resolve to multiple live facts; pass :cid to disambiguate"]
          :code :claim-ambiguous :version (current-seq @co)}
+
+        (= :mismatch cid)
+        (claim-locator-mismatch)
 
         (not (and (string? evidence) (str/starts-with? evidence "@")))
         {:reject ["claim-cite requires a named :evidence entity"]
@@ -1478,7 +1500,7 @@
 (defn- do-claim-decision [req]
   (if @flat-log
     (claims-v2-required)
-    (let [cid (claim-cid (:te req) (:p req))
+    (let [cid (claim-cid req)
           decision (when (some? (:decision req))
                      (keyword (name (:decision req))))
           agent (:agent req)
@@ -1489,8 +1511,11 @@
          :version (current-seq @co)}
 
         (= :ambiguous cid)
-        {:reject ["claim subject and predicate resolve to multiple live facts"]
+        {:reject ["claim subject and predicate resolve to multiple live facts; pass :cid to disambiguate"]
          :code :claim-ambiguous :version (current-seq @co)}
+
+        (= :mismatch cid)
+        (claim-locator-mismatch)
 
         (not (#{:verified :rejected} decision))
         {:reject ["claim-decision requires :verified or :rejected"]
@@ -1528,15 +1553,19 @@
               (assoc result :claim-cid cid :status decision))))))))
 
 (defn- read-claim [req]
-  (let [cid (claim-cid (:te req) (:p req))]
+  (let [cid (claim-cid req)]
     (cond
       (nil? cid)
       {:error "claim fact was not found" :code :claim-not-found
        :version (current-seq @co)}
 
       (= :ambiguous cid)
-      {:error "claim subject and predicate resolve to multiple live facts"
+      {:error "claim subject and predicate resolve to multiple live facts; pass :cid to disambiguate"
        :code :claim-ambiguous :version (current-seq @co)}
+
+      (= :mismatch cid)
+      {:error "explicit :cid does not match the (te,pred) locator"
+       :code :claim-locator-mismatch :version (current-seq @co)}
 
       :else
       (let [st (:store @co)
@@ -1560,6 +1589,61 @@
       {:error "claims-read requires at most 2000 claim locators"
        :code :invalid-claims-read :version (current-seq @co)}
       {:ok (mapv read-claim requested)
+       :version (current-seq @co)})))
+
+;; Un-verify: supersede every live verdict SELECTION on the claim so status
+;; derives back to :pending — claim fact and evidence untouched, the withdrawn
+;; verdicts still in the log. Multiple live selections can coexist (two
+;; verifiers, verified + a foreign-family selection), and claims/verdict
+;; elects the highest, so ONE supersede could just promote the runner-up:
+;; loop until no verdict remains. Idempotent when there is nothing to
+;; withdraw.
+(defn- do-claim-unverify [req]
+  (if @flat-log
+    (claims-v2-required)
+    (let [cid (claim-cid req)
+          agent (:agent req)]
+      (cond
+        (nil? cid)
+        {:reject ["claim fact was not found"] :code :claim-not-found
+         :version (current-seq @co)}
+
+        (= :ambiguous cid)
+        {:reject ["claim subject and predicate resolve to multiple live facts; pass :cid to disambiguate"]
+         :code :claim-ambiguous :version (current-seq @co)}
+
+        (= :mismatch cid)
+        (claim-locator-mismatch)
+
+        (not (and (string? agent) (not (str/blank? agent))))
+        {:reject ["claim-unverify requires a nonblank :agent"]
+         :code :invalid-claim-unverify :version (current-seq @co)}
+
+        :else
+        (loop [withdrawn []]
+          (if-let [v (claims/verdict @co cid)]
+            (let [res (supersede-cid! @co agent (:cid v))]
+              (if (:reject res)
+                (assoc res :claim-cid cid :withdrawn withdrawn)
+                (recur (conj withdrawn (:cid v)))))
+            (if (empty? withdrawn)
+              {:ok (current-seq @co) :idempotent true :claim-cid cid
+               :status (claims/status @co cid)}
+              {:ok (current-seq @co) :claim-cid cid :withdrawn withdrawn
+               :status (claims/status @co cid)})))))))
+
+;; The transition rule as a wire read: which VERIFIED claims cite evidence
+;; extracted against world :from whose slot no longer resolves identically at
+;; :to (docs/claims-design.md "The transition rule"). Returns bare claim cids —
+;; compose with :claim-read {:cid ...} for the full read model. Worlds-optional
+;; falls out of the module: a store with no evidence.world facts answers [].
+(defn- read-claims-needing-reverification [req]
+  (let [from (:from req) to (:to req)]
+    (if (or (not (string? from)) (str/blank? from)
+            (not (string? to)) (str/blank? to))
+      {:error "claims-needing-reverification requires :from and :to world version ids"
+       :code :invalid-reverification-read :version (current-seq @co)}
+      {:ok (vec (sort (claims/needs-reverification @co from to)))
        :version (current-seq @co)})))
 
 ;; --- one-wire managed-agent identity publication ----------------------------
@@ -3691,7 +3775,7 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-batch :managed-agent-publish :claim-cite :claim-decision
+  #{:assert :assert-batch :managed-agent-publish :claim-cite :claim-decision :claim-unverify
     :assert-with-fence :assert-at-version :assert-at-version-with-fence
     :retract :retract-with-fence :bump})
 
@@ -4442,6 +4526,7 @@
       :assert-batch (do-assert-batch (:te req) (:facts req) (:base req))
       :claim-cite (do-claim-cite req)
       :claim-decision (do-claim-decision req)
+      :claim-unverify (do-claim-unverify req)
       ;; One-wire managed-agent identity publication: the daemon derives and
       ;; acquires the canonical per-subject lease, commits body + marker in one
       ;; batch transaction, verifies exact readback, then releases the lease.
@@ -4561,6 +4646,7 @@
       ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
       :claim-read (read-claim req)
       :claims-read (read-claims req)
+      :claims-needing-reverification (read-claims-needing-reverification req)
       :facts   (let [{:keys [version triples]} (facts-wire-snapshot)]
                   {:version version
                    :log (or @flat-log (:log @co))

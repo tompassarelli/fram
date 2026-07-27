@@ -129,7 +129,9 @@ If that gets tedious in production, the fix is a generic coordinator verb
 (subject-is-a-cid `about!`) — app-generic plumbing, *not* claims vocabulary and
 not an engine change. It is deliberately out of this module's scope. Same story
 for un-verifying: superseding one selection fact is a public store write today,
-just not reachable from `retract!`'s signature.
+just not reachable from `retract!`'s signature. *(Both verbs have since
+landed: `coord.clj` `about!` and `supersede-cid!` — PR #1 and its follow-up.
+The daemon bridge over them lives in `coord_daemon.clj`.)*
 
 ## The treaty
 
@@ -148,9 +150,10 @@ baselined count of `claim` lines, and a file not in the baseline must carry none
 so the vocabulary cannot regrow by accident. This document and the spec suite were
 admitted to that baseline deliberately, in the commit that introduced them.
 
-One amendment (PR #1): the daemon's claims bridge — `:claim-cite`,
-`:claim-decision`, `:claim-read`, `:claims-read` in `coord_daemon.clj`, the
-generic `about!` seam's mention in `coord.clj`, and their lifecycle test — is
+One amendment (PR #1 + follow-up): the daemon's claims bridge — the
+`:claim-*` / `:claims-*` ops in `coord_daemon.clj`, the generic
+`about!`/`supersede-cid!` seams' mentions in `coord.clj`, and the bridge's
+lifecycle test — is
 part of this module's *surface*, and spends the reservation in its reserved
 sense: those ops name the verification lifecycle, not the stored triple. They
 were admitted to the ratchet baseline deliberately, in the commit that landed

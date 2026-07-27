@@ -91,6 +91,79 @@
 (check "cold replay preserves evidence provenance"
        (= "@evidence:door" (get-in replayed [:provenance 0 :name])))
 
+;; Un-verify closes the lifecycle loop: withdraw the verdict selection(s) so
+;; status derives back to pending — claim + evidence untouched, the withdrawn
+;; verdict still in the log — and a fresh decision can then flip the SAME
+;; claim the other way. The full pending -> verified -> pending -> rejected
+;; arc through one wire surface, on replayed state.
+(check "claim-unverify requires an agent"
+       (= :invalid-claim-unverify
+          (:code (handle {:op :claim-unverify
+                          :te "@claim:door" :p "review.assertion"}))))
+(def unverified (handle {:op :claim-unverify :agent "alice"
+                         :te "@claim:door" :p "review.assertion"}))
+(check "claim-unverify withdraws the verdict back to pending"
+       (and (:ok unverified)
+            (= :pending (:status unverified))
+            (= 1 (count (:withdrawn unverified)))))
+(check "claim-unverify is idempotent"
+       (:idempotent (handle {:op :claim-unverify :agent "alice"
+                             :te "@claim:door" :p "review.assertion"})))
+(check "an un-verified claim can be re-decided the other way"
+       (= :rejected
+          (:status (handle {:op :claim-decision :agent "bob"
+                            :decision :rejected
+                            :reason "the schedule row reads 900, not 950"
+                            :te "@claim:door" :p "review.assertion"}))))
+(check "claim-read shows the rejection with its reason"
+       (= "the schedule row reads 900, not 950"
+          (get-in (handle {:op :claim-read
+                           :te "@claim:door" :p "review.assertion"})
+                  [:rejection :reason])))
+
+;; Rival facts coexist on one (te,pred) — exactly what views exist for — and
+;; the locator alone then dead-ends. The :cid every claim op returns is the
+;; disambiguator; a stale/mismatched cid+locator pairing is rejected, never
+;; guessed.
+(handle {:op :assert :te "@claim:window" :p "review.assertion"
+         :r "{\"text\":\"Window W1 is 600 mm wide.\"}"})
+(handle {:op :assert :te "@claim:window" :p "review.assertion"
+         :r "{\"text\":\"Window W1 is 650 mm wide.\"}"})
+(def rivals
+  (let [st (:store @co)]
+    (vec (sort (live-cids-lp @co (s/resolve-name st "@claim:window")
+                             (c/value-id st "review.assertion"))))))
+(check "locator alone is ambiguous across live rivals"
+       (= :claim-ambiguous
+          (:code (handle {:op :claim-read
+                          :te "@claim:window" :p "review.assertion"}))))
+(check "an explicit :cid disambiguates the read"
+       (= "{\"text\":\"Window W1 is 650 mm wide.\"}"
+          (:claim (handle {:op :claim-read :cid (second rivals)}))))
+(check "an explicit :cid disambiguates a citation"
+       (= (second rivals)
+          (:claim-cid (handle {:op :claim-cite :agent "extractor"
+                               :cid (second rivals)
+                               :evidence "@evidence:door"}))))
+(check "an explicit :cid disambiguates a decision"
+       (= :verified
+          (:status (handle {:op :claim-decision :agent "carol"
+                            :decision :verified :cid (second rivals)}))))
+(check "a mismatched locator + :cid pairing is rejected"
+       (= :claim-locator-mismatch
+          (:code (handle {:op :claim-read :te "@claim:door"
+                          :p "review.assertion" :cid (second rivals)}))))
+
+;; The transition rule on the wire: bare cids, composable with :claim-read
+;; {:cid ...}. Worlds-optional: this store never called a world verb, so the
+;; answer is empty, not a false alarm.
+(check "claims-needing-reverification validates its inputs"
+       (= :invalid-reverification-read
+          (:code (handle {:op :claims-needing-reverification :from "vA"}))))
+(check "claims-needing-reverification is worlds-optional (empty, no false alarm)"
+       (= [] (:ok (handle {:op :claims-needing-reverification
+                           :from "vA" :to "vB"}))))
+
 (def flat-path (str scratch "/facts.flat.log"))
 (spit flat-path "")
 (boot-flat! flat-path)
@@ -108,6 +181,10 @@
                           :te "@claim:flat"
                           :p "review.assertion"
                           :evidence "@evidence:flat"}))))
+(check "serve-flat fails closed for claim-unverify"
+       (= :claims-require-v2-log
+          (:code (handle {:op :claim-unverify :agent "alice"
+                          :te "@claim:flat" :p "review.assertion"}))))
 
 (println (str "\nclaims-daemon: " (- @total @failures) "/" @total " passed"))
 (when (pos? @failures)
