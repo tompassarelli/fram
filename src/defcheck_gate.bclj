@@ -15,3 +15,72 @@
 (define-mode strict)
 
 (def BEAGLE-MESSAGE-RE :- Any (re-pattern "^beagle:\\s*"))
+
+(def TYPED-SOURCE-RE :- Any (re-pattern "(?m)(^|[\\s(\\[]):-(\\s|$)"))
+
+(def DOT-RE :- Any (re-pattern "\\."))
+
+(def ANON-ARG-RE :- Any (re-pattern "%\\d*|%&"))
+
+(def CLASS-LIKE-RE :- Any (re-pattern "[A-Z].*"))
+
+(defn- env-int [k :- String d :- Int] :- Int
+  (or (some-> (System/getenv k) Integer/parseInt) d))
+
+(defrecord DefcheckState [coord-port :- Int sidecar-port :- Int gwdir :- Any autostart? :- Bool render-fn :- Any modules-fn :- Any arity-check? :- Bool])
+
+(def beagle-home :- String
+  (or (System/getenv "BEAGLE_HOME")
+    (str (System/getProperty "user.home") "/code/beagle")))
+
+(def repo-root :- String
+  (or (System/getenv "FRAM_HOME") (System/getProperty "user.dir")))
+
+(defn- rpc [port :- Int line :- String] :- Any
+  (with-open [s (java.net.Socket.)]
+    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)))
+    (let [w (io/writer (.getOutputStream s)) r (io/reader (.getInputStream s))]
+      (.write w (str line "\n"))
+      (.flush w)
+      (.readLine r))))
+
+(defn coord-with-state [state :- DefcheckState req :- Any] :- Any
+  (edn/read-string (rpc (:coord-port state) (pr-str req))))
+
+(defn sidecar-with-state [state :- DefcheckState line :- String] :- Any
+  (json/parse-string (rpc (:sidecar-port state) line) true))
+
+(defn sidecar-up-with-state? [state :- DefcheckState] :- Bool
+  (try (:ok (sidecar-with-state state "ping")) (catch Exception _ false)))
+
+(defn ensure-sidecar-with-state! "Ping the warm checker; if down and *autostart?*, launch bin/fram-defcheck and\n  block (≤30s) until it announces ready. Idempotent. Returns true when up."
+  [state :- DefcheckState]
+  :-
+  Bool
+  (or (sidecar-up-with-state? state)
+    (when (:autostart? state)
+      (let [launcher (str repo-root "/bin/fram-defcheck")]
+        (let [pb (ProcessBuilder. ["setsid" launcher (str (:sidecar-port state))])]
+          (.redirectOutput pb (java.io.File. "/dev/null"))
+          (.redirectError pb (java.io.File. "/dev/null"))
+          (.start pb))
+        (loop [n 0]
+          (cond
+            (sidecar-up-with-state? state)
+            true
+            (>= n 60)
+            (throw (ex-info "fram-defcheck sidecar failed to start" {:port (:sidecar-port state)}))
+            :else
+            (do (Thread/sleep 500) (recur (inc n)))))))))
+
+(defn gwdir-with-state [state :- DefcheckState] :- String
+  (or (:gwdir state)
+    (str (System/getProperty "java.io.tmpdir")
+      "/fram-defcheck-gw-"
+      (:coord-port state))))
+
+(defn src-path-with-state [state :- DefcheckState module :- String] :- String
+  (str (gwdir-with-state state) "/" module ".bclj"))
+
+(defn edn-path-with-state [state :- DefcheckState module :- String] :- String
+  (str (gwdir-with-state state) "/.edn/" module ".edn"))
