@@ -25,7 +25,8 @@
             [cheshire.core :as json]
             [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d]
             [fram.claims :as claims] [fram.rt]
-            [fri])
+            [fri]
+            [coord-daemon-wire :as wire])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
            [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
@@ -123,8 +124,7 @@
     (reset! edit-durability-state state)
     state))
 
-(defn- effective-request-op [req]
-  (if (= :for-log (:op req)) (get-in req [:request :op]) (:op req)))
+(defn- effective-request-op [req] (wire/effective-request-op req))
 
 (def ^:private durability-diagnostic-ops
   ;; These never read or mutate the uncertain disk tail. :edit-protocol and
@@ -451,28 +451,11 @@
 
 ;; cheap pre-parse depth guard: the deepest run of unmatched opening delimiters.
 ;; Rejecting here avoids the JVM recursive reader StackOverflowError (#5).
-(defn- edn-too-deep? [^String s]
-  (loop [i 0 depth 0 mx 0 in-str false esc false]
-    (if (>= i (.length s))
-      (> mx max-edn-depth)
-      (let [c (.charAt s i)]
-        (cond
-          esc          (recur (inc i) depth mx in-str false)
-          (and in-str (= c \\)) (recur (inc i) depth mx in-str true)
-          in-str       (recur (inc i) depth mx (not (= c \")) false)
-          (= c \")     (recur (inc i) depth mx true false)
-          (or (= c \() (= c \[) (= c \{))
-                       (let [d (inc depth)] (recur (inc i) d (max mx d) in-str false))
-          (or (= c \)) (= c \]) (= c \}))
-                       (recur (inc i) (max 0 (dec depth)) mx in-str false)
-          :else        (recur (inc i) depth mx in-str false))))))
+(defn- edn-too-deep? [^String s] (wire/edn-too-deep? s max-edn-depth))
 
 ;; parse a request line defensively: bound depth, keep clojure.edn (never
 ;; read-string — no #= eval), and surface a parse failure as data, not a throw.
-(defn- parse-req [^String line]
-  (when (edn-too-deep? line)
-    (throw (ex-info "edn too deep" {:type :edn-too-deep})))
-  (edn/read-string line))
+(defn- parse-req [^String line] (wire/parse-request line max-edn-depth))
 
 ;; flat-log projection: each reified commit also appends the flat {:op :l :p :r}
 ;; line the CLI's cold fold reads — so "files are pure projections of the reified
@@ -856,10 +839,7 @@
 
 (def ^:dynamic *request-query-control* nil)
 
-(defn- query-request? [req]
-  (and (map? req)
-       (or (#{:query :query-page :pull} (:op req))
-           (and (= :as-of (:op req)) (:query req)))))
+(defn- query-request? [req] (wire/query-request? req))
 
 (defn- lower-query-limit [req key ceiling]
   (let [n (get req key)]
@@ -4041,19 +4021,8 @@
   (resolve/sym-val (second (resolve/ordered-children (resolve/unwrap-def fnode)))))
 
 ;; ---- exception / reject -> ERROR shape (NEVER a bare throw) ------------------
-(defn- ex->s-err [module nm t]
-  (let [d (ex-data t)
-        msg (or (not-empty (str (.getMessage t))) (:message d) (str "internal error: " (.getSimpleName (class t))))]
-    (s-err :gate :at {:module module :def nm}
-           :message msg
-           :got (.getSimpleName (class t))
-           :suggestion (or (:suggestion d) "simplify the form; ensure every referenced helper/type exists"))))
-(defn- reject->s-err [module nm er]
-  (let [msg (if (vector? (:reject er)) (str/join "; " (:reject er)) (str (:reject er)))]
-    (cond-> (s-err :canon :at {:module module :def nm}
-                   :message (str "verb rejected: " msg)
-                   :suggestion "send exactly one named value def per form; narrow ambiguous edits")
-      (:disambiguation er) (assoc :disambiguation (:disambiguation er)))))
+(defn- ex->s-err [module nm t] (wire/exception-gate-error module nm t))
+(defn- reject->s-err [module nm er] (wire/reject-gate-error module nm er))
 
 ;; ---- write-def --------------------------------------------------------------
 ;; A t-r1 fumble: the agent sends the WIRE CHANGESET ([{:op "upsert-form" :form (defn
@@ -4348,13 +4317,7 @@
        (catch Throwable t
          ;; Surface a verb's structured disambiguation payload (replace-in-body
          ;; candidates + :within suggestions) alongside the human :reject message.
-         (let [d   (ex-data t)
-               msg (or (not-empty (str (.getMessage t))) (:message d)
-                       (str "internal error: " (.getSimpleName (class t))))]
-           (cond-> {:reject [(str "edit-min: " msg)]
-                    :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
-                    :version (current-seq @co)}
-             (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
+         (wire/edit-min-error-response (:spec req) t (current-seq @co)))))
 
 ;; Internal adapter read: resolve a module's canonical downstream view from the
 ;; graph's @<module>#root `file` fact. The MCP validates path confinement before
@@ -4803,7 +4766,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      {:error "unknown op"}))))))
+      (wire/unknown-op-response)))))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
@@ -4834,10 +4797,7 @@
 ;; instead (fram.rt/to-json = cheshire/generate-string): the Elixir client decodes
 ;; JSON ~90x faster than EDN (eden), so an opt-in JSON :query is the first-load/refresh
 ;; win. Gated purely on :fmt — no :fmt => pr-str, exactly as today.
-(defn- serialize-resp [fmt resp]
-  (if (or (= fmt :json) (= fmt "json"))
-    (fram.rt/to-json resp)
-    (pr-str resp)))
+(defn- serialize-resp [fmt resp] (wire/serialize-response fmt resp fram.rt/to-json))
 
 (defn- try-reply
   ([^BufferedWriter w resp] (try-reply w resp nil))
@@ -4906,16 +4866,10 @@
         (when-let [line (read-line-bounded r max-line-bytes)]
           (let [req (parse-req line)
                 inner (:request req)
-                strict-reject
-                (when (and require-log-fence?
-                           (not= :for-log (:op req)))
-                  {:reject ["this coordinator requires a :for-log envelope"]
-                   :code :log-fence-required
-                   :served-log (served-log-path)})
-                fenced-subscribe? (and (= :for-log (:op req))
-                                       (map? inner)
-                                       (= :subscribe (:op inner)))
-                subscribe-req (if fenced-subscribe? inner req)
+                strict-reject (wire/strict-log-fence-rejection
+                               require-log-fence? req (served-log-path))
+                fenced-subscribe? (wire/fenced-subscribe? req)
+                subscribe-req (wire/subscription-request req)
                 fence-reject (when fenced-subscribe?
                                (locking dlock
                                  (log-fence-rejection (:expected-log req))))]
@@ -4934,15 +4888,16 @@
                   ;; the loop now blocks on read purely to detect disconnect (EOF).
                   ;; The 1 MiB line cap still guards against a flooding subscriber.
                   (.setSoTimeout s 0)
-                  (.write w (pr-str (cond-> {:subscribed (current-seq @co)}
-                                      fenced-subscribe?
-                                      (assoc :log (served-log-path)))))
+                  (.write w (pr-str (wire/subscription-response
+                                     (current-seq @co)
+                                     fenced-subscribe?
+                                     (served-log-path))))
                   (.newLine w)
                   (.flush w)
                   (loop [] (when (read-line-bounded r max-line-bytes) (recur))))
 
               :else
-              (let [actual (if (= :for-log (:op req)) inner req)
+              (let [actual (wire/actual-request req)
                     query? (query-request? actual)
                     control (when query? (new-query-control actual))
                     _ (when query? (monitor-query-disconnect s r control))]
@@ -4959,8 +4914,7 @@
         ;; keeps a deep-nest / malformed line from taking down the conn thread.
         (catch java.net.SocketTimeoutException _ nil)   ; slow client: just close
         (catch Throwable t
-          (try-reply w {:error (str "bad request: "
-                                    (or (:type (ex-data t)) (.. t getClass getSimpleName)))}))))
+          (try-reply w (wire/bad-request-response t)))))
     (catch Throwable _ nil)
     (finally (try (.close s) (catch Throwable _ nil)))))
 
