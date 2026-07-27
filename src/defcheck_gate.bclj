@@ -8,8 +8,10 @@
 ;; ============================================================================
 (ns fram.defcheck
   (:require [clojure.java.io :as io]
-            [clojure.string :as str]
-            [clojure.edn :as edn]
-            [cheshire.core :as json]))
+    [clojure.string :as str]
+    [clojure.edn :as edn]
+    [cheshire.core :as json]))
 
 (define-mode strict)
+
+(def BEAGLE-MESSAGE-RE :- Any (re-pattern "^beagle:\\s*"))
