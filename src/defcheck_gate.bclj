@@ -84,3 +84,76 @@
 
 (defn edn-path-with-state [state :- DefcheckState module :- String] :- String
   (str (gwdir-with-state state) "/.edn/" module ".edn"))
+
+(defn live-modules-with-state "The live module set. Uses *modules-fn* if bound (in-process); else reads the\n  stable :srcs the coordinator attaches to a render-miss (`:index` is A1's WIP)."
+  [state :- DefcheckState]
+  :-
+  (Vec String)
+  (if (:modules-fn state)
+    (vec ((:modules-fn state)))
+    (let [r (coord-with-state state {:op :render :module "__nonexistent__"})]
+      (vec (or (:srcs r) [])))))
+
+(defn render-edn-with-state! "Render module -> triples string, written to edn-path. Returns the path. Uses\n  *render-fn* if bound (the coordinator's in-process render), else coord :render."
+  [state :- DefcheckState module :- String]
+  :-
+  String
+  (let [edn (if (:render-fn state) ((:render-fn state) module) (let [resp (coord-with-state state {:op :render :module module})] (when (:error resp) (throw (ex-info (str "render failed for " module ": " (:error resp)) {:module module}))) (:edn resp)))]
+    (when (str/blank? (str edn))
+      (throw (ex-info (str "render returned no source for " module) {:module module})))
+    (let [p (edn-path-with-state state module)]
+      (io/make-parents (io/file p))
+      (spit p edn)
+      p)))
+
+(defn refresh-sibling-with-state! "Render `module` fresh (coord :render) to its EDN, and warm EDN->text via the\n  sidecar to <gwdir>/<module>.bclj — so OTHER modules resolve this module's\n  CURRENT signatures on their next check. Returns the EDN path. The .bclj write\n  is best-effort (a stale sibling only weakens cross-module fidelity, never\n  corrupts a check)."
+  [state :- DefcheckState module :- String]
+  :-
+  String
+  (let [epath (render-edn-with-state! state module)]
+    (io/make-parents (io/file (src-path-with-state state module)))
+    (try
+      (sidecar-with-state state
+        (str "render " epath " " (src-path-with-state state module)))
+      (catch Exception _ nil))
+    epath))
+
+(defn prime-gwdir-with-state! "Populate <gwdir> with a .bclj for every live module (warm, via the sidecar).\n  Idempotent + cheap to repeat. Call once when an arena's coordinator comes up\n  (and internally by whole-tree-check, so cross-refs resolve current text)."
+  [state :- DefcheckState]
+  :-
+  String
+  (ensure-sidecar-with-state! state)
+  (doseq [m (live-modules-with-state state)]
+    (try (refresh-sibling-with-state! state m) (catch Exception _ nil)))
+  (gwdir-with-state state))
+
+(def parse-kinds :- (Set String)
+  #{"parse-error" "reader" "structural" "syntax" "read-error"})
+
+(defn- diag->error [module :- String diag :- Any] :- Any
+  (let [kind (:kind diag) stage (if (contains? parse-kinds (str kind)) :parse :type) def-name (:name diag) line (or (:error-line diag) (:line diag)) expected (:expected diag) got (:actual diag) msg (str/replace (str (:message diag)) BEAGLE-MESSAGE-RE "") fix (:fix_plan diag) suggestion (cond (map? fix) (or (:suggestion fix) (:message fix) (:summary fix)) (string? fix) fix (and expected got) (str "make it a " expected " (currently " got ")")) nearest (:nearest diag)]
+    (let [at0 {:module module} at1 (if def-name (assoc at0 :def def-name) at0) at2 (if line (assoc at1 :line line) at1) e0 {:ok false :stage stage :at at2 :message msg} e1 (if expected (assoc e0 :expected expected) e0) e2 (if got (assoc e1 :got got) e1) e3 (if suggestion (assoc e2 :suggestion suggestion) e2) e4 (if (seq nearest) (assoc e3 :nearest (vec nearest)) e3) e5 (if kind (assoc e4 :kind kind) e4)]
+      (if (:error-code diag) (assoc e5 :error-code (:error-code diag)) e5))))
+
+(defn- pick-primary "The error to surface as the single return value: prefer one on the def just\n  written, else the first. Full list travels in :errors."
+  [name :- Any errs :- (Vec Any)]
+  :-
+  Any
+  (or (first (filter (fn [e :- Any] :- Bool (= name (get-in e [:at :def]))) errs))
+    (first errs)))
+
+(defn check-module-errors-with-state! "Render `module` fresh and type-check it against the primed sibling gwdir.\n  Returns a vector of ERROR-shape maps (empty when clean). Refreshes this\n  module's own sibling text so later cross-module checks see it."
+  [state :- DefcheckState module :- String]
+  :-
+  (Vec Any)
+  (let [epath (refresh-sibling-with-state! state module) resp (sidecar-with-state state (str "check " epath " " (src-path-with-state state module)))]
+    (if-not (:ok resp)
+      [{:ok
+        false
+        :stage
+        :type
+        :at
+        {:module module}
+        :message
+        (str "def-check infra error: " (:error resp))}]
+      (mapv (fn [e :- Any] :- Any (diag->error module e)) (:errors resp)))))
