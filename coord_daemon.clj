@@ -73,10 +73,18 @@
 (def projection-cache (atom nil))
 ;; the rotation-segment layer (thread 019f9e66) lives at the bottom of this file,
 ;; next to the checkpoint writer; :status reaches back for its ops surface.
-(declare rotation-index-status start-rotation-compactor! rotation-stats)
+(declare rotation-index-status start-rotation-compactor! rotation-stats
+         snapshot-if-dirty!)
 (def projection-build-lock (Object.))
 (def subscribers (atom []))
+(def subscription-sockets (atom #{}))
 (def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
+(def listener-socket (atom nil))
+(def accept-stopped (atom nil))
+(def drain-monitor (Object.))
+(def active-connections (atom 0))
+(def draining? (atom false))
+(def drain-hook-installed? (atom false))
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
 (def telemetry-mtime (atom nil))     ; same freshness fence for the split telemetry half
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
@@ -4912,7 +4920,16 @@
               (try-reply w fence-reject (:fmt req))
 
               (or fenced-subscribe? (= (:op req) :subscribe))
-              (do (swap! subscribers conj {:w w :flt (:filter subscribe-req)})   ; P5: opt-in scoped filter (nil = firehose)
+              (do
+                  (locking drain-monitor
+                    (swap! subscription-sockets conj s)
+                    ;; TERM may have closed the listener after this connection was
+                    ;; accepted but before its request was classified. A subscription
+                    ;; is idle transport, not finite in-flight work; close it now so
+                    ;; drain cannot wait forever.
+                    (when @draining?
+                      (try (.close s) (catch Throwable _ nil))))
+                  (swap! subscribers conj {:w w :s s :flt (:filter subscribe-req)}) ; P5: opt-in scoped filter (nil = firehose)
                   ;; A subscriber is long-lived: it RECEIVES pushed events and sends
                   ;; nothing, so the request-path read timeout (5s) must NOT apply or
                   ;; it would drop every idle subscriber. Disable it for this socket;
@@ -4947,7 +4964,9 @@
         (catch Throwable t
           (try-reply w (wire/bad-request-response t)))))
     (catch Throwable _ nil)
-    (finally (try (.close s) (catch Throwable _ nil)))))
+    (finally
+      (swap! subscription-sockets disj s)
+      (try (.close s) (catch Throwable _ nil)))))
 
 ;; bind address: loopback by default (no existing single-machine user is silently
 ;; exposed); honor FRAM_BIND for gateway-fronted / cross-host deployment. The wire
@@ -5084,6 +5103,57 @@
       {:socket (adopt-listen-socket fd) :inherited? true})
     {:socket (listen-socket addr port tls) :inherited? false}))
 
+(defn- serve-conn-async! [^Socket s]
+  ;; Count before submission: once accept returns, TERM must either observe this
+  ;; connection as in-flight or wait for accept-stopped before testing the count.
+  (locking drain-monitor (swap! active-connections inc))
+  (try
+    (future
+      (try
+        (serve-conn s)
+        (finally
+          (locking drain-monitor
+            (swap! active-connections dec)
+            (.notifyAll drain-monitor)))))
+    (catch Throwable t
+      (try (.close s) (catch Throwable _ nil))
+      (locking drain-monitor
+        (swap! active-connections dec)
+        (.notifyAll drain-monitor))
+      (throw t))))
+
+(defn- await-connections-drained! []
+  (locking drain-monitor
+    (loop []
+      (when (pos? @active-connections)
+        (.wait drain-monitor)
+        (recur)))))
+
+(defn- drain-and-checkpoint! []
+  ;; Ordering is the handover proof:
+  ;;   1. stop accept (systemd keeps its own listener reference + backlog);
+  ;;   2. wait until the accept loop has published every already-accepted socket;
+  ;;   3. close idle subscriptions and finish finite request workers;
+  ;;   4. cross the group-appender FIFO barrier (all request appends fsynced);
+  ;;   5. checkpoint only that fully drained durable version.
+  (reset! draining? true)
+  (when-let [^ServerSocket ss @listener-socket]
+    (try (.close ss) (catch Throwable _ nil)))
+  (when-let [^java.util.concurrent.CountDownLatch stopped @accept-stopped]
+    (.await stopped))
+  (locking drain-monitor
+    (doseq [^Socket s @subscription-sockets]
+      (try (.close s) (catch Throwable _ nil))))
+  (await-connections-drained!)
+  (durable-barrier!)
+  (snapshot-if-dirty! "shutdown"))
+
+(defn- install-drain-hook! []
+  (when (compare-and-set! drain-hook-installed? false true)
+    (.addShutdownHook
+     (Runtime/getRuntime)
+     (Thread. ^Runnable drain-and-checkpoint! "fram-coordinator-drain"))))
+
 (defn serve [port]
   (let [cfg (bind-cfg)
         addr (:addr cfg) loopback? (:loopback? cfg) label (:label cfg)
@@ -5091,7 +5161,12 @@
         opened (open-listen-socket addr port tls)
         ss (:socket opened)
         inherited? (:inherited? opened)
-        actual-port (.getLocalPort ^ServerSocket ss)]
+        actual-port (.getLocalPort ^ServerSocket ss)
+        stopped (java.util.concurrent.CountDownLatch. 1)]
+    (reset! draining? false)
+    (reset! listener-socket ss)
+    (reset! accept-stopped stopped)
+    (install-drain-hook!)
     (when (and (not loopback?) (not tls))
       (binding [*out* *err*]
         (println (str "WARNING: coordinator bound to " label ":" actual-port
@@ -5103,7 +5178,17 @@
                         loopback? " (sole writer, loopback-only)"
                         :else " (sole writer, behind-gateway)")))
     (maybe-wire-def-check! actual-port)   ; phase 2: wire A2's warm def-level check (FRAM_DEFCHECK=1)
-    (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
+    (try
+      (loop []
+        (when-not @draining?
+          (let [s (.accept ^ServerSocket ss)]
+            (serve-conn-async! s)
+            (recur))))
+      (catch java.net.SocketException t
+        (when-not @draining? (throw t)))
+      (finally
+        (.countDown stopped)
+        (compare-and-set! listener-socket ss nil)))))
 
 (defn client [port m]
   (with-open [s (Socket.)]
@@ -6188,8 +6273,9 @@
 ;; Every snapshot-interval-ms, if commits advanced past the last checkpoint, write one
 ;; (write-snapshot! serializes under dlock). Also fires once right after boot on its
 ;; own thread — after a fold boot that restamps a fresh checkpoint without delaying
-;; time-to-serve — and once from a clean-shutdown hook, so the next boot's tail is
-;; as small as the shutdown was clean. Failures log and never take the daemon down.
+;; time-to-serve. The listener lifecycle owns the clean-shutdown checkpoint so it
+;; can order it after accept-stop, in-flight completion, and the durability barrier.
+;; Failures log and never take the daemon down.
 (def ^:private last-snapshot-seq (atom -1))
 (defn- snapshot-if-dirty! [why]
   (try
@@ -6218,9 +6304,7 @@
                        (Thread/sleep (long snapshot-interval-ms))
                        (snapshot-if-dirty! "interval")
                        (recur))))
-      (.setName "fram-snapshot-writer") (.setDaemon true) (.start))
-    (.addShutdownHook (Runtime/getRuntime)
-                      (Thread. (fn [] (snapshot-if-dirty! "shutdown"))))))
+      (.setName "fram-snapshot-writer") (.setDaemon true) (.start))))
 
 ;; ---- rotation segments: persistence + background compaction ---------------
 ;; The in-memory rotations are rebuilt from the store on every boot, which is
