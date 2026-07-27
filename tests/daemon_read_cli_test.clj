@@ -175,6 +175,26 @@
           (str/includes? output
                          "committed via coordinator (v9): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = cli-fix probe")))
 
+(let [read-called? (atom false)
+      output
+      (with-redefs [rt/coord-port (constantly 7977)
+                    rt/coord-version-for-log (fn [& _] 8)
+                    rt/coord-assert-for-log (fn [& _] "reject:cycle")
+                    rt/read-log
+                    (fn [& _]
+                      (reset! read-called? true)
+                      (throw (ex-info "rejected write selected fallback" {})))]
+        (with-out-str
+          (check! "coordinator rejection is terminal"
+                  (fram-fast/fast-write!
+                   log-path "assert"
+                   "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
+                   "progress" "rejected probe"))))]
+  (check! "coordinator rejection never falls through to a cold write"
+          (not @read-called?))
+  (check! "coordinator rejection remains visible"
+          (str/includes? output "REJECTED by coordinator: reject:cycle")))
+
 (check! "ambiguous single-token write preserves cold normalization fallback"
         (false? (fram-fast/fast-write!
                  log-path "assert"
