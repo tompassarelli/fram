@@ -83,17 +83,7 @@
 (def ^:dynamic *corpus-cache* nil)
 (def ^:dynamic file->ents (atom {}))
 
-(defn load-edn [path]
-  (let [lines (str/split-lines (slurp path))
-        src   (-> (first (filter #(str/starts-with? % "@file") lines)) (subs 6))
-        local (atom {})
-        ent   (fn [lid] (or (@local lid)
-                            (let [e (c/entity! ctx)] (swap! local assoc lid e)
-                                 (swap! file->ents update src (fnil conj []) e) e)))]
-    (doseq [line lines :when (str/starts-with? line "[")]
-      (let [[s p o] (edn/read-string line)]
-        (c/fact! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
-    src))
+(defn load-edn [path] (rco/load-edn! ctx tx file->ents path))
 
 ;; --- fact-graph accessors --------------------------------------------------
 ;; render-mode marker predicate value-ids — DYNAMIC, rebound (recomputed against
@@ -283,17 +273,17 @@
 ;; (src/resolve_modules.bclj). Wrappers as in Cuts B/C; the entity list comes out
 ;; of the ^:dynamic `file->ents` atom here and is handed over explicitly.
 (defn unwrap-def [form] (rm/unwrap-def ctx *view* form))
-(defn module-defs [src] (rm/module-defs ctx *view* (@file->ents src)))
+(defn module-defs [src] (rm/module-defs ctx *view* (rco/file-entities file->ents src)))
 ;; --- cross-module: parse ns/:require (imports) and js/export (exports) -------
-(defn forms-of [src] (rm/forms-of ctx *view* (@file->ents src)))
-(defn ns-form [src] (rm/ns-form ctx *view* (@file->ents src)))
-(defn module-name [src] (rm/module-name ctx *view* (@file->ents src)))
+(defn forms-of [src] (rm/forms-of ctx *view* (rco/file-entities file->ents src)))
+(defn ns-form [src] (rm/ns-form ctx *view* (rco/file-entities file->ents src)))
+(defn module-name [src] (rm/module-name ctx *view* (rco/file-entities file->ents src)))
 (defn merge-import-opts [acc modn kids] (rm/merge-import-opts ctx *view* acc modn (vec kids)))
-(defn parse-require [src] (rm/parse-require ctx *view* (@file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
-(defn module-exports [src] (rm/module-exports ctx *view* (@file->ents src))) ; {exported-name -> binding-node}
+(defn parse-require [src] (rm/parse-require ctx *view* (rco/file-entities file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
+(defn module-exports [src] (rm/module-exports ctx *view* (rco/file-entities file->ents src))) ; {exported-name -> binding-node}
 (defn type-name-leaf [d] (rm/type-name-leaf ctx *view* d))                   ; a type def's name-leaf, (Name Params) head unwrapped
-(defn module-types [src] (rm/module-types ctx *view* (@file->ents src)))     ; {type-name -> name-leaf}
-(defn module-accessors [src] (rm/module-accessors ctx *view* (@file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
+(defn module-types [src] (rm/module-types ctx *view* (rco/file-entities file->ents src)))     ; {type-name -> name-leaf}
+(defn module-accessors [src] (rm/module-accessors ctx *view* (rco/file-entities file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
 
 ;; --- corpus tables (DYNAMIC, inert root) ------------------------------------
 ;; The loaded sources + every frame/export table derived from them. INERT at root
@@ -305,7 +295,7 @@
 (def ^:dynamic file-modframe {})
 (def ^:dynamic file-typeframe {})
 (def ^:dynamic file-accessors {})
-(defn def-binding [src nm] (or (get (file-modframe src) nm) (get (file-typeframe src) nm)))  ; value OR type
+(defn def-binding [src nm] (rco/def-binding file-modframe file-typeframe src nm))  ; value OR type
 ;; module-name -> {exported-name -> binding-node}
 ;; beagle modules carry an (ns ...) form but export IMPLICITLY (no js/export), so
 ;; fall back to ALL top-level defs as the export surface. JS modules with explicit
@@ -321,7 +311,7 @@
 ;; so a record rename carries c/point-x / :refer'd point-x (parallel to global-type-exports).
 (def ^:dynamic global-accessor-exports {})
 (defn make-xresolve [src]
-  (rco/make-xresolve ctx *view* @file->ents
+  (rco/make-xresolve ctx *view* (rco/file-entity-map file->ents)
                      global-exports global-type-exports global-accessor-exports src))
 ;; --- Turtle #6: resolve identifier mentions INSIDE comments -----------------
 ;; A comment is a sequence of text + symbol-candidate segments. A symbol segment
@@ -338,7 +328,7 @@
 ;; is why the ^:dynamic *xresolve*/*tresolve*/*aresolve* are no longer rebound on
 ;; this path — the module builds each src's three resolvers itself. re-resolve! still
 ;; binds them, and reads them through walk-env.
-(defn walk-corpus [] (rco/walk-corpus (vec srcs) file-modframe file-typeframe file-accessors @file->ents))
+(defn walk-corpus [] (rco/walk-corpus (vec srcs) file-modframe file-typeframe file-accessors (rco/file-entity-map file->ents)))
 (defn cbind! [L target] (rw/cbind! (walk-env) L target))
 (defn resolve-comment [e src] (rw/resolve-comment! (walk-env) (walk-corpus) e src))
 (defn walk-comments [src] (rw/walk-comments! (walk-env) (walk-corpus) src))
@@ -366,16 +356,18 @@
 (defn lift-bound-to-refers! [] (rco/lift-bound-to-refers! ctx tx KIND BOUND REFERS))
 
 (defn- install-corpus-tables! [tables]
-  (set! file-modframe (:modframe tables))
-  (set! file-typeframe (:typeframe tables))
-  (set! file-accessors (:accessors tables))
-  (set! global-exports (:exports tables))
-  (set! global-type-exports (:type-exports tables))
-  (set! global-accessor-exports (:accessor-exports tables)))
+  (let [[modframe typeframe accessors exports type-exports accessor-exports]
+        (rco/corpus-table-values tables)]
+    (set! file-modframe modframe)
+    (set! file-typeframe typeframe)
+    (set! file-accessors accessors)
+    (set! global-exports exports)
+    (set! global-type-exports type-exports)
+    (set! global-accessor-exports accessor-exports)))
 
 (defn- install-warm-corpus! [groups tables]
   (reset! file->ents groups)
-  (set! srcs (:srcs tables))
+  (set! srcs (rco/table-srcs tables))
   (install-corpus-tables! tables))
 
 (defn- corpus-state []
@@ -390,16 +382,17 @@
                      (fn [line] (binding [*out* *err*] (println line)))))
 
 (defn- with-corpus-state! [store t sup body]
-  (binding [ctx store, tx t, SUP sup
+  (let [ids (rco/corpus-predicate-ids! store)]
+    (binding [ctx store, tx t, SUP sup
             file->ents (atom {})
-            Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
-            FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
-            CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+            Vp (:Vp ids) KIND (:KIND ids) REFERS (:REFERS ids) BOUND (:BOUND ids)
+            FIXED (:FIXED ids) QUAL (:QUAL ids)
+            CTOR (:CTOR ids) ACC (:ACC ids)
             n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
             n-forms-walked (atom 0) walked-modules (atom #{})
             srcs [] file-modframe {} file-typeframe {} file-accessors {}
             global-exports {} global-type-exports {} global-accessor-exports {}]
-    (body)))
+      (body))))
 
 (defn- corpus-host [] (rco/->CorpusHost with-corpus-state! load-edn corpus-state))
 
@@ -453,21 +446,21 @@
 ;; precisely the surface a consumer's :refer/:as/:rename can bind, so a change to THIS
 ;; set is exactly what forces a consumer re-walk; an internal body edit leaves it fixed.
 (defn module-export-set [src]
-  (rco/module-export-set ctx *view* @file->ents src))
+  (rco/module-export-set ctx *view* (rco/file-entity-map file->ents) src))
 ;; import-graph: {module -> #{modules it imports}} over the whole corpus, from each
 ;; module's (ns :require ...) / bare (require ...). Consumers of M = the modules whose
 ;; import-set contains M (the reverse edge). Used to widen the dirty set when M's
 ;; export-set changed: M PLUS everyone importing M re-resolves.
 (defn module-imports [src]
-  (rco/module-imports ctx *view* @file->ents src))
+  (rco/module-imports ctx *view* (rco/file-entity-map file->ents) src))
 (defn import-graph []
-  (rco/import-graph ctx *view* @file->ents (vec srcs)))
+  (rco/import-graph ctx *view* (rco/file-entity-map file->ents) (vec srcs)))
 ;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
 ;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
 ;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
 ;; has zero defmacro).
 (defn module-has-macro? [src]
-  (rco/module-has-macro? ctx *view* @file->ents src))
+  (rco/module-has-macro? ctx *view* (rco/file-entity-map file->ents) src))
 
 ;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
 ;; recomputed against THAT store — store-local ids must match their store, the

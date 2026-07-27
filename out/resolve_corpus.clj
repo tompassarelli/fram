@@ -141,7 +141,7 @@
    install-tables (:install-tables state)]
   (do
   (install-srcs loaded)
-  (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded @ (:file-ents state)))
+  (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
   (let [run-all (:run-all state)]
   (run-all))
   (body))))))))
@@ -177,3 +177,38 @@
   (run-over (filter module-set (:srcs fresh)))
   (lift-bound-to-refers! (:ctx fresh) (:tx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
   (body))))))))
+
+(defn file-entities [file-ents src]
+  (get (deref file-ents) src []))
+
+(defn file-entity-map [file-ents]
+  (deref file-ents))
+
+(defn def-binding [modframe typeframe src nm]
+  (or (get (get modframe src) nm) (get (get typeframe src) nm)))
+
+(defn corpus-table-values [tables]
+  [(:modframe tables) (:typeframe tables) (:accessors tables) (:exports tables) (:type-exports tables) (:accessor-exports tables)])
+
+(defn table-srcs [tables]
+  (:srcs tables))
+
+(defn corpus-predicate-ids! [store]
+  {:Vp (c/value! store "v") :KIND (c/value! store "kind") :REFERS (c/value! store "refers_to") :BOUND (c/value! store "bound_to") :FIXED (c/value! store "keep_spelling") :QUAL (c/value! store "qualifier") :CTOR (c/value! store "ctor_prefix") :ACC (c/value! store "accessor_field")})
+
+(defn load-edn! [ctx tx file-ents path]
+  (let [lines (str/split-lines (slurp path))
+   src (-> (first (filter (fn [line] (str/starts-with? line "@file")) lines)) (subs 6))
+   local (atom {})
+   read-edn (requiring-resolve 'clojure.edn/read-string)
+   ent (fn [lid] (or (get (deref local) lid) (let [e (c/entity! ctx)]
+  (do
+  (swap! local assoc lid e)
+  (swap! file-ents update src (fnil conj []) e)
+  e))))]
+  (do
+  (doseq [line lines
+   :when (str/starts-with? line "[")]
+  (let [[s p o] (read-edn line)]
+  (c/fact! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
+  src)))
