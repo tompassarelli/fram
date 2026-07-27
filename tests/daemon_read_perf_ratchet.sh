@@ -15,6 +15,7 @@ printf '%s\n' \
 
 actual="$(
   FRAM_PORT=1 \
+  FRAM_COORD_RETRY_WINDOW_MS=0 \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" show offline

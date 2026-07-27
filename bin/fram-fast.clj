@@ -7,6 +7,58 @@
             [fram.main :as main]
             [fram.rt :as rt]))
 
+(defn- retry-window-ms []
+  (let [raw (or (System/getenv "FRAM_COORD_RETRY_WINDOW_MS") "25000")]
+    (when-not (re-matches #"(0|[1-9][0-9]{0,4})" raw)
+      (throw
+       (ex-info
+        "FRAM_COORD_RETRY_WINDOW_MS must be an integer from 0 through 99999 milliseconds"
+        {:type :invalid-coordinator-retry-window :value raw})))
+    (parse-long raw)))
+
+(defn- retry-delays []
+  (loop [remaining (retry-window-ms)
+         next-delay 100
+         delays []]
+    (if (zero? remaining)
+      delays
+      (let [delay (min remaining next-delay)]
+        (recur (- remaining delay)
+               (min 6000 (* 2 next-delay))
+               (conj delays delay))))))
+
+(def ^:dynamic *sleep!* #(Thread/sleep %))
+
+(defn- valid-show-response? [response]
+  (and (map? response)
+       (integer? (:version response))
+       (vector? (:rows response))
+       (every?
+        (fn [row]
+          (and (vector? row)
+               (= 2 (count row))
+               (string? (nth row 0))
+               (string? (nth row 1))))
+        (:rows response))))
+
+(defn- show-once [port log subject]
+  (let [response (rt/coord-show-for-log port log subject)]
+    (when (valid-show-response? response) response)))
+
+(defn- coordinator-show
+  "One strict daemon-read choke point. A reachable incompatible or malformed
+  daemon falls back immediately. An unreachable daemon gets a bounded retry
+  window long enough to span its normal restart before the same cold fallback."
+  [port log subject]
+  (or
+   (show-once port log subject)
+   (when (= -1 (rt/coord-version-for-log port log))
+     (loop [delays (retry-delays)]
+       (when-let [delay (first delays)]
+         (*sleep!* delay)
+         (or (show-once port log subject)
+             (recur (rest delays))))))))
+
 (defn- parse-op [line]
   (try
     (let [op (edn/read-string line)]
@@ -55,7 +107,7 @@
   Returns false when the existing CLI must own fallback or prefix resolution."
   [log id provenance?]
   (let [subject (str "@" id)
-        rows (:rows (rt/coord-show-for-log (rt/coord-port) log subject))]
+        rows (:rows (coordinator-show (rt/coord-port) log subject))]
     (if-not (seq rows)
       false
       (let [ops (relevant-ops log subject)

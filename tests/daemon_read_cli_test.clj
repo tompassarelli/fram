@@ -86,6 +86,50 @@
   (check! "warm exact show keeps provenance marker"
           (str/includes? warm-output "· by lane-probe")))
 
+(let [show-calls (atom 0)
+      sleeps (atom [])
+      response {:version 12 :rows projection}
+      result
+      (with-redefs [rt/coord-show-for-log
+                    (fn [& _]
+                      (if (= 3 (swap! show-calls inc)) response nil))
+                    rt/coord-version-for-log (fn [& _] -1)
+                    fram-fast/retry-delays (constantly [100 250 500])
+                    fram-fast/*sleep!* #(swap! sleeps conj %)]
+        (#'fram-fast/coordinator-show 7977 log-path subject))]
+  (check! "unreachable coordinator retries until a complete response"
+          (= response result))
+  (check! "restart retry uses bounded ordered backoff"
+          (= [100 250] @sleeps)))
+
+(let [show-calls (atom 0)
+      sleeps (atom [])
+      result
+      (with-redefs [rt/coord-show-for-log
+                    (fn [& _] (swap! show-calls inc) nil)
+                    rt/coord-version-for-log (fn [& _] -3)
+                    fram-fast/retry-delays (constantly [100 250])
+                    fram-fast/*sleep!* #(swap! sleeps conj %)]
+        (#'fram-fast/coordinator-show 7977 log-path subject))]
+  (check! "reachable incompatible daemon selects cold fallback" (nil? result))
+  (check! "reachable incompatible daemon is not retried"
+          (and (= 1 @show-calls) (empty? @sleeps))))
+
+(doseq [malformed
+        [{:version 1 :rows [["title"]]}
+         {:version 1 :rows [["title" "ok"] "torn"]}
+         {:version "1" :rows [["title" "ok"]]}
+         {:version 1 :rows [["title" 7]]}]]
+  (let [result
+        (with-redefs [rt/coord-show-for-log (fn [& _] malformed)
+                      rt/coord-version-for-log (fn [& _] 1)]
+          (#'fram-fast/coordinator-show 7977 log-path subject))]
+    (check! (str "malformed daemon response rejected " (pr-str malformed))
+            (nil? result))))
+
+(check! "default retry backoff spans the coordinator restart window"
+        (>= (reduce + (#'fram-fast/retry-delays)) 25000))
+
 (doseq [[target rows] wire-projections]
   (let [bare (subs target 1)
         warm-output
@@ -138,7 +182,9 @@
                  "depends_on" "possibly-a-ref")))
 
 (check! "daemon absence preserves cold show fallback signal"
-        (with-redefs [rt/coord-show-for-log (fn [& _] nil)]
+        (with-redefs [rt/coord-show-for-log (fn [& _] nil)
+                      rt/coord-version-for-log (fn [& _] -1)
+                      fram-fast/retry-delays (constantly [])]
           (false? (fram-fast/fast-show!
                    log-path
                    "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
