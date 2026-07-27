@@ -96,7 +96,7 @@ run () {
     >"$WORK/$name.out" 2>"$WORK/$name.err"
   echo "$?" > "$WORK/$name.rc"
   # fold the emitted projection into one comparable blob (sorted, headed by name)
-  ( cd "$d" && for f in $(ls 2>/dev/null | sort); do echo "===== $f"; cat "$f"; done ) \
+  ( cd "$d" && for f in $(ls 2>/dev/null | LC_ALL=C sort); do echo "===== $f"; cat "$f"; done ) \
     > "$WORK/$name.proj"
 }
 
