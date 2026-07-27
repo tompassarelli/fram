@@ -485,3 +485,194 @@
             (zero? cmp) (seg-long img :values-str (+ base 12))
             (neg? cmp) (recur (inc mid) hi)
             :else (recur lo (dec mid))))))))
+
+(defn open-fri-with-cap [path :- Any cache-cap :- Int?] :- Any
+  (let [raf (RandomAccessFile. (str path) "r")
+        ch (.getChannel raf)
+        flen (.length raf)
+        _seek-footer (.seek raf (- flen 8))
+        foff (.readLong raf)
+        _seek-body (.seek raf foff)
+        fb (byte-array (- flen foff 8))
+        _read (.readFully raf fb)
+        footer (edn/read-string (String. fb StandardCharsets/UTF_8))
+        maps
+        (reduce
+         (fn [acc :- Any row :- Any] :- Any
+           (let [seg (first row)
+                 meta (second row)]
+             (assoc acc seg (map-segment ch (:off meta) (:len meta)))))
+         {}
+         (:segments footer))
+        buf
+        (reduce
+         (fn [acc :- Any row :- Any] :- Any
+           (let [seg (first row)
+                 chunks (second row)]
+             (if (= 1 (count chunks))
+               (assoc acc seg (nth (first chunks) 2))
+               acc)))
+         {}
+         maps)
+        base {:raf raf
+              :channel ch
+              :footer footer
+              :maps maps
+              :buf buf
+              :vid-memo (atom {})}
+        nn (long (/ (get-in footer [:segments :names :len] 0) 20))
+        nmap
+        (reduce
+         (fn [m :- Any i :- Int] :- Any
+           (let [b (* i 20)
+                 soff (seg-long base :names b)
+                 slen (seg-int base :names (+ b 8))
+                 eid (seg-long base :names (+ b 12))
+                 s (String. (seg-get-bytes base :names-blob soff slen)
+                            StandardCharsets/UTF_8)]
+             (assoc m s eid)))
+         {}
+         (range nn))]
+    (assoc base
+           :names-map nmap
+           :name-pid (value-id base "name")
+           :cache-cap (render-cache-cap cache-cap)
+           :render-cache (lru)
+           :name-cache (lru)
+           :lit-cache (lru))))
+
+(defn open-fri [path :- Any] :- Any
+  (open-fri-with-cap path *cache-cap*))
+
+(defn close-fri! [img :- Any] :- Nil
+  (do
+    (try (.close (:channel img)) (catch Exception _ nil))
+    (try (.close (:raf img)) (catch Exception _ nil))
+    nil))
+
+(defn run-ords [img :- Any runseg :- Any off :- Int len :- Int] :- (Vec Int)
+  (mapv
+   (fn [i :- Int] :- Int (seg-int img runseg (+ off (* i 4))))
+   (range len)))
+
+(defn by-l [img :- Any lid :- Int] :- (Vec Int)
+  (let [n (long (/ (get-in img [:footer :segments :postings-l :len]) 20))]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        []
+        (let [mid (quot (+ lo hi) 2)
+              base (* mid 20)
+              k (seg-long img :postings-l base)]
+          (cond
+            (= k lid)
+            (let [off (seg-long img :postings-l (+ base 8))
+                  len (seg-int img :postings-l (+ base 16))]
+              (reduce
+               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
+                 (if (superseded-ord? img ord)
+                   acc
+                   (conj acc (ord-cid img ord))))
+               []
+               (run-ords img :pl-runs off len)))
+            (< k lid) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
+
+(defn by-lp [img :- Any lid :- Int pid :- Int] :- (Vec Int)
+  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        []
+        (let [mid (quot (+ lo hi) 2)
+              base (* mid 28)
+              kl (seg-long img :postings-lp base)
+              kp (seg-long img :postings-lp (+ base 8))
+              cmp (if (< kl lid)
+                    -1
+                    (if (> kl lid)
+                      1
+                      (if (< kp pid) -1 (if (> kp pid) 1 0))))]
+          (cond
+            (zero? cmp)
+            (let [off (seg-long img :postings-lp (+ base 16))
+                  len (seg-int img :postings-lp (+ base 24))]
+              (reduce
+               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
+                 (if (superseded-ord? img ord)
+                   acc
+                   (conj acc (ord-cid img ord))))
+               []
+               (run-ords img :plp-runs off len)))
+            (neg? cmp) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
+
+(defn pred-id [img :- Any s :- String] :- Int?
+  (let [memo (:vid-memo img)]
+    (or (get @memo s)
+        (let [v (value-id img s)]
+          (do (when (some? v) (memo-put memo s v)) v)))))
+
+(defn resolve-name [img :- Any nm :- String] :- Int?
+  (get (:names-map img) nm))
+
+(defn name-of [img :- Any subj :- Int] :- String?
+  (when-let [name-pid (:name-pid img)]
+    (let [cids (by-lp img subj name-pid)]
+      (when (seq cids)
+        (let [f (fact-of img (first cids))]
+          (if (nil? f) nil (literal img (:r f))))))))
+
+(defn cold->dump [img :- Any] :- Any
+  (let [n (nfacts img)
+        facts (mapv
+               (fn [ord :- Int] :- Any
+                 [(ord-cid img ord)
+                  {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)}])
+               (range n))
+        tx-of (mapv
+               (fn [ord :- Int] :- Any [(ord-cid img ord) (ord-tx img ord)])
+               (range n))
+        vc (vcount img)
+        values
+        (mapv
+         (fn [i :- Int] :- Any
+           (let [base (* i 20)
+                 id (seg-long img :values-id base)
+                 off (seg-long img :values-id (+ base 8))
+                 len (seg-int img :values-id (+ base 16))]
+             [id (String. (seg-get-bytes img :values-blob off len)
+                          StandardCharsets/UTF_8)]))
+         (range vc))
+        ec (get-in img [:footer :counts :entities])
+        ents (mapv
+              (fn [i :- Int] :- Int (seg-long img :entities (* i 8)))
+              (range ec))
+        txc (get-in img [:footer :counts :txs])
+        txs
+        (mapv
+         (fn [i :- Int] :- Any
+           (let [base (* i 28)
+                 tx (seg-long img :txs base)
+                 sq (seg-long img :txs (+ base 8))
+                 off (seg-long img :txs (+ base 16))
+                 len (seg-int img :txs (+ base 24))
+                 agent (String. (seg-get-bytes img :txs-blob off len)
+                                StandardCharsets/UTF_8)]
+             [tx {:seq sq :agent agent}]))
+         (range txc))
+        superd
+        (reduce
+         (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
+           (if (superseded-ord? img ord)
+             (conj acc (ord-cid img ord))
+             acc))
+         []
+         (range n))]
+    {:next-id (next-id img)
+     :next-seq (covers-seq img)
+     :supersedes-pred (supersedes-pred img)
+     :objects (vec (concat (map first values) ents (map first facts)))
+     :values values
+     :facts facts
+     :tx-of tx-of
+     :txs txs
+     :superseded superd}))
