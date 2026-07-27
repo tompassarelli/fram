@@ -92,7 +92,40 @@
     (check "reply completion is terminal"
            (= :done
               (:phase
-               (wire/connection-transition handled {:event :replied}))))))
+               (wire/connection-transition handled {:event :replied})))))
 
-(println "coord_daemon_wire:" (- 16 @failures) "/ 16 PASS")
+  (let [ceilings {:timeout-ms 5000
+                  :max-steps 10000000
+                  :max-rows 1000
+                  :max-response-bytes 65536}
+        lowered (wire/query-limit-plan
+                 {:query-timeout-ms 50
+                  :query-max-steps 200
+                  :query-max-rows 10
+                  :query-max-response-bytes 1024}
+                 ceilings 1000000)
+        raised (wire/query-limit-plan
+                {:query-timeout-ms 6000
+                 :query-max-steps 20000000
+                 :query-max-rows 2000
+                 :query-max-response-bytes 999999}
+                ceilings 1000000)
+        invalid (wire/query-limit-plan
+                 {:query-timeout-ms 0
+                  :query-max-steps "many"}
+                 ceilings 1000000)]
+    (check "query requests lower every server backpressure ceiling"
+           (= [50 200 10 1024]
+              (mapv (fn [key] (get lowered key))
+                    [:timeout-ms :max-steps :max-rows :max-response-bytes])))
+    (check "query requests cannot raise server backpressure ceilings"
+           (= [5000 10000000 1000 65536]
+              (mapv (fn [key] (get raised key))
+                    [:timeout-ms :max-steps :max-rows :max-response-bytes])))
+    (check "limit plan uses explicit clock and rejects invalid overrides"
+           (and (= 5001000000 (:deadline-ns invalid))
+                (= 5000 (:timeout-ms invalid))
+                (= 10000000 (:max-steps invalid))))))
+
+(println "coord_daemon_wire:" (- 19 @failures) "/ 19 PASS")
 (System/exit (if (zero? @failures) 0 1))

@@ -862,21 +862,22 @@
 
 (defn- query-request? [req] (wire/query-request? req))
 
-(defn- lower-query-limit [req key ceiling]
-  (let [n (get req key)]
-    (if (and (integer? n) (pos? n)) (min n ceiling) ceiling)))
-
 (defn- new-query-control [req]
-  (let [timeout (lower-query-limit req :query-timeout-ms query-timeout-ms)]
+  (let [plan (wire/query-limit-plan
+              req
+              {:timeout-ms query-timeout-ms
+               :max-steps query-max-steps
+               :max-rows query-max-rows
+               :max-response-bytes query-max-response-bytes}
+              (System/nanoTime))]
     {:cancelled (atom nil)
      :done (atom false)
      :steps (java.util.concurrent.atomic.AtomicLong. 0)
-     :timeout-ms timeout
-     :deadline-ns (+ (System/nanoTime) (* 1000000 timeout))
-     :max-steps (lower-query-limit req :query-max-steps query-max-steps)
-     :max-rows (lower-query-limit req :query-max-rows query-max-rows)
-     :max-response-bytes (lower-query-limit req :query-max-response-bytes
-                                            query-max-response-bytes)}))
+     :timeout-ms (:timeout-ms plan)
+     :deadline-ns (:deadline-ns plan)
+     :max-steps (:max-steps plan)
+     :max-rows (:max-rows plan)
+     :max-response-bytes (:max-response-bytes plan)}))
 
 (defn- cancel-query! [control reason]
   (compare-and-set! (:cancelled control) nil reason))

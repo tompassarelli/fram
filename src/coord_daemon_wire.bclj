@@ -26,6 +26,33 @@
        (or (contains? #{:query :query-page :pull} (:op req))
            (and (= :as-of (:op req)) (:query req)))))
 
+(defrecord QueryLimitPlan
+  [timeout-ms :- Int
+   deadline-ns :- Int
+   max-steps :- Int
+   max-rows :- Int
+   max-response-bytes :- Int])
+
+(defn lower-limit [req :- Any key :- Keyword ceiling :- Int] :- Int
+  (let [n (get req key)]
+    (if (and (integer? n) (pos? n))
+      (min n ceiling)
+      ceiling)))
+
+;; Requests may lower server ceilings, never raise them. The host supplies one
+;; monotonic clock reading and wraps this immutable plan in cancellation atoms
+;; and counters; those runtime mechanisms do not cross this boundary.
+(defn query-limit-plan
+  [req :- Any ceilings :- Any now-ns :- Int] :- QueryLimitPlan
+  (let [timeout (lower-limit req :query-timeout-ms (:timeout-ms ceilings))]
+    (->QueryLimitPlan
+     timeout
+     (+ now-ns (* 1000000 timeout))
+     (lower-limit req :query-max-steps (:max-steps ceilings))
+     (lower-limit req :query-max-rows (:max-rows ceilings))
+     (lower-limit req :query-max-response-bytes
+                  (:max-response-bytes ceilings)))))
+
 ;; Dispatch descriptions are protocol data, not executable handlers. The host
 ;; supplies the live store/config state and interprets :route/:handler while
 ;; retaining every mutation body and concurrency boundary.
