@@ -60,3 +60,31 @@
   (let [m :- fram.types/Store (deref ctx) all (live-as-of ctx s)]
     (filterv (fn [cid :- Int] :- Bool (let [f (get (:facts m) cid)] (and (some? f) (= (get f :l) te) (= (get f :p) pid))))
       all)))
+
+(defn live-r-on [ctx :- (Atom fram.types/Store) cid :- Int pid :- Int?] :- Int?
+  (if (nil? pid)
+    nil
+    (let [fcid (first (c/by-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r :- Any (if (nil? f) nil (get f :r))]
+      (if (int? r) r nil))))
+
+(defn withdrawal-of [ctx :- (Atom fram.types/Store) cid :- Int] :- Any
+  (let [wb (c/value-id ctx "withdrawn_by") by-id (live-r-on ctx cid wb)]
+    (if (nil? by-id)
+      nil
+      (let [at-id (live-r-on ctx cid (c/value-id ctx "withdrawn_at")) reason-id (live-r-on ctx cid (c/value-id ctx "withdrawn_reason"))]
+        {:by
+         (c/literal ctx by-id)
+         :at
+         (if (nil? at-id) nil (c/literal ctx at-id))
+         :reason
+         (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
+
+(defn withdrawn? [ctx :- (Atom fram.types/Store) cid :- Int] :- Bool
+  (boolean (withdrawal-of ctx cid)))
+
+(defn live-members [ctx :- (Atom fram.types/Store) te :- Int pid :- Int policy :- Keyword] :- (Vec Int)
+  (let [m :- fram.types/Store (deref ctx) live (live-cids-lp ctx te pid)]
+    (if (= policy :add-wins)
+      (let [all (get (:idx-by-lp m) [te pid] []) resurrected (filterv (fn [cid :- Int] :- Bool (and (contains? (:superseded m) cid) (withdrawn? ctx cid))) all)]
+        (vec (distinct (concat live resurrected))))
+      live)))
