@@ -69,3 +69,9 @@
   (not (valid-lease-request? holder resource ttl-ms now-ms max-ms)) {:reject :invalid-lease-request :version version}
   (and (lease-held? lease now-ms) (not= (:holder lease) holder)) {:reject :held :holder (:holder lease) :exp (:exp lease) :version version}
   :else {:persist true}))
+
+(defn lease-renew-decision [lease holder resource expected-epoch ttl-ms now-ms max-ms max-epoch version]
+  (cond
+  (or (not (valid-lease-request? holder resource ttl-ms now-ms max-ms)) (not (valid-lease-epoch? expected-epoch max-epoch))) {:reject :invalid-lease-request :version version}
+  (and (lease-held? lease now-ms) (= (:holder lease) holder) (= (:epoch lease) expected-epoch)) {:persist true}
+  :else {:reject :fence-lost :version version}))
