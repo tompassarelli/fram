@@ -1,1 +1,1 @@
-{:version 3, :facts 53, :mode :fold, :reason "disabled (FRAM_SNAPSHOT_BOOT unset)", :title "Alpha"}
+{:version 3, :facts 53, :mode :fold, :reason "disabled (FRAM_SNAPSHOT_BOOT=0)", :title "Alpha"}
