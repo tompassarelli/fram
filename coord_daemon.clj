@@ -23,7 +23,8 @@
             [fram.kernel :as ck]
             [fram.authority :as authority] [fram.tools :as tools]
             [cheshire.core :as json]
-            [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d] [fram.rt])
+            [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d]
+            [fram.claims :as claims] [fram.rt])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
            [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
@@ -1422,6 +1423,137 @@
                :batch true})
             {:reject (:reject res) :version (:version res)
              :at (:at res) :pred (:pred res)}))))))
+
+;; fram.claims daemon bridge. The claims module intentionally remains a
+;; vocabulary + read/rule layer; these verbs expose the coordinator writes its
+;; design already prescribes. They require the v2 log because the flat
+;; projection cannot preserve cid subjects/objects across restart.
+(defn- claim-cid [te pred]
+  (let [st  (:store @co)
+        lid (s/resolve-name st te)
+        pid (c/value-id st pred)
+        cids (if (and lid pid)
+               (vec (distinct (live-cids-lp @co lid pid)))
+               [])]
+    (cond
+      (empty? cids) nil
+      (= 1 (count cids)) (first cids)
+      :else :ambiguous)))
+
+(defn- claims-v2-required []
+  {:reject ["fram.claims daemon writes require the v2 log; serve-flat cannot preserve cid identity"]
+   :code :claims-require-v2-log
+   :version (current-seq @co)})
+
+(defn- do-claim-cite [req]
+  (if @flat-log
+    (claims-v2-required)
+    (let [cid (claim-cid (:te req) (:p req))
+          evidence (:evidence req)]
+      (cond
+        (nil? cid)
+        {:reject ["claim fact was not found"] :code :claim-not-found
+         :version (current-seq @co)}
+
+        (= :ambiguous cid)
+        {:reject ["claim subject and predicate resolve to multiple live facts"]
+         :code :claim-ambiguous :version (current-seq @co)}
+
+        (not (and (string? evidence) (str/starts-with? evidence "@")))
+        {:reject ["claim-cite requires a named :evidence entity"]
+         :code :invalid-claim-citation :version (current-seq @co)}
+
+        :else
+        (assoc (about! @co (or (:agent req) "claims") cid
+                       claims/evidence-pred :link evidence)
+               :claim-cid cid)))))
+
+(defn- do-claim-decision [req]
+  (if @flat-log
+    (claims-v2-required)
+    (let [cid (claim-cid (:te req) (:p req))
+          decision (when (some? (:decision req))
+                     (keyword (name (:decision req))))
+          agent (:agent req)
+          current (when (integer? cid) (claims/status @co cid))]
+      (cond
+        (nil? cid)
+        {:reject ["claim fact was not found"] :code :claim-not-found
+         :version (current-seq @co)}
+
+        (= :ambiguous cid)
+        {:reject ["claim subject and predicate resolve to multiple live facts"]
+         :code :claim-ambiguous :version (current-seq @co)}
+
+        (not (#{:verified :rejected} decision))
+        {:reject ["claim-decision requires :verified or :rejected"]
+         :code :invalid-claim-decision :version (current-seq @co)}
+
+        (not (and (string? agent) (not (str/blank? agent))))
+        {:reject ["claim-decision requires a nonblank :agent"]
+         :code :invalid-claim-decision :version (current-seq @co)}
+
+        (= current decision)
+        {:ok (current-seq @co) :idempotent true :claim-cid cid
+         :status current}
+
+        (not= :pending current)
+        {:reject [(str "only a pending claim can be decided; current status is "
+                       (or current :ordinary-fact))]
+         :code :claim-not-pending :version (current-seq @co)}
+
+        :else
+        (let [reason (:reason req)
+              reason-result
+              (when (= :rejected decision)
+                (if (and (string? reason) (not (str/blank? reason)))
+                  (about! @co agent cid claims/reason-pred :assert reason)
+                  {:reject ["a rejected claim requires a nonblank :reason"]
+                   :code :invalid-claim-decision
+                   :version (current-seq @co)}))]
+          (if (:reject reason-result)
+            reason-result
+            (let [root (if (= :verified decision)
+                         claims/verified-view
+                         claims/rejected-view)
+                  view (claims/scoped-view root agent)
+                  result (select! @co view cid)]
+              (assoc result :claim-cid cid :status decision))))))))
+
+(defn- read-claim [req]
+  (let [cid (claim-cid (:te req) (:p req))]
+    (cond
+      (nil? cid)
+      {:error "claim fact was not found" :code :claim-not-found
+       :version (current-seq @co)}
+
+      (= :ambiguous cid)
+      {:error "claim subject and predicate resolve to multiple live facts"
+       :code :claim-ambiguous :version (current-seq @co)}
+
+      :else
+      (let [st (:store @co)
+            fact (c/fact-of st cid)
+            provenance
+            (mapv (fn [entry]
+                    (assoc entry :name (s/name-of st (:node entry))))
+                  (claims/provenance @co cid))]
+        {:ok true
+         :claim-cid cid
+         :claim (c/literal st (:r fact))
+         :status (claims/status @co cid)
+         :verdict (claims/verdict @co cid)
+         :rejection (claims/rejection @co cid)
+         :provenance provenance
+         :version (current-seq @co)}))))
+
+(defn- read-claims [req]
+  (let [requested (:claims req)]
+    (if (or (not (sequential? requested)) (> (count requested) 2000))
+      {:error "claims-read requires at most 2000 claim locators"
+       :code :invalid-claims-read :version (current-seq @co)}
+      {:ok (mapv read-claim requested)
+       :version (current-seq @co)})))
 
 ;; --- one-wire managed-agent identity publication ----------------------------
 ;; :managed-agent-publish is the server-side composition of the fresh managed
@@ -3552,7 +3684,7 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-batch :managed-agent-publish
+  #{:assert :assert-batch :managed-agent-publish :claim-cite :claim-decision
     :assert-with-fence :assert-at-version :assert-at-version-with-fence
     :retract :retract-with-fence :bump})
 
@@ -4301,6 +4433,8 @@
       ;; disconnect/timeout boundary (thread 019f9063 / incident 019f8958). Additive:
       ;; single :assert above is byte-identical; old clients never send this op.
       :assert-batch (do-assert-batch (:te req) (:facts req) (:base req))
+      :claim-cite (do-claim-cite req)
+      :claim-decision (do-claim-decision req)
       ;; One-wire managed-agent identity publication: the daemon derives and
       ;; acquires the canonical per-subject lease, commits body + marker in one
       ;; batch transaction, verifies exact readback, then releases the lease.
@@ -4418,6 +4552,8 @@
       ;; re-orders. :log echoes which log this daemon serves so a client can refuse
       ;; a mismatched daemon (fram.rt/coord-live-facts checks it). Clients ask with
       ;; {:fmt :json} — bb decodes the ~2MB payload ~12x faster as JSON than as EDN.
+      :claim-read (read-claim req)
+      :claims-read (read-claims req)
       :facts   (let [{:keys [version triples]} (facts-wire-snapshot)]
                   {:version version
                    :log (or @flat-log (:log @co))
