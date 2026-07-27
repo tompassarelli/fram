@@ -77,7 +77,9 @@
 (ns resolve-verbs
   (:require [clojure.string :as str]
     [fram.types :as t]
-    [fram.store :as c]))
+    [fram.store :as c]
+    [resolve-core :as rc]
+    [resolve-read :as rr]))
 
 (define-mode strict)
 
@@ -107,7 +109,17 @@
                  forms-of :- Any        ; (fn [src]) -> top-level forms
                  module-name :- Any     ; (fn [src]) -> the ns-form module name
                  parse-require :- Any   ; (fn [src]) -> {:refer .. :as .. :rename ..}
-                 capture-refs :- Any])  ; (fn [node scope B new]) -> captured refs
+                 capture-refs :- Any    ; (fn [node scope B new]) -> captured refs
+                 ultimate :- Any        ; (fn [B]) -> follow refers_to to the node that HOLDS the name
+                 BOUND :- Int           ; the durable bound_to predicate id
+                 REFERS :- Int          ; the derived refers_to predicate id
+                 wrapper-of :- Any      ; (fn [src]) -> the beagle-file wrapper node
+                 wrap-forms :- Any      ; (fn [wrap]) -> [[OrdKey cid child] …], CRDT-ordered
+                 form-for-victim :- Any ; (fn [src victim]) -> the top-level form named by `victim`
+                 descendants :- Any     ; (fn [root]) -> root + every structural descendant
+                 retire :- Any          ; (fn [cid]) -> supersede a fact with no replacement
+                 reresolve :- Any       ; (fn []) -> re-walk the corpus so fresh refs carry refers_to
+                 ents :- Any])          ; {src -> [entity …]} — @file->ents, snapshotted
 
 ;; ---------------------------------------------------------------------------
 ;; rename — every INVARIANT + fact mutation of the old `rename` case arm.
@@ -191,3 +203,186 @@
         (warn (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
         (warn (str "FACTS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
         (doseq [src :- String (:emit-srcs v)] (warn (str "projected -> " (op src) "   <- " src)))))))
+
+;; ---------------------------------------------------------------------------
+;; the CRDT tie a verb writes. On the daemon (capture-only) path defer to
+;; "PENDING" — the daemon sets the tie to the new node's ATOMIC name-int, so
+;; concurrent same-path inserts get distinct keys and BOTH land (commute). The
+;; single-writer CLI path has no race -> tie "0".
+;; ord-str* is rc/ord-str with a STRING tie: the sentinel "PENDING" is not an
+;; integer, and rc/ord-str's tie is typed Int (it serves the parsed-key side).
+;; ---------------------------------------------------------------------------
+;; nn — the -1 coercion Cut G used, for the two places beagle needs an Int and the
+;; host hands over an Int?: an ABSENT index (`first` over keep-indexed types as
+;; Int? and does not narrow on a some?/nil? test at the use site) and a node id
+;; that arrives from a closure. In both, the nil case is one the verb has already
+;; REJECTED, so -1 is unreachable, not a written value.
+(defn- nn [e :- Int?] :- Int (if (nil? e) -1 e))
+
+;; a wrap-forms ENTRY is [OrdKey cid child]. The accessors coerce through `vec`
+;; because the entry arrives from a host closure as Any (and, where the entry is
+;; an optional `some` result, as Nil on the branch the caller has already
+;; rejected) — `nth` needs a vector, and this is the one place to say so.
+(defn- ekey [e :- Any] :- Any (nth (vec e) 0))
+
+(defn- ecid [e :- Any] :- Any (nth (vec e) 1))
+
+(defn- enode [e :- Any] :- Any (nth (vec e) 2))
+
+(defn- ord-tie [v :- Verb] :- String (if (:capture-only? v) "PENDING" "0"))
+
+(defn- ord-str* [path :- (Vec Int) tie :- String] :- String
+  (str "f" (str/join "." path) "~" tie))
+
+;; ---------------------------------------------------------------------------
+;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
+;; EFFECT is a supersede of the wrapper's fN form-edge fact(s) pointing at the
+;; deleted form(s). Retiring that edge makes the form unreachable from the
+;; beagle-file wrapper, so (a) the minimal-op harvest (do-edit-min) sees a
+;; RETRACT of the wrapper edge and (b) the render path's reachability filter
+;; drops the orphaned subtree — ONE mechanism serves both drivers. A delete that
+;; would ORPHAN a surviving reference REFUSES (no facts mutated).
+;; ---------------------------------------------------------------------------
+(defn verb-delete! [v :- Verb name :- String scope :- String] :- Any
+  (let [ctx (:ctx v)
+        view (:view v)
+        srcs (:srcs v)
+        warn (:warn v)
+        reject (:reject v)
+        dbind (:def-binding v)
+        ffv (:form-for-victim v)
+        desc (:descendants v)
+        ult (:ultimate v)
+        target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) srcs))
+        ;; value OR type binding occurrences to delete
+        victims (vec (keep (fn [s :- String] :- Any (dbind s name)) target-srcs))
+        ;; the top-level forms to remove + their whole subtrees (incl. a defunion's
+        ;; variant-constructor name-leaves). Computed FIRST so the orphan check both
+        ;; excludes refs INSIDE a deleted form and flags surviving refs to ANY binding
+        ;; the deletion removes (the union name OR a variant).
+        all-forms (set (vec (mapcat (fn [s :- String] :- (Vec Any)
+                                      (vec (keep (fn [b :- Any] :- Any (ffv s b)) victims)))
+                                    srcs)))
+        subtree (reduce (fn [acc :- (Set Any) f :- Any] :- (Set Any) (into acc (desc f)))
+                        #{} (vec all-forms))
+        orphans (vec (mapcat (fn [s :- String] :- (Vec Any)
+                               (vec (filter (fn [e :- Any] :- Bool
+                                              (let [tgt (rr/refers-target ctx view (:BOUND v) (:REFERS v) e)]
+                                                (and (= "symbol" (rr/kind-of ctx view e))
+                                                     (some? tgt)
+                                                     (not (contains? subtree e))
+                                                     (contains? subtree (ult tgt)))))
+                                            (vec (get (:ents v) s [])))))
+                             srcs))]
+    (when (= 0 (count victims))
+      (warn (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no facts mutated)."))
+      (reject 5))
+    ;; matched a binding but no independently-deletable top-level form (e.g. a defunion
+    ;; variant lives nested inside its union) — refuse, don't report a no-op as success.
+    (when (= 0 (count all-forms))
+      (warn (str "REJECTED — `" name "` is not an independently-deletable top-level form "
+                 "(a defunion variant / nested binding); no facts mutated."))
+      (reject 5))
+    ;; INVARIANT (no-orphaned-refs): refuse if any SURVIVING reference points at a victim.
+    (when (> (count orphans) 0)
+      (warn "================ delete + orphaned-reference invariant ================")
+      (warn (str "REJECTED — " (count orphans) " reference(s) would be ORPHANED (no-orphaned-refs; no facts mutated):"))
+      (doseq [o :- Any (vec (take 5 orphans))]
+        (warn (str "  orphan: reference node " o " (`" (rr/sym-val ctx view o) "`)")))
+      (reject 6))
+    ;; SAFE: retire each wrapper fN edge that points at a deleted form root. by-l filters
+    ;; superseded facts, so the form drops out of the wrapper's children everywhere.
+    (let [wof (:wrapper-of v)
+          wf (:wrap-forms v)
+          retire (:retire v)
+          emit (:emit v)
+          retired (atom 0)]
+      (doseq [src :- String srcs]
+        (let [wrap (wof src)]
+          (when (some? wrap)
+            (doseq [entry :- Any (vec (wf wrap))]
+              (when (contains? all-forms (enode entry))
+                (retire (ecid entry))
+                (swap! retired (fn [n :- Int] :- Int (+ n 1))))))))
+      (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+      (emit "delete"
+            (str "deleted def `" name "` in \"" scope "\" (" @retired
+                 " wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)")))))
+
+;; ---------------------------------------------------------------------------
+;; reorder — MOVE an existing top-level def to a new position (after an anchor)
+;; by RE-SPELLING its wrapper order key, NOT by re-minting the form.
+;; insert-form+delete would churn node identity (refers_to identity edges to the
+;; moved form's nodes would break, and a concurrent edit to it would be lost).
+;; The #36 CRDT design makes the in-place move trivial + sound: supersede the
+;; moved form's existing wrapper fN edge and mint a NEW one at a between-path,
+;; pointing at the SAME form root — zero node churn, identity preserved.
+;; `(reorder X :after Y)` puts X immediately after Y; `:after nil`/"" -> FRONT.
+;; ---------------------------------------------------------------------------
+(defn verb-reorder! [v :- Verb name :- String scope :- String after-name :- Any] :- Any
+  (let [ctx (:ctx v)
+        tx (:tx v)
+        warn (:warn v)
+        reject (:reject v)
+        dbind (:def-binding v)
+        ffv (:form-for-victim v)
+        wof (:wrapper-of v)
+        wf (:wrap-forms v)
+        target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+    (when (not= 1 (count target-srcs))
+      (warn (str "REJECTED — reorder scope \"" scope "\" matches "
+                 (count target-srcs) " files (need 1); no facts mutated."))
+      (reject 3))
+    (let [src (first target-srcs)
+          wrap (wof src)
+          forms (vec (wf wrap))
+          mover-bind (dbind src name)
+          mover-form (when (some? mover-bind) (ffv src mover-bind))
+          mover-entry (when (some? mover-form)
+                        (some (fn [e :- Any] :- Any (when (= (enode e) mover-form) e)) forms))
+          front? (str/blank? (str after-name))
+          anchor-bind (when-not front? (dbind src after-name))
+          anchor-form (when (some? anchor-bind) (ffv src anchor-bind))
+          anchor-idx (when (some? anchor-form)
+                       (first (vec (keep-indexed (fn [i :- Int e :- Any] :- Any
+                                                   (when (= (enode e) anchor-form) i))
+                                                 forms))))]
+      (when (nil? mover-entry)
+        (warn (str "REJECTED — reorder target `" name "` not found in \"" scope "\"; no facts mutated."))
+        (reject 5))
+      (when (and (not front?) (nil? anchor-idx))
+        (warn (str "REJECTED — reorder anchor `" after-name "` not found in \"" scope "\"; no facts mutated."))
+        (reject 3))
+      ;; -1 sentinel, not nil: `first` over keep-indexed types as (U Int Nil) and
+      ;; beagle does not narrow it on a some?/nil? test, so the index is made an Int
+      ;; and the "absent" case is the guard (the original's nil test, spelled typed).
+      (when-not front?
+        (let [ai (nn anchor-idx)]
+          (when (>= ai 0)
+            (when (= (enode (nth forms ai)) mover-form)
+              (warn (str "REJECTED — reorder `" name "` :after itself is a no-op; no facts mutated."))
+              (reject 3)))))
+      ;; the gap to land in: between the anchor and its next sibling, SKIPPING the mover
+      ;; itself (so moving X just past its current neighbour computes the right gap).
+      (let [others (vec (remove (fn [e :- Any] :- Bool (= (enode e) mover-form)) forms))
+            ;; a-pos is -1 exactly in the front? case (the anchor-not-found and
+            ;; :after-itself rejections above already returned), so the -1 test is the
+            ;; same branch the original's `if front?` took — spelled this way so the
+            ;; index is provably an Int where it indexes.
+            a-pos (if front?
+                    -1
+                    (nn (first (vec (keep-indexed (fn [i :- Int e :- Any] :- Any
+                                                     (when (= (enode e) anchor-form) i))
+                                                   others)))))
+            lo (if (< a-pos 0) nil (:path (ekey (nth others a-pos))))
+            hi (if (< a-pos 0)
+                 (:path (ekey (first others)))
+                 (when (< (+ a-pos 1) (count others)) (:path (ekey (nth others (+ a-pos 1))))))]
+        (let [retire (:retire v)
+              emit (:emit v)]
+          (retire (ecid mover-entry))
+          (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-between lo hi) (ord-tie v))) (nn mover-form) tx)
+          (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+          (emit "reorder"
+                (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`"))
+                     " in \"" scope "\" (wrapper order-key re-spelled; SAME subtree, 0 node churn)")))))))

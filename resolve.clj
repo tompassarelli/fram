@@ -938,6 +938,15 @@
       (println detail)
       (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
 
+;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
+;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
+(defn wrap-forms [parent]
+  (->> (c/by-l ctx parent)
+       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
+                             k (ord-parse (c/literal ctx (:p cl)))]
+                         (when k [k cid (:r cl)]))))
+       (sort-by first ord-cmp) vec))
+
 ;; ============================================================================
 ;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
 ;; authoring verb's invariant order, reject codes/messages, fact mutations and
@@ -962,21 +971,15 @@
               (fn [src] (extract-file! src (out-path src)))
               out-path
               def-binding file-typeframe file-modframe forms-of module-name
-              parse-require capture-refs))
+              parse-require capture-refs ultimate
+              BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
+              retire-fact! re-resolve! @file->ents))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
 
 
 ;; upsert-form — add/replace a top-level def from an EDN datum spec.
-;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
-;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
-(defn wrap-forms [parent]
-  (->> (c/by-l ctx parent)
-       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
-                             k (ord-parse (c/literal ctx (:p cl)))]
-                         (when k [k cid (:r cl)]))))
-       (sort-by first ord-cmp) vec))
 
 ;; CRDT tie: on the daemon (capture-only) path defer to "PENDING" — the daemon sets the
 ;; tie to the new node's ATOMIC name-int, so concurrent same-path inserts get distinct
@@ -1414,107 +1417,19 @@
                                "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
                                "def NOT re-emitted — siblings + comments preserved; refs via refers_to)")))))))))
 
-;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the same
-;; victim/subtree/orphan computation as the CLI `delete` arm, but the EFFECT is a
-;; supersede of the wrapper's fN form-edge fact(s) pointing at the deleted form(s).
-;; Retiring that edge makes the form unreachable from the beagle-file wrapper, so
-;; (a) the minimal-op harvest (do-edit-min) sees a RETRACT of the wrapper edge and
-;; (b) the render path's reachability filter (root=wrapper, descendants-only) drops
-;; the orphaned subtree — ONE mechanism serves both drivers, no projection flag.
-;; Fail-closed: a delete that would ORPHAN a surviving reference REFUSES (no facts
-;; mutated) — exactly the CLI invariant, just routed through *reject!*.
-(defn verb-delete! [name scope]
-  (let [target-srcs (filter #(str/includes? % scope) srcs)
-        victims (keep #(def-binding % name) target-srcs)   ; value OR type binding occurrences to delete
-        ;; the top-level forms to remove + their whole subtrees (incl. a defunion's
-        ;; variant-constructor name-leaves). Computed FIRST so the orphan check both
-        ;; excludes refs INSIDE a deleted form and flags surviving refs to ANY binding
-        ;; the deletion removes (the union name OR a variant).
-        all-forms (set (mapcat (fn [src] (keep #(form-for-victim src %) victims)) srcs))
-        subtree (reduce into #{} (map descendants all-forms))
-        orphans (for [src srcs, e (@file->ents src)
-                      :when (and (= "symbol" (kind-of e)) (refers-target e) (not (subtree e))
-                                 (subtree (ultimate (refers-target e))))] e)]   ; ref to a deleted binding
-    (when (zero? (count victims))
-      (binding [*out* *err*]
-        (println (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no facts mutated).")))
-      (*reject!* 5))
-    ;; matched a binding but no independently-deletable top-level form (e.g. a defunion
-    ;; variant lives nested inside its union) — refuse, don't report a no-op as success.
-    (when (empty? all-forms)
-      (binding [*out* *err*]
-        (println (str "REJECTED — `" name "` is not an independently-deletable top-level form "
-                      "(a defunion variant / nested binding); no facts mutated.")))
-      (*reject!* 5))
-    ;; INVARIANT (no-orphaned-refs): refuse if any SURVIVING reference points at a victim.
-    (when (pos? (count orphans))
-      (binding [*out* *err*]
-        (println "================ delete + orphaned-reference invariant ================")
-        (println (str "REJECTED — " (count orphans) " reference(s) would be ORPHANED (no-orphaned-refs; no facts mutated):"))
-        (doseq [o (take 5 orphans)] (println (str "  orphan: reference node " o " (`" (sym-val o) "`)"))))
-      (*reject!* 6))
-    ;; SAFE: retire each wrapper fN edge that points at a deleted form root. by-l filters
-    ;; superseded facts, so the form drops out of the wrapper's children everywhere — the
-    ;; render reachability filter + the minimal-op harvest both follow from this one supersede.
-    (let [retired (atom 0)]
-      (doseq [src srcs
-              :let [wrap (wrapper-of src)]
-              [_ cid r] (when wrap (wrap-forms wrap))
-              :when (all-forms r)]
-        (retire-fact! cid) (swap! retired inc))
-      (when-not *capture-only?* (re-resolve!))
-      (author-emit-scoped! "delete"
-                    (str "deleted def `" name "` in \"" scope "\" (" @retired
-                         " wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)")))))
+;; delete — remove a top-level def by name (M1 Cut H; logic in
+;; src/resolve_verbs.bclj). FACT-NATIVE + fail-closed: the EFFECT is a supersede of
+;; the wrapper's fN form-edge fact(s) pointing at the deleted form(s), so the
+;; minimal-op harvest sees a RETRACT and the render reachability filter drops the
+;; orphaned subtree — ONE mechanism, both drivers. A delete that would ORPHAN a
+;; surviving reference REFUSES (no facts mutated).
+(defn verb-delete! [name scope] (rvb/verb-delete! (verb-env) name scope))
 
-;; reorder — MOVE an existing top-level def to a new position (after an anchor) by
-;; RE-SPELLING its wrapper order key, NOT by re-minting the form. insert-form+delete
-;; would churn node identity (a fresh subtree + a dropped one — refers_to identity
-;; edges to the moved form's nodes would break, and a concurrent edit to it would be
-;; lost). The #36 CRDT design makes the in-place move trivial + sound: supersede the
-;; moved form's existing wrapper fN edge and mint a NEW one at a between-path, pointing
-;; at the SAME form root — zero node churn, identity preserved. `(reorder X :after Y)`
-;; puts X immediately after Y; `:after nil`/"" moves X to the FRONT.
-(defn verb-reorder! [name scope after-name]
-  (let [target-srcs (filter #(str/includes? % scope) srcs)]
-    (when (not= 1 (count target-srcs))
-      (binding [*out* *err*] (println (str "REJECTED — reorder scope \"" scope "\" matches "
-                                           (count target-srcs) " files (need 1); no facts mutated.")))
-      (*reject!* 3))
-    (let [src (first target-srcs)
-          wrap (wrapper-of src)
-          forms (wrap-forms wrap)
-          mover-bind (def-binding src name)
-          mover-form (when mover-bind (form-for-victim src mover-bind))
-          mover-entry (when mover-form (some (fn [[k cid r]] (when (= r mover-form) [k cid r])) forms))
-          front? (str/blank? (str after-name))
-          anchor-bind (when-not front? (def-binding src after-name))
-          anchor-form (when anchor-bind (form-for-victim src anchor-bind))
-          anchor-idx (when anchor-form (first (keep-indexed (fn [i [_ _ r]] (when (= r anchor-form) i)) forms)))]
-      (when (nil? mover-entry)
-        (binding [*out* *err*] (println (str "REJECTED — reorder target `" name "` not found in \"" scope "\"; no facts mutated.")))
-        (*reject!* 5))
-      (when (and (not front?) (nil? anchor-idx))
-        (binding [*out* *err*] (println (str "REJECTED — reorder anchor `" after-name "` not found in \"" scope "\"; no facts mutated.")))
-        (*reject!* 3))
-      (when (and (not front?) (= (nth (nth forms anchor-idx) 2) mover-form))
-        (binding [*out* *err*] (println (str "REJECTED — reorder `" name "` :after itself is a no-op; no facts mutated.")))
-        (*reject!* 3))
-      ;; the gap to land in: between the anchor and its next sibling, SKIPPING the mover
-      ;; itself (so moving X just past its current neighbour computes the right gap).
-      (let [others (remove (fn [[_ _ r]] (= r mover-form)) forms)
-            [lo hi] (if front?
-                      [nil (:path (first (first others)))]
-                      (let [a-pos (first (keep-indexed (fn [i [_ _ r]] (when (= r anchor-form) i)) others))]
-                        [(:path (first (nth others a-pos)))
-                         (when (< (inc a-pos) (count others)) (:path (first (nth others (inc a-pos)))))]))
-            [_ mover-cid _] mover-entry]
-        (retire-fact! mover-cid)
-        (c/fact! ctx wrap (c/value! ctx (ord-str (ord-between lo hi) (ord-tie))) mover-form tx)
-        (when-not *capture-only?* (re-resolve!))
-        (author-emit-scoped! "reorder"
-                      (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`"))
-                           " in \"" scope "\" (wrapper order-key re-spelled; SAME subtree, 0 node churn)"))))))
+;; reorder — MOVE a def to a new position by RE-SPELLING its wrapper order key
+;; (M1 Cut H; logic in src/resolve_verbs.bclj), NOT by re-minting the form:
+;; insert+delete would churn node identity. `:after nil`/"" moves it to the FRONT.
+(defn verb-reorder! [name scope after-name] (rvb/verb-reorder! (verb-env) name scope after-name))
+
 
 ;; ============================================================================
 ;; run-verb-warm! — THE GRAPH EDIT PATH. Run an authoring verb over a LOG-booted

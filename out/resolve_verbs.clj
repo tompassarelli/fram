@@ -1,9 +1,11 @@
 (ns resolve-verbs
   (:require [clojure.string :as str]
             [fram.types :as t]
-            [fram.store :as c]))
+            [fram.store :as c]
+            [resolve-core :as rc]
+            [resolve-read :as rr]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -48,6 +50,26 @@
 (defn verb-parse-require [r] (:parse-require r))
 
 (defn verb-capture-refs [r] (:capture-refs r))
+
+(defn verb-ultimate [r] (:ultimate r))
+
+(defn verb-BOUND [r] (:BOUND r))
+
+(defn verb-REFERS [r] (:REFERS r))
+
+(defn verb-wrapper-of [r] (:wrapper-of r))
+
+(defn verb-wrap-forms [r] (:wrap-forms r))
+
+(defn verb-form-for-victim [r] (:form-for-victim r))
+
+(defn verb-descendants [r] (:descendants r))
+
+(defn verb-retire [r] (:retire r))
+
+(defn verb-reresolve [r] (:reresolve r))
+
+(defn verb-ents [r] (:ents r))
 
 (defn- ^Boolean upper-first? [^String s]
   (and (> (count s) 0) (let [c (subs s 0 1)]
@@ -112,3 +134,123 @@
   (warn (str "FACTS EDITED: " (deref edits) "  (just the definition's name; references follow refers_to)"))
   (doseq [src (:emit-srcs v)]
   (warn (str "projected -> " (op src) "   <- " src))))))))
+
+(defn- nn [e]
+  (if (nil? e) -1 e))
+
+(defn- ekey [e]
+  (nth (vec e) 0))
+
+(defn- ecid [e]
+  (nth (vec e) 1))
+
+(defn- enode [e]
+  (nth (vec e) 2))
+
+(defn- ^String ord-tie [^Verb v]
+  (if (:capture-only? v) "PENDING" "0"))
+
+(defn- ^String ord-str* [path ^String tie]
+  (str "f" (str/join "." path) "~" tie))
+
+(defn verb-delete! [^Verb v ^String name ^String scope]
+  (let [ctx (:ctx v)
+   view (:view v)
+   srcs (:srcs v)
+   warn (:warn v)
+   reject (:reject v)
+   dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   desc (:descendants v)
+   ult (:ultimate v)
+   target-srcs (vec (filter (fn [s] (str/includes? s scope)) srcs))
+   victims (vec (keep (fn [s] (dbind s name)) target-srcs))
+   all-forms (set (vec (mapcat (fn [s] (vec (keep (fn [b] (ffv s b)) victims))) srcs)))
+   subtree (reduce (fn [acc f] (into acc (desc f))) #{} (vec all-forms))
+   orphans (vec (mapcat (fn [s] (vec (filter (fn [e] (let [tgt (rr/refers-target ctx view (:BOUND v) (:REFERS v) e)]
+  (and (= "symbol" (rr/kind-of ctx view e)) (some? tgt) (not (contains? subtree e)) (contains? subtree (ult tgt))))) (vec (get (:ents v) s []))))) srcs))]
+  (if (= 0 (count victims)) (do
+  (warn (str "REJECTED — no binding named `" name "` found in \"" scope "\" (nothing to delete; no facts mutated)."))
+  (reject 5)))
+  (if (= 0 (count all-forms)) (do
+  (warn (str "REJECTED — `" name "` is not an independently-deletable top-level form " "(a defunion variant / nested binding); no facts mutated."))
+  (reject 5)))
+  (if (> (count orphans) 0) (do
+  (warn "================ delete + orphaned-reference invariant ================")
+  (warn (str "REJECTED — " (count orphans) " reference(s) would be ORPHANED (no-orphaned-refs; no facts mutated):"))
+  (doseq [o (vec (take 5 orphans))]
+  (warn (str "  orphan: reference node " o " (`" (rr/sym-val ctx view o) "`)")))
+  (reject 6)))
+  (let [wof (:wrapper-of v)
+   wf (:wrap-forms v)
+   retire (:retire v)
+   emit (:emit v)
+   retired (atom 0)]
+  (doseq [src srcs]
+  (let [wrap (wof src)]
+  (if (some? wrap) (do
+  (doseq [entry (vec (wf wrap))]
+  (if (contains? all-forms (enode entry)) (do
+  (retire (ecid entry))
+  (swap! retired (fn [n] (+ n 1))))))))))
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (emit "delete" (str "deleted def `" name "` in \"" scope "\" (" (deref retired) " wrapper form-edge(s) superseded; subtree orphaned + dropped on render; 0 orphaned refs)")))))
+
+(defn verb-reorder! [^Verb v ^String name ^String scope after-name]
+  (let [ctx (:ctx v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   wof (:wrapper-of v)
+   wf (:wrap-forms v)
+   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — reorder scope \"" scope "\" matches " (count target-srcs) " files (need 1); no facts mutated."))
+  (reject 3)))
+  (let [src (first target-srcs)
+   wrap (wof src)
+   forms (vec (wf wrap))
+   mover-bind (dbind src name)
+   mover-form (if (some? mover-bind) (do
+  (ffv src mover-bind)))
+   mover-entry (if (some? mover-form) (do
+  (some (fn [e] (if (= (enode e) mover-form) (do
+  e))) forms)))
+   front? (str/blank? (str after-name))
+   anchor-bind (if (not front?) (do
+  (dbind src after-name)))
+   anchor-form (if (some? anchor-bind) (do
+  (ffv src anchor-bind)))
+   anchor-idx (if (some? anchor-form) (do
+  (first (vec (keep-indexed (fn [i e] (if (= (enode e) anchor-form) (do
+  i))) forms)))))]
+  (if (nil? mover-entry) (do
+  (warn (str "REJECTED — reorder target `" name "` not found in \"" scope "\"; no facts mutated."))
+  (reject 5)))
+  (if (and (not front?) (nil? anchor-idx)) (do
+  (warn (str "REJECTED — reorder anchor `" after-name "` not found in \"" scope "\"; no facts mutated."))
+  (reject 3)))
+  (if (not front?) (do
+  (let [ai (nn anchor-idx)]
+  (if (>= ai 0) (do
+  (if (= (enode (nth forms ai)) mover-form) (do
+  (warn (str "REJECTED — reorder `" name "` :after itself is a no-op; no facts mutated."))
+  (reject 3))))))))
+  (let [others (vec (remove (fn [e] (= (enode e) mover-form)) forms))
+   a-pos (if front? -1 (nn (first (vec (keep-indexed (fn [i e] (if (= (enode e) anchor-form) (do
+  i))) others)))))
+   lo (if (< a-pos 0) nil (:path (ekey (nth others a-pos))))
+   hi (if (< a-pos 0) (:path (ekey (first others))) (if (< (+ a-pos 1) (count others)) (do
+  (:path (ekey (nth others (+ a-pos 1)))))))]
+  (let [retire (:retire v)
+   emit (:emit v)]
+  (retire (ecid mover-entry))
+  (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-between lo hi) (ord-tie v))) (nn mover-form) tx)
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (emit "reorder" (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`")) " in \"" scope "\" (wrapper order-key re-spelled; SAME subtree, 0 node churn)")))))))
