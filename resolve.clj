@@ -800,7 +800,7 @@
 ;; nil/true/false/:kw are all SYMBOL leaves) so `nil`/`true`/`:foo` match their storage.
 ;; M1 Cut J: the LOGIC is Beagle now (src/resolve_verbs.bclj) — it lives with the two
 ;; verbs that consume it. This wrapper stays because resolve.clj-local callers
-;; (writable-victim, reject-candidate) and the port's ns-qualified surface use it.
+;; (writable-victim's wrapper) and the port's ns-qualified surface use it.
 (defn datum->canon [d] (rvb/datum->canon d))
 ;; anchor-matches — single POST-ORDER pass over a def form's subtree that computes each
 ;; node's canon EXACTLY ONCE (O(N), not O(N^2) — a naive "canonize every candidate" re-walks
@@ -835,53 +835,14 @@
 ;; (canon computed once per node). Returns [{:parent :pos :cid :child :chain} ...];
 ;; the search ROOT itself is never a candidate (only its interior children).
 (defn anchor-match-sites [root target] (rv/anchor-match-sites ctx *view* BOUND REFERS FIXED root target))
-;; a short, distinctive label for one breadcrumb rung (an enclosing form's head).
-(defn- crumb-label [n] (rv/crumb-label ctx *view* n))
 ;; DISAMBIG-CAP — at most this many candidates in a reject payload (report the total).
 (def DISAMBIG-CAP rc/DISAMBIG-CAP)
-;; build the reject candidate for match site `site`, relative to search-root `root`,
-;; given the OTHER sites (to find the smallest enclosing form that isolates THIS one).
-(defn- reject-candidate [root site others idx]
-  (let [chain       (:chain site)
-        breadcrumb  (mapv crumb-label chain)
-        parent      (:parent site)
-        other-nodes (into #{} (mapcat :chain others))
-        ;; :within — smallest enclosing form (deepest ancestor identity-distinct from
-        ;; every other site) whose source round-trips AND matches exactly one interior
-        ;; form of the def. Guarantees a valid, copy-pastable scope-narrower.
-        within (some (fn [a]
-                       (when-not (contains? other-nodes a)
-                         (let [ac (node->canon a) s (node->str a)]
-                           (when (and (<= (count s) 800)
-                                      (= ac (try (datum->canon (edn/read-string s)) (catch Throwable _ nil)))
-                                      (= 1 (count (anchor-match-sites root ac))))
-                             s))))
-                     (reverse chain))
-        ctx-str (let [s (node->str parent)] (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
-    {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
-;; assemble the structured disambiguation payload (+ a human-readable :message) the
-;; daemon threads through *reject!* into `handle`'s reject response.
-(defn- disambig-payload [reason name scope root sites]
-  (let [total (count sites)
-        shown (vec (map-indexed (fn [i s] (reject-candidate root s (concat (take i sites) (drop (inc i) sites)) (inc i)))
-                                (take DISAMBIG-CAP sites)))
-        head  (case reason
-                :ambiguous-old   (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                      total " matches; no facts mutated).")
-                :ambiguous-within (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                       total " matches; no facts mutated). It must match exactly one enclosing form."))
-        lines (map (fn [c]
-                     (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c))
-                          (when (:within c) (str "\n      within: " (:within c)))))
-                   shown)
-        remedy (case reason
-                 :ambiguous-old   "Retry with :within set to one candidate's `within` form (it isolates that occurrence), or supply a larger :old."
-                 :ambiguous-within "Supply a `within` that names exactly one enclosing form (use a larger/more distinctive form).")]
-    {:reason reason :verb "replace-in-body" :name name :scope scope
-     :total total :shown (count shown) :candidates shown :remedy remedy
-     :message (str "REJECTED — " head "\n" (str/join "\n" lines)
-                   "\n  remedy: " remedy)}))
-
+;; M1 Cut J: the whole anchor-disambiguation payload builder — crumb-label,
+;; reject-candidate and disambig-payload — is Beagle now (src/resolve_verbs.bclj),
+;; beside verb-replace-in-body!, its only caller. They were private here and nothing
+;; outside called them, so nothing is left behind but this note: the clojure.edn
+;; read-string round-trip that makes a :within suggestion SELF-VALIDATING crosses the
+;; Beagle boundary through both check and emit-clj, so the guard moved with the logic.
 ;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
 ;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
 ;; M1 Cut J: the logic is Beagle (src/resolve_verbs.bclj) — it was a Verb closure
@@ -918,7 +879,7 @@
               BOUND REFERS wrapper-of form-for-victim descendants
               retire-fact! re-resolve! @file->ents
               mint-datum! register! scope->srcs fN-facts
-              FIXED disambig-payload (fn [code] (System/exit code))))
+              FIXED (fn [code] (System/exit code))))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))

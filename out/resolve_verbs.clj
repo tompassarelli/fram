@@ -6,9 +6,10 @@
             [resolve-read :as rr]
             [resolve-binds :as rb]
             [resolve-modules :as rm]
-            [resolve-render :as rv]))
+            [resolve-render :as rv]
+            [clojure.edn :as edn]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of form-for-victim descendants retire reresolve ents mint register scope-srcs fn-facts FIXED disambig exit])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of form-for-victim descendants retire reresolve ents mint register scope-srcs fn-facts FIXED exit])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -81,8 +82,6 @@
 (defn verb-fn-facts [r] (:fn-facts r))
 
 (defn verb-FIXED [r] (:FIXED r))
-
-(defn verb-disambig [r] (:disambig r))
 
 (defn verb-exit [r] (:exit r))
 
@@ -232,6 +231,41 @@
    k (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)]
   (if (nil? k) acc (conj acc [k cid (:r cl)])))) [] (c/by-l ctx parent))]
   (vec (sort-by (fn [row] (nth row 0)) rc/ord-cmp rows))))
+
+(defn- reject-candidate [^Verb v root site others idx]
+  (let [ctx (:ctx v)
+   view (:view v)
+   BOUND (:BOUND v)
+   REFERS (:REFERS v)
+   FIXED (:FIXED v)
+   chain (:chain site)
+   breadcrumb (mapv (fn [n] (rv/crumb-label ctx view n)) chain)
+   parent (:parent site)
+   other-nodes (into #{} (mapcat (fn [o] (:chain o)) others))
+   within (some (fn [a] (if (not (contains? other-nodes a)) (do
+  (let [ac (rv/node->canon ctx view BOUND REFERS FIXED a)
+   s (rv/node->str ctx view BOUND REFERS FIXED a)]
+  (if (and (<= (count s) 800) (= ac (try
+  (datum->canon (edn/read-string s))
+  (catch Throwable _
+    nil))) (= 1 (count (rv/anchor-match-sites ctx view BOUND REFERS FIXED root ac)))) (do
+  s)))))) (reverse chain))
+   ctx-str (let [s (rv/node->str ctx view BOUND REFERS FIXED parent)]
+  (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
+  {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
+
+(defn disambig-payload [^Verb v reason ^String name ^String scope root sites]
+  (let [total (count sites)
+   shown (vec (map-indexed (fn [i s] (reject-candidate v root s (concat (take i sites) (drop (+ i 1) sites)) (+ i 1))) (take rc/DISAMBIG-CAP sites)))
+   head (cond
+  (= reason :ambiguous-old) (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" (" total " matches; no facts mutated).")
+  :else (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" (" total " matches; no facts mutated). It must match exactly one enclosing form."))
+   lines (map (fn [c] (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c)) (if (:within c) (do
+  (str "\n      within: " (:within c)))))) shown)
+   remedy (cond
+  (= reason :ambiguous-old) "Retry with :within set to one candidate's `within` form (it isolates that occurrence), or supply a larger :old."
+  :else "Supply a `within` that names exactly one enclosing form (use a larger/more distinctive form).")]
+  {:reason reason :verb "replace-in-body" :name name :scope scope :total total :shown (count shown) :candidates shown :remedy remedy :message (str "REJECTED — " head "\n" (str/join "\n" lines) "\n  remedy: " remedy)}))
 
 (defn verb-delete! [^Verb v ^String name ^String scope]
   (let [ctx (:ctx v)
@@ -519,7 +553,6 @@
   (reject 3)))
   (let [dbind (:def-binding v)
    ffv (:form-for-victim v)
-   dis (:disambig v)
    src (first target-srcs)
    B (dbind src name)
    form (if (some? B) (do
@@ -535,7 +568,7 @@
   (reject2 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
   (> (count wsites) 1) (do
   (warn (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" (" (count wsites) " matches; no facts mutated)."))
-  (reject2 5 (dis :ambiguous-within name scope form wsites)))
+  (reject2 5 (disambig-payload v :ambiguous-within name scope (nn form) wsites)))
   :else (:child (first wsites)))))
    target-canon (datum->canon old-datum)
    matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
@@ -545,7 +578,7 @@
   (reject2 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope :within (some? within-datum) :message (str "REJECTED — anchor `old` not found inside " (if (some? within-datum) "the `within` form" (str "`" name "`")) " in \"" scope "\" (0 matches).")}))
   (> (count matches) 1) (do
   (warn (str "REJECTED — anchor `old` is AMBIGUOUS inside " (if (some? within-datum) "the `within` form" (str "`" name "`")) " in \"" scope "\" (" (count matches) " matches; no facts mutated)."))
-  (reject2 5 (dis :ambiguous-old name scope search-root matches)))
+  (reject2 5 (disambig-payload v :ambiguous-old name scope (nn search-root) matches)))
   :else (let [mint (:mint v)
    retire (:retire v)
    emit (:emit v)

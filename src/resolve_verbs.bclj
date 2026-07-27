@@ -26,13 +26,24 @@
 ;;      helper the verbs call arrive HERE as one explicit `Verb` record that
 ;;      resolve.clj's `verb-env` builds from the dynamic state at call time.
 ;;
-;;   2. THE HELPERS STAY BEHIND, AS CLOSURES. mint-datum! / retire-fact! /
-;;      extract-file! / capture-refs / datum->canon / the disambiguation payload
-;;      builder are resolve.clj's (they touch reader metadata, java.util.regex,
-;;      clojure.edn and the projection writer — host surfaces this port does not
-;;      move). They ride in the record as function VALUES, exactly as Cut G's
-;;      xres/tres/ares did. What moved is the verb LOGIC: the invariant order,
-;;      the reject codes + messages, the fact mutations and the emit reporting.
+;;   2. THE HELPERS THAT STAY BEHIND STAY AS CLOSURES. mint-datum! /
+;;      retire-fact! / extract-file! / capture-refs are resolve.clj's (they touch
+;;      the projection writer and the `binding` scaffolds a ^:dynamic var pins to
+;;      that namespace). They ride in the record as function VALUES, exactly as
+;;      Cut G's xres/tres/ares did. What moved in Cut H is the verb LOGIC: the
+;;      invariant order, the reject codes + messages, the fact mutations and the
+;;      emit reporting.
+;;
+;;      M1 CUT J NARROWED THAT RULE. Four of those closures were never host-bound
+;;      at all — they were merely resolve.clj-resident — so they moved here and
+;;      left the record (41 -> 36 fields): datum->canon (the EDN-datum canon,
+;;      java.util.regex included), writable-victim + writable-disp-name (upsert
+;;      identity), wrap-forms (the wrapper's CRDT-ordered form edges) and the
+;;      anchor-disambiguation payload builder (clojure.edn round-trip included).
+;;      Cut I's probe is why: bare Java interop, Pattern/.pattern, pr-str and
+;;      clojure.edn all cross the Beagle boundary through check AND emit-clj. The
+;;      surviving test for "stays behind" is now `binding` of a host dynamic var
+;;      or a ^:dynamic var that cannot change namespace — not host interop.
 ;;
 ;;   3. `binding [*out* *err*]` CANNOT MOVE (it rebinds a host dynamic var), so
 ;;      stderr reporting is one closure, `warn`, called once per LINE. The
@@ -82,7 +93,8 @@
     [resolve-read :as rr]
     [resolve-binds :as rb]
     [resolve-modules :as rm]
-    [resolve-render :as rv]))
+    [resolve-render :as rv]
+    [clojure.edn :as edn]))
 
 (define-mode strict)
 
@@ -127,7 +139,6 @@
                  scope-srcs :- Any      ; (fn [scope]) -> scope->srcs: dot-SEGMENT-boundary module match
                  fn-facts :- Any        ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
                  FIXED :- Int           ; the :rename keep-spelling render marker predicate id
-                 disambig :- Any        ; (fn [reason name scope root sites]) -> the reject payload
                  exit :- Any])          ; (fn [code]) — System/exit, the unknown-op arm's hard stop
 
 ;; ---------------------------------------------------------------------------
@@ -381,6 +392,77 @@
                          (if (nil? k) acc (conj acc [k cid (get cl :r)]))))
                      [] (c/by-l ctx parent))]
     (vec (sort-by (fn [row :- Any] :- Any (nth row 0)) rc/ord-cmp rows))))
+
+
+;; ---------------------------------------------------------------------------
+;; ANCHOR DISAMBIGUATION (M1 Cut J) — the structured reject payload
+;; replace-in-body hands to *reject!* when `old` (or `within`) matches more than
+;; one interior form. Was a resolve.clj closure (`disambig`) under Cut H's
+;; helpers-stay-behind rule; the only host surface in it is clojure.edn/read-string
+;; inside a try (probed through check AND emit-clj: both cross), and the round-trip
+;; it guards is precisely datum->canon's, which is here now.
+;; ---------------------------------------------------------------------------
+;; build the reject candidate for match site `site`, relative to search-root `root`,
+;; given the OTHER sites (to find the smallest enclosing form that isolates THIS one).
+(defn- reject-candidate [v :- Verb root :- Int site :- Any others :- Any idx :- Int] :- Any
+  (let [ctx (:ctx v)
+        view (:view v)
+        BOUND (:BOUND v)
+        REFERS (:REFERS v)
+        FIXED (:FIXED v)
+        chain (:chain site)
+        breadcrumb (mapv (fn [n :- Int] :- Any (rv/crumb-label ctx view n)) chain)
+        parent (:parent site)
+        other-nodes (into #{} (mapcat (fn [o :- Any] :- Any (:chain o)) others))
+        ;; :within — smallest enclosing form (deepest ancestor identity-distinct from
+        ;; every other site) whose source round-trips AND matches exactly one interior
+        ;; form of the def. Guarantees a valid, copy-pastable scope-narrower.
+        within (some (fn [a :- Int] :- Any
+                       (when-not (contains? other-nodes a)
+                         (let [ac (rv/node->canon ctx view BOUND REFERS FIXED a)
+                               s (rv/node->str ctx view BOUND REFERS FIXED a)]
+                           (when (and (<= (count s) 800)
+                                      (= ac (try (datum->canon (edn/read-string s))
+                                                 (catch Throwable _ nil)))
+                                      (= 1 (count (rv/anchor-match-sites ctx view BOUND REFERS FIXED root ac))))
+                             s))))
+                     (reverse chain))
+        ctx-str (let [s (rv/node->str ctx view BOUND REFERS FIXED parent)]
+                  (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
+    {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
+
+;; assemble the structured disambiguation payload (+ a human-readable :message) the
+;; daemon threads through *reject!* into `handle`'s reject response. `case` is removed
+;; surface in beagle, so the two-reason dispatch is a cond — same arms, same strings.
+(defn disambig-payload [v :- Verb reason :- Any name :- String scope :- String
+                        root :- Int sites :- Any] :- Any
+  (let [total (count sites)
+        shown (vec (map-indexed
+                     (fn [i :- Int s :- Any] :- Any
+                       (reject-candidate v root s
+                                         (concat (take i sites) (drop (+ i 1) sites))
+                                         (+ i 1)))
+                     (take rc/DISAMBIG-CAP sites)))
+        head (cond
+               (= reason :ambiguous-old)
+               (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                    total " matches; no facts mutated).")
+               :else
+               (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                    total " matches; no facts mutated). It must match exactly one enclosing form."))
+        lines (map (fn [c :- Any] :- String
+                     (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c))
+                          (when (:within c) (str "\n      within: " (:within c)))))
+                   shown)
+        remedy (cond
+                 (= reason :ambiguous-old)
+                 "Retry with :within set to one candidate's `within` form (it isolates that occurrence), or supply a larger :old."
+                 :else
+                 "Supply a `within` that names exactly one enclosing form (use a larger/more distinctive form).")]
+    {:reason reason :verb "replace-in-body" :name name :scope scope
+     :total total :shown (count shown) :candidates shown :remedy remedy
+     :message (str "REJECTED — " head "\n" (str/join "\n" lines)
+                   "\n  remedy: " remedy)}))
 
 ;; ---------------------------------------------------------------------------
 ;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
@@ -786,7 +868,6 @@
       (reject 3))
     (let [dbind (:def-binding v)
           ffv (:form-for-victim v)
-          dis (:disambig v)
           src (first target-srcs)
           B (dbind src name)
           form (when (some? B) (ffv src B))]
@@ -811,7 +892,7 @@
                   (> (count wsites) 1)
                   (do (warn (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
                                  (count wsites) " matches; no facts mutated)."))
-                      (reject2 5 (dis :ambiguous-within name scope form wsites)))
+                      (reject2 5 (disambig-payload v :ambiguous-within name scope (nn form) wsites)))
                   :else (:child (first wsites)))))
             target-canon (datum->canon old-datum)
             matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
@@ -830,7 +911,7 @@
           (do (warn (str "REJECTED — anchor `old` is AMBIGUOUS inside "
                          (if (some? within-datum) "the `within` form" (str "`" name "`"))
                          " in \"" scope "\" (" (count matches) " matches; no facts mutated)."))
-              (reject2 5 (dis :ambiguous-old name scope search-root matches)))
+              (reject2 5 (disambig-payload v :ambiguous-old name scope (nn search-root) matches)))
           :else
           (let [mint (:mint v)
                 retire (:retire v)
