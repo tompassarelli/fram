@@ -1,0 +1,4 @@
+remove-wins []
+add-wins ["red"]
+default-policy []
+withdrawn-cid nil

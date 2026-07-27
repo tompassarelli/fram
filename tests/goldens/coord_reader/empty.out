@@ -1,0 +1,4 @@
+empty-election [nil nil]
+empty-view-election [nil nil]
+unknown-withdrawal [nil false]
+unknown-view nil
