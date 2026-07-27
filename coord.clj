@@ -191,7 +191,7 @@
   (ensure-group-appender!)
   (let [t (promise)]
     (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed})
-    (case (queue-admission-decision (some? *durable-tickets*))
+    (case (queue-admission-decision (boolean *durable-tickets*))
       :defer (do (swap! *durable-tickets* conj t) t)
       :await (await-durable! t))))
 
