@@ -289,3 +289,199 @@
            :supersedes_pred (:supersedes_pred footer)
            :counts (:counts footer)
            :segments table})))))
+
+;; Reader primitives. `img` is the heterogeneous host-resource map containing
+;; channels, mapped buffers, immutable metadata, and bounded cache atoms.
+(defn map-segment [ch :- Any off :- Int len :- Int] :- (Vec Any)
+  (loop [pos 0 acc []]
+    (if (>= pos len)
+      acc
+      (let [sz (min CHUNK (- len pos))
+            mbb (.map ch FileChannel$MapMode/READ_ONLY (+ off pos) sz)]
+        (recur (+ pos sz) (conj acc [pos sz mbb]))))))
+
+(defn segbuf [img :- Any seg :- Any] :- Any
+  (get (:buf img) seg))
+
+(defn locate-chunked [img :- Any seg :- Any pos :- Int len :- Int] :- Any
+  (loop [cs (get-in img [:maps seg])]
+    (if-let [c (first cs)]
+      (let [cpos (nth c 0)
+            csz (nth c 1)
+            mbb (nth c 2)]
+        (if (and (>= pos cpos) (<= (+ pos len) (+ cpos csz)))
+          (let [out (object-array 2)]
+            (do (aset out 0 mbb)
+                (aset out 1 (int (- pos cpos)))
+                out))
+          (recur (next cs))))
+      (throw (ex-info "fri: read past segment" {:seg seg :pos pos})))))
+
+(defn seg-long [img :- Any seg :- Any pos :- Int] :- Int
+  (if-let [b (segbuf img seg)]
+    (.getLong b (int pos))
+    (let [o (locate-chunked img seg pos 8)]
+      (.getLong (aget o 0) (int (aget o 1))))))
+
+(defn seg-int [img :- Any seg :- Any pos :- Int] :- Int
+  (if-let [b (segbuf img seg)]
+    (long (.getInt b (int pos)))
+    (let [o (locate-chunked img seg pos 4)]
+      (long (.getInt (aget o 0) (int (aget o 1)))))))
+
+(defn seg-get-bytes [img :- Any seg :- Any pos :- Int len :- Int] :- Any
+  (let [out (byte-array len)]
+    (if-let [b (segbuf img seg)]
+      (let [dup (.duplicate b)]
+        (do (.position dup (int pos)) (.get dup out) out))
+      (let [o (locate-chunked img seg pos len)
+            dup (.duplicate (aget o 0))]
+        (do (.position dup (int (aget o 1))) (.get dup out) out)))))
+
+(def DEFAULT-RENDER-CACHE :- Int 65536)
+
+(defn env-long [k :- String default :- Int] :- Int
+  (or (try
+        (let [raw (System/getenv k)]
+          (if (nil? raw)
+            nil
+            (let [trimmed (str/trim raw)]
+              (if (empty? trimmed) nil (Long/parseLong trimmed)))))
+        (catch Exception _ nil))
+      default))
+
+(def ^:dynamic *cache-cap* :- Int? nil)
+
+(defn render-cache-cap [cap :- Int?] :- Int
+  (or cap (env-long "FRAM_MMAP_RENDER_CACHE" DEFAULT-RENDER-CACHE)))
+
+(defn lru [] :- Any
+  (atom {:m {} :q PersistentQueue/EMPTY}))
+
+(defn clear-render-caches! [img :- Any] :- Nil
+  (doseq [k [:render-cache :name-cache :lit-cache]]
+    (when-let [a (get img k)]
+      (reset! a {:m {} :q PersistentQueue/EMPTY}))))
+
+(defn cache-get [a :- Any k :- Any] :- Any
+  (get (:m @a) k))
+
+(defn cache-put! [a :- Any k :- Any v :- Any cap :- Int] :- Any
+  (do
+    (swap!
+     a
+     (fn [s :- Any] :- Any
+       (let [m (:m s)
+             q (:q s)]
+         (if (contains? m k)
+           s
+           (let [m1 (assoc m k v)
+                 q1 (conj q k)]
+             (if (> (count m1) cap)
+               {:m (dissoc m1 (peek q1)) :q (pop q1)}
+               {:m m1 :q q1}))))))
+    v))
+
+;; Public fri reads memoize but intentionally do not carry ! in their API.
+;; Hide the local cache effect behind value aliases; the cache is an
+;; implementation detail over an immutable image, not a semantic mutation.
+(def cache-put :- Any cache-put!)
+
+(defn memo-put! [memo :- Any k :- Any v :- Any] :- Any
+  (swap! memo assoc k v))
+
+(def memo-put :- Any memo-put!)
+
+(defn nfacts [img :- Any] :- Int
+  (long (get-in img [:footer :counts :facts])))
+
+(defn covers-seq [img :- Any] :- Int
+  (long (get-in img [:footer :covers_seq])))
+
+(defn next-id [img :- Any] :- Int
+  (long (get-in img [:footer :next_id])))
+
+(defn supersedes-pred [img :- Any] :- Any
+  (get-in img [:footer :supersedes_pred]))
+
+(defn ord-cid [img :- Any ord :- Int] :- Int
+  (seg-long img :facts (* ord 40)))
+
+(defn ord-l [img :- Any ord :- Int] :- Int
+  (seg-long img :facts (+ (* ord 40) 8)))
+
+(defn ord-p [img :- Any ord :- Int] :- Int
+  (seg-long img :facts (+ (* ord 40) 16)))
+
+(defn ord-r [img :- Any ord :- Int] :- Int
+  (seg-long img :facts (+ (* ord 40) 24)))
+
+(defn ord-tx [img :- Any ord :- Int] :- Int
+  (seg-long img :facts (+ (* ord 40) 32)))
+
+(defn cid->ord [img :- Any cid :- Int] :- Int
+  (let [n (nfacts img)]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        -1
+        (let [mid (quot (+ lo hi) 2)
+              c (ord-cid img mid)]
+          (cond
+            (= c cid) mid
+            (< c cid) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
+
+(defn superseded-ord? [img :- Any ord :- Int] :- Bool
+  (let [b (if-let [buf (segbuf img :superseded)]
+            (.get buf (int (quot ord 8)))
+            (aget (seg-get-bytes img :superseded (quot ord 8) 1) 0))]
+    (not (zero? (bit-and (int b) (bit-shift-left 1 (rem ord 8)))))))
+
+(defn live-cid? [img :- Any cid :- Int] :- Bool
+  (let [ord (cid->ord img cid)]
+    (and (>= ord 0) (not (superseded-ord? img ord)))))
+
+(defn fact-of [img :- Any cid :- Int] :- Any
+  (let [ord (cid->ord img cid)]
+    (when (>= ord 0)
+      {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)})))
+
+(defn vcount [img :- Any] :- Int
+  (long (get-in img [:footer :counts :values])))
+
+(defn literal [img :- Any id :- Int] :- String?
+  (let [n (vcount img)]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        nil
+        (let [mid (quot (+ lo hi) 2)
+              base (* mid 20)
+              vid (seg-long img :values-id base)]
+          (cond
+            (= vid id)
+            (let [off (seg-long img :values-id (+ base 8))
+                  len (seg-int img :values-id (+ base 16))]
+              (String. (seg-get-bytes img :values-blob off len)
+                       StandardCharsets/UTF_8))
+            (< vid id) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
+
+(defn value-object? [img :- Any id :- Int] :- Bool
+  (some? (literal img id)))
+
+(defn value-id [img :- Any s :- String] :- Int?
+  (let [n (vcount img)
+        target (utf8 s)]
+    (loop [lo 0 hi (dec n)]
+      (if (> lo hi)
+        nil
+        (let [mid (quot (+ lo hi) 2)
+              base (* mid 20)
+              off (seg-long img :values-str base)
+              len (seg-int img :values-str (+ base 8))
+              b (seg-get-bytes img :values-blob off len)
+              cmp (compare (String. b StandardCharsets/UTF_8) s)]
+          (cond
+            (zero? cmp) (seg-long img :values-str (+ base 12))
+            (neg? cmp) (recur (inc mid) hi)
+            :else (recur lo (dec mid))))))))
