@@ -1,0 +1,15 @@
+  [PASS] (a) clean untyped module -> no errors — ()
+  [PASS] (b) undefined symbol flagged — "unresolved symbol `parse-cookiez` in broken — not a local, an own def, a :require refer/alias, clojure.core, or interop"
+  [PASS] (b) :stage :type
+  [PASS] (b) :got names the bad symbol
+  [PASS] (b) :at :def = broken
+  [PASS] (b) :nearest names real parse-cookies — ["parse-cookies" "re-cookie"]
+  [PASS] (b) clean defs NOT flagged (only broken) — 1 total
+  [PASS] (c) arity mismatch flagged — "arity mismatch: `parse-cookies` called with 3 arg(s), but is defined for 2"
+  [PASS] (c) :expected 2 / :got 3 — :expected 2 :got 3
+  [PASS] (c) :nearest names parse-cookies
+  [PASS] (d) clean ->> stage NOT flagged as arity
+  [PASS] (d) untyped source detected as untyped
+  [PASS] (d) typed source NOT treated as untyped — typed -> routes to sidecar type-checker (unchanged)
+
+=== 13/13 checks passed ===
