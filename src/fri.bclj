@@ -1,0 +1,56 @@
+#lang beagle/clj
+
+;; fri — public typed facade over the ported mmap image implementation.
+(ns fri
+  (:require [fri-port :as fp]))
+
+(define-mode strict)
+
+(def MAGIC :- String fp/MAGIC)
+(def FMT :- Int fp/FMT)
+(def ^:dynamic *cache-cap* :- Int? nil)
+
+(defn write-fri! [store-val :- Any path :- Any & opts :- Any] :- Any
+  (apply fp/write-fri! store-val path opts))
+
+(defn render-cache-cap [] :- Int
+  (fp/render-cache-cap *cache-cap*))
+
+(defn clear-render-caches! [img :- Any] :- Nil
+  (fp/clear-render-caches! img))
+
+(defn open-fri [path :- Any] :- Any
+  (fp/open-fri-with-cap path *cache-cap*))
+
+(defn close-fri! [img :- Any] :- Nil
+  (fp/close-fri! img))
+
+(defn nfacts [img :- Any] :- Int (fp/nfacts img))
+(defn covers-seq [img :- Any] :- Int (fp/covers-seq img))
+(defn next-id [img :- Any] :- Int (fp/next-id img))
+(defn supersedes-pred [img :- Any] :- Any (fp/supersedes-pred img))
+(defn cid->ord [img :- Any cid :- Int] :- Int (fp/cid->ord img cid))
+(defn superseded-ord? [img :- Any ord :- Int] :- Bool (fp/superseded-ord? img ord))
+(defn live-cid? [img :- Any cid :- Int] :- Bool (fp/live-cid? img cid))
+(defn fact-of [img :- Any cid :- Int] :- Any (fp/fact-of img cid))
+(defn literal [img :- Any id :- Int] :- String? (fp/literal img id))
+(defn value-object? [img :- Any id :- Int] :- Bool (fp/value-object? img id))
+(defn value-id [img :- Any value :- String] :- Int? (fp/value-id img value))
+(defn by-l [img :- Any lid :- Int] :- (Vec Int) (fp/by-l img lid))
+(defn by-lp [img :- Any lid :- Int pid :- Int] :- (Vec Int) (fp/by-lp img lid pid))
+(defn pred-id [img :- Any value :- String] :- Int? (fp/pred-id img value))
+(defn resolve-name [img :- Any value :- String] :- Int? (fp/resolve-name img value))
+(defn name-of [img :- Any subj :- Int] :- String? (fp/name-of img subj))
+(defn cold->dump [img :- Any] :- Any (fp/cold->dump img))
+(defn render [img :- Any cid :- Int] :- Any (fp/render img cid))
+(defn render-ord [img :- Any ord :- Int] :- Any (fp/render-ord img ord))
+(defn by-lp-ords [img :- Any lid :- Int pid :- Int] :- (Vec Int)
+  (fp/by-lp-ords img lid pid))
+(defn render-lp [img :- Any subj-name :- String pred-name :- String] :- Any
+  (fp/render-lp img subj-name pred-name))
+(defn cold-name-triples
+  [img :- Any schema-pred? :- [String -> Bool] read-hidden-pred? :- [String -> Bool]]
+  :- Any
+  (fp/cold-name-triples img schema-pred? read-hidden-pred?))
+(defn verify-segments? [img :- Any segments :- Any] :- Bool
+  (fp/verify-segments? img segments))
