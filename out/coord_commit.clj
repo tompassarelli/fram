@@ -75,3 +75,6 @@
   (or (not (valid-lease-request? holder resource ttl-ms now-ms max-ms)) (not (valid-lease-epoch? expected-epoch max-epoch))) {:reject :invalid-lease-request :version version}
   (and (lease-held? lease now-ms) (= (:holder lease) holder) (= (:epoch lease) expected-epoch)) {:persist true}
   :else {:reject :fence-lost :version version}))
+
+(defn lease-release-decision [lease holder epoch ^Boolean require-epoch version]
+  (if (and (not (nil? lease)) (= (:holder lease) holder) (or (not require-epoch) (= (:epoch lease) epoch))) {:retract true} {:ok version :noop true}))
