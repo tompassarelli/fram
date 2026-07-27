@@ -4917,23 +4917,25 @@
       (try
         (when-let [line (read-line-bounded r max-line-bytes)]
           (let [req (parse-req line)
-                inner (:request req)
                 strict-reject (wire/strict-log-fence-rejection
                                require-log-fence? req (served-log-path))
                 fenced-subscribe? (wire/fenced-subscribe? req)
-                subscribe-req (wire/subscription-request req)
                 fence-reject (when fenced-subscribe?
                                (locking dlock
-                                 (log-fence-rejection (:expected-log req))))]
-            (cond
-              strict-reject
-              (try-reply w strict-reject (:fmt req))
+                                 (log-fence-rejection (:expected-log req))))
+                state (wire/connection-transition
+                       (wire/connection-start)
+                       {:event :request
+                        :request req
+                        :strict-reject strict-reject
+                        :fence-reject fence-reject})]
+            (case (:phase state)
+              :reply
+              (try-reply w (:response state) (:format state))
 
-              fence-reject
-              (try-reply w fence-reject (:fmt req))
-
-              (or fenced-subscribe? (= (:op req) :subscribe))
-              (do
+              :subscribe
+              (let [subscribe-req (:actual state)]
+                (do
                   (locking drain-monitor
                     (swap! subscription-sockets conj s)
                     ;; TERM may have closed the listener after this connection was
@@ -4951,26 +4953,32 @@
                   (.setSoTimeout s 0)
                   (.write w (pr-str (wire/subscription-response
                                      (current-seq @co)
-                                     fenced-subscribe?
+                                     (:fenced-subscription state)
                                      (served-log-path))))
                   (.newLine w)
                   (.flush w)
-                  (loop [] (when (read-line-bounded r max-line-bytes) (recur))))
+                  (loop [] (when (read-line-bounded r max-line-bytes) (recur)))))
 
-              :else
-              (let [actual (wire/actual-request req)
-                    query? (query-request? actual)
-                    control (when query? (new-query-control actual))
-                    _ (when query? (monitor-query-disconnect s r control))]
+              :handle
+              (let [actual (:actual state)
+                    control (when (:query state) (new-query-control actual))
+                    _ (when (:query state) (monitor-query-disconnect s r control))]
                 (try
                   (let [resp (if control (handle req control) (handle req))]
-                    (try-reply w resp (:fmt req)))
+                    (try-reply
+                     w
+                     (:response
+                      (wire/connection-transition
+                       state {:event :handled :response resp}))
+                     (:format state)))
                   (finally
                     ;; The monitor owns input after request parse and has a 100ms
                     ;; read timeout. Marking done lets it retire by itself; do not
                     ;; future-cancel it (cancelling before scheduling could skip
-                    ;; its finally and leak the monitor count).
-                    (when control (reset! (:done control) true))))))))
+                     ;; its finally and leak the monitor count).
+                    (when control (reset! (:done control) true)))))
+
+              nil)))
         ;; StackOverflowError is an Error (not Exception); catching Throwable here
         ;; keeps a deep-nest / malformed line from taking down the conn thread.
         (catch java.net.SocketTimeoutException _ nil)   ; slow client: just close

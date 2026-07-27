@@ -89,6 +89,45 @@
 (defn subscription-response [version ^Boolean fenced? served-log]
   (if fenced? {:subscribed version :log served-log} {:subscribed version}))
 
+(defrecord ConnectionState [phase request actual format response fenced-subscription query])
+
+(defn connectionstate-phase [r] (:phase r))
+
+(defn connectionstate-request [r] (:request r))
+
+(defn connectionstate-actual [r] (:actual r))
+
+(defn connectionstate-format [r] (:format r))
+
+(defn connectionstate-response [r] (:response r))
+
+(defn connectionstate-fenced-subscription [r] (:fenced-subscription r))
+
+(defn connectionstate-query [r] (:query r))
+
+(defn ^ConnectionState connection-start []
+  (->ConnectionState :reading nil nil nil nil false false))
+
+(defn ^ConnectionState connection-transition [^ConnectionState state event]
+  (let [kind (:event event)]
+  (cond
+  (= kind :request) (let [req (:request event)
+   strict-reject (:strict-reject event)
+   fence-reject (:fence-reject event)
+   fenced? (fenced-subscribe? req)
+   subscription? (or fenced? (= :subscribe (:op req)))
+   actual (actual-request req)
+   fmt (:fmt req)]
+  (cond
+  strict-reject (->ConnectionState :reply req actual fmt strict-reject fenced? false)
+  fence-reject (->ConnectionState :reply req actual fmt fence-reject fenced? false)
+  subscription? (->ConnectionState :subscribe req (subscription-request req) fmt nil fenced? false)
+  :else (->ConnectionState :handle req actual fmt nil false (query-request? actual))))
+  (= kind :handled) (->ConnectionState :reply (:request state) (:actual state) (:format state) (:response event) (:fenced-subscription state) (:query state))
+  (= kind :replied) (->ConnectionState :done (:request state) (:actual state) (:format state) (:response state) (:fenced-subscription state) (:query state))
+  (= kind :eof) (->ConnectionState :done (:request state) (:actual state) (:format state) (:response state) (:fenced-subscription state) (:query state))
+  :else state)))
+
 (defn ^String serialize-response [fmt resp to-json]
   (if (json-format? fmt) (to-json resp) (pr-str resp)))
 

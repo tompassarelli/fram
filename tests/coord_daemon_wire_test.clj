@@ -53,7 +53,46 @@
   (check "unknown op preserves legacy unknown-op dispatch"
          (empty? (wire/request-validation-errors
                   {:op :not-real}
-                  (wire/request-dispatch {:op :not-real} clean cfg)))))
+                  (wire/request-dispatch {:op :not-real} clean cfg))))
 
-(println "coord_daemon_wire:" (- 10 @failures) "/ 10 PASS")
+  (let [start (wire/connection-start)
+        query-state
+        (wire/connection-transition
+         start {:event :request
+                :request {:op :query :query {} :fmt :json}})
+        fenced-state
+        (wire/connection-transition
+         start {:event :request
+                :request {:op :for-log :expected-log "x"
+                          :request {:op :subscribe :filter {:p "title"}}}})
+        rejected
+        (wire/connection-transition
+         start {:event :request
+                :request {:op :version :fmt :json}
+                :strict-reject {:code :log-fence-required}})
+        handled
+        (wire/connection-transition
+         query-state {:event :handled :response {:ok [["x"]]}})]
+    (check "connection starts at the read mechanism boundary"
+           (= :reading (:phase start)))
+    (check "finite query enters handle with explicit reader-monitor decision"
+           (and (= :handle (:phase query-state))
+                (:query query-state)
+                (= :json (:format query-state))))
+    (check "fenced subscription unwraps into a long-lived subscription phase"
+           (and (= :subscribe (:phase fenced-state))
+                (:fenced-subscription fenced-state)
+                (= :subscribe (get-in fenced-state [:actual :op]))))
+    (check "pre-handler rejection enters reply with its selected envelope"
+           (and (= :reply (:phase rejected))
+                (= :log-fence-required (get-in rejected [:response :code]))))
+    (check "handler result advances the same connection state to reply"
+           (and (= :reply (:phase handled))
+                (= {:ok [["x"]]} (:response handled))))
+    (check "reply completion is terminal"
+           (= :done
+              (:phase
+               (wire/connection-transition handled {:event :replied}))))))
+
+(println "coord_daemon_wire:" (- 16 @failures) "/ 16 PASS")
 (System/exit (if (zero? @failures) 0 1))

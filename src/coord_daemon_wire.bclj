@@ -200,6 +200,66 @@
     {:subscribed version :log served-log}
     {:subscribed version}))
 
+(defrecord ConnectionState
+  [phase :- Keyword
+   request :- Any
+   actual :- Any
+   format :- Any
+   response :- Any
+   fenced-subscription :- Bool
+   query :- Bool])
+
+(defn connection-start [] :- ConnectionState
+  (->ConnectionState :reading nil nil nil nil false false))
+
+;; The host reports facts learned at mechanism boundaries (one parsed request,
+;; the result of the locked log-fence probe, and one handler result). This
+;; transition owns only the lifecycle decision; readers, writers, sockets,
+;; monitors, handler execution, and draining remain host-side.
+(defn connection-transition
+  [state :- ConnectionState event :- Any] :- ConnectionState
+  (let [kind (:event event)]
+    (cond
+      (= kind :request)
+      (let [req (:request event)
+            strict-reject (:strict-reject event)
+            fence-reject (:fence-reject event)
+            fenced? (fenced-subscribe? req)
+            subscription? (or fenced? (= :subscribe (:op req)))
+            actual (actual-request req)
+            fmt (:fmt req)]
+        (cond
+          strict-reject
+          (->ConnectionState :reply req actual fmt strict-reject fenced? false)
+
+          fence-reject
+          (->ConnectionState :reply req actual fmt fence-reject fenced? false)
+
+          subscription?
+          (->ConnectionState :subscribe req (subscription-request req)
+                             fmt nil fenced? false)
+
+          :else
+          (->ConnectionState :handle req actual fmt nil false
+                             (query-request? actual))))
+
+      (= kind :handled)
+      (->ConnectionState :reply (:request state) (:actual state)
+                         (:format state) (:response event)
+                         (:fenced-subscription state) (:query state))
+
+      (= kind :replied)
+      (->ConnectionState :done (:request state) (:actual state)
+                         (:format state) (:response state)
+                         (:fenced-subscription state) (:query state))
+
+      (= kind :eof)
+      (->ConnectionState :done (:request state) (:actual state)
+                         (:format state) (:response state)
+                         (:fenced-subscription state) (:query state))
+
+      :else state)))
+
 (defn serialize-response [fmt :- Any resp :- Any to-json :- Any] :- String
   (if (json-format? fmt)
     (to-json resp)
