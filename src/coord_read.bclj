@@ -88,3 +88,30 @@
       (let [all (get (:idx-by-lp m) [te pid] []) resurrected (filterv (fn [cid :- Int] :- Bool (and (contains? (:superseded m) cid) (withdrawn? ctx cid))) all)]
         (vec (distinct (concat live resurrected))))
       live)))
+
+(defn view-selects [ctx :- (Atom fram.types/Store) view :- String] :- (U (Set Int) Nil)
+  (let [ve (s/resolve-name ctx view) sel (c/value-id ctx "selects")]
+    (if (or (nil? ve) (nil? sel))
+      nil
+      (reduce (fn [acc :- (Set Int) cid :- Int] :- (Set Int) (let [f (c/fact-of ctx cid) r :- Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
+        #{}
+        (c/by-lp ctx ve sel)))))
+
+(defn pool-of [ctx :- (Atom fram.types/Store) view :- String? cids :- (Vec Int)] :- (Vec Int)
+  (if (nil? view)
+    cids
+    (let [sel (view-selects ctx view)]
+      (if (or (nil? sel) (empty? sel))
+        cids
+        (let [in-view (filterv (fn [cid :- Int] :- Bool (contains? sel cid)) cids)]
+          (if (empty? in-view) cids in-view))))))
+
+(defn elect [ctx :- (Atom fram.types/Store) view :- String? cids :- (Vec Int)] :- Int?
+  (if (empty? cids)
+    nil
+    (first (sort-by (fn [cid :- Int] :- (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
+
+(defn elect-causal [ctx :- (Atom fram.types/Store) view :- String? cids :- (Vec Int)] :- Int?
+  (if (empty? cids)
+    nil
+    (first (sort-by (fn [cid :- Int] :- (Vec Any) (causal-key ctx cid)) (pool-of ctx view cids)))))
