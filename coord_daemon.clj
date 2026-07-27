@@ -4093,7 +4093,7 @@
                     ;; store given [module name], so the def is committed FIRST, then checked.
                     ;; A :type reject is INNER-LOOP FEEDBACK, not a transaction abort: the warm
                     ;; store is a scratchpad that tolerates in-progress type errors BY DESIGN
-                    ;; (the whole-tree gate at promotion is authoritative — defcheck_gate.clj
+                    ;; (the whole-tree gate at promotion is authoritative — the graph-authored
                     ;; "authority split"). So we surface the error (agent fixes + re-upserts,
                     ;; replacing by name — idempotent) rather than rolling back, which would cost
                     ;; a full corpus read per write. The commit mechanics stay atomic (OCC).

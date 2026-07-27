@@ -18,9 +18,9 @@ RUN clojure -P
 #   out/                 compiled engine namespaces (classpath, deps.edn :paths)
 #   coord.clj            reified coordinator library (load-file'd)
 #   resolve.clj          resolver (load-file'd, engine root)
-#   defcheck_gate.clj    conditional load (FRAM_DEFCHECK=1)
+#   out/defcheck_gate.clj conditional load (FRAM_DEFCHECK=1)
 COPY out/ out/
-COPY coord.clj coord_daemon.clj resolve.clj defcheck_gate.clj ./
+COPY coord.clj coord_daemon.clj resolve.clj ./
 COPY bin/fram-daemon bin/fram-daemon
 
 # The wire protocol is UNAUTHENTICATED — 0.0.0.0 is safe ONLY because

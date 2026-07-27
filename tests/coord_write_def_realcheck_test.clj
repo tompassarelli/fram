@@ -1,9 +1,9 @@
 ;; ============================================================================
 ;; coord_write_def_realcheck_test.clj — A1×A2 integration: write-def wired to A2's
-;; WARM def-level check (defcheck_gate.clj) via the def-check-hook seam.
+;; WARM graph-authored def-level check via the def-check-hook seam.
 ;; ============================================================================
-;; Boots a code daemon with FRAM_DEFCHECK=1 so serve wires fram.defcheck/check-def
-;; (+ whole-tree-check for :check). Proves the FULL adapter-v2 pipeline: a def that
+;; Boots a code daemon with FRAM_DEFCHECK=1 so serve wires the stateful gate API
+;; (including whole-tree check for :check). Proves the FULL adapter-v2 pipeline: a def that
 ;; mints but does NOT type-check comes back :stage :type with a repair :suggestion;
 ;; a valid def comes back :ok + :deep-check :ran; :check {} runs the whole-tree gate.
 ;;

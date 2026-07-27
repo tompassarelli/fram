@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Byte-for-byte gate for defcheck_gate.clj. Capture MUST run against the
-# original Clojure implementation before any Beagle cut delegates a definition.
+# Byte-for-byte gate for the graph-authored defcheck module. Its committed
+# goldens were captured from the original Clojure implementation before cutover.
 #
 #   tests/defcheck_golden.sh capture tests/goldens/defcheck
 #   tests/defcheck_golden.sh verify  tests/goldens/defcheck
@@ -46,7 +46,7 @@ if [ "$MODE" = capture ]; then
       cp "$WORK/$c.$ext" "$GOLD/$c.$ext"
     done
   done
-  echo "defcheck_golden: captured 2 cases from original defcheck_gate.clj -> $GOLD"
+  echo "defcheck_golden: captured 2 cases from graph-authored defcheck module -> $GOLD"
   exit 0
 fi
 
