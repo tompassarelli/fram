@@ -652,6 +652,10 @@
 ;; Ported into canonical's hand-written idiom from the typed spec-of-record
 ;; (fram-lease/src/fram/coord.bclj); coord_lease_test is the gate.
 (def lease-pred "lease")
+(def ^:dynamic *lease-now-ms*
+  "Host clock seam for lease adapters. Production uses the JVM wall clock;
+  deterministic decision goldens bind an explicit clock."
+  (fn [] (System/currentTimeMillis)))
 (defn- lease-subj [res] (str "@lease:" res))
 (defn- encode-lease [h exp epoch] (str h "|" exp "|" epoch))
 (defn- decode-lease [v]
@@ -693,7 +697,7 @@
 
 (defn acquire-lease! [co holder res ttl-ms]
   (locking (:lock co)
-    (let [now (System/currentTimeMillis)
+    (let [now (*lease-now-ms*)
           cur (read-lease co res)]
       (cond
         (not (valid-lease-request? holder res ttl-ms now))
@@ -713,7 +717,7 @@
   A lapse or takeover is terminal for the caller: renewal never reacquires."
   [co holder res expected-epoch ttl-ms]
   (locking (:lock co)
-    (let [now (System/currentTimeMillis)
+    (let [now (*lease-now-ms*)
           cur (read-lease co res)]
       (cond
         (or (not (valid-lease-request? holder res ttl-ms now))
@@ -754,7 +758,7 @@
   (locking (:lock co)
     (let [cur (read-lease co res)]
       (boolean (and cur (= (:holder cur) holder) (= epoch (:epoch cur))
-                    (> (:exp cur) (System/currentTimeMillis)))))))
+                    (> (:exp cur) (*lease-now-ms*)))))))
 
 (defn with-fence!
   "Execute ACTION only while RES is held by HOLDER at EPOCH. Fence validation
