@@ -1,0 +1,31 @@
+{:contract-version 1
+ :accepted-at "2026-07-28"
+ :accepted-revision "34da6a2"
+ :max-latency-regression-ratio 1.50
+ :min-throughput-retention-ratio 0.67
+ :metrics
+ {:boot-to-serving-ms :lower-is-better
+  :cold-start-query-ms :lower-is-better
+  :write-under-read-ops-s :higher-is-better
+  :mixed-ops-s :higher-is-better}
+ :baselines
+ {["fram" 3000]
+  {:boot-to-serving-ms 546.530
+   :cold-start-query-ms 32.383
+   :write-under-read-ops-s 578.136
+   :mixed-ops-s 62.294}
+  ["fram" 30000]
+  {:boot-to-serving-ms 5907.528
+   :cold-start-query-ms 277.930
+   :write-under-read-ops-s 486.470
+   :mixed-ops-s 5.651}
+  ["sqlite" 3000]
+  {:boot-to-serving-ms 0.624
+   :cold-start-query-ms 1.708
+   :write-under-read-ops-s 1176.131
+   :mixed-ops-s 715.069}
+  ["sqlite" 30000]
+  {:boot-to-serving-ms 0.722
+   :cold-start-query-ms 20.729
+   :write-under-read-ops-s 1203.349
+   :mixed-ops-s 57.256}}}
