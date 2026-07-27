@@ -129,7 +129,9 @@ class Daemon:
             self.process.kill()
             self.process.wait(timeout=5)
             raise AssertionError(f"daemon did not drain on SIGTERM\n{self.diagnostics()}")
-        check(rc == 0, f"daemon exited {rc} on SIGTERM\n{self.diagnostics()}")
+        # HotSpot reports a conventional 128+SIGTERM status after running all
+        # shutdown hooks; systemd classifies that expected signal as clean.
+        check(rc in (0, 143), f"daemon exited {rc} on SIGTERM\n{self.diagnostics()}")
 
 
 def main() -> None:

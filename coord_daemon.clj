@@ -5014,21 +5014,95 @@
     (doto (ServerSocket.) (.setReuseAddress true)
           (.bind (InetSocketAddress. addr (int port))))))
 
+(defn- inherited-listen-fd []
+  (when-let [raw (System/getenv "FRAM_LISTEN_FD")]
+    (let [fd (try
+               (Integer/parseInt raw)
+               (catch Throwable _
+                 (throw (ex-info "FRAM_LISTEN_FD must be an integer descriptor"
+                                 {:fram/listen-fd raw}))))]
+      (when (< fd 3)
+        (throw (ex-info "FRAM_LISTEN_FD must name a non-stdio descriptor"
+                        {:fram/listen-fd fd})))
+      (let [path (java.nio.file.Paths/get
+                  (str "/proc/self/fd/" fd)
+                  (make-array String 0))
+            target (try
+                     (str (java.nio.file.Files/readSymbolicLink path))
+                     (catch Throwable t
+                       (throw (ex-info "FRAM_LISTEN_FD is not open"
+                                       {:fram/listen-fd fd} t))))]
+        (when-not (str/starts-with? target "socket:[")
+          (throw (ex-info "FRAM_LISTEN_FD does not name a socket"
+                          {:fram/listen-fd fd :target target}))))
+      fd)))
+
+(defn- adopt-listen-socket [fd]
+  ;; Java has no public API for adopting an arbitrary systemd descriptor.
+  ;; The daemon launcher opens this one JDK-internal constructor explicitly;
+  ;; keeping it here (rather than in request logic) makes the platform boundary
+  ;; small and fail-closed when the launch flags or JDK shape disagree.
+  (try
+    (let [io-util (Class/forName "sun.nio.ch.IOUtil")
+          new-fd (.getMethod io-util "newFD"
+                             (into-array Class [Integer/TYPE]))
+          descriptor (.invoke new-fd nil (object-array [(int fd)]))
+          channel-class (Class/forName "sun.nio.ch.ServerSocketChannelImpl")
+          ctor (.getDeclaredConstructor
+                channel-class
+                (into-array
+                 Class
+                 [java.nio.channels.spi.SelectorProvider
+                  java.net.ProtocolFamily
+                  java.io.FileDescriptor
+                  Boolean/TYPE]))]
+      (.setAccessible ctor true)
+      (let [channel (.newInstance
+                     ctor
+                     (object-array
+                      [(java.nio.channels.spi.SelectorProvider/provider)
+                       java.net.StandardProtocolFamily/INET
+                       descriptor
+                       Boolean/TRUE]))]
+        (.socket ^java.nio.channels.ServerSocketChannel channel)))
+    (catch Throwable t
+      (throw
+       (ex-info
+        (str "cannot adopt FRAM_LISTEN_FD " fd
+             "; run through bin/fram-daemon with its JDK socket-adoption flags")
+        {:fram/listen-fd fd}
+        t)))))
+
+(defn- open-listen-socket [addr port tls]
+  (if-let [fd (inherited-listen-fd)]
+    (do
+      (when tls
+        (throw
+         (ex-info
+          "FRAM_LISTEN_FD cannot be combined with engine-terminated FRAM_TLS_*"
+          {:fram/listen-fd fd})))
+      {:socket (adopt-listen-socket fd) :inherited? true})
+    {:socket (listen-socket addr port tls) :inherited? false}))
+
 (defn serve [port]
   (let [cfg (bind-cfg)
         addr (:addr cfg) loopback? (:loopback? cfg) label (:label cfg)
         tls (tls-cfg)
-        ss (listen-socket addr port tls)]
+        opened (open-listen-socket addr port tls)
+        ss (:socket opened)
+        inherited? (:inherited? opened)
+        actual-port (.getLocalPort ^ServerSocket ss)]
     (when (and (not loopback?) (not tls))
       (binding [*out* *err*]
-        (println (str "WARNING: coordinator bound to " label ":" port
+        (println (str "WARNING: coordinator bound to " label ":" actual-port
                       " (non-loopback, NO TLS). The wire protocol is UNAUTHENTICATED — it MUST sit "
                       "behind the gateway / a firewall, or set FRAM_TLS_* for mutual TLS; never publish this port."))))
-    (println (str "reified coordinator listening on " label ":" port
+    (println (str "reified coordinator listening on " label ":" actual-port
                   (cond tls " (sole writer, mTLS)"
+                        inherited? " (sole writer, inherited socket)"
                         loopback? " (sole writer, loopback-only)"
                         :else " (sole writer, behind-gateway)")))
-    (maybe-wire-def-check! port)          ; phase 2: wire A2's warm def-level check (FRAM_DEFCHECK=1)
+    (maybe-wire-def-check! actual-port)   ; phase 2: wire A2's warm def-level check (FRAM_DEFCHECK=1)
     (loop [] (let [s (.accept ss)] (future (serve-conn s)) (recur)))))
 
 (defn client [port m]

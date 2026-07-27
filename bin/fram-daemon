@@ -60,9 +60,23 @@ if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
     exit 2
   fi
   cd "$HERE"
-  exec "$FRAM_JAVA" -cp "$daemon_classpath" clojure.main \
+  jvm_args=()
+  if [[ -n "${FRAM_LISTEN_FD:-}" ]]; then
+    jvm_args+=(
+      --add-exports=java.base/sun.nio.ch=ALL-UNNAMED
+      --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+    )
+  fi
+  exec "$FRAM_JAVA" "${jvm_args[@]}" -cp "$daemon_classpath" clojure.main \
     coord_daemon.clj "$mode" "${1:-7977}" "$log_path"
 fi
 
 cd "$HERE"
-exec clojure -M coord_daemon.clj "$mode" "${1:-7977}" "$log_path"
+clojure_jvm_args=()
+if [[ -n "${FRAM_LISTEN_FD:-}" ]]; then
+  clojure_jvm_args+=(
+    -J--add-exports=java.base/sun.nio.ch=ALL-UNNAMED
+    -J--add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+  )
+fi
+exec clojure "${clojure_jvm_args[@]}" -M coord_daemon.clj "$mode" "${1:-7977}" "$log_path"
