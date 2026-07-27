@@ -834,13 +834,26 @@
 (defn warm-facts [] (vec (:facts (warm!))))
 (defn warm-idx [] (:idx (warm!)))
 
+(declare read-logs-merged)
+
 (defn- facts-wire-snapshot []
   (let [v (current-seq @co)
         cc @facts-wire-cache
         triples (if (= v (:version cc))
                   (:triples cc)
-                  (let [ts (mapv (fn [c] [(:l c) (:p c) (:r c)])
-                                 (fold/refold-order (client-view-facts @co)))]
+                  (let [live (client-view-facts @co)
+                        ;; Below nine distinct fold keys Clojure uses an
+                        ;; insertion-ordered PersistentArrayMap. The reified
+                        ;; store does not preserve the flat log's insertion
+                        ;; order, so refolding that view can emit different
+                        ;; bytes from a cold fold. Tiny corpora are cheap to
+                        ;; fold from their authoritative log; real corpora stay
+                        ;; on the warm hash-map-order path.
+                        ordered
+                        (if (and @flat-log (< (count live) 9))
+                          (:facts (fold/fold (read-logs-merged @flat-log)))
+                          (fold/refold-order live))
+                        ts (mapv (fn [c] [(:l c) (:p c) (:r c)]) ordered)]
                     (reset! facts-wire-cache {:version v :triples ts})
                     ts))]
     {:version v :triples triples}))
