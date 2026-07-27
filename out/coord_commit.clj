@@ -40,3 +40,26 @@
   (:cycle intent) {:reject [(str pred " cycle")] :version head-version :at (:index intent) :pred pred}
   (and (not (:single intent)) (expected-value-match? (:live-values intent) (:expected-value intent))) (recur (vec (rest remaining)) writes (conj idempotent pred))
   :else (recur (vec (rest remaining)) (conj writes {:pred pred :kind (:kind intent) :r (:r intent)}) idempotent))))))
+
+(defn ^Boolean lease-expired? [lease now-ms]
+  (if (nil? lease) false (<= (:exp lease) now-ms)))
+
+(defn ^Boolean valid-lease-request? [holder resource ttl-ms now-ms max-ms]
+  (and (string? holder) (not (.isBlank holder)) (not (.contains holder "|")) (string? resource) (not (.isBlank resource)) (integer? ttl-ms) (pos? ttl-ms) (<= ttl-ms (- max-ms now-ms))))
+
+(defn ^Boolean valid-lease-epoch? [epoch max-epoch]
+  (and (integer? epoch) (pos? epoch) (<= epoch max-epoch)))
+
+(defn ^Boolean lease-fence-ok? [lease holder epoch now-ms]
+  (and (not (nil? lease)) (> (:exp lease) now-ms) (= (:holder lease) holder) (= (:epoch lease) epoch)))
+
+(defrecord LeaseSnapshot [holder exp epoch])
+
+(defn leasesnapshot-holder [r] (:holder r))
+
+(defn leasesnapshot-exp [r] (:exp r))
+
+(defn leasesnapshot-epoch [r] (:epoch r))
+
+(defn ^Boolean lease-held? [lease now-ms]
+  (if (nil? lease) false (> (:exp lease) now-ms)))

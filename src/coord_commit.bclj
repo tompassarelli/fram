@@ -59,6 +59,28 @@
             (conj writes {:pred pred :kind (:kind intent) :r (:r intent)})
             idempotent))))))
 
+(defn lease-expired? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
+  (if (nil? lease) false (<= (:exp lease) now-ms)))
+
+(defn valid-lease-request? [holder :- Any resource :- Any ttl-ms :- Any now-ms :- Int max-ms :- Int] :- Bool
+  (and (string? holder)
+    (not (.isBlank holder))
+    (not (.contains holder "|"))
+    (string? resource)
+    (not (.isBlank resource))
+    (integer? ttl-ms)
+    (pos? ttl-ms)
+    (<= ttl-ms (- max-ms now-ms))))
+
+(defn valid-lease-epoch? [epoch :- Any max-epoch :- Int] :- Bool
+  (and (integer? epoch) (pos? epoch) (<= epoch max-epoch)))
+
+(defn lease-fence-ok? [lease :- LeaseSnapshot? holder :- Any epoch :- Any now-ms :- Int] :- Bool
+  (and (not (nil? lease))
+    (> (:exp lease) now-ms)
+    (= (:holder lease) holder)
+    (= (:epoch lease) epoch)))
+
 (defrecord LeaseSnapshot [holder :- String exp :- Int epoch :- Int])
 
 (defn lease-held? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
