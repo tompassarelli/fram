@@ -113,15 +113,16 @@ def main() -> int:
             if len(read_join(cold_reader)) != expected_rows:
                 errors += 1
 
-        stop = threading.Event()
         read_ops = 0
         read_errors = 0
+        start = threading.Barrier(2)
 
         def concurrent_reader() -> None:
             nonlocal read_ops, read_errors
             connection = sqlite3.connect(database, isolation_level=None)
             configure(connection)
-            while not stop.is_set():
+            start.wait()
+            for _ in range(12):
                 if len(read_join(connection)) != expected_rows:
                     read_errors += 1
                 read_ops += 1
@@ -129,8 +130,9 @@ def main() -> int:
 
         reader_thread = threading.Thread(target=concurrent_reader)
         reader_thread.start()
+        start.wait()
         write_start = time.perf_counter_ns()
-        for i in range(120):
+        for i in range(240):
             durable_insert(
                 writer,
                 f"@sustained-{run_id}-{i}",
@@ -138,7 +140,6 @@ def main() -> int:
                 f"value-{i}",
             )
         write_ms = elapsed_ms(write_start)
-        stop.set()
         reader_thread.join()
         errors += read_errors
 
@@ -163,7 +164,7 @@ def main() -> int:
             "boot-to-serving-ms": boot_ms,
             "cold-start-query-ms": cold_ms,
             "cold-query-rows": len(cold_rows),
-            "write-under-read-ops-s": 120.0 / (write_ms / 1000.0),
+            "write-under-read-ops-s": 240.0 / (write_ms / 1000.0),
             "concurrent-read-ops": read_ops,
             "mixed-ops-s": 160.0 / (mixed_ms / 1000.0),
             "mixed-read-p50-ms": statistics.median(mixed_read_latencies),

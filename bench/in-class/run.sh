@@ -46,10 +46,18 @@ for size in "${sizes[@]}"; do
     exit 2
   }
   for run in $(seq 1 "$RUNS"); do
-    for adapter in "${adapters[@]}"; do
-      echo "running adapter=$adapter corpus-triples=$size run=$run" >&2
-      run_adapter "$adapter" "$size" "$run"
-    done
+    if (( run % 2 == 0 )); then
+      for ((index=${#adapters[@]} - 1; index >= 0; index--)); do
+        adapter="${adapters[$index]}"
+        echo "running adapter=$adapter corpus-triples=$size run=$run" >&2
+        run_adapter "$adapter" "$size" "$run"
+      done
+    else
+      for adapter in "${adapters[@]}"; do
+        echo "running adapter=$adapter corpus-triples=$size run=$run" >&2
+        run_adapter "$adapter" "$size" "$run"
+      done
+    fi
   done
 done
 

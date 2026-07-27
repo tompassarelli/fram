@@ -12,8 +12,12 @@
         golden (edn/read-string (slurp golden-path))
         metrics (:metrics golden)
         median (fn [xs]
-                 (let [s (vec (sort xs))]
-                   (nth s (quot (count s) 2))))
+                 (let [s (vec (sort xs))
+                       n (count s)
+                       middle (quot n 2)]
+                   (if (odd? n)
+                     (nth s middle)
+                     (/ (+ (nth s (dec middle)) (nth s middle)) 2.0))))
         current (into {}
                       (for [[key rs] (group-by (juxt :adapter :corpus-triples) rows)]
                         [key (into {} (for [metric (keys metrics)]

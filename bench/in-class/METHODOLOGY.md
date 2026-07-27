@@ -26,8 +26,8 @@ The measured scenarios are:
 
 - boot-to-serving: durable corpus activation through the adapter-ready probe;
 - cold-start query: the first kind/title join before any warmup;
-- sustained writes under concurrent reads: 120 individually durable commits
-  by the sole writer while another reader repeats the join;
+- sustained writes under concurrent reads: 240 individually durable commits
+  by the sole writer while another reader executes exactly 12 joins;
 - mixed read/write: 40 fixed cycles of one durable write followed by three
   joins.
 
