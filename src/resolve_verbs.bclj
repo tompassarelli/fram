@@ -117,7 +117,6 @@
                  BOUND :- Int           ; the durable bound_to predicate id
                  REFERS :- Int          ; the derived refers_to predicate id
                  wrapper-of :- Any      ; (fn [src]) -> the beagle-file wrapper node
-                 wrap-forms :- Any      ; (fn [wrap]) -> [[OrdKey cid child] …], CRDT-ordered
                  form-for-victim :- Any ; (fn [src victim]) -> the top-level form named by `victim`
                  descendants :- Any     ; (fn [root]) -> root + every structural descendant
                  retire :- Any          ; (fn [cid]) -> supersede a fact with no replacement
@@ -366,6 +365,23 @@
       (contains? rc/EXTEND-FORMS head) (str head " " (pr-str (second datum)))
       :else (str (second datum)))))
 
+;; wrap-forms (M1 Cut J) — the wrapper's top-level form edges in CRDT (path,tie)
+;; order: [[OrdKey cid child] …]. Dual-parse (old f<int> + new f<path>~tie) rides in
+;; rc/ord-parse, which returns nil for a non-form edge and so doubles as the filter.
+;; Four verbs (delete, reorder, upsert-form, insert-form) read the wrapper through
+;; it; it was a closure only because the ord algebra used to live in resolve.clj —
+;; rc/ord-parse + rc/ord-cmp are Beagle now, so the shape is the same reduce+sort-by
+;; resolve_render.bclj's ord-edges already uses.
+(defn wrap-forms [v :- Verb parent :- Int] :- Any
+  (let [ctx (:ctx v)
+        rows (reduce (fn [acc :- (Vec Any) cid :- Int] :- (Vec Any)
+                       (let [cl (c/fact-of ctx cid)
+                             pi :- Any (if (nil? cl) nil (get cl :p))
+                             k (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)]
+                         (if (nil? k) acc (conj acc [k cid (get cl :r)]))))
+                     [] (c/by-l ctx parent))]
+    (vec (sort-by (fn [row :- Any] :- Any (nth row 0)) rc/ord-cmp rows))))
+
 ;; ---------------------------------------------------------------------------
 ;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
 ;; EFFECT is a supersede of the wrapper's fN form-edge fact(s) pointing at the
@@ -425,14 +441,13 @@
     ;; SAFE: retire each wrapper fN edge that points at a deleted form root. by-l filters
     ;; superseded facts, so the form drops out of the wrapper's children everywhere.
     (let [wof (:wrapper-of v)
-          wf (:wrap-forms v)
           retire (:retire v)
           emit (:emit v)
           retired (atom 0)]
       (doseq [src :- String srcs]
         (let [wrap (wof src)]
           (when (some? wrap)
-            (doseq [entry :- Any (vec (wf wrap))]
+            (doseq [entry :- Any (vec (wrap-forms v (nn wrap)))]
               (when (contains? all-forms (enode entry))
                 (retire (ecid entry))
                 (swap! retired (fn [n :- Int] :- Int (+ n 1))))))))
@@ -459,7 +474,6 @@
         dbind (:def-binding v)
         ffv (:form-for-victim v)
         wof (:wrapper-of v)
-        wf (:wrap-forms v)
         target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — reorder scope \"" scope "\" matches "
@@ -467,7 +481,7 @@
       (reject 3))
     (let [src (first target-srcs)
           wrap (wof src)
-          forms (vec (wf wrap))
+          forms (vec (wrap-forms v (nn wrap)))
           mover-bind (dbind src name)
           mover-form (when (some? mover-bind) (ffv src mover-bind))
           mover-entry (when (some? mover-form)
@@ -541,11 +555,10 @@
                  "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
       (reject 3))
     (let [wof (:wrapper-of v)
-          wf (:wrap-forms v)
           mint (:mint v)
           src (first target-srcs)
           wrap (wof src)
-          forms (vec (wf wrap))
+          forms (vec (wrap-forms v (nn wrap)))
           disp-name (when (seq? datum) (writable-disp-name datum))
           victim-form (when (seq? datum) (writable-victim v src datum))
           victim-entry (when (some? victim-form)
@@ -585,12 +598,11 @@
       (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
       (reject 3))
     (let [wof (:wrapper-of v)
-          wf (:wrap-forms v)
           dbind (:def-binding v)
           ffv (:form-for-victim v)
           src (first target-srcs)
           wrap (wof src)
-          forms (vec (wf wrap))
+          forms (vec (wrap-forms v (nn wrap)))
           anchor-bind (dbind src after-name)
           anchor-form (when (some? anchor-bind) (ffv src anchor-bind))
           i (nn (when (some? anchor-form)

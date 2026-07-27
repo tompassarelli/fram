@@ -884,12 +884,11 @@
 
 ;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
 ;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
-(defn wrap-forms [parent]
-  (->> (c/by-l ctx parent)
-       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
-                             k (ord-parse (c/literal ctx (:p cl)))]
-                         (when k [k cid (:r cl)]))))
-       (sort-by first ord-cmp) vec))
+;; M1 Cut J: the logic is Beagle (src/resolve_verbs.bclj) — it was a Verb closure
+;; only because the ord algebra used to live here, and rc/ord-parse + rc/ord-cmp
+;; moved in Cut A. This wrapper stays for the ns-qualified surface
+;; (coord_daemon.clj:3975, tests/store_delete_reorder_test.clj).
+(defn wrap-forms [parent] (rvb/wrap-forms (verb-env) parent))
 
 ;; ============================================================================
 ;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
@@ -916,7 +915,7 @@
               out-path
               def-binding file-typeframe file-modframe forms-of module-name
               parse-require capture-refs ultimate
-              BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
+              BOUND REFERS wrapper-of form-for-victim descendants
               retire-fact! re-resolve! @file->ents
               mint-datum! register! scope->srcs fN-facts
               FIXED disambig-payload (fn [code] (System/exit code))))

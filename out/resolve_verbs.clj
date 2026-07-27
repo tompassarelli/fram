@@ -8,7 +8,7 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs fn-facts FIXED disambig exit])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of form-for-victim descendants retire reresolve ents mint register scope-srcs fn-facts FIXED disambig exit])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -61,8 +61,6 @@
 (defn verb-REFERS [r] (:REFERS r))
 
 (defn verb-wrapper-of [r] (:wrapper-of r))
-
-(defn verb-wrap-forms [r] (:wrap-forms r))
 
 (defn verb-form-for-victim [r] (:form-for-victim r))
 
@@ -227,6 +225,14 @@
   (contains? rc/EXTEND-FORMS head) (str head " " (pr-str (second datum)))
   :else (str (second datum)))))
 
+(defn wrap-forms [^Verb v parent]
+  (let [ctx (:ctx v)
+   rows (reduce (fn [acc cid] (let [cl (c/fact-of ctx cid)
+   pi (if (nil? cl) nil (:p cl))
+   k (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)]
+  (if (nil? k) acc (conj acc [k cid (:r cl)])))) [] (c/by-l ctx parent))]
+  (vec (sort-by (fn [row] (nth row 0)) rc/ord-cmp rows))))
+
 (defn verb-delete! [^Verb v ^String name ^String scope]
   (let [ctx (:ctx v)
    view (:view v)
@@ -256,14 +262,13 @@
   (warn (str "  orphan: reference node " o " (`" (rr/sym-val ctx view o) "`)")))
   (reject 6)))
   (let [wof (:wrapper-of v)
-   wf (:wrap-forms v)
    retire (:retire v)
    emit (:emit v)
    retired (atom 0)]
   (doseq [src srcs]
   (let [wrap (wof src)]
   (if (some? wrap) (do
-  (doseq [entry (vec (wf wrap))]
+  (doseq [entry (vec (wrap-forms v (nn wrap)))]
   (if (contains? all-forms (enode entry)) (do
   (retire (ecid entry))
   (swap! retired (fn [n] (+ n 1))))))))))
@@ -280,14 +285,13 @@
    dbind (:def-binding v)
    ffv (:form-for-victim v)
    wof (:wrapper-of v)
-   wf (:wrap-forms v)
    target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
   (if (not= 1 (count target-srcs)) (do
   (warn (str "REJECTED — reorder scope \"" scope "\" matches " (count target-srcs) " files (need 1); no facts mutated."))
   (reject 3)))
   (let [src (first target-srcs)
    wrap (wof src)
-   forms (vec (wf wrap))
+   forms (vec (wrap-forms v (nn wrap)))
    mover-bind (dbind src name)
    mover-form (if (some? mover-bind) (do
   (ffv src mover-bind)))
@@ -343,11 +347,10 @@
   (warn (str "REJECTED — upsert-form spec head `" (first datum) "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
   (reject 3)))
   (let [wof (:wrapper-of v)
-   wf (:wrap-forms v)
    mint (:mint v)
    src (first target-srcs)
    wrap (wof src)
-   forms (vec (wf wrap))
+   forms (vec (wrap-forms v (nn wrap)))
    disp-name (if (seq? datum) (do
   (writable-disp-name datum)))
    victim-form (if (seq? datum) (do
@@ -380,12 +383,11 @@
   (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
   (reject 3)))
   (let [wof (:wrapper-of v)
-   wf (:wrap-forms v)
    dbind (:def-binding v)
    ffv (:form-for-victim v)
    src (first target-srcs)
    wrap (wof src)
-   forms (vec (wf wrap))
+   forms (vec (wrap-forms v (nn wrap)))
    anchor-bind (dbind src after-name)
    anchor-form (if (some? anchor-bind) (do
   (ffv src anchor-bind)))
