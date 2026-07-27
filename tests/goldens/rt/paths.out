@@ -1,0 +1,1 @@
+{:lock "/tmp/.fram.rewrite.lock", :intent "/tmp/.fram.rewrite.intent", :coord-tmp "/tmp/.fram.rewrite.coord.tmp", :telem-tmp "/tmp/.fram.rewrite.telem.tmp", :floor "vGUARD"}

@@ -1,0 +1,25 @@
+----- Error --------------------------------------------------------------------
+Type:     java.time.format.DateTimeParseException
+Message:  Text 'not-a-time' could not be parsed at index 0
+Location: /tmp/rt-golden-run/probe.clj:40:26
+
+----- Context ------------------------------------------------------------------
+36:   "torn" (do (spit fixture "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\"}\n{:tx")
+37:              (emit (mapv #(select-keys % [:tx :op :l :p :r]) (rt/read-log fixture))))
+38:   "iso" (emit {:int [(rt/parse-int "42") (rt/parse-int "x")]
+39:                :seconds [(rt/iso-to-seconds "1970-01-01T00:00:00Z")
+40:                          (rt/iso-to-seconds "not-a-time")]
+                             ^--- Text 'not-a-time' could not be parsed at index 0
+41:                :shapes [(rt/is-iso-datetime-19 "2026-07-27T10:11:12")
+42:                         (rt/is-iso-datetime-16 "2026-07-27T10:11")
+43:                         (rt/is-iso-datetime-19 "bad")]})
+44:   "text" (emit {:digits (rt/filter-digits "vGUARD-019f")
+45:                 :repeat (rt/repeat-str "ab" 3)
+
+----- Stack trace --------------------------------------------------------------
+fram.rt/iso-to-seconds - /tmp/rt-golden-run/fram/rt.clj:1452:1
+user/emit              - /tmp/rt-golden-run/probe.clj:40:26
+user/emit              - /tmp/rt-golden-run/probe.clj:6:1
+user                   - /tmp/rt-golden-run/probe.clj:38:9
+user                   - /tmp/rt-golden-run/probe.clj:7:1
+
