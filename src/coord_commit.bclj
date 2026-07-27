@@ -58,3 +58,8 @@
           (recur (vec (rest remaining))
             (conj writes {:pred pred :kind (:kind intent) :r (:r intent)})
             idempotent))))))
+
+(defrecord LeaseSnapshot [holder :- String exp :- Int epoch :- Int])
+
+(defn lease-held? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
+  (if (nil? lease) false (> (:exp lease) now-ms)))
