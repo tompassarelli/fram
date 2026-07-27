@@ -84,20 +84,20 @@
 (dotimes [_ 10] (checked-query!))
 
 (def sustained
-  (let [start (promise)
+  (let [stop? (atom false)
         reads (atom 0)
         reader (future
-                 @start
-                 (dotimes [_ 12]
+                 (while (not @stop?)
                    (checked-query!)
                    (swap! reads inc)))
-        _ (deliver start true)
         [elapsed _]
-        (ms #(dotimes [i 240]
+        (ms #(dotimes [i 1200]
                (checked-write! (str "@sustained-" run-id "-" i)
                                (str "value-" i))))]
+    (reset! stop? true)
     @reader
-    {:ops-s (/ 240.0 (/ elapsed 1000.0))
+    (when (zero? @reads) (swap! errors inc))
+    {:ops-s (/ 1200.0 (/ elapsed 1000.0))
      :read-ops @reads}))
 
 (def mixed

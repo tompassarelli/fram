@@ -5,8 +5,7 @@
  :workload
  {:warmup-writes 30
   :warmup-reads 10
-  :measured-writes 240
-  :concurrent-reads 12
+  :measured-writes 1200
   :mixed-cycles 40
   :mixed-reads-per-cycle 3}
  :scenarios
