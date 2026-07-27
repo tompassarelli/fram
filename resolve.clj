@@ -1042,7 +1042,7 @@
               parse-require capture-refs ultimate
               BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
               retire-fact! re-resolve! @file->ents
-              mint-datum! register! scope->srcs writable-victim writable-disp-name))
+              mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
@@ -1065,51 +1065,11 @@
   (rvb/verb-insert-comment! (verb-env) scope anchor-name text placement))
 
 
-;; set-body — replace a def/defn's body with a freshly-minted body datum.
-;; Handles BOTH shapes: a defn (`(defn f [params] :- R body…)`), where the body
-;; follows the [param] vector, AND a plain value-def (`(def x :- T val)` /
-;; `defonce`), where the body is the single value form that follows the NAME. The
-;; two are symmetric under `ret?` (an optional `:- T` return/type annotation): the
-;; only difference is the ANCHOR slot the body starts after — the param bracket for
-;; a defn, the name for a value-def. Before, the PARAM-FORMS gate rejected every
-;; js/export-wrapped value-def (map/vector binding) with code 5 (no-victim), so
-;; "add a field to this map" was unauthorable — the duel's F021-F024 failure.
-(defn verb-set-body! [name scope datum]
-  (let [target-srcs (scope->srcs scope)]
-    (when (not= 1 (count target-srcs))
-      (binding [*out* *err*]
-        (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
-                      " source files; set-body needs exactly one (no facts mutated).")))
-      (*reject!* 3))
-    (let [src (first target-srcs)
-          B (def-binding src name)
-          form (when B (form-for-victim src B))
-          d (when form (unwrap-def form))]
-      (when (or (nil? form) (not (VALUE-DEFS (head-sym d))))
-        (binding [*out* *err*]
-          (println (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope
-                        "\" (set-body needs a value binding; no facts mutated).")))
-        (*reject!* 5))
-      (let [kids     (fN-facts d)
-            param?   (PARAM-FORMS (head-sym d))
-            ;; body follows the [param] vector (defn) or the NAME (plain value-def).
-            anchor-n (if param?
-                       (some (fn [[n _ r]] (when (brackets? r) n)) kids)
-                       (some (fn [[n _ r]] (when (= name (sym-val (unwrap-meta r))) n)) kids))
-            ret?     (some (fn [[n _ r]] (and (= n (inc anchor-n)) (TYPE-COLON (sym-val r)))) kids)
-            body-start (+ anchor-n (if ret? 3 1))
-            body-slots (filter (fn [[n _ _]] (>= n body-start)) kids)
-            new-root (mint-datum! src datum)]
-        (when (empty? body-slots)
-          (binding [*out* *err*]
-            (println (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated.")))
-          (*reject!* 5))
-        (doseq [[_ cid _] body-slots] (retire-fact! cid))
-        (c/fact! ctx d (c/value! ctx (str "f" body-start)) new-root tx)
-        (when-not *capture-only?* (re-resolve!))
-        (author-emit-scoped! "set-body"
-                      (str "replaced body of `" name "` in \"" scope "\" ("
-                           (count body-slots) " body slot(s) superseded; new body minted as facts)"))))))
+;; set-body — replace a def/defn's body with a freshly-minted body datum (M1 Cut H;
+;; logic in src/resolve_verbs.bclj). Handles BOTH shapes — a defn, whose body follows
+;; the [param] vector, and a plain value-def, whose body follows the NAME — symmetric
+;; under an optional `:- T` return annotation.
+(defn verb-set-body! [name scope datum] (rvb/verb-set-body! (verb-env) name scope datum))
 
 ;; ============================================================================
 ;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a def,

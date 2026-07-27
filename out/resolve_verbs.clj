@@ -3,9 +3,11 @@
             [fram.types :as t]
             [fram.store :as c]
             [resolve-core :as rc]
-            [resolve-read :as rr]))
+            [resolve-read :as rr]
+            [resolve-binds :as rb]
+            [resolve-modules :as rm]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -80,6 +82,8 @@
 (defn verb-writable-victim [r] (:writable-victim r))
 
 (defn verb-writable-disp-name [r] (:writable-disp-name r))
+
+(defn verb-fn-facts [r] (:fn-facts r))
 
 (defn- ^Boolean upper-first? [^String s]
   (and (> (count s) 0) (let [c (subs s 0 1)]
@@ -394,3 +398,50 @@
   (let [rr! (:reresolve v)]
   (rr!))))
   (emit "insert-comment" (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)"))))))
+
+(defn verb-set-body! [^Verb v ^String name ^String scope datum]
+  (let [ctx (:ctx v)
+   view (:view v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   ssrcs (:scope-srcs v)
+   target-srcs (vec (ssrcs scope))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; set-body needs exactly one (no facts mutated)."))
+  (reject 3)))
+  (let [dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   src (first target-srcs)
+   B (dbind src name)
+   form (if (some? B) (do
+  (ffv src B)))
+   d (if (some? form) (do
+  (rm/unwrap-def ctx view (nn form))))]
+  (if (or (nil? form) (not (contains? rc/VALUE-DEFS (str (rr/head-sym ctx view d))))) (do
+  (warn (str "REJECTED — `" name "` is not a def/defn with a body in \"" scope "\" (set-body needs a value binding; no facts mutated)."))
+  (reject 5)))
+  (let [fnf (:fn-facts v)
+   mint (:mint v)
+   kids (vec (fnf d))
+   param? (contains? rc/PARAM-FORMS (str (rr/head-sym ctx view d)))
+   anchor-n (nn (if param? (some (fn [e] (if (rb/brackets? ctx view (nn (enode e))) (do
+  (ekey e)))) kids) (some (fn [e] (if (= name (rr/sym-val ctx view (rr/unwrap-meta ctx view (nn (enode e))))) (do
+  (ekey e)))) kids)))
+   ret? (some (fn [e] (if (and (= (ekey e) (+ anchor-n 1)) (contains? rc/TYPE-COLON (str (rr/sym-val ctx view (nn (enode e)))))) (do
+  true))) kids)
+   body-start (+ anchor-n (if (some? ret?) 3 1))
+   body-slots (vec (filter (fn [e] (>= (nn (ekey e)) body-start)) kids))
+   new-root (mint src datum)]
+  (if (= 0 (count body-slots)) (do
+  (warn (str "REJECTED — `" name "` has no body fN edges to replace; no facts mutated."))
+  (reject 5)))
+  (let [retire (:retire v)
+   emit (:emit v)]
+  (doseq [e body-slots]
+  (retire (ecid e)))
+  (c/fact! ctx (nn d) (c/value! ctx (str "f" body-start)) (nn new-root) tx)
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (emit "set-body" (str "replaced body of `" name "` in \"" scope "\" (" (count body-slots) " body slot(s) superseded; new body minted as facts)")))))))
