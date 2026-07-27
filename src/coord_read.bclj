@@ -43,3 +43,20 @@
 (defn causal-key [ctx :- (Atom fram.types/Store) cid :- Int] :- (Vec Any)
   (let [obs (observed-of ctx cid)]
     [(if (nil? obs) (seq-of ctx cid) obs) cid (str (agent-of ctx cid))]))
+
+(defn superseded-as-of [ctx :- (Atom fram.types/Store) s :- Int] :- (Set Int)
+  (let [m :- fram.types/Store (deref ctx) sup (:supersedes-pred m)]
+    (reduce (fn [acc :- (Set Int) cid :- Int] :- (Set Int) (let [f (get (:facts m) cid) p :- Any (if (nil? f) nil (get f :p)) r :- Any (if (nil? f) nil (get f :r))] (if (and (= p sup) (<= (seq-of ctx cid) s) (int? r)) (conj acc r) acc)))
+      #{}
+      (vec (keys (:facts m))))))
+
+(defn live-as-of [ctx :- (Atom fram.types/Store) s :- Int] :- (Set Int)
+  (let [m :- fram.types/Store (deref ctx) sup (:supersedes-pred m) gone (superseded-as-of ctx s)]
+    (reduce (fn [acc :- (Set Int) cid :- Int] :- (Set Int) (let [f (get (:facts m) cid) p :- Any (if (nil? f) nil (get f :p))] (if (and (some? f) (<= (seq-of ctx cid) s) (not= p sup) (not (contains? gone cid))) (conj acc cid) acc)))
+      #{}
+      (vec (keys (:facts m))))))
+
+(defn live-as-of-lp [ctx :- (Atom fram.types/Store) s :- Int te :- Int pid :- Int] :- (Vec Int)
+  (let [m :- fram.types/Store (deref ctx) all (live-as-of ctx s)]
+    (filterv (fn [cid :- Int] :- Bool (let [f (get (:facts m) cid)] (and (some? f) (= (get f :l) te) (= (get f :p) pid))))
+      all)))
