@@ -1214,16 +1214,16 @@
   (coord-rt port (log-envelope log req)))
 
 (defn coord-version [port]
-  (try (let [resp (coord-rt port {:op :version})] (or (:version resp) -1))
+  (try (let [resp (coord-rt port {:op :version})] (rtc/coord-version-response resp))
        (catch Exception _ -1)))
 
 (defn coord-version-for-log [port log]
   (try
     (let [resp (coord-request-for-log port log {:op :version})]
-      (cond
-        (integer? (:version resp)) (:version resp)
-        (= :log-mismatch (:code resp)) -2
-        :else -3))
+      (rtc/coord-version-for-log-response resp))
+;;
+;;
+;;
     (catch Exception _ -1)))
 
 (defn- reject-message [rejection]
@@ -1274,28 +1274,28 @@
 (defn coord-status-for-log [port log]
   (try
     (let [r (coord-request-for-log port log {:op :status})]
-      (cond
-        (integer? (:version r))
-        ;; Keep this exact first-line contract: North's lifecycle probe accepts
-        ;; only coordinator UP + an integer version.
-        (str "coordinator UP on 127.0.0.1:" port " (v" (:version r) ")")
-
-        (= :log-mismatch (:code r))
-        (str "coordinator WRONG LOG on 127.0.0.1:" port
-             " — expected " (:expected-log r)
-             "; daemon serves " (:served-log r)
-             "; refusing fenced reads and writes")
-
-        (= "unknown op" (:error r))
-        (str "coordinator INCOMPATIBLE on 127.0.0.1:" port
-             " — daemon lacks required log-fence protocol; restart it with current Fram")
-
-        :else
-        (str "coordinator UNUSABLE on 127.0.0.1:" port
-             " — " (pr-str r))))
+      (rtc/coord-status-response port r))
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
     (catch Exception _
-      (str "coordinator DOWN on 127.0.0.1:" port
-           " — start it with bin/fram-up"))))
+      (rtc/coord-status-down port))))
+;;
+;;
+;;
 
 ;; warm READ ops — served off the daemon's in-memory warm store / index, avoiding the
 ;; COLD full-log fold the MCP/CLI read path pays per request (interface investigation
@@ -1307,14 +1307,14 @@
 ;; rewrite (no fN ordering touched).
 (defn warm-read [port req]
   (try (let [r (coord-rt port req)]
-         (when-not (and (map? r) (= "unknown op" (:error r))) r))
+         (rtc/warm-read-response r))
        (catch Exception _ nil)))
 (defn warm-read-for-log [port log req]
   (try
     (let [r (coord-request-for-log port log req)]
-      (when-not (or (= "unknown op" (:error r))
-                    (contains? r :reject))
-        r))
+      (rtc/warm-read-for-log-response r))
+;;
+;;
     (catch Exception _ nil)))
 (defn coord-query    [port q]       (warm-read port {:op :query :query q}))   ; -> q/run envelope | nil
 (defn coord-query-page

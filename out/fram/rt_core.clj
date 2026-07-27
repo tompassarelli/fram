@@ -105,3 +105,29 @@
   (= "unknown op" (:error resp)) "protocol-incompatible"
   (:reject resp) (str "reject:" (reject-message (:reject resp)))
   :else (str "error:" (pr-str resp))))
+
+(defn coord-version-response [resp]
+  (let [version (:version resp)]
+  (if (integer? version) version -1)))
+
+(defn coord-version-for-log-response [resp]
+  (cond
+  (integer? (:version resp)) (:version resp)
+  (= :log-mismatch (:code resp)) -2
+  :else -3))
+
+(defn ^String coord-status-response [port resp]
+  (cond
+  (integer? (:version resp)) (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
+  (= :log-mismatch (:code resp)) (str "coordinator WRONG LOG on 127.0.0.1:" port " — expected " (:expected-log resp) "; daemon serves " (:served-log resp) "; refusing fenced reads and writes")
+  (= "unknown op" (:error resp)) (str "coordinator INCOMPATIBLE on 127.0.0.1:" port " — daemon lacks required log-fence protocol; restart it with current Fram")
+  :else (str "coordinator UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
+
+(defn ^String coord-status-down [port]
+  (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
+
+(defn warm-read-response [resp]
+  (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
+
+(defn warm-read-for-log-response [resp]
+  (if (or (= "unknown op" (:error resp)) (contains? resp :reject)) nil resp))
