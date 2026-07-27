@@ -89,3 +89,19 @@
   (and (some? new-sha1) (= new-sha1 live-line1-sha)) :roll-forward
   (and (some? old-bytes) (some? old-sha) (= old-sha live-prefix-sha)) :roll-back
   :else (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
+
+(defn log-envelope [^String canonical-log req]
+  (let [base {:op :for-log :expected-log canonical-log :request req}]
+  (if (contains? req :fmt) (assoc base :fmt (:fmt req)) base)))
+
+(defn ^String reject-message [rejection]
+  (if (sequential? rejection) (str/join "; " (map str rejection)) (str rejection)))
+
+(defn ^String coord-write-response [resp]
+  (cond
+  (:ok resp) (str "ok:" (:ok resp))
+  (= (:reject resp) :conflict) "conflict"
+  (= (:code resp) :log-mismatch) (str "log-mismatch: expected " (:expected-log resp) "; daemon serves " (:served-log resp))
+  (= "unknown op" (:error resp)) "protocol-incompatible"
+  (:reject resp) (str "reject:" (reject-message (:reject resp)))
+  :else (str "error:" (pr-str resp))))

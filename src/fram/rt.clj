@@ -1205,10 +1205,10 @@
   (.getCanonicalPath (io/file path)))
 
 (defn- log-envelope [log req]
-  (cond-> {:op :for-log
-           :expected-log (canonical-log-path log)
-           :request req}
-    (contains? req :fmt) (assoc :fmt (:fmt req))))
+  (rtc/log-envelope (canonical-log-path log) req))
+;;
+;;
+;;
 
 (defn coord-request-for-log [port log req]
   (coord-rt port (log-envelope log req)))
@@ -1227,20 +1227,20 @@
     (catch Exception _ -1)))
 
 (defn- reject-message [rejection]
-  (if (sequential? rejection)
-    (str/join "; " (map str rejection))
-    (str rejection)))
+  (rtc/reject-message rejection))
+;;
+;;
 
 (defn- coord-write-response [resp]
-  (cond
-    (:ok resp) (str "ok:" (:ok resp))
-    (= (:reject resp) :conflict) "conflict"
-    (= (:code resp) :log-mismatch)
-    (str "log-mismatch: expected " (:expected-log resp)
-         "; daemon serves " (:served-log resp))
-    (= "unknown op" (:error resp)) "protocol-incompatible"
-    (:reject resp) (str "reject:" (reject-message (:reject resp)))
-    :else (str "error:" (pr-str resp))))
+  (rtc/coord-write-response resp))
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
 
 (defn- coord-write [op port te pred value base]
   (try
