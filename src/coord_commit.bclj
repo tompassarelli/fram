@@ -139,3 +139,16 @@
   (if (and (not (nil? lease)) (= (:holder lease) holder) (or (not require-epoch) (= (:epoch lease) epoch)))
     {:retract true}
     {:ok version :noop true}))
+
+(defrecord GroupFlushPolicy [min-items :- Int drain-limit :- Int])
+
+(defn group-flush-policy [pending-count :- Int] :- GroupFlushPolicy
+  (->GroupFlushPolicy 1 (max 0 pending-count)))
+
+(defn group-flush-ready? [policy :- GroupFlushPolicy batch-count :- Int] :- Bool
+  (>= batch-count (:min-items policy)))
+
+(defn queue-admission-decision [deferred :- Bool] :- Keyword
+  (if deferred :defer :await))
+
+(defn group-lock-order [] :- (Vec Keyword) [:group-io :append-admission])

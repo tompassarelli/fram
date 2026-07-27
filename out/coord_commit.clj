@@ -102,3 +102,21 @@
 
 ^{:line 138 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn lease-release-decision [lease holder epoch ^Boolean require-epoch version]
   ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (if ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (and ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (not ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (nil? lease)) ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (= ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (:holder lease) holder) ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (or ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (not require-epoch) ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (= ^{:line 139 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (:epoch lease) epoch))) ^{:line 140 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} {:retract true} ^{:line 141 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} {:ok version :noop true}))
+
+^{:line 143 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defrecord GroupFlushPolicy [min-items drain-limit])
+
+(defn groupflushpolicy-min-items [r] (:min-items r))
+
+(defn groupflushpolicy-drain-limit [r] (:drain-limit r))
+
+^{:line 145 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn ^GroupFlushPolicy group-flush-policy [pending-count]
+  ^{:line 146 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (->GroupFlushPolicy 1 ^{:line 146 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (max 0 pending-count)))
+
+^{:line 148 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn ^Boolean group-flush-ready? [^GroupFlushPolicy policy batch-count]
+  ^{:line 149 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (>= batch-count ^{:line 149 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (:min-items policy)))
+
+^{:line 151 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn queue-admission-decision [^Boolean deferred]
+  ^{:line 152 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (if deferred :defer :await))
+
+^{:line 154 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn group-lock-order []
+  ^{:line 154 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} [:group-io :append-admission])
