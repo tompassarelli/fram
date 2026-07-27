@@ -23,3 +23,38 @@
   (if (nil? expected-value) false (contains? live-values expected-value)))
 
 (defrecord CommitIntent [index :- Int pred :- String kind :- Keyword r :- String single :- Bool base-version :- Int expected-version :- Int? live-values :- (Set Int) expected-value :- Int? cycle :- Bool])
+
+(defn commit-plan [head-version :- Int intents :- (Vec CommitIntent)] :- (Map Keyword Any)
+  (loop [remaining :- (Vec CommitIntent) intents writes :- (Vec Any) [] idempotent :- (Vec String) []]
+    (if (empty? remaining)
+      {:writes writes :idempotent idempotent}
+      (let [intent :- CommitIntent (first remaining) pred (:pred intent)]
+        (cond
+          (version-conflict? (:single intent)
+            (:base-version intent)
+            (:expected-version intent))
+          {:reject
+           :conflict
+           :version
+           head-version
+           :at
+           (:index intent)
+           :pred
+           pred}
+          (:cycle intent)
+          {:reject
+           [(str pred " cycle")]
+           :version
+           head-version
+           :at
+           (:index intent)
+           :pred
+           pred}
+          (and (not (:single intent))
+            (expected-value-match? (:live-values intent)
+              (:expected-value intent)))
+          (recur (vec (rest remaining)) writes (conj idempotent pred))
+          :else
+          (recur (vec (rest remaining))
+            (conj writes {:pred pred :kind (:kind intent) :r (:r intent)})
+            idempotent))))))
