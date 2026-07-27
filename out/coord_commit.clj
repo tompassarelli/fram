@@ -63,3 +63,9 @@
 
 (defn ^Boolean lease-held? [lease now-ms]
   (if (nil? lease) false (> (:exp lease) now-ms)))
+
+(defn lease-grant-decision [lease holder resource ttl-ms now-ms max-ms version]
+  (cond
+  (not (valid-lease-request? holder resource ttl-ms now-ms max-ms)) {:reject :invalid-lease-request :version version}
+  (and (lease-held? lease now-ms) (not= (:holder lease) holder)) {:reject :held :holder (:holder lease) :exp (:exp lease) :version version}
+  :else {:persist true}))

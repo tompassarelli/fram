@@ -85,3 +85,12 @@
 
 (defn lease-held? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
   (if (nil? lease) false (> (:exp lease) now-ms)))
+
+(defn lease-grant-decision [lease :- LeaseSnapshot? holder :- Any resource :- Any ttl-ms :- Any now-ms :- Int max-ms :- Int version :- Int] :- (Map Keyword Any)
+  (cond
+    (not (valid-lease-request? holder resource ttl-ms now-ms max-ms))
+    {:reject :invalid-lease-request :version version}
+    (and (lease-held? lease now-ms) (not= (:holder lease) holder))
+    {:reject :held :holder (:holder lease) :exp (:exp lease) :version version}
+    :else
+    {:persist true}))
