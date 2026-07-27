@@ -11,27 +11,17 @@
 (load-file "resolve.clj")
 (alias 'r 'resolve)
 
-(def RT (or (System/getenv "FRAM_ROUNDTRIP")
-            (str (System/getenv "HOME") "/code/beagle/beagle-lib/private/facts-roundtrip.rkt")))
-(when-not (.exists (io/file RT))
-  (println "SKIP — missing prerequisite: facts-roundtrip.rkt (" RT ")") (System/exit 0))
-(def beagle-home (or (System/getenv "BEAGLE_HOME") (str (System/getenv "HOME") "/code/beagle")))
-;; Pinned racket, the way bin/fram-ingest-code resolves it (FRAM_RACKET, else
-;; the beagle direnv): bare `racket` is the stale-bytecode trap — an ambient
-;; binary mismatches beagle's compiled .zo. No pin => SKIP (CI has no toolchain).
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [p (try (str/trim (:out (sh {:out :string :err :string}
-                                       "direnv" "exec" beagle-home "which" "racket")))
-                   (catch Throwable _ ""))]
-        (when-not (str/blank? p) p))))
-(when-not racket-bin
-  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")
+                     (str (System/getenv "HOME") "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
+(when-not (.canExecute (io/file beagle-bin))
+  (println "SKIP — missing prerequisite: Beagle CLI (" beagle-bin ")")
   (System/exit 0))
 (def work (str (System/getProperty "java.io.tmpdir") "/replace-in-body-test-" (System/nanoTime)))
 (.mkdirs (io/file work))
 (def edn-path (str work "/schema.edn"))
-(let [rr (sh {:out (io/file edn-path) :err :string} racket-bin RT "--emit-edn"
+(let [rr (sh {:out (io/file edn-path) :err :string}
+             beagle-bin "facts-roundtrip" "--emit-edn"
              (str (System/getProperty "user.dir") "/src/fram/schema.bclj"))]
   (when-not (zero? (:exit rr)) (println "emit-edn failed:" (:err rr)) (System/exit 1)))
 

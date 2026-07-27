@@ -16,6 +16,7 @@
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
 (def home (System/getProperty "user.home"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def racket-bin
   (or (System/getenv "FRAM_RACKET")
       (let [r (try (p/sh {:out :string :err :string}
@@ -24,7 +25,7 @@
         (when (and r (zero? (:exit r))) (str/trim (:out r))))))
 
 (when (or (str/blank? racket-bin)
-          (not (.exists (io/file (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))))
+          (not (.canExecute (io/file beagle-bin))))
   (println "SKIP — the flake-pinned Beagle/Racket toolchain is unavailable")
   (System/exit 0))
 
@@ -59,7 +60,7 @@
    "FRAM_OUT" (str root "/out")
    "FRAM_BIN" (str root "/bin")
    "FRAM_RESOLVE" (str root "/resolve.clj")
-   "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
+   "FRAM_BEAGLE" beagle-bin
    "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")
    "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")})
 

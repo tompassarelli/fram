@@ -25,7 +25,7 @@
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
+               "FRAM_BEAGLE" (str beagle-home "/bin/beagle")
                "FRAM_RESOLVE" (str root "/resolve.clj")})
 
 ;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —

@@ -43,28 +43,12 @@
        (filter #(ast-pred? (second %)))
        set))
 
-;; FRAM_RACKET overrides; else the beagle direnv. No pin => SKIP rather than
-;; throw: CI runners carry no racket/direnv toolchain (and bare racket would
-;; mismatch beagle's compiled .zo bytecode anyway).
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [beagle-home (or (System/getenv "BEAGLE_HOME")
-                            (str (System/getProperty "user.home") "/code/beagle"))
-            r (try (proc/sh {:out :string :err :string}
-                            "direnv" "exec" beagle-home "which" "racket")
-                   (catch Throwable _ nil))]
-        (when (and r (zero? (:exit r)) (not (str/blank? (:out r))))
-          (str/trim (:out r))))
-      (do (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
-          (System/exit 0))))
-
-(def roundtrip-rkt
-  (or (System/getenv "FRAM_ROUNDTRIP")
-      (str (or (System/getenv "BEAGLE_HOME")
-               (str (System/getProperty "user.home") "/code/beagle"))
-           "/beagle-lib/private/facts-roundtrip.rkt")))
-(when-not (.exists (io/file roundtrip-rkt))
-  (println "SKIP — missing prerequisite: facts-roundtrip.rkt (" roundtrip-rkt ")")
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")
+                     (str (System/getProperty "user.home") "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE")
+                    (str beagle-home "/bin/beagle")))
+(when-not (.canExecute (io/file beagle-bin))
+  (println "SKIP — missing prerequisite: Beagle CLI (" beagle-bin ")")
   (System/exit 0))
 
 (def constrained-scan
@@ -83,12 +67,12 @@
 (try
   (spit rendered-edn (:edn module-render))
   (let [rendered (proc/sh {:out :string :err :string}
-                          racket-bin roundtrip-rkt "--render" (str rendered-edn))]
+                          beagle-bin "facts-roundtrip" "--render" (str rendered-edn))]
     (check! "module render converts back to Beagle" (zero? (:exit rendered)))
     (when (zero? (:exit rendered))
       (spit rendered-bclj (:out rendered))
       (let [emitted (proc/sh {:out :string :err :string}
-                             racket-bin roundtrip-rkt "--emit-edn"
+                             beagle-bin "facts-roundtrip" "--emit-edn"
                              (str rendered-bclj))
             scan-ast (module-ast (:ok full-scan))
             render-ast (emitted-module-ast (:out emitted))]

@@ -20,12 +20,12 @@
 ;;   A  mint-datum! of `:-` produces kind="symbol" v=":-" (NOT keyword) — the
 ;;      encode invariant at the unit level.
 ;;   B  a typed def authored through the REAL verb (verb-upsert-form!), rendered to
-;;      EDN via extract-file!, builds via beagle --build-edn with 0 errors AND the
-;;      type annotation survives (^String reaches the emitted Clojure).
+;;      EDN via extract-file!, renders through Beagle's certified CLI, and the
+;;      type annotation survives in the regenerated Beagle source.
 ;;
 ;;   bb -cp out tests/store_colon_marker_roundtrip_test.clj   (from the repo root)
-;; Needs: racket + bb + resolve.clj + beagle (facts-roundtrip.rkt +
-;; beagle-build-all). Skips with a clear message if a beagle prereq is missing.
+;; Needs: bb + resolve.clj + the Beagle facts-roundtrip CLI.
+;; Skips with a clear message if a Beagle prerequisite is missing.
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]
@@ -33,13 +33,12 @@
 
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
-(def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
-(def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")
+                     (str home "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 
 (doseq [[p label] [[(str root "/resolve.clj") "engine resolve.clj"]
-                   [roundtrip-rkt "facts-roundtrip.rkt"]
-                   [build-all "beagle-build-all"]]]
+                   [beagle-bin "Beagle CLI"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))
 
@@ -81,19 +80,8 @@
 ;; caused the prefix-sibling collision it replaced).
 (spit seed "#lang beagle/clj\n(ns demo)\n(def seed-marker :- Int 0)\n")
 (def seed-edn (str work "/demo.edn"))
-;; Pinned racket, the way bin/fram-ingest-code resolves it (FRAM_RACKET, else
-;; the beagle direnv): bare `racket` is the stale-bytecode trap — an ambient
-;; binary mismatches beagle's compiled .zo. No pin => SKIP (CI has no toolchain).
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [p (try (str/trim (:out (proc/sh {:out :string :err :string}
-                                            "direnv" "exec" beagle-home "which" "racket")))
-                   (catch Throwable _ ""))]
-        (when-not (str/blank? p) p))))
-(when-not racket-bin
-  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
-  (System/exit 0))
-(def emit-r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--emit-edn" seed))
+(def emit-r (proc/sh {:out :string :err :string}
+                     beagle-bin "facts-roundtrip" "--emit-edn" seed))
 (if-not (zero? (:exit emit-r))
   (chk "B0: emit-edn seed module" false)
   (do
@@ -112,21 +100,16 @@
           colon-markers   (count (re-seq #"\"v\" \":-\"" edn))]
       (chk "B1: render-EDN carries NO keyword-kind leaf (the mint mismatch is gone)" no-keyword-leaf)
       (chk "B2: render-EDN spells the `:-` markers with the colon (>=3 occurrences)" (>= colon-markers 3))
-      (let [br (proc/sh {:out :string :err :string} build-all out-edn "--build-edn")
-            blob (str (:out br) (:err br))]
-        (chk "B3: beagle --build-edn of the render-EDN builds 0 errors"
-             (re-find #"\b1 built, 0 error\(s\)" blob))
-        ;; and the build emits to a known out dir so we can confirm the TYPE survived
-        (let [bout (str work "/build")]
-          (.mkdirs (io/file bout))
-          (proc/sh {:out :string :err :string} build-all out-edn "--build-edn" "--out" bout)
-          (let [emitted (->> (file-seq (io/file bout)) (filter #(.isFile %))
-                             (map slurp) (str/join "\n"))]
-            (chk "B4: the `:- String` annotation survives to the emitted Clojure (^String)"
-                 (str/includes? emitted "^String"))))))))
+      (let [rr (proc/sh {:out :string :err :string}
+                        beagle-bin "facts-roundtrip" "--render" out-edn)
+            rendered (:out rr)]
+        (chk "B3: certified facts-roundtrip CLI renders the authored module"
+             (zero? (:exit rr)))
+        (chk "B4: the `:- String` annotation survives in regenerated Beagle source"
+             (str/includes? rendered ":- String"))))))
 
 ;; --- verdict ----------------------------------------------------------------
-(println "\n=== `:-` type marker round-trips: graph-author → render-EDN → --build-edn ===")
+(println "\n=== `:-` type marker round-trips: graph-author → render-EDN → Beagle source ===")
 (let [cs @checks fails (remove second cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)

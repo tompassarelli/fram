@@ -20,8 +20,8 @@
 ;;      block (the -pr-writer-into-schema print-method shape) writes + renders.
 ;;
 ;;   clojure -M tests/coord_proto_upsert_test.clj > /tmp/proto.out 2>&1; echo EXIT=$?
-;;   (needs the BEAGLE_HOME / FRAM_RACKET pin for the racket render leg; without a
-;;    resolvable racket the render assertions SKIP loudly, write/index still run.)
+;;   (needs BEAGLE_HOME / FRAM_BEAGLE for the render leg; without a Beagle CLI
+;;    the render assertions SKIP loudly, write/index still run.)
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io] '[clojure.java.shell :as sh])
 
@@ -60,24 +60,19 @@
 (defn- idx [module]        (client port {:op :index     :spec {:module module}}))
 (defn- names [module]      (mapv :name (:defs (idx module))))
 
-;; render leg: :render returns resolved EDN; racket facts-roundtrip inverts it to
-;; Clojure text. Resolve racket the way fram-ingest-code does (FRAM_RACKET, else
-;; direnv, else bare) so a missing pin SKIPS the render assertions rather than lying.
-(def racket
-  (or (System/getenv "FRAM_RACKET")
-      (let [bh (or (System/getenv "BEAGLE_HOME") (str (System/getProperty "user.home") "/code/beagle"))
-            p  (try (str/trim (:out (sh/sh "direnv" "exec" bh "which" "racket"))) (catch Throwable _ ""))]
-        (when-not (str/blank? p) p))))
-(def roundtrip-rkt
-  (str (or (System/getenv "BEAGLE_HOME") (str (System/getProperty "user.home") "/code/beagle"))
-       "/beagle-lib/private/facts-roundtrip.rkt"))
+;; render leg: :render returns resolved EDN; the public facts-roundtrip CLI
+;; inverts it to Clojure text.
+(def beagle-home
+  (or (System/getenv "BEAGLE_HOME")
+      (str (System/getProperty "user.home") "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (defn- render-text [module]
   (let [resp (client port {:op :render :spec {:module module} :module module})
         edn  (:edn resp)]
-    (when (and racket edn (.exists (io/file roundtrip-rkt)))
+    (when (and edn (.canExecute (io/file beagle-bin)))
       (let [ef (str (System/getProperty "java.io.tmpdir") "/proto-render-" (System/nanoTime) ".edn")]
         (spit ef edn)
-        (let [{:keys [exit out err]} (sh/sh racket roundtrip-rkt "--render" ef)]
+        (let [{:keys [exit out err]} (sh/sh beagle-bin "facts-roundtrip" "--render" ef)]
           (when (zero? exit) out))))))
 
 (def RP "ring.core.protocols")
@@ -140,7 +135,7 @@
                   true)
                 (catch Throwable t (str t)))
            "render did not parse"))
-  (check "RENDER SKIPPED (no racket pin) — write/index asserts still ran" true "set FRAM_RACKET/BEAGLE_HOME to run the render leg"))
+  (check "RENDER SKIPPED (no Beagle CLI) — write/index asserts still ran" true "set FRAM_BEAGLE/BEAGLE_HOME to run the render leg"))
 
 ;; -----------------------------------------------------------------------------
 (println "\n=== (3) MALLI-05 CLASS: extend-type IPrintWithWriter (-pr-writer / -write) ===")

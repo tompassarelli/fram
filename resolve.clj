@@ -507,7 +507,7 @@
 
 ;; ============================================================================
 ;; AUTHORING — mint a NEW datum subtree into the SAME fact store (the inverse of
-;; facts-roundtrip.rkt's datum->facts). This is what makes add-def / set-body a
+;; facts-roundtrip's datum->facts projection). This is what makes add-def / set-body a
 ;; FACT OPERATION, not a text splice: a Clojure EDN datum (the structured edit
 ;; spec the agent emits, e.g. `(defn add-two [x :- Int] :- Int (+ x 2))`) is walked
 ;; into fresh entities carrying `kind`/`v`/`fN` facts — exactly the reader-datum

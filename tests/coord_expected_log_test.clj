@@ -193,11 +193,11 @@
           body-file (io/file dir "body.edn")
           _ (spit body-file "(+ 1 2)")
           edit-helper
-          ;; FRAM_RACKET is spoofed so the helper reaches the daemon on a
+          ;; FRAM_BEAGLE is spoofed so the helper reaches the daemon on a
           ;; runner with no Beagle toolchain: this bar asserts the LOG FENCE
-          ;; rejection, which the daemon issues before any racket work.
+          ;; rejection, which the daemon issues before any render work.
           (run-command
-           {"FRAM_RACKET" "/bin/true"}
+           {"FRAM_BEAGLE" "/bin/true"}
            "bb" "-cp" "out" "bin/fram-edit-code"
            "set-body" "missing" "--name" "missing"
            "--body-file" (.getPath body-file)
@@ -444,20 +444,19 @@
               _ (spit body-file "(+ 1 2)")
               _ (spit author-file
                       "[{:op \"set-body\" :module \"missing\" :name \"missing\" :body (+ 1 2)}]")
-              ;; FRAM_RACKET + FRAM_ROUNDTRIP are spoofed so both helpers get
-              ;; past their toolchain preflight (fram-render-code dies on a
-              ;; missing facts-roundtrip.rkt before contacting the daemon) on a
-              ;; runner with no Beagle toolchain. Neither bar reaches racket:
+              ;; FRAM_BEAGLE is spoofed so both helpers get past their
+              ;; toolchain preflight on a runner with no Beagle checkout.
+              ;; Neither bar reaches the roundtrip CLI:
               ;; "missing" has no module (render) / the log fence rejects (edit).
               render-helper
               (run-command
-               {"FRAM_RACKET" "/bin/true" "FRAM_ROUNDTRIP" "/dev/null"}
+               {"FRAM_BEAGLE" "/bin/true"}
                "bb" "-cp" "out" "bin/fram-render-code"
                "missing" "--port" (str strict-port)
                "--log" (.getPath strict-a))
               edit-helper
               (run-command
-               {"FRAM_RACKET" "/bin/true"}
+               {"FRAM_BEAGLE" "/bin/true"}
                "bb" "-cp" "out" "bin/fram-edit-code"
                "set-body" "missing" "--name" "missing"
                "--body-file" (.getPath body-file)

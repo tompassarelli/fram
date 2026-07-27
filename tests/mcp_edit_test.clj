@@ -22,7 +22,7 @@
 ;;       diagnostic, and the .bclj is BYTE-UNCHANGED (fail-closed on the build gate).
 ;;
 ;;   bb mcp_edit_test.clj      (run from the fram repo root)
-;; Needs: racket + bb + out/ + resolve.clj + beagle (facts-roundtrip
+;; Needs: bb + out/ + resolve.clj + Beagle (facts-roundtrip CLI
 ;; + beagle-build-all). Skips with a clear message if a prerequisite is missing.
 (require '[babashka.process :as p] '[cheshire.core :as json]
          '[clojure.string :as str] '[clojure.java.io :as io])
@@ -32,9 +32,10 @@
 
 (def home (System/getProperty "user.home"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def root (System/getProperty "user.dir"))
 (def needed
-  [[(str beagle-home "/beagle-lib/private/facts-roundtrip.rkt") "facts-roundtrip.rkt"]
+  [[beagle-bin "Beagle CLI"]
    [(str beagle-home "/bin/beagle-build-all") "beagle-build-all"]
    [(str root "/resolve.clj") "engine resolve.clj"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
@@ -59,7 +60,7 @@
    "FRAM_OUT" (str root "/out")
    "FRAM_RESOLVE" (str root "/resolve.clj")
    "BEAGLE_HOME" beagle-home
-   "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")
+   "FRAM_BEAGLE" beagle-bin
    "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")})
 
 ;; run one tools/call through a FRESH server process; return the parsed reply for id.

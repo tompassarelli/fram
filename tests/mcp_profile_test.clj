@@ -25,7 +25,7 @@
 ;;
 ;;   bb -cp out tests/mcp_profile_test.clj      (run from the repo root)
 ;; Needs: bb + out/. Parts C-E boot throwaway coordinators (clojure JVM).
-;; Part E additionally needs racket + beagle (facts-roundtrip / facts-check-emit)
+;; Part E additionally needs Beagle plus the Racket-backed facts-check-emit gate
 ;; and SKIPS with a message when absent.
 (require '[babashka.process :as p] '[cheshire.core :as json]
          '[clojure.string :as str] '[clojure.java.io :as io])
@@ -52,10 +52,10 @@
   (spit f "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n"))
 
 ;; --- part E prerequisites (real graph edit) ----------------------------------
-(def roundtrip (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt"))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def check-emit (str beagle-home "/beagle-lib/private/facts-check-emit.rkt"))
 (def schema-module (str root "/src/fram/schema.bclj"))
-(def beagle-ok? (every? #(.exists (io/file %)) [roundtrip check-emit schema-module]))
+(def beagle-ok? (every? #(.exists (io/file %)) [beagle-bin check-emit schema-module]))
 
 ;; the code log the daemons serve: a REAL ingested module when beagle is present
 ;; (so part E can edit it), else a tiny synthetic log (parts A-D need no module).
@@ -115,7 +115,7 @@
           "FRAM_OUT" (str root "/out") "FRAM_BIN" (str root "/bin")
           "FRAM_RESOLVE" (str root "/resolve.clj")
           "BEAGLE_HOME" beagle-home
-          "FRAM_ROUNDTRIP" roundtrip "FRAM_CHECK_EMIT" check-emit
+          "FRAM_BEAGLE" beagle-bin "FRAM_CHECK_EMIT" check-emit
           "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")}))
 
 (defn run-mcp [env reqs]

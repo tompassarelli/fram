@@ -8,12 +8,12 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 (def code-log (str root "/.fram/code.log"))
-(def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out") "FRAM_ROUNDTRIP" roundtrip-rkt
+(def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out") "FRAM_BEAGLE" beagle-bin
                "FRAM_RESOLVE" (str root "/resolve.clj")})
-(doseq [p [code-log roundtrip-rkt]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
+(doseq [p [code-log beagle-bin]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
 (binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-rename-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))

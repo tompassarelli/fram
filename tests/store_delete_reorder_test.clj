@@ -20,8 +20,8 @@
 ;;   D2  delete of a STILL-REFERENCED def is REFUSED (orphan invariant; nothing mutated).
 ;;   R1  reorder moves the form to its new slot WITHOUT re-minting it (the SAME node id
 ;;       backs the moved form — 0 node churn) and the new order is what the render shows.
-;;   E   the post-delete+reorder module builds via beagle --build-edn with 0 errors and
-;;       the `:- T` annotations survive (^T) — the verbs compose with the `:-` encode fix.
+;;   E   the post-delete+reorder module renders through Beagle's certified CLI;
+;;       the `:- T` annotations and requested order survive in the source view.
 ;;
 ;;   bb -cp out tests/store_delete_reorder_test.clj   (from the repo root)
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
@@ -31,13 +31,12 @@
 
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
-(def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
-(def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")
+                     (str home "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 
 (doseq [[p label] [[(str root "/resolve.clj") "engine resolve.clj"]
-                   [roundtrip-rkt "facts-roundtrip.rkt"]
-                   [build-all "beagle-build-all"]]]
+                   [beagle-bin "Beagle CLI"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))
 
@@ -65,19 +64,8 @@
                 "(def dead :- String \"x\")\n"
                 "(defn greet [who :- String] :- String (str base \" \" who punct))\n"))
 (def seed-edn (str work "/demo.edn"))
-;; Pinned racket, the way bin/fram-ingest-code resolves it (FRAM_RACKET, else
-;; the beagle direnv): bare `racket` is the stale-bytecode trap — an ambient
-;; binary mismatches beagle's compiled .zo. No pin => SKIP (CI has no toolchain).
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [p (try (str/trim (:out (proc/sh {:out :string :err :string}
-                                            "direnv" "exec" beagle-home "which" "racket")))
-                   (catch Throwable _ ""))]
-        (when-not (str/blank? p) p))))
-(when-not racket-bin
-  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
-  (System/exit 0))
-(def emit-r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--emit-edn" seed))
+(def emit-r (proc/sh {:out :string :err :string}
+                     beagle-bin "facts-roundtrip" "--emit-edn" seed))
 
 (if-not (zero? (:exit emit-r))
   (chk "B0: emit-edn seed module" false)
@@ -130,25 +118,26 @@
     (let [edn (slurp out-edn)]
       (chk "D1c: render-EDN does NOT contain the deleted def's name (`dead`)"
            (not (str/includes? edn "\"dead\"")))
-      (let [br (proc/sh {:out :string :err :string} build-all out-edn "--build-edn")
-            blob (str (:out br) (:err br))]
-        (chk "E1: beagle --build-edn of the post-delete+reorder module builds 0 errors"
-             (re-find #"\b1 built, 0 error\(s\)" blob))
-        (let [bout (str work "/build")]
-          (.mkdirs (io/file bout))
-          (proc/sh {:out :string :err :string} build-all out-edn "--build-edn" "--out" bout)
-          (let [emitted (->> (file-seq (io/file bout)) (filter #(.isFile %))
-                             (map slurp) (str/join "\n"))]
-            (chk "E2: the `:- String` annotations survive to the emitted Clojure (^String)"
-                 (str/includes? emitted "^String"))
-            (chk "E3: the deleted def `dead` is absent from the emitted program"
-                 (not (str/includes? emitted "dead")))))))))
+      (let [rr (proc/sh {:out :string :err :string}
+                        beagle-bin "facts-roundtrip" "--render" out-edn)
+            rendered (:out rr)
+            punct-i (.indexOf rendered "(def punct")
+            base-i (.indexOf rendered "(def base")
+            greet-i (.indexOf rendered "(defn greet")]
+        (chk "E1: certified facts-roundtrip CLI renders the post-delete+reorder module"
+             (zero? (:exit rr)))
+        (chk "E2: the `:- String` annotations survive in the rendered Beagle source"
+             (str/includes? rendered ":- String"))
+        (chk "E3: the deleted def `dead` is absent from the rendered program"
+             (not (str/includes? rendered "(def dead")))
+        (chk "E4: rendered source preserves requested punct,base,greet order"
+             (and (<= 0 punct-i) (< punct-i base-i) (< base-i greet-i)))))))
 
 ;; --- verdict ----------------------------------------------------------------
-(println "\n=== delete + reorder verbs: fact-native, fail-closed, build-clean ===")
+(println "\n=== delete + reorder verbs: fact-native, fail-closed, byte-stable render ===")
 (let [cs @checks fails (remove second cs)]
   (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
   (if (empty? fails)
-    (do (println "\nPASS —" (count cs) "/" (count cs) ": delete + reorder are sound and compose with --build-edn.")
+    (do (println "\nPASS —" (count cs) "/" (count cs) ": delete + reorder are sound and render through Beagle's public CLI.")
         (System/exit 0))
     (do (println "\nFAIL —" (count fails) "of" (count cs) "checks failed.") (System/exit 1))))

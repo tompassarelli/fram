@@ -23,7 +23,7 @@
 #   G10 delete of a nonexistent victim (rc 5 contract)              out+err+rc
 #   G11 callgraph JSON over the codegraph .bjs corpus               stdout
 #
-# Env: FRAM_RESOLVE (default ./resolve.clj), BEAGLE_HOME, FRAM_ROUNDTRIP.
+# Env: FRAM_RESOLVE (default ./resolve.clj), BEAGLE_HOME, FRAM_BEAGLE.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,9 +31,8 @@ MODE="${1:?usage: resolve_golden.sh capture|verify <dir>}"
 GOLD="${2:?usage: resolve_golden.sh capture|verify <dir>}"
 RESOLVE="${FRAM_RESOLVE:-$HERE/resolve.clj}"
 BEAGLE="${BEAGLE_HOME:-$HOME/code/beagle}"
-ROUNDTRIP="${FRAM_ROUNDTRIP:-$BEAGLE/beagle-lib/private/facts-roundtrip.rkt}"
-RACKET="${FRAM_RACKET:-$(direnv exec "$BEAGLE" which racket 2>/dev/null)}"
-[ -x "$RACKET" ] || { echo "resolve_golden: no pinned racket (set FRAM_RACKET)" >&2; exit 2; }
+BEAGLE_CLI="${FRAM_BEAGLE:-$BEAGLE/bin/beagle}"
+[ -x "$BEAGLE_CLI" ] || { echo "resolve_golden: no Beagle CLI (set FRAM_BEAGLE)" >&2; exit 2; }
 
 # FIXED work dir, deliberately not mktemp: resolve echoes the absolute path of
 # every file it projects to stderr, so a randomized dir would differ run-to-run
@@ -63,7 +62,7 @@ FRAM_MODULES="types store schema datalog kernel fold import export query tools a
 BJS="trap mod-a mod-b trap-collision shadow forshadow mapshadow torture types re-a re-b re-c"
 
 emit () { # emit <src> <dest.edn>
-  "$RACKET" "$ROUNDTRIP" --emit-edn "$1" > "$2" 2>"$2.err" || {
+  "$BEAGLE_CLI" facts-roundtrip --emit-edn "$1" > "$2" 2>"$2.err" || {
     echo "resolve_golden: emit-edn failed for $1" >&2; cat "$2.err" >&2; exit 2; }
 }
 

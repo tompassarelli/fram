@@ -70,9 +70,9 @@
 (def root (System/getProperty "user.dir"))
 (def home (System/getProperty "user.home"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt"))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def check-emit (str beagle-home "/beagle-lib/private/facts-check-emit.rkt"))
-(doseq [[f label] [[roundtrip "facts-roundtrip.rkt"] [check-emit "facts-check-emit.rkt"]
+(doseq [[f label] [[beagle-bin "Beagle CLI"] [check-emit "facts-check-emit.rkt"]
                    [(str root "/out/fram/rt.clj") "out/ (build first)"]]]
   (when-not (.exists (io/file f))
     (println "SKIP — missing prerequisite:" label "(" f ")") (System/exit 0)))
@@ -224,7 +224,7 @@
            "FRAM_OUT" (str root "/out") "FRAM_BIN" (str root "/bin")
            "FRAM_RESOLVE" (str root "/resolve.clj")
            "BEAGLE_HOME" beagle-home
-           "FRAM_ROUNDTRIP" roundtrip "FRAM_CHECK_EMIT" check-emit
+           "FRAM_BEAGLE" beagle-bin "FRAM_CHECK_EMIT" check-emit
            "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")}
     (System/getenv "FRAM_RACKET") (assoc "FRAM_RACKET" (System/getenv "FRAM_RACKET"))))
 

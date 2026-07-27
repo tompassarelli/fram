@@ -19,10 +19,10 @@
 ;; Plus a regression: a plain defn set-body in the UNAMBIGUOUS sibling still commits.
 ;;
 ;; Runs on the JVM (clojure -M), NOT bare bb — the daemon + verbs need production's
-;; LispReader (see tests/coord_write_def_test.clj). Needs a flake-pinned racket to ingest
-;; (BEAGLE_HOME / FRAM_RACKET); SKIPs cleanly if beagle can't be resolved.
+;; LispReader (see tests/coord_write_def_test.clj). Needs the Beagle CLI to ingest
+;; (BEAGLE_HOME / FRAM_BEAGLE); SKIPs cleanly if Beagle can't be resolved.
 ;;
-;;   BEAGLE_HOME=$HOME/code/beagle FRAM_RACKET=$(direnv exec $HOME/code/beagle which racket) \
+;;   BEAGLE_HOME=$HOME/code/beagle \
 ;;     clojure -M tests/coord_editpath_defect_test.clj ; echo EXIT=$?
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]
@@ -32,16 +32,11 @@
 (def root (System/getProperty "user.dir"))
 (def home (System/getProperty "user.home"))
 
-;; --- beagle resolution (both dials); SKIP if the pinned racket can't be found -----
+;; --- Beagle resolution; SKIP if the CLI cannot be found ----------------------
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [r (try (sh/sh "direnv" "exec" beagle-home "which" "racket") (catch Exception _ nil))]
-        (when (and r (zero? (:exit r)) (not (str/blank? (:out r)))) (str/trim (:out r))))))
-(when (str/blank? racket-bin)
-  (println "SKIP — no flake-pinned racket (set FRAM_RACKET / BEAGLE_HOME)") (System/exit 0))
-(when-not (.exists (io/file (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
-  (println "SKIP — no beagle roundtrip.rkt under" beagle-home) (System/exit 0))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
+(when-not (.canExecute (io/file beagle-bin))
+  (println "SKIP — no Beagle CLI (set FRAM_BEAGLE / BEAGLE_HOME)") (System/exit 0))
 
 ;; --- synthesize a corpus with the two risky shapes, ingest -> a flat code.log -----
 ;; pkg/gen.bclj + pkg/gen_seq.bclj under one --root => modules "pkg.gen" (⊂ "pkg.gen_seq").
@@ -58,13 +53,13 @@
 
 (def log (str work "/code.log"))
 (def env (assoc (into {} (System/getenv))
-                "BEAGLE_HOME" beagle-home "FRAM_RACKET" racket-bin))
+                "BEAGLE_HOME" beagle-home "FRAM_BEAGLE" beagle-bin))
 (let [r (sh/sh "bb" "-cp" "out" "bin/fram-ingest-code"
                (str work "/pkg/gen.bclj") (str work "/pkg/gen_seq.bclj")
                "--root" work "--out" log
                :env env :dir root)]
   (when-not (and (zero? (:exit r)) (.exists (io/file log)))
-    (println "SKIP — ingest failed (racket/beagle unavailable?):\n" (:out r) (:err r))
+    (println "SKIP — ingest failed (Beagle unavailable?):\n" (:out r) (:err r))
     (System/exit 0)))
 
 ;; --- boot a throwaway warm daemon over the log on a verified-free port >= 49010 ---

@@ -41,12 +41,12 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP") (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 (def code-log (str root "/.fram/code.log"))
 
 (def needed
-  [[roundtrip-rkt "facts-roundtrip.rkt"]
+  [[beagle-bin "Beagle CLI"]
    [build-all "beagle-build-all"]
    [(str root "/resolve.clj") "engine resolve.clj"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
@@ -89,7 +89,8 @@
 ;; GATE 3 — INGEST lossless: emit-edn(schema) re-keyed @schema#n == warm AST.
 ;; ===========================================================================
 (defn- emit-edn-triples [path module]
-  (let [r (proc/sh {:out :string :err :string} "racket" roundtrip-rkt "--emit-edn" path)]
+  (let [r (proc/sh {:out :string :err :string}
+                   beagle-bin "facts-roundtrip" "--emit-edn" path)]
     (into #{}
           (->> (str/split-lines (:out r))
                (keep (fn [line]
@@ -192,16 +193,18 @@
 (def rfl (str kbuild "/render-from-log.bclj"))
 (def rft (str kbuild "/render-from-text.bclj"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_ROUNDTRIP" roundtrip-rkt "FRAM_RESOLVE" (str root "/resolve.clj")})
+               "FRAM_BEAGLE" beagle-bin "FRAM_RESOLVE" (str root "/resolve.clj")})
 ;; render-from-log over a FRESH copy of the committed code log (no bridge fact).
 (def klog (str kbuild "/code.log")) (io/copy (io/file code-log) (io/file klog))
 (proc/shell {:extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" klog "--out" rfl)
 ;; render-from-text: emit-edn -> resolve -> render (the existing authoring projection).
 (def kresolve (str kbuild "/resolve-out")) (.mkdirs (io/file kresolve))
-(proc/sh {:out (io/file (str kresolve "/schema-emit.edn")) :err :string} "racket" roundtrip-rkt "--emit-edn" (str root "/src/fram/schema.bclj"))
+(proc/sh {:out (io/file (str kresolve "/schema-emit.edn")) :err :string}
+         beagle-bin "facts-roundtrip" "--emit-edn" (str root "/src/fram/schema.bclj"))
 (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kresolve)}
          "bb" "-cp" "out" "resolve.clj" "resolve" (str kresolve "/schema-emit.edn"))
-(proc/sh {:out (io/file rft) :err :string} "racket" roundtrip-rkt "--render" (str kresolve "/resolved-schema.bclj.edn"))
+(proc/sh {:out (io/file rft) :err :string}
+         beagle-bin "facts-roundtrip" "--render" (str kresolve "/resolved-schema.bclj.edn"))
 (def k-byte-identical
   (and (.exists (io/file rfl)) (.exists (io/file rft))
        (= (slurp rfl) (slurp rft))))
@@ -227,7 +230,8 @@
 (.mkdirs (io/file kc-work))
 ;; the verb runs over the emit-edn of the CURRENT schema (text), producing a new render.
 (def kc-resolve (str kc-work "/resolve-out")) (.mkdirs (io/file kc-resolve))
-(proc/sh {:out (io/file (str kc-resolve "/schema-emit.edn")) :err :string} "racket" roundtrip-rkt "--emit-edn" (str root "/src/fram/schema.bclj"))
+(proc/sh {:out (io/file (str kc-resolve "/schema-emit.edn")) :err :string}
+         beagle-bin "facts-roundtrip" "--emit-edn" (str root "/src/fram/schema.bclj"))
 (def kc-body (str kc-work "/body.edn"))
 ;; set-body of `cardinality` to a GENUINELY DIFFERENT but semantically-equivalent
 ;; body (internal let bindings renamed pid->p, card-pid->cp). This forces a REAL
@@ -245,7 +249,8 @@
 ;; render the verb's output to the new .bclj.
 (def kc-newbclj (str kc-work "/schema-new.bclj"))
 (when kc-verb-ok
-  (proc/sh {:out (io/file kc-newbclj) :err :string} "racket" roundtrip-rkt "--render" (str kc-resolve "/resolved-schema.bclj.edn")))
+  (proc/sh {:out (io/file kc-newbclj) :err :string}
+           beagle-bin "facts-roundtrip" "--render" (str kc-resolve "/resolved-schema.bclj.edn")))
 ;; commit the delta THROUGH this daemon's coordinator (the code log).
 (def kc-commit
   (when (.exists (io/file kc-newbclj))

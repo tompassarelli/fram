@@ -16,7 +16,7 @@
 (def home (System/getProperty "user.home"))
 (def root (System/getProperty "user.dir"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def roundtrip-rkt (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt"))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def build-all (str beagle-home "/bin/beagle-build-all"))
 ;; HERMETIC: the committed single-module fixture (exactly one canonical `schema`),
 ;; never the worktree's live .fram/code.log. FRAM_BIN pinned to the worktree bin so
@@ -29,13 +29,13 @@
          {"BEAGLE_HOME" beagle-home
           "FRAM_HOME" root
           "FRAM_OUT" (str root "/out")
-          "FRAM_ROUNDTRIP" roundtrip-rkt
+          "FRAM_BEAGLE" beagle-bin
           "FRAM_RESOLVE" (str root "/resolve.clj")
           "FRAM_BIN" (str root "/bin")}))
 (defn- fail-fast! [& xs]
   (binding [*out* *err*] (apply println "FAIL —" xs))
   (System/exit 1))
-(doseq [p [fixture roundtrip-rkt build-all]]
+(doseq [p [fixture beagle-bin build-all]]
   (when-not (.isFile (io/file p)) (fail-fast! "missing required file" p)))
 (def fixture-roots
   (with-open [reader (io/reader fixture)]

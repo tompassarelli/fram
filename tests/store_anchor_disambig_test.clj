@@ -10,7 +10,7 @@
 ;;      equivalent COARSE whole-enclosing-form replace (surgical == coarse).
 ;;   3. a unique :old (no :within) lands on the unchanged fast path (1 edge swap).
 ;;   4. :within that is ambiguous OR non-matching REJECTS (fail-closed every level).
-;;   bb -cp out tests/store_anchor_disambig_test.clj   (from repo root; pinned racket)
+;;   bb -cp out tests/store_anchor_disambig_test.clj   (from repo root)
 ;; ============================================================================
 (require '[fram.store :as c] '[clojure.edn :as edn]
          '[clojure.walk :as walk] '[clojure.java.io :as io] '[clojure.string :as str]
@@ -21,27 +21,16 @@
 (load-file "resolve.clj")
 (alias 'r 'resolve)
 
-(def RT  (or (System/getenv "FRAM_ROUNDTRIP")
-             (str (System/getenv "HOME") "/code/beagle/beagle-lib/private/facts-roundtrip.rkt")))
 (def VIM (or (System/getenv "VIM_BJS") "/home/tom/code/gjoa/src/gjoa/chrome/bjs/tabs/vim.bjs"))
 (def work (str (System/getProperty "java.io.tmpdir") "/anchor-disambig-" (System/nanoTime)))
 (.mkdirs (io/file work))
-(doseq [p [RT VIM]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
-(def beagle-home (or (System/getenv "BEAGLE_HOME") (str (System/getenv "HOME") "/code/beagle")))
-;; Pinned racket, the way bin/fram-ingest-code resolves it (FRAM_RACKET, else
-;; the beagle direnv): bare `racket` is the stale-bytecode trap — an ambient
-;; binary mismatches beagle's compiled .zo. No pin => SKIP (CI has no toolchain).
-(def racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [p (try (str/trim (:out (sh {:out :string :err :string}
-                                       "direnv" "exec" beagle-home "which" "racket")))
-                   (catch Throwable _ ""))]
-        (when-not (str/blank? p) p))))
-(when-not racket-bin
-  (println "SKIP — missing prerequisite: Beagle-pinned racket (set FRAM_RACKET, or direnv+beagle)")
-  (System/exit 0))
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")
+                     (str (System/getenv "HOME") "/code/beagle")))
+(def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
+(doseq [p [beagle-bin VIM]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
 (def edn-path (str work "/vim.edn"))
-(let [rr (sh {:out (io/file edn-path) :err :string} racket-bin RT "--emit-edn" VIM)]
+(let [rr (sh {:out (io/file edn-path) :err :string}
+             beagle-bin "facts-roundtrip" "--emit-edn" VIM)]
   (when-not (zero? (:exit rr)) (println "emit-edn failed:" (:err rr)) (System/exit 1)))
 
 (def pass (atom 0)) (def fail (atom 0))
@@ -54,11 +43,12 @@
     (try (thunk) {:ok true}
          (catch clojure.lang.ExceptionInfo e (let [d (ex-data e)] {:reject (:code d) :detail (:detail d)})))))
 
-;; render the (edited, resolved) bound module -> .bjs text (extract-file! + racket --render)
+;; render the (edited, resolved) bound module -> .bjs text.
 (defn render-module [src]
   (let [ep (str work "/render-" (System/nanoTime) ".edn")]
     (r/extract-file! src ep)
-    (let [rr (sh {:out :string :err :string} racket-bin RT "--render" ep)]
+    (let [rr (sh {:out :string :err :string}
+                 beagle-bin "facts-roundtrip" "--render" ep)]
       (when-not (zero? (:exit rr)) (println "  render failed:" (:err rr)))
       (:out rr))))
 
