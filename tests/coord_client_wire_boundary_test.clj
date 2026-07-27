@@ -147,7 +147,7 @@
 (let [payload-size (* 9 1024 1024)
       payload (apply str (repeat payload-size "x"))
       response
-      (str "{\"log\":" (pr-str test-log)
+      (str "{\"version\":1,\"log\":" (pr-str test-log)
            ",\"facts\":[[\"@wire\",\"note\"," (pr-str payload) "]]}\n")
       {:keys [result elapsed-ms]}
       (run-peer
@@ -291,7 +291,7 @@
                (< elapsed-ms 2000.0))))
 
 (let [valid
-      (str "{\"log\":" (pr-str test-log)
+      (str "{\"version\":1,\"log\":" (pr-str test-log)
            ",\"facts\":[[\"@wire\",\"note\",\"must-not-be-accepted\"]]} {} \n")
       {:keys [result]}
       (run-peer
