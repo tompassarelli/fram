@@ -61,6 +61,9 @@ jobs:
       - name: Vocabulary ratchet (claim-regrowth gate)
         run: bash tests/vocab_ratchet_test.sh
 
+      - name: Daemon-read ratchet (CLI must not cold-fold when warm)
+        run: bash tests/daemon_read_perf_ratchet.sh
+
       - name: mTLS round-trip (JVM daemon, engine-terminated mutual TLS)
         run: bb tests/tls_test.clj
 

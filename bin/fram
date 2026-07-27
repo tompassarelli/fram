@@ -34,4 +34,9 @@ else
 fi
 export FRAM_THREADS FRAM_LOG
 mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
+case "${1:-}" in
+  show|tell|retract|untell)
+    exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
+    ;;
+esac
 exec bb -cp "$HERE/out" -m fram.main "$@"
