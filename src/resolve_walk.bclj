@@ -133,6 +133,10 @@
 
 (def UNQUOTE-TOKENS :- (Set String) #{"~" "," "~@" ",@"})
 
+(def MODULE-NAME-RE :- Any (re-pattern "@([^#]+)#\\d+"))
+
+(def SLASH-RE :- Any (re-pattern "/"))
+
 (defn- sv [w :- Walk e :- Int?] :- Any
   (rr/sym-val (:ctx w) (:view w) e))
 
@@ -548,3 +552,89 @@
                           (if (empty? e) (rm/module-defs ctx view ents) e))))
      :type-exports (by-mod (fn [ents :- (Vec Int)] :- Any (rm/module-types ctx view ents)))
      :accessor-exports (by-mod (fn [ents :- (Vec Int)] :- Any (rm/module-accessors ctx view ents)))}))
+
+;; M1 Cut K: the corpus/store-frame layer. The resolve namespace retains the
+;; dynamic vars external callers bind; these functions receive their current
+;; values explicitly and own the portable logic.
+(defn name->module [nm :- Any] :- Any
+  (if (string? nm)
+    (let [hit (re-matches MODULE-NAME-RE nm)]
+      (if (some? hit) (second hit) nil))
+    nil))
+
+(defn make-xresolve [ctx :- (Atom t/Store) view :- Any ents-of :- Any
+                     exports :- Any type-exports :- Any accessor-exports :- Any
+                     src :- Any] :- Any
+  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))
+        xport (fn [m :- Any n :- Any] :- Any
+                (or (get-in exports [m n]) (get-in type-exports [m n])))
+        xacc (fn [m :- Any n :- Any] :- Any
+               (get-in accessor-exports [m n]))]
+    (fn [nm :- Any] :- Any
+      (cond
+        (nil? nm) nil
+        (get refer nm)
+        (let [m (get refer nm)]
+          (if-let [target (xport m nm)]
+            {:target target :mode :tracking}
+            (when-let [accessor (xacc m nm)]
+              {:target (first accessor) :mode :tracking :accessor (second accessor)})))
+        (get rename nm)
+        (let [[m source-name] (get rename nm)]
+          {:target (xport m source-name) :mode :fixed})
+        (str/includes? nm "/")
+        (let [[alias public-name] (str/split nm SLASH-RE 2)
+              module (or (get as alias)
+                         (when (some (fn [table :- Any] :- Bool
+                                       (contains? table alias))
+                                 [exports type-exports accessor-exports])
+                           alias))]
+          (when module
+            (if-let [target (xport module public-name)]
+              {:target target :mode :qual :alias alias}
+              (when-let [accessor (xacc module public-name)]
+                {:target (first accessor) :mode :qual :alias alias
+                 :accessor (second accessor)}))))
+        :else nil))))
+
+(defn module-export-set [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Any
+  (let [ents (vec (get ents-of src []))
+        exports (rm/module-exports ctx view ents)
+        value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
+    (into #{} (concat (keys value-exports)
+                      (keys (rm/module-types ctx view ents))
+                      (keys (rm/module-accessors ctx view ents))))))
+
+(defn module-imports [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Any
+  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
+    (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
+
+(defn import-graph [ctx :- (Atom t/Store) view :- Any ents-of :- Any srcs :- (Vec Any)] :- Any
+  (into {}
+    (map (fn [src :- Any] :- Any
+           (let [ents (vec (get ents-of src []))]
+             [(rm/module-name ctx view ents)
+              (module-imports ctx view ents-of src)]))
+      (filter (fn [src :- Any] :- Bool
+                (some? (rm/module-name ctx view (vec (get ents-of src [])))))
+        srcs))))
+
+(defn module-has-macro? [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Bool
+  (let [ents (vec (get ents-of src []))]
+    (boolean
+      (some (fn [form :- Int] :- Bool
+              (let [def-form (rm/unwrap-def ctx view form)
+                    head (first (rr/ordered-children ctx def-form))]
+                (= "defmacro" (rr/sym-val ctx view head))))
+        (rm/forms-of ctx view ents)))))
+
+(defn lift-bound-to-refers! [ctx :- (Atom t/Store) tx :- Int
+                             KIND :- Int BOUND :- Int REFERS :- Int] :- Any
+  (doseq [cid (c/by-p ctx BOUND)]
+    (let [claim (c/fact-of ctx cid)
+          leaf (:l claim)
+          target (:r claim)]
+      (when (and (integer? target)
+                 (rr/live-node? ctx KIND target)
+                 (empty? (c/by-lp ctx leaf REFERS)))
+        (c/fact! ctx leaf REFERS target tx)))))

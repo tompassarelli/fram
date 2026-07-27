@@ -62,6 +62,10 @@
 
 (def UNQUOTE-TOKENS #{"~" "," "~@" ",@"})
 
+(def MODULE-NAME-RE (re-pattern "@([^#]+)#\\d+"))
+
+(def SLASH-RE (re-pattern "/"))
+
 (defn- sv [^Walk w e]
   (rr/sym-val (:ctx w) (:view w) e))
 
@@ -422,3 +426,58 @@
   (assoc m (rm/module-name ctx view ents) (f ents)))) {} named))]
   {:modframe (per (fn [ents] (rm/module-defs ctx view ents))) :typeframe (per (fn [ents] (rm/module-types ctx view ents))) :accessors (per (fn [ents] (rm/module-accessors ctx view ents))) :exports (by-mod (fn [ents] (let [e (rm/module-exports ctx view ents)]
   (if (empty? e) (rm/module-defs ctx view ents) e)))) :type-exports (by-mod (fn [ents] (rm/module-types ctx view ents))) :accessor-exports (by-mod (fn [ents] (rm/module-accessors ctx view ents)))}))
+
+(defn name->module [nm]
+  (if (string? nm) (let [hit (re-matches MODULE-NAME-RE nm)]
+  (if (some? hit) (second hit) nil)) nil))
+
+(defn make-xresolve [ctx view ents-of exports type-exports accessor-exports src]
+  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))
+   xport (fn [m n] (or (get-in exports [m n]) (get-in type-exports [m n])))
+   xacc (fn [m n] (get-in accessor-exports [m n]))]
+  (fn [nm] (cond
+  (nil? nm) nil
+  (get refer nm) (let [m (get refer nm)]
+  (let [target (xport m nm)]
+  (if target {:target target :mode :tracking} (let [accessor (xacc m nm)]
+  (if accessor (do
+  {:target (first accessor) :mode :tracking :accessor (second accessor)}))))))
+  (get rename nm) (let [[m source-name] (get rename nm)]
+  {:target (xport m source-name) :mode :fixed})
+  (str/includes? nm "/") (let [[alias public-name] (str/split nm SLASH-RE 2)
+   module (or (get as alias) (if (some (fn [table] (contains? table alias)) [exports type-exports accessor-exports]) (do
+  alias)))]
+  (if module (do
+  (let [target (xport module public-name)]
+  (if target {:target target :mode :qual :alias alias} (let [accessor (xacc module public-name)]
+  (if accessor (do
+  {:target (first accessor) :mode :qual :alias alias :accessor (second accessor)}))))))))
+  :else nil))))
+
+(defn module-export-set [ctx view ents-of src]
+  (let [ents (vec (get ents-of src []))
+   exports (rm/module-exports ctx view ents)
+   value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
+  (into #{} (concat (keys value-exports) (keys (rm/module-types ctx view ents)) (keys (rm/module-accessors ctx view ents))))))
+
+(defn module-imports [ctx view ents-of src]
+  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
+  (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
+
+(defn import-graph [ctx view ents-of srcs]
+  (into {} (map (fn [src] (let [ents (vec (get ents-of src []))]
+  [(rm/module-name ctx view ents) (module-imports ctx view ents-of src)])) (filter (fn [src] (some? (rm/module-name ctx view (vec (get ents-of src []))))) srcs))))
+
+(defn ^Boolean module-has-macro? [ctx view ents-of src]
+  (let [ents (vec (get ents-of src []))]
+  (boolean (some (fn [form] (let [def-form (rm/unwrap-def ctx view form)
+   head (first (rr/ordered-children ctx def-form))]
+  (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
+
+(defn lift-bound-to-refers! [ctx tx KIND BOUND REFERS]
+  (doseq [cid (c/by-p ctx BOUND)]
+  (let [claim (c/fact-of ctx cid)
+   leaf (:l claim)
+   target (:r claim)]
+  (if (and (integer? target) (rr/live-node? ctx KIND target) (empty? (c/by-lp ctx leaf REFERS))) (do
+  (c/fact! ctx leaf REFERS target tx))))))

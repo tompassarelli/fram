@@ -320,30 +320,8 @@
 ;; so a record rename carries c/point-x / :refer'd point-x (parallel to global-type-exports).
 (def ^:dynamic global-accessor-exports {})
 (defn make-xresolve [src]
-  (let [{:keys [refer as rename]} (parse-require src)
-        ;; a :refer'd / :as-qualified / :rename'd name may be a VALUE or a TYPE export
-        xport (fn [m n] (or (get-in global-exports [m n]) (get-in global-type-exports [m n])))
-        xacc  (fn [m n] (get-in global-accessor-exports [m n]))]   ; [type-leaf field] or nil
-    (fn [nm]
-      (cond
-        ;; a symbol node with no `v` (nil name) is not a resolvable cross-module ref — bail
-        ;; before `str/includes?` NPEs. Such nodes appear inside .cljc reader-conditional
-        ;; content (`#?(:clj …)`), which the warm resolver descends into during render;
-        ;; leaving them unresolved renders their own spelling, exactly right under no-rename.
-        (nil? nm) nil
-        (get refer nm)  (let [m (get refer nm)]
-                          (if-let [t (xport m nm)] {:target t :mode :tracking}
-                            (when-let [a (xacc m nm)] {:target (first a) :mode :tracking :accessor (second a)})))
-        (get rename nm) (let [[m sn] (get rename nm)] {:target (xport m sn) :mode :fixed})
-        (str/includes? nm "/")
-        ;; qualifier is an :as alias OR a fully-spelled module name (e.g. (require acc.prod) then acc.prod/Box)
-        (let [[al pn] (str/split nm #"/" 2)
-              m (or (get as al)
-                    (when (some #(contains? % al) [global-exports global-type-exports global-accessor-exports]) al))]
-          (when m
-            (if-let [t (xport m pn)] {:target t :mode :qual :alias al}
-              (when-let [a (xacc m pn)] {:target (first a) :mode :qual :alias al :accessor (second a)}))))
-        :else nil))))
+  (rw/make-xresolve ctx *view* @file->ents
+                    global-exports global-type-exports global-accessor-exports src))
 ;; --- Turtle #6: resolve identifier mentions INSIDE comments -----------------
 ;; A comment is a sequence of text + symbol-candidate segments. A symbol segment
 ;; that EXACTLY names an in-scope binding (module def / type / refer-import) gets
@@ -384,11 +362,7 @@
 ;; refers_to to its durable target. Warm-only (refers_to is a derived resolve-pred, re-cut
 ;; each materialize). Idempotent: leaves already resolved are skipped.
 (defn lift-bound-to-refers! []
-  (when BOUND
-    (doseq [cid (c/by-p ctx BOUND)]
-      (let [cl (c/fact-of ctx cid) L (:l cl) D (:r cl)]
-        (when (and (integer? D) (live-node? D) (empty? (c/by-lp ctx L REFERS)))
-          (c/fact! ctx L REFERS D tx))))))
+  (when BOUND (rw/lift-bound-to-refers! ctx tx KIND BOUND REFERS)))
 
 ;; ============================================================================
 ;; resolve-edn! — the RUNNABLE pipeline over an ARBITRARY bound store.
@@ -444,8 +418,7 @@
 ;; ============================================================================
 ;; module of `@kernel#127` -> "kernel" ; the daemon names every node `@<mod>#<int>`.
 (defn name->module [nm]
-  (when (string? nm)
-    (when-let [[_ m] (re-matches #"@([^#]+)#\d+" nm)] m)))
+  (rw/name->module nm))
 ;; corpus-from-store! — from the BOUND, already-populated store, derive the SAME
 ;; corpus structure resolve-edn! computes from EDN: file->ents grouped by module,
 ;; srcs = the module list, then the per-module frame/export tables (reusing
@@ -511,26 +484,21 @@
 ;; precisely the surface a consumer's :refer/:as/:rename can bind, so a change to THIS
 ;; set is exactly what forces a consumer re-walk; an internal body edit leaves it fixed.
 (defn module-export-set [src]
-  (let [v (module-exports src)
-        vexp (if (seq v) v (module-defs src))]   ; beagle implicit-export fallback (mirrors global-exports)
-    (into #{} (concat (keys vexp)
-                      (keys (module-types src))
-                      (keys (module-accessors src))))))
+  (rw/module-export-set ctx *view* @file->ents src))
 ;; import-graph: {module -> #{modules it imports}} over the whole corpus, from each
 ;; module's (ns :require ...) / bare (require ...). Consumers of M = the modules whose
 ;; import-set contains M (the reverse edge). Used to widen the dirty set when M's
 ;; export-set changed: M PLUS everyone importing M re-resolves.
 (defn module-imports [src]
-  (let [{:keys [refer as rename]} (parse-require src)]
-    (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
+  (rw/module-imports ctx *view* @file->ents src))
 (defn import-graph []
-  (into {} (map (fn [s] [(module-name s) (module-imports s)]) (filter module-name srcs))))
+  (rw/import-graph ctx *view* @file->ents (vec srcs)))
 ;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
 ;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
 ;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
 ;; has zero defmacro).
 (defn module-has-macro? [src]
-  (boolean (some (fn [f] (= "defmacro" (head-sym (unwrap-def f)))) (forms-of src))))
+  (rw/module-has-macro? ctx *view* @file->ents src))
 
 ;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
 ;; recomputed against THAT store — store-local ids must match their store, the
