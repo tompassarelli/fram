@@ -1,0 +1,5 @@
+{:adapter "datomic-transactor"
+ :status :stub
+ :requires [:licensed-artifact :separate-transactor :durable-storage]
+ :must-observe [:transaction-completion :independent-readers]
+ :contract "~/code/fram/bench/in-class/scenario-contract.edn"}
