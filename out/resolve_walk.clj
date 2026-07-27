@@ -431,6 +431,26 @@
   (if (string? nm) (let [hit (re-matches MODULE-NAME-RE nm)]
   (if (some? hit) (second hit) nil)) nil))
 
+(defn warm-groups [ctx cache]
+  (let [NAME (c/value-id ctx "name")]
+  (cond
+  (some? cache) cache
+  (some? NAME) (reduce (fn [groups cid] (let [claim (c/fact-of ctx cid)
+   node-name (c/literal ctx (:r claim))
+   module (name->module node-name)]
+  (if (some? module) (update groups module (fnil conj []) (:l claim)) groups))) {} (c/by-p ctx NAME))
+  :else {})))
+
+(defn scoped-corpus-tables [ctx view groups scope]
+  (let [srcs (vec (keys groups))
+   frame-srcs (if (some? scope) (vec (filter scope srcs)) srcs)
+   per-frame (fn [f] (reduce (fn [table src] (assoc table src (f (vec (get groups src []))))) {} frame-srcs))
+   named (vec (filter (fn [src] (some? (rm/module-name ctx view (vec (get groups src []))))) srcs))
+   by-module (fn [f] (if (some? scope) {} (reduce (fn [table src] (let [ents (vec (get groups src []))]
+  (assoc table (rm/module-name ctx view ents) (f ents)))) {} named)))]
+  {:srcs srcs :modframe (per-frame (fn [ents] (rm/module-defs ctx view ents))) :typeframe (per-frame (fn [ents] (rm/module-types ctx view ents))) :accessors (per-frame (fn [ents] (rm/module-accessors ctx view ents))) :exports (by-module (fn [ents] (let [exports (rm/module-exports ctx view ents)]
+  (if (seq exports) exports (rm/module-defs ctx view ents))))) :type-exports (by-module (fn [ents] (rm/module-types ctx view ents))) :accessor-exports (by-module (fn [ents] (rm/module-accessors ctx view ents)))}))
+
 (defn make-xresolve [ctx view ents-of exports type-exports accessor-exports src]
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))
    xport (fn [m n] (or (get-in exports [m n]) (get-in type-exports [m n])))

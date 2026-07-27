@@ -427,42 +427,20 @@
 ;; nothing leaks past the binding scope, exactly like resolve-edn!.
 (defn corpus-from-store! []
   (let [t0     (System/nanoTime)
-        NAME   (c/value-id ctx "name")            ; the daemon's node-name predicate
-        groups (cond
-                 ;; INCREMENTAL CORPUS CACHE — skip the O(total) name reduce when the daemon
-                 ;; supplies the maintained module->entity-ids map (the dominant per-verb cost).
-                 (some? *corpus-cache*) *corpus-cache*
-                 NAME (reduce (fn [acc cid]
-                                (let [cl (c/fact-of ctx cid)
-                                      nm (c/literal ctx (:r cl))
-                                      m  (name->module nm)]
-                                  (if m (update acc m (fnil conj []) (:l cl)) acc)))
-                              {} (c/by-p ctx NAME))
-                 :else {})
-        t-groups (System/nanoTime)]
+        ;; M1 Cut K: grouping + frame/export construction are Beagle. The
+        ;; dynamic reset!/set! seam stays here because external callers bind
+        ;; these resolve namespace vars by qualified name.
+        groups (rw/warm-groups ctx *corpus-cache*)
+        t-groups (System/nanoTime)
+        tables (rw/scoped-corpus-tables ctx *view* groups *corpus-scope*)]
     (reset! file->ents groups)                    ; module-keyed entity lists
-    (set! srcs (vec (keys groups)))               ; the modules ARE the srcs
-    ;; SCOPED corpus (Build B): *corpus-scope* restricts the EXPENSIVE per-module FRAME
-    ;; builds (module-defs/types/accessors) to the module(s) the verb actually reads.
-    ;; The src/module LIST is still the whole corpus (groups), so module membership /
-    ;; name->module are correct — only the frame TABLES are scoped. The only caller
-    ;; that sets a scope is the no-walk minimal-op path (set-body/upsert-form), which
-    ;; reads ONLY its target module's frame via def-binding and never run-resolution!'s
-    ;; cross-module export tables — so scoping frames + skipping the global export
-    ;; tables under a scope is sound. nil scope => full frames + exports (verbatim).
-    (let [frame-srcs (if *corpus-scope* (filter *corpus-scope* srcs) srcs)]
-      (set! file-modframe  (into {} (map (fn [s] [s (module-defs s)]) frame-srcs)))
-      (set! file-typeframe (into {} (map (fn [s] [s (module-types s)]) frame-srcs)))
-      (set! file-accessors (into {} (map (fn [s] [s (module-accessors s)]) frame-srcs))))
-    (when-not *corpus-scope*                       ; cross-module export tables — only the WALK reads them
-      (set! global-exports
-            (into {} (map (fn [s] [(module-name s)
-                                   (let [e (module-exports s)] (if (seq e) e (module-defs s)))])
-                          (filter module-name srcs))))
-      (set! global-type-exports
-            (into {} (map (fn [s] [(module-name s) (module-types s)]) (filter module-name srcs))))
-      (set! global-accessor-exports
-            (into {} (map (fn [s] [(module-name s) (module-accessors s)]) (filter module-name srcs)))))
+    (set! srcs (:srcs tables))
+    (set! file-modframe (:modframe tables))
+    (set! file-typeframe (:typeframe tables))
+    (set! file-accessors (:accessors tables))
+    (set! global-exports (:exports tables))
+    (set! global-type-exports (:type-exports tables))
+    (set! global-accessor-exports (:accessor-exports tables))
     (when (= "1" (System/getenv "FRAM_PROF"))
       (binding [*out* *err*]
         (println (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s"
