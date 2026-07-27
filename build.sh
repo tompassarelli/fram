@@ -70,7 +70,9 @@ done
 #   coord_daemon_wire M6 Cut 1: pure wire request/response parsing, formatting,
 #                classification, and error-envelope construction. The root
 #                coord_daemon.clj retains sockets, dispatch, state, and lifecycle.
-for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_corpus resolve_mint resolve_verbs fri_port fri coord_daemon_wire; do
+#   coord_read   M5 Cut A: pure coordinator reads over an explicit store handle;
+#                coord.clj retains state, dynamic vars, writers, and concurrency.
+for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_corpus resolve_mint resolve_verbs fri_port fri coord_daemon_wire coord_read; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"

@@ -34,6 +34,7 @@
   (:require [fram.store :as c] [fram.schema :as s] [fram.kernel :as ck]
             [fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
             [fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
+            [coord-read :as cr]
             [clojure.edn :as edn] [clojure.java.io :as io] [clojure.string :as str]))
 
 (defn- store [co] (:store co))
@@ -201,19 +202,10 @@
       {:k :commit :tx txid}])))
 
 ;; --- reads over the reified store -------------------------------------------
-(defn- live-cids-lp [co te pid]
-  (let [m @(store co)]
-    (remove #(contains? (:superseded m) %) (get (:idx-by-lp m) [te pid]))))
-(defn- seq-of [co cid]
-  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :seq] 0)))
-(defn base-version [co te pid]
-  (reduce max 0 (map #(seq-of co %) (live-cids-lp co te pid))))
-(defn current-seq [co]
-  ;; O(1): :next-seq is the monotonic seq counter — begin-tx! does (update :next-seq inc) and
-  ;; assigns the result as the tx's :seq, so the LAST-assigned seq == the MAX seq == :next-seq.
-  ;; The old (reduce max ... (:txs m)) was O(total-commits) and, called ~37x per authoring op,
-  ;; was the residual O(total) authoring cost (per-op grew 14->61ms over a 500-def build).
-  (or (:next-seq @(store co)) 0))
+(defn- live-cids-lp [co te pid] (cr/live-cids-lp (store co) te pid))
+(defn- seq-of [co cid] (cr/seq-of (store co) cid))
+(defn base-version [co te pid] (cr/base-version (store co) te pid))
+(defn current-seq [co] (cr/current-seq (store co)))
 
 ;; --- coexist-elect: the default read-time election (move-B keystone) ---------
 ;; Under coexist-elect a live (l,p) group MAY hold >1 coexisting fact: rival writes
@@ -227,8 +219,7 @@
 ;; this is BYTE-IDENTICAL to (first cids); it diverges only to make the pick total and
 ;; input-order-independent. The loser sees itself lose on its NEXT read and yields.
 ;; nil on an empty group. (`view` attaches here when first-class views land — thread E.)
-(defn agent-of [co cid]
-  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :agent])))
+(defn agent-of [co cid] (cr/agent-of (store co) cid))
 
 ;; --- causality / as-of (thread H, Part A): the causal stamp ------------------
 ;; Every coordination write already reports :base = "the version I had observed when
@@ -241,23 +232,20 @@
 ;; (commit order), so the causal election degrades to cid-order, never throws.
 ;; RISK GUARD: the writer cannot fact to have observed the FUTURE — observed is clamped
 ;; to the pre-commit current-seq at the write site (a backdated stamp only LOSES elections).
-(defn observed-of [co cid]
-  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :observed])))
+(defn observed-of [co cid] (cr/observed-of (store co) cid))
 ;; ts-of — the WALL-CLOCK stamp of a fact's asserting tx (thread H, display metadata).
 ;; Mirrors agent-of/observed-of: reads the tx record's :ts (an ISO-8601 instant string,
 ;; same format the flat log records, minted once per tx at commit via rt/now-ts). PURELY
 ;; DISPLAY — pull surfaces it as :ts; it NEVER participates in as-of / live election, which
 ;; stay seq-addressed. nil for pre-existing v2 txs whose record predates the :ts field (pull
 ;; omits the key then), so OLD logs replay unchanged — the stamp is strictly additive.
-(defn ts-of [co cid]
-  (let [m @(store co)] (get-in m [:txs (get (:tx-of m) cid) :ts])))
+(defn ts-of [co cid] (cr/ts-of (store co) cid))
 ;; the causal key of a live fact: [observed-or-seq, cid, agent]. observed orders by
 ;; DECISION time (who saw the empty group first), cid/agent keep it a total order. A LATER
 ;; commit (higher cid) that DECIDED earlier (lower observed) wins — this is the whole point:
 ;; election by causal view, not by commit order. Pure fn of recorded facts -> every reader
 ;; computes it identically with zero coordination.
-(defn causal-key [co cid]
-  [(or (observed-of co cid) (seq-of co cid)) cid (str (agent-of co cid))])
+(defn causal-key [co cid] (cr/causal-key (store co) cid))
 
 ;; --- as-of: the history fold (thread H, Part B) ------------------------------
 ;; "What was live AS OF seq S?" A fact is live-as-of-S iff it was BORN at a seq <= S
@@ -267,40 +255,17 @@
 ;; b). Folds the in-store tail, so it is bounded by thread D's snapshot floor (history
 ;; compacted below a snapshot is gone: as-of before the floor is unavailable, not wrong) —
 ;; never O(total history) (acceptance f).
-(defn- tx-seq-of [m cid] (get-in m [:txs (get (:tx-of m) cid) :seq] 0))
-(defn superseded-as-of [co s]
-  (let [m @(store co) sup (:supersedes-pred m)]
-    (set (for [[cid cl] (:facts m)
-               :when (and (= (:p cl) sup) (<= (tx-seq-of m cid) s))]
-           (:r cl)))))
-(defn live-as-of [co s]
-  (let [m @(store co) sup (:supersedes-pred m) gone (superseded-as-of co s)]
-    (set (for [[cid cl] (:facts m)
-               :when (and (<= (tx-seq-of m cid) s)
-                          (not= (:p cl) sup)              ; the markers are bookkeeping, not data
-                          (not (contains? gone cid)))]
-           cid))))
+(defn superseded-as-of [co s] (cr/superseded-as-of (store co) s))
+(defn live-as-of [co s] (cr/live-as-of (store co) s))
 ;; the live cids of ONE (te,pid) group as of S — the as-of twin of live-cids-lp.
-(defn live-as-of-lp [co s te pid]
-  (let [m @(store co) all (live-as-of co s)]
-    (filterv (fn [cid] (let [cl (get (:facts m) cid)] (and (= (:l cl) te) (= (:p cl) pid))))
-             all)))
+(defn live-as-of-lp [co s te pid] (cr/live-as-of-lp (store co) s te pid))
 
 ;; --- first-class retraction readers + the add-wins/remove-wins view selector ---
 ;; withdrawal-of reads the attribution surface OFF a victim cid (the queryable who/when/
 ;; why retract! stamped). nil when the cid carries no live withdrawn_by tombstone.
-(defn- live-r-on [co cid pid]   ; live object-value of one (cid,pid) marker group
-  (let [m @(store co)]
-    (some (fn [c] (when-not (contains? (:superseded m) c) (:r (get (:facts m) c))))
-          (get (:idx-by-lp m) [cid pid]))))
-(defn withdrawal-of [co cid]
-  (let [m  @(store co)
-        wb (c/value-id (store co) "withdrawn_by")]
-    (when (and wb (live-r-on co cid wb))
-      {:by     (get (:values m) (live-r-on co cid wb))
-       :at     (when-let [a (live-r-on co cid (c/value-id (store co) "withdrawn_at"))]     (get (:values m) a))
-       :reason (when-let [r (live-r-on co cid (c/value-id (store co) "withdrawn_reason"))] (get (:values m) r))})))
-(defn withdrawn? [co cid] (boolean (withdrawal-of co cid)))
+(defn- live-r-on [co cid pid] (cr/live-r-on (store co) cid pid))
+(defn withdrawal-of [co cid] (cr/withdrawal-of (store co) cid))
+(defn withdrawn? [co cid] (cr/withdrawn? (store co) cid))
 
 ;; live-members — the multi-valued live group on (te,pid) UNDER A WITHDRAWAL POLICY. The
 ;; policy is a VIEW choice (thread H, Part D), not a kernel hardcode:
@@ -312,15 +277,8 @@
 ;; The discriminator is `withdrawn?` (overwrite victims have no tombstone), so the two
 ;; policies are pure read-time derivations over the one append-only log.
 (defn live-members
-  ([co te pid] (live-members co te pid :remove-wins))
-  ([co te pid policy]
-   (let [m    @(store co)
-         live (live-cids-lp co te pid)]
-     (if (= policy :add-wins)
-       (let [resurrected (filter (fn [cid] (and (contains? (:superseded m) cid) (withdrawn? co cid)))
-                                 (get (:idx-by-lp m) [te pid]))]
-         (vec (distinct (concat live resurrected))))
-       (vec live)))))
+  ([co te pid] (cr/live-members (store co) te pid :remove-wins))
+  ([co te pid policy] (cr/live-members (store co) te pid policy)))
 
 ;; --- views-as-facts (thread E): per-branch isolation over the same log ------
 ;; A VIEW is a first-class subject; (view selects @cid) facts are its OVERLAY —
@@ -329,14 +287,7 @@
 ;; store-native of VIEWS_AND_BRANCHES §8's three encodings). view-selects returns
 ;; the live overlay; nil when the view subject or `selects` predicate was never
 ;; minted (an unknown view selects nothing -> it inherits main).
-(defn view-selects [co view]
-  (let [m   @(store co)
-        ve  (s/resolve-name (store co) view)
-        sel (c/value-id (store co) "selects")]
-    (when (and ve sel)
-      (set (keep #(:r (get (:facts m) %))
-                 (remove #(contains? (:superseded m) %)
-                         (get (:idx-by-lp m) [ve sel])))))))
+(defn view-selects [co view] (cr/view-selects (store co) view))
 
 ;; elect — the read-time election, now VIEW-RELATIVE (thread E generalizes move-B's
 ;; default-main `elect` to `elect(view, cids)`; `(first cids)`'s descendant gains a view):
@@ -350,13 +301,8 @@
 ;;     falls back to the default election over the whole group — "one head + named
 ;;     overlays" (VIEWS §8): a view is main plus only the facts it overrides.
 (defn elect
-  ([co cids] (elect co nil cids))
-  ([co view cids]
-   (when (seq cids)
-     (let [sel     (when view (view-selects co view))
-           in-view (when (seq sel) (filterv sel cids))
-           pool    (if (seq in-view) in-view cids)]
-       (first (sort-by (fn [cid] [cid (str (agent-of co cid))]) pool))))))
+  ([co cids] (cr/elect (store co) nil cids))
+  ([co view cids] (cr/elect (store co) view cids)))
 
 ;; elect-causal — the CAUSAL election policy (thread H, Part C): same view-relative
 ;; pool as `elect`, but ordered by the CAUSAL key [observed, cid, agent] instead of
@@ -368,13 +314,8 @@
 ;; facts fall back to seq-of via causal-key), so it is a strict refinement, never a
 ;; regression. nil on an empty group.
 (defn elect-causal
-  ([co cids] (elect-causal co nil cids))
-  ([co view cids]
-   (when (seq cids)
-     (let [sel     (when view (view-selects co view))
-           in-view (when (seq sel) (filterv sel cids))
-           pool    (if (seq in-view) in-view cids)]
-       (first (sort-by (fn [cid] (causal-key co cid)) pool))))))
+  ([co cids] (cr/elect-causal (store co) nil cids))
+  ([co view cids] (cr/elect-causal (store co) view cids)))
 
 (defn- ent! [co tx nm]
   (or (s/resolve-name (store co) nm)
