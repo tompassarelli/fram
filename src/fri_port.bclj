@@ -1,0 +1,291 @@
+#lang beagle/clj
+
+;; fri-port — typed implementation behind the incremental fri.clj migration.
+;;
+;; Any is confined to two host boundaries Beagle cannot currently name:
+;; primitive JVM arrays/ByteBuffers and the heterogeneous Store/image maps.
+(ns fri-port
+  (:require [clojure.string :as str] [clojure.edn :as edn])
+  (:import [java.io RandomAccessFile DataOutputStream BufferedOutputStream FileOutputStream ByteArrayOutputStream]
+           [java.nio ByteBuffer]
+           [java.nio.channels FileChannel FileChannel$MapMode]
+           [java.nio.charset StandardCharsets]
+           [java.nio.file Files CopyOption StandardCopyOption]
+           [java.security MessageDigest]
+           [clojure.lang PersistentQueue]))
+
+(define-mode strict)
+
+(def MAGIC :- String "FRAMFRI1")
+(def FMT :- Int 1)
+(def CHUNK :- Int (* 1024 1024 1024))
+
+;; Writer. JVM byte arrays and buffers are the host seam; Store data is the
+;; heterogeneous map emitted by fram.store.
+(defn utf8 [s :- String] :- Any
+  (.getBytes s StandardCharsets/UTF_8))
+
+(defn sha256-hex [b :- Any] :- String
+  (let [d (.digest (MessageDigest/getInstance "SHA-256") b)]
+    (apply str (map (fn [x :- Any] :- String (format "%02x" x)) d))))
+
+(defn bb [n :- Int] :- Any
+  (ByteBuffer/allocate n))
+
+(defn facts-segment [facts-sorted :- Any] :- [Any -> Any]
+  (fn [tx-of :- Any] :- Any
+    (let [n (count facts-sorted)
+          buf (bb (* n 40))]
+      (do
+        (doseq [[cid m] facts-sorted]
+          (.putLong buf (long cid))
+          (.putLong buf (long (:l m)))
+          (.putLong buf (long (:p m)))
+          (.putLong buf (long (:r m)))
+          (.putLong buf (long (or (get tx-of cid) 0))))
+        (.array buf)))))
+
+(defn values-segments [values :- Any] :- Any
+  (let [rows (vec values)
+        blob (ByteArrayOutputStream.)
+        meta (reduce
+              (fn [acc :- Any row :- Any] :- Any
+                (let [id (first row)
+                      v (second row)
+                      b (utf8 (str v))
+                      off (.size blob)]
+                  (do
+                    (.write blob b 0 (alength b))
+                    (conj acc {:id (long id)
+                               :off off
+                               :len (alength b)
+                               :s (str v)}))))
+              []
+              rows)
+        by-id (sort-by :id meta)
+        by-str (sort-by :s meta)
+        vid (bb (* (count meta) 20))
+        vstr (bb (* (count meta) 20))]
+    (do
+      (doseq [m by-id]
+        (.putLong vid (:id m))
+        (.putLong vid (long (:off m)))
+        (.putInt vid (int (:len m))))
+      (doseq [m by-str]
+        (.putLong vstr (long (:off m)))
+        (.putInt vstr (int (:len m)))
+        (.putLong vstr (:id m)))
+      {:values-id (.array vid)
+       :values-str (.array vstr)
+       :values-blob (.toByteArray blob)})))
+
+(defn longs-segment [ids :- Any] :- Any
+  (let [v (vec (sort ids))
+        buf (bb (* (count v) 8))]
+    (do
+      (doseq [x v] (.putLong buf (long x)))
+      (.array buf))))
+
+(defn txs-segments [txs :- Any] :- Any
+  (let [rows (vec txs)
+        blob (ByteArrayOutputStream.)
+        meta (mapv
+              (fn [row :- Any] :- Any
+                (let [tx (first row)
+                      t (second row)
+                      a (utf8 (str (:agent t)))
+                      off (.size blob)]
+                  (do
+                    (.write blob a 0 (alength a))
+                    {:tx (long tx)
+                     :seq (long (or (:seq t) 0))
+                     :off off
+                     :len (alength a)})))
+              rows)
+        buf (bb (* (count meta) 28))]
+    (do
+      (doseq [m meta]
+        (.putLong buf (:tx m))
+        (.putLong buf (:seq m))
+        (.putLong buf (long (:off m)))
+        (.putInt buf (int (:len m))))
+      {:txs (.array buf) :txs-blob (.toByteArray blob)})))
+
+(defn postings-l [ord->l :- Any n :- Int] :- Any
+  (let [groups (reduce
+                (fn [m :- Any ord :- Int] :- Any
+                  (update m (aget ord->l ord) (fnil conj []) ord))
+                (sorted-map)
+                (range n))
+        runs (ByteArrayOutputStream.)
+        keytab (bb (* (count groups) 20))]
+    (do
+      (doseq [row groups]
+        (let [lid (first row)
+              ords (second row)
+              off (.size runs)
+              rb (bb (* (count ords) 4))]
+          (do
+            (doseq [o ords] (.putInt rb (int o)))
+            (let [a (.array rb)] (.write runs a 0 (alength a)))
+            (.putLong keytab (long lid))
+            (.putLong keytab (long off))
+            (.putInt keytab (int (count ords))))))
+      {:postings-l (.array keytab) :pl-runs (.toByteArray runs)})))
+
+(defn postings-lp [ord->l :- Any ord->p :- Any n :- Int] :- Any
+  (let [groups (reduce
+                (fn [m :- Any ord :- Int] :- Any
+                  (update m [(aget ord->l ord) (aget ord->p ord)]
+                          (fnil conj [])
+                          ord))
+                (sorted-map)
+                (range n))
+        runs (ByteArrayOutputStream.)
+        keytab (bb (* (count groups) 28))]
+    (do
+      (doseq [row groups]
+        (let [key (first row)
+              lid (first key)
+              pid (second key)
+              ords (second row)
+              off (.size runs)
+              rb (bb (* (count ords) 4))]
+          (do
+            (doseq [o ords] (.putInt rb (int o)))
+            (let [a (.array rb)] (.write runs a 0 (alength a)))
+            (.putLong keytab (long lid))
+            (.putLong keytab (long pid))
+            (.putLong keytab (long off))
+            (.putInt keytab (int (count ords))))))
+      {:postings-lp (.array keytab) :plp-runs (.toByteArray runs)})))
+
+(defn names-segments [store-val :- Any] :- Any
+  (let [name-pid (get (:val-intern store-val) "name")
+        superseded (set (keys (:superseded store-val)))
+        rows (if (nil? name-pid)
+               []
+               (reduce
+                (fn [acc :- Any row :- Any] :- Any
+                  (let [cid (first row)
+                        f (second row)]
+                    (if (and (= (:p f) name-pid)
+                             (not (contains? superseded cid)))
+                      (conj acc [(get (:values store-val) (:r f)) (:l f)])
+                      acc)))
+                []
+                (:facts store-val)))
+        blob (ByteArrayOutputStream.)
+        meta (reduce
+              (fn [acc :- Any row :- Any] :- Any
+                (let [nm (first row)
+                      eid (second row)
+                      b (utf8 (str nm))
+                      off (.size blob)]
+                  (do
+                    (.write blob b 0 (alength b))
+                    (conj acc {:s (str nm)
+                               :off off
+                               :len (alength b)
+                               :eid (long eid)}))))
+              []
+              rows)
+        by-str (sort-by :s meta)
+        tab (bb (* (count meta) 20))]
+    (do
+      (doseq [x by-str]
+        (.putLong tab (long (:off x)))
+        (.putInt tab (int (:len x)))
+        (.putLong tab (:eid x)))
+      {:names (.array tab) :names-blob (.toByteArray blob)})))
+
+(defn superseded-segment [ord-superseded? :- [Int -> Bool] n :- Int] :- Any
+  (let [b (byte-array (quot (+ n 7) 8))]
+    (do
+      (doseq [ord :- Int (range n)]
+        (when (ord-superseded? ord)
+          (aset-byte b
+                     (quot ord 8)
+                     (unchecked-byte
+                      (bit-or (aget b (quot ord 8))
+                              (bit-shift-left 1 (rem ord 8)))))))
+      b)))
+
+(defn write-fri! [store-val :- Any path :- Any & opts :- Any] :- Any
+  (let [fold-fingerprint (get (apply hash-map opts) :fold-fingerprint)
+        facts-sorted (sort-by first (:facts store-val))
+        n (count facts-sorted)
+        cids (long-array (map first facts-sorted))
+        ord->l (long-array (map (comp :l second) facts-sorted))
+        ord->p (long-array (map (comp :p second) facts-sorted))
+        superseded (set (keys (:superseded store-val)))
+        ord-sup? (fn [ord :- Int] :- Bool (contains? superseded (aget cids ord)))
+        make-facts (facts-segment facts-sorted)
+        entities (remove
+                  (fn [x :- Any] :- Bool
+                    (or (contains? (:values store-val) x)
+                        (contains? (:facts store-val) x)))
+                  (keys (:objects store-val)))
+        segs (merge
+              {:facts (make-facts (:tx-of store-val))
+               :entities (longs-segment entities)
+               :superseded (superseded-segment ord-sup? n)}
+              (values-segments (:values store-val))
+              (txs-segments (:txs store-val))
+              (names-segments store-val)
+              (postings-l ord->l n)
+              (postings-lp ord->l ord->p n))
+        order [:facts :values-id :values-str :values-blob :entities
+               :txs :txs-blob :names :names-blob
+               :postings-l :pl-runs :postings-lp :plp-runs :superseded]
+        tmp (str path ".tmp")
+        fos (FileOutputStream. tmp)]
+    (with-open [os (DataOutputStream. (BufferedOutputStream. fos))]
+      (.write os (utf8 MAGIC))
+      (.writeInt os FMT)
+      (let [start (+ (alength (utf8 MAGIC)) 4)
+            pair
+            (loop [pos start acc {} ks order]
+              (let [k (first ks)]
+                (if (nil? k)
+                  [acc pos]
+                  (let [b (get segs k)]
+                    (do
+                      (.write os b 0 (alength b))
+                      (recur (+ pos (alength b))
+                             (assoc acc k {:off pos
+                                           :len (alength b)
+                                           :sha256 (sha256-hex b)})
+                             (next ks)))))))
+            table (first pair)
+            foff (second pair)
+            footer {:magic MAGIC
+                    :fmt FMT
+                    :covers_seq (or (:next-seq store-val) 0)
+                    :next_id (or (:next-id store-val) 0)
+                    :supersedes_pred (:supersedes-pred store-val)
+                    :fold_fingerprint fold-fingerprint
+                    :counts {:facts n
+                             :values (count (:values store-val))
+                             :entities (count entities)
+                             :txs (count (:txs store-val))
+                             :superseded (count superseded)}
+                    :segments table}
+            fb (utf8 (pr-str footer))]
+        (do
+          (.write os fb 0 (alength fb))
+          (.writeLong os (long foff))
+          (.flush os)
+          (.force (.getChannel fos) true)
+          (Files/move
+           (.toPath (java.io.File. tmp))
+           (.toPath (java.io.File. (str path)))
+           (into-array
+            CopyOption
+            [StandardCopyOption/ATOMIC_MOVE
+             StandardCopyOption/REPLACE_EXISTING]))
+          {:covers_seq (:covers_seq footer)
+           :next_id (:next_id footer)
+           :supersedes_pred (:supersedes_pred footer)
+           :counts (:counts footer)
+           :segments table})))))
