@@ -80,3 +80,12 @@
   (and (map? record) (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record))) (= EDIT-BATCH-ENVELOPE-VERSION (:fram-edit-envelope record)) (nonblank? (:fram-edit-log record)) (nonblank? (:fram-edit-candidate record)) (= (:fram-edit-candidate record) (:fram-edit-batch record)) (nonblank? (:fram-edit-module record)) (nonblank? (:fram-edit-path record)) (int? base) (not (neg? base)) (int? final) (not (neg? final)) (int? ops) (not (neg? ops)) (int? installed) (not (neg? installed)) (int? lines) (not (neg? lines)) (= ops installed) (= installed lines) (= final (+ base installed)) (digest? (:fram-edit-ops-digest record)) (digest? (:fram-edit-edn-digest record)) (digest? (:fram-edit-batch-sha record)) (digest? (:fram-edit-seal-sha record)) (= (:fram-edit-seal-sha record) expected-seal))))
 
 (def EDIT-BATCH-ENVELOPE-SEAL-FIELDS [:fram-edit-envelope :fram-edit-log :fram-edit-candidate :fram-edit-batch :fram-edit-module :fram-edit-path :fram-edit-base-version :fram-edit-final-version :fram-edit-ops :fram-edit-installed :fram-edit-ops-digest :fram-edit-edn-digest :fram-edit-line-count :fram-edit-batch-sha])
+
+(defn classify-rewrite-crash [^String coord live-ino old-ino new-ino old-bytes old-sha new-sha1 live-line1-sha live-prefix-sha]
+  (cond
+  (nil? live-ino) (throw (ex-info (str "rewrite intent present but " coord " does not exist — refusing to classify") {:path coord :fram/doctor-refusal true}))
+  (and (some? old-ino) (= live-ino old-ino)) :roll-back
+  (and (some? new-ino) (= live-ino new-ino)) :roll-forward
+  (and (some? new-sha1) (= new-sha1 live-line1-sha)) :roll-forward
+  (and (some? old-bytes) (some? old-sha) (= old-sha live-prefix-sha)) :roll-back
+  :else (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))

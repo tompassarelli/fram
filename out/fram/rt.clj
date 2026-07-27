@@ -574,21 +574,21 @@
         new-ino   (get-in intent [:new_coord :ino])
         old-bytes (get-in intent [:coord :bytes])
         old-sha   (get-in intent [:coord :sha])
-        new-sha1  (get-in intent [:new_coord :sha1])]
-    (cond
-      (nil? live-ino)
-      (throw (ex-info (str "rewrite intent present but " coord " does not exist — refusing to classify")
-                      {:path coord :fram/doctor-refusal true}))
-      (and old-ino (= live-ino old-ino)) :roll-back
-      (and new-ino (= live-ino new-ino)) :roll-forward
-      ;; ino unavailable/recycled: fall back to content shas.
-      (and new-sha1 (= new-sha1 (file-line1-sha16 coord))) :roll-forward
-      (and old-bytes old-sha (= old-sha (file-prefix-sha16 coord old-bytes))) :roll-back
-      :else
-      (throw (ex-info (str "rewrite intent does not match the live corpus at " coord
-                           " (neither source nor replacement inode/sha) — refusing to classify; "
-                           "operator intervention required")
-                      {:path coord :intent intent :fram/doctor-refusal true})))))
+        new-sha1  (get-in intent [:new_coord :sha1])
+        line1-sha (when new-sha1 (file-line1-sha16 coord))
+        prefix-sha (when (and old-bytes old-sha) (file-prefix-sha16 coord old-bytes))]
+    (rtc/classify-rewrite-crash
+     coord live-ino old-ino new-ino old-bytes old-sha new-sha1 line1-sha prefix-sha)))
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
 
 (defn- compose-empty-telem-tmp!
   "Step-6 twin for roll-forward: an EMPTY 0444 replacement for telemetry.log,
