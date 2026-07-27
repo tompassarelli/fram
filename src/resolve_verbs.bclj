@@ -119,7 +119,12 @@
                  descendants :- Any     ; (fn [root]) -> root + every structural descendant
                  retire :- Any          ; (fn [cid]) -> supersede a fact with no replacement
                  reresolve :- Any       ; (fn []) -> re-walk the corpus so fresh refs carry refers_to
-                 ents :- Any])          ; {src -> [entity …]} — @file->ents, snapshotted
+                 ents :- Any            ; {src -> [entity …]} — @file->ents, snapshotted
+                 mint :- Any            ; (fn [src datum]) -> mint-datum!: an EDN datum as fresh facts
+                 register :- Any        ; (fn [src e]) -> register! a fresh entity in file->ents
+                 scope-srcs :- Any      ; (fn [scope]) -> scope->srcs: dot-SEGMENT-boundary module match
+                 writable-victim :- Any ; (fn [src datum]) -> the top-level form this upsert REPLACES
+                 writable-disp-name :- Any])  ; (fn [datum]) -> the human label for the upserted form
 
 ;; ---------------------------------------------------------------------------
 ;; rename — every INVARIANT + fact mutation of the old `rename` case arm.
@@ -386,3 +391,160 @@
           (emit "reorder"
                 (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`"))
                      " in \"" scope "\" (wrapper order-key re-spelled; SAME subtree, 0 node churn)")))))))
+
+;; ---------------------------------------------------------------------------
+;; upsert-form — add OR replace a top-level def from an EDN datum spec. A REPLACE
+;; reuses the victim's CRDT PATH (new tie) and retires the victim's edge; an
+;; APPEND lands at a path strictly after the last form. Concurrent appends compute
+;; the same path on identical clones -> distinct tie (name-int) -> both land.
+;; ---------------------------------------------------------------------------
+(defn verb-upsert-form! [v :- Verb scope :- String datum :- Any] :- Any
+  (let [ctx (:ctx v)
+        tx (:tx v)
+        warn (:warn v)
+        reject (:reject v)
+        ssrcs (:scope-srcs v)
+        target-srcs (vec (ssrcs scope))]
+    (when (not= 1 (count target-srcs))
+      (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
+                 " source files; upsert-form needs exactly one (no facts mutated)."))
+      (reject 3))
+    (when (and (seq? datum) (not (rc/writable-def-head? (str (first datum)))))
+      (warn (str "REJECTED — upsert-form spec head `" (first datum)
+                 "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
+      (reject 3))
+    (let [wof (:wrapper-of v)
+          wf (:wrap-forms v)
+          mint (:mint v)
+          wdn (:writable-disp-name v)
+          wvic (:writable-victim v)
+          src (first target-srcs)
+          wrap (wof src)
+          forms (vec (wf wrap))
+          disp-name (when (seq? datum) (wdn datum))
+          victim-form (when (seq? datum) (wvic src datum))
+          victim-entry (when (some? victim-form)
+                         (some (fn [e :- Any] :- Any (when (= (enode e) victim-form) e)) forms))
+          new-root (mint src datum)]
+      (if (some? victim-entry)
+        ;; REPLACE in place: reuse the victim's PATH (new tie), retire the victim.
+        (let [retire (:retire v)]
+          (retire (ecid victim-entry))
+          (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (:path (ekey victim-entry)) (ord-tie v))) (nn new-root) tx))
+        ;; APPEND: a path strictly after the last form (CRDT).
+        (let [last-path (when (> (count forms) 0) (:path (ekey (last forms))))]
+          (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-append last-path) (ord-tie v))) (nn new-root) tx)))
+      (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+      (let [emit (:emit v)]
+        (emit "upsert-form"
+              (str (if (some? victim-entry) "replaced" "added") " top-level def `" disp-name
+                   "` in \"" scope "\" (1 form minted as facts; refs resolved via refers_to)"))))))
+
+;; ---------------------------------------------------------------------------
+;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a
+;; CRDT path strictly between the anchor and its next sibling. Concurrent inserts
+;; after the same anchor compute the same between-path -> distinct tie -> both
+;; land, ordered by tie (commute) — the thing append-only could not do.
+;; ---------------------------------------------------------------------------
+(defn verb-insert-form! [v :- Verb scope :- String after-name :- String datum :- Any] :- Any
+  (let [ctx (:ctx v)
+        tx (:tx v)
+        warn (:warn v)
+        reject (:reject v)
+        target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+    (when (not= 1 (count target-srcs))
+      (warn (str "REJECTED — insert-form scope \"" scope "\" matches "
+                 (count target-srcs) " files (need 1)."))
+      (reject 3))
+    (when (and (seq? datum) (not (contains? rc/VALUE-DEFS (str (first datum)))))
+      (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
+      (reject 3))
+    (let [wof (:wrapper-of v)
+          wf (:wrap-forms v)
+          dbind (:def-binding v)
+          ffv (:form-for-victim v)
+          src (first target-srcs)
+          wrap (wof src)
+          forms (vec (wf wrap))
+          anchor-bind (dbind src after-name)
+          anchor-form (when (some? anchor-bind) (ffv src anchor-bind))
+          i (nn (when (some? anchor-form)
+                  (first (vec (keep-indexed (fn [n :- Int e :- Any] :- Any
+                                              (when (= (enode e) anchor-form) n))
+                                            forms)))))]
+      (when (< i 0)
+        (warn (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\"."))
+        (reject 3))
+      (let [mint (:mint v)
+            anchor-path (:path (ekey (nth forms i)))
+            next-path (when (< (+ i 1) (count forms)) (:path (ekey (nth forms (+ i 1)))))
+            new-root (mint src datum)]
+        (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-between anchor-path next-path) (ord-tie v))) (nn new-root) tx)
+        (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+        (let [emit (:emit v)]
+          (emit "insert-form"
+                (str "inserted def after `" after-name "` in \"" scope "\" (CRDT mid-insert)")))))))
+
+;; ---------------------------------------------------------------------------
+;; insert-comment — author a standalone LINE comment (Turtle #6) leading/trailing
+;; an anchor def. Comments do NOT live in the wrapper's form order; they attach to
+;; their anchor FORM via a `commentN` edge. This mints a kind="comment" node + one
+;; `text` seg (the lexeme) + the commentN edge — the FIRST incremental authoring
+;; of a comment node. The seg is a single `text` run (renders verbatim); symbol
+;; segs (rename-tracked identifier mentions) are a follow-up.
+;; ---------------------------------------------------------------------------
+(def COMMENT-RE :- Any (re-pattern "comment\\d+"))
+
+;; next free commentN slot on a form (0 if none)
+(defn- next-comment-idx [v :- Verb form :- Int] :- Int
+  (let [ctx (:ctx v)]
+    (+ 1 (reduce (fn [acc :- Int n :- Int] :- Int (if (> n acc) n acc))
+                 -1
+                 (vec (keep (fn [cid :- Int] :- Int?
+                              (let [cl (c/fact-of ctx cid)
+                                    p (c/literal ctx (:p cl))]
+                                (when (and (string? p) (some? (re-matches COMMENT-RE (str p))))
+                                  (parse-long (subs (str p) 7)))))
+                            (c/by-l ctx form)))))))
+
+(defn verb-insert-comment! [v :- Verb scope :- String anchor-name :- String
+                            text :- String placement :- Any] :- Any
+  (let [ctx (:ctx v)
+        tx (:tx v)
+        warn (:warn v)
+        reject (:reject v)
+        target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+    (when (not= 1 (count target-srcs))
+      (warn (str "REJECTED — insert-comment scope \"" scope "\" matches "
+                 (count target-srcs) " files (need 1)."))
+      (reject 3))
+    (when (str/blank? text)
+      (warn "REJECTED — insert-comment needs non-empty --text; no facts mutated.")
+      (reject 3))
+    (let [dbind (:def-binding v)
+          ffv (:form-for-victim v)
+          src (first target-srcs)
+          plc (if (contains? #{"leading" "trailing"} placement) (str placement) "leading")
+          ;; the lexeme keeps the leading `;` (matches what text->graph ingest captures)
+          lex (if (str/starts-with? (str/triml text) ";") text (str ";; " text))
+          anchor-bind (dbind src anchor-name)
+          anchor-form (when (some? anchor-bind) (ffv src anchor-bind))]
+      (when (nil? anchor-form)
+        (warn (str "REJECTED — insert-comment anchor `" anchor-name "` not found in \"" scope "\"."))
+        (reject 3))
+      (let [reg (:register v)
+            emit (:emit v)
+            form (nn anchor-form)
+            k (next-comment-idx v form)
+            cnode (nn (reg src (c/entity! ctx)))
+            seg (nn (reg src (c/entity! ctx)))]
+        (c/fact! ctx cnode (:KIND v) (c/value! ctx "comment") tx)
+        (c/fact! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
+        (c/fact! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
+        (c/fact! ctx seg (:KIND v) (c/value! ctx "text") tx)
+        (c/fact! ctx seg (:Vp v) (c/value! ctx lex) tx)
+        (c/fact! ctx cnode (c/value! ctx "seg0") seg tx)
+        (c/fact! ctx form (c/value! ctx (str "comment" k)) cnode tx)
+        (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+        (emit "insert-comment"
+              (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)"))))))

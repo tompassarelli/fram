@@ -5,7 +5,7 @@
             [resolve-core :as rc]
             [resolve-read :as rr]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -70,6 +70,16 @@
 (defn verb-reresolve [r] (:reresolve r))
 
 (defn verb-ents [r] (:ents r))
+
+(defn verb-mint [r] (:mint r))
+
+(defn verb-register [r] (:register r))
+
+(defn verb-scope-srcs [r] (:scope-srcs r))
+
+(defn verb-writable-victim [r] (:writable-victim r))
+
+(defn verb-writable-disp-name [r] (:writable-disp-name r))
 
 (defn- ^Boolean upper-first? [^String s]
   (and (> (count s) 0) (let [c (subs s 0 1)]
@@ -254,3 +264,133 @@
   (let [rr! (:reresolve v)]
   (rr!))))
   (emit "reorder" (str "moved def `" name "` " (if front? "to the front" (str "after `" after-name "`")) " in \"" scope "\" (wrapper order-key re-spelled; SAME subtree, 0 node churn)")))))))
+
+(defn verb-upsert-form! [^Verb v ^String scope datum]
+  (let [ctx (:ctx v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   ssrcs (:scope-srcs v)
+   target-srcs (vec (ssrcs scope))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; upsert-form needs exactly one (no facts mutated)."))
+  (reject 3)))
+  (if (and (seq? datum) (not (rc/writable-def-head? (str (first datum))))) (do
+  (warn (str "REJECTED — upsert-form spec head `" (first datum) "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
+  (reject 3)))
+  (let [wof (:wrapper-of v)
+   wf (:wrap-forms v)
+   mint (:mint v)
+   wdn (:writable-disp-name v)
+   wvic (:writable-victim v)
+   src (first target-srcs)
+   wrap (wof src)
+   forms (vec (wf wrap))
+   disp-name (if (seq? datum) (do
+  (wdn datum)))
+   victim-form (if (seq? datum) (do
+  (wvic src datum)))
+   victim-entry (if (some? victim-form) (do
+  (some (fn [e] (if (= (enode e) victim-form) (do
+  e))) forms)))
+   new-root (mint src datum)]
+  (if (some? victim-entry) (let [retire (:retire v)]
+  (retire (ecid victim-entry))
+  (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (:path (ekey victim-entry)) (ord-tie v))) (nn new-root) tx)) (let [last-path (if (> (count forms) 0) (do
+  (:path (ekey (last forms)))))]
+  (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-append last-path) (ord-tie v))) (nn new-root) tx)))
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (let [emit (:emit v)]
+  (emit "upsert-form" (str (if (some? victim-entry) "replaced" "added") " top-level def `" disp-name "` in \"" scope "\" (1 form minted as facts; refs resolved via refers_to)"))))))
+
+(defn verb-insert-form! [^Verb v ^String scope ^String after-name datum]
+  (let [ctx (:ctx v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — insert-form scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
+  (reject 3)))
+  (if (and (seq? datum) (not (contains? rc/VALUE-DEFS (str (first datum))))) (do
+  (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
+  (reject 3)))
+  (let [wof (:wrapper-of v)
+   wf (:wrap-forms v)
+   dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   src (first target-srcs)
+   wrap (wof src)
+   forms (vec (wf wrap))
+   anchor-bind (dbind src after-name)
+   anchor-form (if (some? anchor-bind) (do
+  (ffv src anchor-bind)))
+   i (nn (if (some? anchor-form) (do
+  (first (vec (keep-indexed (fn [n e] (if (= (enode e) anchor-form) (do
+  n))) forms))))))]
+  (if (< i 0) (do
+  (warn (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\"."))
+  (reject 3)))
+  (let [mint (:mint v)
+   anchor-path (:path (ekey (nth forms i)))
+   next-path (if (< (+ i 1) (count forms)) (do
+  (:path (ekey (nth forms (+ i 1))))))
+   new-root (mint src datum)]
+  (c/fact! ctx (nn wrap) (c/value! ctx (ord-str* (rc/ord-between anchor-path next-path) (ord-tie v))) (nn new-root) tx)
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (let [emit (:emit v)]
+  (emit "insert-form" (str "inserted def after `" after-name "` in \"" scope "\" (CRDT mid-insert)")))))))
+
+(def COMMENT-RE (re-pattern "comment\\d+"))
+
+(defn- next-comment-idx [^Verb v form]
+  (let [ctx (:ctx v)]
+  (+ 1 (reduce (fn [acc n] (if (> n acc) n acc)) -1 (vec (keep (fn [cid] (let [cl (c/fact-of ctx cid)
+   p (c/literal ctx (:p cl))]
+  (if (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (do
+  (parse-long (subs (str p) 7)))))) (c/by-l ctx form)))))))
+
+(defn verb-insert-comment! [^Verb v ^String scope ^String anchor-name ^String text placement]
+  (let [ctx (:ctx v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — insert-comment scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
+  (reject 3)))
+  (if (str/blank? text) (do
+  (warn "REJECTED — insert-comment needs non-empty --text; no facts mutated.")
+  (reject 3)))
+  (let [dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   src (first target-srcs)
+   plc (if (contains? #{"leading" "trailing"} placement) (str placement) "leading")
+   lex (if (str/starts-with? (str/triml text) ";") text (str ";; " text))
+   anchor-bind (dbind src anchor-name)
+   anchor-form (if (some? anchor-bind) (do
+  (ffv src anchor-bind)))]
+  (if (nil? anchor-form) (do
+  (warn (str "REJECTED — insert-comment anchor `" anchor-name "` not found in \"" scope "\"."))
+  (reject 3)))
+  (let [reg (:register v)
+   emit (:emit v)
+   form (nn anchor-form)
+   k (next-comment-idx v form)
+   cnode (nn (reg src (c/entity! ctx)))
+   seg (nn (reg src (c/entity! ctx)))]
+  (c/fact! ctx cnode (:KIND v) (c/value! ctx "comment") tx)
+  (c/fact! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
+  (c/fact! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
+  (c/fact! ctx seg (:KIND v) (c/value! ctx "text") tx)
+  (c/fact! ctx seg (:Vp v) (c/value! ctx lex) tx)
+  (c/fact! ctx cnode (c/value! ctx "seg0") seg tx)
+  (c/fact! ctx form (c/value! ctx (str "comment" k)) cnode tx)
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (emit "insert-comment" (str "added " plc " comment on `" anchor-name "` in \"" scope "\" (comment" k "; 1 text seg minted)"))))))
