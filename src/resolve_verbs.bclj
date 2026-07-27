@@ -126,8 +126,6 @@
                  mint :- Any            ; (fn [src datum]) -> mint-datum!: an EDN datum as fresh facts
                  register :- Any        ; (fn [src e]) -> register! a fresh entity in file->ents
                  scope-srcs :- Any      ; (fn [scope]) -> scope->srcs: dot-SEGMENT-boundary module match
-                 writable-victim :- Any ; (fn [src datum]) -> the top-level form this upsert REPLACES
-                 writable-disp-name :- Any  ; (fn [datum]) -> the human label for the upserted form
                  fn-facts :- Any        ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
                  FIXED :- Int           ; the :rename keep-spelling render marker predicate id
                  disambig :- Any        ; (fn [reason name scope root sites]) -> the reject payload
@@ -285,6 +283,88 @@
     (set? d)      (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
     (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
     :else         [:leaf "other" (pr-str d)]))
+
+;; ---------------------------------------------------------------------------
+;; UPSERT IDENTITY (M1 Cut J) — which existing form an upsert REPLACES, and what
+;; to call it. Both were resolve.clj closures (`writable-victim`/`writable-disp-name`
+;; in the Verb record); nothing in them is host-bound — they read the corpus through
+;; rr/ + rm/ and compare through datum->canon, all of which are here — so they move
+;; to their caller (verb-upsert-form!) and two more closure fields leave the record.
+;; ---------------------------------------------------------------------------
+;; a writable form whose IDENTITY is its def-name (def/defn/type/protocol/defmulti) —
+;; as opposed to defmethod (name+dispatch) and the extend forms (head+target), which
+;; key differently and coexist under a shared head/name.
+(defn- named-def-head? [h :- Any] :- Bool
+  (and (rc/writable-def-head? (str h))
+       (not (contains? (into #{"defmethod"} rc/EXTEND-FORMS) (str h)))))
+
+;; the meta/Params-unwrapped def NAME of a node: peel (#%meta …), and if the name
+;; slot is itself a list (a metadata-named def) take its first child.
+(defn- node-def-name [v :- Verb f :- Int?] :- Any
+  (let [ctx (:ctx v)
+        view (:view v)
+        nl0 (rr/unwrap-meta ctx view (second (rr/ordered-children ctx (rm/unwrap-def ctx view f))))
+        nl (if (= "list" (rr/kind-of ctx view nl0)) (first (rr/ordered-children ctx nl0)) nl0)]
+    (rr/sym-val ctx view nl)))
+
+;; writable-victim — the existing top-level FORM node this upsert should REPLACE
+;; (nil -> APPEND). Identity is head-shaped:
+;;   named (def/defn/type/protocol/defmulti) -> the def NAME (meta/Params unwrapped),
+;;     matched by string so `def`->`defn` upsert and metadata-named defs round-trip;
+;;   defmethod -> multimethod name + dispatch value (canon-compared) — two methods on
+;;     the same M with different dispatch are DISTINCT and coexist; re-writing one
+;;     replaces it;
+;;   extend-type/extend-protocol/extend -> head + primary target (the form's second
+;;     child), so re-authoring `(extend-type T …)` replaces the T block. (Multiple
+;;     extend blocks on the same target under one head collapse to one identity — a
+;;     known, documented bound.)
+(defn writable-victim [v :- Verb src :- String datum :- Any] :- Any
+  (let [ctx (:ctx v)
+        view (:view v)
+        BOUND (:BOUND v)
+        REFERS (:REFERS v)
+        FIXED (:FIXED v)
+        wrapper (:wrapper-of v)
+        head (str (first datum))
+        forms (rest (rr/ordered-children ctx (wrapper src)))]
+    (cond
+      (= head "defmethod")
+      (let [m (str (second datum))
+            dv (datum->canon (nth (vec datum) 2 nil))]
+        (some (fn [f :- Int] :- Any
+                (let [d (rm/unwrap-def ctx view f)
+                      k (rr/ordered-children ctx d)]
+                  (when (and (= "defmethod" (rr/head-sym ctx view d))
+                             (= m (rr/sym-val ctx view (second k)))
+                             (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil))))
+                    f)))
+              forms))
+      (contains? rc/EXTEND-FORMS head)
+      (let [tgt (datum->canon (second datum))]
+        (some (fn [f :- Int] :- Any
+                (let [d (rm/unwrap-def ctx view f)]
+                  (when (and (= head (rr/head-sym ctx view d))
+                             (= tgt (rv/node->canon ctx view BOUND REFERS FIXED
+                                                    (second (rr/ordered-children ctx d)))))
+                    f)))
+              forms))
+      :else
+      (let [nm (str (second datum))]
+        (some (fn [f :- Int] :- Any
+                (when (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f)))
+                           (= nm (node-def-name v f)))
+                  f))
+              forms)))))
+
+;; a human label for the upserted form (author-emit + result naming). For a value def
+;; it is the name; for defmethod it is `M:dispatch`; for an extension it is
+;; `head <target>`.
+(defn writable-disp-name [datum :- Any] :- String
+  (let [head (str (first datum))]
+    (cond
+      (= head "defmethod") (str (second datum) ":" (pr-str (nth (vec datum) 2 nil)))
+      (contains? rc/EXTEND-FORMS head) (str head " " (pr-str (second datum)))
+      :else (str (second datum)))))
 
 ;; ---------------------------------------------------------------------------
 ;; delete — remove a top-level def by name. FACT-NATIVE + fail-closed: the
@@ -463,13 +543,11 @@
     (let [wof (:wrapper-of v)
           wf (:wrap-forms v)
           mint (:mint v)
-          wdn (:writable-disp-name v)
-          wvic (:writable-victim v)
           src (first target-srcs)
           wrap (wof src)
           forms (vec (wf wrap))
-          disp-name (when (seq? datum) (wdn datum))
-          victim-form (when (seq? datum) (wvic src datum))
+          disp-name (when (seq? datum) (writable-disp-name datum))
+          victim-form (when (seq? datum) (writable-victim v src datum))
           victim-entry (when (some? victim-form)
                          (some (fn [e :- Any] :- Any (when (= (enode e) victim-form) e)) forms))
           new-root (mint src datum)]

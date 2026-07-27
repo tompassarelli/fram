@@ -8,7 +8,7 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED disambig exit])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs fn-facts FIXED disambig exit])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -79,10 +79,6 @@
 (defn verb-register [r] (:register r))
 
 (defn verb-scope-srcs [r] (:scope-srcs r))
-
-(defn verb-writable-victim [r] (:writable-victim r))
-
-(defn verb-writable-disp-name [r] (:writable-disp-name r))
 
 (defn verb-fn-facts [r] (:fn-facts r))
 
@@ -189,6 +185,47 @@
   (set? d) (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
   (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
   :else [:leaf "other" (pr-str d)]))
+
+(defn- ^Boolean named-def-head? [h]
+  (and (rc/writable-def-head? (str h)) (not (contains? (into #{"defmethod"} rc/EXTEND-FORMS) (str h)))))
+
+(defn- node-def-name [^Verb v f]
+  (let [ctx (:ctx v)
+   view (:view v)
+   nl0 (rr/unwrap-meta ctx view (second (rr/ordered-children ctx (rm/unwrap-def ctx view f))))
+   nl (if (= "list" (rr/kind-of ctx view nl0)) (first (rr/ordered-children ctx nl0)) nl0)]
+  (rr/sym-val ctx view nl)))
+
+(defn writable-victim [^Verb v ^String src datum]
+  (let [ctx (:ctx v)
+   view (:view v)
+   BOUND (:BOUND v)
+   REFERS (:REFERS v)
+   FIXED (:FIXED v)
+   wrapper (:wrapper-of v)
+   head (str (first datum))
+   forms (rest (rr/ordered-children ctx (wrapper src)))]
+  (cond
+  (= head "defmethod") (let [m (str (second datum))
+   dv (datum->canon (nth (vec datum) 2 nil))]
+  (some (fn [f] (let [d (rm/unwrap-def ctx view f)
+   k (rr/ordered-children ctx d)]
+  (if (and (= "defmethod" (rr/head-sym ctx view d)) (= m (rr/sym-val ctx view (second k))) (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil)))) (do
+  f)))) forms))
+  (contains? rc/EXTEND-FORMS head) (let [tgt (datum->canon (second datum))]
+  (some (fn [f] (let [d (rm/unwrap-def ctx view f)]
+  (if (and (= head (rr/head-sym ctx view d)) (= tgt (rv/node->canon ctx view BOUND REFERS FIXED (second (rr/ordered-children ctx d))))) (do
+  f)))) forms))
+  :else (let [nm (str (second datum))]
+  (some (fn [f] (if (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f))) (= nm (node-def-name v f))) (do
+  f))) forms)))))
+
+(defn ^String writable-disp-name [datum]
+  (let [head (str (first datum))]
+  (cond
+  (= head "defmethod") (str (second datum) ":" (pr-str (nth (vec datum) 2 nil)))
+  (contains? rc/EXTEND-FORMS head) (str head " " (pr-str (second datum)))
+  :else (str (second datum)))))
 
 (defn verb-delete! [^Verb v ^String name ^String scope]
   (let [ctx (:ctx v)
@@ -308,15 +345,13 @@
   (let [wof (:wrapper-of v)
    wf (:wrap-forms v)
    mint (:mint v)
-   wdn (:writable-disp-name v)
-   wvic (:writable-victim v)
    src (first target-srcs)
    wrap (wof src)
    forms (vec (wf wrap))
    disp-name (if (seq? datum) (do
-  (wdn datum)))
+  (writable-disp-name datum)))
    victim-form (if (seq? datum) (do
-  (wvic src datum)))
+  (writable-victim v src datum)))
    victim-entry (if (some? victim-form) (do
   (some (fn [e] (if (= (enode e) victim-form) (do
   e))) forms)))

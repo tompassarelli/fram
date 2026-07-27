@@ -772,77 +772,20 @@
     (or (seg? src) (seg? (module-name src)))))
 (defn- scope->srcs [scope] (filter #(scope-match? % scope) srcs))
 
-;; datum->canon / node->canon are defined further down; forward-declare so the upsert
-;; victim finder can compare a NEW datum's dispatch/target against an EXISTING node's —
-;; both reduce to the SAME canonical vector, so the match is representation-independent.
-(declare datum->canon node->canon)
-;; writable-victim — the existing top-level FORM node this upsert should REPLACE (nil ->
-;; APPEND). Identity is head-shaped:
-;;   named (def/defn/type/protocol/defmulti) -> the def NAME (meta/Params unwrapped),
-;;     matched by string so `def`->`defn` upsert and metadata-named defs round-trip;
-;;   defmethod -> multimethod name + dispatch value (canon-compared) — two methods on the
-;;     same M with different dispatch are DISTINCT and coexist; re-writing one replaces it;
-;;   extend-type/extend-protocol/extend -> head + primary target (the form's second child),
-;;     so re-authoring `(extend-type T …)` replaces the T block. (Multiple extend blocks on
-;;     the same target under one head collapse to one identity — a known, documented bound.)
-(defn- node-def-name [f]                       ; meta/Params-unwrapped def NAME of a node
-  (let [nl0 (unwrap-meta (second (ordered-children (unwrap-def f))))
-        nl  (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)]
-    (sym-val nl)))
-(defn- writable-victim [src datum]
-  (let [head  (str (first datum))
-        forms (rest (ordered-children (wrapper-of src)))]
-    (cond
-      (= head "defmethod")
-      (let [m  (str (second datum))
-            dv (datum->canon (nth (vec datum) 2 nil))]        ; dispatch value, canon
-        (some (fn [f] (let [d (unwrap-def f) k (ordered-children d)]
-                        (when (and (= "defmethod" (head-sym d))
-                                   (= m (sym-val (second k)))
-                                   (= dv (node->canon (nth (vec k) 2 nil))))
-                          f)))
-              forms))
-      (contains? EXTEND-FORMS head)
-      (let [tgt (datum->canon (second datum))]                ; primary target, canon
-        (some (fn [f] (let [d (unwrap-def f)]
-                        (when (and (= head (head-sym d))
-                                   (= tgt (node->canon (second (ordered-children d)))))
-                          f)))
-              forms))
-      :else                                                   ; named identity
-      (let [nm (str (second datum))]
-        (some (fn [f] (when (and (named-def-head? (head-sym (unwrap-def f)))
-                                 (= nm (node-def-name f)))
-                        f))
-              forms)))))
-;; a human label for the upserted form (author-emit + result naming). For a value def it
-;; is the name; for defmethod it is `M:dispatch`; for an extension it is `head <target>`.
-(defn writable-disp-name [datum]
-  (let [head (str (first datum))]
-    (cond
-      (= head "defmethod")      (str (second datum) ":" (pr-str (nth (vec datum) 2 nil)))
-      (contains? EXTEND-FORMS head) (str head " " (pr-str (second datum)))
-      :else                     (str (second datum)))))
-
-;; ============================================================================
-;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a def,
-;; addressed by an ANCHOR datum (the OLD form, as it reads in source), with a NEW
-;; form — WITHOUT re-emitting the whole def. Kills the mega-def floor (duel lever #2):
-;; changing one case in a 1,768-line def costs ONE fN-edge swap, not a whole-def
-;; re-mint. Same fact-op discipline as set-body — supersede exactly the touched fN
-;; edge, mint the replacement, recompile-gated + fail-closed — but at INTERIOR
-;; granularity. Because only one edge moves and the def is never re-minted, EVERY
-;; sibling form + all attached comments (the def's leading comments, other cases)
-;; survive untouched — it does not carry set-body's comment-fidelity loss (019f208b-d67b).
-;;
-;; ADDRESSING — anchor-form match (Edit-tool old_string, but on the AST). The model
-;; emits the OLD interior form + the NEW one; we canonicalize both STRUCTURALLY (kind
-;; + rendered spelling + child shape, whitespace/formatting ignored) and require the
-;; anchor to match EXACTLY ONE interior node. 0 or >1 matches REFUSE (no facts
-;; mutated) — the model disambiguates by supplying a larger enclosing form, exactly
-;; like old_string uniqueness. Structural (not textual) match is why the model need
-;; not reproduce whitespace: it emits the form, we compare shape.
-;;
+;; datum->canon / node->canon / verb-env are defined further down; forward-declare so
+;; the upsert victim finder can compare a NEW datum's dispatch/target against an
+;; EXISTING node's — both reduce to the SAME canonical vector, so the match is
+;; representation-independent.
+(declare datum->canon node->canon verb-env)
+;; writable-victim / writable-disp-name — WHICH existing top-level form an upsert
+;; replaces (nil -> APPEND), and what to call it. M1 Cut J: both are Beagle now
+;; (src/resolve_verbs.bclj), next to their only caller, verb-upsert-form!. Nothing
+;; in them was host-bound — they read the corpus through the ported read/module
+;; layers and compare through datum->canon, which moved in step 1. These wrappers
+;; stay for the ns-qualified surface (coord_daemon.clj:3893 calls
+;; resolve/writable-disp-name).
+(defn writable-victim [src datum] (rvb/writable-victim (verb-env) src datum))
+(defn writable-disp-name [datum] (rvb/writable-disp-name datum))
 ;; render-sym — the spelling a symbol node RENDERS as (mirrors extract-file!'s
 ;; reference-rendering): a resolved reference shows its binding's CURRENT name
 ;; (mode-adjusted: ctor prefix, x/qualifier, :rename keep-spelling); an unresolved /
@@ -975,7 +918,7 @@
               parse-require capture-refs ultimate
               BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
               retire-fact! re-resolve! @file->ents
-              mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts
+              mint-datum! register! scope->srcs fN-facts
               FIXED disambig-payload (fn [code] (System/exit code))))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
