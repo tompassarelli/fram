@@ -9,8 +9,9 @@
 ;; OCC, leases, locks, queues, promises, fsync, and group commit remain in
 ;; coord.clj. This module owns only read-time derivations over coordinator state.
 ;; ============================================================================
-(ns coord-read
-  (:require [fram.store :as c]
-            [fram.schema :as s]))
+(ns coord-read (:require [fram.store :as c] [fram.schema :as s]))
 
 (define-mode strict)
+
+(defn live-cids-lp [ctx :- (Atom fram.types/Store) te :- Int pid :- Int] :- (Vec Int)
+  (c/by-lp ctx te pid))
