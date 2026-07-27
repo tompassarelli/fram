@@ -10,7 +10,11 @@
 ;; locks, queues, futures, promises, fsync, group commit, and dynamic vars stay
 ;; in coord.clj.
 ;; ============================================================================
-(ns coord-commit
-  (:require [fram.types :as t]))
+(ns coord-commit (:require [fram.types :as t]))
 
 (define-mode strict)
+
+(defn version-conflict? [single :- Bool base-version :- Int expected-version :- Int?] :- Bool
+  (if (nil? expected-version)
+    false
+    (and single (> base-version expected-version))))
