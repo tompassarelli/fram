@@ -21,3 +21,5 @@
 
 (defn expected-value-match? [live-values :- (Set Int) expected-value :- Int?] :- Bool
   (if (nil? expected-value) false (contains? live-values expected-value)))
+
+(defrecord CommitIntent [index :- Int pred :- String kind :- Keyword r :- String single :- Bool base-version :- Int expected-version :- Int? live-values :- (Set Int) expected-value :- Int? cycle :- Bool])
