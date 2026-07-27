@@ -148,6 +148,15 @@ baselined count of `claim` lines, and a file not in the baseline must carry none
 so the vocabulary cannot regrow by accident. This document and the spec suite were
 admitted to that baseline deliberately, in the commit that introduced them.
 
+One amendment (PR #1): the daemon's claims bridge — `:claim-cite`,
+`:claim-decision`, `:claim-read`, `:claims-read` in `coord_daemon.clj`, the
+generic `about!` seam's mention in `coord.clj`, and their lifecycle test — is
+part of this module's *surface*, and spends the reservation in its reserved
+sense: those ops name the verification lifecycle, not the stored triple. They
+were admitted to the ratchet baseline deliberately, in the commit that landed
+them. The border holds everywhere else: the store, the fold, the engine's own
+vocabulary for what the graph holds still never say "claim."
+
 ## Revise by PR
 
 This is a draft on purpose. It was written from first principles plus one

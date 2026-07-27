@@ -7,8 +7,9 @@
 5	codegraph/docs/build-log.md
 2	codegraph/test/comment-falsifier.sh
 1	codegraph/test/faith.rkt
-5	coord_daemon.clj
-38	docs/claims-design.md
+1	coord.clj
+66	coord_daemon.clj
+41	docs/claims-design.md
 9	docs/naming.md
 28	out/fram/claims.clj
 1	out/fram/rt.clj
@@ -22,6 +23,7 @@
 1	tests/apparatus_r1/cells/perf_104k.clj
 1	tests/apparatus_r1/lib/r1/harness.clj
 1	tests/authority_primitives_test.clj
+38	tests/claims_daemon_test.clj
 108	tests/claims_spec_test.clj
 1	tests/goldens/resolve/callgraph-fram.out
 1	tests/package_graph_edit_runtime_smoke.sh
