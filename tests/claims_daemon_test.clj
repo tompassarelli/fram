@@ -27,6 +27,12 @@
                      :facts [{:p "evidence.source" :r "sheet:A101"}
                              {:p "evidence.region" :r "detail:3"}
                              {:p "evidence.fingerprint" :r "sha256:abc"}]})))
+(check "claim-cite rejects a missing agent (provenance is attributable)"
+       (= :invalid-claim-citation
+          (:code (handle {:op :claim-cite
+                          :te "@claim:door"
+                          :p "review.assertion"
+                          :evidence "@evidence:door"}))))
 (check "claim-cite links evidence to the fact cid"
        (:ok (handle {:op :claim-cite
                      :agent "extractor"

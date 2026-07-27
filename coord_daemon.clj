@@ -1449,7 +1449,8 @@
   (if @flat-log
     (claims-v2-required)
     (let [cid (claim-cid (:te req) (:p req))
-          evidence (:evidence req)]
+          evidence (:evidence req)
+          agent (:agent req)]
       (cond
         (nil? cid)
         {:reject ["claim fact was not found"] :code :claim-not-found
@@ -1463,8 +1464,14 @@
         {:reject ["claim-cite requires a named :evidence entity"]
          :code :invalid-claim-citation :version (current-seq @co)}
 
+        ;; same bar as claim-decision: a citation is attributable provenance,
+        ;; so an anonymous default agent would silently launder authorship.
+        (not (and (string? agent) (not (str/blank? agent))))
+        {:reject ["claim-cite requires a nonblank :agent"]
+         :code :invalid-claim-citation :version (current-seq @co)}
+
         :else
-        (assoc (about! @co (or (:agent req) "claims") cid
+        (assoc (about! @co agent cid
                        claims/evidence-pred :link evidence)
                :claim-cid cid)))))
 
