@@ -4363,6 +4363,14 @@
       :else
       {:ok true :module module :path (first paths) :version (current-seq @co)})))
 
+(defn- request-dispatch [req]
+  (wire/request-dispatch
+   req
+   {:durability-stop? (boolean (durability-stop-rejection req))}
+   {:reload-checked? *reload-checked*
+    :reload-deferred-ops reload-deferred-ops
+    :reload-mutation-ops reload-mutation-ops}))
+
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
   ;; (clone/verb/harvest) is lock-free and its COMMIT phase already takes dlock itself (the (B)
@@ -4370,17 +4378,24 @@
   ;; and HIDES the concurrency the logic layer + the 150-pair commute already proved. maybe-reload!
   ;; is a no-op in v2-log mode (the code daemon, where :edit-min lives), so skipping it here is
   ;; safe; the commit still serializes under dlock and is OCC-checked per (te,p) at commit time.
+  (let [decision (request-dispatch req)
+        route (:route decision)
+        handler (:handler decision)
+        invalid (wire/invalid-request-response
+                 (wire/request-validation-errors req decision))]
   (cond
     ;; An indeterminate append outcome poisons the process. Diagnostics remain
     ;; live and expose the reason; every other request stops before reload,
     ;; compute, or mutation so no later commit can outrun recovery authority.
+    (= :durability-stop route)
     (durability-stop-rejection req)
-    (durability-stop-rejection req)
+
+    invalid invalid
 
     ;; Query fencing covers only reload/fence validation and capture of one
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
     ;; expensive or abandoned read can never block writes, leases, or status.
-    (and (= :for-log (:op req)) (query-request? (:request req)))
+    (= :fenced-query route)
     (let [_ (maybe-reload!)
           inner (:request req)
           captured (locking dlock
@@ -4391,7 +4406,7 @@
         reject
         (execute-query inner (:roots captured))))
 
-    (query-request? req)
+    (= :query route)
     (let [_ (maybe-reload!)
           roots (locking dlock (capture-query-roots!))]
       (execute-query req roots))
@@ -4401,19 +4416,26 @@
     ;; the JVM monitor, but cannot release the fence between check and mutation.
     ;; :edit-min is different by design: its expensive compute stays lock-free
     ;; and do-edit-min validates expected-log inside its existing commit lock.
-    (= :for-log (:op req))
+    (= :for-log route)
     (let [inner (:request req)
-          expected (:expected-log req)]
+          expected (:expected-log req)
+          inner-decision (wire/request-dispatch
+                          inner
+                          {:durability-stop? false}
+                          {:reload-checked? true
+                           :reload-deferred-ops reload-deferred-ops
+                           :reload-mutation-ops reload-mutation-ops})
+          inner-handler (:handler inner-decision)]
       (cond
         (not (map? inner))
         {:reject ["log fence requires a nested request map"]
          :code :invalid-log-fence}
 
-        (= :for-log (:op inner))
+        (= :for-log inner-handler)
         {:reject ["nested log-fence envelopes are not supported"]
          :code :invalid-log-fence}
 
-        (= :edit-min (:op inner))
+        (= :edit-min inner-handler)
         ;; Cheap preflight avoids running the lock-free compiler/harvest work
         ;; for an already-proven mismatch. do-edit-min* repeats this check at
         ;; the commit boundary, under the same dlock as its first mutation.
@@ -4426,13 +4448,13 @@
         ;; compute) behind a cheap fence preflight; it writes NOTHING canonical, so
         ;; no fence recheck is needed at its end. Commit takes dlock itself and
         ;; rechecks the fence inside it (do-edit-commit).
-        (= :edit-prepare (:op inner))
+        (= :edit-prepare inner-handler)
         (if-let [fence-reject (locking dlock
                                 (log-fence-rejection expected))]
           fence-reject
           (do-edit-prepare inner))
 
-        (= :edit-commit (:op inner))
+        (= :edit-commit inner-handler)
         (edit-commit-response inner expected true)
 
         :else
@@ -4448,29 +4470,29 @@
     ;; writer lock (the atom swap on commit is atomic), so a reader never serializes behind
     ;; concurrent writers. Used to measure true propagation (commit -> reader sees) without
     ;; the read-coupled-to-writer-lock artifact the dlock-wrapped :version/:status have.
-    (= :version-free (:op req)) {:version (current-seq @co)}
+    (= :version-free handler) {:version (current-seq @co)}
     ;; LOCK-FREE CONTENT check: is value string (:v req) interned in the warm @co snapshot
     ;; yet? Names are unique per writer, so interned <=> that writer's def reached the store.
     ;; This is the propagation visibility signal (commit -> reader sees THIS def), off the dlock.
-    (= :seen (:op req)) {:seen (boolean (c/value-id (:store @co) (:v req)))}
+    (= :seen handler) {:seen (boolean (c/value-id (:store @co) (:v req)))}
     ;; Lock-free reload telemetry: supervisors/tests can observe the two-phase build
     ;; without triggering another maybe-reload! request themselves.
-    (= :reload-status (:op req))
+    (= :reload-status handler)
     {:active @active-reloads :retries @reload-retries
      :generation @reload-generation}
     ;; S-PROFILE text-bridge verbs (thread A1). LOCK-FREE: write-def commits through
     ;; do-edit-min (which takes dlock itself); read-def/index are @co snapshot reads.
     ;; All return the structured ERROR shape on any malformed input — never a bare throw.
-    (= :write-def (:op req)) (try (do-write-def (:spec req))
+    (= :write-def handler) (try (do-write-def (:spec req))
                                   (catch Throwable t (ex->s-err (:module (:spec req)) nil t)))
-    (= :read-def  (:op req)) (try (do-read-def (:spec req))
+    (= :read-def handler) (try (do-read-def (:spec req))
                                   (catch Throwable t (ex->s-err (:module (:spec req)) (:name (:spec req)) t)))
-    (= :index     (:op req)) (try (do-index (:spec req))
+    (= :index handler) (try (do-index (:spec req))
                                   (catch Throwable t (ex->s-err (:module (:spec req)) nil t)))
     ;; :check {} — the whole-tree gate the agent calls before declaring done (spec
     ;; S-profile contract). Delegates to A2's whole-tree-check (:stage :gate) when wired;
     ;; else reports :deferred (advisory phase). nil from the gate = the tree is clean.
-    (= :check (:op req))
+    (= :check handler)
     (if-let [wtc @whole-tree-hook]
       (let [res (try (wtc) (catch Throwable t (ex->s-err nil nil t)))]
         (if (nil? res)
@@ -4479,11 +4501,11 @@
       {:ok true :checked :deferred
        :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + out/defcheck_gate.clj)"
        :version (current-seq @co)})
-    (= :edit-min (:op req)) (edit-min-response req nil false)
+    (= :edit-min handler) (edit-min-response req nil false)
     ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence
     ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
-    (= :edit-prepare (:op req)) (do-edit-prepare req)
-    (= :edit-commit (:op req)) (edit-commit-response req nil false)
+    (= :edit-prepare handler) (do-edit-prepare req)
+    (= :edit-commit handler) (edit-commit-response req nil false)
   :else
   (do
     ;; maybe-reload! performs its own two-phase capture/build/install.  It must run
@@ -4494,7 +4516,7 @@
      ;; Recheck after acquiring dlock: a concurrent request may have passed the
      ;; outer guard before the failing edit poisoned the process.
      (or (durability-stop-rejection req)
-         (case (:op req)
+         (case handler
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       ;; ATOMIC multi-fact publication for ONE subject — all-or-none at every
@@ -4780,7 +4802,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      (wire/unknown-op-response)))))))
+      (wire/unknown-op-response))))))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
