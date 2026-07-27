@@ -26,6 +26,7 @@
             [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d]
             [fram.claims :as claims] [fram.rt]
             [fri]
+            [coord-commit :as cc]
             [coord-daemon-wire :as wire])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
@@ -5767,28 +5768,42 @@
                          (when (> (long (get-in fences [label :byte_offset] -1))
                                   (.length (java.io.File. ^String path)))
                            label))
-                       expected-paths)]
-    (cond
-      (not (map? snap))                          "no checkpoint sidecar (missing/torn/non-EDN)"
-      (not (int? (:seq snap)))                   "sidecar malformed (:seq not int)"
-      (not (int? watermark))                     "sidecar malformed (:watermark not int)"
-      (and (contains? snap :watermark)
-           (not= (:watermark snap) (:seq snap))) "sidecar watermark disagrees with snapshot seq"
-      (not= expected-labels actual-labels)       (str "checkpoint log set mismatch (checkpoint "
-                                                      (sort actual-labels) ", live "
-                                                      (sort expected-labels) ")")
-      (some #(not (int? (get-in fences [% :byte_offset])))
-            expected-labels)                     "sidecar malformed (log byte_offset not int)"
-      (nil? (:fold_version snap))                "sidecar unstamped (pre-fingerprint format)"
-      (nil? fp)                                  "live fold fingerprint uncomputable (fold source unreadable)"
-      (not= fp (:fold_version snap))             (str "fold-version mismatch (checkpoint "
-                                                      (subs (str (:fold_version snap)) 0 (min 12 (count (str (:fold_version snap)))))
-                                                      "… vs live " (subs fp 0 12) "…) — fold logic changed since checkpoint")
-      bad-identity                               (str (name bad-identity)
-                                                      " log identity mismatch (rotated/reset log)")
-      past-eof                                   (str (name past-eof)
-                                                      " byte offset past EOF (log truncated below checkpoint)")
-      :else nil)))
+                       expected-paths)
+        decision (cc/sidecar-validation-decision
+                  (map? snap)
+                  (int? (:seq snap))
+                  (int? watermark)
+                  (or (not (contains? snap :watermark))
+                      (= (:watermark snap) (:seq snap)))
+                  (= expected-labels actual-labels)
+                  (not (some #(not (int? (get-in fences [% :byte_offset])))
+                             expected-labels))
+                  (some? (:fold_version snap))
+                  (some? fp)
+                  (= fp (:fold_version snap))
+                  bad-identity
+                  past-eof)]
+    (case (:reason decision)
+      nil nil
+      :no-sidecar "no checkpoint sidecar (missing/torn/non-EDN)"
+      :seq-malformed "sidecar malformed (:seq not int)"
+      :watermark-malformed "sidecar malformed (:watermark not int)"
+      :watermark-disagrees "sidecar watermark disagrees with snapshot seq"
+      :log-set-mismatch (str "checkpoint log set mismatch (checkpoint "
+                             (sort actual-labels) ", live "
+                             (sort expected-labels) ")")
+      :offset-malformed "sidecar malformed (log byte_offset not int)"
+      :unstamped "sidecar unstamped (pre-fingerprint format)"
+      :fingerprint-uncomputable "live fold fingerprint uncomputable (fold source unreadable)"
+      :fingerprint-mismatch (str "fold-version mismatch (checkpoint "
+                                 (subs (str (:fold_version snap)) 0
+                                       (min 12 (count (str (:fold_version snap)))))
+                                 "… vs live " (subs fp 0 12)
+                                 "…) — fold logic changed since checkpoint")
+      :identity-mismatch (str (name (:label decision))
+                              " log identity mismatch (rotated/reset log)")
+      :past-eof (str (name (:label decision))
+                     " byte offset past EOF (log truncated below checkpoint)"))))
 
 ;; the rotation-segment layer is defined below (it needs fold-fingerprint /
 ;; log-identity-of / warm!); boot reaches back for it.
@@ -5817,13 +5832,16 @@
         gate-why (cond
                    (not @snapshot-boot-enabled?) "disabled (FRAM_SNAPSHOT_BOOT=0)"
                    :else (validate-sidecar snap flat))
+        replay? (= :replay
+                   (cc/snapshot-replay-decision
+                    @snapshot-boot-enabled? gate-why))
         ;; FRAM_MMAP_IMAGE: when the sidecar advertises an :fri image and the flag is
         ;; on, prefer the mmap-cold boot (mmap-boot); it returns :cold when it kept the
         ;; corpus mmap'd (empty tail) or falls into a byte-identical heap fold+tail.
         ;; A missing/torn .fri returns nil -> we retry the v2log incremental-boot, then
         ;; the whole-log fold. Every miss costs a slower boot, never wrong state.
         [candidate replay-why]
-        (if gate-why
+        (if-not replay?
           [nil gate-why]
           (try (if-let [r (or (when (and @mmap-image-enabled?
                                          (nil? @telemetry-log)
@@ -5842,12 +5860,15 @@
           (let [fold-co (migrate-flat->co flat)]
             {:result (snapshot-store-diff (:co candidate) fold-co)
              :fold-co fold-co}))
-        verified? (or (nil? verification) (get-in verification [:result :ok]))
-        ib (when verified? candidate)
-        why (if verified?
-              replay-why
+        boot-mode (cc/boot-install-decision
+                   (boolean candidate)
+                   (boolean @snapshot-boot-verify?)
+                   (boolean (get-in verification [:result :ok])))
+        ib (when (= :snapshot boot-mode) candidate)
+        why (if (and (= :fold boot-mode) verification)
               (str "snapshot verification diff non-empty "
-                   (pr-str (:result verification))))
+                   (pr-str (:result verification)))
+              replay-why)
         folded-co (when-not ib
                     (or (:fold-co verification)
                         (migrate-flat->co flat)))]

@@ -152,3 +152,38 @@
   (if deferred :defer :await))
 
 (defn group-lock-order [] :- (Vec Keyword) [:group-io :append-admission])
+
+(defn snapshot-replay-decision [enabled :- Bool validation-reason :- Any] :- Keyword
+  (if (or (not enabled) (some? validation-reason)) :fold :replay))
+
+(defn boot-install-decision [candidate-present :- Bool verification-enabled :- Bool verification-ok :- Bool] :- Keyword
+  (if (and candidate-present (or (not verification-enabled) verification-ok))
+    :snapshot
+    :fold))
+
+(defn sidecar-validation-decision [sidecar-map :- Bool seq-valid :- Bool watermark-valid :- Bool watermark-agrees :- Bool log-set-matches :- Bool offsets-valid :- Bool stamped :- Bool fingerprint-computable :- Bool fingerprint-matches :- Bool bad-identity :- Any past-eof :- Any] :- (Map Keyword Any)
+  (cond
+    (not sidecar-map)
+    {:reason :no-sidecar}
+    (not seq-valid)
+    {:reason :seq-malformed}
+    (not watermark-valid)
+    {:reason :watermark-malformed}
+    (not watermark-agrees)
+    {:reason :watermark-disagrees}
+    (not log-set-matches)
+    {:reason :log-set-mismatch}
+    (not offsets-valid)
+    {:reason :offset-malformed}
+    (not stamped)
+    {:reason :unstamped}
+    (not fingerprint-computable)
+    {:reason :fingerprint-uncomputable}
+    (not fingerprint-matches)
+    {:reason :fingerprint-mismatch}
+    (some? bad-identity)
+    {:reason :identity-mismatch :label bad-identity}
+    (some? past-eof)
+    {:reason :past-eof :label past-eof}
+    :else
+    {:reason nil}))
