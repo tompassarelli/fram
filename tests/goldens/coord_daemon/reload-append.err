@@ -1,0 +1,3 @@
+WARNING: var? already refers to: #'clojure.core/var? in namespace: fram.datalog, being replaced by: #'fram.datalog/var?
+WARNING: list? already refers to: #'clojure.core/list? in namespace: resolve-walk, being replaced by: #'resolve-walk/list?
+WARNING: descendants already refers to: #'clojure.core/descendants in namespace: resolve, being replaced by: #'resolve/descendants

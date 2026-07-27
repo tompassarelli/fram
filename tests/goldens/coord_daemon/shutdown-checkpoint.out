@@ -1,0 +1,2 @@
+[fram] checkpoint (shutdown): seq 3 -> /tmp/coord-daemon-golden-run/cases/shutdown-checkpoint/facts.log.snapshots/snap-3.v2log
+{:sidecar {:seq 3, :image "/tmp/coord-daemon-golden-run/cases/shutdown-checkpoint/facts.log.snapshots/snap-3.v2log", :byte_offset 239, :fact_count 53, :hash "ab4a4cc91195991b55739cd880edbd4080b8b503c84e596284d924c1fb488730", :log_identity "41272019853256681ea539db78867b93eb27106a50c794f71d0d5961101cd166"}, :image-exists true, :tmp-left-behind false}
