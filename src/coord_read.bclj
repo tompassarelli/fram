@@ -1,0 +1,16 @@
+#lang beagle/clj
+
+;; @upstream:graph — the code lives in the Fram fact graph; this text is a
+;; generated view. Author substantive forms only through the Fram graph-edit
+;; verbs. SEEDED 2026-07-27 for engine-core M5 Cut A.
+;; ============================================================================
+;; coord-read — pure coordinator readers.
+;; ============================================================================
+;; OCC, leases, locks, queues, promises, fsync, and group commit remain in
+;; coord.clj. This module owns only read-time derivations over coordinator state.
+;; ============================================================================
+(ns coord-read
+  (:require [fram.store :as c]
+            [fram.schema :as s]))
+
+(define-mode strict)
