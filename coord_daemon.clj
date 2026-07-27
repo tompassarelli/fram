@@ -24,14 +24,14 @@
             [fram.authority :as authority] [fram.tools :as tools]
             [cheshire.core :as json]
             [fram.fold :as fold] [fram.query :as q] [fram.datalog :as d]
-            [fram.claims :as claims] [fram.rt])
+            [fram.claims :as claims] [fram.rt]
+            [fri])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
            [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
            [java.security KeyStore]))
 (load-file "coord.clj")          ; the reified coordinator library (ns coord)
 (refer 'coord)                   ; this file calls coord's vars UNQUALIFIED throughout
-(load-file "fri.clj")            ; FRAM_MMAP_IMAGE V1: the .fri columnar mmap image (ns fri)
 (require 'pull)                  ; the PULL API (ns pull) — GRAPH-AUTHORED Beagle: its
                                  ; upstream is .fram/code.log, src/pull.bclj is the
                                  ; rendered view, out/pull.clj the emitted artifact (on
