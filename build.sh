@@ -11,6 +11,9 @@ SRC="$HERE/src"; OUT="$HERE/out"
 BEAGLE="${BEAGLE_HOME:-$HOME/code/beagle}"
 
 mkdir -p "$OUT/fram"
+BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
+  "$SRC/fram/rt_core.bclj" "$OUT/fram/rt_core.clj" >/dev/null
+echo "  built fram/rt_core"
 cp "$SRC/fram/rt.clj" "$OUT/fram/rt.clj"     # hand-written runtime ships as-is
 cp "$SRC/fram/json.clj" "$OUT/fram/json.clj" # JSON runtime for the clockify module
 cp "$SRC/fram/authority_json.clj" "$OUT/fram/authority_json.clj" # strict raw JSON host boundary

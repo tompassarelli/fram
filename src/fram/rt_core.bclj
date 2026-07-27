@@ -1,0 +1,17 @@
+#lang beagle/clj
+
+;; @upstream:graph — the code lives in the Fram fact graph; this text is
+;; GENERATED. Author substantive forms through the Fram graph-edit verbs,
+;; never by editing this rendered view as text. SEEDED 2026-07-27 for the
+;; engine-core M4 runtime port; seed only, with no substantive definitions.
+;; ============================================================================
+;; fram.rt-core — deterministic runtime logic.
+;; ============================================================================
+;; fram.rt remains the bootstrap host seam for locks, filesystem mutation,
+;; sockets, threads, clocks, codecs, and other JVM capabilities. This module
+;; owns pure transformations; fram.rt keeps the public API and delegates here.
+;; ============================================================================
+(ns fram.rt-core
+  (:require [clojure.string :as str]))
+
+(define-mode strict)
