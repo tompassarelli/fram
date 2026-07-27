@@ -136,24 +136,12 @@
   (let [st (store co)]
     (apply max (live-cids-lp co (s/resolve-name st te) (c/value-id st pred)))))
 
-(defn about!
-  "commit!, but the SUBJECT is a fact cid instead of a name — a fact ABOUT a
-   fact. This is EXACTLY the write retract! already performs internally
-   (`withdrawn_by` on a victim cid, coord.clj): fram.schema/assert! or /link!
-   with a cid as subject, in one coord tx, appended by the same delta-records
-   path. cids are first-class subjects in the one flat id space
-   (docs/VIEWS_AND_BRANCHES.md §8), so nothing new is needed to store one.
-   kind = :assert (a literal) | :link (an existing entity id). Returns the cid."
-  [co agent cid pred kind r]
-  (locking (:lock co)
-    (let [st    (store co)
-          since (:next-id @st)
-          tx    (c/begin-tx! st agent)
-          new   (if (= kind :link)
-                  (s/link! st cid pred r tx)
-                  (s/assert! st cid pred r tx))]
-      (append-tx! co (delta-records co since tx))
-      new)))
+;; The subject-is-a-cid write helper this spec once carried inline became the
+;; real coordinator verb — coord.clj `about!` (the generic seam this doc's
+;; "one integration seam" section anticipated). The spec now exercises THAT
+;; verb, so the 90 bars are the contract for the shipped write path. Note the
+;; signature difference from the old fixture: :link takes the target's NAME
+;; (about! resolves it), and the return is a result map, not the new cid.
 
 (defn supersede!
   "Retire ONE fact by cid with the store's own supersession marker — the same
@@ -222,7 +210,7 @@
                    (commit! co "extractor" nm fp-pred :assert fp nil)
                    (when wld (commit! co "extractor" nm wld-pred :assert wld nil))
                    (s/resolve-name (store co) nm))
-          cite!  (fn [claim node] (about! co "extractor" claim ev-pred :link node))
+          cite!  (fn [claim node] (about! co "extractor" claim ev-pred :link (s/name-of (store co) node)))
           ;; a verdict is ONE view-selection; the tx's agent is the view subject,
           ;; so a verifier-scoped view carries the verifier identity for free.
           ;; select! returns the SELECTED cid, so the SELECTION fact's own cid is
@@ -257,7 +245,7 @@
           _      (cite! c4 e4)
           _      (cite! c5 e5)
           _      (cite! c6 e6)
-          dead   (cite! c6 e2)          ; a citation the extractor later withdrew
+          dead   (:cid (cite! c6 e2))   ; a citation the extractor later withdrew
           _      (supersede! co "extractor" dead)
           _      (cite! c7 e1)
           _      (cite! c8 e1)
@@ -300,8 +288,8 @@
           eb (ev! "@ev:bare" "docs/plan.md" "L3:C1-L3:C13" "sha256:nope")
           b1 (claim! "@doc:bare" "states" "the budget is 2.4M")
           b2 (claim! "@doc:bare" "cites" "RFC 4648")]
-      (about! co "extractor" b1 ev-pred :link eb)
-      (about! co "extractor" b2 ev-pred :link eb)
+      (about! co "extractor" b1 ev-pred :link (s/name-of (store co) eb))
+      (about! co "extractor" b2 ev-pred :link (s/name-of (store co) eb))
       (select! co alice-v b1)
       {:co co :eb eb :b1 b1 :b2 b2})))
 

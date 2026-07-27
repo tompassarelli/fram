@@ -576,6 +576,9 @@
 ;; the write replays byte-for-byte like select! and retract!'s withdrawal facts.
 ;; kind = :assert (literal) | :link (named entity). Exact live duplicates are
 ;; idempotent. The caller owns any higher-level policy around the target fact.
+;; Returns the NEW fact's :cid on a fresh write (commit!/select! parity) — a
+;; caller that must later name the citation itself (supersede it, decorate it)
+;; needs no read-back query. The idempotent arm carries no :cid: nothing new.
 (defn about! [co agent cid pred kind r-spec]
   (locking (:lock co)
     (let [st      (store co)
@@ -599,12 +602,12 @@
         :else
         (let [since (:next-id @st)
               tx    (c/begin-tx! st agent)
-              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))]
-          (case kind
-            :link   (s/link! st cid pred target tx)
-            :assert (s/assert! st cid pred r-spec tx))
+              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+              new   (case kind
+                      :link   (s/link! st cid pred target tx)
+                      :assert (s/assert! st cid pred r-spec tx))]
           (append-tx! co (delta-records co since tx))
-          {:ok (get-in @st [:txs tx :seq]) :subject-cid cid})))))
+          {:ok (get-in @st [:txs tx :seq]) :subject-cid cid :cid new})))))
 
 ;; commit-on-view! — write a rival fact AND select it into `view` in one breath: the
 ;; "write on a branch" verb. Always coexists (no base -> never staleness-rejected); the

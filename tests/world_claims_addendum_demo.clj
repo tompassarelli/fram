@@ -161,18 +161,9 @@
   (let [st (store co)]
     (apply max (live-cids-lp co (s/resolve-name st subj) (c/value-id st pred)))))
 
-(defn about!
-  "commit!, but the SUBJECT is a fact cid — a fact ABOUT a fact (the citation
-   edge, the rejection reason). cids are first-class subjects in the one flat id
-   space (docs/VIEWS_AND_BRANCHES.md §8), so nothing new is needed."
-  [co agent cid pred kind r]
-  (locking (:lock co)
-    (let [st    (store co)
-          since (:next-id @st)
-          tx    (c/begin-tx! st agent)
-          new   (if (= kind :link) (s/link! st cid pred r tx) (s/assert! st cid pred r tx))]
-      (append-tx! co (delta-records co since tx))
-      new)))
+;; The subject-is-a-cid write is now the real coordinator verb — coord.clj
+;; `about!` (loaded above). :link takes the target's NAME (about! resolves it);
+;; a fresh write returns {:ok seq :subject-cid cid :cid new-fact-cid}.
 
 (defn withdraw!
   "Retire ONE fact by cid with the store's own supersession marker — the same
@@ -274,7 +265,7 @@
           ;; ---- the extracted claims (ordinary facts) -----------------------
           claim! (fn [subj pred v] (commit! co "extract" subj pred :assert v nil)
                    (cid-of co subj pred))
-          cite!  (fn [claim node] (about! co "extract" claim cl/evidence-pred :link node))
+          cite!  (fn [claim node] (about! co "extract" claim cl/evidence-pred :link (s/name-of (store co) node)))
           verdict! (fn [view claim] (select! co view claim) (cid-of co view "selects"))
           k-gfci    (claim! "@takeoff:E-101" "requires" "GFCI protection at every exterior receptacle")
           k-emt     (claim! "@takeoff:E-101" "requires" "EMT for all branch circuit conduit")
