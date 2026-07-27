@@ -110,7 +110,7 @@
 (defn groupflushpolicy-drain-limit [r] (:drain-limit r))
 
 ^{:line 145 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn ^GroupFlushPolicy group-flush-policy [pending-count]
-  ^{:line 146 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (->GroupFlushPolicy 1 ^{:line 146 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (max 0 pending-count)))
+  ^{:line 146 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (->GroupFlushPolicy 1 2147483647))
 
 ^{:line 148 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (defn ^Boolean group-flush-ready? [^GroupFlushPolicy policy batch-count]
   ^{:line 149 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (>= batch-count ^{:line 149 :file "/tmp/fram-lane-lane-ms3qe7ju-5de18215-3fb0-42a9-830d-bb0baa183031/src/coord_commit.bclj"} (:min-items policy)))

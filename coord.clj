@@ -68,6 +68,24 @@
 (def ^:private group-q (java.util.concurrent.LinkedBlockingQueue.))
 (def ^:private group-appender-started (atom false))
 
+(defn- plan-group-batch [items]
+  (mapv (fn [batch] [(:path batch) (mapv #(nth items %) (:indices batch))])
+        (cc/group-batch-plan (mapv #(cc/->GroupBatchItem (:path %)) items))))
+(defn- group-flush-policy [pending-count] (cc/group-flush-policy pending-count))
+(defn- group-flush-ready? [policy batch-count] (cc/group-flush-ready? policy batch-count))
+(defn- queue-admission-decision [deferred] (cc/queue-admission-decision deferred))
+(defn- group-lock-order [] (cc/group-lock-order))
+
+(defn- with-batch-lock! [lock-id f]
+  (case lock-id
+    :group-io (locking group-io-lock (f))
+    (throw (ex-info "unknown group batch lock policy" {:lock lock-id}))))
+
+(defn- with-path-lock! [lock-id path f]
+  (case lock-id
+    :append-admission (rt/with-append-admission path f)
+    (throw (ex-info "unknown group path lock policy" {:lock lock-id}))))
+
 (defn- deliver-all! [items v] (doseq [{:keys [ticket]} items] (deliver ticket v)))
 
 (defn assert-flat-append-boundary!
@@ -97,53 +115,62 @@
 (defn- group-appender-loop []
   (loop []
     (let [fst (.take group-q)
-          buf (java.util.ArrayList.)]
+          buf (java.util.ArrayList.)
+          policy (group-flush-policy (.size group-q))]
       (.add buf fst)
-      (.drainTo group-q buf)                     ; the batch = everything pending now
-      (let [items (vec buf)]
+      (.drainTo group-q buf (:drain-limit policy))
+      (let [items (vec buf)
+            [batch-lock path-lock] (group-lock-order)]
+        (when-not (group-flush-ready? policy (count items))
+          (throw (ex-info "group batch below flush threshold"
+                          {:count (count items) :policy policy})))
         ;; group-io-lock makes (write+fsync+on-flushed) atomic w.r.t. the daemon's
         ;; maybe-reload! stamp check, so our own async append is never mistaken
         ;; for an external edit (stamp and file move together).
-        (locking group-io-lock
-          (doseq [[path pitems] (group-by :path items)]
-            (let [real (vec (filter #(seq (:lines %)) pitems))
-                  written-bytes (when (seq real) (utf8-byte-count real))
-                  flush-context (volatile! nil)]
-              (try
-                (when (and path (seq real))
-                  ;; vGUARD writer admission (B2 §2): the batch holds the SHARED
-                  ;; rewrite lock across open→write→fsync→close, so a generation
-                  ;; flip's EXCLUSIVE lock excludes it kernel-arbitrated (no scan,
-                  ;; no TOCTOU). A live flip DELAYS the batch — the ack (ticket
-                  ;; delivery below) still happens only after the fsync, so no
-                  ;; acked write can ever sit outside a flip's read set.
-                  (rt/with-append-admission (str path)
-                    (fn []
-                      (assert-flat-append-boundary! path)
-                      (let [before-stamp (flat-file-stamp path)
-                            before-bytes (.length (java.io.File. (str path)))]
-                        (with-open [os (java.io.FileOutputStream. (str path) true)]
-                          (doseq [{:keys [lines]} real, ^String ln lines]
-                            (.write os (.getBytes ln "UTF-8")))
-                          (.flush os)
-                          (.force (.getChannel os) true))    ; ONE fsync covers the whole batch
-                        ;; Capture the owned-byte proof before releasing shared
-                        ;; rewrite admission; a generation flip cannot hide in
-                        ;; the before/after window.
-                        (let [after-stamp (flat-file-stamp path)
-                              after-bytes (.length (java.io.File. (str path)))]
-                          (vreset! flush-context
-                                   {:path (str path)
-                                    :before-stamp before-stamp
-                                    :after-stamp after-stamp
-                                    :owned-append-exact?
-                                    (= (long after-bytes)
-                                       (+ (long before-bytes)
-                                          (long written-bytes)))}))))))
-                (doseq [{:keys [on-flushed]} pitems :when on-flushed]
-                  (on-flushed @flush-context))
-                (deliver-all! pitems :ok)
-                (catch Throwable t (deliver-all! pitems t)))))))
+        (with-batch-lock!
+          batch-lock
+          (fn []
+            (doseq [[path pitems] (plan-group-batch items)]
+              (let [real (vec (filter #(seq (:lines %)) pitems))
+                    written-bytes (when (seq real) (utf8-byte-count real))
+                    flush-context (volatile! nil)]
+                (try
+                  (when (and path (seq real))
+                    ;; vGUARD writer admission (B2 §2): the batch holds the SHARED
+                    ;; rewrite lock across open→write→fsync→close, so a generation
+                    ;; flip's EXCLUSIVE lock excludes it kernel-arbitrated (no scan,
+                    ;; no TOCTOU). A live flip DELAYS the batch — the ack (ticket
+                    ;; delivery below) still happens only after the fsync, so no
+                    ;; acked write can ever sit outside a flip's read set.
+                    (with-path-lock!
+                      path-lock
+                      (str path)
+                      (fn []
+                        (assert-flat-append-boundary! path)
+                        (let [before-stamp (flat-file-stamp path)
+                              before-bytes (.length (java.io.File. (str path)))]
+                          (with-open [os (java.io.FileOutputStream. (str path) true)]
+                            (doseq [{:keys [lines]} real, ^String ln lines]
+                              (.write os (.getBytes ln "UTF-8")))
+                            (.flush os)
+                            (.force (.getChannel os) true))  ; ONE fsync covers the whole batch
+                          ;; Capture the owned-byte proof before releasing shared
+                          ;; rewrite admission; a generation flip cannot hide in
+                          ;; the before/after window.
+                          (let [after-stamp (flat-file-stamp path)
+                                after-bytes (.length (java.io.File. (str path)))]
+                            (vreset! flush-context
+                                     {:path (str path)
+                                      :before-stamp before-stamp
+                                      :after-stamp after-stamp
+                                      :owned-append-exact?
+                                      (= (long after-bytes)
+                                         (+ (long before-bytes)
+                                            (long written-bytes)))}))))))
+                  (doseq [{:keys [on-flushed]} pitems :when on-flushed]
+                    (on-flushed @flush-context))
+                  (deliver-all! pitems :ok)
+                  (catch Throwable t (deliver-all! pitems t))))))))
       (recur))))
 
 (defn- ensure-group-appender! []
@@ -164,9 +191,9 @@
   (ensure-group-appender!)
   (let [t (promise)]
     (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed})
-    (if *durable-tickets*
-      (do (swap! *durable-tickets* conj t) t)
-      (await-durable! t))))
+    (case (queue-admission-decision (some? *durable-tickets*))
+      :defer (do (swap! *durable-tickets* conj t) t)
+      :await (await-durable! t))))
 
 ;; barrier: returns once every enqueue that happened-before it is on disk (FIFO
 ;; queue + in-order batches). No-op if nothing was ever enqueued.

@@ -143,7 +143,7 @@
 (defrecord GroupFlushPolicy [min-items :- Int drain-limit :- Int])
 
 (defn group-flush-policy [pending-count :- Int] :- GroupFlushPolicy
-  (->GroupFlushPolicy 1 (max 0 pending-count)))
+  (->GroupFlushPolicy 1 2147483647))
 
 (defn group-flush-ready? [policy :- GroupFlushPolicy batch-count :- Int] :- Bool
   (>= batch-count (:min-items policy)))
