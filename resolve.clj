@@ -27,7 +27,8 @@
             [resolve-modules :as rm] ; M1 Cut D: one module's frame + its import/export surface
             [resolve-render :as rv]  ; M1 Cut E: render a node back to source + the anchor search
             [resolve-query :as rq]   ; M1 Cut F: the code queries — call graph, blast closure, dead private
-            [resolve-walk :as rw]))  ; M1 Cut G: the lexical walk — every reference to its nearest binding
+            [resolve-walk :as rw]    ; M1 Cut G: the lexical walk — every reference to its nearest binding
+            [resolve-verbs :as rvb]))  ; M1 Cut H: the authoring verbs — an edit is a fact operation
 
 (def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
@@ -937,59 +938,35 @@
       (println detail)
       (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
 
+;; ============================================================================
+;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
+;; authoring verb's invariant order, reject codes/messages, fact mutations and
+;; emit reporting. As in Cuts B–G the ^:dynamic vars STAY here (coord_daemon.clj
+;; and tests/*.clj `binding` them by qualified name), so `verb-env` reads the
+;; dynamic state at call time and hands it over as ONE explicit record — together
+;; with the resolve.clj-local helpers the verbs call (mint/retire/extract/
+;; capture-refs/…), which ride as function VALUES exactly as Cut G's xres/tres/
+;; ares did. `binding [*out* *err*]` cannot move namespace, so stderr reporting is
+;; the `warn` closure, called once per LINE (the goldens compare bytes).
+;; *reject!* is passed at BOTH arities: callers bind it as `(fn [code] …)` (the
+;; unit tests) or `(fn [code & [detail]] …)` (the daemon), so each call site keeps
+;; the arity the original used — 1 everywhere but replace-in-body's structured
+;; disambiguation payload. Docstrings + per-def rationale live in the module header.
+;; ============================================================================
+(defn verb-env []
+  (rvb/->Verb ctx *view* tx SUP KIND Vp (vec srcs) *capture-only?* (vec (emit-srcs))
+              (fn [code] (*reject!* code))
+              (fn [code detail] (*reject!* code detail))
+              (fn [line] (binding [*out* *err*] (println line)))
+              author-emit-scoped!
+              (fn [src] (extract-file! src (out-path src)))
+              out-path
+              def-binding file-typeframe file-modframe forms-of module-name
+              parse-require capture-refs))
+
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
-(defn verb-rename! [old new target]
-  (let [target-srcs (filter #(str/includes? % target) srcs)
-        edits (atom 0)]
-    (doseq [src target-srcs]
-      (when (and (def-binding src old) (def-binding src new))
-        (binding [*out* *err*]
-          (println (str "REJECTED — `" new "` already names a binding in " src
-                        " (rename-doesn't-collide; no facts mutated).")))
-        (*reject!* 3)))
-    (doseq [src target-srcs]
-      (when (and (get (file-typeframe src) old) (not (re-find #"^[A-Z]" new)))
-        (binding [*out* *err*]
-          (println (str "REJECTED — `" new "` is not a valid (Capitalized) type name "
-                        "(beagle type-name shape; no facts mutated).")))
-        (*reject!* 3)))
-    (doseq [src target-srcs]
-      (when-let [B (def-binding src old)]
-        (let [caps (mapcat (fn [s] (mapcat #(capture-refs % (list (file-modframe s)) B new)
-                                           (forms-of s))) srcs)]
-          (when (seq caps)
-            (binding [*out* *err*]
-              (println (str "REJECTED — renaming `" old "` -> `" new "` would be CAPTURED by a local `"
-                            new "` in scope at " (count caps) " reference(s) (no-capture; no facts mutated).")))
-            (*reject!* 4)))))
-    (let [target-mods (set (keep module-name target-srcs))]
-      (doseq [src srcs :when (not (some #{src} target-srcs))]
-        (let [{:keys [refer rename]} (parse-require src)]
-          (when (and (contains? target-mods (get refer old))
-                     (or (def-binding src new) (get refer new) (get rename new)))
-            (binding [*out* *err*]
-              (println (str "REJECTED — renaming `" old "` -> `" new "` would DUPLICATE a binding in consumer "
-                            src " (it already binds `" new "`; no-import-collision; no facts mutated).")))
-            (*reject!* 3)))))
-    (doseq [src target-srcs]
-      (when-let [B (def-binding src old)]
-        (let [oldc (first (filter #(= Vp (:p (c/fact-of ctx %))) (c/by-l ctx B)))
-              nc (c/fact! ctx B Vp (c/value! ctx new) tx)]
-          (c/fact! ctx nc SUP oldc tx) (swap! edits inc))))
-    (when (zero? @edits)
-      (binding [*out* *err*]
-        (println (str "REJECTED — no binding named `" old "` found in \"" target
-                      "\" (nothing to rename; no facts mutated).")))
-      (*reject!* 5))
-    ;; capture-only (daemon :edit-min): the name fact is mutated above; SKIP the
-    ;; whole-corpus projection — the daemon commits the captured op + re-resolves scoped.
-    (when-not *capture-only?*
-      (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
-      (binding [*out* *err*]
-        (println "================ Turtle #5 — O(1) shadow-correct rename ================")
-        (println (str "edit: rename def `" old "` -> `" new "` in \"" target "\""))
-        (println (str "FACTS EDITED: " @edits "  (just the definition's name; references follow refers_to)"))
-        (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src)))))))
+(defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
+
 
 ;; upsert-form — add/replace a top-level def from an EDN datum spec.
 ;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.

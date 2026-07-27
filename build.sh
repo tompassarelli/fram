@@ -49,7 +49,11 @@ done
 #   resolve_query M1 Cut F: the code queries that run ON the resolved graph
 #                — call-edges, blast-closure, binding-privacy and the
 #                stratified-Datalog dead-private query (rq/*).
-for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk; do
+#   resolve_verbs M1 Cut H: the authoring verbs themselves — rename,
+#                upsert/insert/set-body/replace-in-body/delete/reorder and the
+#                graph-path op dispatch (rvb/*). The dynamic state + the host
+#                helpers they call are passed in as one Verb record.
+for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_verbs; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"
