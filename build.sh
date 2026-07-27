@@ -61,10 +61,13 @@ done
 #                reader, fact retirement, the no-capture scan and the
 #                projection writer (rmi/*). The dynamic state is passed in as
 #                one Mint record.
+#   resolve_corpus M1 Cut L: the corpus/store frame — install fresh or warm
+#                resolver state, derive frames/exports, and drive whole/scoped
+#                resolution (rco/*). Dynamic vars stay in resolve.clj.
 #   fri_port     M3: typed implementation of the mmap image writer/reader.
 #   fri          M3: public facade preserving the original `fri` namespace and
 #                its dynamic cache-cap test seam.
-for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_mint resolve_verbs fri_port fri; do
+for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_corpus resolve_mint resolve_verbs fri_port fri; do
   BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"

@@ -28,6 +28,7 @@
             [resolve-render :as rv]  ; M1 Cut E: render a node back to source + the anchor search
             [resolve-query :as rq]   ; M1 Cut F: the code queries — call graph, blast closure, dead private
             [resolve-walk :as rw]    ; M1 Cut G: the lexical walk — every reference to its nearest binding
+            [resolve-corpus :as rco] ; M1 Cut L: the corpus/store frame + fresh/warm resolver pipelines
             [resolve-mint :as rmi]   ; M1 Cut I: the mint/author layer — a datum enters the store as facts
             [resolve-verbs :as rvb]))  ; M1 Cut H: the authoring verbs — an edit is a fact operation
 
@@ -320,8 +321,8 @@
 ;; so a record rename carries c/point-x / :refer'd point-x (parallel to global-type-exports).
 (def ^:dynamic global-accessor-exports {})
 (defn make-xresolve [src]
-  (rw/make-xresolve ctx *view* @file->ents
-                    global-exports global-type-exports global-accessor-exports src))
+  (rco/make-xresolve ctx *view* @file->ents
+                     global-exports global-type-exports global-accessor-exports src))
 ;; --- Turtle #6: resolve identifier mentions INSIDE comments -----------------
 ;; A comment is a sequence of text + symbol-candidate segments. A symbol segment
 ;; that EXACTLY names an in-scope binding (module def / type / refer-import) gets
@@ -331,12 +332,13 @@
 ;; win without the sed corruption. Module scope (comments-in-bodies are a follow-up).
 ;; M1 Cut G — the comment resolver and the per-src walk driver are Beagle too
 ;; (src/resolve_walk.bclj). `walk-corpus` packages the four corpus tables the
-;; driver reads; `make-xresolve` stays here (it closes over parse-require and the
-;; global export tables) and is handed over as the per-src resolver factory, which
+;; driver reads; `make-xresolve` lives in resolve_corpus and receives the current
+;; global export tables as explicit parameters, then is handed over as the
+;; per-src resolver factory, which
 ;; is why the ^:dynamic *xresolve*/*tresolve*/*aresolve* are no longer rebound on
 ;; this path — the module builds each src's three resolvers itself. re-resolve! still
 ;; binds them, and reads them through walk-env.
-(defn walk-corpus [] (rw/->Corpus (vec srcs) file-modframe file-typeframe file-accessors @file->ents))
+(defn walk-corpus [] (rco/walk-corpus (vec srcs) file-modframe file-typeframe file-accessors @file->ents))
 (defn cbind! [L target] (rw/cbind! (walk-env) L target))
 (defn resolve-comment [e src] (rw/resolve-comment! (walk-env) (walk-corpus) e src))
 (defn walk-comments [src] (rw/walk-comments! (walk-env) (walk-corpus) src))
@@ -361,8 +363,45 @@
 ;; render markers; this only fills the GAP: a bound leaf with no live refers_to gets a plain
 ;; refers_to to its durable target. Warm-only (refers_to is a derived resolve-pred, re-cut
 ;; each materialize). Idempotent: leaves already resolved are skipped.
-(defn lift-bound-to-refers! []
-  (when BOUND (rw/lift-bound-to-refers! ctx tx KIND BOUND REFERS)))
+(defn lift-bound-to-refers! [] (rco/lift-bound-to-refers! ctx tx KIND BOUND REFERS))
+
+(defn- install-corpus-tables! [tables]
+  (set! file-modframe (:modframe tables))
+  (set! file-typeframe (:typeframe tables))
+  (set! file-accessors (:accessors tables))
+  (set! global-exports (:exports tables))
+  (set! global-type-exports (:type-exports tables))
+  (set! global-accessor-exports (:accessor-exports tables)))
+
+(defn- install-warm-corpus! [groups tables]
+  (reset! file->ents groups)
+  (set! srcs (:srcs tables))
+  (install-corpus-tables! tables))
+
+(defn- corpus-state []
+  (rco/->CorpusState ctx *view* tx KIND BOUND REFERS file->ents
+                     *corpus-cache* *corpus-scope* *resolve-walk?*
+                     (vec srcs)
+                     (fn [loaded] (set! srcs loaded))
+                     install-corpus-tables!
+                     install-warm-corpus!
+                     run-resolution!
+                     run-resolution-over!
+                     (fn [line] (binding [*out* *err*] (println line)))))
+
+(defn- with-corpus-state! [store t sup body]
+  (binding [ctx store, tx t, SUP sup
+            file->ents (atom {})
+            Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
+            FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
+            CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
+            n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
+            n-forms-walked (atom 0) walked-modules (atom #{})
+            srcs [] file-modframe {} file-typeframe {} file-accessors {}
+            global-exports {} global-type-exports {} global-accessor-exports {}]
+    (body)))
+
+(defn- corpus-host [] (rco/->CorpusHost with-corpus-state! load-edn corpus-state))
 
 ;; ============================================================================
 ;; resolve-edn! — the RUNNABLE pipeline over an ARBITRARY bound store.
@@ -376,35 +415,7 @@
 ;; ============================================================================
 (defn resolve-edn!
   ([edn-paths] (resolve-edn! edn-paths (fn [])))
-  ([edn-paths body]
-   (let [store (c/new-store)
-         t     (c/begin-tx! store "resolve")
-         sup   (c/value! store "supersedes")]
-     (c/set-supersedes-pred! store sup)
-     (binding [ctx store, tx t, SUP sup
-               file->ents (atom {})
-               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
-               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
-               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
-               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
-               n-forms-walked (atom 0) walked-modules (atom #{})
-               srcs [] file-modframe {} file-typeframe {} file-accessors {}
-               global-exports {} global-type-exports {} global-accessor-exports {}]
-       ;; load EDN into the FRESH bound store, then compute the corpus tables from
-       ;; THOSE srcs (set! the thread-local binding — never the root value).
-       (set! srcs (mapv load-edn edn-paths))
-       ;; M1 Cut G: the six per-run tables are one Beagle call (rw/corpus-tables);
-       ;; the `binding`/`set!` scaffolding stays here because the ^:dynamic vars
-       ;; themselves cannot move namespace.
-       (let [tb (rw/corpus-tables ctx *view* (vec srcs) @file->ents)]
-         (set! file-modframe (:modframe tb))
-         (set! file-typeframe (:typeframe tb))
-         (set! file-accessors (:accessors tb))
-         (set! global-exports (:exports tb))
-         (set! global-type-exports (:type-exports tb))
-         (set! global-accessor-exports (:accessor-exports tb)))
-       (run-resolution!)
-       (body)))))
+  ([edn-paths body] (rco/resolve-edn! (corpus-host) (vec edn-paths) body)))
 
 ;; ============================================================================
 ;; S3.2 — resolve WARM, over the daemon's live store (no EDN reload).
@@ -418,34 +429,14 @@
 ;; ============================================================================
 ;; module of `@kernel#127` -> "kernel" ; the daemon names every node `@<mod>#<int>`.
 (defn name->module [nm]
-  (rw/name->module nm))
+  (rco/name->module nm))
 ;; corpus-from-store! — from the BOUND, already-populated store, derive the SAME
 ;; corpus structure resolve-edn! computes from EDN: file->ents grouped by module,
 ;; srcs = the module list, then the per-module frame/export tables (reusing
 ;; module-defs/module-types/module-accessors/module-exports/module-name — they
 ;; read @file->ents + ctx, which now ARE the warm store). `set!` (not root) so
 ;; nothing leaks past the binding scope, exactly like resolve-edn!.
-(defn corpus-from-store! []
-  (let [t0     (System/nanoTime)
-        ;; M1 Cut K: grouping + frame/export construction are Beagle. The
-        ;; dynamic reset!/set! seam stays here because external callers bind
-        ;; these resolve namespace vars by qualified name.
-        groups (rw/warm-groups ctx *corpus-cache*)
-        t-groups (System/nanoTime)
-        tables (rw/scoped-corpus-tables ctx *view* groups *corpus-scope*)]
-    (reset! file->ents groups)                    ; module-keyed entity lists
-    (set! srcs (:srcs tables))
-    (set! file-modframe (:modframe tables))
-    (set! file-typeframe (:typeframe tables))
-    (set! file-accessors (:accessors tables))
-    (set! global-exports (:exports tables))
-    (set! global-type-exports (:type-exports tables))
-    (set! global-accessor-exports (:accessor-exports tables))
-    (when (= "1" (System/getenv "FRAM_PROF"))
-      (binding [*out* *err*]
-        (println (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s"
-                         (/ (- t-groups t0) 1e6) (/ (- (System/nanoTime) t-groups) 1e6)
-                         (some? *corpus-cache*) (count srcs) (boolean *corpus-scope*)))))))
+(defn corpus-from-store! [] (rco/corpus-from-store! (corpus-state)))
 
 ;; ============================================================================
 ;; S3.3 scoped-classifier helpers — computed from the BOUND warm corpus (call
@@ -462,21 +453,21 @@
 ;; precisely the surface a consumer's :refer/:as/:rename can bind, so a change to THIS
 ;; set is exactly what forces a consumer re-walk; an internal body edit leaves it fixed.
 (defn module-export-set [src]
-  (rw/module-export-set ctx *view* @file->ents src))
+  (rco/module-export-set ctx *view* @file->ents src))
 ;; import-graph: {module -> #{modules it imports}} over the whole corpus, from each
 ;; module's (ns :require ...) / bare (require ...). Consumers of M = the modules whose
 ;; import-set contains M (the reverse edge). Used to widen the dirty set when M's
 ;; export-set changed: M PLUS everyone importing M re-resolves.
 (defn module-imports [src]
-  (rw/module-imports ctx *view* @file->ents src))
+  (rco/module-imports ctx *view* @file->ents src))
 (defn import-graph []
-  (rw/import-graph ctx *view* @file->ents (vec srcs)))
+  (rco/import-graph ctx *view* @file->ents (vec srcs)))
 ;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
 ;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
 ;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
 ;; has zero defmacro).
 (defn module-has-macro? [src]
-  (rw/module-has-macro? ctx *view* @file->ents src))
+  (rco/module-has-macro? ctx *view* @file->ents src))
 
 ;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
 ;; recomputed against THAT store — store-local ids must match their store, the
@@ -487,22 +478,7 @@
 ;; warm refers_to edges callers-of / blast-radius read come straight from here.
 (defn resolve-warm-store!
   ([store] (resolve-warm-store! store (fn [])))
-  ([store body]
-   (let [t   (c/begin-tx! store "resolve-warm")
-         sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))]
-     (c/set-supersedes-pred! store sup)
-     (binding [ctx store, tx t, SUP sup
-               file->ents (atom {})
-               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
-               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
-               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
-               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
-               n-forms-walked (atom 0) walked-modules (atom #{})
-               srcs [] file-modframe {} file-typeframe {} file-accessors {}
-               global-exports {} global-type-exports {} global-accessor-exports {}]
-       (corpus-from-store!)
-       (when *resolve-walk?* (run-resolution!) (lift-bound-to-refers!))   ; Build B: the minimal-op path skips the whole-corpus walk (and the identity lift)
-       (body)))))
+  ([store body] (rco/resolve-warm-store! (corpus-host) store body)))
 
 ;; ============================================================================
 ;; S3.3 — resolve-modules! : SCOPED re-resolve over the warm store.
@@ -520,23 +496,7 @@
 ;; ============================================================================
 (defn resolve-modules!
   ([store module-set] (resolve-modules! store module-set (fn [])))
-  ([store module-set body]
-   (let [t   (c/begin-tx! store "resolve-scoped")
-         sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))]
-     (c/set-supersedes-pred! store sup)
-     (binding [ctx store, tx t, SUP sup
-               file->ents (atom {})
-               Vp (c/value! store "v") KIND (c/value! store "kind") REFERS (c/value! store "refers_to") BOUND (c/value! store "bound_to")
-               FIXED (c/value! store "keep_spelling") QUAL (c/value! store "qualifier")
-               CTOR (c/value! store "ctor_prefix") ACC (c/value! store "accessor_field")
-               n-resolved (atom 0) n-unresolved (atom 0) n-xmod (atom 0) n-type (atom 0) n-comment (atom 0)
-               n-forms-walked (atom 0) walked-modules (atom #{})
-               srcs [] file-modframe {} file-typeframe {} file-accessors {}
-               global-exports {} global-type-exports {} global-accessor-exports {}]
-       (corpus-from-store!)                          ; FULL tables from the whole store
-       (run-resolution-over! (filter module-set srcs))  ; WALK only the affected module subset
-       (lift-bound-to-refers!)                       ; #(a) fill identity gaps the spelling walk missed
-       (body)))))
+  ([store module-set body] (rco/resolve-modules! (corpus-host) store module-set body)))
 
 ;; --- projection: emit EDN for beagle --render, names resolved via refers_to --
 ;; follow refers_to transitively (re-export chains: a (js/export name) re-export is
