@@ -59,6 +59,36 @@
             (conj writes {:pred pred :kind (:kind intent) :r (:r intent)})
             idempotent))))))
 
+(defrecord GroupBatchItem [path :- String?])
+
+(defrecord GroupBatch [path :- String? indices :- (Vec Int)])
+
+(defn- group-index [groups :- (Vec GroupBatch) path :- String?] :- Int?
+  (loop [remaining :- (Vec GroupBatch) groups index 0]
+    (if (empty? remaining)
+      nil
+      (if (= (:path (first remaining)) path)
+        index
+        (recur (vec (rest remaining)) (inc index))))))
+
+(defn group-batch-plan [items :- (Vec GroupBatchItem)] :- (Vec GroupBatch)
+  (loop [remaining :- (Vec GroupBatchItem) items index 0 groups :- (Vec GroupBatch) []]
+    (if (empty? remaining)
+      groups
+      (let [item :- GroupBatchItem (first remaining) group-index (group-index groups (:path item))]
+        (if (nil? group-index)
+          (recur (vec (rest remaining))
+            (inc index)
+            (conj groups (->GroupBatch (:path item) [index])))
+          (let [group :- GroupBatch (nth groups group-index)]
+            (recur (vec (rest remaining))
+              (inc index)
+              (assoc groups
+                group-index
+                (->GroupBatch (:path group) (conj (:indices group) index))))))))))
+
+(defrecord LeaseSnapshot [holder :- String exp :- Int epoch :- Int])
+
 (defn lease-expired? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
   (if (nil? lease) false (<= (:exp lease) now-ms)))
 
@@ -80,8 +110,6 @@
     (> (:exp lease) now-ms)
     (= (:holder lease) holder)
     (= (:epoch lease) epoch)))
-
-(defrecord LeaseSnapshot [holder :- String exp :- Int epoch :- Int])
 
 (defn lease-held? [lease :- LeaseSnapshot? now-ms :- Int] :- Bool
   (if (nil? lease) false (> (:exp lease) now-ms)))
