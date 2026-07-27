@@ -15,3 +15,31 @@
 
 (defn live-cids-lp [ctx :- (Atom fram.types/Store) te :- Int pid :- Int] :- (Vec Int)
   (c/by-lp ctx te pid))
+
+(defn seq-of [ctx :- (Atom fram.types/Store) cid :- Int] :- Int
+  (let [m :- fram.types/Store (deref ctx) txid (get (:tx-of m) cid) tx (if (nil? txid) nil (get (:txs m) txid)) sq :- Any (if (nil? tx) nil (get tx :seq))]
+    (if (int? sq) sq 0)))
+
+(defn base-version [ctx :- (Atom fram.types/Store) te :- Int pid :- Int] :- Int
+  (reduce max
+    0
+    (map (fn [cid :- Int] :- Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
+
+(defn current-seq [ctx :- (Atom fram.types/Store)] :- Int
+  (let [m :- fram.types/Store (deref ctx)] (:next-seq m)))
+
+(defn agent-of [ctx :- (Atom fram.types/Store) cid :- Int] :- Any
+  (let [m :- fram.types/Store (deref ctx) txid (get (:tx-of m) cid) tx (if (nil? txid) nil (get (:txs m) txid))]
+    (if (nil? tx) nil (get tx :agent))))
+
+(defn observed-of [ctx :- (Atom fram.types/Store) cid :- Int] :- Int?
+  (let [m :- fram.types/Store (deref ctx) txid (get (:tx-of m) cid) tx (if (nil? txid) nil (get (:txs m) txid)) obs :- Any (if (nil? tx) nil (get tx :observed))]
+    (if (int? obs) obs nil)))
+
+(defn ts-of [ctx :- (Atom fram.types/Store) cid :- Int] :- String?
+  (let [m :- fram.types/Store (deref ctx) txid (get (:tx-of m) cid) tx (if (nil? txid) nil (get (:txs m) txid)) ts :- Any (if (nil? tx) nil (get tx :ts))]
+    (if (string? ts) ts nil)))
+
+(defn causal-key [ctx :- (Atom fram.types/Store) cid :- Int] :- (Vec Any)
+  (let [obs (observed-of ctx cid)]
+    [(if (nil? obs) (seq-of ctx cid) obs) cid (str (agent-of ctx cid))]))
