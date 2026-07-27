@@ -8,12 +8,26 @@ SIZES="${BENCH_SIZES:-3000,30000}"
 RUNS="${BENCH_RUNS:-2}"
 ADAPTERS="${BENCH_ADAPTERS:-fram,sqlite}"
 OUTPUT="${BENCH_OUTPUT:-$(mktemp /tmp/fram-in-class.XXXXXX.jsonl)}"
+META="${BENCH_META_OUTPUT:-${OUTPUT%.jsonl}.meta}"
 
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || {
   echo "BENCH_RUNS must be a positive integer" >&2
   exit 2
 }
 : >"$OUTPUT"
+{
+  printf 'started_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'revision=%s\n' "$(git -C "$ROOT" rev-parse HEAD)"
+  printf 'kernel=%s\n' "$(uname -srmo)"
+  printf 'nproc=%s\n' "$(nproc)"
+  printf 'cpu_model=%s\n' "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p')"
+  printf 'mem_total=%s\n' "$(sed -n 's/^MemTotal:[[:space:]]*//p' /proc/meminfo)"
+  printf 'python=%s\n' "$(python3 --version 2>&1)"
+  printf 'sqlite=%s\n' "$(sqlite3 --version)"
+  printf 'start_load=%s\n' "$(cat /proc/loadavg)"
+  printf 'sizes=%s\n' "$SIZES"
+  printf 'runs=%s\n' "$RUNS"
+} >"$META"
 
 run_adapter() {
   local adapter="$1" size="$2" run="$3" raw row
@@ -65,4 +79,9 @@ bb "$HERE/report.bb" "$OUTPUT"
 if [[ -f "$HERE/golden.edn" && "${BENCH_CHECK_GOLDEN:-1}" = "1" ]]; then
   bb "$HERE/check-golden.bb" "$OUTPUT" "$HERE/golden.edn"
 fi
+{
+  printf 'ended_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'end_load=%s\n' "$(cat /proc/loadavg)"
+} >>"$META"
 echo "raw-results=$OUTPUT" >&2
+echo "metadata=$META" >&2
