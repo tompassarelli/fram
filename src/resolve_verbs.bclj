@@ -81,7 +81,8 @@
     [resolve-core :as rc]
     [resolve-read :as rr]
     [resolve-binds :as rb]
-    [resolve-modules :as rm]))
+    [resolve-modules :as rm]
+    [resolve-render :as rv]))
 
 (define-mode strict)
 
@@ -127,7 +128,10 @@
                  scope-srcs :- Any      ; (fn [scope]) -> scope->srcs: dot-SEGMENT-boundary module match
                  writable-victim :- Any ; (fn [src datum]) -> the top-level form this upsert REPLACES
                  writable-disp-name :- Any  ; (fn [datum]) -> the human label for the upserted form
-                 fn-facts :- Any])      ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
+                 fn-facts :- Any        ; (fn [parent]) -> [[N cid child] …] over LIVE fN edges, ordered
+                 FIXED :- Int           ; the :rename keep-spelling render marker predicate id
+                 datum-canon :- Any     ; (fn [datum]) -> datum->canon: the structural comparison form
+                 disambig :- Any])      ; (fn [reason name scope root sites]) -> the reject payload
 
 ;; ---------------------------------------------------------------------------
 ;; rename — every INVARIANT + fact mutation of the old `rename` case arm.
@@ -617,3 +621,101 @@
           (emit "set-body"
                 (str "replaced body of `" name "` in \"" scope "\" ("
                      (count body-slots) " body slot(s) superseded; new body minted as facts)")))))))
+
+;; ---------------------------------------------------------------------------
+;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a
+;; def, addressed by an ANCHOR datum (the OLD form, as it reads in source), with
+;; a NEW form — WITHOUT re-emitting the whole def. Kills the mega-def floor:
+;; changing one case in a 1,768-line def costs ONE fN-edge swap, not a whole-def
+;; re-mint. Because only one edge moves and the def is never re-minted, EVERY
+;; sibling form + all attached comments survive untouched.
+;;
+;; ADDRESSING — anchor-form match (the Edit tool's old_string, but on the AST):
+;; both the anchor datum and the graph nodes canonicalize STRUCTURALLY (kind +
+;; rendered spelling + child shape, formatting ignored) and the anchor must match
+;; EXACTLY ONE interior node. 0 or >1 REFUSE (no facts mutated). Optional
+;; `within-datum` narrows the search to the unique enclosing form it matches —
+;; fail-closed at every level. On an ambiguous/absent match the reject carries the
+;; structured disambiguation payload (:candidates + :within suggestions).
+;;
+;; ARITY: the original's 4-arg convenience arity stays in resolve.clj (it forwards
+;; within-datum = nil); here there is one 5-arg function.
+;; ---------------------------------------------------------------------------
+(defn verb-replace-in-body! [v :- Verb name :- String scope :- String
+                             old-datum :- Any new-datum :- Any within-datum :- Any] :- Any
+  (let [ctx (:ctx v)
+        view (:view v)
+        tx (:tx v)
+        warn (:warn v)
+        reject (:reject v)
+        reject2 (:reject2 v)
+        target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+    (when (not= 1 (count target-srcs))
+      (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
+                 " source files; replace-in-body needs exactly one (no facts mutated)."))
+      (reject 3))
+    (let [dbind (:def-binding v)
+          ffv (:form-for-victim v)
+          dcanon (:datum-canon v)
+          dis (:disambig v)
+          src (first target-srcs)
+          B (dbind src name)
+          form (when (some? B) (ffv src B))]
+      (when (nil? form)
+        (warn (str "REJECTED — no def named `" name "` found in \"" scope
+                   "\" (nothing to edit; no facts mutated)."))
+        (reject2 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope
+                    :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")}))
+      ;; (2) :within scope-narrowing — resolve the enclosing anchor to EXACTLY ONE node
+      ;; and search `old` only inside it. Fail-closed: 0 or >1 within-matches reject.
+      (let [search-root
+            (if (nil? within-datum)
+              form
+              (let [wcanon (dcanon within-datum)
+                    wsites (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn form) wcanon)]
+                (cond
+                  (= 0 (count wsites))
+                  (do (warn (str "REJECTED — `within` form not found inside `" name "` in \"" scope
+                                 "\" (0 matches; no facts mutated)."))
+                      (reject2 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope
+                                  :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
+                  (> (count wsites) 1)
+                  (do (warn (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
+                                 (count wsites) " matches; no facts mutated)."))
+                      (reject2 5 (dis :ambiguous-within name scope form wsites)))
+                  :else (:child (first wsites)))))
+            target-canon (dcanon old-datum)
+            matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
+        (cond
+          (= 0 (count matches))
+          (do (warn (str "REJECTED — anchor `old` not found inside "
+                         (if (some? within-datum) "the `within` form" (str "`" name "`"))
+                         " in \"" scope "\" (0 matches; no facts mutated). The old form must match "
+                         "an interior form structurally (head + spelling + child shape)."))
+              (reject2 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope
+                          :within (some? within-datum)
+                          :message (str "REJECTED — anchor `old` not found inside "
+                                        (if (some? within-datum) "the `within` form" (str "`" name "`"))
+                                        " in \"" scope "\" (0 matches).")}))
+          (> (count matches) 1)
+          (do (warn (str "REJECTED — anchor `old` is AMBIGUOUS inside "
+                         (if (some? within-datum) "the `within` form" (str "`" name "`"))
+                         " in \"" scope "\" (" (count matches) " matches; no facts mutated)."))
+              (reject2 5 (dis :ambiguous-old name scope search-root matches)))
+          :else
+          (let [mint (:mint v)
+                retire (:retire v)
+                emit (:emit v)
+                site (first matches)
+                new-root (mint src new-datum)]
+            ;; retire the matched fN edge + re-point the SAME position literal at the
+            ;; freshly-minted form — by-l filters superseded, so reads see only the new
+            ;; child; the integer fN is reused verbatim -> byte-stable outside the edit.
+            (retire (:cid site))
+            (c/fact! ctx (nn (:parent site)) (c/value! ctx (:pos site)) (nn new-root) tx)
+            (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+            (emit "replace-in-body"
+                  (str "replaced 1 interior form inside `" name "` in \"" scope
+                       (when (some? within-datum) "\" (scoped by :within)")
+                       "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
+                       "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))

@@ -5,9 +5,10 @@
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]
-            [resolve-modules :as rm]))
+            [resolve-modules :as rm]
+            [resolve-render :as rv]))
 
-(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts])
+(defrecord Verb [ctx view tx SUP KIND Vp srcs capture-only? emit-srcs reject reject2 warn emit extract out-path def-binding typeframe modframe forms-of module-name parse-require capture-refs ultimate BOUND REFERS wrapper-of wrap-forms form-for-victim descendants retire reresolve ents mint register scope-srcs writable-victim writable-disp-name fn-facts FIXED datum-canon disambig])
 
 (defn verb-ctx [r] (:ctx r))
 
@@ -84,6 +85,12 @@
 (defn verb-writable-disp-name [r] (:writable-disp-name r))
 
 (defn verb-fn-facts [r] (:fn-facts r))
+
+(defn verb-FIXED [r] (:FIXED r))
+
+(defn verb-datum-canon [r] (:datum-canon r))
+
+(defn verb-disambig [r] (:disambig r))
 
 (defn- ^Boolean upper-first? [^String s]
   (and (> (count s) 0) (let [c (subs s 0 1)]
@@ -445,3 +452,57 @@
   (let [rr! (:reresolve v)]
   (rr!))))
   (emit "set-body" (str "replaced body of `" name "` in \"" scope "\" (" (count body-slots) " body slot(s) superseded; new body minted as facts)")))))))
+
+(defn verb-replace-in-body! [^Verb v ^String name ^String scope old-datum new-datum within-datum]
+  (let [ctx (:ctx v)
+   view (:view v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   reject2 (:reject2 v)
+   target-srcs (vec (filter (fn [s] (str/includes? s scope)) (:srcs v)))]
+  (if (not= 1 (count target-srcs)) (do
+  (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; replace-in-body needs exactly one (no facts mutated)."))
+  (reject 3)))
+  (let [dbind (:def-binding v)
+   ffv (:form-for-victim v)
+   dcanon (:datum-canon v)
+   dis (:disambig v)
+   src (first target-srcs)
+   B (dbind src name)
+   form (if (some? B) (do
+  (ffv src B)))]
+  (if (nil? form) (do
+  (warn (str "REJECTED — no def named `" name "` found in \"" scope "\" (nothing to edit; no facts mutated)."))
+  (reject2 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")})))
+  (let [search-root (if (nil? within-datum) form (let [wcanon (dcanon within-datum)
+   wsites (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn form) wcanon)]
+  (cond
+  (= 0 (count wsites)) (do
+  (warn (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches; no facts mutated)."))
+  (reject2 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
+  (> (count wsites) 1) (do
+  (warn (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" (" (count wsites) " matches; no facts mutated)."))
+  (reject2 5 (dis :ambiguous-within name scope form wsites)))
+  :else (:child (first wsites)))))
+   target-canon (dcanon old-datum)
+   matches (rv/anchor-match-sites ctx view (:BOUND v) (:REFERS v) (:FIXED v) (nn search-root) target-canon)]
+  (cond
+  (= 0 (count matches)) (do
+  (warn (str "REJECTED — anchor `old` not found inside " (if (some? within-datum) "the `within` form" (str "`" name "`")) " in \"" scope "\" (0 matches; no facts mutated). The old form must match " "an interior form structurally (head + spelling + child shape)."))
+  (reject2 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope :within (some? within-datum) :message (str "REJECTED — anchor `old` not found inside " (if (some? within-datum) "the `within` form" (str "`" name "`")) " in \"" scope "\" (0 matches).")}))
+  (> (count matches) 1) (do
+  (warn (str "REJECTED — anchor `old` is AMBIGUOUS inside " (if (some? within-datum) "the `within` form" (str "`" name "`")) " in \"" scope "\" (" (count matches) " matches; no facts mutated)."))
+  (reject2 5 (dis :ambiguous-old name scope search-root matches)))
+  :else (let [mint (:mint v)
+   retire (:retire v)
+   emit (:emit v)
+   site (first matches)
+   new-root (mint src new-datum)]
+  (retire (:cid site))
+  (c/fact! ctx (nn (:parent site)) (c/value! ctx (:pos site)) (nn new-root) tx)
+  (if (not (:capture-only? v)) (do
+  (let [rr! (:reresolve v)]
+  (rr!))))
+  (emit "replace-in-body" (str "replaced 1 interior form inside `" name "` in \"" scope (if (some? within-datum) (do
+  "\" (scoped by :within)")) "\" (1 fN edge superseded + re-pointed at a freshly-minted form; " "def NOT re-emitted — siblings + comments preserved; refs via refers_to)"))))))))

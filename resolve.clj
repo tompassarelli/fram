@@ -1006,71 +1006,6 @@
       (contains? EXTEND-FORMS head) (str head " " (pr-str (second datum)))
       :else                     (str (second datum)))))
 
-;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
-;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
-(defn wrap-forms [parent]
-  (->> (c/by-l ctx parent)
-       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
-                             k (ord-parse (c/literal ctx (:p cl)))]
-                         (when k [k cid (:r cl)]))))
-       (sort-by first ord-cmp) vec))
-
-;; ============================================================================
-;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
-;; authoring verb's invariant order, reject codes/messages, fact mutations and
-;; emit reporting. As in Cuts B–G the ^:dynamic vars STAY here (coord_daemon.clj
-;; and tests/*.clj `binding` them by qualified name), so `verb-env` reads the
-;; dynamic state at call time and hands it over as ONE explicit record — together
-;; with the resolve.clj-local helpers the verbs call (mint/retire/extract/
-;; capture-refs/…), which ride as function VALUES exactly as Cut G's xres/tres/
-;; ares did. `binding [*out* *err*]` cannot move namespace, so stderr reporting is
-;; the `warn` closure, called once per LINE (the goldens compare bytes).
-;; *reject!* is passed at BOTH arities: callers bind it as `(fn [code] …)` (the
-;; unit tests) or `(fn [code & [detail]] …)` (the daemon), so each call site keeps
-;; the arity the original used — 1 everywhere but replace-in-body's structured
-;; disambiguation payload. Docstrings + per-def rationale live in the module header.
-;; ============================================================================
-(defn verb-env []
-  (rvb/->Verb ctx *view* tx SUP KIND Vp (vec srcs) *capture-only?* (vec (emit-srcs))
-              (fn [code] (*reject!* code))
-              (fn [code detail] (*reject!* code detail))
-              (fn [line] (binding [*out* *err*] (println line)))
-              author-emit-scoped!
-              (fn [src] (extract-file! src (out-path src)))
-              out-path
-              def-binding file-typeframe file-modframe forms-of module-name
-              parse-require capture-refs ultimate
-              BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
-              retire-fact! re-resolve! @file->ents
-              mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts))
-
-;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
-(defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
-
-
-;; upsert-form — add/replace a top-level def from an EDN datum spec (M1 Cut H;
-;; logic in src/resolve_verbs.bclj). A REPLACE reuses the victim's CRDT path (new
-;; tie) and retires the victim's edge; an APPEND lands strictly after the last form.
-(defn verb-upsert-form! [scope datum] (rvb/verb-upsert-form! (verb-env) scope datum))
-
-;; insert-form — the CRDT MIDDLE-INSERT (#36): a def AFTER an anchor def, at a path
-;; strictly between the anchor and its next sibling (M1 Cut H). Concurrent inserts
-;; after the same anchor compute the same path -> distinct tie -> both land (commute).
-(defn verb-insert-form! [scope after-name datum] (rvb/verb-insert-form! (verb-env) scope after-name datum))
-
-;; insert-comment — author a standalone LINE comment (Turtle #6) leading/trailing an
-;; anchor def (M1 Cut H): a kind="comment" node + one `text` seg (the lexeme, which
-;; renders verbatim) + the `commentN` edge that attaches it to the anchor FORM.
-(defn verb-insert-comment! [scope anchor-name text placement]
-  (rvb/verb-insert-comment! (verb-env) scope anchor-name text placement))
-
-
-;; set-body — replace a def/defn's body with a freshly-minted body datum (M1 Cut H;
-;; logic in src/resolve_verbs.bclj). Handles BOTH shapes — a defn, whose body follows
-;; the [param] vector, and a plain value-def, whose body follows the NAME — symmetric
-;; under an optional `:- T` return annotation.
-(defn verb-set-body! [name scope datum] (rvb/verb-set-body! (verb-env) name scope datum))
-
 ;; ============================================================================
 ;; replace-in-body — SUB-DEF surgical edit. Replace ONE interior form inside a def,
 ;; addressed by an ANCHOR datum (the OLD form, as it reads in source), with a NEW
@@ -1200,86 +1135,84 @@
      :total total :shown (count shown) :candidates shown :remedy remedy
      :message (str "REJECTED — " head "\n" (str/join "\n" lines)
                    "\n  remedy: " remedy)}))
+
+;; wrap-forms — the wrapper's top-level form edges in CRDT (path,tie) order.
+;; -> [[{:path :tie} cid child] ...]. Dual-parse (old f<int> + new f<path>~tie).
+(defn wrap-forms [parent]
+  (->> (c/by-l ctx parent)
+       (keep (fn [cid] (let [cl (c/fact-of ctx cid)
+                             k (ord-parse (c/literal ctx (:p cl)))]
+                         (when k [k cid (:r cl)]))))
+       (sort-by first ord-cmp) vec))
+
+;; ============================================================================
+;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
+;; authoring verb's invariant order, reject codes/messages, fact mutations and
+;; emit reporting. As in Cuts B–G the ^:dynamic vars STAY here (coord_daemon.clj
+;; and tests/*.clj `binding` them by qualified name), so `verb-env` reads the
+;; dynamic state at call time and hands it over as ONE explicit record — together
+;; with the resolve.clj-local helpers the verbs call (mint/retire/extract/
+;; capture-refs/…), which ride as function VALUES exactly as Cut G's xres/tres/
+;; ares did. `binding [*out* *err*]` cannot move namespace, so stderr reporting is
+;; the `warn` closure, called once per LINE (the goldens compare bytes).
+;; *reject!* is passed at BOTH arities: callers bind it as `(fn [code] …)` (the
+;; unit tests) or `(fn [code & [detail]] …)` (the daemon), so each call site keeps
+;; the arity the original used — 1 everywhere but replace-in-body's structured
+;; disambiguation payload. Docstrings + per-def rationale live in the module header.
+;; ============================================================================
+(defn verb-env []
+  (rvb/->Verb ctx *view* tx SUP KIND Vp (vec srcs) *capture-only?* (vec (emit-srcs))
+              (fn [code] (*reject!* code))
+              (fn [code detail] (*reject!* code detail))
+              (fn [line] (binding [*out* *err*] (println line)))
+              author-emit-scoped!
+              (fn [src] (extract-file! src (out-path src)))
+              out-path
+              def-binding file-typeframe file-modframe forms-of module-name
+              parse-require capture-refs ultimate
+              BOUND REFERS wrapper-of wrap-forms form-for-victim descendants
+              retire-fact! re-resolve! @file->ents
+              mint-datum! register! scope->srcs writable-victim writable-disp-name fN-facts
+              FIXED datum->canon disambig-payload))
+
+;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
+(defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
+
+
+;; upsert-form — add/replace a top-level def from an EDN datum spec (M1 Cut H;
+;; logic in src/resolve_verbs.bclj). A REPLACE reuses the victim's CRDT path (new
+;; tie) and retires the victim's edge; an APPEND lands strictly after the last form.
+(defn verb-upsert-form! [scope datum] (rvb/verb-upsert-form! (verb-env) scope datum))
+
+;; insert-form — the CRDT MIDDLE-INSERT (#36): a def AFTER an anchor def, at a path
+;; strictly between the anchor and its next sibling (M1 Cut H). Concurrent inserts
+;; after the same anchor compute the same path -> distinct tie -> both land (commute).
+(defn verb-insert-form! [scope after-name datum] (rvb/verb-insert-form! (verb-env) scope after-name datum))
+
+;; insert-comment — author a standalone LINE comment (Turtle #6) leading/trailing an
+;; anchor def (M1 Cut H): a kind="comment" node + one `text` seg (the lexeme, which
+;; renders verbatim) + the `commentN` edge that attaches it to the anchor FORM.
+(defn verb-insert-comment! [scope anchor-name text placement]
+  (rvb/verb-insert-comment! (verb-env) scope anchor-name text placement))
+
+
+;; set-body — replace a def/defn's body with a freshly-minted body datum (M1 Cut H;
+;; logic in src/resolve_verbs.bclj). Handles BOTH shapes — a defn, whose body follows
+;; the [param] vector, and a plain value-def, whose body follows the NAME — symmetric
+;; under an optional `:- T` return annotation.
+(defn verb-set-body! [name scope datum] (rvb/verb-set-body! (verb-env) name scope datum))
+
 ;; verb-replace-in-body! — swap ONE interior form of def `name` (matched by `old-datum`)
-;; for `new-datum`. Reuses the matched edge's EXACT position literal (integer fN preserved
-;; -> byte-stable, racket --render sees it) — retire the old edge, mint the new form, wire
-;; a fresh edge at the same slot. Mirrors set-body's edge-swap, at interior granularity.
-;; Optional `within-datum` narrows the search to the (unique) enclosing form it matches —
-;; fail-closed at every level: within must match exactly one form, then old exactly one
-;; form inside it. On an ambiguous/absent match the reject carries a structured
-;; disambiguation payload (:candidates + :within suggestions) via *reject!*.
+;; for `new-datum` (M1 Cut H; logic in src/resolve_verbs.bclj). Reuses the matched edge's
+;; EXACT position literal (integer fN preserved -> byte-stable), so the def is never
+;; re-minted and every sibling form + attached comment survives. Optional `within-datum`
+;; narrows the search to the (unique) enclosing form it matches — fail-closed at every
+;; level. On an ambiguous/absent match the reject carries a structured disambiguation
+;; payload (:candidates + :within suggestions) via *reject!*.
 (defn verb-replace-in-body!
   ([name scope old-datum new-datum] (verb-replace-in-body! name scope old-datum new-datum nil))
   ([name scope old-datum new-datum within-datum]
-  (let [target-srcs (filter #(str/includes? % scope) srcs)]
-    (when (not= 1 (count target-srcs))
-      (binding [*out* *err*]
-        (println (str "REJECTED — scope \"" scope "\" matches " (count target-srcs)
-                      " source files; replace-in-body needs exactly one (no facts mutated).")))
-      (*reject!* 3))
-    (let [src  (first target-srcs)
-          B    (def-binding src name)
-          form (when B (form-for-victim src B))]
-      (when (nil? form)
-        (binding [*out* *err*]
-          (println (str "REJECTED — no def named `" name "` found in \"" scope
-                        "\" (nothing to edit; no facts mutated).")))
-        (*reject!* 5 {:reason :no-def :verb "replace-in-body" :name name :scope scope
-                      :message (str "REJECTED — no def named `" name "` found in \"" scope "\".")}))
-      ;; (2) :within scope-narrowing — resolve the enclosing anchor to EXACTLY ONE node
-      ;; and search `old` only inside it. Fail-closed: 0 or >1 within-matches reject.
-      (let [search-root
-            (if (nil? within-datum)
-              form
-              (let [wcanon (datum->canon within-datum)
-                    wsites (anchor-match-sites form wcanon)]
-                (cond
-                  (zero? (count wsites))
-                  (do (binding [*out* *err*]
-                        (println (str "REJECTED — `within` form not found inside `" name "` in \"" scope
-                                      "\" (0 matches; no facts mutated).")))
-                      (*reject!* 5 {:reason :no-within :verb "replace-in-body" :name name :scope scope
-                                    :message (str "REJECTED — `within` form not found inside `" name "` in \"" scope "\" (0 matches).")}))
-                  (> (count wsites) 1)
-                  (do (binding [*out* *err*]
-                        (println (str "REJECTED — `within` is AMBIGUOUS inside `" name "` in \"" scope "\" ("
-                                      (count wsites) " matches; no facts mutated).")))
-                      (*reject!* 5 (disambig-payload :ambiguous-within name scope form wsites)))
-                  :else (:child (first wsites)))))
-            target-canon (datum->canon old-datum)
-            matches      (anchor-match-sites search-root target-canon)]
-        (cond
-          (zero? (count matches))
-          (do (binding [*out* *err*]
-                (println (str "REJECTED — anchor `old` not found inside "
-                              (if within-datum "the `within` form" (str "`" name "`"))
-                              " in \"" scope "\" (0 matches; no facts mutated). The old form must match "
-                              "an interior form structurally (head + spelling + child shape).")))
-              (*reject!* 5 {:reason :no-old :verb "replace-in-body" :name name :scope scope
-                            :within (some? within-datum)
-                            :message (str "REJECTED — anchor `old` not found inside "
-                                          (if within-datum "the `within` form" (str "`" name "`"))
-                                          " in \"" scope "\" (0 matches).")}))
-          (> (count matches) 1)
-          (do (binding [*out* *err*]
-                (println (str "REJECTED — anchor `old` is AMBIGUOUS inside "
-                              (if within-datum "the `within` form" (str "`" name "`"))
-                              " in \"" scope "\" (" (count matches) " matches; no facts mutated).")))
-              (*reject!* 5 (disambig-payload :ambiguous-old name scope search-root matches)))
-          :else
-          (let [{:keys [parent pos cid]} (first matches)
-                new-root (mint-datum! src new-datum)]
-            ;; retire the matched fN edge + re-point the SAME position literal at the
-            ;; freshly-minted form — by-l filters superseded, so reads see only the new
-            ;; child; the integer fN is reused verbatim -> byte-stable outside the edit.
-            (retire-fact! cid)
-            (c/fact! ctx parent (c/value! ctx pos) new-root tx)
-            (when-not *capture-only?* (re-resolve!))
-            (author-emit-scoped! "replace-in-body"
-                          (str "replaced 1 interior form inside `" name "` in \"" scope
-                               (when within-datum "\" (scoped by :within)")
-                               "\" (1 fN edge superseded + re-pointed at a freshly-minted form; "
-                               "def NOT re-emitted — siblings + comments preserved; refs via refers_to)")))))))))
+   (rvb/verb-replace-in-body! (verb-env) name scope old-datum new-datum within-datum)))
 
 ;; delete — remove a top-level def by name (M1 Cut H; logic in
 ;; src/resolve_verbs.bclj). FACT-NATIVE + fail-closed: the EFFECT is a supersede of
