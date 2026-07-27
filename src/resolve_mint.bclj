@@ -1,0 +1,97 @@
+#lang beagle/clj
+
+;; ============================================================================
+;; resolve-mint — THE MINT/AUTHOR LAYER: a new form enters the store as FACTS.
+;; ============================================================================
+;; Stage M1 Cut I of the engine core port (north thread
+;; 019f9f0e-de2a-7759-bb10-db8b14be6fad). This is the inverse of
+;; facts-roundtrip.rkt's datum->facts: a Clojure EDN datum (the structured edit
+;; spec an agent emits, e.g. `(defn add-two [x :- Int] :- Int (+ x 2))`) is
+;; walked into FRESH entities carrying `kind`/`v`/`fN` facts — exactly the
+;; reader-datum shape --emit-edn projects — and registered in file->ents so the
+;; projection emits them. That is what makes add-def / set-body a FACT
+;; OPERATION rather than a text splice; the renderer reconstructs purely from
+;; fN/tail, so a minted subtree round-trips byte-stable and any reference in it
+;; resolves through the SAME lexical walk.
+;;
+;; STRUCTURAL ADAPTATION (Cuts B–H's rule, unchanged): STATE IS A PARAMETER.
+;; resolve.clj's ^:dynamic vars cannot change namespace (coord_daemon.clj and
+;; tests/coord_*.clj `binding` them by qualified name), so the store, tx and the
+;; predicate value-ids arrive HERE as one explicit `Mint` record that resolve.clj
+;; builds from the dynamic state at call time. `ents` is the file->ents ATOM
+;; ITSELF (not a snapshot) — register! must mutate the var the projection reads.
+;;
+;; PER-DEF NOTES (the rationale that rode with the originals):
+;;   register!    every minted entity is appended to file->ents[src] so
+;;                extract-file! emits it. THE registration.
+;;   mint-leaf!   one scalar leaf: a `kind` fact + a `v` fact.
+;;   fN-facts     the LIVE, ordered fN edges of a parent — the body slots
+;;                set-body / replace-in-body address. Integer fN only (a CRDT
+;;                order key is a WRAPPER-level spelling; body edges stay flat),
+;;                matching the original's #"f\d+" exactly.
+;;   retire-fact! supersede a fact with NO replacement value (retiring a
+;;                wrapper/body fN edge). The supersedes edge needs a subject; a
+;;                fresh entity is fine — the live-view filter keys off the
+;;                superseded :r (the old fact id), not the subject
+;;                (cnf.bclj:105-106,116).
+;;
+;; The regex literal is hoisted to a top-level `re-pattern` def (resolve_read's
+;; rule: a #"…" literal cannot cross the graph-edit datum channel), compiled
+;; once exactly as the literal was.
+;;
+;; Consumed by resolve.clj — the emitted out/resolve_mint.clj must stay on the
+;; classpath.
+;; ============================================================================
+(ns resolve-mint
+  (:require [fram.types :as t] [fram.store :as c]))
+
+(define-mode strict)
+
+(def FN-RE :- Any (re-pattern "f\\d+"))
+
+;; The mint environment: the dynamic store state of resolve.clj, handed over
+;; explicitly. `ents` is typed (Atom Any) because Beagle cannot name "a map from
+;; src string to a vector of entity ids" more precisely than Any — the same
+;; boundary Cut G's xres/tres/ares and Cut H's corpus tables sit on.
+(defrecord Mint [ctx :- (Atom t/Store)
+                 tx :- Int
+                 SUP :- Int
+                 KIND :- Int
+                 Vp :- Int
+                 ents :- (Atom Any)])
+
+;; -> [[N fact-id child-node] …]: one row per LIVE fN edge, in slot order.
+(defrecord FnEdge [idx :- Int cid :- Int child :- Any])
+
+(defn register! [m :- Mint src :- String e :- Int] :- Int
+  (let [ents (:ents m)]
+    (do (swap! ents (fn [tbl :- Any] :- Any (assoc tbl src (conj (get tbl src []) e))))
+        e)))
+
+(defn mint-leaf! [m :- Mint src :- String kind :- Any v :- Any] :- Int
+  (let [ctx (:ctx m)
+        tx (:tx m)
+        e (register! m src (c/entity! ctx))]
+    (do (c/fact! ctx e (:KIND m) (c/value! ctx kind) tx)
+        (c/fact! ctx e (:Vp m) (c/value! ctx v) tx)
+        e)))
+
+(defn fN-facts [m :- Mint parent :- Int] :- (Vec Any)
+  (let [ctx (:ctx m)
+        rows (reduce (fn [acc :- (Vec FnEdge) cid :- Int] :- (Vec FnEdge)
+                       (let [f (c/fact-of ctx cid)
+                             pi :- Any (if (nil? f) nil (get f :p))
+                             p :- Any (if (int? pi) (c/literal ctx pi) nil)
+                             r :- Any (if (nil? f) nil (get f :r))]
+                         (if (and (string? p) (some? (re-matches FN-RE (str p))))
+                           (let [n (parse-long (subs (str p) 1))]
+                             (if (nil? n) acc (conj acc (->FnEdge n cid r))))
+                           acc)))
+                     []
+                     (c/by-l ctx parent))]
+    (mapv (fn [e :- FnEdge] :- Any [(:idx e) (:cid e) (:child e)])
+      (sort-by (fn [e :- FnEdge] :- Int (:idx e)) rows))))
+
+(defn retire-fact! [m :- Mint oldc :- Int] :- Any
+  (let [ctx (:ctx m)]
+    (c/fact! ctx (c/entity! ctx) (:SUP m) oldc (:tx m))))

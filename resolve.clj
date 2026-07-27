@@ -28,6 +28,7 @@
             [resolve-render :as rv]  ; M1 Cut E: render a node back to source + the anchor search
             [resolve-query :as rq]   ; M1 Cut F: the code queries — call graph, blast closure, dead private
             [resolve-walk :as rw]    ; M1 Cut G: the lexical walk — every reference to its nearest binding
+            [resolve-mint :as rmi]   ; M1 Cut I: the mint/author layer — a datum enters the store as facts
             [resolve-verbs :as rvb]))  ; M1 Cut H: the authoring verbs — an edit is a fact operation
 
 (def mode (first *command-line-args*))
@@ -611,16 +612,17 @@
 ;; byte-stable, and any reference in it resolves via the SAME lexical walk (a fresh
 ;; pass over forms-of after minting), giving scope-correctness for free.
 ;; ============================================================================
-(defn register! [src e] (swap! file->ents update src (fnil conj []) e) e)
+;; M1 Cut I — THE MINT LAYER is Beagle (src/resolve_mint.bclj). As in Cuts B–H the
+;; ^:dynamic vars STAY here, so `mint-env` reads the dynamic state at call time and
+;; hands it over as ONE record; `file->ents` rides as the ATOM ITSELF (register!
+;; must mutate the var the projection reads, not a snapshot).
+(defn mint-env [] (rmi/->Mint ctx tx SUP KIND Vp file->ents))
+(defn register! [src e] (rmi/register! (mint-env) src e))
 ;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->facts:55-64).
 ;; Beagle reads [..] as (#%brackets ..) and {..} as (#%map ..), so a vector/map datum
 ;; in the spec is minted as a `list` headed by that desugaring symbol — identical to
 ;; what --emit-edn produces, keeping the projection lossless.
-(defn mint-leaf! [src kind v]
-  (let [e (register! src (c/entity! ctx))]
-    (c/fact! ctx e KIND (c/value! ctx kind) tx)
-    (c/fact! ctx e Vp (c/value! ctx v) tx)
-    e))
+(defn mint-leaf! [src kind v] (rmi/mint-leaf! (mint-env) src kind v))
 ;; Reader metadata (`^Type` / `^:flag` / `^{..}`) rides on the datum as Clojure meta —
 ;; the host LispReader normalizes `^Type`→{:tag Type}, `^:dynamic`→{:dynamic true}. The
 ;; write-def raw-source path minted a bare `(str sym)`, DROPPING it silently: a whole-block
@@ -688,16 +690,11 @@
     :else (mint-leaf! src "other" (pr-str d)))))
 ;; the body fN edges of a defn form = the consecutive fN child facts whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
-(defn fN-facts [parent]            ; -> [[N fact-id child-node] ...] over LIVE fN edges, ordered
-  (->> (c/by-l ctx parent) (map (fn [cid] [cid (c/fact-of ctx cid)]))
-       (keep (fn [[cid cl]] (let [p (c/literal ctx (:p cl))]
-                              (when (and (string? p) (re-matches #"f\d+" p))
-                                [(parse-long (subs p 1)) cid (:r cl)]))))
-       (sort-by first)))
+(defn fN-facts [parent] (rmi/fN-facts (mint-env) parent))  ; -> [[N fact-id child-node] ...] over LIVE fN edges, ordered
 ;; supersede a fact WITHOUT a replacement value (e.g. retiring a wrapper/body fN edge).
 ;; The supersedes edge needs a subject; a fresh entity is fine — the live-view filter
 ;; keys off the superseded :r (the old fact id), not the subject (cnf.bclj:105-106,116).
-(defn retire-fact! [oldc] (c/fact! ctx (c/entity! ctx) SUP oldc tx))
+(defn retire-fact! [oldc] (rmi/retire-fact! (mint-env) oldc))
 
 ;; --- delete projection: omit a top-level form + its subtree, renumber siblings ---
 ;; The renderer reads fN children CONSECUTIVELY and includes only nodes reachable from
