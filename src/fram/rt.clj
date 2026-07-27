@@ -11,7 +11,8 @@
             [clojure.java.io :as io]
             [cheshire.core :as cheshire]
             [fram.fold :as fold]
-            [fram.kernel :as kernel]))
+            [fram.kernel :as kernel]
+            [fram.rt-core :as rtc]))
 
 ;; Serialize any value (records serialize as objects keyed by field name; vectors
 ;; as arrays) to JSON — the engine's structured-output path for the MCP edge.
@@ -67,18 +68,14 @@
 
 (defn split-on [s sep]
   (vec (str/split s (re-pattern (java.util.regex.Pattern/quote sep)) -1)))
-(defn str-index-of [s sub] (str/index-of s sub))
-(defn split-comma [s]
-  (->> (str/split s #",") (map str/trim) (remove str/blank?) vec))
+(defn str-index-of [s sub] (rtc/str-index-of s sub))
+(defn split-comma [s] (rtc/split-comma s))
 (defn today-iso [] (str (java.time.LocalDate/now)))
-(defn str-lt? [a b] (neg? (compare a b)))
+(defn str-lt? [a b] (rtc/str-lt? a b))
 
 ;; split a triple line "<predicate><ws><object...>" into [pred obj]; obj may
 ;; contain spaces (it's the rest of the line). Blank/garbage -> [line ""].
-(defn split-kv [line]
-  (let [t (str/trim line)
-        m (re-find #"^(\S+)\s+(.*)$" t)]
-    (if m [(nth m 1) (nth m 2)] [t ""])))
+(defn split-kv [line] (rtc/split-kv line))
 
 ;; --- fact-native triple-file value (de)serialization -----------------------
 ;; A fact in a triple file is either a ref (@id, handled by the caller)
@@ -91,9 +88,7 @@
 ;; --- thread id: human-grouped, fixed-width, opaque key ----------------------
 ;; 2026-06-15-150040 (yyyy-MM-dd-HHmmss). Dashes for glance-readability; fixed
 ;; width so id<->slug splits by position; sorts chronologically as a plain string.
-(defn- fmt-id [n]
-  (let [s (str n)]
-    (str (subs s 0 4) "-" (subs s 4 6) "-" (subs s 6 8) "-" (subs s 8 14))))
+(defn- fmt-id [n] (rtc/fmt-id n))
 
 (defn now-id []
   (fmt-id (.format (java.time.LocalDateTime/now)
@@ -139,14 +134,19 @@
       (if got got (recur (inc n))))))
 (defn release-id [dir id] (.delete (io/file (lock-path dir id))) nil)
 
-(defn slugify [title]
-  (let [base (-> (str/lower-case (str title))
-                 (str/replace #"[^a-z0-9]+" "_")
-                 (str/replace #"^_+" "")
-                 (str/replace #"_+$" ""))
-        capped (if (> (count base) 60) (subs base 0 60) base)
-        clean (str/replace capped #"_+$" "")]
-    (if (str/blank? clean) "untitled" clean)))
+(defn slugify [title] (rtc/slugify title))
+
+;; Keep downstream source locations stable: the rt golden compares host
+;; exception stderr without masks. The graph-authored delegates above replace
+;; multi-line bodies, so this spacer preserves the original stack-trace lines.
+;;
+;;
+;;
+;;
+;;
+;;
+;;
+;;
 
 ;; --- portable defaults ------------------------------------------------------
 
@@ -1470,12 +1470,10 @@
 (defn delete-file [p] (when (.exists (io/file p)) (.delete (io/file p))) nil)
 (defn spit-append [p content] (spit p content :append true) nil)
 (defn getenv [nm] (System/getenv nm))
-(defn filter-digits [s] (str/replace s #"[^0-9]" ""))
-(defn is-iso-datetime-19 [s]
-  (boolean (and (= 19 (count s)) (re-matches #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}" s))))
-(defn is-iso-datetime-16 [s]
-  (boolean (and (= 16 (count s)) (re-matches #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}" s))))
-(defn repeat-str [s n] (apply str (repeat (max 0 (long n)) s)))
+(defn filter-digits [s] (rtc/filter-digits s))
+(defn is-iso-datetime-19 [s] (rtc/is-iso-datetime-19 s))
+(defn is-iso-datetime-16 [s] (rtc/is-iso-datetime-16 s))
+(defn repeat-str [s n] (rtc/repeat-str s n))
 
 ;; Clockify HTTP — lazy-resolve babashka.http-client so the AOT/native path
 ;; never references it at compile time (network/out-of-scope there).
