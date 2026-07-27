@@ -649,8 +649,8 @@
 ;; LIVENESS fresh IN-lock. One single-valued cell on @lease:<R> co-encodes
 ;; holder|expiry-ms|epoch; held-ness is DERIVED (cell present AND expiry > clock).
 ;; A lapsed lease is reacquired by the next acquirer's own commit (no sweeper).
-;; Ported into canonical's hand-written idiom from the typed spec-of-record
-;; (fram-lease/src/fram/coord.bclj); coord_lease_test is the gate.
+;; Pure decisions live in graph-upstream coord-commit. This host retains the
+;; clock, lock, persistence, retract execution, and durable fencing epochs.
 (def lease-pred "lease")
 (def ^:dynamic *lease-now-ms*
   "Host clock seam for lease adapters. Production uses the JVM wall clock;
@@ -671,14 +671,11 @@
       (let [cid (first (live-cids-lp co te pid))]
         (when cid (decode-lease (get (:values @st) (:r (get (:facts @st) cid)))))))))
 
-(defn- valid-lease-request? [holder res ttl-ms now]
-  (and (string? holder) (not (str/blank? holder)) (not (str/includes? holder "|"))
-       (string? res) (not (str/blank? res))
-       (integer? ttl-ms) (pos? ttl-ms)
-       (<= ttl-ms (- Long/MAX_VALUE now))))
-
-(defn- valid-lease-epoch? [epoch]
-  (and (integer? epoch) (pos? epoch) (<= epoch Long/MAX_VALUE)))
+(defn- lease-snapshot [lease] (when lease (cc/->LeaseSnapshot (:holder lease) (:exp lease) (:epoch lease))))
+(defn- lease-grant-decision [lease holder res ttl-ms now version] (cc/lease-grant-decision (lease-snapshot lease) holder res ttl-ms now Long/MAX_VALUE version))
+(defn- lease-renew-decision [lease holder res epoch ttl-ms now version] (cc/lease-renew-decision (lease-snapshot lease) holder res epoch ttl-ms now Long/MAX_VALUE Long/MAX_VALUE version))
+(defn- lease-release-decision [lease holder epoch require-epoch version] (cc/lease-release-decision (lease-snapshot lease) holder epoch require-epoch version))
+(defn- lease-fence-ok-decision [lease holder epoch now] (cc/lease-fence-ok? (lease-snapshot lease) holder epoch now))
 
 (defn- persist-lease!
   "Persist one fresh lease cell. Caller owns (:lock co); the new transaction's
@@ -698,19 +695,14 @@
 (defn acquire-lease! [co holder res ttl-ms]
   (locking (:lock co)
     (let [now (*lease-now-ms*)
-          cur (read-lease co res)]
-      (cond
-        (not (valid-lease-request? holder res ttl-ms now))
-        {:reject :invalid-lease-request :version (current-seq co)}
-
-        (and cur (> (:exp cur) now) (not= (:holder cur) holder))
-        {:reject :held :holder (:holder cur) :exp (:exp cur) :version (current-seq co)}
-
-        :else
+          cur (read-lease co res)
+          decision (lease-grant-decision cur holder res ttl-ms now (current-seq co))]
+      (if (:persist decision)
         ;; The transaction sequence is global and durable. Deriving the fence
         ;; token from the lease cell itself lets release erase the cell without
         ;; erasing epoch history, closing same-holder ABA after reacquisition.
-        (persist-lease! co holder res ttl-ms now)))))
+        (persist-lease! co holder res ttl-ms now)
+        decision))))
 
 (defn renew-lease!
   "Extend only the exact current, unexpired lease and rotate its fencing token.
@@ -718,20 +710,11 @@
   [co holder res expected-epoch ttl-ms]
   (locking (:lock co)
     (let [now (*lease-now-ms*)
-          cur (read-lease co res)]
-      (cond
-        (or (not (valid-lease-request? holder res ttl-ms now))
-            (not (valid-lease-epoch? expected-epoch)))
-        {:reject :invalid-lease-request :version (current-seq co)}
-
-        (and cur
-             (= holder (:holder cur))
-             (= expected-epoch (:epoch cur))
-             (> (:exp cur) now))
+          cur (read-lease co res)
+          decision (lease-renew-decision cur holder res expected-epoch ttl-ms now (current-seq co))]
+      (if (:persist decision)
         (persist-lease! co holder res ttl-ms now)
-
-        :else
-        {:reject :fence-lost :version (current-seq co)}))))
+        decision))))
 
 ;; release-lease! re-enters (:lock co) via retract! — JVM monitors are REENTRANT,
 ;; so this is safe; do NOT "fix" the nesting into a separate lock (would deadlock).
@@ -741,24 +724,23 @@
   ;; an old finally block from the same holder must not release a newer lease.
   ([co holder res]
    (locking (:lock co)
-     (let [cur (read-lease co res)]
-       (if (and cur (= (:holder cur) holder))
+     (let [cur (read-lease co res)
+           decision (lease-release-decision cur holder nil false (current-seq co))]
+       (if (:retract decision)
          (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
-         {:ok (current-seq co) :noop true}))))
+         decision))))
   ([co holder res epoch]
    (locking (:lock co)
-     (let [cur (read-lease co res)]
-       (if (and cur
-                (= (:holder cur) holder)
-                (= (:epoch cur) epoch))
+     (let [cur (read-lease co res)
+           decision (lease-release-decision cur holder epoch true (current-seq co))]
+       (if (:retract decision)
          (retract! co holder (lease-subj res) lease-pred nil (current-seq co))
-         {:ok (current-seq co) :noop true})))))
+         decision)))))
 
 (defn fence-ok? [co res holder epoch]
   (locking (:lock co)
     (let [cur (read-lease co res)]
-      (boolean (and cur (= (:holder cur) holder) (= epoch (:epoch cur))
-                    (> (:exp cur) (*lease-now-ms*)))))))
+      (lease-fence-ok-decision cur holder epoch (*lease-now-ms*)))))
 
 (defn with-fence!
   "Execute ACTION only while RES is held by HOLDER at EPOCH. Fence validation
