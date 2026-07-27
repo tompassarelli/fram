@@ -1,7 +1,7 @@
 ;; ============================================================================
 ;; store_defcheck_untyped_test.clj — UNTYPED-mode def-check selftest (EXP-025).
 ;; ============================================================================
-;; Unit-drives the in-process untyped analyzer in defcheck_gate.clj directly on
+;; Unit-drives the graph-authored in-process untyped analyzer directly on
 ;; plain-Clojure source strings — NO coordinator, NO sidecar, NO beagle spawn, so
 ;; it runs anywhere `clojure -M` does and is sub-millisecond per check.
 ;;
@@ -19,11 +19,11 @@
 ;; Run:  clojure -M tests/store_defcheck_untyped_test.clj ; echo EXIT=$?
 ;; ============================================================================
 (require '[clojure.string :as str])
-(load-file (str (System/getProperty "user.dir") "/defcheck_gate.clj"))
+(load-file (str (System/getProperty "user.dir") "/out/defcheck_gate.clj"))
 (alias 'dc (create-ns 'fram.defcheck))
 
 (defn- pv [s] (deref (ns-resolve 'fram.defcheck s)))
-(def analyze     (pv 'analyze-untyped-module))
+(def analyze     (partial (pv 'analyze-untyped-module-with-state!) true))
 (def untyped?    (pv 'untyped-mode?))
 
 (def results (atom []))

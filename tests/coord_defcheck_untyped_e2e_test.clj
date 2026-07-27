@@ -119,8 +119,10 @@
              (and txt (str/includes? txt "parse-cookies") (not (str/includes? txt "parse-cookiez"))) "no rejected def landed")
       ;; the untyped analyzer over the rendered edited tree must be clean
       (when txt
-        (let [analyze (deref (ns-resolve 'fram.defcheck 'analyze-untyped-module))]
-          (check "(3) rendered edited module analyzes CLEAN" (empty? (analyze "cookies" txt)) (pr-str (map :message (analyze "cookies" txt)))))))
+        (let [analyze (deref (ns-resolve 'fram.defcheck 'analyze-untyped-module-with-state!))]
+          (check "(3) rendered edited module analyzes CLEAN"
+                 (empty? (analyze true "cookies" txt))
+                 (pr-str (map :message (analyze true "cookies" txt)))))))
 
     (println (format "\n==== %s : %d failure(s) ====" (if (zero? @failures) "PASS" "FAIL") @failures))
     (shutdown!)

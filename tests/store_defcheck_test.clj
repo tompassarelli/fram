@@ -2,7 +2,7 @@
 ;; ============================================================================
 ;; store_defcheck_test.clj — the incremental def-level check selftest (A2).
 ;; ============================================================================
-;; Drives defcheck_gate.clj (check-def / whole-tree-check) + bin/fram-defcheck-server
+;; Drives the graph-authored defcheck gate + bin/fram-defcheck-server
 ;; over a THROWAWAY coordinator booted on a /tmp arena log, with trap-kill and a
 ;; :status sanity assertion (the daemon's :log MUST be our selftest log before any
 ;; result is trusted). NEVER touches 7977/48942/48950. Boots its own sidecar on a
@@ -104,16 +104,24 @@
       (log! "SAFETY ABORT: coordinator :" coord-port " serves" (:log st) "— not the selftest arena") (System/exit 4))
     (log! "coordinator OK —" (pr-str (select-keys st [:version :log]))))
 
-  ;; load the primitive; bind it at our scratch ports + a private gwdir.
-  (load-file (str repo "/defcheck_gate.clj"))
+  ;; Load the primitive with explicit scratch ports + a private gwdir.
+  (load-file (str repo "/out/defcheck_gate.clj"))
   (let [ns' (find-ns 'fram.defcheck)
-        gv  (fn [s] (ns-resolve ns' s))]
-    (with-bindings {(gv '*coord-port*)   coord-port
-                    (gv '*sidecar-port*) sidecar-port
-                    (gv '*gwdir*)        (str arena "/gwdir")}
-      (let [check-def        (deref (gv 'check-def))
-            whole-tree-check (deref (gv 'whole-tree-check))
-            prime!           (deref (gv 'prime-gwdir!))]
+        gv  (fn [s] (ns-resolve ns' s))
+        ctor (deref (gv '->DefcheckState))
+        state (ctor coord-port sidecar-port (str arena "/gwdir") true nil nil true)
+        ensure-state! (deref (gv 'ensure-sidecar-with-state!))
+        prime-state! (deref (gv 'prime-gwdir-with-state!))
+        modules-state (deref (gv 'live-modules-with-state))
+        errors-state (deref (gv 'check-module-errors-any-with-state!))
+        check-state (deref (gv 'check-def-with-state!))
+        whole-state (deref (gv 'whole-tree-check-with-state!))]
+    (let [ensure! #(ensure-state! state)
+          prime! #(prime-state! state)
+          modules #(modules-state state)
+          errors #(errors-state state %)
+          check-def #(check-state %1 %2 ensure! errors)
+          whole-tree-check #(whole-state ensure! prime! modules errors)]
         (prime!)   ; siblings on disk so cross-module resolution is live
 
         ;; (a) bad def caught incrementally, structured -------------------------
@@ -147,7 +155,7 @@
               med (nth (sort ts) 5)
               mn  (apply min ts)]
           (check! "(c) warm check < 5000ms (hard target)"  (< med 5000) (format "median %.1fms min %.1fms" med mn))
-          (check! "(c) warm check < 1000ms (ideal target)" (< med 1000) (format "median %.1fms" med)))))))
+          (check! "(c) warm check < 1000ms (ideal target)" (< med 1000) (format "median %.1fms" med))))))
 
 (defn -main []
   (try (run)

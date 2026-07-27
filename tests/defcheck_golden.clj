@@ -1,10 +1,10 @@
-;; Deterministic behavior probe for the original defcheck_gate.clj.
+;; Deterministic behavior probe for the graph-authored defcheck module.
 ;; Keep this driver implementation-neutral: it reaches the public surface and
 ;; the private, behavior-bearing helpers through vars so later delegated ports
 ;; are measured against the same observations.
 (require '[clojure.string :as str])
 
-(load-file (str (System/getProperty "user.dir") "/defcheck_gate.clj"))
+(load-file (str (System/getProperty "user.dir") "/out/defcheck_gate.clj"))
 
 (defn- v [s] (ns-resolve 'fram.defcheck s))
 (defn- f [s] (deref (v s)))
@@ -97,43 +97,31 @@
                      [:analyze-unresolved unresolved-src]
                      [:analyze-arity arity-src]
                      [:analyze-read-error "(ns demo)\n(defn broken [x]"]]]
-  (emit label ((f 'analyze-untyped-module) "demo" src)))
+  (emit label ((f 'analyze-untyped-module-with-state!) true "demo" src)))
 
 (emit :check-def-clean
-      (with-redefs-fn
-        {(v 'ensure-sidecar!) (fn [] true)
-         (v 'check-module-errors-any) (fn [_] [])}
-        #((f 'check-def) "demo" "wanted")))
+      ((f 'check-def-with-state!) "demo" "wanted" (fn [] true) (fn [_] [])))
 
 (emit :check-def-error
-      (with-redefs-fn
-        {(v 'ensure-sidecar!) (fn [] true)
-         (v 'check-module-errors-any)
-         (fn [_] [{:ok false :stage :type :at {:module "demo" :def "other"} :message "first"}
-                  {:ok false :stage :type :at {:module "demo" :def "wanted"} :message "preferred"}])}
-        #((f 'check-def) "demo" "wanted")))
+      ((f 'check-def-with-state!)
+       "demo" "wanted" (fn [] true)
+       (fn [_] [{:ok false :stage :type :at {:module "demo" :def "other"} :message "first"}
+                {:ok false :stage :type :at {:module "demo" :def "wanted"} :message "preferred"}])))
 
 (emit :check-def-infra
-      (with-redefs-fn
-        {(v 'ensure-sidecar!) (fn [] (throw (ex-info "offline" {})))}
-        #((f 'check-def) "demo" "wanted")))
+      ((f 'check-def-with-state!)
+       "demo" "wanted" (fn [] (throw (ex-info "offline" {}))) (fn [_] [])))
 
 (emit :whole-tree-clean
-      (with-redefs-fn
-        {(v 'ensure-sidecar!) (fn [] true)
-         (v 'prime-gwdir!) (fn [] "/tmp/gw")
-         (v 'live-modules) (fn [] ["a" "b"])
-         (v 'check-module-errors-any) (fn [_] [])}
-        #((f 'whole-tree-check))))
+      ((f 'whole-tree-check-with-state!)
+       (fn [] true) (fn [] "/tmp/gw") (fn [] ["a" "b"]) (fn [_] [])))
 
 (emit :whole-tree-error
-      (with-redefs-fn
-        {(v 'ensure-sidecar!) (fn [] true)
-         (v 'prime-gwdir!) (fn [] "/tmp/gw")
-         (v 'live-modules) (fn [] ["a" "b"])
-         (v 'check-module-errors-any)
-         (fn [module]
-           (if (= module "b")
-             [{:ok false :stage :type :at {:module module :def "bad"} :message "broken"}]
-             []))}
-        #((f 'whole-tree-check))))
+      ((f 'whole-tree-check-with-state!)
+       (fn [] true)
+       (fn [] "/tmp/gw")
+       (fn [] ["a" "b"])
+       (fn [module]
+         (if (= module "b")
+           [{:ok false :stage :type :at {:module module :def "bad"} :message "broken"}]
+           []))))

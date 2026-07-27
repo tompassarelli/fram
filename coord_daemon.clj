@@ -4282,27 +4282,41 @@
                   defs (mapv #(select-keys % [:name :head :sig]) (addressable-forms src))]
               {:ok true :module want :defs defs :count (count defs) :version (current-seq @co)})))))))
 
-;; ---- phase 2: wire A2's WARM def-level check (thread A2, defcheck_gate.clj) ---
+;; ---- phase 2: wire A2's WARM graph-authored def-level check ------------------
 ;; Opt-in via FRAM_DEFCHECK=1 so LIVE task coordinators (7977/48942/48950 — no code,
 ;; no sidecar) are untouched; the EXP-026 code daemon sets it. Graceful degrade: any
 ;; load/resolve failure leaves the advisory default in place (never breaks the daemon).
-;; A2's check-def reads fram.defcheck/*coord-port* — we bind it to THIS daemon's serving
-;; port per call (with-bindings; no root mutation). *autostart?* boots the 49060 sidecar.
+;; Runtime configuration is explicit DefcheckState; the host daemon owns the port.
 (defn- maybe-wire-def-check! [port]
   (when (= "1" (System/getenv "FRAM_DEFCHECK"))
     (try
-      (load-file (str (System/getProperty "user.dir") "/defcheck_gate.clj"))
-      (let [cp  (resolve 'fram.defcheck/*coord-port*)
-            cd  (some-> (resolve 'fram.defcheck/check-def) var-get)
-            wtc (some-> (resolve 'fram.defcheck/whole-tree-check) var-get)]
-        (if (and cp cd)
+      (load-file (str (System/getProperty "user.dir") "/out/defcheck_gate.clj"))
+      (let [ctor   (some-> (resolve 'fram.defcheck/->DefcheckState) var-get)
+            ensure (some-> (resolve 'fram.defcheck/ensure-sidecar-with-state!) var-get)
+            prime  (some-> (resolve 'fram.defcheck/prime-gwdir-with-state!) var-get)
+            mods   (some-> (resolve 'fram.defcheck/live-modules-with-state) var-get)
+            errors (some-> (resolve 'fram.defcheck/check-module-errors-any-with-state!) var-get)
+            cd     (some-> (resolve 'fram.defcheck/check-def-with-state!) var-get)
+            wtc    (some-> (resolve 'fram.defcheck/whole-tree-check-with-state!) var-get)]
+        (if (every? some? [ctor ensure prime mods errors cd])
           (do
-            (reset! def-check-hook (fn [module name] (with-bindings {cp port} (cd module name))))
-            (when wtc (reset! whole-tree-hook (fn [] (with-bindings {cp port} (wtc)))))
-            (println (str "def-check: WARM primitive wired — fram.defcheck/check-def @ coord-port " port
-                          (when wtc " (+ whole-tree-check -> :check verb)"))))
+            (let [sidecar-port (or (some-> (System/getenv "FRAM_DEFCHECK_PORT")
+                                           Integer/parseInt)
+                                   49060)
+                  state (ctor port sidecar-port nil true nil nil true)
+                  ensure! #(ensure state)
+                  prime!  #(prime state)
+                  modules #(mods state)
+                  check-errors #(errors state %)]
+              (reset! def-check-hook
+                      (fn [module name] (cd module name ensure! check-errors)))
+              (when wtc
+                (reset! whole-tree-hook
+                        (fn [] (wtc ensure! prime! modules check-errors))))
+              (println (str "def-check: WARM graph primitive wired @ coord-port " port
+                            (when wtc " (+ whole-tree-check -> :check verb)")))))
           (binding [*out* *err*]
-            (println "def-check: defcheck_gate.clj loaded but check-def/*coord-port* not found; staying advisory"))))
+            (println "def-check: out/defcheck_gate.clj loaded but stateful gate API not found; staying advisory"))))
       (catch Throwable t
         (binding [*out* *err*]
           (println (str "def-check: warm primitive unavailable (" (.getMessage t) "); staying advisory-deferred")))))))
@@ -4463,7 +4477,7 @@
           {:ok true :checked :whole-tree :version (current-seq @co)}
           (assoc res :version (current-seq @co))))
       {:ok true :checked :deferred
-       :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + defcheck_gate.clj)"
+       :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + out/defcheck_gate.clj)"
        :version (current-seq @co)})
     (= :edit-min (:op req)) (edit-min-response req nil false)
     ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence

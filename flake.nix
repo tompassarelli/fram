@@ -32,7 +32,7 @@
           };
 
           # The bin/ scripts resolve HERE = $(dirname $0)/.. and load out/ (compiled
-          # Clojure), coord*.clj, resolve.clj, codegraph/, defcheck_gate.clj, tests/, and src/
+          # Clojure), coord*.clj, resolve.clj, codegraph/, tests/, and src/
           # from there. The CLI + MCP run on babashka against committed out/. The
           # daemon's exact JVM classpath is resolved once during the build from the
           # pure cache above, then Java runs it directly at runtime.
@@ -67,7 +67,7 @@
 
             mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
             cp -r out bin src coord.clj coord_daemon.clj resolve.clj fri.clj \
-              rotations.clj defcheck_gate.clj deps.edn \
+              rotations.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
             # Only codegraph's source is executable runtime input. build/ is a
