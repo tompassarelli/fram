@@ -623,71 +623,13 @@
 ;; in the spec is minted as a `list` headed by that desugaring symbol — identical to
 ;; what --emit-edn produces, keeping the projection lossless.
 (defn mint-leaf! [src kind v] (rmi/mint-leaf! (mint-env) src kind v))
-;; Reader metadata (`^Type` / `^:flag` / `^{..}`) rides on the datum as Clojure meta —
-;; the host LispReader normalizes `^Type`→{:tag Type}, `^:dynamic`→{:dynamic true}. The
-;; write-def raw-source path minted a bare `(str sym)`, DROPPING it silently: a whole-block
-;; `extend-protocol` re-author lost every `^OutputStream` param hint (→ reflection). Mint it
-;; as beagle's `(#%meta <m> <target>)` node (unwrap-meta's inverse) so hints + `^:dynamic`
-;; names survive. Match beagle's reader shorthand (parse.rkt): {:tag Sym}→Sym (bare symbol),
-;; a single {:flag true}→:flag (keyword), else the full map (`^{..}` longhand). Source-position
-;; keys the reader may attach are stripped (a plain PushbackReader adds none, but be defensive).
-(defn- clj-meta->beagle-meta [m]
-  (cond
-    (and (= 1 (count m)) (contains? m :tag) (symbol? (:tag m))) (:tag m)
-    (and (= 1 (count m)) (true? (val (first m))))               (key (first m))
-    :else m))
-(defn- reader-meta [d]
-  (when (instance? clojure.lang.IObj d)
-    (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file]))))
+;; mint-datum! — THE MINT (M1 Cut I; logic + the per-branch re-encoding rationale
+;; in src/resolve_mint.bclj). An EDN datum becomes fresh entities carrying
+;; kind/v/fN facts, in the SAME allocation order the original used (the goldens
+;; compare bytes). Reader metadata, regex and set objects are re-encoded as the
+;; `(#%meta …)` / `(#%regex …)` / `(#%set …)` nodes beagle's own reader produces.
+(defn mint-datum! [src d] (rmi/mint-datum! (mint-env) src d))
 
-(defn mint-datum! [src d]
-  (if-let [m (reader-meta d)]
-    ;; strip the meta and re-mint under an explicit (#%meta …) wrapper (recursion mints the
-    ;; bare target normally; a single #%meta suffices — Clojure merges stacked hints to one map).
-    (mint-datum! src (list (symbol "#%meta") (clj-meta->beagle-meta m) (with-meta d nil)))
-  (cond
-    ;; EDN `nil` must mint as the SYMBOL nil — beagle reads source `nil` via Racket's
-    ;; reader (no nil there), so the corpus convention is kind="symbol" v="nil"; the
-    ;; kind="nil" leaf means Racket '() and RENDERS as `()`, which the type-checker
-    ;; rejects ("unsupported expression: '()"). Same re-encoding rationale as the
-    ;; keyword branch below. (Found by the macro-crossover set-body probe, 2026-07-02.)
-    (nil? d)        (mint-leaf! src "symbol" "nil")
-    (symbol? d)     (mint-leaf! src "symbol"  (str d))
-    ;; A `:foo` token is a SYMBOL leaf with the colon RETAINED — beagle reads .bclj via
-    ;; Racket's reader, which has no keyword syntax: `:enable`/`:-` come back as the symbol
-    ;; |:enable|/|:-| (kind="symbol", v=":enable"). facts-roundtrip's emit/decode shares
-    ;; that convention, so a `keyword`-kind leaf (colon stripped) decodes to a Clojure keyword
-    ;; that renders as `#:-` — corrupting the `:-` type marker and rejecting the build. The
-    ;; authoring spec is parsed by clojure.edn (where `:-` IS a keyword), so we MUST re-encode
-    ;; it the beagle way here, or graph-authored typed defs never round-trip to text.
-    (keyword? d)    (mint-leaf! src "symbol"  (str d))
-    (string? d)     (mint-leaf! src "string"  d)
-    ;; same convention: beagle source `true`/`false` read as SYMBOLS (the corpus has
-    ;; zero kind="bool" leaves) — mint them the way the reader does.
-    (boolean? d)    (mint-leaf! src "symbol"  (if d "true" "false"))
-    (char? d)       (mint-leaf! src "char"    (str d))
-    (number? d)     (mint-leaf! src "number"  (str d))
-    (or (list? d) (seq? d) (vector? d) (map? d))
-    ;; symbols built via (symbol ..) — writing #%brackets literally would be read as a
-    ;; reader tag by Clojure's reader at load time of this file.
-    (let [head  (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else [])
-          elems (concat head (if (map? d) (apply concat (seq d)) (seq d)))
-          e     (register! src (c/entity! ctx))]
-      (c/fact! ctx e KIND (c/value! ctx "list") tx)
-      (doseq [[i x] (map-indexed vector elems)]
-        (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! src x) tx))
-      e)
-    ;; Reader forms the host LispReader hands us as OBJECTS (write-def raw-source path),
-    ;; not as `#%…`-headed lists like beagle's Racket reader emits. Re-encode them into
-    ;; the SAME `(#%regex "pat")` / `(#%set e…)` list node --emit-edn mints, so the
-    ;; renderer (facts-roundtrip datum->src + node->str) inverts them back to the reader
-    ;; literal. Without this a regex/set fell to the :else leaf and was pr-str'd — a
-    ;; `#","` became the STRING `"#\",\""`, corrupting the def. (EXP-025 b1 substrate defect.)
-    (instance? java.util.regex.Pattern d)
-    (mint-datum! src (list (symbol "#%regex") (.pattern ^java.util.regex.Pattern d)))
-    (set? d)
-    (mint-datum! src (cons (symbol "#%set") (seq d)))
-    :else (mint-leaf! src "other" (pr-str d)))))
 ;; the body fN edges of a defn form = the consecutive fN child facts whose slot is
 ;; AFTER the params bracket (everything --emit-edn put at f5,f6,... in `defn` :122).
 (defn fN-facts [parent] (rmi/fN-facts (mint-env) parent))  ; -> [[N fact-id child-node] ...] over LIVE fN edges, ordered

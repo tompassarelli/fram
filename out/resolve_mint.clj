@@ -41,6 +41,42 @@
   (c/fact! ctx e (:Vp m) (c/value! ctx v) tx)
   e)))
 
+(defn- clj-meta->beagle-meta [mt]
+  (cond
+  (and (= 1 (count mt)) (contains? mt :tag) (symbol? (:tag mt))) (:tag mt)
+  (and (= 1 (count mt)) (true? (val (first mt)))) (key (first mt))
+  :else mt))
+
+(defn- reader-meta [d]
+  (if (instance? clojure.lang.IObj d) (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file])) nil))
+
+(defn mint-datum! [^Mint m ^String src d]
+  (let [mt (reader-meta d)]
+  (if (some? mt) (mint-datum! m src (list (symbol "#%meta") (clj-meta->beagle-meta mt) (with-meta d nil))) (cond
+  (nil? d) (mint-leaf! m src "symbol" "nil")
+  (symbol? d) (mint-leaf! m src "symbol" (str d))
+  (keyword? d) (mint-leaf! m src "symbol" (str d))
+  (string? d) (mint-leaf! m src "string" d)
+  (boolean? d) (mint-leaf! m src "symbol" (if d "true" "false"))
+  (char? d) (mint-leaf! m src "char" (str d))
+  (number? d) (mint-leaf! m src "number" (str d))
+  (or (list? d) (seq? d) (vector? d) (map? d)) (let [ctx (:ctx m)
+   tx (:tx m)
+   head (cond
+  (vector? d) [(symbol "#%brackets")]
+  (map? d) [(symbol "#%map")]
+  :else [])
+   elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d))))
+   e (register! m src (c/entity! ctx))]
+  (do
+  (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
+  (doseq [i (range (count elems))]
+  (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! m src (nth elems i)) tx))
+  e))
+  (instance? java.util.regex.Pattern d) (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
+  (set? d) (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
+  :else (mint-leaf! m src "other" (pr-str d))))))
+
 (defn fN-facts [^Mint m parent]
   (let [ctx (:ctx m)
    rows (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)

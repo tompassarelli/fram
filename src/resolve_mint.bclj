@@ -76,6 +76,75 @@
         (c/fact! ctx e (:Vp m) (c/value! ctx v) tx)
         e)))
 
+;; Reader metadata (`^Type` / `^:flag` / `^{..}`) rides on the datum as Clojure meta —
+;; the host LispReader normalizes `^Type`→{:tag Type}, `^:dynamic`→{:dynamic true}. The
+;; write-def raw-source path minted a bare `(str sym)`, DROPPING it silently: a whole-block
+;; `extend-protocol` re-author lost every `^OutputStream` param hint (→ reflection). Mint it
+;; as beagle's `(#%meta <m> <target>)` node (unwrap-meta's inverse) so hints + `^:dynamic`
+;; names survive. Match beagle's reader shorthand (parse.rkt): {:tag Sym}→Sym (bare symbol),
+;; a single {:flag true}→:flag (keyword), else the full map (`^{..}` longhand). Source-position
+;; keys the reader may attach are stripped (a plain PushbackReader adds none, but be defensive).
+(defn- clj-meta->beagle-meta [mt :- Any] :- Any
+  (cond
+    (and (= 1 (count mt)) (contains? mt :tag) (symbol? (get mt :tag))) (get mt :tag)
+    (and (= 1 (count mt)) (true? (val (first mt))))                    (key (first mt))
+    :else mt))
+
+(defn- reader-meta [d :- Any] :- Any
+  (if (instance? clojure.lang.IObj d)
+    (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file]))
+    nil))
+
+;; The MINT. Every branch below re-encodes a Clojure EDN token the way beagle's own
+;; Racket reader would have read it — the corpus convention, not clojure.edn's:
+;;   nil      -> the SYMBOL "nil" (a kind="nil" leaf means Racket '() and renders as
+;;               `()`, which the type-checker rejects).
+;;   :foo     -> a SYMBOL leaf with the colon RETAINED (beagle has no keyword syntax;
+;;               a keyword-kind leaf decodes back as `#:-`, corrupting the `:-` type
+;;               marker and rejecting the build).
+;;   true/false -> SYMBOL leaves (the corpus has zero kind="bool" leaves).
+;;   [..]/{..}  -> a `list` headed by #%brackets / #%map, exactly what --emit-edn
+;;               produces, keeping the projection lossless.
+;;   #"…"/#{…}  -> the `(#%regex "pat")` / `(#%set e…)` list node the renderer inverts
+;;               back to the reader literal. Without this a regex fell to the :else
+;;               leaf and was pr-str'd — `#","` became the STRING `"#\",\""` (EXP-025).
+;; Evaluation ORDER is load-bearing: the parent entity is allocated BEFORE its children
+;; and each child's slot value before the child itself, so entity ids come out in the
+;; original's sequence and the goldens stay byte-identical.
+(defn mint-datum! [m :- Mint src :- String d :- Any] :- Int
+  (let [mt (reader-meta d)]
+    (if (some? mt)
+      ;; strip the meta and re-mint under an explicit (#%meta …) wrapper (recursion mints the
+      ;; bare target normally; a single #%meta suffices — Clojure merges stacked hints to one map).
+      (mint-datum! m src (list (symbol "#%meta") (clj-meta->beagle-meta mt) (with-meta d nil)))
+      (cond
+        (nil? d)     (mint-leaf! m src "symbol" "nil")
+        (symbol? d)  (mint-leaf! m src "symbol" (str d))
+        (keyword? d) (mint-leaf! m src "symbol" (str d))
+        (string? d)  (mint-leaf! m src "string" d)
+        (boolean? d) (mint-leaf! m src "symbol" (if d "true" "false"))
+        (char? d)    (mint-leaf! m src "char" (str d))
+        (number? d)  (mint-leaf! m src "number" (str d))
+        (or (list? d) (seq? d) (vector? d) (map? d))
+        ;; symbols built via (symbol ..) — writing #%brackets literally would be read as a
+        ;; reader tag by Clojure's reader at load time of the original file.
+        (let [ctx (:ctx m)
+              tx (:tx m)
+              head :- Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else [])
+              elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d))))
+              e (register! m src (c/entity! ctx))]
+          (do (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
+              (doseq [i :- Int (range (count elems))]
+                (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! m src (nth elems i)) tx))
+              e))
+        ;; Reader forms the host LispReader hands us as OBJECTS (the write-def raw-source
+        ;; path), not as `#%…`-headed lists like beagle's Racket reader emits.
+        (instance? java.util.regex.Pattern d)
+        (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
+        (set? d)
+        (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
+        :else (mint-leaf! m src "other" (pr-str d))))))
+
 (defn fN-facts [m :- Mint parent :- Int] :- (Vec Any)
   (let [ctx (:ctx m)
         rows (reduce (fn [acc :- (Vec FnEdge) cid :- Int] :- (Vec FnEdge)
