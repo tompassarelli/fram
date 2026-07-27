@@ -157,3 +157,88 @@
         :message
         (str "def-check infra error: " (:error resp))}]
       (mapv (fn [e :- Any] :- Any (diag->error module e)) (:errors resp)))))
+
+(defn- source-typed? [src :- String] :- Bool
+  (boolean (re-find TYPED-SOURCE-RE (str src))))
+
+(defn- untyped-mode? [src :- String] :- Bool
+  (let [mode (or (System/getenv "FRAM_DEFCHECK_MODE") "auto")]
+    (cond
+      (= mode "typed")
+      false
+      (= mode "untyped")
+      true
+      :else
+      (not (source-typed? src)))))
+
+(defn module-src-text-with-state! "Refresh `module`'s sibling .bclj (warm EDN->text) and return its text."
+  [state :- DefcheckState module :- String]
+  :-
+  String
+  (refresh-sibling-with-state! state module)
+  (slurp (src-path-with-state state module)))
+
+(defn- read-forms "Read every top-level form from `src`. Returns {:forms [...] :read-error msg?}.\n  Permissive: reader conditionals allowed (:clj branch), unknown tagged literals\n  pass their value through, read-eval disabled. A mid-stream read failure stops\n  and reports (the target def, if unreadable, is a real check-1 failure)."
+  [src :- String]
+  :-
+  Any
+  (let [rdr (java.io.PushbackReader. (java.io.StringReader. (str src))) opts {:read-cond :allow :features #{:clj} :eof :fram.defcheck/eof}]
+    (binding [*read-eval* false *default-data-reader-fn* (fn [_tag :- Any v :- Any] :- Any v)]
+      (loop [acc []]
+        (let [f (try (read opts rdr) (catch Throwable t {:fram.defcheck/read-error (or (.getMessage t) (str (class t)))}))]
+          (cond
+            (and (map? f) (:fram.defcheck/read-error f))
+            {:forms acc :read-error (:fram.defcheck/read-error f)}
+            (= f :fram.defcheck/eof)
+            {:forms acc}
+            :else
+            (recur (conj acc f))))))))
+
+(def special-forms :- (Set Any)
+  (set (map symbol ["def" "if" "do" "let" "let*" "fn" "fn*" "loop" "loop*" "recur" "throw" "try" "catch" "finally" "quote" "var" "monitor-enter" "monitor-exit" "new" "set!" "." "&" "deftype*" "reify*" "case*" "letfn*" "import*" "clojure.core/import*" "unquote" "unquote-splicing"])))
+
+(def core-names :- Any
+  (delay (set (map (comp symbol name) (keys (ns-publics (quote clojure.core)))))))
+
+(def def-heads :- (Set Any)
+  (set (map symbol ["def" "defn" "defn-" "defonce" "def-" "defmacro" "definline" "defmulti" "defmethod" "deftype" "defrecord" "defprotocol" "declare" "defstruct" "extend-type" "extend-protocol" "extend"])))
+
+(def thread-heads :- (Set Any)
+  (set (map symbol ["->" "->>" "some->" "some->>" "cond->" "cond->>" "as->" "doto"])))
+
+(def binding-vec-heads :- (Set Any)
+  (set (map symbol ["let" "let*" "loop" "loop*" "binding" "when-let" "if-let" "when-some" "if-some" "when-first" "with-open" "with-local-vars" "with-redefs" "dotimes"])))
+
+(defn- pattern-locals [pat :- Any] :- (Set Any)
+  (cond
+    (symbol? pat)
+    (if (= pat (quote &)) #{} #{pat})
+    (vector? pat)
+    (set (mapcat pattern-locals pat))
+    (map? pat)
+    (reduce-kv (fn [acc :- (Set Any) k :- Any v :- Any] :- (Set Any) (cond (= k :keys) (into acc (map (comp symbol name)) v) (= k :strs) (into acc (map (comp symbol name)) v) (= k :syms) (into acc (map (comp symbol name)) v) (= k :as) (conj acc v) (= k :or) acc (keyword? k) (into acc (pattern-locals k)) :else (into acc (pattern-locals k))))
+      #{}
+      pat)
+    :else
+    #{}))
+
+(defn- arglist-locals [params :- Any] :- (Set Any)
+  (set (mapcat pattern-locals (remove (fn [x :- Any] :- Bool (= x (quote &))) params))))
+
+(defn- fn-arities "Given a defn/fn tail (after the name), return {:fixed #{n…} :variadic min|nil}."
+  [tail :- Any]
+  :-
+  Any
+  (let [tail (if (string? (first tail)) (drop 1 tail) tail) tail (if (map? (first tail)) (drop 1 tail) tail) bodies (cond (vector? (first tail)) [(first tail)] (and (seq? (first tail)) (vector? (ffirst tail))) (map first tail) :else nil)]
+    (when (seq bodies)
+      (reduce (fn [acc :- Any params :- Any] :- Any (let [amp (.indexOf (vec params) (quote &)) fixed (if (neg? amp) (count params) amp)] (if (neg? amp) (update acc :fixed conj fixed) (update acc :variadic (fnil min fixed) fixed))))
+        {:fixed #{} :variadic nil}
+        bodies))))
+
+(defn- collect-defs "Walk top-level forms → {:names #{sym…} :arities {sym {:fixed.. :variadic..}}}.\n  Names cover def/defn/deftype/defrecord (+ ->Ctor/map->Ctor/Ctor.), defprotocol\n  method names, declare, defmulti. Arities only for fn-shaped defs."
+  [forms :- Any]
+  :-
+  Any
+  (reduce (fn [acc :- Any form :- Any] :- Any (if-not (and (seq? form) (symbol? (first form))) acc (let [h (first form) nm (when (>= (count form) 2) (first (rest form))) base (fn [a :- Any s :- Any] :- Any (if (symbol? s) (update a :names conj (symbol (name s))) a))] (cond (or (= h (quote defn)) (= h (quote defn-)) (= h (quote defmacro)) (= h (quote definline))) (let [nm* (symbol (name nm))] (assoc-in (base acc nm) [:arities nm*] (fn-arities (drop 2 form)))) (or (= h (quote def)) (= h (quote defonce)) (= h (quote def-)) (= h (quote defstruct)) (= h (quote defmulti))) (base acc nm) (= (quote declare) h) (reduce base acc (rest form)) (or (= h (quote deftype)) (= h (quote defrecord))) (update (base acc nm) :names into (when (symbol? nm) [(symbol (str "->" (name nm))) (symbol (str "map->" (name nm))) (symbol (str (name nm) "."))])) (= (quote defprotocol) h) (reduce (fn [a :- Any sig :- Any] :- Any (if (and (seq? sig) (symbol? (first sig))) (base a (first sig)) a)) (base acc nm) (drop 2 form)) :else acc))))
+    {:names #{} :arities {}}
+    forms))
