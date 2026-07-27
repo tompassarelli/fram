@@ -1,7 +1,7 @@
-;; coord_snapshot_boot_test.clj — thread 019f2190 plan b gate: FLAG-GATED snapshot boot.
+;; coord_snapshot_boot_test.clj — thread 019f2190 snapshot boot gate.
 ;; coord_snapshot_test.clj proves the incremental reconstruction itself; THIS file proves
 ;; the activation/invalidation contract around it:
-;;   - default OFF (FRAM_SNAPSHOT_BOOT gates checkpoint consumption at boot);
+;;   - default ON, with FRAM_SNAPSHOT_BOOT=0 as the explicit escape hatch;
 ;;   - a checkpoint boot reproduces the whole-log fold EXACTLY — state AND version,
 ;;     torn tail line included;
 ;;   - EVERY invalidation (stale fold fingerprint, rotated/reset log, truncated log,
@@ -68,7 +68,7 @@
     (chk "tail retracted the checkpoint-era multi edge" (empty? (s/lookup-all st t1 "tag")))
     (chk "torn line NOT applied as state" (nil? (s/resolve-name st "@torn"))))
 
-  ;; --- (2) DEFAULT OFF: the flag gates checkpoint consumption ---
+  ;; --- (2) EXPLICIT OFF: the flag gates checkpoint consumption ---
   (reset! snapshot-boot-enabled? false)
   (boot-flat! LOG)
   (chk "flag OFF: whole-log fold" (= :fold (boot-mode)))

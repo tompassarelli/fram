@@ -73,7 +73,9 @@
 (check! "split snapshot boot consumes the checkpoint"
         (= :snapshot (:mode @last-boot)))
 (check! "split snapshot boot replays both physical tails"
-        (= {:coordination 2 :telemetry 2} (:tail-lines @last-boot)))
+        ;; coordination also carries the checkpoint's six queryable metadata
+        ;; facts, which intentionally live after the image watermark.
+        (= {:coordination 8 :telemetry 2} (:tail-lines @last-boot)))
 (check! "boot-both-ways verification diff is empty"
         (= {:ok true
             :only-snapshot 0

@@ -4653,14 +4653,9 @@
       ;; thread 019f100f-7fff — snapshot/compaction surface:
       ;; :snapshot writes a checkpoint (dump-log! image + @snapshot:<seq> facts);
       ;; :snapshot-reconcile is the gate (live store == from-scratch whole migrate).
-      :snapshot           (cond
-                            (not @flat-log) {:error "snapshot needs flat-log (drop-in) mode"}
-                            ;; refuse under log-split routing: write-snapshot!'s byte_offset indexes
-                            ;; ONLY the coordination log, so a later FRAM_TELEMETRY_LOG-unset reboot
-                            ;; would incremental-boot off this sidecar and silently drop telemetry
-                            ;; facts committed after it. Mirrors the periodic-writer guard.
-                            @telemetry-log {:error "snapshot disabled under log-split routing (FRAM_TELEMETRY_LOG set)"}
-                            :else (write-snapshot! @co @flat-log))
+      :snapshot           (if @flat-log
+                            (write-snapshot! @co @flat-log)
+                            {:error "snapshot needs flat-log (drop-in) mode"})
       :snapshot-reconcile (snapshot-reconcile)
       :built-through      {:built-through @built-through :version (current-seq @co)}
       ;; warm scope-correct callers of a binding, served from refers_to materialized
@@ -5235,6 +5230,34 @@
   (let [f (java.io.File. (sidecar-path flat))]
     (when (.exists f)
       (try (edn/read-string (slurp f)) (catch Exception _ nil)))))
+
+(declare log-identity-of)
+
+(defn- snapshot-log-paths [flat]
+  (cond-> {:coordination (str flat)}
+    @telemetry-log (assoc :telemetry (str @telemetry-log))))
+
+(defn- snapshot-log-offsets [flat]
+  (into {}
+        (map (fn [[label path]]
+               [label (.length (java.io.File. ^String path))]))
+        (snapshot-log-paths flat)))
+
+(defn- snapshot-log-fences [flat offsets]
+  (into {}
+        (map (fn [[label path]]
+               [label {:identity (log-identity-of path)
+                       :byte_offset (long (get offsets label 0))}]))
+        (snapshot-log-paths flat)))
+
+(defn- sidecar-log-fences [snap]
+  ;; Pre-split sidecars remain valid in single-log mode. They deliberately fail
+  ;; the log-set equality gate when a telemetry sibling is active.
+  (or (:logs snap)
+      (when (and (contains? snap :log_identity)
+                 (contains? snap :byte_offset))
+        {:coordination {:identity (:log_identity snap)
+                        :byte_offset (:byte_offset snap)}})))
 ;; temp-file + ATOMIC_MOVE rename — a concurrent reader/booter sees the OLD file or
 ;; the NEW one, never a torn write (same-dir rename is atomic on POSIX).
 (defn- rename-atomic! [tmp dst]
@@ -5249,12 +5272,15 @@
     (rename-atomic! tmp (sidecar-path flat))))
 
 ;; ---- snapshot-boot activation + stamps (thread 019f2190, plan b) -----------
-;; FRAM_SNAPSHOT_BOOT gates BOTH boot-time consumption of a checkpoint AND the
-;; periodic checkpoint writer — default OFF, so landing this on main changes
-;; nothing until an owned :7977 bounce exports the flag. An atom (not a bare env
-;; read) so in-process tests can flip it without an env round-trip.
+;; Snapshot boot is the default. FRAM_SNAPSHOT_BOOT=0 is the explicit escape
+;; hatch; a missing/invalid checkpoint still falls back to the full fold. Atoms
+;; (not bare env reads) let in-process tests exercise every path.
 (def snapshot-boot-enabled?
-  (atom (contains? #{"1" "true" "on"} (str/lower-case (str (System/getenv "FRAM_SNAPSHOT_BOOT"))))))
+  (atom (not (contains? #{"0" "false" "off"}
+                        (str/lower-case (str (System/getenv "FRAM_SNAPSHOT_BOOT")))))))
+(def snapshot-boot-verify?
+  (atom (contains? #{"1" "true" "on"}
+                   (str/lower-case (str (System/getenv "FRAM_SNAPSHOT_VERIFY"))))))
 (def snapshot-interval-ms
   (max 1000 (or (some-> (System/getenv "FRAM_SNAPSHOT_INTERVAL_MS") parse-long) 900000)))  ; 15 min; 1s floor
 (def last-boot (atom nil))  ; {:mode :snapshot|:fold :ms n :reason <why fold>} — ops (:status) + tests
@@ -5462,14 +5488,31 @@
 ;; substrate for the reconcile gate, which compares an incrementally-built store to a
 ;; from-scratch whole-migrate of the same flat log (they MUST be set-equal).
 (defn- live-name-triples [co] (set (reified->facts co)))
+
+(defn snapshot-store-diff [snapshot-co fold-co]
+  (let [snapshot (live-name-triples snapshot-co)
+        folded (live-name-triples fold-co)
+        snapshot-version (long (current-seq snapshot-co))
+        fold-version (long (current-seq fold-co))
+        only-snapshot (clojure.set/difference snapshot folded)
+        only-fold (clojure.set/difference folded snapshot)]
+    {:ok (and (empty? only-snapshot)
+              (empty? only-fold)
+              (= snapshot-version fold-version))
+     :only-snapshot (count only-snapshot)
+     :only-fold (count only-fold)
+     :snapshot-version snapshot-version
+     :fold-version fold-version}))
+
 (defn snapshot-reconcile
-  "Gate: does the live (incrementally-materialized) store equal a from-scratch whole
-   migrate of the flat log? {:ok bool :inc n :fresh n}. Hot-path-free (test/admin)."
+  "Gate: does the live (incrementally-materialized) store and version equal a
+   from-scratch whole migrate of every active log? Hot-path-free (test/admin)."
   ([] (snapshot-reconcile @co @flat-log))
   ([co flat]
    (let [fresh (migrate-flat->co flat)]
-     {:ok (= (live-name-triples co) (live-name-triples fresh))
-      :inc (count (reified->facts co)) :fresh (count (reified->facts fresh))})))
+     (assoc (snapshot-store-diff co fresh)
+            :inc (count (reified->facts co))
+            :fresh (count (reified->facts fresh))))))
 
 ;; replay the nearest snapshot image, then tail-apply the flat lines past it — the
 ;; incremental boot. nil if no usable snapshot (caller falls back to whole migrate).
@@ -5478,34 +5521,68 @@
     (when (and (.exists img) (pos? (.length img))
                ;; hash gate: a torn/edited image is rejected (fall back to whole migrate)
                (or (nil? (:hash snap)) (= (:hash snap) (try (sha256-file (:image snap)) (catch Exception _ nil)))))
-      (let [base {:store (replay (:image snap)) :log nil :lock (Object.)}
-            {:keys [lines max-tx]} (read-log-tail* flat (:byte_offset snap) (:seq snap))
-            through (max (long (:seq snap)) (long max-tx))]
+      (let [watermark (long (or (:watermark snap) (:seq snap)))
+            fences (sidecar-log-fences snap)
+            tails (into {}
+                        (map (fn [[label path]]
+                               [label (read-log-tail* path
+                                                     (get-in fences [label :byte_offset])
+                                                     watermark)]))
+                        (snapshot-log-paths flat))
+            lines (->> tails vals (mapcat :lines) (sort-by #(or (:tx %) 0)) vec)
+            max-tx (reduce max watermark (map (comp long :max-tx val) tails))
+            base {:store (replay (:image snap)) :log nil :lock (Object.)}
+            through (max watermark max-tx)
+            tail-lines (into {} (map (fn [[label tail]] [label (count (:lines tail))])) tails)]
         (apply-tail! base lines)
         ;; a torn tail line is dropped from APPLY but its :tx still counts toward the
         ;; version (see read-log-tail*) — advance :next-seq so current-seq == what a
         ;; whole-log fold of the same bytes reports (doctor FRESH, :facts version equal).
         (swap! (:store base) update :next-seq #(max (long (or % 0)) through))
-        {:co base :through through :tail-lines (count lines)}))))
+        {:co base
+         :through through
+         :tail-lines (if @telemetry-log tail-lines (:coordination tail-lines))}))))
 
 ;; checkpoint validation gate — nil when usable, else WHY not (the boot log line +
 ;; last-boot carry the reason). Every failure falls back to the whole-log fold: a bad
 ;; checkpoint may cost a slower boot, never wrong state.
 (defn- validate-sidecar [snap flat]
-  (let [fp (fold-fingerprint)]
+  (let [fp (fold-fingerprint)
+        expected-paths (snapshot-log-paths flat)
+        fences (sidecar-log-fences snap)
+        expected-labels (set (keys expected-paths))
+        actual-labels (set (keys fences))
+        watermark (or (:watermark snap) (:seq snap))
+        bad-identity (some (fn [[label path]]
+                             (when (not= (get-in fences [label :identity])
+                                         (log-identity-of path))
+                               label))
+                           expected-paths)
+        past-eof (some (fn [[label path]]
+                         (when (> (long (get-in fences [label :byte_offset] -1))
+                                  (.length (java.io.File. ^String path)))
+                           label))
+                       expected-paths)]
     (cond
       (not (map? snap))                          "no checkpoint sidecar (missing/torn/non-EDN)"
-      (or (not (int? (:seq snap)))
-          (not (int? (:byte_offset snap))))      "sidecar malformed (:seq/:byte_offset not ints)"
+      (not (int? (:seq snap)))                   "sidecar malformed (:seq not int)"
+      (not (int? watermark))                     "sidecar malformed (:watermark not int)"
+      (and (contains? snap :watermark)
+           (not= (:watermark snap) (:seq snap))) "sidecar watermark disagrees with snapshot seq"
+      (not= expected-labels actual-labels)       (str "checkpoint log set mismatch (checkpoint "
+                                                      (sort actual-labels) ", live "
+                                                      (sort expected-labels) ")")
+      (some #(not (int? (get-in fences [% :byte_offset])))
+            expected-labels)                     "sidecar malformed (log byte_offset not int)"
       (nil? (:fold_version snap))                "sidecar unstamped (pre-fingerprint format)"
       (nil? fp)                                  "live fold fingerprint uncomputable (fold source unreadable)"
       (not= fp (:fold_version snap))             (str "fold-version mismatch (checkpoint "
                                                       (subs (str (:fold_version snap)) 0 (min 12 (count (str (:fold_version snap)))))
                                                       "… vs live " (subs fp 0 12) "…) — fold logic changed since checkpoint")
-      (not= (:log_identity snap)
-            (log-identity-of flat))              "log identity mismatch (rotated/reset log)"
-      (> (long (:byte_offset snap))
-         (.length (java.io.File. (str flat))))   "byte offset past EOF (log truncated below checkpoint)"
+      bad-identity                               (str (name bad-identity)
+                                                      " log identity mismatch (rotated/reset log)")
+      past-eof                                   (str (name past-eof)
+                                                      " byte offset past EOF (log truncated below checkpoint)")
       :else nil)))
 
 ;; the rotation-segment layer is defined below (it needs fold-fingerprint /
@@ -5532,36 +5609,51 @@
   (reset! flat-canonical? true)
   (let [t0   (System/nanoTime)
         snap (read-sidecar flat)
-        why  (cond
-               (not @snapshot-boot-enabled?) "disabled (FRAM_SNAPSHOT_BOOT unset)"
-               ;; a snapshot image covers the unified store but its tail-fold reads ONLY
-               ;; the coordination log's byte offset — it cannot see telemetry-log lines
-               ;; past the checkpoint. Under log-split routing, force the whole-log MERGE boot
-               ;; (both logs). A1 costs no boot speedup anyway (plan §GO); correctness > latency.
-               @telemetry-log "disabled (log-split routing active — whole-log merge boot)"
-               :else (validate-sidecar snap flat))
+        gate-why (cond
+                   (not @snapshot-boot-enabled?) "disabled (FRAM_SNAPSHOT_BOOT=0)"
+                   :else (validate-sidecar snap flat))
         ;; FRAM_MMAP_IMAGE: when the sidecar advertises an :fri image and the flag is
         ;; on, prefer the mmap-cold boot (mmap-boot); it returns :cold when it kept the
         ;; corpus mmap'd (empty tail) or falls into a byte-identical heap fold+tail.
         ;; A missing/torn .fri returns nil -> we retry the v2log incremental-boot, then
         ;; the whole-log fold. Every miss costs a slower boot, never wrong state.
-        [ib why] (if why
-                   [nil why]
-                   (try (if-let [r (or (when (and @mmap-image-enabled? (= :fri (:image_format snap)))
-                                         (mmap-boot snap flat))
-                                       (incremental-boot snap flat))]
-                          [r nil]
-                          [nil "snapshot image missing/torn (hash gate)"])
-                        (catch Throwable t
-                          [nil (str "snapshot replay failed: " (.getMessage t))])))]
+        [candidate replay-why]
+        (if gate-why
+          [nil gate-why]
+          (try (if-let [r (or (when (and @mmap-image-enabled?
+                                         (nil? @telemetry-log)
+                                         (= :fri (:image_format snap)))
+                                (mmap-boot snap flat))
+                              (incremental-boot snap flat))]
+                 [r nil]
+                 [nil "snapshot image missing/torn (hash gate)"])
+               (catch Throwable t
+                 [nil (str "snapshot replay failed: " (.getMessage t))])))
+        ;; Verification mode is deliberately expensive: independently full-fold
+        ;; every active log and compare store+version before installing the fast
+        ;; candidate. A mismatch installs the oracle fold and names the fallback.
+        verification
+        (when (and candidate @snapshot-boot-verify?)
+          (let [fold-co (migrate-flat->co flat)]
+            {:result (snapshot-store-diff (:co candidate) fold-co)
+             :fold-co fold-co}))
+        verified? (or (nil? verification) (get-in verification [:result :ok]))
+        ib (when verified? candidate)
+        why (if verified?
+              replay-why
+              (str "snapshot verification diff non-empty "
+                   (pr-str (:result verification))))
+        folded-co (when-not ib
+                    (or (:fold-co verification)
+                        (migrate-flat->co flat)))]
     (reset! cold-image nil)                ; drop any prior boot's mmap handle
     (if ib
       (do (reset! co (:co ib)) (reset! built-through (:through ib))
           (when (:cold ib) (reset! cold-image (:cold ib))))
       ;; cold path: no/invalid checkpoint -> the proven whole-log migrate
-      (let [c0 (migrate-flat->co flat)]
-        (reset! co c0)
-        (reset! built-through (or (:next-seq @(:store c0)) 0))))
+      (do
+        (reset! co folded-co)
+        (reset! built-through (or (:next-seq @(:store folded-co)) 0))))
     (seed-name-seq! (:store @co))          ; Build A: seed the serialized name allocator above the global max
     (reset! flat-log flat)
     (load-log-routing! (:store @co))       ; log split: data-driven telemetry allow-list (@log-routing facts > default)
@@ -5586,9 +5678,14 @@
       (index!))
     (let [ms (quot (- (System/nanoTime) t0) 1000000)]
       (reset! last-boot (if ib
-                          {:mode :snapshot :ms ms :image (or (:fri_image snap) (:image snap)) :covers (:seq snap)
-                           :cold (boolean @cold-image) :tail-lines (:tail-lines ib)}
-                          {:mode :fold :ms ms :reason why}))
+                          (cond-> {:mode :snapshot :ms ms
+                                   :image (or (:fri_image snap) (:image snap))
+                                   :covers (:seq snap)
+                                   :cold (boolean @cold-image)
+                                   :tail-lines (:tail-lines ib)}
+                            verification (assoc :verification (:result verification)))
+                          (cond-> {:mode :fold :ms ms :reason why}
+                            verification (assoc :verification (:result verification)))))
       (println (str "[fram] boot(flat): "
                     (if ib
                       (str "checkpoint " (:image snap) " (covers seq " (:seq snap) ") + tail of "
@@ -5780,21 +5877,24 @@
          :unchanged)))))
 
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------
-;; dump-log! writes the live store as a v2 image the EXISTING replay consumes (reuse,
-;; not new fold code). covers_through = the live seq at dump time; byte_offset = the
-;; flat-log length at dump time (= tail start). The metadata becomes FACTS so "latest
-;; snapshot" / "which covers seq N" / "GC candidates" are queries; a tiny sidecar
-;; mirrors the latest pointer for O(1) boot discovery (facts are the source of truth).
+;; dump-log! writes the unified live store as a v2 image the EXISTING replay consumes
+;; (reuse, not new fold code). Under dlock, a durability barrier first makes every
+;; store-visible write durable; one global :tx watermark and one byte offset per
+;; physical log are then captured from that exact turn. The metadata becomes FACTS
+;; so "latest snapshot" / "which covers seq N" / "GC candidates" are queries; a
+;; tiny sidecar mirrors the latest pointer for O(1) boot discovery.
 ;; Snapshot is view-relative: of_view @view:main. The @snapshot:<seq> facts land in
 ;; the tail (tx > covers_through) and are harmlessly re-applied on the next boot.
 (defn write-snapshot! [co flat]
   (locking dlock
+    (durable-barrier!)
     (let [st (:store co)
           sq (current-seq co)
+          offsets (snapshot-log-offsets flat)
           _ (.mkdirs (java.io.File. (snap-dir flat)))
           image (snap-image flat sq)
           tmp (str image ".tmp")
-          byteoff (.length (java.io.File. (str flat)))
+          byteoff (get offsets :coordination)
           _ (dump-log! st tmp)
           h (sha256-file tmp)
           _ (rename-atomic! tmp image)     ; the image appears WHOLE or not at all
@@ -5820,10 +5920,20 @@
       ;; COVERS its own metadata and boot sees an EMPTY tail (the mmap-cold path).
       ;; :fri_covers/:fri_byte_offset (post-append) drive mmap-boot's tail read; the
       ;; v2log image keeps the pre-append :seq/:byte_offset for the flag-off path.
-      (let [fri-meta (when @mmap-image-enabled? (write-fri-snapshot! st flat (current-seq co)))
+      (let [fences (snapshot-log-fences flat offsets)
+            fri-meta (when (and @mmap-image-enabled? (nil? @telemetry-log))
+                       (write-fri-snapshot! st flat (current-seq co)))
             fri-byteoff (when fri-meta (.length (java.io.File. (str flat))))]
-        (write-sidecar! flat (cond-> {:seq sq :image image :byte_offset byteoff :fact_count ccount :hash h
-                                      :fold_version (fold-fingerprint) :log_identity (log-identity-of flat)
+        (write-sidecar! flat (cond-> {:seq sq
+                                      :watermark sq
+                                      :image image
+                                      :byte_offset byteoff
+                                      :logs fences
+                                      :fact_count ccount
+                                      :hash h
+                                      :fold_version (fold-fingerprint)
+                                      ;; Legacy single-log readers use this stamp.
+                                      :log_identity (get-in fences [:coordination :identity])
                                       :written_at (fram.rt/now-iso)}
                                fri-meta (assoc :image_format :fri
                                                :fri_image (:image fri-meta)
@@ -6021,10 +6131,7 @@
       (binding [*out* *err*]
         (println (str "[fram] checkpoint (" why ") FAILED: " (.getMessage t)))))))
 (defn start-snapshot-writer! []
-  ;; nil? @telemetry-log: don't write checkpoints under log-split routing — boot-flat!
-  ;; forces the whole-log merge (snapshot fast-path disabled), so images would only
-  ;; accumulate unread. Per-log snapshots are a later enhancement (plan Lane 1 note).
-  (when (and @snapshot-boot-enabled? @flat-log (nil? @telemetry-log))
+  (when (and @snapshot-boot-enabled? @flat-log)
     ;; booted FROM a checkpoint -> the state through the current seq is exactly
     ;; what the next boot reconstructs from image+tail; only NEW commits warrant
     ;; the next checkpoint. (A fold boot leaves the seed at -1 so the post-boot
