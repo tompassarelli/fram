@@ -18,3 +18,6 @@
   (if (nil? expected-version)
     false
     (and single (> base-version expected-version))))
+
+(defn expected-value-match? [live-values :- (Set Int) expected-value :- Int?] :- Bool
+  (if (nil? expected-value) false (contains? live-values expected-value)))
