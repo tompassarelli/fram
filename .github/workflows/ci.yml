@@ -55,6 +55,12 @@ jobs:
           done
           exit $fail
 
+      # The subset ratchet on 'claim' residue is a .sh, so the *_test.clj glob
+      # above never runs it — PR #1 tripped it unseen. Deliberate regrowth
+      # regenerates the baseline in the same commit (see the script header).
+      - name: Vocabulary ratchet (claim-regrowth gate)
+        run: bash tests/vocab_ratchet_test.sh
+
       - name: mTLS round-trip (JVM daemon, engine-terminated mutual TLS)
         run: bb tests/tls_test.clj
 
