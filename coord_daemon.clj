@@ -335,6 +335,10 @@
 (def query-max-rows (min q/max-results (positive-env-long "FRAM_QUERY_MAX_ROWS" q/max-results)))
 (def query-max-response-bytes
   (positive-env-long "FRAM_QUERY_MAX_RESPONSE_BYTES" (* 64 1024 1024)))
+;; Test-only scheduling seam: lets the cancellation regression delay the watcher
+;; beyond a request's small deadline without delaying admission itself.
+(def query-monitor-launch-delay-ms
+  (positive-env-long "FRAM_TEST_QUERY_MONITOR_LAUNCH_DELAY_MS" 0))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
 (def active-reloads (atom 0))
@@ -4870,32 +4874,36 @@
   (when (= :reply (:action selection))
     (try-reply w (:response selection) fmt)))
 
+(defn- inspect-pipelined-query-input! [^BufferedReader r control]
+  ;; read-line-bounded may leave read-ahead bytes in this reader. Check them in
+  ;; the admission thread: a byte is conclusive because the protocol has one
+  ;; frame only, while waiting for a future to make this check consumes deadline.
+  (try
+    (when (.ready r)
+      (let [ch (.read r)]
+        (if (= ch -1)
+          (cancel-query! control :client-disconnected)
+          (cancel-query! control :unexpected-client-input))))
+    (catch Throwable _
+      (cancel-query! control :client-disconnected))))
+
 (defn- monitor-query-disconnect [^Socket s ^BufferedReader r control]
-  ;; serve-conn has completely parsed the protocol's single request line before
-  ;; starting this future. From this point until close, this monitor is the sole
-  ;; input-stream owner; the request handler never reads from the socket.
-  (let [inspected (java.util.concurrent.CountDownLatch. 1)
-        registered? (atom true)
+  ;; serve-conn has completely parsed the protocol's single request line. Its
+  ;; synchronous read-ahead inspection preserves pipelined-input cancellation;
+  ;; the ongoing EOF monitor is deliberately not on the admission critical path.
+  (inspect-pipelined-query-input! r control)
+  (when (nil? @(:cancelled control))
+    (let [registered? (atom true)
         release-monitor! (fn []
                            (when (compare-and-set! registered? true false)
                              (swap! active-query-monitors dec)))]
-    (swap! active-query-monitors inc)
-    (try
-      (let [worker
-            (future
-              (try
+      (swap! active-query-monitors inc)
+      (try
+        (future
+          (try
+            (when (pos? query-monitor-launch-delay-ms)
+              (Thread/sleep query-monitor-launch-delay-ms))
                 (.setSoTimeout s 100)
-                ;; read-line-bounded has consumed exactly the first protocol line,
-                ;; but BufferedReader may already hold read-ahead bytes. Inspect
-                ;; that SAME reader before allowing evaluation to begin. ready is
-                ;; nonblocking; if true, one byte is conclusive because the wire
-                ;; contract permits no second frame or trailing data.
-                (when (.ready r)
-                  (let [ch (.read r)]
-                    (if (= ch -1)
-                      (cancel-query! control :client-disconnected)
-                      (cancel-query! control :unexpected-client-input))))
-                (.countDown inspected)
                 (when (nil? @(:cancelled control))
                   (loop []
                     (when-not @(:done control)
@@ -4910,18 +4918,12 @@
                 (catch Throwable _
                   (cancel-query! control :client-disconnected))
                 (finally
-                  ;; Also releases serve-conn if initial inspection itself failed.
-                  (.countDown inspected)
-                  (release-monitor!))))]
-        ;; Synchronization point: evaluation/response ordering begins only after
-        ;; the monitor's initial nonblocking inspection has a definitive result.
-        (.await inspected)
-        worker)
-      (catch Throwable t
-        ;; Submission/await failure races safely with the worker's finally: the
-        ;; registration is released exactly once, never driven negative.
-        (release-monitor!)
-        (throw t)))))
+                  (release-monitor!))))
+        (catch Throwable t
+          ;; Submission failure releases the registration; the asynchronous
+          ;; worker otherwise owns its own release in finally.
+          (release-monitor!)
+          (throw t))))))
 
 (defn serve-conn [^Socket s]
   (try

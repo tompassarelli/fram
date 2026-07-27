@@ -84,7 +84,10 @@
                  "FRAM_MAX_RESULTS" "10000000"
                  "FRAM_QUERY_MAX_ROWS" "10000000"
                  "FRAM_QUERY_MAX_STEPS" "100000000"
-                 "FRAM_QUERY_TIMEOUT_MS" "15000")
+                 "FRAM_QUERY_TIMEOUT_MS" "15000"
+                 ;; This is intentionally five times the request deadline below:
+                 ;; monitor scheduling must never hold up query admission.
+                 "FRAM_TEST_QUERY_MONITOR_LAUNCH_DELAY_MS" "100")
       daemon (proc/process {:dir root :out :string :err :string :env env}
                            "clojure" "-M" "coord_daemon.clj" "serve-flat"
                            (str port) (.getPath log))]
@@ -107,6 +110,10 @@
     (let [res (client port {:op :query :query subject-q :query-max-steps 10})]
       (check! "subject-ground query is index-local under a ten-step budget"
               (= [["group" "g"]] (:ok res))))
+    (let [[ms res] (elapsed-ms #(client port {:op :query :query subject-q
+                                               :query-timeout-ms 20}))]
+      (check! (format "100ms delayed EOF monitor does not delay a 20ms indexed query (observed %.1fms)" ms)
+              (and (= [["group" "g"]] (:ok res)) (< ms 100.0))))
     (check! "normal completed request retires its EOF monitor"
             (eventually #(zero? (get-in (client port {:op :status})
                                         [:queries :monitors]))))
