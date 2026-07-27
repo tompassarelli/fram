@@ -5976,8 +5976,10 @@
             ;; stable tx-ordered union. Runtime split edits are rare; correctness
             ;; here is worth avoiding two partially-coupled incremental cursors.
             (let [c0 (migrate-flat->co path)
-                  through (or (:next-seq @(:store c0)) 0)]
-              (if (< (long through) (long (:from-tx roots)))
+                  through (or (:next-seq @(:store c0)) 0)
+                  decision (cc/reload-watermark-decision
+                            true (:from-tx roots) through through)]
+              (if (= :refused decision)
                 {:mode :refused :logmax through}
                 {:mode :install :co c0 :schema-root schema-root
                  :through through}))
@@ -5996,8 +5998,10 @@
                   {:mode :install :co clone :schema-root schema-root
                    :through tail-max})
                 (let [whole (read-log-tail* path 0 -1)
-                      logmax (:max-tx whole)]
-                  (if (< logmax (long (:from-tx roots)))
+                      logmax (:max-tx whole)
+                      decision (cc/reload-watermark-decision
+                                false (:from-tx roots) tail-max logmax)]
+                  (if (= :refused decision)
                     {:mode :refused :logmax logmax}
                     (let [c0 (migrate-flat->co path)]
                       {:mode :install :co c0 :schema-root schema-root
@@ -6028,11 +6032,18 @@
                              (= (:from-tx roots) @built-through)
                              (= (:co-version roots) (current-seq @co))
                              (identical? (:store-root roots) @(:store @co))
-                             (= (:generation roots) @reload-generation))]
-        (cond
-          (= :raced (:mode candidate)) :retry
+                             (= (:generation roots) @reload-generation))
+            generation-advanced? (> @reload-generation (:generation roots))
+            stamps-converged? (and (= @flat-mtime (:target-stamp roots))
+                                   (= @telemetry-mtime
+                                      (:target-telemetry-stamp roots)))
+            decision (cc/reload-install-decision
+                      (:mode candidate) same-target? exact-base?
+                      generation-advanced? stamps-converged?)]
+        (case decision
+          :retry :retry
 
-          (and same-target? exact-base? (= :refused (:mode candidate)))
+          :refused
           (do
             ;; Remember the refused physical state so every later request does not
             ;; rescan it.  The in-memory Store/schema/cache stay on the last good root.
@@ -6047,7 +6058,7 @@
                             " state; the log file is STALE — restore before restart.")))
             :refused)
 
-          (and same-target? exact-base? (= :install (:mode candidate)))
+          :installed
           (do
             (reset! co (:co candidate))
             (reset! built-through (:through candidate))
@@ -6064,13 +6075,7 @@
 
           ;; Another reloader installed this exact physical target.  Its generation
           ;; is proof of convergence; do not whole-migrate the same corpus again.
-          (and same-target?
-               (> @reload-generation (:generation roots))
-               (= @flat-mtime (:target-stamp roots))
-               (= @telemetry-mtime (:target-telemetry-stamp roots)))
-          :superseded
-
-          :else :retry)))))
+          :superseded :superseded)))))
 
 (defn maybe-reload!
   ([] (maybe-reload! false))
@@ -6086,20 +6091,22 @@
    ;; the old immutable root: the active reloader's Store/stamp OCC check will fail
    ;; and its forced retry will clone the new root plus the external tail.  Reads
    ;; that require reload freshness pass false and continue to participate.
-   (if (and nonblocking-if-active? (pos? @active-reloads))
+   (if (= :in-progress
+          (cc/reload-entry-decision nonblocking-if-active? @active-reloads))
      :in-progress
      (loop [attempt 0 force? false]
        (if-let [roots (capture-reload-roots! force?)]
          (let [candidate (build-reload-candidate roots)
                result (install-reload-candidate! roots candidate)]
-           (if (= :retry result)
-             (if (< attempt (dec reload-max-attempts))
-               (do (swap! reload-retries inc)
-                   (recur (inc attempt) true))
-               (throw (ex-info "external log kept changing during reload"
-                               {:type :reload-raced :attempts reload-max-attempts
-                                :path (:path roots)})))
-             result))
+           (case (cc/reload-result-decision
+                  result attempt reload-max-attempts)
+             :retry (do (swap! reload-retries inc)
+                        (recur (inc attempt) true))
+             :exhausted
+             (throw (ex-info "external log kept changing during reload"
+                             {:type :reload-raced :attempts reload-max-attempts
+                              :path (:path roots)}))
+             :return result))
          :unchanged)))))
 
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------

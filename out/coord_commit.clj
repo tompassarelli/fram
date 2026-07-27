@@ -141,3 +141,23 @@
   (some? bad-identity) {:reason :identity-mismatch :label bad-identity}
   (some? past-eof) {:reason :past-eof :label past-eof}
   :else {:reason nil}))
+
+(defn reload-entry-decision [^Boolean nonblocking-if-active active-reloads]
+  (if (and nonblocking-if-active (pos? active-reloads)) :in-progress :participate))
+
+(defn reload-watermark-decision [^Boolean split-logs from-tx tail-max log-max]
+  (if split-logs (if (< log-max from-tx) :refused :whole) (cond
+  (> tail-max from-tx) :tail
+  (< log-max from-tx) :refused
+  :else :whole)))
+
+(defn reload-install-decision [candidate-mode ^Boolean same-target ^Boolean exact-base ^Boolean generation-advanced ^Boolean stamps-converged]
+  (cond
+  (= candidate-mode :raced) :retry
+  (and same-target exact-base (= candidate-mode :refused)) :refused
+  (and same-target exact-base (= candidate-mode :install)) :installed
+  (and same-target generation-advanced stamps-converged) :superseded
+  :else :retry))
+
+(defn reload-result-decision [result attempt max-attempts]
+  (if (= result :retry) (if (< attempt (dec max-attempts)) :retry :exhausted) :return))

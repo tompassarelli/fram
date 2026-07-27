@@ -187,3 +187,31 @@
     {:reason :past-eof :label past-eof}
     :else
     {:reason nil}))
+
+(defn reload-entry-decision [nonblocking-if-active :- Bool active-reloads :- Int] :- Keyword
+  (if (and nonblocking-if-active (pos? active-reloads))
+    :in-progress
+    :participate))
+
+(defn reload-watermark-decision [split-logs :- Bool from-tx :- Int tail-max :- Int log-max :- Int] :- Keyword
+  (if split-logs
+    (if (< log-max from-tx) :refused :whole)
+    (cond (> tail-max from-tx) :tail (< log-max from-tx) :refused :else :whole)))
+
+(defn reload-install-decision [candidate-mode :- Keyword same-target :- Bool exact-base :- Bool generation-advanced :- Bool stamps-converged :- Bool] :- Keyword
+  (cond
+    (= candidate-mode :raced)
+    :retry
+    (and same-target exact-base (= candidate-mode :refused))
+    :refused
+    (and same-target exact-base (= candidate-mode :install))
+    :installed
+    (and same-target generation-advanced stamps-converged)
+    :superseded
+    :else
+    :retry))
+
+(defn reload-result-decision [result :- Keyword attempt :- Int max-attempts :- Int] :- Keyword
+  (if (= result :retry)
+    (if (< attempt (dec max-attempts)) :retry :exhausted)
+    :return))
