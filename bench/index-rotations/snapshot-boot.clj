@@ -1,12 +1,8 @@
 ;; Bar-3: FRAM_SNAPSHOT_BOOT boot-time measurement.
-;; Bench.clj's generic boot! always sets FRAM_TELEMETRY_LOG, which forces
-;; boot-flat-canonical! to reason "disabled (log-split routing active)" and
-;; fold whole-corpus regardless of FRAM_SNAPSHOT_BOOT — so it never exercises
-;; the actual snapshot+tail path. This script drives it directly, no telemetry
-;; log involved: (1) boot flat-only + fold once (cold, no sidecar yet),
-;; (2) issue :snapshot to write the checkpoint, stop, (3) reboot with
-;; FRAM_SNAPSHOT_BOOT=1 against the SAME log + a small tail appended after the
-;; checkpoint (so boot must fold snapshot + tail, not whole-corpus), measure.
+;; Exercises the production split-log layout: (1) force one full merged fold,
+;; (2) issue :snapshot at one unified-store watermark, (3) append coordination
+;; AND telemetry tails, (4) reboot with the default-on snapshot path, then
+;; (5) reboot in FRAM_SNAPSHOT_VERIFY mode to diff it against a fresh full fold.
 ;; Run: bb -cp out /tmp/fram-bench/snapshot-boot.clj <port>
 (require '[babashka.process :as proc]
          '[clojure.edn :as edn]
@@ -16,14 +12,8 @@
 (def port (Integer/parseInt (or (first *command-line-args*) "8935")))
 (def home "/tmp/fram-bench/snaphome")
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
-;; NB: a boot path literally named "coordination.log" unconditionally activates
-;; log-split routing (activate-split!, coord_daemon.clj:6017) which then forces
-;; boot-flat-canonical! to whole-log-merge-fold regardless of FRAM_SNAPSHOT_BOOT
-;; (coord_daemon.clj:5317, pre-existing infra, unrelated to this branch's
-;; rotations work — the live corpus is split for that reason). Name the boot
-;; file "facts.log" instead so reaim-split leaves it in plain single-log mode
-;; and the snapshot+tail path in boot-flat-canonical! actually gets exercised.
-(def log (str home "/facts.log"))
+(def log (str home "/coordination.log"))
+(def telemetry (str home "/telemetry.log"))
 
 (defn client
   ([request] (client request 120000))
@@ -43,7 +33,8 @@
 
 (defn boot! [extra-env]
   (proc/process (into ["bin/fram-daemon" "serve-flat" (str port) log])
-                {:dir root :out :inherit :err :inherit :extra-env extra-env}))
+                {:dir root :out :inherit :err :inherit
+                 :extra-env (merge {"FRAM_TELEMETRY_LOG" telemetry} extra-env)}))
 
 (defn wait-ready! [timeout-ms]
   (let [t0 (System/nanoTime)]
@@ -59,33 +50,45 @@
 
 (println (str "load: " (str/trim (:out (proc/sh "cat" "/proc/loadavg"))) "  nproc=" (.availableProcessors (Runtime/getRuntime))))
 
-;; --- fresh corpus copy, no telemetry log (pure flat-log mode) ---------------
+;; --- fresh split-corpus copy ------------------------------------------------
 (.mkdirs (io/file home))
-(io/copy (io/file "/tmp/fram-bench/pristine/coordination.log") (io/file log))
 (doseq [f (.listFiles (io/file home))]
-  (when-not (= (.getName (io/file log)) (.getName f)) (io/delete-file f true)))
+  (io/delete-file f true))
+(io/copy (io/file "/tmp/fram-bench/pristine/coordination.log") (io/file log))
+(io/copy (io/file "/tmp/fram-bench/pristine/telemetry.log") (io/file telemetry))
 
 ;; --- phase 1: cold boot, no sidecar yet -> whole-log fold, establishes the
 ;;     no-snapshot-available baseline and gets us a live daemon to checkpoint.
-(let [p1 (boot! {})]
+(let [p1 (boot! {"FRAM_SNAPSHOT_BOOT" "0"})]
   (let [t1 (wait-ready! 600000)]
     (println (format "phase1 cold-fold-boot-ms          %.0f" t1))
     (println (str "phase1 boot-mode  " (pr-str (:boot (client {:op :status} 60000)))))
     ;; write the checkpoint
     (let [[t res] (ms #(client {:op :snapshot} 120000))]
       (println (format "snapshot-write-ms                 %.0f  %s" t (pr-str (select-keys res [:error])))))
-    ;; small tail AFTER the checkpoint, so the reboot must fold snapshot+tail
-    (dotimes [i 25] (client {:op :assert :l (str "@bench-tail-" (System/currentTimeMillis)) :p "tail_bench" :r (str i)} 60000))
+    ;; Small tails in BOTH logs after the checkpoint.
+    (dotimes [i 12]
+      (client {:op :assert :l (str "@bench-thread-" i) :p "title" :r (str "tail-" i)} 60000)
+      (client {:op :assert :l (str "@run:bench-" i) :p "kind" :r "run"} 60000)
+      (client {:op :assert :l (str "@run:bench-" i) :p "sample" :r (str i)} 60000))
     (stop! p1)))
 
 (Thread/sleep 500)
 
-;; --- phase 2: reboot same log with FRAM_SNAPSHOT_BOOT=1 -> should fold
-;;     snapshot + tail only, not the whole 83MB corpus.
-(let [p2 (boot! {"FRAM_SNAPSHOT_BOOT" "1"})]
+;; --- phase 2: unset means ON; replay checkpoint + both bounded tails ----------
+(let [p2 (boot! {})]
   (let [t2 (wait-ready! 600000)]
     (println (format "phase2 snapshot-boot-ms           %.0f" t2))
     (let [st (client {:op :status} 60000)]
       (println (str "phase2 boot-mode  " (pr-str (:boot st))))
       (println (str "phase2 version    " (:version st))))
     (stop! p2)))
+
+(Thread/sleep 500)
+
+;; --- phase 3: golden mode independently full-folds and requires empty diff ---
+(let [p3 (boot! {"FRAM_SNAPSHOT_VERIFY" "1"})]
+  (wait-ready! 600000)
+  (let [st (client {:op :status} 60000)]
+    (println (str "phase3 boot-both-ways " (pr-str (:boot st))))
+    (stop! p3)))

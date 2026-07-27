@@ -36,16 +36,12 @@ interleaved writes, and write throughput (serial + under concurrent reads).
 bb -cp out bench/index-rotations/snapshot-boot.clj 8937
 ```
 
-`cold-query-and-write-throughput.clj`'s generic `boot!` always sets
-`FRAM_TELEMETRY_LOG` (needed for bars 1/2's realistic split-log corpus), which
-makes `boot-flat-canonical!` refuse the snapshot path unconditionally
-("log-split routing active — whole-log merge boot", `coord_daemon.clj:5317`,
-pre-existing infra unrelated to this branch). `snapshot-boot.clj` instead
-boots the corpus as a plain unsplit `facts.log` (no telemetry sibling) so the
-snapshot+tail path actually engages: cold whole-log fold once, `:snapshot`
-op to checkpoint, append a small tail, then reboot with
-`FRAM_SNAPSHOT_BOOT=1` and confirm `:boot {:mode :snapshot ...}` with a small
-`:tail-lines` count rather than a whole-corpus fold.
+`snapshot-boot.clj` uses the production split layout (`coordination.log` plus
+`telemetry.log`): it forces one full merged fold, checkpoints the unified store
+at one global watermark carrying a byte offset and identity for each log,
+appends a small tail to both logs, then reboots with the default-on snapshot
+path. A third boot sets `FRAM_SNAPSHOT_VERIFY=1`, independently full-folds both
+logs, and requires an empty store/version diff.
 
 ## Results (2026-07-27, this run)
 
@@ -82,8 +78,8 @@ Bar 2 — write throughput, BEFORE vs AFTER, same corpus/load class:
 - OCC: no assert/reject-path changes in this branch; write path is unchanged
   compile-time-identical logic, only the read-side projection changed.
 
-Bar 3 — FRAM_SNAPSHOT_BOOT, unsplit single-log corpus (152,489 facts, the
-telemetry-routed subset excluded by design when unsplit):
+Bar 3 — historical pre-Horizon-2 single-log measurement (152,489 facts, the
+telemetry-routed subset excluded by design):
 - phase 1, `FRAM_SNAPSHOT_BOOT` unset: `{:mode :fold, :ms 9144}` (whole-log
   fold, no sidecar yet) — 12,888 ms wall incl. JVM start.
 - `:snapshot` checkpoint written in 2183 ms.
@@ -98,7 +94,19 @@ telemetry-routed subset excluded by design when unsplit):
   (O(tail) not O(corpus)) and grows with corpus size, not yet visible as a
   wall-clock win on this ~150k-fact slice. Log-split routing (the live
   daemon's actual layout: `coordination.log` + `telemetry.log`) forces
-  whole-log-merge fold unconditionally regardless of `FRAM_SNAPSHOT_BOOT`
-  (pre-existing infra decision, `coord_daemon.clj:5317`, out of this
-  branch's footprint) — noted as a scope boundary, not a defect introduced
-  here.
+  whole-log-merge fold unconditionally regardless of `FRAM_SNAPSHOT_BOOT`.
+  Horizon-2 removed that split-routing limitation.
+
+## Horizon-2 snapshot boot result (2026-07-28)
+
+Scratch copies of the current canonical logs, never the live daemon/files:
+coordination 23 MiB + telemetry 33 MiB, 203,700 visible facts, version 206,993.
+Host load was 13.19 / 11.95 / 9.94 on 24 CPUs, so timings are directional.
+
+- forced full merged fold: 13,818 ms;
+- fenced snapshot write: 2,892 ms at watermark 206,993;
+- fresh default-on snapshot boot: 12,780 ms, replaying only
+  `{:coordination 6, :telemetry 0}` tail lines;
+- improvement: 1,038 ms (7.5%) on this 56 MiB corpus;
+- boot-both-ways golden: `only-snapshot=0`, `only-fold=0`, snapshot version
+  206,999, fold version 206,999.
