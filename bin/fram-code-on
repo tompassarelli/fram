@@ -155,7 +155,7 @@ FRAM_SERVER_JSON=$(cat <<JSON
     "FRAM_OUT": "$HERE/out",
     "FRAM_BIN": "$HERE/bin",
     "FRAM_RESOLVE": "$HERE/resolve.clj",
-    "FRAM_ROUNDTRIP": "$BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt",
+    "FRAM_BEAGLE": "$BEAGLE_HOME/bin/beagle",
     "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
     "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
     "BEAGLE_HOME": "$BEAGLE_HOME"

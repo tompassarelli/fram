@@ -15,6 +15,7 @@ required_internal=(
   FRAM_GRAPH_EDIT_SEALED_BASH
   FRAM_GRAPH_EDIT_SEALED_BB
   FRAM_GRAPH_EDIT_SEALED_BEAGLE
+  FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI
   FRAM_GRAPH_EDIT_SEALED_BUILD_ALL
   FRAM_GRAPH_EDIT_SEALED_CAT
   FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT
@@ -27,7 +28,6 @@ required_internal=(
   FRAM_GRAPH_EDIT_SEALED_RACKET
   FRAM_GRAPH_EDIT_SEALED_REALPATH
   FRAM_GRAPH_EDIT_SEALED_RESOLVE
-  FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP
 )
 for name in "${required_internal[@]}"; do
   [[ -n "${!name:-}" ]] || die "package-only entrypoint; missing sealed binding $name"
@@ -37,6 +37,7 @@ for path in \
   "$FRAM_GRAPH_EDIT_SEALED_BASH" \
   "$FRAM_GRAPH_EDIT_SEALED_BB" \
   "$FRAM_GRAPH_EDIT_SEALED_BEAGLE" \
+  "$FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI" \
   "$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
   "$FRAM_GRAPH_EDIT_SEALED_CAT" \
   "$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
@@ -47,8 +48,7 @@ for path in \
   "$FRAM_GRAPH_EDIT_SEALED_MANIFEST" \
   "$FRAM_GRAPH_EDIT_SEALED_RACKET" \
   "$FRAM_GRAPH_EDIT_SEALED_REALPATH" \
-  "$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
-  "$FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP"; do
+  "$FRAM_GRAPH_EDIT_SEALED_RESOLVE"; do
   [[ "$path" == /nix/store/* ]] || die "sealed binding escaped /nix/store: $path"
 done
 
@@ -66,6 +66,7 @@ if [[ "${FRAM_GRAPH_EDIT_SEALED_ENVIRONMENT_STAGE:-}" != "sealed-v1" ]]; then
     FRAM_GRAPH_EDIT_SEALED_BASH="$FRAM_GRAPH_EDIT_SEALED_BASH" \
     FRAM_GRAPH_EDIT_SEALED_BB="$FRAM_GRAPH_EDIT_SEALED_BB" \
     FRAM_GRAPH_EDIT_SEALED_BEAGLE="$FRAM_GRAPH_EDIT_SEALED_BEAGLE" \
+    FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI="$FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI" \
     FRAM_GRAPH_EDIT_SEALED_BUILD_ALL="$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
     FRAM_GRAPH_EDIT_SEALED_CAT="$FRAM_GRAPH_EDIT_SEALED_CAT" \
     FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT="$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
@@ -78,7 +79,6 @@ if [[ "${FRAM_GRAPH_EDIT_SEALED_ENVIRONMENT_STAGE:-}" != "sealed-v1" ]]; then
     FRAM_GRAPH_EDIT_SEALED_RACKET="$FRAM_GRAPH_EDIT_SEALED_RACKET" \
     FRAM_GRAPH_EDIT_SEALED_REALPATH="$FRAM_GRAPH_EDIT_SEALED_REALPATH" \
     FRAM_GRAPH_EDIT_SEALED_RESOLVE="$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
-    FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP="$FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP" \
     NORTH_FRAM_AUTHORITY_INSTANCE_ID="${NORTH_FRAM_AUTHORITY_INSTANCE_ID:-}" \
     NORTH_FRAM_AUTHORITY_LEASE_ID="${NORTH_FRAM_AUTHORITY_LEASE_ID:-}" \
     NORTH_FRAM_AUTHORITY_LEASE_EPOCH="${NORTH_FRAM_AUTHORITY_LEASE_EPOCH:-}" \
@@ -170,7 +170,7 @@ if [[ "$command_name" == preflight ]]; then
     PATH="$FRAM_GRAPH_EDIT_SEALED_PATH" \
     "$FRAM_GRAPH_EDIT_SEALED_BB" -e '
       (require (quote [cheshire.core :as json]))
-      (let [[manifest fram beagle racket java bb roundtrip check-emit build-all resolve-clj
+      (let [[manifest fram beagle beagle-cli racket java bb check-emit build-all resolve-clj
              instance-id lease-id lease-epoch runtime-digest checkout source log port]
             *command-line-args*]
         (println
@@ -180,10 +180,9 @@ if [[ "$command_name" == preflight ]]; then
            :verificationOwner "north"
            :runtimeDigestVerifiedByEntrypoint false
            :coreManifest manifest
-           :storeExecutables {:babashka bb :java java :racket racket}
+           :storeExecutables {:babashka bb :beagle beagle-cli :java java :racket racket}
            :storeHelpers {:beagleRoot beagle :buildAll build-all
-                          :checkEmit check-emit :factsRoundtrip roundtrip
-                          :framRoot fram :resolve resolve-clj}
+                          :checkEmit check-emit :framRoot fram :resolve resolve-clj}
            :authority {:instanceId instance-id :leaseId lease-id
                        :leaseEpoch lease-epoch
                        :northSuppliedRuntimeClosureDigest runtime-digest}
@@ -192,10 +191,10 @@ if [[ "$command_name" == preflight ]]; then
     "$FRAM_GRAPH_EDIT_SEALED_MANIFEST" \
     "$FRAM_GRAPH_EDIT_SEALED_FRAM" \
     "$FRAM_GRAPH_EDIT_SEALED_BEAGLE" \
+    "$FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI" \
     "$FRAM_GRAPH_EDIT_SEALED_RACKET" \
     "$FRAM_GRAPH_EDIT_SEALED_JAVA" \
     "$FRAM_GRAPH_EDIT_SEALED_BB" \
-    "$FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP" \
     "$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
     "$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
     "$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
@@ -216,6 +215,7 @@ exec "$FRAM_GRAPH_EDIT_SEALED_ENV" -i \
   TMPDIR=/tmp \
   BABASHKA_CLASSPATH="$FRAM_GRAPH_EDIT_SEALED_FRAM/out" \
   BEAGLE_HOME="$FRAM_GRAPH_EDIT_SEALED_BEAGLE" \
+  FRAM_BEAGLE="$FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI" \
   FRAM_AUTHORITY_INSTANCE_ID="$instance_id" \
   FRAM_AUTHORITY_LEASE_ID="$lease_id" \
   FRAM_AUTHORITY_LEASE_EPOCH="$lease_epoch" \
@@ -239,7 +239,6 @@ exec "$FRAM_GRAPH_EDIT_SEALED_ENV" -i \
   FRAM_PORT="$code_port" \
   FRAM_RACKET="$FRAM_GRAPH_EDIT_SEALED_RACKET" \
   FRAM_RESOLVE="$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
-  FRAM_ROUNDTRIP="$FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP" \
   FRAM_SOURCE_ROOT="$source_root" \
   FRAM_SRC="$source_root" \
   FRAM_THREADS="$FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS" \

@@ -231,6 +231,7 @@
             ];
             executables = {
               babashka = "${pkgs.babashka}/bin/bb";
+              beagle = "${beaglePkg}/bin/beagle";
               coordinatorJava = "${pkgs.jdk}/bin/java";
               coordinatorSource = "${framRoot}/coord_daemon.clj";
               entrypointRelative = "bin/fram-graph-edit-runtime";
@@ -240,7 +241,6 @@
             helpers = {
               beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
               factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
-              factsRoundtrip = "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt";
               framResolve = "${framRoot}/resolve.clj";
             };
             environment = {
@@ -322,6 +322,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_BASH "${pkgs.bash}/bin/bash" \
               --set FRAM_GRAPH_EDIT_SEALED_BB "${pkgs.babashka}/bin/bb" \
               --set FRAM_GRAPH_EDIT_SEALED_BEAGLE "${beaglePkg}" \
+              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI "${beaglePkg}/bin/beagle" \
               --set FRAM_GRAPH_EDIT_SEALED_BUILD_ALL "${beaglePkg}/bin/beagle-build-all" \
               --set FRAM_GRAPH_EDIT_SEALED_CAT "${pkgs.coreutils}/bin/cat" \
               --set FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt" \
@@ -333,8 +334,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
-              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/resolve.clj" \
-              --set FRAM_GRAPH_EDIT_SEALED_ROUNDTRIP "${beaglePkg}/beagle-lib/private/facts-roundtrip.rkt"
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/resolve.clj"
             set -u
 
             runHook postInstall

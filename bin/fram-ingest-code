@@ -3,7 +3,7 @@
 ;; fram-ingest-code — THE FLIP, stage 1: Beagle source tree -> canonical CODE log.
 ;; ============================================================================
 ;; Demotes .bclj TEXT from source-of-truth to a generated view: ingest each
-;; module's AST (via `racket --emit-edn`) into a per-repo, dedicated flat fact
+;; module's AST (via `bin/beagle facts-roundtrip --emit-edn`) into a per-repo, dedicated flat fact
 ;; log (.fram/code.log), re-keying every file-local integer node id `n` to the
 ;; node NAME `@<module>#n`. The existing daemon boots from this UNCHANGED via
 ;; `serve-flat <PORT> <code.log>`, because migrate-flat->co (coord_daemon.clj)
@@ -42,7 +42,7 @@
 ;;
 ;; Env (overridable for CI/tests; defaults match the live tree):
 ;;   BEAGLE_HOME   (default ~/code/beagle)
-;;   FRAM_ROUNDTRIP (default $BEAGLE_HOME/beagle-lib/private/facts-roundtrip.rkt)
+;;   FRAM_BEAGLE    (default $BEAGLE_HOME/bin/beagle)
 ;; ============================================================================
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
@@ -54,23 +54,8 @@
 
 (def ^:private home (System/getProperty "user.home"))
 (def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def ^:private roundtrip-rkt (or (System/getenv "FRAM_ROUNDTRIP")
-                                 (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
-;; emit-edn loads facts-roundtrip's .zo, compiled for beagle's flake-pinned
-;; racket; bare "racket" picks the ambient one -> .zo 'version mismatch'. Resolve
-;; the pinned racket like bin/_beagle-racket (FRAM_RACKET overrides). NO bare
-;; "racket" fallback: a silent mismatch produces a stale-bytecode failure that
-;; looks like a code bug, not a version bug. Fail loud instead.
-(def ^:private racket-bin
-  (or (System/getenv "FRAM_RACKET")
-      (let [r (try (proc/sh {:out :string :err :string} "direnv" "exec" beagle-home "which" "racket")
-                   (catch Exception _ nil))]
-        (when (and r (zero? (:exit r)) (not (clojure.string/blank? (:out r))))
-          (clojure.string/trim (:out r))))
-      (die (str "fram-ingest-code: cannot resolve pinned racket for " beagle-home ". "
-                "Run `source " beagle-home "/bin/_beagle-racket` first, or set FRAM_RACKET "
-                "to the flake-pinned racket binary. Refusing to fall back to bare `racket` "
-                "(version mismatch with beagle's compiled .zo bytecode)."))))
+(def ^:private beagle-bin (or (System/getenv "FRAM_BEAGLE")
+                              (str beagle-home "/bin/beagle")))
 
 ;; --- args --------------------------------------------------------------------
 (defn- parse-args [args]
@@ -128,7 +113,8 @@
 ;; emit-edn prints `@file <path>` then one `[s "pred" o]` per line. o is an INTEGER
 ;; (a structural link to node `o`) or a STRING (a literal value). We re-key every id.
 (defn- emit-edn-triples [path]
-  (let [r (proc/sh {:out :string :err :string} racket-bin roundtrip-rkt "--emit-edn" path)]
+  (let [r (proc/sh {:out :string :err :string}
+                   beagle-bin "facts-roundtrip" "--emit-edn" path)]
     (when (not (zero? (:exit r)))
       (die "emit-edn FAILED for" path "\n" (:err r)))
     (->> (str/split-lines (:out r))
@@ -162,8 +148,8 @@
 (let [{:keys [srcs out module append root]} (parse-args *command-line-args*)
       out-path (or out (str (System/getProperty "user.dir") "/.fram/code.log"))]
   (when (empty? srcs) (die "usage: bin/fram-ingest-code <src> [<src>...] [--out <log>] [--module <name>] [--append] [--root <dir>]"))
-  (when-not (.exists (io/file roundtrip-rkt))
-    (die "missing facts-roundtrip.rkt at" roundtrip-rkt "(set FRAM_ROUNDTRIP / BEAGLE_HOME)"))
+  (when-not (.canExecute (io/file beagle-bin))
+    (die "missing executable Beagle CLI at" beagle-bin "(set FRAM_BEAGLE / BEAGLE_HOME)"))
   (let [files (->> srcs (mapcat beagle-files) distinct sort
                    (filter (fn [p] (or (nil? module) (str/includes? p module)))))]
     (when (empty? files) (die "no Beagle modules matched" (pr-str srcs) (when module (str "(module filter: " module ")"))))

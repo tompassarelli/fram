@@ -167,7 +167,7 @@
 ;; Tool/binary locations are overridable for tests/CI; defaults match the live tree.
 (defn- env-or [k d] (or (System/getenv k) d))
 (def ^:private beagle-home   (env-or "BEAGLE_HOME"   (str (System/getProperty "user.home") "/code/beagle")))
-(def ^:private roundtrip-rkt (env-or "FRAM_ROUNDTRIP" (str beagle-home "/beagle-lib/private/facts-roundtrip.rkt")))
+(def ^:private beagle-bin    (env-or "FRAM_BEAGLE" (str beagle-home "/bin/beagle")))
 (def ^:private build-all     (env-or "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")))
 ;; INCREMENTAL DE-HANDICAP: per-edit gate checks+emits ONLY the edited module from
 ;; its facts (facts->AST->type-check->emit clj), instead of rendering + building
@@ -262,7 +262,8 @@
               ;;    OTHER module (unchanged; per-file check resolves cross-refs via declare-extern).
               (let [ednf (str work "/edited.edn")
                     render-fail
-                    (let [ee (sh {:out (io/file ednf) :err :string} "racket" roundtrip-rkt "--emit-edn" edited)]
+                    (let [ee (sh {:out (io/file ednf) :err :string}
+                                 beagle-bin "facts-roundtrip" "--emit-edn" edited)]
                       (when (not (zero? (:exit ee))) (str "emit-edn of edited module failed: " (str/trim (:err ee)))))]
                 (if render-fail
                   (do (sh {} "rm" "-rf" work) {:isError true :text (str "FLIP — " render-fail)})
@@ -647,7 +648,8 @@
                         ednf  (str work "/candidate" ext ".edn")
                         candf (str work "/candidate" ext)
                         _ (spit ednf (:edn prep))
-                        rr (sh {:out (io/file candf) :err :string} "racket" roundtrip-rkt "--render" ednf)]
+                        rr (sh {:out (io/file candf) :err :string}
+                               beagle-bin "facts-roundtrip" "--render" ednf)]
                     (if-not (zero? (:exit rr))
                       (do (sh {} "rm" "-rf" work)
                           {:isError true
@@ -655,7 +657,8 @@
                                       (str/trim (:err rr)))})
                       ;; sealed Beagle checks — parse, then type — on the candidate, BEFORE commit.
                       (let [chk-edn (str candf ".chk.edn")
-                            pe2 (sh {:out (io/file chk-edn) :err :string} "racket" roundtrip-rkt "--emit-edn" candf)]
+                            pe2 (sh {:out (io/file chk-edn) :err :string}
+                                    beagle-bin "facts-roundtrip" "--emit-edn" candf)]
                         (if-not (zero? (:exit pe2))
                           (do (sh {} "rm" "-rf" work)
                               {:isError true
@@ -778,7 +781,8 @@
             edns (mapv (fn [f]
                          (let [b (.getName (io/file f))
                                out (str edir "/" b ".edn")
-                               r (sh {:out (io/file out) :err :string} "racket" roundtrip-rkt "--emit-edn" f)]
+                               r (sh {:out (io/file out) :err :string}
+                                     beagle-bin "facts-roundtrip" "--emit-edn" f)]
                            [f b out (:exit r) (:err r)]))
                        src-files)
             emit-fail (some (fn [[_ b _ ex er]] (when (not (zero? ex)) (str "emit-edn failed for " b ": " er))) edns)]
@@ -818,7 +822,8 @@
                                       proj (str resolve-out "/resolved-" b ".edn")
                                       out (str regen "/" b)]
                                   (if (.exists (io/file proj))
-                                    (let [r (sh {:out (io/file out) :err :string} "racket" roundtrip-rkt "--render" proj)]
+                                    (let [r (sh {:out (io/file out) :err :string}
+                                                beagle-bin "facts-roundtrip" "--render" proj)]
                                       (when (not (zero? (:exit r))) (str "render failed for " b ": " (:err r))))
                                     (str "no projected EDN for " b " (expected " proj ")"))))
                               src-files)]
