@@ -6605,62 +6605,175 @@
              :from-tx @built-through
              :co-version (current-seq @co)
              :store-root @(:store @co)
+             :schema-root @schema-view
+             :cache-root @cache
              :generation @reload-generation}))))))
+
+(defn- reload-log-tail
+  "Read one independently-cursored log only when its physical stamp moved.
+
+   The byte cursor is a seek hint and :tx remains the correctness boundary.
+   A shorter target is an explicit truncation/regression signal: the caller
+   must use the whole-corpus oracle rather than applying a partial tail."
+  [path known-stamp target-stamp from-byte target-bytes from-tx]
+  (if (= known-stamp target-stamp)
+    {:lines [] :max-tx (long from-tx) :append-safe? true}
+    (let [append-safe? (and (integer? from-byte)
+                            (integer? target-bytes)
+                            (<= 0 (long from-byte) (long target-bytes)))
+          tail (when append-safe?
+                 (read-log-tail* path from-byte from-tx))]
+      {:lines (vec (or (:lines tail) []))
+       :max-tx (long (or (:max-tx tail) from-tx))
+       :append-safe? append-safe?})))
+
+(defn- split-reload-tail
+  "Read the coordination and telemetry deltas from independent byte cursors,
+   then restore their shared logical order by :tx."
+  [roots]
+  (let [from-tx (long (:from-tx roots))
+        coordination
+        (reload-log-tail (:path roots)
+                         (:known-stamp roots) (:target-stamp roots)
+                         (:from-byte roots) (:target-bytes roots) from-tx)
+        telemetry
+        (when-let [path (:telemetry-path roots)]
+          (reload-log-tail path
+                           (:known-telemetry-stamp roots)
+                           (:target-telemetry-stamp roots)
+                           (:from-telemetry-byte roots)
+                           (:target-telemetry-bytes roots) from-tx))
+        halves (cond-> [coordination] telemetry (conj telemetry))]
+    {:lines (->> halves
+                 (mapcat :lines)
+                 (sort-by #(long (or (:tx %) 0)))
+                 vec)
+     :max-tx (reduce max from-tx (map :max-tx halves))
+     :append-safe? (every? :append-safe? halves)}))
+
+(defn- whole-corpus-max-tx [roots]
+  (reduce max -1
+          (map (fn [path] (:max-tx (read-log-tail* path 0 -1)))
+               (cond-> [(:path roots)]
+                 (:telemetry-path roots) (conj (:telemetry-path roots))))))
+
+(defn- reload-cache-delta
+  "Patch a current immutable warm cache from the candidate Store by the exact
+   (subject,predicate) groups named in the tail. Falls back to one whole cache
+   build unless every pre-state identity is proven current."
+  [roots candidate-co schema-root through lines]
+  (let [prior (:cache-root roots)
+        reusable?
+        (and (:facts prior) (:idx prior)
+             (= (:co-version roots) (:version prior))
+             (identical? (:store-root roots) (:store-root prior))
+             (identical? (:schema-root roots) (:schema-root prior))
+             (identical? schema-root (:schema-root roots)))]
+    (if-not reusable?
+      (locking query-cache-build-lock
+        (build-warm-cache candidate-co schema-root))
+      (let [groups (->> lines
+                        (filter #(and (:l %) (:p %) (:r %)))
+                        (map (juxt :l :p))
+                        distinct)
+            [idx' facts']
+            (reduce
+             (fn [[ix facts] [te p]]
+               (let [old-group (get-in ix [:sp [te p]] #{})
+                     new-group (lp-live-triples candidate-co te p)
+                     to-del (clojure.set/difference old-group new-group)
+                     to-add (clojure.set/difference new-group old-group)
+                     ix' (as-> ix i
+                           (reduce idx-del i to-del)
+                           (reduce idx-add i to-add)
+                           (reduce #(rotations/note-del %1 %2 through) i to-del)
+                           (reduce #(rotations/note-add %1 %2 through) i to-add))
+                     facts' (as-> facts fs
+                              (reduce
+                               (fn [s t]
+                                 (disj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                               fs to-del)
+                              (reduce
+                               (fn [s t]
+                                 (conj s (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                               fs to-add))]
+                 [ix' facts']))
+             [(:idx prior) (:facts prior)]
+             groups)]
+        {:facts facts' :idx idx' :index nil :version through
+         :store-root @(:store candidate-co) :schema-root schema-root}))))
 
 (defn- build-reload-candidate [roots]
   (swap! active-reloads inc)
   (try
     (let [path (:path roots)
           telemetry-path (:telemetry-path roots)
-          schema-root (schema-view-from-flat path)
+          cursor-ready?
+          (and (integer? (:from-byte roots))
+               (integer? (:target-bytes roots))
+               (or (nil? telemetry-path)
+                   (and (integer? (:from-telemetry-byte roots))
+                        (integer? (:target-telemetry-bytes roots)))))
+          tail (split-reload-tail roots)
+          schema-tail? (some #(schema-writable (:p %)) (:lines tail))
+          append-tail? (and (:append-safe? tail)
+                            (> (long (:max-tx tail))
+                               (long (:from-tx roots))))
           candidate
-          (if telemetry-path
-            ;; The two logs share one tx space but have independent byte offsets.
-            ;; An out-of-band edit to either half therefore rebuilds from their
-            ;; stable tx-ordered union. Runtime split edits are rare; correctness
-            ;; here is worth avoiding two partially-coupled incremental cursors.
-            (let [c0 (migrate-flat->co path)
-                  through (or (:next-seq @(:store c0)) 0)
-                  decision (cc/reload-watermark-decision
-                            true (:from-tx roots) through through)]
-              (if (= :refused decision)
-                {:mode :refused :logmax through}
-                {:mode :install :co c0 :schema-root schema-root
-                 :through through}))
-            (let [tail-result (read-log-tail* path (:from-byte roots) (:from-tx roots))
-                  tail (:lines tail-result)
-                  tail-max (:max-tx tail-result)]
-              (if (> (long tail-max) (long (:from-tx roots)))
-                (let [clone {:store (atom (:store-root roots)) :log nil :lock (Object.)}]
-                  (apply-tail! clone tail)
-                  ;; read-log-tail* deliberately excludes an EDN-valid incomplete row
-                  ;; from :lines while retaining its :tx in :max-tx.  The cold fold does
-                  ;; the same: no fact applies, but version advances past the torn write.
-                  ;; Advancing the private clone also keeps schema-only tails in cheap
-                  ;; tail mode instead of forcing a whole-log migration.
-                  (swap! (:store clone) assoc :next-seq tail-max)
-                  {:mode :install :co clone :schema-root schema-root
-                   :through tail-max})
-                (let [whole (read-log-tail* path 0 -1)
-                      logmax (:max-tx whole)
-                      decision (cc/reload-watermark-decision
-                                false (:from-tx roots) tail-max logmax)]
-                  (if (= :refused decision)
-                    {:mode :refused :logmax logmax}
-                    (let [c0 (migrate-flat->co path)]
-                      {:mode :install :co c0 :schema-root schema-root
-                       :through (or (:next-seq @(:store c0)) 0)}))))))]
-      ;; Build the immutable query cache alongside the candidate, outside dlock.
-      ;; Installing a split-log reload with `cache` at version -1 exposed every
-      ;; concurrent reader to its own O(corpus) rebuild. Publishing the Store,
-      ;; schema, and ready cache in one short install turn preserves the exact
-      ;; candidate identities and lets later commits stay incremental.
+          (cond
+            ;; Compatibility/fail-safe for callers that predate per-log cursor
+            ;; capture: without both offsets there is no bounded proof, so use
+            ;; the established whole-corpus oracle.
+            (not cursor-ready?)
+            (let [schema-root (schema-view-from-flat path)
+                  c0 (migrate-flat->co path)]
+              {:mode :install :co c0 :schema-root schema-root
+               :through (or (:next-seq @(:store c0)) 0)
+               :incremental? false})
+
+            append-tail?
+            (let [;; Schema changes are rare and retain the established
+                  ;; log-folded schema oracle. Domain-only tails (including the
+                  ;; telemetry hot path) reuse the captured schema identity.
+                  schema-root (if schema-tail?
+                                (schema-view-from-flat path)
+                                (:schema-root roots))
+                  through (long (:max-tx tail))
+                  clone {:store (atom (:store-root roots))
+                         :log nil :lock (Object.)}]
+              (apply-tail! clone (:lines tail))
+              ;; An EDN-valid incomplete row is excluded from :lines but retained
+              ;; in :max-tx. Match the cold fold's version without applying it.
+              (swap! (:store clone) assoc :next-seq through)
+              {:mode :install :co clone :schema-root schema-root
+               :through through :tail-lines (:lines tail)
+               :incremental? true})
+
+            :else
+            ;; A shortened cursor, same-watermark rewrite, or tx regression
+            ;; cannot be represented as an append delta. The whole fold remains
+            ;; the fail-closed oracle for those rare cases.
+            (let [logmax (whole-corpus-max-tx roots)]
+              (if (< (long logmax) (long (:from-tx roots)))
+                {:mode :refused :logmax logmax}
+                (let [schema-root (schema-view-from-flat path)
+                      c0 (migrate-flat->co path)]
+                  {:mode :install :co c0 :schema-root schema-root
+                   :through (or (:next-seq @(:store c0)) 0)
+                   :incremental? false}))))]
+      ;; Publish Store, schema, and a ready cache in one install turn. Ordinary
+      ;; split-log appends patch only their touched groups; ambiguous physical
+      ;; changes pay the existing whole-cache oracle once.
       (let [candidate
             (if (= :install (:mode candidate))
               (assoc candidate :cache
-                     (locking query-cache-build-lock
-                       (build-warm-cache
-                        (:co candidate) (:schema-root candidate))))
+                     (if (:incremental? candidate)
+                       (reload-cache-delta
+                        roots (:co candidate) (:schema-root candidate)
+                        (:through candidate) (:tail-lines candidate))
+                       (locking query-cache-build-lock
+                         (build-warm-cache
+                          (:co candidate) (:schema-root candidate)))))
               candidate)]
       ;; External writers do not participate in group-io-lock.  A final stamp check
       ;; is therefore mandatory after every byte of candidate construction.
