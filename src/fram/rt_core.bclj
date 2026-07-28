@@ -82,7 +82,7 @@
 
 (def DIGEST-RE :- Regex (re-pattern "[0-9a-f]{64}"))
 
-(defn edit-batch-envelope-marker? [record :- (Map Keyword Any)] :- Bool
+(defn edit-batch-envelope-marker? [record :- (Map Keyword (Dyn String Int))] :- Bool
   (and (map? record) (contains? record :fram-edit-envelope)))
 
 (defn digest? [value :- String] :- Bool
@@ -94,7 +94,7 @@
 (defn generation-record? [op :- (Map Keyword Any)] :- Bool
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
-(defn valid-edit-batch-envelope? [record :- (Map Keyword Any) expected-seal :- String] :- Bool
+(defn valid-edit-batch-envelope? [record :- (Map Keyword (Dyn String Int)) expected-seal :- String] :- Bool
   (let [base (:fram-edit-base-version record) final (:fram-edit-final-version record) ops (:fram-edit-ops record) installed (:fram-edit-installed record) lines (:fram-edit-line-count record)]
     (and (map? record)
       (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record)))
