@@ -126,6 +126,40 @@
         (check! (format "post-disconnect write remains <=250ms (%.1fms)" ms)
                 (and (:ok response) (<= ms 250.0)))))
 
+    ;; Validation builds a whole kernel index and checks every thread. Keep its
+    ;; captured store/schema snapshot coherent, but do all O(corpus) work after
+    ;; releasing dlock so mutations do not convoy behind it.
+    (let [validation
+          (future
+            (elapsed-ms
+             #(client port log {:op :validate :test-delay-ms 2000})))]
+      (check! "two-second strict validate is observably active"
+              (eventually
+               #(pos? (get-in (client port log {:op :status})
+                              [:controls :active] 0))))
+      (let [writes
+            (mapv
+             (fn [i]
+               (future
+                 (elapsed-ms
+                  #(client port log
+                           {:op :assert
+                            :te (str "@during-validate-" i)
+                            :p "title"
+                            :r (str "validate-value-" i)}))))
+             (range 10))
+            results (mapv deref writes)
+            latencies (mapv first results)
+            responses (mapv second results)]
+        (check! "all ten disjoint writes commit during slow strict validate"
+                (every? :ok responses))
+        (check! (str "validate-concurrent acknowledgements <=250ms; observed "
+                     (pr-str latencies))
+                (every? #(<= % 250.0) latencies)))
+      (let [[ms response] @validation]
+        (check! (format "validate delay executed outside writer lock (%.1fms)" ms)
+                (and (vector? (:violations response)) (>= ms 1900.0)))))
+
     ;; The periodic checkpoint had a second, independent convoy: dump-log!,
     ;; hashing, FRI generation, and sidecar publication all ran under dlock.
     ;; Hold the captured-root build outside that monitor for two seconds and

@@ -4609,11 +4609,11 @@
       {:ok true :module module :path (first paths) :version (current-seq @co)})))
 
 (defn- control-request? [req]
-  (= :status (:op req)))
+  (contains? #{:status :validate} (:op req)))
 
 (defn- maybe-delay-control! [req]
   ;; Test-only cancellation seam. The sleep is deliberately cooperative so the
-  ;; socket EOF monitor can abandon a timed-out status request; production
+  ;; socket EOF monitor can abandon a timed-out control read; production
   ;; requests cannot ask the daemon to sleep.
   (let [delay-ms (when control-delay-test-enabled?
                    (some-> (:test-delay-ms req) long))]
@@ -4676,6 +4676,15 @@
      :index (:index roots)
      :rollback_floor fram.rt/rollback-floor}))
 
+(defn- validate-response [req roots]
+  ;; Build both the client projection and kernel index from the immutable
+  ;; store/schema pair captured in one short writer turn. Validation can be
+  ;; O(corpus), but it cannot retain the mutation monitor or mix graph versions.
+  (maybe-delay-control! req)
+  (let [facts (client-view-facts-from
+               (:co-root roots) (:schema-root roots))]
+    {:violations (all-violations (ck/build-index (vec facts)))}))
+
 (defn- request-dispatch [req]
   (wire/request-dispatch
    req
@@ -4689,7 +4698,7 @@
   ;; Their expensive work is either a captured-snapshot read or a checkpoint
   ;; with its own phased publication, so the global mutation monitor is both
   ;; unnecessary and harmful.
-  #{:status :facts :show :snapshot})
+  #{:status :facts :show :validate :snapshot})
 
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
@@ -4818,6 +4827,11 @@
          :rows (reduce (fn [rows [l p r]]
                          (if (= l te) (conj rows [p r]) rows))
                        [] triples)}))
+
+    (= :validate handler)
+    (do
+      (when-not *reload-checked* (prepare-request-reload! req))
+      (validate-response req (capture-read-roots!)))
 
     (= :snapshot handler)
     (do
@@ -4957,7 +4971,6 @@
                       :last-edit-outcome @last-edit-outcome
                       :version (current-seq @co)}
       ;; :edit-min is handled ABOVE, outside the outer dlock (socket exposure) — see top of handle.
-      :validate {:violations (all-violations (index!))}
       ;; Narrow MCP show: preserve the cold path's fold-emission order without
       ;; transferring the whole live graph or re-folding history. The same
       ;; versioned projection cache backs :facts below.
