@@ -12,7 +12,7 @@
   (.getCanonicalPath
    (io/file (or (first *command-line-args*) "."))))
 
-(def resolve-path (str root "/resolve.clj"))
+(def resolve-path (str root "/out/resolve.clj"))
 (def link-9-revision "7396fc2")
 
 (def reader-options
@@ -332,7 +332,7 @@
        vec))
 
 (def current
-  (source-accounting (slurp resolve-path) "resolve.clj"))
+  (source-accounting (slurp resolve-path) "out/resolve.clj"))
 
 (def baseline
   (let [{:keys [exit out err]}
