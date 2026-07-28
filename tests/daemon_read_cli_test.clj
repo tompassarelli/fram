@@ -460,6 +460,19 @@
   (check! "query fallback reaches cold-main with its original args"
           (= ["query" sample-query] @fallback-args)))
 
+;; --- the read timeout must exceed the daemon's ordinary response time -------
+;; Timing out does NOT fail the command: it falls back to the cold whole-log
+;; fold, which is SLOWER than continuing to wait. So a short timeout is
+;; counterproductive on its own terms. The daemon answers a large query in ~4.9s
+;; with cold caches, and the old 2s default sat below that, firing the fallback
+;; systematically — silently, because a cold answer looks like a correct one
+;; (it is not: 773 rows vs 1,485, coordination-only).
+;;
+;; Asserts the PROPERTY (comfortably above a cold daemon read), not the exact
+;; number, so tuning stays free while a regression to a sub-second default fails.
+(check! "the default read timeout leaves room for a cold daemon read"
+        (>= fram-fast/default-coord-read-timeout-ms 10000))
+
 ;; --- the cold fallback must be explicable ----------------------------------
 ;; Falling back to the whole-log fold is a 20x+ latency cliff that still
 ;; returns a CORRECT answer, so nothing in the result reveals it happened. On

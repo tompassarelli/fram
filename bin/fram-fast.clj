@@ -33,8 +33,24 @@
         (throw (ex-info "coordinator response is not exactly one EDN form" {})))
       value)))
 
+(def default-coord-read-timeout-ms
+  ;; 15s, not 2s. Timing out here does NOT fail the command — it falls back to
+  ;; the cold whole-log fold, which is far SLOWER than continuing to wait. So a
+  ;; short timeout is counterproductive on its own terms: giving up after 2s to
+  ;; then spend 15s folding is strictly worse than waiting 5s for the answer.
+  ;;
+  ;; Measured 2026-07-29 on a 1,485-row query, same corpus, same load:
+  ;;   timeout 2000   15,511ms   773 rows   (cold: WRONG COUNT — coordination only)
+  ;;   timeout 20000   2,198ms  1,485 rows  (warm)
+  ;;   timeout 20000     686ms  1,485 rows  (warm)
+  ;; The daemon answers that query in ~4.9s with cold caches, so 2s was below
+  ;; its ordinary response time and the fallback fired systematically —
+  ;; silently, since a cold answer looks like a correct one.
+  15000)
+
 (defn- read-response-line! [^java.net.Socket socket]
-  (.setSoTimeout socket (env-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 2000))
+  (.setSoTimeout socket (env-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS"
+                                        default-coord-read-timeout-ms))
   (let [limit (response-byte-limit)
         input (java.io.BufferedInputStream. (.getInputStream socket))
         output (java.io.ByteArrayOutputStream.)]
