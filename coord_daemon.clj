@@ -79,7 +79,8 @@
 (def projection-build-lock (Object.))
 (def subscribers (atom []))
 (def subscription-sockets (atom #{}))
-(def dlock (Object.))                ; serializes reload + writes + reads (drop-in mode)
+(def dlock (Object.))                ; serializes reload + mutation commit boundaries
+(def snapshot-build-lock (Object.)) ; serializes checkpoint publication, never writers
 (def listener-socket (atom nil))
 (def accept-stopped (atom nil))
 (def drain-monitor (Object.))
@@ -340,8 +341,14 @@
 ;; beyond a request's small deadline without delaying admission itself.
 (def query-monitor-launch-delay-ms
   (positive-env-long "FRAM_TEST_QUERY_MONITOR_LAUNCH_DELAY_MS" 0))
+(def control-delay-test-enabled?
+  (= "1" (System/getenv "FRAM_TEST_CONTROL_DELAY")))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
+(def active-control-reads (atom 0))
+(def active-control-monitors (atom 0))
+(def control-stops (atom {:client-disconnected 0
+                          :unexpected-client-input 0}))
 (def active-reloads (atom 0))
 (def reload-retries (atom 0))
 (def reload-generation (atom 0))
@@ -841,27 +848,63 @@
 
 (declare read-logs-merged)
 
-(defn- facts-wire-snapshot []
-  (let [v (current-seq @co)
-        cc @facts-wire-cache
-        triples (if (= v (:version cc))
-                  (:triples cc)
-                  (let [live (client-view-facts @co)
-                        ;; Below nine distinct fold keys Clojure uses an
-                        ;; insertion-ordered PersistentArrayMap. The reified
-                        ;; store does not preserve the flat log's insertion
-                        ;; order, so refolding that view can emit different
-                        ;; bytes from a cold fold. Tiny corpora are cheap to
-                        ;; fold from their authoritative log; real corpora stay
-                        ;; on the warm hash-map-order path.
-                        ordered
-                        (if (and @flat-log (< (count live) 9))
-                          (:facts (fold/fold (read-logs-merged @flat-log)))
-                          (fold/refold-order live))
-                        ts (mapv (fn [c] [(:l c) (:p c) (:r c)]) ordered)]
-                    (reset! facts-wire-cache {:version v :triples ts})
-                    ts))]
-    {:version v :triples triples}))
+(defn- capture-read-roots! []
+  ;; The Store is an atom containing a persistent value. Capture that value and
+  ;; every identity that gives it meaning in one short writer turn, then wrap it
+  ;; in a private atom. Derived projection/serialization may take seconds, but it
+  ;; can no longer retain the mutation monitor after a client timeout.
+  (locking dlock
+    (let [co-root @co
+          store-root @(:store co-root)
+          schema-root @schema-view
+          version (current-seq co-root)
+          cached @facts-wire-cache]
+      {:co-root (assoc co-root :store (atom store-root))
+       :store-root store-root
+       :schema-root schema-root
+       :version version
+       :flat @flat-log
+       :cached-triples (when (= version (:version cached))
+                         (:triples cached))})))
+
+(defn- publish-facts-wire-cache! [roots triples]
+  ;; A stale projection remains a correct response for its captured request, but
+  ;; it must not replace the cache after a writer/reloader installed new roots.
+  (locking dlock
+    (let [co-root @co]
+      (when (and (= (:version roots) (current-seq co-root))
+                 (identical? (:store-root roots) @(:store co-root))
+                 (identical? (:schema-root roots) @schema-view))
+        (reset! facts-wire-cache
+                {:version (:version roots) :triples triples})
+        true))))
+
+(defn- facts-wire-snapshot
+  ([] (facts-wire-snapshot (capture-read-roots!)))
+  ([roots]
+   (let [v (:version roots)
+         triples
+         (or (:cached-triples roots)
+             (let [live (client-view-facts-from
+                         (:co-root roots) (:schema-root roots))
+                   ;; Below nine distinct fold keys Clojure uses an
+                   ;; insertion-ordered PersistentArrayMap. Preserve the cold
+                   ;; fold's byte order, but truncate the concurrently-readable
+                   ;; log at the captured version so response version and rows
+                   ;; still describe one snapshot.
+                   ordered
+                   (if (and (:flat roots) (< (count live) 9))
+                     (:facts
+                      (fold/fold
+                       (filterv #(<= (long (or (:tx %) 0)) (long v))
+                                (read-logs-merged (:flat roots)))))
+                     (fold/refold-order live))
+                   ts (mapv (fn [c] [(:l c) (:p c) (:r c)]) ordered)]
+               (publish-facts-wire-cache! roots ts)
+               ts))]
+     {:version v
+      :log (or (:flat roots) (:log (:co-root roots)))
+      :triples triples})))
 
 (def ^:dynamic *request-query-control* nil)
 
@@ -4562,6 +4605,72 @@
       :else
       {:ok true :module module :path (first paths) :version (current-seq @co)})))
 
+(defn- control-request? [req]
+  (= :status (:op req)))
+
+(defn- maybe-delay-control! [req]
+  ;; Test-only cancellation seam. The sleep is deliberately cooperative so the
+  ;; socket EOF monitor can abandon a timed-out status request; production
+  ;; requests cannot ask the daemon to sleep.
+  (let [delay-ms (when control-delay-test-enabled?
+                   (some-> (:test-delay-ms req) long))]
+    (when (and delay-ms (pos? delay-ms))
+      (swap! active-control-reads inc)
+      (try
+        (loop [remaining delay-ms]
+          (when-let [reason (some-> *request-query-control* :cancelled deref)]
+            (swap! control-stops update reason (fnil inc 0))
+            (throw (ex-info "control request cancelled"
+                            {:type :control-request-cancelled
+                             :reason reason})))
+          (when (pos? remaining)
+            (let [slice (min 10 remaining)]
+              (Thread/sleep (long slice))
+              (recur (- remaining slice)))))
+        (finally
+          (swap! active-control-reads dec))))))
+
+(defn- capture-status-roots! []
+  (locking dlock
+    (let [co-root @co
+          store-root @(:store co-root)
+          img @cold-image
+          cold-live (when img
+                      (- (fri/nfacts img)
+                         (long (get-in img [:footer :counts :superseded]))))]
+      {:version (current-seq co-root)
+       :store-root store-root
+       :cold-live cold-live
+       :log (or @flat-log (:log co-root))
+       :boot @last-boot
+       :durability @edit-durability-state
+       :last-edit-outcome @last-edit-outcome
+       :queries {:active @active-queries
+                 :monitors @active-query-monitors
+                 :stops @query-stops}
+       :controls {:active @active-control-reads
+                  :monitors @active-control-monitors
+                  :stops @control-stops}
+       :reloads {:active @active-reloads
+                 :retries @reload-retries
+                 :generation @reload-generation}
+       :index (rotation-index-status)})))
+
+(defn- status-response [req roots]
+  (maybe-delay-control! req)
+  (let [tail-live (count (c/current-facts (atom (:store-root roots))))]
+    {:version (:version roots)
+     :facts (+ (long (or (:cold-live roots) 0)) tail-live)
+     :log (:log roots)
+     :boot (:boot roots)
+     :durability (:durability roots)
+     :last-edit-outcome (:last-edit-outcome roots)
+     :queries (:queries roots)
+     :controls (:controls roots)
+     :reloads (:reloads roots)
+     :index (:index roots)
+     :rollback_floor fram.rt/rollback-floor}))
+
 (defn- request-dispatch [req]
   (wire/request-dispatch
    req
@@ -4569,6 +4678,13 @@
    {:reload-checked? *reload-checked*
     :reload-deferred-ops reload-deferred-ops
     :reload-mutation-ops reload-mutation-ops}))
+
+(def ^:private detached-locked-handlers
+  ;; These handlers were historically classified :locked by the wire table.
+  ;; Their expensive work is either a captured-snapshot read or a checkpoint
+  ;; with its own phased publication, so the global mutation monitor is both
+  ;; unnecessary and harmful.
+  #{:status :facts :show :snapshot})
 
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
@@ -4656,6 +4772,18 @@
         (= :edit-commit inner-handler)
         (edit-commit-response inner expected true)
 
+        (contains? detached-locked-handlers inner-handler)
+        ;; Preserve the protocol fence at the immutable-root capture boundary,
+        ;; but never recursively retain it during projection, serialization, a
+        ;; test/admin delay, or checkpoint file generation.
+        (do
+          (prepare-request-reload! inner)
+          (if-let [fence-reject (locking dlock
+                                  (log-fence-rejection expected))]
+            fence-reject
+            (binding [*reload-checked* true]
+              (handle* inner))))
+
         :else
         (do
           (prepare-request-reload! inner)
@@ -4664,6 +4792,34 @@
             fence-reject
             (binding [*reload-checked* true]
               (handle* inner)))))))
+
+    (= :status handler)
+    (status-response req (capture-status-roots!))
+
+    (= :facts handler)
+    (do
+      (when-not *reload-checked* (prepare-request-reload! req))
+      (let [{:keys [version log triples]} (facts-wire-snapshot)]
+        {:version version
+         :log log
+         :facts triples}))
+
+    (= :show handler)
+    (do
+      (when-not *reload-checked* (prepare-request-reload! req))
+      (let [{:keys [version triples]} (facts-wire-snapshot)
+            te (:te req)]
+        {:version version
+         :rows (reduce (fn [rows [l p r]]
+                         (if (= l te) (conj rows [p r]) rows))
+                       [] triples)}))
+
+    (= :snapshot handler)
+    (do
+      (when-not *reload-checked* (prepare-request-reload! req))
+      (if @flat-log
+        (write-snapshot! @co @flat-log)
+        {:error "snapshot needs flat-log (drop-in) mode"}))
 
     ;; LOCK-FREE read: deref the @co immutable snapshot, NO dlock. Reads don't need the
     ;; writer lock (the atom swap on commit is atomic), so a reader never serializes behind
@@ -5064,7 +5220,8 @@
     (catch Throwable _
       (cancel-query! control :client-disconnected))))
 
-(defn- monitor-query-disconnect [^Socket s ^BufferedReader r control]
+(defn- monitor-request-disconnect
+  [^Socket s ^BufferedReader r control monitor-count launch-delay-ms]
   ;; serve-conn has completely parsed the protocol's single request line. Its
   ;; synchronous read-ahead inspection preserves pipelined-input cancellation;
   ;; the ongoing EOF monitor is deliberately not on the admission critical path.
@@ -5073,13 +5230,13 @@
     (let [registered? (atom true)
         release-monitor! (fn []
                            (when (compare-and-set! registered? true false)
-                             (swap! active-query-monitors dec)))]
-      (swap! active-query-monitors inc)
+                             (swap! monitor-count dec)))]
+      (swap! monitor-count inc)
       (try
         (future
           (try
-            (when (pos? query-monitor-launch-delay-ms)
-              (Thread/sleep query-monitor-launch-delay-ms))
+            (when (pos? launch-delay-ms)
+              (Thread/sleep launch-delay-ms))
                 (.setSoTimeout s 100)
                 (when (nil? @(:cancelled control))
                   (loop []
@@ -5101,6 +5258,13 @@
           ;; worker otherwise owns its own release in finally.
           (release-monitor!)
           (throw t))))))
+
+(defn- monitor-query-disconnect [^Socket s ^BufferedReader r control]
+  (monitor-request-disconnect
+   s r control active-query-monitors query-monitor-launch-delay-ms))
+
+(defn- monitor-control-disconnect [^Socket s ^BufferedReader r control]
+  (monitor-request-disconnect s r control active-control-monitors 0))
 
 (defn serve-conn [^Socket s]
   (try
@@ -5154,8 +5318,19 @@
 
               :handle
               (let [actual (:actual state)
-                    control (when (:query state) (new-query-control actual))
-                    _ (when (:query state) (monitor-query-disconnect s r control))]
+                    query-control (when (:query state)
+                                    (new-query-control actual))
+                    control-control (when (and (not (:query state))
+                                               (control-request? actual))
+                                      {:cancelled (atom nil)
+                                       :done (atom false)})
+                    control (or query-control control-control)
+                    _ (cond
+                        query-control
+                        (monitor-query-disconnect s r query-control)
+
+                        control-control
+                        (monitor-control-disconnect s r control-control))]
                 (try
                   (let [resp (if control (handle req control) (handle req))]
                     (try-reply
