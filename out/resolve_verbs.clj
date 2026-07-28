@@ -615,3 +615,80 @@
    out-path (:out-path env)]
   (->Verb (:ctx env) (:view env) (:tx env) (:SUP env) (:KIND env) (:Vp env) (vec (:srcs env)) (:capture-only? env) (vec (:emit-srcs env)) (fn [code] (reject! code)) (fn [code detail] (reject! code detail)) (fn [line] (binding [*out* *err*]
   (println line))) (:author-emit env) (fn [src] (extract-file src (out-path src))) out-path (:def-binding env) (:typeframe env) (:modframe env) (:forms-of env) (:module-name env) (:parse-require env) (:capture-refs env) (:ultimate env) (:BOUND env) (:REFERS env) (:wrapper-of env) (:form-for-victim env) (:descendants env) (:retire env) (:reresolve env) (:ents env) (:mint env) (:register env) (:scope-srcs env) (:fn-facts env) (:FIXED env) (fn [code] (System/exit code)))))
+
+(defn run-cli! [env args]
+  (let [mode (first args)
+   fi (first (vec (keep-indexed (fn [i arg] (if (= arg "--within-file") i nil)) args)))
+   stripped (if (nil? fi) args (vec (concat (take fi args) (drop (+ fi 2) args))))
+   skip (cond
+  (= mode "resolve") 1
+  (= mode "rename") 4
+  (= mode "delete") 3
+  (= mode "reorder") 4
+  (= mode "callgraph") 1
+  (= mode "upsert-form") 3
+  (= mode "set-body") 4
+  (= mode "replace-in-body") 5
+  :else 1)
+   edn-paths (vec (drop skip stripped))
+   resolve-edn (:resolve-edn env)]
+  (resolve-edn edn-paths (fn [] (let [warn (fn [line] (binding [*out* *err*]
+  (println line)))
+   srcs-fn (:srcs env)
+   counter (:counter env)
+   extract (:extract env)
+   out-path (:out-path env)
+   basename (fn [src] (last (str/split src (re-pattern "/"))))
+   file-ents (:file-ents env)
+   kind-of (:kind-of env)
+   refers-target (:refers-target env)
+   rename! (:rename! env)
+   delete! (:delete! env)
+   reorder! (:reorder! env)
+   upsert! (:upsert! env)
+   set-body! (:set-body! env)
+   replace-in-body! (:replace-in-body! env)
+   read-edn (fn [path] (edn/read-string (slurp path)))
+   call-edges (:call-edges env)
+   blast-closure (:blast-closure env)
+   binding-privacy (:binding-privacy env)
+   dead-private-bindings (:dead-private-bindings env)
+   json-generate (requiring-resolve 'cheshire.core/generate-string)]
+  (cond
+  (= mode "resolve") (do
+  (warn "================ Turtle #5 — lexical resolution pass ================")
+  (warn (str "references resolved (carry refers_to → a binding node): " (counter :resolved) "  (" (counter :xmod) " cross-module, " (counter :type) " type references)"))
+  (warn (str "unresolved (builtins / native — correctly NO refers_to): " (counter :unresolved)))
+  (warn (str "comment identifier mentions resolved (rename-correct doc comments): " (counter :comment)))
+  (doseq [src (vec (srcs-fn))]
+  (extract src))
+  (doseq [src (vec (srcs-fn))]
+  (warn (str "  " (basename src) ": " (count (filter (fn [node] (and (= "symbol" (kind-of node)) (some? (refers-target node)))) (vec (file-ents src)))) " references carry refers_to; projected (identity) -> " (out-path src)))))
+  (= mode "rename") (let [[old new target] (vec (drop 1 args))]
+  (rename! old new target))
+  (= mode "delete") (let [[name target] (vec (drop 1 args))]
+  (delete! name target))
+  (= mode "reorder") (let [[name target after] (vec (drop 1 args))]
+  (reorder! name target after))
+  (= mode "upsert-form") (let [[scope spec-file] (vec (drop 1 args))]
+  (upsert! scope (read-edn spec-file)))
+  (= mode "set-body") (let [[name scope body-file] (vec (drop 1 args))]
+  (set-body! name scope (read-edn body-file)))
+  (= mode "replace-in-body") (let [[name scope old-file new-file] (vec (drop 1 args))
+   within-path (second (drop-while (fn [arg] (not= "--within-file" arg)) args))
+   within-datum (if (some? within-path) (do
+  (read-edn within-path)))]
+  (replace-in-body! name scope (read-edn old-file) (read-edn new-file) within-datum))
+  (= mode "callgraph") (let [cg (call-edges)
+   defn-meta (:defn-meta cg)
+   edges (:edges cg)
+   key->s (fn [leaf] (:key (get defn-meta leaf)))
+   edges-s (mapv (fn [edge] [(key->s (first edge)) (key->s (second edge))]) edges)
+   closure (blast-closure edges-s)
+   reaches (:reaches closure)
+   blast (:blast closure)
+   dead-priv (dead-private-bindings cg (binding-privacy))
+   dead-s (vec (sort (map key->s dead-priv)))]
+  (warn (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs, %d dead private (refers_to + Fram Datalog)" (count defn-meta) (count edges-s) (count reaches) (count dead-s)))
+  (println (json-generate {:defns (vec (vals defn-meta)) :edges edges-s :blast (into {} (map (fn [entry] [(first entry) (vec (second entry))]) blast)) :dead-private dead-s})))
+  :else nil))))))

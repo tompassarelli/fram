@@ -32,7 +32,6 @@
             [resolve-mint :as rmi]   ; M1 Cut I: the mint/author layer — a datum enters the store as facts
             [resolve-verbs :as rvb]))  ; M1 Cut H: the authoring verbs — an edit is a fact operation
 
-(def mode (first *command-line-args*))
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
 ;; Every piece of computed resolution state lives in a dynamic var with an INERT
 ;; root binding (nil / empty atom). `resolve-edn!` rebinds them all to a FRESH
@@ -885,117 +884,26 @@
 ;; tables / counters exactly as the old top-level code did. GUARDED: loaded as a
 ;; library (no recognized mode), nothing runs — no load-edn over mis-sliced args.
 (def MODES rc/MODES)
-(defn -main []
-  (let [;; strip an optional `--within-file <path>` flag (replace-in-body's scope-narrower)
-        ;; so it never lands in the edn-paths slice below (load-edn would slurp it as a file).
-        raw      (vec *command-line-args*)
-        fi       (.indexOf raw "--within-file")
-        stripped (if (neg? fi) raw (concat (take fi raw) (drop (+ fi 2) raw)))
-        edn-paths (drop (case mode "resolve" 1 "rename" 4 "delete" 3 "reorder" 4 "callgraph" 1
-                                   "upsert-form" 3 "set-body" 4 "replace-in-body" 5)
-                        stripped)]
-    (resolve-edn!
-     edn-paths
-     (fn []
-(case mode
-  "resolve"
-  (binding [*out* *err*]
-    (println "================ Turtle #5 — lexical resolution pass ================")
-    (println (str "references resolved (carry refers_to → a binding node): " @n-resolved
-                  "  (" @n-xmod " cross-module, " @n-type " type references)"))
-    (println (str "unresolved (builtins / native — correctly NO refers_to): " @n-unresolved))
-    (println (str "comment identifier mentions resolved (rename-correct doc comments): " @n-comment))
-    ;; write the resolved projection so identity can be checked: with NO rename,
-    ;; projecting through refers_to must reproduce the original source exactly.
-    (doseq [src srcs] (extract-file! src (out-path src)))
-    (doseq [src srcs]
-      (println (str "  " (-> src (str/split #"/") last) ": "
-                    (count (filter #(and (= "symbol" (kind-of %)) (refers-target %)) (@file->ents src)))
-                    " references carry refers_to; projected (identity) -> " (out-path src)))))
-
-  "rename"
-  (let [[old new target] (drop 1 *command-line-args*)]
-    (verb-rename! old new target))
-
-  ;; delete : remove a top-level def by name. Delegates to verb-delete! (the SAME
-  ;; fact-native body the warm/minimal-op path runs) — the default *reject!* is
-  ;; System/exit, so the CLI keeps its exit-code contract (5 no-victim, 6 orphan).
-  "delete"
-  (let [[name target] (drop 1 *command-line-args*)]
-    (verb-delete! name target))
-
-  ;; reorder : move a top-level def after an anchor (or to the front), in place.
-  "reorder"
-  (let [[name target after] (drop 1 *command-line-args*)]
-    (verb-reorder! name target after))
-
-  ;; ============================================================================
-  ;; AUTHORING VERBS — the GAP closed: a fact operation for novel authoring.
-  ;; upsert-form : add a NEW top-level def (append a wrapper fN edge) OR replace an
-  ;;               existing top-level def by name (supersede its wrapper fN edge to
-  ;;               point at a freshly-minted subtree). The form is given as an EDN
-  ;;               datum (the structured edit spec), minted into the SAME store.
-  ;; Both reuse extract-file! (the rename/delete render machine) and re-run the
-  ;; lexical walk over the post-mint corpus, so a reference in the new code resolves
-  ;; via refers_to (scope-correct) exactly like hand-written code — then the recompile
-  ;; gate (authoring.sh) is the only acceptance criterion. fail-closed before that.
-  ;; ============================================================================
-  "upsert-form"
-  (let [[scope spec-file] (drop 1 *command-line-args*)
-        datum (edn/read-string (slurp spec-file))]
-    (verb-upsert-form! scope datum))
-
-  ;; set-body : replace a defn's BODY — supersede every post-params fN edge of the
-  ;; named defn and re-wire to a freshly-minted body datum.
-  "set-body"
-  (let [[name scope body-file] (drop 1 *command-line-args*)
-        datum (edn/read-string (slurp body-file))]
-    (verb-set-body! name scope datum))
-
-  ;; replace-in-body : SUB-DEF surgical edit — replace ONE interior form of the named
-  ;; def (matched structurally by the OLD form) with a NEW form, WITHOUT re-emitting the
-  ;; def. Anchor-form addressing (Edit-tool old_string on the AST): unique match required,
-  ;; fail-closed on 0/>1. old-file/new-file each hold one EDN datum (the verb reads them).
-  ;; An OPTIONAL `--within-file <path>` flag (anywhere after new-file; stripped from the
-  ;; edn-paths slice in -main) holds an enclosing-form datum that narrows the search (the
-  ;; `old` match must be unique WITHIN it) — the disambiguation remedy.
-  "replace-in-body"
-  (let [[name scope old-file new-file] (drop 1 *command-line-args*)
-        within-file (second (drop-while #(not= "--within-file" %) *command-line-args*))
-        old-datum (edn/read-string (slurp old-file))
-        new-datum (edn/read-string (slurp new-file))
-        within-datum (when within-file (edn/read-string (slurp within-file)))]
-    (verb-replace-in-body! name scope old-datum new-datum within-datum))
-
-  ;; ============================================================================
-  ;; callgraph — the scope-correct call graph + transitive blast radius, derived
-  ;; from the SAME refers_to edges the rename/delete engine uses. A "call" is a
-  ;; reference in list-HEAD position whose binding (followed transitively) is a
-  ;; top-level defn; the caller is its enclosing top-level defn. Because refers_to
-  ;; is the converged cross-module/multi-arity/collision-correct resolution, this
-  ;; call graph is too — unlike a bare-callname index, it does NOT drop qualified
-  ;; (a/f, m/f) cross-module calls. Emits the JSON beagle-cascade consumes.
-  ;; ============================================================================
-  "callgraph"
-  (let [{:keys [defn-meta edges] :as cg} (call-edges)
-        key->s  (fn [leaf] (:key (defn-meta leaf)))
-        edges-s (mapv (fn [[a b]] [(key->s a) (key->s b)]) edges)
-        {:keys [reaches blast]} (blast-closure edges-s)
-        ;; identity-keyed stratified-Datalog: private bindings unreachable from public roots.
-        dead-priv (dead-private-bindings cg (binding-privacy))
-        dead-s    (vec (sort (map key->s dead-priv)))]
-    (binding [*out* *err*]
-      (println (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs, %d dead private (refers_to + Fram Datalog)"
-                       (count defn-meta) (count edges-s) (count reaches) (count dead-s))))
-    (println (json/generate-string
-              {:defns (vec (vals defn-meta)) :edges edges-s
-               :blast (into {} (map (fn [[k vs]] [k (vec vs)]) blast))
-               ;; ADDITIVE field — the dead-private derivation, keyed like :defns/:edges
-               ;; ("src#leaf"). No Beagle syntax added; a consumer that ignores it is unaffected.
-               :dead-private dead-s}))))))))
+(defn -main [& args]
+  (rvb/run-cli!
+   {:resolve-edn resolve-edn!
+    :srcs (fn [] (vec srcs))
+    :counter (fn [k] (get {:resolved (deref n-resolved) :xmod (deref n-xmod)
+                           :type (deref n-type) :unresolved (deref n-unresolved)
+                           :comment (deref n-comment)} k))
+    :extract (fn [src] (extract-file! src (out-path src)))
+    :out-path out-path
+    :file-ents (fn [src] (get (deref file->ents) src))
+    :kind-of kind-of :refers-target refers-target
+    :rename! verb-rename! :delete! verb-delete! :reorder! verb-reorder!
+    :upsert! verb-upsert-form! :set-body! verb-set-body!
+    :replace-in-body! verb-replace-in-body!
+    :call-edges call-edges :blast-closure blast-closure
+    :binding-privacy binding-privacy :dead-private-bindings dead-private-bindings}
+   (vec args)))
 
 ;; GUARD: run the pipeline only when invoked as a CLI with a recognized mode.
 ;; Loaded as a library (no mode arg, or an unrecognized one), this is a no-op —
 ;; so a daemon can `require`/load this file and call `resolve-edn!` over its own
 ;; warm store without the old top-level load-edn crashing on mis-sliced args.
-(when (MODES mode) (-main))
+(when (MODES (first *command-line-args*)) (apply -main *command-line-args*))

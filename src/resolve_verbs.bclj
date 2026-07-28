@@ -774,3 +774,46 @@
       (get env :fn-facts)
       (get env :FIXED)
       (fn [code :- Int] :- Any (System/exit code)))))
+
+(defn run-cli! [env :- Any args :- (Vec String)] :- Any
+  (let [mode (first args) fi (first (vec (keep-indexed (fn [i :- Int arg :- String] :- Int? (if (= arg "--within-file") i nil)) args))) stripped (if (nil? fi) args (vec (concat (take fi args) (drop (+ fi 2) args)))) skip (cond (= mode "resolve") 1 (= mode "rename") 4 (= mode "delete") 3 (= mode "reorder") 4 (= mode "callgraph") 1 (= mode "upsert-form") 3 (= mode "set-body") 4 (= mode "replace-in-body") 5 :else 1) edn-paths (vec (drop skip stripped)) resolve-edn (get env :resolve-edn)]
+    (resolve-edn edn-paths
+      (fn [] :- Any
+        (let [warn (fn [line :- Any] :- Any (binding [*out* *err*] (println line))) srcs-fn (get env :srcs) counter (get env :counter) extract (get env :extract) out-path (get env :out-path) basename (fn [src :- String] :- String (last (str/split src (re-pattern "/")))) file-ents (get env :file-ents) kind-of (get env :kind-of) refers-target (get env :refers-target) rename! (get env :rename!) delete! (get env :delete!) reorder! (get env :reorder!) upsert! (get env :upsert!) set-body! (get env :set-body!) replace-in-body! (get env :replace-in-body!) read-edn (fn [path :- String] :- Any (edn/read-string (slurp path))) call-edges (get env :call-edges) blast-closure (get env :blast-closure) binding-privacy (get env :binding-privacy) dead-private-bindings (get env :dead-private-bindings) json-generate (requiring-resolve (quote cheshire.core/generate-string))]
+          (cond
+            (= mode "resolve")
+            (do
+              (warn "================ Turtle #5 — lexical resolution pass ================")
+              (warn (str "references resolved (carry refers_to → a binding node): " (counter :resolved) "  (" (counter :xmod) " cross-module, " (counter :type) " type references)"))
+              (warn (str "unresolved (builtins / native — correctly NO refers_to): " (counter :unresolved)))
+              (warn (str "comment identifier mentions resolved (rename-correct doc comments): " (counter :comment)))
+              (doseq [src :- String (vec (srcs-fn))] (extract src))
+              (doseq [src :- String (vec (srcs-fn))]
+                (warn (str "  " (basename src) ": " (count (filter (fn [node :- Any] :- Bool (and (= "symbol" (kind-of node)) (some? (refers-target node)))) (vec (file-ents src)))) " references carry refers_to; projected (identity) -> " (out-path src)))))
+            (= mode "rename")
+            (let [[old new target] (vec (drop 1 args))]
+              (rename! old new target))
+            (= mode "delete")
+            (let [[name target] (vec (drop 1 args))] (delete! name target))
+            (= mode "reorder")
+            (let [[name target after] (vec (drop 1 args))]
+              (reorder! name target after))
+            (= mode "upsert-form")
+            (let [[scope spec-file] (vec (drop 1 args))]
+              (upsert! scope (read-edn spec-file)))
+            (= mode "set-body")
+            (let [[name scope body-file] (vec (drop 1 args))]
+              (set-body! name scope (read-edn body-file)))
+            (= mode "replace-in-body")
+            (let [[name scope old-file new-file] (vec (drop 1 args)) within-path (second (drop-while (fn [arg :- String] :- Bool (not= "--within-file" arg)) args)) within-datum (when (some? within-path) (read-edn within-path))]
+              (replace-in-body! name
+                scope
+                (read-edn old-file)
+                (read-edn new-file)
+                within-datum))
+            (= mode "callgraph")
+            (let [cg (call-edges) defn-meta (:defn-meta cg) edges (:edges cg) key->s (fn [leaf :- Any] :- Any (:key (get defn-meta leaf))) edges-s (mapv (fn [edge :- Any] :- Any [(key->s (first edge)) (key->s (second edge))]) edges) closure (blast-closure edges-s) reaches (:reaches closure) blast (:blast closure) dead-priv (dead-private-bindings cg (binding-privacy)) dead-s (vec (sort (map key->s dead-priv)))]
+              (warn (format "callgraph: %d defns, %d scope-correct edges, %d transitive reaches-pairs, %d dead private (refers_to + Fram Datalog)" (count defn-meta) (count edges-s) (count reaches) (count dead-s)))
+              (println (json-generate {:defns (vec (vals defn-meta)) :edges edges-s :blast (into {} (map (fn [entry :- Any] :- Any [(first entry) (vec (second entry))]) blast)) :dead-private dead-s})))
+            :else
+            nil))))))
