@@ -24,10 +24,37 @@
                        {} params)
    :required (vec (keep (fn [p] (when (:required p) (:name p))) params))})
 
+(def edit-transaction-items-schema
+  {:oneOf
+   [{:type "object"
+     :properties
+     {:op {:type "string" :const "set-body"}
+      :name {:type "string" :description "Definition whose body will be replaced."}
+      :body {:type "string" :description "Replacement body as an EDN datum string."}}
+     :required ["op" "name" "body"]}
+    {:type "object"
+     :properties
+     {:op {:type "string" :const "replace-in-body"}
+      :name {:type "string" :description "Definition containing the form to replace."}
+      :old {:type "string" :description "Existing interior form as an EDN datum string."}
+      :new {:type "string" :description "Replacement interior form as an EDN datum string."}
+      :within {:type "string" :description "Optional enclosing form used to disambiguate old."}}
+     :required ["op" "name" "old" "new"]}
+    {:type "object"
+     :properties
+     {:op {:type "string" :const "upsert-form"}
+      :form {:type "string" :description "Whole top-level form as an EDN datum string."}
+      :name {:type "string"
+             :description "Optional identity assertion; when supplied it must match the identity derived from form."}}
+     :required ["op" "form"]}]})
+
 (defn catalog-tool [spec]
   {:name (:name spec)
    :description (:desc spec)
-   :inputSchema (input-schema (:params spec))})
+   :inputSchema
+   (cond-> (input-schema (:params spec))
+     (= "edit-transaction" (:name spec))
+     (assoc-in [:properties :edits :items] edit-transaction-items-schema))})
 
 (def expected-tools (mapv catalog-tool (tl/catalog [])))
 
@@ -102,6 +129,29 @@
        (= expected-tools tools))
   (chk "each tool has an inputSchema object"
        (every? (fn [t] (= "object" (get-in t [:inputSchema :type]))) tools)))
+
+(let [tools (get-in (get by-id 2) [:result :tools])
+      transaction (some #(when (= "edit-transaction" (:name %)) %) tools)
+      items (get-in transaction [:inputSchema :properties :edits :items])
+      arms (into {}
+                 (map (fn [arm]
+                        [(get-in arm [:properties :op :const]) arm]))
+                 (:oneOf items))]
+  (chk "edit-transaction edits.items is discriminated by exactly three op constants"
+       (= #{"set-body" "replace-in-body" "upsert-form"} (set (keys arms))))
+  (chk "set-body transaction items require op, name, and body"
+       (= ["op" "name" "body"] (:required (get arms "set-body"))))
+  (chk "replace-in-body transaction items require op/name/old/new and expose optional within"
+       (let [arm (get arms "replace-in-body")]
+         (and (= ["op" "name" "old" "new"] (:required arm))
+              (= "string" (get-in arm [:properties :within :type])))))
+  (chk "upsert-form transaction items require form while name is an optional identity assertion"
+       (let [arm (get arms "upsert-form")]
+         (and (= ["op" "form"] (:required arm))
+              (= "string" (get-in arm [:properties :name :type]))
+              (not (some #{"name"} (:required arm)))
+              (str/includes? (get-in arm [:properties :name :description])
+                             "identity assertion")))))
 
 ;; Cold large-corpus regression. The fixture models 10k graph entities / 30k
 ;; kind-v-f0 facts, then appends a newline-terminated corruption sentinel. A

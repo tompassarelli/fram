@@ -118,8 +118,37 @@
    :properties (reduce (fn [m p] (assoc m (:name p) {:type (:type p) :description (str (:name p))})) {} params)
    :required (vec (keep (fn [p] (when (:required p) (:name p))) params))})
 
+(def ^:private edit-transaction-items-schema
+  {:oneOf
+   [{:type "object"
+     :properties
+     {"op" {:type "string" :const "set-body"}
+      "name" {:type "string" :description "Definition whose body will be replaced."}
+      "body" {:type "string" :description "Replacement body as an EDN datum string."}}
+     :required ["op" "name" "body"]}
+    {:type "object"
+     :properties
+     {"op" {:type "string" :const "replace-in-body"}
+      "name" {:type "string" :description "Definition containing the form to replace."}
+      "old" {:type "string" :description "Existing interior form as an EDN datum string."}
+      "new" {:type "string" :description "Replacement interior form as an EDN datum string."}
+      "within" {:type "string" :description "Optional enclosing form used to disambiguate old."}}
+     :required ["op" "name" "old" "new"]}
+    {:type "object"
+     :properties
+     {"op" {:type "string" :const "upsert-form"}
+      "form" {:type "string" :description "Whole top-level form as an EDN datum string."}
+      "name" {:type "string"
+              :description "Optional identity assertion; when supplied it must match the identity derived from form."}}
+     :required ["op" "form"]}]})
+
+(defn- tool-input-schema [spec]
+  (cond-> (input-schema (:params spec))
+    (= "edit-transaction" (:name spec))
+    (assoc-in [:properties "edits" :items] edit-transaction-items-schema)))
+
 (defn- ->tool [spec]
-  {:name (:name spec) :description (:desc spec) :inputSchema (input-schema (:params spec))})
+  {:name (:name spec) :description (:desc spec) :inputSchema (tool-input-schema spec)})
 
 (def ^:private closed-tools (mapv ->tool closed-catalog))
 
