@@ -127,8 +127,24 @@
     (check! (str "malformed daemon response rejected " (pr-str malformed))
             (nil? result))))
 
-(check! "default retry backoff spans the coordinator restart window"
-        (>= (reduce + (#'fram-fast/retry-delays)) 25000))
+(check! "default retry window does not amplify coordinator absence"
+        (empty? (#'fram-fast/retry-delays)))
+
+(let [scan-called? (atom false)
+      output
+      (with-redefs [rt/coord-port (constantly 7977)
+                    rt/coord-show-for-log
+                    (fn [& _] {:version 13 :rows [["title" "exact fast row"]]})
+                    fram-fast/matching-ops
+                    (fn [& _]
+                      (reset! scan-called? true)
+                      (throw (ex-info "provenance scan selected" {})))]
+        (with-out-str
+          (fram-fast/fast-show!
+           log-path "019fa4d4-93aa-7447-aae5-0a5bcfca6849" false)))]
+  (check! "plain exact show skips provenance log scan" (not @scan-called?))
+  (check! "plain exact show renders daemon rows directly"
+          (= "  title  exact fast row\n" output)))
 
 (doseq [[target rows] wire-projections]
   (let [bare (subs target 1)
@@ -209,6 +225,13 @@
                    log-path
                    "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                    false))))
+
+(let [fallback-args (atom nil)]
+  (with-redefs [fram-fast/coordinator-show (fn [& _] nil)
+                fram-fast/cold-main! #(reset! fallback-args %)]
+    (fram-fast/-main "show" "019fa4d4"))
+  (check! "substring show preserves full resolver fallback"
+          (= ["show" "019fa4d4"] @fallback-args)))
 
 (println (format "daemon_read_cli: %d / %d PASS"
                  (- @checks @failures) @checks))

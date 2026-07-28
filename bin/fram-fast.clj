@@ -4,11 +4,10 @@
             [clojure.string :as str]
             [fram.fold :as fold]
             [fram.kernel :as k]
-            [fram.main :as main]
             [fram.rt :as rt]))
 
 (defn- retry-window-ms []
-  (let [raw (or (System/getenv "FRAM_COORD_RETRY_WINDOW_MS") "25000")]
+  (let [raw (or (System/getenv "FRAM_COORD_RETRY_WINDOW_MS") "0")]
     (when-not (re-matches #"(0|[1-9][0-9]{0,4})" raw)
       (throw
        (ex-info
@@ -47,8 +46,8 @@
 
 (defn- coordinator-show
   "One strict daemon-read choke point. A reachable incompatible or malformed
-  daemon falls back immediately. An unreachable daemon gets a bounded retry
-  window long enough to span its normal restart before the same cold fallback."
+  daemon falls back immediately. An unreachable daemon may use an explicitly
+  configured bounded retry window before the same cold fallback."
   [port log subject]
   (or
    (show-once port log subject)
@@ -102,6 +101,15 @@
             (matching-ops telemetry subject #(run-record? subject %)))
       primary)))
 
+(def evidence-preds #{"bar_evidence" "progress" "outcome"})
+
+(defn- needs-full-renderer? [rows provenance?]
+  (or provenance?
+      (some #(contains? evidence-preds (first %)) rows)))
+
+(defn- cold-main! [args]
+  (apply (requiring-resolve 'fram.main/-main) args))
+
 (defn fast-show!
   "Serve an exact subject from the coordinator's narrow :show projection.
   Returns false when the existing CLI must own fallback or prefix resolution."
@@ -110,20 +118,25 @@
         rows (:rows (coordinator-show (rt/coord-port) log subject))]
     (if-not (seq rows)
       false
-      (let [ops (relevant-ops log subject)
-            run-facts
-            (filterv #(= "run_bar_evidence" (:p %))
-                     (:facts (fold/fold ops)))
-            facts
-            (into (mapv (fn [[predicate value]]
-                          (k/->Fact subject predicate value))
-                        rows)
-                  run-facts)]
-        ;; cmd-show remains the one renderer. It sees daemon-ordered subject rows,
-        ;; plus only the raw records needed for provenance/reporter joins.
-        (with-redefs [rt/coord-live-facts (fn [& _] facts)
-                      rt/read-log (fn [_] ops)]
-          (main/cmd-show log id provenance?))
+      (do
+        (if (needs-full-renderer? rows provenance?)
+          (let [ops (relevant-ops log subject)
+                run-facts
+                (filterv #(= "run_bar_evidence" (:p %))
+                         (:facts (fold/fold ops)))
+                facts
+                (into (mapv (fn [[predicate value]]
+                              (k/->Fact subject predicate value))
+                            rows)
+                      run-facts)]
+            ;; Keep full provenance joins byte-identical, but pay their engine
+            ;; and log-scan cost only when the output can contain a marker.
+            (with-redefs [rt/coord-live-facts (fn [& _] facts)
+                          rt/read-log (fn [_] ops)]
+              ((requiring-resolve 'fram.main/cmd-show)
+               log id provenance?)))
+          (doseq [[predicate value] rows]
+            (println (str "  " predicate "  " value))))
         true))))
 
 (defn- safe-fast-value? [value]
@@ -193,7 +206,7 @@
 
           :else false)]
     (when-not handled?
-      (apply main/-main args))))
+      (cold-main! args))))
 
 (when (= *file* (System/getProperty "babashka.file"))
   (apply -main *command-line-args*))

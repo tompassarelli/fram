@@ -3,7 +3,7 @@
 #   fram import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <val>
 # Checkout runs default to <repo>/threads and <repo>/coordination.log. Packaged runs
 # default to writable XDG state. Override either with FRAM_THREADS / FRAM_LOG.
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+HERE="${BASH_SOURCE[0]%/*}/.."
 # Deep daemon/recovery selfcheck is a bash-orchestrated command (boots isolated
 # scratch coordinators with trap-based cleanup) — dispatch before the bb exec.
 if [[ "${1:-}" == "selfcheck" ]]; then
@@ -33,7 +33,11 @@ else
   FRAM_LOG="${FRAM_LOG:-$HERE/coordination.log}"
 fi
 export FRAM_THREADS FRAM_LOG
-mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
+log_parent="${FRAM_LOG%/*}"
+[[ "$log_parent" != "$FRAM_LOG" ]] || log_parent=.
+if [[ ! -d "$FRAM_THREADS" || ! -d "$log_parent" ]]; then
+  mkdir -p "$FRAM_THREADS" "$log_parent"
+fi
 case "${1:-}" in
   show|tell|retract|untell)
     exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
