@@ -53,7 +53,7 @@
                             {:key key :expected value :row row}))))
         (when-not (and (zero? (:errors row))
                        (= (:expected-count row) (:result-count row)))
-          (throw (ex-info "index scenario result mismatch" {:row row}))))
+          (throw (ex-info "index scenario result mismatch" {:row row})))))
     (when-not (= expected observed)
       (throw
        (ex-info "index benchmark matrix incomplete"
@@ -71,4 +71,4 @@
                (/ (reduce + (map :rss-retained-kb rs)) (double (count rs))))))
     (println
      (format "index-architecture contract: PASS (%d rows, %d matrix cases)"
-             (count rows) (count expected))))))
+             (count rows) (count expected)))))
