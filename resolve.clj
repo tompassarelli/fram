@@ -542,49 +542,29 @@
 ;; the root, so deleting a form means (a) skip its whole subtree (else its orphaned root
 ;; would compete with the real wrapper) and (b) re-emit the wrapper's surviving forms at
 ;; consecutive fN (a gap would truncate the file). Pure projection — the store is not mutated.
-(def ^:dynamic *deleted-forms* #{})      ; wrapper-child form node-ids to omit (per src, but ids are global)
-(def ^:dynamic *deleted-subtree* #{})    ; all entity ids under deleted forms — skipped on emit
-(defn wrapper-of [src] (some (fn [e] (when (= "beagle-file" (head-sym e)) e)) (@file->ents src)))
-(defn structural-kids [n]                ; child node ids via fN/segN/commentN/tail edges
-  (->> (c/by-l ctx n) (map #(c/fact-of ctx %))
-       (keep (fn [cl] (let [p (c/literal ctx (:p cl)) r (:r cl)]
-                        (when (and (integer? r) (string? p)
-                                   (or (ord-pos? p) (re-matches #"seg\d+" p)         ; #36: ord-pos? = old f<int> OR new CRDT key
-                                       (re-matches #"comment\d+" p) (= p "tail")))   ; a form's own doc-comment
-                          r))))))
-(defn descendants [root]                 ; root + all transitive structural descendants
-  (loop [seen #{} stack [root]]
-    (if (empty? stack) seen
-      (let [n (peek stack)]
-        (if (seen n) (recur seen (pop stack))
-          (recur (conj seen n) (into (pop stack) (structural-kids n))))))))
-(defn form-for-victim [src victim]       ; the top-level form whose def-NAME is victim (only the name —
-  (some (fn [f]                          ; a defunion VARIANT is not its own top-level form, so it won't match)
-          (let [nl0 (unwrap-meta (second (ordered-children (unwrap-def f))))   ; D2: peel (#%meta …) off the name
-                nl (if (= "list" (kind-of nl0)) (first (ordered-children nl0)) nl0)]   ; (Name Params) head
-            (when (= victim nl) f)))
-        (rest (ordered-children (wrapper-of src)))))
+(defn wrapper-of [src]
+  (rmi/wrapper-of ctx *view* (rco/file-entity-map file->ents) src))
+(defn structural-kids [n] (rmi/structural-kids ctx n))
+(defn descendants [root] (rmi/descendants ctx root))
+(defn form-for-victim [src victim]
+  (rmi/form-for-victim ctx *view* (rco/file-entity-map file->ents) unwrap-def src victim))
 ;; extract-file! — THE PROJECTION (M1 Cut I; line construction, the #36 wrapper
 ;; renumber and the reachability filter all in src/resolve_mint.bclj). Only the
 ;; writer + `binding [*out* w]` scaffolding stays here — a host dynamic var cannot
 ;; change namespace — so the module returns the LINES and this printlns them, one
 ;; per line, byte-for-byte as before.
 (defn emit-env []
-  (rmi/->Emit ctx *view* BOUND REFERS FIXED @file->ents
-              wrapper-of descendants *deleted-forms* *deleted-subtree*))
+  (rmi/emit-env ctx *view* BOUND REFERS FIXED
+                (rco/file-entity-map file->ents) unwrap-def))
 (defn extract-file! [src out-path]
-  (with-open [w (clojure.java.io/writer out-path)]
-    (binding [*out* w]
-      (doseq [line (rmi/extract-lines (emit-env) src)] (println line)))))
+  (rmi/extract-file! (emit-env) src out-path))
 
 ;; render output dir honors *resolve-out* (default $RESOLVE_OUT, then /tmp) so
 ;; concurrent gate runs / agents don't collide on a global /tmp/resolved-*.edn —
 ;; the gates set it to a per-run temp dir. *resolve-out* is the IN-PROCESS override
 ;; (System/getenv can't be set at runtime, so the warm-store driver binds this var
 ;; to route the verb's projection into a per-run dir without re-launching bb).
-(def ^:dynamic *resolve-out* nil)
-(defn out-path [src] (str (or *resolve-out* (System/getenv "RESOLVE_OUT") "/tmp")
-                          "/resolved-" (-> src (str/split #"/") last) ".edn"))
+(defn out-path [src] (rmi/out-path src))
 
 ;; --- no-capture invariant ---------------------------------------------------
 ;; capture-refs — the LEXICAL DUAL of the def-vs-def collision guard (M1 Cut I;
@@ -635,8 +615,7 @@
 ;; The GRAPH path binds it to just the affected module — render-from-store needs
 ;; only that one, and projecting the 11-module warm corpus would be wasteful.
 ;; Default = nil => "all srcs" (verbatim text-path behavior).
-(def ^:dynamic *project-srcs* nil)
-(defn- emit-srcs [] (or *project-srcs* srcs))
+(defn- emit-srcs [] (rmi/emit-srcs (vec srcs)))
 ;; *capture-only?* — the MINIMAL-OP graph edit (daemon :edit-min) runs the verb ONLY
 ;; to capture its fact mint/supersede ops; it does NOT want the verb's two heavy
 ;; downstream SIDE EFFECTS: (1) re-resolve! (a whole-corpus lexical re-walk that
@@ -648,12 +627,8 @@
 (def ^:dynamic *capture-only?* false)
 ;; like author-emit!, but only over *project-srcs* (the affected module on the graph path).
 (defn author-emit-scoped! [op detail]
-  (when-not *capture-only?*
-    (doseq [src (emit-srcs)] (extract-file! src (out-path src)))
-    (binding [*out* *err*]
-      (println (str "================ authoring: " op " ================"))
-      (println detail)
-      (doseq [src (emit-srcs)] (println (str "projected -> " (out-path src) "   <- " src))))))
+  (rmi/author-emit-scoped! (emit-env) (vec (emit-srcs))
+                           *capture-only?* op detail))
 
 ;; D1: resolve a scope to its target module at a dot-SEGMENT boundary. A raw substring
 ;; filter (str/includes?) collides a module with any sibling it PREFIXES — scope
@@ -667,9 +642,8 @@
 ;; and its ns-form module name (the EDN/CLI path keys srcs by the `@file` value) — each
 ;; direction covers short↔qualified without reopening the prefix-sibling collision.
 (defn- scope-match? [src scope]
-  (letfn [(seg? [m] (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
-    (or (seg? src) (seg? (module-name src)))))
-(defn- scope->srcs [scope] (filter #(scope-match? % scope) srcs))
+  (rmi/scope-match? module-name src scope))
+(defn- scope->srcs [scope] (rmi/scope->srcs module-name (vec srcs) scope))
 
 ;; datum->canon / node->canon / verb-env are defined further down; forward-declare so
 ;; the upsert victim finder can compare a NEW datum's dispatch/target against an
@@ -859,12 +833,12 @@
 ;; the text path calls, over the LOG-booted warm store.
 (defn run-verb-warm! [store spec]
   (let [module (:module spec)]
-    (binding [*resolve-out* (:resolve-out spec)]      ; nil => env/$RESOLVE_OUT/tmp
+    (binding [rmi/*resolve-out* (:resolve-out spec)]      ; nil => env/$RESOLVE_OUT/tmp
       (resolve-warm-store!
        store
        (fn []
-         (binding [*project-srcs* (when module
-                                    (filter #(str/includes? % module) srcs))]
+         (binding [rmi/*project-srcs* (when module
+                                       (rmi/scope->srcs module-name (vec srcs) module))]
            (rvb/dispatch-verb! (verb-env) spec)))))
     module))
 

@@ -276,3 +276,65 @@
    ft mtypes
    fa maccs]
   {:modframe (reduce (fn [acc s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc s] (assoc acc s (fa s))) {} srcs)}))
+
+(def STRUCTURAL-SEG-RE (re-pattern "seg\\d+"))
+
+(def STRUCTURAL-COMMENT-RE (re-pattern "comment\\d+"))
+
+(def PATH-SPLIT-RE (re-pattern "/"))
+
+(defn wrapper-of [ctx view ents ^String src]
+  (some (fn [e] (if (= "beagle-file" (rr/head-sym ctx view e)) (do
+  e))) (vec (get ents src []))))
+
+(defn structural-kids [ctx n]
+  (vec (keep (fn [cid] (let [cl (c/fact-of ctx cid)
+   p (c/literal ctx (:p cl))
+   r (:r cl)]
+  (if (and (int? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) (do
+  r)))) (c/by-l ctx n))))
+
+(defn descendants [ctx root]
+  (loop [seen #{}
+   stack [root]]
+  (if (empty? stack) seen (let [n (peek stack)]
+  (if (contains? seen n) (recur seen (pop stack)) (recur (conj seen n) (into (pop stack) (structural-kids ctx n))))))))
+
+(defn form-for-victim [ctx view ents unwrap-def ^String src victim]
+  (some (fn [f] (let [nl0 (rr/unwrap-meta ctx view (second (rr/ordered-children ctx (unwrap-def f))))
+   nl (if (= "list" (rr/kind-of ctx view nl0)) (first (rr/ordered-children ctx nl0)) nl0)]
+  (if (= victim nl) (do
+  f)))) (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
+
+(defn ^Emit emit-env [ctx view BOUND REFERS FIXED ents unwrap-def]
+  (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (descendants ctx root)) #{} #{}))
+
+(defn extract-file! [^Emit m ^String src ^String outp]
+  (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
+
+(def *resolve-out* nil)
+
+(defn ^String out-path [^String src]
+  (str (or *resolve-out* (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
+
+(def *project-srcs* nil)
+
+(defn emit-srcs [srcs]
+  (if (nil? *project-srcs*) srcs (vec *project-srcs*)))
+
+(defn author-emit-scoped! [^Emit m srcs ^Boolean capture-only? op detail]
+  (if (not capture-only?) (do
+  (doseq [src srcs]
+  (extract-file! m src (out-path src)))
+  (binding [*out* *err*]
+  (println (str "================ authoring: " op " ================"))
+  (println detail)
+  (doseq [src srcs]
+  (println (str "projected -> " (out-path src) "   <- " src)))))))
+
+(defn ^Boolean scope-match? [module-name ^String src ^String scope]
+  (let [seg? (fn [m] (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
+  (or (seg? src) (seg? (module-name src)))))
+
+(defn scope->srcs [module-name srcs ^String scope]
+  (vec (filter (fn [src] (scope-match? module-name src scope)) srcs)))
