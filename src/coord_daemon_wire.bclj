@@ -90,7 +90,7 @@
    :claim-unverify {:route :locked :handler :claim-unverify :required [] :validation :handler :response :mutation}
    :managed-agent-publish {:route :locked :handler :managed-agent-publish :required [] :validation :handler :response :mutation}
    :assert-with-fence {:route :locked :handler :assert-with-fence :required [:te :p :r :res :holder :epoch] :response :mutation}
-   :assert-at-version {:route :locked :handler :assert-at-version :required [:te :p :r :base] :response :mutation}
+   :assert-at-version {:route :locked :handler :assert-at-version :required [:te :p :r] :response :mutation}
    :assert-at-version-with-fence {:route :locked :handler :assert-at-version-with-fence :required [:te :p :r :base :res :holder :epoch] :response :mutation}
    :retract {:route :locked :handler :retract :required [:te :p :r] :response :mutation}
    :retract-existing {:route :locked :handler :retract-existing :required [:te :p :r] :response :mutation}

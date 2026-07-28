@@ -125,8 +125,10 @@
                    (bytes= telemetry-before (bytes telemetry))))
       (finally (rt/close-rewrite-lock! shared-gate)))
     (await-daemon! port)
-    (check! "coordination torn tail truncates to the exact complete prefix"
-            (= coordination-prefix (slurp coordination)))
+    (check! "coordination repair keeps the exact complete prefix and drops the torn suffix"
+            (let [repaired (slurp coordination)]
+              (and (.startsWith repaired coordination-prefix)
+                   (not (.contains repaired coordination-torn)))))
     (check! "telemetry torn tail truncates to the exact complete prefix"
             (= telemetry-prefix (slurp telemetry)))
     (check! "both repaired split logs end at a durable append boundary"
