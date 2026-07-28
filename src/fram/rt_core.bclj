@@ -91,7 +91,7 @@
 (defn nonblank? [value :- String] :- Bool
   (and (string? value) (not (str/blank? value))))
 
-(defn generation-record? [op :- (Map Keyword Any)] :- Bool
+(defn generation-record? [op :- (Map Keyword (Dyn String Int))] :- Bool
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
 (defn valid-edit-batch-envelope? [record :- (Map Keyword (Dyn String Int)) expected-seal :- String] :- Bool
