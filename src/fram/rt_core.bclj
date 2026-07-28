@@ -218,5 +218,5 @@
 (defn warm-read-response [resp :- (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] :- (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
 
-(defn warm-read-for-log-response [resp :- (Map Keyword Any)] :- (U (Map Keyword Any) Nil)
+(defn warm-read-for-log-response [resp :- (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] :- (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (or (= "unknown op" (:error resp)) (contains? resp :reject)) nil resp))
