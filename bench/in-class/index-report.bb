@@ -59,6 +59,10 @@
        (ex-info "index benchmark matrix incomplete"
                 {:missing (sort (set/difference expected observed))
                  :unexpected (sort (set/difference observed expected))})))
+    (when-not (= (count expected) (count rows))
+      (throw
+       (ex-info "index benchmark matrix contains duplicate rows"
+                {:expected (count expected) :observed (count rows)})))
     (println
      "| engine | live triples | scenario | runs | mean query ms | retained RSS KiB |")
     (println "| --- | ---: | --- | ---: | ---: | ---: |")
