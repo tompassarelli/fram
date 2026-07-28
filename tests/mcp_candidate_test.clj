@@ -104,7 +104,8 @@
        ";; %NAME% — hermetic nested fixture for graph-edit-candidate-v1 probes.\n\n"
        "(defn double-it [x :- Int] :- Int\n  (* 2 x))\n\n"
        "(defn plus-both [a :- Int b :- Int] :- Int\n  (+ (double-it a) (double-it b)))\n"))
-(def modules ["wkfix" "schema" "missmod" "dupmod" "relmod" "outmod" "travmod" "linkmod"])
+(def modules ["wkfix" "schema" "missmod" "typedtxn"
+              "dupmod" "relmod" "outmod" "travmod" "linkmod"])
 (doseq [m modules]
   (spit (str nested-dir "/" m ".bclj") (str/replace fixture-body "%NAME%" m)))
 (spit (str nested-dir "/schema.bclj")
@@ -116,6 +117,12 @@
            ";; jointred — two type errors that can only cross the gate together.\n\n"
            "(defn left-red [] :- Int\n  \"red-left\")\n\n"
            "(defn right-red [] :- Int\n  \"red-right\")\n"))
+(spit (str nested-dir "/typedtxn.bclj")
+      (str "#lang beagle/clj\n\n"
+           ";; typedtxn — adding the throwable declaration alone makes the "
+           "existing raw throw illegal.\n\n"
+           "(defn classify-rewrite-crash [path :- String] :- String\n"
+           "  (throw (ex-info \"boom\" {:path path :fram/doctor-refusal true})))\n"))
 
 ;; HERMETIC SPAWNS — :env REPLACES the environment everywhere below. An ambient
 ;; live-runtime FRAM_TELEMETRY_LOG would otherwise leak into the daemons via
@@ -408,6 +415,94 @@
        (and (= log0 (vec (read-bytes transaction-log)))
             (= v0 (transaction-version))
             (= file0 (slurp jointred-file)))))
+
+;; T2. TYPE + SIGNATURE ATOMICITY — a throwable declaration changes how the
+;; checker judges every raw throw in the module. Adding the type alone is red;
+;; upserting the type and the function that cites it must therefore cross the
+;; candidate gate as one final-state transaction.
+(def typedtxn-file (str nested-dir "/typedtxn.bclj"))
+(def rewrite-error-form
+  "(defunion :throwable RewriteCrashError (RewriteCrash [message :- String path :- String doctor-refusal :- Bool]))")
+(def typed-classifier-form
+  "(defn classify-rewrite-crash [path :- String] :- String :raises RewriteCrashError (throw (ex-info \"boom\" {:path path :fram/doctor-refusal true})))")
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp typedtxn-file)
+      single (mcp-edit transaction-env 8 "add-def"
+                       {:module "src.fram.typedtxn"
+                        :form rewrite-error-form})
+      text (or (rtext single) "")]
+  (chk "T2: adding a throwable type alone is rejected while its raw throw is uncovered"
+       (and (rerr? single)
+            (str/includes? text "throwing path is not covered by :raises")
+            (str/includes? text "nothing committed")))
+  (chk "T2: rejected type-only edit leaves log, version, and projection unchanged"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp typedtxn-file)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 9 "edit-transaction"
+              {:module "src.fram.typedtxn"
+               :edits [{:op "upsert-form"
+                        :name "RewriteCrashError"
+                        :form rewrite-error-form}
+                       {:op "upsert-form"
+                        :name "classify-rewrite-crash"
+                        :form typed-classifier-form}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after (alength ^bytes before) (alength ^bytes after))
+                        "UTF-8")
+      source (slurp typedtxn-file)]
+  (chk "T2: type declaration + citing function upsert commit as one checked transaction"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE-CHECKS CLEAN")
+            (str/includes? text "edit-transaction")))
+  (chk "T2: final projection contains the throwable type and typed function"
+       (and (str/includes? source "RewriteCrashError")
+            (str/includes? source ":raises")
+            (str/includes? source ":fram/doctor-refusal")))
+  (chk "T2: type/signature transaction emits exactly one durable batch envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+;; Modifier-bearing type definitions key by their declared name, not by the
+;; `:throwable` modifier. Two throwable unions must coexist.
+(let [other-form
+      "(defunion :throwable OtherError (OtherFailure [message :- String code :- Int]))"
+      result (mcp-edit transaction-env 10 "add-def"
+                       {:module "src.fram.typedtxn" :form other-form})
+      source (slurp typedtxn-file)]
+  (chk "T2: a second :throwable union appends instead of replacing the first"
+       (and (not (rerr? result))
+            (str/includes? source "RewriteCrashError")
+            (str/includes? source "OtherError"))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp typedtxn-file)
+      result (mcp-edit
+              transaction-env 11 "edit-transaction"
+              {:module "src.fram.typedtxn"
+               :edits [{:op "upsert-form"
+                        :name "BadError"
+                        :form "(defunion :throwable BadError (Bad [message :- String path :- String]))"}
+                       {:op "upsert-form"
+                        :name "classify-rewrite-crash"
+                        :form "(defn classify-rewrite-crash [path :- String] :- String (throw (ex-info \"bad\" {:path path})))"}]})
+      text (or (rtext result) "")]
+  (chk "T2: a red upsert transaction is rejected by the one sealed end-state check"
+       (and (rerr? result)
+            (str/includes? text "fails the sealed Beagle parse/type check")
+            (str/includes? text "nothing committed")))
+  (chk "T2: rejected upsert transaction records nothing and preserves projection"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp typedtxn-file)))))
 
 (when (= "1" (System/getenv "FRAM_TRANSACTION_TEST_ONLY"))
   (p/destroy-tree main-daemon)

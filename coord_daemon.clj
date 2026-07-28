@@ -27,7 +27,8 @@
             [fram.claims :as claims] [fram.rt]
             [fri]
             [coord-commit :as cc]
-            [coord-daemon-wire :as wire])
+            [coord-daemon-wire :as wire]
+            [resolve-core :as rcore])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
            [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
@@ -3138,18 +3139,28 @@
                      (when (and te (some? rs)) [te p rs])))
           ;; the verb's NEW facts = the fact ids in [since, next-id) (O(delta)).
           new-cid-facts (keep (fn [cid] (when-let [cl (get (:facts m) cid)] [cid cl])) since-ids)
-          ;; ASSERTS: every NEW AST fact (kind/v/fN/... ; skip derived + schema preds).
+          ;; ASSERTS: every NEW AST fact still LIVE in the clone
+          ;; (kind/v/fN/... ; skip derived + schema preds). A staged verb may mint
+          ;; an edge and supersede it again before sealing—for example when a
+          ;; whole-form replacement grafts the previous binding identity into
+          ;; the new tree. Such a fact never existed in the base and is not part
+          ;; of the candidate's net delta.
           new-facts (->> new-cid-facts
+                          (remove (fn [[cid _]]
+                                    (contains? (:superseded m) cid)))
                           (map second)
                           (filter (fn [cl] (let [p (c/literal clone (:p cl))]
                                              (ast-pred-str? p)))))
           asserts (vec (keep ->wire new-facts))
           ;; RETRACTS: every NEW supersede marker's VICTIM, as its (l p r) by name.
-          ;; A marker is a fact (cid >= since) whose pred == the supersedes pred; its
-          ;; :r is the OLD (superseded) fact id. We retract that old fact's AST edge.
+          ;; A marker is a fact (cid > since) whose pred == the supersedes pred;
+          ;; only victims from the BASE snapshot become wire retracts. A
+          ;; clone-local victim (> since) is paired with the omitted assert above,
+          ;; so both sides disappear from the sealed net delta.
           victim-cids (->> new-cid-facts
                            (filter (fn [[_ cl]] (= (:p cl) sup-pid)))
-                           (map (fn [[_ cl]] (:r cl))))
+                           (map (fn [[_ cl]] (:r cl)))
+                           (filter #(<= % since)))
           retracts (vec (keep (fn [vcid]
                                 (when-let [vcl (get (:facts m) vcid)]
                                   (when (ast-pred-str? (c/literal clone (:p vcl)))
@@ -3827,12 +3838,58 @@
           (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
 
 ;; A multi-definition candidate is deliberately narrower than the single-edit
-;; vocabulary: body edits only, one module, and one edit per definition.  The
-;; distinct-name rule keeps every step independent while the transaction is
-;; staged; a caller that wants to edit one definition twice can send its final
-;; body once.  The sealed candidate still uses the ordinary commit/journal path.
-(def ^:private edit-transaction-verbs #{"set-body" "replace-in-body"})
+;; vocabulary: body edits plus named top-level upserts, one module, and one edit
+;; per definition. The distinct-name rule keeps every step independent while
+;; the transaction is staged; a caller that wants to edit one definition twice
+;; sends its final form once. The sealed candidate still uses the ordinary
+;; commit/journal path.
+(def ^:private edit-transaction-verbs
+  #{"set-body" "replace-in-body" "upsert-form"})
 (def ^:private max-edit-transaction-size 32)
+
+(defn- normalize-edit-transaction-spec! [i spec]
+  (when-not (map? spec)
+    (throw (ex-info (str "edit-prepare: :specs[" i "] must be a map")
+                    {:reject :invalid-specs :index i})))
+  (when-not (contains? edit-transaction-verbs (:op spec))
+    (throw (ex-info (str "edit-prepare: :specs[" i "] verb "
+                         (pr-str (:op spec))
+                         " is outside the transaction surface "
+                         "(set-body, replace-in-body, upsert-form)")
+                    {:reject :unknown-verb :index i})))
+  (when (str/blank? (str (:module spec)))
+    (throw (ex-info (str "edit-prepare: :specs[" i "] :module required")
+                    {:reject :invalid-specs :index i})))
+  (if (= "upsert-form" (:op spec))
+    (let [key (rcore/writable-form-key (:datum spec))
+          actual (rcore/writable-form-display-name (:datum spec))
+          asserted? (contains? spec :name)
+          asserted (when asserted? (str (:name spec)))]
+      (when-not key
+        (throw
+         (ex-info
+          (str "edit-prepare: :specs[" i
+               "] upsert-form must contain a writable top-level definition")
+          {:reject :invalid-specs :index i})))
+      (when (and asserted? (str/blank? asserted))
+        (throw
+         (ex-info (str "edit-prepare: :specs[" i
+                       "] optional :name assertion cannot be blank")
+                  {:reject :invalid-specs :index i})))
+      (when (and asserted? (not= asserted actual))
+        (throw
+         (ex-info
+          (str "edit-prepare: :specs[" i "] :name "
+               (pr-str (:name spec))
+               " does not match form identity " (pr-str actual))
+          {:reject :identity-mismatch :index i
+           :expected actual :provided (:name spec)})))
+      (assoc spec :name actual :target-key key))
+    (let [name (str (:name spec))]
+      (when (str/blank? name)
+        (throw (ex-info (str "edit-prepare: :specs[" i "] :name required")
+                        {:reject :invalid-specs :index i})))
+      (assoc spec :name name :target-key [:named name]))))
 
 (defn- validate-edit-transaction-specs! [raw-specs]
   (when-not (sequential? raw-specs)
@@ -3846,30 +3903,19 @@
       (throw (ex-info (str "edit-prepare: :specs exceeds the "
                            max-edit-transaction-size "-edit transaction limit")
                       {:reject :invalid-specs})))
-    (doseq [[i spec] (map-indexed vector specs)]
-      (when-not (map? spec)
-        (throw (ex-info (str "edit-prepare: :specs[" i "] must be a map")
-                        {:reject :invalid-specs :index i})))
-      (when-not (contains? edit-transaction-verbs (:op spec))
-        (throw (ex-info (str "edit-prepare: :specs[" i "] verb "
-                             (pr-str (:op spec))
-                             " is outside the transaction surface (set-body, replace-in-body)")
-                        {:reject :unknown-verb :index i})))
-      (when (str/blank? (str (:module spec)))
-        (throw (ex-info (str "edit-prepare: :specs[" i "] :module required")
-                        {:reject :invalid-specs :index i})))
-      (when (str/blank? (str (:name spec)))
-        (throw (ex-info (str "edit-prepare: :specs[" i "] :name required")
-                        {:reject :invalid-specs :index i}))))
-    (let [modules (set (map :module specs))
-          names (mapv :name specs)]
+    (let [specs (mapv (fn [i spec]
+                        (normalize-edit-transaction-spec! i spec))
+                      (range)
+                      specs)
+          modules (set (map :module specs))
+          targets (mapv :target-key specs)]
       (when-not (= 1 (count modules))
         (throw (ex-info "edit-prepare: every transaction edit must target one module"
                         {:reject :mixed-modules :modules (vec (sort modules))})))
-      (when-not (= (count names) (count (set names)))
-        (throw (ex-info "edit-prepare: every transaction edit must target a distinct definition"
-                        {:reject :duplicate-definition}))))
-    specs))
+      (when-not (= (count targets) (count (set targets)))
+        (throw (ex-info "edit-prepare: every transaction edit must target a distinct top-level definition"
+                        {:reject :duplicate-definition})))
+      specs)))
 
 ;; Stage each definition edit against the preceding staged result, but never
 ;; touch canonical state.  Each step reuses the byte-identical single-edit

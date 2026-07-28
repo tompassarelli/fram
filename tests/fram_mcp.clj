@@ -28,6 +28,7 @@
          '[fram.kernel :as k]
          '[fram.fold :as fold]
          '[fram.tools :as tl]
+         '[resolve-core :as rcore]
          '[fram.rt])
 
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
@@ -351,9 +352,6 @@
                           (:within e) (assoc :within (datum! (:within e) "within")))
       nil)))
 
-;; Parse one module's multi-definition transaction. The outer module is the
-;; sole scope authority; nested edits reuse the existing set-body /
-;; replace-in-body payload shape without carrying a second module.
 (defn- edit-transaction-specs [e]
   (let [edits (:edits e)]
     (when-not (sequential? edits)
@@ -363,15 +361,41 @@
        (when-not (map? edit)
          (throw (ex-info (str "edits[" i "] must be an object")
                          {:spec-error true})))
-       (when-not (#{"set-body" "replace-in-body"} (:op edit))
-         (throw (ex-info (str "edits[" i "] op must be set-body or replace-in-body")
+       (when-not (#{"set-body" "replace-in-body" "upsert-form"} (:op edit))
+         (throw (ex-info (str "edits[" i "] op must be set-body, replace-in-body, or upsert-form")
                          {:spec-error true})))
-       (when (str/blank? (str (:name edit)))
+       (when (and (not= "upsert-form" (:op edit))
+                  (str/blank? (str (:name edit))))
          (throw (ex-info (str "edits[" i "] name is required")
                          {:spec-error true})))
-       (or (edit-min-spec (assoc edit :module (:module e)))
-           (throw (ex-info (str "edits[" i "] has an unknown edit op")
-                           {:spec-error true}))))
+       (let [spec
+             (or (edit-min-spec (assoc edit :module (:module e)))
+                 (throw (ex-info (str "edits[" i "] has an unknown edit op")
+                                 {:spec-error true})))]
+         (if (= "upsert-form" (:op edit))
+           (let [key (rcore/writable-form-key (:datum spec))
+                 actual (rcore/writable-form-display-name (:datum spec))
+                 asserted? (contains? edit :name)
+                 asserted (when asserted? (str (:name edit)))]
+             (when-not key
+               (throw
+                (ex-info
+                 (str "edits[" i "] upsert-form must contain a writable top-level definition")
+                 {:spec-error true})))
+             (when (and asserted? (str/blank? asserted))
+               (throw
+                (ex-info
+                 (str "edits[" i "] optional name assertion cannot be blank")
+                 {:spec-error true})))
+             (when (and asserted? (not= asserted actual))
+               (throw
+                (ex-info
+                 (str "edits[" i "] name " (pr-str (:name edit))
+                      " does not match form identity " (pr-str actual))
+                 {:spec-error true})))
+             (assoc spec :name actual :target-key key))
+           (let [name (str (:name edit))]
+             (assoc spec :name name :target-key [:named name])))))
      (range)
      edits)))
 
