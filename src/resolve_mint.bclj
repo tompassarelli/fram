@@ -1,5 +1,8 @@
 #lang beagle/clj
 
+;; @upstream:graph — the code lives in the Fram fact graph; this text is a
+;; regenerable downstream view.
+;;
 ;; ============================================================================
 ;; resolve-mint — THE MINT/AUTHOR LAYER: a new form enters the store as FACTS.
 ;; ============================================================================
