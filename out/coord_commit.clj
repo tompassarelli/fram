@@ -173,3 +173,16 @@
 
 (defn migrate-kernel-seed-plan [single-valued schema-preds cmap current-single]
   (filterv (fn [pred] (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred)))) single-valued))
+
+(defn tail-input-plan [lines schema-preds]
+  (let [valid (filterv (fn [line] (boolean (and (:l line) (:p line) (:r line) (int? (:tx line)) (not (contains? schema-preds (:p line)))))) lines)
+   max-tx (reduce max 0 (map (fn [line] (:tx line)) valid))]
+  {:valid valid :max-tx max-tx}))
+
+(defn tail-keyed-latest [single-preds lines]
+  (reduce (fn [latest line] (let [pred (:p line)
+   key (if (contains? single-preds pred) [(:l line) pred] [(:l line) pred (:r line)])
+   previous (get latest key)
+   previous-tx (if (nil? previous) nil (:tx previous))
+   line-tx (:tx line)]
+  (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line)))) {} lines))

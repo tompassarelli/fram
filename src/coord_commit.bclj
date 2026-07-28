@@ -231,3 +231,12 @@
 (defn migrate-kernel-seed-plan [single-valued :- (Vec String) schema-preds :- (Set String) cmap :- (Map String Bool) current-single :- (Set String)] :- (Vec String)
   (filterv (fn [pred :- String] :- Bool (and (not (contains? schema-preds pred)) (not (contains? cmap pred)) (not (contains? current-single pred))))
     single-valued))
+
+(defn tail-input-plan [lines :- (Vec Any) schema-preds :- (Set String)] :- (Map Keyword Any)
+  (let [valid (filterv (fn [line :- Any] :- Bool (boolean (and (get line :l) (get line :p) (get line :r) (int? (get line :tx)) (not (contains? schema-preds (get line :p)))))) lines) max-tx (reduce max 0 (map (fn [line :- Any] :- Int (get line :tx)) valid))]
+    {:valid valid :max-tx max-tx}))
+
+(defn tail-keyed-latest [single-preds :- (Set String) lines :- (Vec Any)] :- (Map Any Any)
+  (reduce (fn [latest :- (Map Any Any) line :- Any] :- (Map Any Any) (let [pred :- String (get line :p) key :- Any (if (contains? single-preds pred) [(get line :l) pred] [(get line :l) pred (get line :r)]) previous (get latest key) previous-tx :- Any (if (nil? previous) nil (get previous :tx)) line-tx :- Any (get line :tx)] (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line))))
+    {}
+    lines))

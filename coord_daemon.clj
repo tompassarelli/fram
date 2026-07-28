@@ -5790,20 +5790,6 @@
 
 (defn- ref-str?* [x] (and (string? x) (ref-shape? x)))
 
-;; keyed-latest over flat lines, mirroring fram.fold/key-of (single -> (l,p); multi ->
-;; (l,p,r)); the latest by :tx wins and its :op is carried so a dominating retract
-;; removes the key. Re-derived here because fram.fold/keyed-latest is private AND drops
-;; retracts (we need them to supersede a snapshot-era fact). `cmap` is the effective
-;; cardinality map (schema-as-facts: store facts overlaid with THIS tail's cardinality
-;; declarations); ck/single-eff? applies fact > env > fallback exactly as the CLI fold's
-;; key-of does, so a pred keys IDENTICALLY warm and cold (finding #23).
-(defn- tail-keyed-latest [cmap lines]
-  (reduce (fn [m a]
-            (let [k (if (ck/single-eff? cmap (:p a)) [(:l a) (:p a)] [(:l a) (:p a) (:r a)])
-                  prev (get m k)]
-              (if (and prev (>= (long (:tx prev)) (long (:tx a)))) m (assoc m k a))))
-          {} lines))
-
 ;; apply a flat-log TAIL (lines past from-tx) onto co's store as per-key group-
 ;; reconciled deltas — the O(delta) materialization step shared by boot / reload /
 ;; as-of. New predicates are declared (existing cardinality untouched). Then per
@@ -5815,7 +5801,8 @@
 ;; clone the store first (see maybe-reload!). Returns co.
 (defn- apply-tail! [co lines]
   (let [st (:store co)
-        valid (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %)) (not (schema-preds (:p %)))) lines)]
+        tail-plan (cc/tail-input-plan (vec lines) schema-preds)
+        valid (:valid tail-plan)]
     (when (seq valid)
       (let [tx (c/begin-tx! st "tail")
             by-pred (group-by :p valid)
@@ -5832,6 +5819,9 @@
                              (assoc m p (= "single" (s/cardinality st p))) m))
                          {} (keys by-pred))
             ecmap (merge base tcmap)                          ; tail declarations win
+            single-preds
+            (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
+            latest (cc/tail-keyed-latest single-preds valid)
             memo (atom {})
             sub! (fn [sid] (or (get @memo sid)
                                (let [id (or (s/resolve-name st sid)
@@ -5856,7 +5846,7 @@
           (let [want (if (ck/single-eff? ecmap p) "single" "multi")]
             (when (not= want (s/cardinality st p))
               (s/def-predicate! st p want "literal" tx))))
-        (doseq [[_ a] (tail-keyed-latest ecmap valid)]
+        (doseq [[_ a] latest]
           (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
                 su (sub! (:l a)) pid (c/value! st p)
                 live (c/by-lp st su pid)]      ; already live-only
@@ -5873,7 +5863,7 @@
                                      (if link? (= (s/resolve-name st r) cr) (= (c/value-id st r) cr))) live)]
                 (when-not (and (not single?) exists?)
                   (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx)))))))
-        (let [tmax (reduce max 0 (map :tx valid))]
+        (let [tmax (:max-tx tail-plan)]
           (swap! st assoc :next-seq tmax)
           (swap! st update :txs assoc tx {:seq tmax :agent "tail"}))))
     co))
