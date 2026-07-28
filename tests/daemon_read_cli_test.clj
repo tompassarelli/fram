@@ -460,6 +460,54 @@
   (check! "query fallback reaches cold-main with its original args"
           (= ["query" sample-query] @fallback-args)))
 
+;; --- the cold fallback must be explicable ----------------------------------
+;; Falling back to the whole-log fold is a 20x+ latency cliff that still
+;; returns a CORRECT answer, so nothing in the result reveals it happened. On
+;; 2026-07-29 `north query` measured 13s while the same query through the daemon
+;; measured 650ms, and the entire difference was an invisible fallback.
+(let [out (with-out-str
+            (binding [*err* *out*]
+              (with-redefs [fram-fast/coord-port (constantly 7977)
+                            fram-fast/debug-enabled? (constantly true)
+                            fram-fast/coord-request-for-log
+                            (fn [& _] {:reject ["log mismatch: client expects /a but coordinator serves /b"]})]
+                (fram-fast/fast-query! log-path sample-query))))]
+  (check! "a rejected request names the rejection at DEBUG"
+          (and (str/includes? out "falling back to the cold path")
+               (str/includes? out "log mismatch"))))
+
+(let [out (with-out-str
+            (binding [*err* *out*]
+              (with-redefs [fram-fast/coord-port (constantly 7977)
+                            fram-fast/debug-enabled? (constantly true)
+                            fram-fast/coord-request-for-log
+                            (fn [& _] (throw (ex-info "read timed out" {})))]
+                (fram-fast/fast-query! log-path sample-query))))]
+  (check! "a thrown probe names the exception at DEBUG"
+          (and (str/includes? out "falling back to the cold path")
+               (str/includes? out "read timed out"))))
+
+;; Silent by default: this is a hot path, and a line per query would be its own
+;; performance problem.
+(let [out (with-out-str
+            (binding [*err* *out*]
+              (with-redefs [fram-fast/coord-port (constantly 7977)
+                            fram-fast/debug-enabled? (constantly false)
+                            fram-fast/coord-request-for-log
+                            (fn [& _] (throw (ex-info "read timed out" {})))]
+                (fram-fast/fast-query! log-path sample-query))))]
+  (check! "silent at default verbosity" (not (str/includes? out "falling back"))))
+
+;; A SUCCESSFUL warm query must never claim it fell back.
+(let [out (with-out-str
+            (binding [*err* *out*]
+              (with-redefs [fram-fast/coord-port (constantly 7977)
+                            fram-fast/debug-enabled? (constantly true)
+                            fram-fast/coord-request-for-log
+                            (fn [& _] {:ok [["@a" "ran"]] :version 9})]
+                (fram-fast/fast-query! log-path sample-query))))]
+  (check! "the warm path reports no fallback" (not (str/includes? out "falling back"))))
+
 ;; The dispatch case itself. Without this, deleting the `query` branch from
 ;; -main leaves every other check above green — the function is exercised
 ;; directly, and the fallback check passes identically whether the branch

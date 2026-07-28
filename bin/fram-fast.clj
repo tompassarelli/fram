@@ -122,14 +122,46 @@
         response))
     (catch Exception _ nil)))
 
+;; A fall back from the warm path to the cold whole-log fold is a 20x+ latency
+;; cliff that produces a CORRECT answer, so nothing about the result reveals it
+;; happened. That silence cost hours on 2026-07-29: `north query` measured 13s
+;; while the same query through the daemon measured 650ms, and the difference
+;; was an invisible fallback. NORTH_LOG_LEVEL/OTEL_LOG_LEVEL=DEBUG names the
+;; reason. Off by default — this is a hot path.
+(defn- debug-enabled? []
+  (contains? #{"DEBUG" "TRACE"}
+             (some-> (or (System/getenv "NORTH_LOG_LEVEL")
+                         (System/getenv "OTEL_LOG_LEVEL"))
+                     str/trim
+                     str/upper-case)))
+
+(defn- note-cold-fallback! [why]
+  (when (debug-enabled?)
+    (binding [*out* *err*]
+      (println (str "[DEBUG] fram-fast: falling back to the cold path — " why)))))
+
 (defn- coord-query-for-log [port log query]
   (try
     (let [response
           (coord-request-for-log port log {:op :query :query query})]
-      (when-not (or (= "unknown op" (:error response))
-                    (contains? response :reject))
-        response))
-    (catch Exception _ nil)))
+      (cond
+        (= "unknown op" (:error response))
+        (do (note-cold-fallback! "daemon does not implement :query") nil)
+
+        (contains? response :reject)
+        (do (note-cold-fallback!
+             (str "daemon rejected the request: " (pr-str (:reject response))))
+            nil)
+
+        :else response))
+    (catch Exception error
+      ;; The two that actually happen: a log-identity mismatch (the CLI and the
+      ;; daemon disagree about which corpus is canonical) and a read timeout
+      ;; while the daemon is busy. Both look identical from the caller — a
+      ;; correct answer, 20x slower — and need completely different fixes.
+      (note-cold-fallback! (str (.getName (class error))
+                                (when-let [m (.getMessage error)] (str " — " m))))
+      nil)))
 
 (defn- coord-version-for-log [port log]
   (try
