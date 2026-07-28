@@ -184,7 +184,7 @@
 (defn coord-version-response [resp :- (Map Keyword (U String Int))] :- Int
   (let [version (:version resp)] (if (integer? version) version -1)))
 
-(defn coord-version-for-log-response [resp :- (Map Keyword Any)] :- Int
+(defn coord-version-for-log-response [resp :- (Map Keyword (U String Int Keyword))] :- Int
   (cond
     (integer? (:version resp))
     (:version resp)
