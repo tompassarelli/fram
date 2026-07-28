@@ -57,4 +57,9 @@
     :query-class :staffing-projection
     :corpus-sizes :default
     :decision-section "Workload derivation / Staffing"
-    :definition "Select the fixed 32 kind=agent subjects through POS, then project each subject through SPO."}]}}
+    :definition "Select the fixed 32 kind=agent subjects through POS, then project each subject through SPO."}
+   {:id :point-lookup
+    :query-class :point-lookup
+    :corpus-sizes :default
+    :decision-section "Workload derivation / Point lookup"
+    :definition "Exact subject+predicate lookup for @corpus-0 title through SPO; result cardinality is one."}]}}

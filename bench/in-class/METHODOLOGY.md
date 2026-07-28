@@ -110,6 +110,11 @@ section `Workload derivation / Staffing`, selects those 32 subjects through the
 POS `(?,kind,agent)` prefix, then projects each subject through SPO. Its fixed
 96-fact result separates lookup behavior from a growing output.
 
+The point lookup scenario cites decision section
+`Workload derivation / Point lookup` and probes the exact
+`(@corpus-0,title,?)` SPO prefix. It always returns one fact across
+3k/30k/300k, making the fixed-result scaling test explicit.
+
 ## Golden ratchet
 
 Run the default landing gate from a clean Fram checkout:

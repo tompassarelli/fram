@@ -241,10 +241,15 @@
      :selected-subjects (count selected)
      :expected-count-fn #(* 3 (min 32 (quot % 3)))}))
 
+(defn point-lookup [engine _scenario]
+  {:result-count (count (probe-triples engine ["@corpus-0" "title" nil]))
+   :expected-count-fn (constantly 1)})
+
 ;; Scenario handlers are added one coherent scenario at a time.
 (def scenario-handlers
   {:coordinator-aggregate-scan coordinator-aggregate-scan
-   :staffing-projection staffing-projection})
+   :staffing-projection staffing-projection
+   :point-lookup point-lookup})
 
 (def started-utc (str (java.time.Instant/now)))
 (def load-start (sh-line "cat" "/proc/loadavg"))
