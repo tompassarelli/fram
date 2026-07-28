@@ -499,7 +499,9 @@
 (defn- flat-line [op te p r seq]
   (str (pr-str {:tx seq :op op :l te :p p :r r :ts (fram.rt/now-ts) :by "coord"}) "\n"))
 
-(declare flat-bytes telemetry-bytes note-source-lines!)
+(declare flat-bytes telemetry-bytes
+         flat-prefix-fence telemetry-prefix-fence
+         note-source-lines! safe-prefix-fence-of)
 
 (defn- advance-owned-append-state!
   "Advance a known corpus stamp and its exact byte cursor only when the appender
@@ -507,12 +509,14 @@
    own batch. If an external prefix was already pending—or raced the append—the
    old stamp stays visible and the next freshness-sensitive request must reload
    it."
-  [known-stamp known-bytes
+  [known-stamp known-bytes known-prefix-fence path
    {:keys [before-stamp after-stamp after-bytes owned-append-exact?]}]
   (when (and owned-append-exact? (= before-stamp @known-stamp))
     (reset! known-stamp after-stamp)
     (when (integer? after-bytes)
-      (reset! known-bytes (long after-bytes)))))
+      (reset! known-bytes (long after-bytes))
+      (reset! known-prefix-fence
+              (safe-prefix-fence-of path (long after-bytes))))))
 ;; DURABILITY (finding #13) is preserved through GROUP COMMIT (coord/enqueue-durable!):
 ;; the lines are enqueued (in commit order — callers hold dlock) and the {:ok} ack only
 ;; happens after the appender thread has fsynced them (handle awaits the tickets after
@@ -573,19 +577,22 @@
           (enqueue-durable! (str @flat-log) (vec coord)
                             (fn [flush]
                               (advance-owned-append-state!
-                               flat-mtime flat-bytes flush)
+                               flat-mtime flat-bytes flat-prefix-fence
+                               @flat-log flush)
                               (note-source-lines! coord))))
         (when-let [telem (seq (:telemetry g))]
           (enqueue-durable! (str tlog) (vec telem)
                             (fn [flush]
                               (advance-owned-append-state!
-                               telemetry-mtime telemetry-bytes flush)
+                               telemetry-mtime telemetry-bytes
+                               telemetry-prefix-fence tlog flush)
                               (note-source-lines! telem)))))
       ;; LEGACY single-log — BYTE-IDENTICAL to pre-split.
       (enqueue-durable! (str @flat-log) (vec lines)
                         (fn [flush]
                           (advance-owned-append-state!
-                           flat-mtime flat-bytes flush)
+                           flat-mtime flat-bytes flat-prefix-fence
+                           @flat-log flush)
                           (note-source-lines! lines))))))
 (defn- append-flat! [op te p r seq]
   (if *flat-batch*
@@ -3867,6 +3874,7 @@
                                                         (fn [flush]
                                                           (advance-owned-append-state!
                                                            flat-mtime flat-bytes
+                                                           flat-prefix-fence flat
                                                            flush)
                                                           (note-source-lines!
                                                            lines))))
@@ -6123,6 +6131,8 @@
 (def built-through (atom 0))
 (def flat-bytes    (atom 0))
 (def telemetry-bytes (atom 0))
+(def flat-prefix-fence (atom nil))
+(def telemetry-prefix-fence (atom nil))
 
 (defn- snap-dir [flat] (str flat ".snapshots"))
 (defn- snap-image [flat seq] (str (snap-dir flat) "/snap-" seq ".v2log"))
@@ -6234,6 +6244,58 @@
 
 (defn- skip-fully! [^java.io.InputStream is ^long n]
   (loop [left n] (when (pos? left) (let [s (.skip is left)] (if (pos? s) (recur (- left s)) nil)))))
+
+(def ^:private prefix-fence-window-bytes 65536)
+
+(defn- log-file-key-of [path]
+  (let [attrs
+        (java.nio.file.Files/readAttributes
+         (.toPath (java.io.File. (str path)))
+         java.nio.file.attribute.BasicFileAttributes
+         (make-array java.nio.file.LinkOption 0))]
+    (some-> (.fileKey attrs) str)))
+
+(defn- sha256-file-range
+  "Hash exactly N bytes beginning at START without allocating the whole prefix."
+  [path start n]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        buf (byte-array 65536)]
+    (with-open [in (java.io.FileInputStream. (str path))]
+      (skip-fully! in (long start))
+      (loop [remaining (long n)]
+        (when (pos? remaining)
+          (let [want (int (min remaining (long (alength buf))))
+                got (.read in buf 0 want)]
+            (when (neg? got)
+              (throw
+               (ex-info
+                (str "log is shorter than the expected " (+ start n)
+                     "-byte prefix")
+                {:code :short-prefix})))
+            (.update md buf 0 got)
+            (recur (- remaining (long got)))))))
+    (apply str (map #(format "%02x" %) (.digest md)))))
+
+(defn- prefix-fence-of
+  "Cheap proof that the already-materialized prefix still names the same file
+   and ends in the same bytes. The file key catches atomic replacement, the
+   first-line identity catches reset/regrow, and the boundary digest catches an
+   in-place truncate/regrow that retained the head. Ordinary appends read at
+   most 64 KiB."
+  [path offset]
+  (let [f (java.io.File. (str path))
+        n (long offset)]
+    (when (and (.exists f) (<= 0 n (.length f)))
+      (let [start (max 0 (- n prefix-fence-window-bytes))]
+        {:offset n
+         :file-key (log-file-key-of path)
+         :identity (log-identity-of path)
+         :boundary-sha (sha256-file-range path start (- n start))}))))
+
+(defn- safe-prefix-fence-of [path offset]
+  (try
+    (prefix-fence-of path offset)
+    (catch Throwable _ nil)))
 
 ;; flat-log lines (raw maps) with :tx > from-tx, read from byte `from-byte` forward.
 ;; UTF-8 decode (fact values carry unicode — so NOT RandomAccessFile.readLine, which
@@ -6594,11 +6656,16 @@
     (seed-schema-view! flat)               ; F4: log-resident schema-writable facts for the read view
     (reset! flat-mtime (stamp flat))
     (reset! flat-bytes (.length (java.io.File. (str flat))))
+    (reset! flat-prefix-fence
+            (safe-prefix-fence-of flat @flat-bytes))
     (if-let [tlog @telemetry-log]
       (do (reset! telemetry-mtime (stamp tlog))
-          (reset! telemetry-bytes (.length (java.io.File. (str tlog)))))
+          (reset! telemetry-bytes (.length (java.io.File. (str tlog))))
+          (reset! telemetry-prefix-fence
+                  (safe-prefix-fence-of tlog @telemetry-bytes)))
       (do (reset! telemetry-mtime nil)
-          (reset! telemetry-bytes 0)))
+          (reset! telemetry-bytes 0)
+          (reset! telemetry-prefix-fence nil)))
     (reset! cache {:index nil :version -1})
     (reset-refers-state!)                  ; S3.3: derived refers_to belong to the OLD store
     ;; mmap-cold + unmaterialized: SKIP the eager warm-cache build (index!) — that
@@ -6651,19 +6718,35 @@
         (let [path @flat-log
               telemetry-path @telemetry-log
               target-stamp (stamp path)
-              target-telemetry-stamp (some-> telemetry-path stamp)]
+              target-telemetry-stamp (some-> telemetry-path stamp)
+              target-bytes (.length (java.io.File. (str path)))
+              target-telemetry-bytes
+              (when telemetry-path
+                (.length (java.io.File. (str telemetry-path))))]
           (when (or force?
                     (not= target-stamp @flat-mtime)
                     (not= target-telemetry-stamp @telemetry-mtime))
             {:path path
              :known-stamp @flat-mtime
              :target-stamp target-stamp
-             :target-bytes (.length (java.io.File. (str path)))
+             :target-bytes target-bytes
+             :known-prefix-fence @flat-prefix-fence
+             :observed-prefix-fence
+             (safe-prefix-fence-of path @flat-bytes)
+             :target-prefix-fence
+             (safe-prefix-fence-of path target-bytes)
              :telemetry-path telemetry-path
              :known-telemetry-stamp @telemetry-mtime
              :target-telemetry-stamp target-telemetry-stamp
-             :target-telemetry-bytes
-             (when telemetry-path (.length (java.io.File. (str telemetry-path))))
+             :target-telemetry-bytes target-telemetry-bytes
+             :known-telemetry-prefix-fence @telemetry-prefix-fence
+             :observed-telemetry-prefix-fence
+             (when telemetry-path
+               (safe-prefix-fence-of telemetry-path @telemetry-bytes))
+             :target-telemetry-prefix-fence
+             (when telemetry-path
+               (safe-prefix-fence-of telemetry-path
+                                     target-telemetry-bytes))
              :from-byte @flat-bytes
              :from-telemetry-byte @telemetry-bytes
              :from-tx @built-through
@@ -6682,12 +6765,16 @@
    so filtering one log by the merged Store version can lose valid facts.
    A shorter target is an explicit truncation/regression signal: the caller
    must use the whole-corpus oracle rather than applying a partial tail."
-  [path known-stamp target-stamp from-byte target-bytes from-tx]
-  (if (= known-stamp target-stamp)
+  [path known-stamp target-stamp from-byte target-bytes from-tx
+   known-prefix-fence observed-prefix-fence]
+  (if (and (= known-stamp target-stamp)
+           (= known-prefix-fence observed-prefix-fence))
     {:lines [] :max-tx -1 :min-tx nil :append-safe? true}
     (let [append-safe? (and (integer? from-byte)
                             (integer? target-bytes)
-                            (<= 0 (long from-byte) (long target-bytes)))
+                            (<= 0 (long from-byte) (long target-bytes))
+                            (some? known-prefix-fence)
+                            (= known-prefix-fence observed-prefix-fence))
           tail (when append-safe?
                  (read-log-tail* path from-byte -1))
           lines (vec (or (:lines tail) []))
@@ -6707,14 +6794,18 @@
         coordination
         (reload-log-tail (:path roots)
                          (:known-stamp roots) (:target-stamp roots)
-                         (:from-byte roots) (:target-bytes roots) from-tx)
+                         (:from-byte roots) (:target-bytes roots) from-tx
+                         (:known-prefix-fence roots)
+                         (:observed-prefix-fence roots))
         telemetry
         (when-let [path (:telemetry-path roots)]
           (reload-log-tail path
                            (:known-telemetry-stamp roots)
                            (:target-telemetry-stamp roots)
                            (:from-telemetry-byte roots)
-                           (:target-telemetry-bytes roots) from-tx))
+                           (:target-telemetry-bytes roots) from-tx
+                           (:known-telemetry-prefix-fence roots)
+                           (:observed-telemetry-prefix-fence roots)))
         halves (cond-> [coordination] telemetry (conj telemetry))]
     (let [lines (->> halves
                      (mapcat :lines)
@@ -6882,10 +6973,18 @@
                           (:co candidate) (:schema-root candidate)))))
               candidate)]
       ;; External writers do not participate in group-io-lock.  A final stamp check
-      ;; is therefore mandatory after every byte of candidate construction.
+      ;; plus prefix-fence check is therefore mandatory after every byte of
+      ;; candidate construction.
       (if (and (= (:target-stamp roots) (stamp path))
+               (= (:target-prefix-fence roots)
+                  (safe-prefix-fence-of path (:target-bytes roots)))
                (= (:target-telemetry-stamp roots)
-                  (some-> telemetry-path stamp)))
+                  (some-> telemetry-path stamp))
+               (= (:target-telemetry-prefix-fence roots)
+                  (when telemetry-path
+                    (safe-prefix-fence-of
+                     telemetry-path
+                     (:target-telemetry-bytes roots)))))
         candidate
         {:mode :raced})))
     (finally
@@ -6896,14 +6995,26 @@
     (locking group-io-lock
       (let [same-target? (and (= (:path roots) @flat-log)
                               (= (:target-stamp roots) (stamp (:path roots)))
+                              (= (:target-prefix-fence roots)
+                                 (safe-prefix-fence-of
+                                  (:path roots) (:target-bytes roots)))
                               (= (:telemetry-path roots) @telemetry-log)
                               (= (:target-telemetry-stamp roots)
-                                 (some-> (:telemetry-path roots) stamp)))
+                                 (some-> (:telemetry-path roots) stamp))
+                              (= (:target-telemetry-prefix-fence roots)
+                                 (when-let [path (:telemetry-path roots)]
+                                   (safe-prefix-fence-of
+                                    path
+                                    (:target-telemetry-bytes roots)))))
             exact-base? (and @flat-canonical?
                              (= (:known-stamp roots) @flat-mtime)
                              (= (:known-telemetry-stamp roots) @telemetry-mtime)
                              (= (:from-byte roots) @flat-bytes)
                              (= (:from-telemetry-byte roots) @telemetry-bytes)
+                             (= (:known-prefix-fence roots)
+                                @flat-prefix-fence)
+                             (= (:known-telemetry-prefix-fence roots)
+                                @telemetry-prefix-fence)
                              (= (:from-tx roots) @built-through)
                              (= (:co-version roots) (current-seq @co))
                              (identical? (:store-root roots) @(:store @co))
@@ -6924,8 +7035,11 @@
             ;; rescan it.  The in-memory Store/schema/cache stay on the last good root.
             (reset! flat-mtime (:target-stamp roots))
             (reset! flat-bytes (:target-bytes roots))
+            (reset! flat-prefix-fence (:target-prefix-fence roots))
             (reset! telemetry-mtime (:target-telemetry-stamp roots))
             (reset! telemetry-bytes (or (:target-telemetry-bytes roots) 0))
+            (reset! telemetry-prefix-fence
+                    (:target-telemetry-prefix-fence roots))
             (binding [*out* *err*]
               (println (str "[fram] REFUSED reload: facts.log regressed (max-tx "
                             (:logmax candidate) " < live built-through " (:from-tx roots) ") — a"
@@ -6939,8 +7053,11 @@
             (reset! built-through (:through candidate))
             (reset! flat-mtime (:target-stamp roots))
             (reset! flat-bytes (:target-bytes roots))
+            (reset! flat-prefix-fence (:target-prefix-fence roots))
             (reset! telemetry-mtime (:target-telemetry-stamp roots))
             (reset! telemetry-bytes (or (:target-telemetry-bytes roots) 0))
+            (reset! telemetry-prefix-fence
+                    (:target-telemetry-prefix-fence roots))
             (reset! schema-view (:schema-root candidate))
             (reset! cache (:cache candidate))
             (reset! facts-wire-cache {:version -1 :triples nil})

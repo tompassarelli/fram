@@ -181,6 +181,9 @@
   (reset! coord-daemon/flat-mtime
           (#'coord-daemon/stamp coordination))
   (reset! coord-daemon/flat-bytes (.length coordination))
+  (reset! coord-daemon/flat-prefix-fence
+          (#'coord-daemon/safe-prefix-fence-of
+           coordination (.length coordination)))
   (coord-daemon/warm!)
   (let [roots (capture-reload! false)
         candidate (build-reload! roots)]
@@ -274,6 +277,57 @@
                      (coord-daemon/handle
                       {:op :query
                        :query (query "mixed-phase"
+                                     [{:var "subject"} {:var "phase"}]
+                                     [{:rel "triple"
+                                       :args [{:var "subject"} "phase"
+                                              {:var "phase"}]}])})))))))
+
+;; Truncate-and-regrow can end longer than the saved cursor. Length+mtime alone
+;; misclassifies that replacement as append and skips its rewritten prefix.
+;; The prefix fence must force the merged whole-fold oracle.
+(let [dir (.toFile
+           (java.nio.file.Files/createTempDirectory
+            "fram-split-regrow"
+            (make-array java.nio.file.attribute.FileAttribute 0)))
+      coordination (io/file dir "coordination.log")
+      telemetry (io/file dir "telemetry.log")
+      row (fn [tx l p r]
+            {:tx tx :op "assert" :l l :p p :r r
+             :ts "t" :by "fixture"})
+      replacement [(row 3 "@run:new-1" "phase" "one")
+                   (row 4 "@run:new-2" "phase" "two")
+                   (row 5 "@run:new-3" "phase" "three")]]
+  (write-lines! coordination [(row 1 "@thread:base" "kind" "thread")])
+  (write-lines! telemetry [(row 2 "@run:old" "phase" "old")])
+  (reset! coord-daemon/telemetry-log (.getCanonicalPath telemetry))
+  (reset! coord-daemon/snapshot-boot-enabled? false)
+  (coord-daemon/boot-flat! (.getCanonicalPath coordination))
+  (coord-daemon/warm!)
+  (let [old-bytes (.length telemetry)]
+    (write-lines! telemetry replacement)
+    (check! "regrown replacement extends beyond the old byte cursor"
+            (> (.length telemetry) old-bytes))
+    (check! "regrown replacement installs through the whole-fold oracle"
+            (= :installed (coord-daemon/maybe-reload!)))
+    (check! "regrown replacement stays set-equal to an independent whole fold"
+            (:ok (coord-daemon/snapshot-reconcile)))
+    (check! "regrown replacement removes the old prefix fact"
+            (= []
+               (:ok (coord-daemon/handle
+                     {:op :query
+                      :query (query "removed-old"
+                                    [{:var "phase"}]
+                                    [{:rel "triple"
+                                      :args ["@run:old" "phase"
+                                             {:var "phase"}]}])}))))
+    (check! "regrown replacement materializes every new prefix row"
+            (= #{["@run:new-1" "one"]
+                 ["@run:new-2" "two"]
+                 ["@run:new-3" "three"]}
+               (set (:ok
+                     (coord-daemon/handle
+                      {:op :query
+                       :query (query "replacement-rows"
                                      [{:var "subject"} {:var "phase"}]
                                      [{:rel "triple"
                                        :args [{:var "subject"} "phase"
