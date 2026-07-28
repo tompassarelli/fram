@@ -42,7 +42,7 @@
   (let [t (str/trim line) m (re-find SPLIT-KV-RE t)]
     (if (some? m) [(nth m 1) (nth m 2)] [t ""])))
 
-(defn fmt-id [n :- Any] :- String
+(defn fmt-id [n :- String] :- String
   (let [s (str n)]
     (str (subs s 0 4) "-" (subs s 4 6) "-" (subs s 6 8) "-" (subs s 8 14))))
 
@@ -82,16 +82,16 @@
 
 (def DIGEST-RE :- Regex (re-pattern "[0-9a-f]{64}"))
 
-(defn edit-batch-envelope-marker? [record :- Any] :- Bool
+(defn edit-batch-envelope-marker? [record :- (Map Keyword Any)] :- Bool
   (and (map? record) (contains? record :fram-edit-envelope)))
 
-(defn digest? [value :- Any] :- Bool
+(defn digest? [value :- String] :- Bool
   (and (string? value) (boolean (re-matches DIGEST-RE value))))
 
-(defn nonblank? [value :- Any] :- Bool
+(defn nonblank? [value :- String] :- Bool
   (and (string? value) (not (str/blank? value))))
 
-(defn generation-record? [op :- Any] :- Bool
+(defn generation-record? [op :- (Map Keyword Any)] :- Bool
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
 (defn valid-edit-batch-envelope? [record :- Any expected-seal :- String] :- Bool
