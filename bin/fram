@@ -38,8 +38,14 @@ log_parent="${FRAM_LOG%/*}"
 if [[ ! -d "$FRAM_THREADS" || ! -d "$log_parent" ]]; then
   mkdir -p "$FRAM_THREADS" "$log_parent"
 fi
+# This list is the FIRST of two gates. fram-fast.clj has its own dispatch and
+# falls back to cold on its own terms; a verb missing HERE never reaches it at
+# all, so adding a fast path inside fram-fast.clj without adding the verb here
+# is a silent no-op. That happened with `query`: the dispatch case was correct
+# and unreachable, and the command stayed on the 13s cold path while measuring
+# as if the fix had not landed.
 case "${1:-}" in
-  show|tell|retract|untell|tell-existing|retract-existing|untell-existing)
+  show|query|tell|retract|untell|tell-existing|retract-existing|untell-existing)
     exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
     ;;
 esac
