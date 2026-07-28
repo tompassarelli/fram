@@ -12,7 +12,7 @@
 (def build-all (or (System/getenv "FRAM_BUILD_ALL") (str beagle-home "/bin/beagle-build-all")))
 (def code-log (str root "/.fram/code.log"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out") "FRAM_BEAGLE" beagle-bin
-               "FRAM_RESOLVE" (str root "/resolve.clj")})
+               "FRAM_RESOLVE" (str root "/out/resolve.clj")})
 (doseq [p [code-log beagle-bin]] (when-not (.exists (io/file p)) (println "SKIP — missing" p) (System/exit 0)))
 (binding [*command-line-args* []] (load-file "coord_daemon.clj"))
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-rename-" (System/nanoTime) ".code.log"))

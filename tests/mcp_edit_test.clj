@@ -37,7 +37,7 @@
 (def needed
   [[beagle-bin "Beagle CLI"]
    [(str beagle-home "/bin/beagle-build-all") "beagle-build-all"]
-   [(str root "/resolve.clj") "engine resolve.clj"]
+   [(str root "/out/resolve.clj") "generated resolve namespace"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
    [(str root "/src/fram/schema.bclj") "src/fram/schema.bclj"]])
 (doseq [[p label] needed]
@@ -58,7 +58,7 @@
   {"FRAM_LOG" logpath "FRAM_THREADS" tmp
    "FRAM_SRC" src-dir          ; <- the edit channel authors into the hermetic copy
    "FRAM_OUT" (str root "/out")
-   "FRAM_RESOLVE" (str root "/resolve.clj")
+   "FRAM_RESOLVE" (str root "/out/resolve.clj")
    "BEAGLE_HOME" beagle-home
    "FRAM_BEAGLE" beagle-bin
    "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")})

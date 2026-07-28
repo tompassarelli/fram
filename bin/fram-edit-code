@@ -67,13 +67,13 @@
 (def ^:private beagle-bin (or (System/getenv "FRAM_BEAGLE")
                               (str beagle-home "/bin/beagle")))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
-                                 (str fram-home "/resolve.clj")))
+                                 (str fram-home "/out/resolve.clj")))
 (def ^:private fram-out      (or (System/getenv "FRAM_OUT") (str fram-home "/out")))
 (def ^:private bin-dir       (or (System/getenv "FRAM_BIN") (str fram-home "/bin")))
 
 ;; resolve.clj's tail runs (-main) iff (first *command-line-args*) is a recognized
 ;; MODE. Our bin's own first arg (e.g. "set-body") collides with that set, AND
-;; coord_daemon.clj itself load-files resolve.clj — so MASK the CLI args around
+;; coord_daemon.clj itself load-files out/resolve.clj — so MASK the CLI args around
 ;; BOTH loads. We drive resolve.clj's verbs via run-verb-warm!, never its -main.
 ;; (fram-render-code is immune: its first arg is a module name, not a MODE.)
 (def ^:private the-args (vec *command-line-args*))   ; capture before masking

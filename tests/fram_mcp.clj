@@ -174,7 +174,7 @@
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
 ;; refs), so unchanged modules need no work. Kills the .bclj round-trip handicap.
 (def ^:private check-emit-rkt (env-or "FRAM_CHECK_EMIT" (str beagle-home "/beagle-lib/private/facts-check-emit.rkt")))
-(def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/resolve.clj")))
+(def ^:private resolve-clj   (env-or "FRAM_RESOLVE"   (str (System/getProperty "user.dir") "/out/resolve.clj")))
 (def ^:private fram-out      (env-or "FRAM_OUT"       (str (System/getProperty "user.dir") "/out")))
 ;; the source tree graph-upstream modules live in (the .bclj scope is resolved here).
 (def ^:private fram-src      (env-or "FRAM_SRC"       (str (System/getProperty "user.dir") "/src/fram")))

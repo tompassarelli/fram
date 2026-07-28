@@ -30,7 +30,7 @@ required=(
   "$package_root/libexec/fram/rotations.clj"
   "$package_root/libexec/fram/fri.clj"
   "$package_root/libexec/fram/out/defcheck_gate.clj"
-  "$package_root/libexec/fram/resolve.clj"
+  "$package_root/libexec/fram/out/resolve.clj"
   "$package_root/libexec/fram/daemon.classpath"
 )
 for path in "${required[@]}"; do

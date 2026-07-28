@@ -23,13 +23,13 @@
 #   G10 delete of a nonexistent victim (rc 5 contract)              out+err+rc
 #   G11 callgraph JSON over the codegraph .bjs corpus               stdout
 #
-# Env: FRAM_RESOLVE (default ./resolve.clj), BEAGLE_HOME, FRAM_BEAGLE.
+# Env: FRAM_RESOLVE (default ./out/resolve.clj), BEAGLE_HOME, FRAM_BEAGLE.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:?usage: resolve_golden.sh capture|verify <dir>}"
 GOLD="${2:?usage: resolve_golden.sh capture|verify <dir>}"
-RESOLVE="${FRAM_RESOLVE:-$HERE/resolve.clj}"
+RESOLVE="${FRAM_RESOLVE:-$HERE/out/resolve.clj}"
 BEAGLE="${BEAGLE_HOME:-$HOME/code/beagle}"
 BEAGLE_CLI="${FRAM_BEAGLE:-$BEAGLE/bin/beagle}"
 [ -x "$BEAGLE_CLI" ] || { echo "resolve_golden: no Beagle CLI (set FRAM_BEAGLE)" >&2; exit 2; }

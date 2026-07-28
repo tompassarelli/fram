@@ -48,7 +48,7 @@
 ;; only defines `resolve/resolve-warm-store!` + the read accessors. Loaded here, at
 ;; daemon-namespace-load time, so the `resolve/...`-qualified symbols in callers-of /
 ;; with-resolve-read resolve at compile time (load-file is run-once by nature).
-(load-file (str (System/getProperty "user.dir") "/resolve.clj"))
+(load-file (str (System/getProperty "user.dir") "/out/resolve.clj"))
 ;; rotations.clj — the SPO/POS/OSP covering read index (ns `rotations`). A pure
 ;; library: defines the index value, its O(delta) maintenance, the covering probe,
 ;; the O(1) Datalog projection, and the content-addressed segment format. Loaded
@@ -5514,7 +5514,7 @@
 ;; validated (fail closed).
 (def ^:private fold-fingerprint-files
   ["out/fram/fold.clj" "out/fram/kernel.clj" "out/fram/schema.clj" "out/fram/store.clj"
-   "out/fram/rt.clj" "resolve.clj" "coord.clj" "coord_daemon.clj"])
+   "out/fram/rt.clj" "out/resolve.clj" "coord.clj" "coord_daemon.clj"])
 (defn fold-fingerprint []
   (try
     (let [root (System/getProperty "user.dir")

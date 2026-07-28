@@ -8,7 +8,7 @@
 ;; resolve.clj + its Beagle-compiled parts are bare-ns files at the repo ROOT
 ;; (build.sh), off the `bb -cp out` classpath — load them the way the daemon
 ;; does (coord_daemon.clj), then alias.
-(load-file "resolve.clj")
+(load-file "out/resolve.clj")
 (alias 'r 'resolve)
 
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (System/getenv "BEAGLE")

@@ -35,12 +35,12 @@
                      (str home "/code/beagle")))
 (def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 
-(doseq [[p label] [[(str root "/resolve.clj") "engine resolve.clj"]
+(doseq [[p label] [[(str root "/out/resolve.clj") "generated resolve namespace"]
                    [beagle-bin "Beagle CLI"]]]
   (when-not (.exists (io/file p))
     (println "SKIP — missing prerequisite:" label "(" p ")") (System/exit 0)))
 
-(load-file (str root "/resolve.clj"))
+(load-file (str root "/out/resolve.clj"))
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm (boolean ok)]))

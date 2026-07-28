@@ -66,7 +66,7 @@
             runHook preInstall
 
             mkdir -p $out/libexec/fram/tests $out/libexec/fram/codegraph $out/bin
-            cp -r out bin src coord.clj coord_daemon.clj resolve.clj fri.clj \
+            cp -r out bin src coord.clj coord_daemon.clj fri.clj \
               rotations.clj deps.edn \
               $out/libexec/fram/
             cp tests/fram_mcp.clj $out/libexec/fram/tests/
@@ -145,7 +145,7 @@
                 --set FRAM_HOME "$out/libexec/fram" \
                 --set FRAM_BIN "$out/libexec/fram/bin" \
                 --set FRAM_OUT "$out/libexec/fram/out" \
-                --set FRAM_RESOLVE "$out/libexec/fram/resolve.clj" \
+                --set FRAM_RESOLVE "$out/libexec/fram/out/resolve.clj" \
                 --set FRAM_PACKAGED "1" \
                 --set FRAM_JAVA "${pkgs.jdk}/bin/java" \
                 --set FRAM_DAEMON_CLASSPATH_FILE "$out/libexec/fram/daemon.classpath"
@@ -241,7 +241,7 @@
             helpers = {
               beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
               factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
-              framResolve = "${framRoot}/resolve.clj";
+              framResolve = "${framRoot}/out/resolve.clj";
             };
             environment = {
               acceptedNorthBindings = [
@@ -334,7 +334,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
-              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/resolve.clj"
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj"
             set -u
 
             runHook postInstall

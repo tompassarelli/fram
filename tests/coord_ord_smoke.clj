@@ -2,14 +2,14 @@
 ;;   bb -cp out coord_ord_smoke.clj    (uses an OLD f<int> corpus: /tmp/store-ksweep-K2.log)
 ;; SAFE: /tmp copy, in-process.
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
-(load-file "coord_daemon.clj")            ; loads resolve.clj (the ord-lib)
+(load-file "coord_daemon.clj")            ; loads out/resolve.clj (the ord-lib)
 (def src "/tmp/store-ksweep-K2.log")
 (when-not (.exists (io/file src)) (println "need" src "— run ksweep first") (System/exit 1))
 (def tmp (str "/tmp/store-ordsmoke-" (System/nanoTime) ".log"))
 (io/copy (io/file src) (io/file tmp))
 (boot-flat! tmp)
 (def st (:store @co))
-(println "resolve.clj loaded OK; ord-parse resolves:" (some? (resolve/ord-parse "f3")))
+(println "out/resolve.clj loaded OK; ord-parse resolves:" (some? (resolve/ord-parse "f3")))
 
 ;; OLD f<int> keys (incl the f10-after-f2 trap) must sort IDENTICALLY under the new
 ;; ord-cmp (via ord-parse) and under the old integer sort — no read regression.

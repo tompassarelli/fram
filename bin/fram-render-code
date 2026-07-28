@@ -43,7 +43,7 @@
 (def ^:private beagle-bin (or (System/getenv "FRAM_BEAGLE")
                               (str beagle-home "/bin/beagle")))
 (def ^:private resolve-clj   (or (System/getenv "FRAM_RESOLVE")
-                                 (str fram-home "/resolve.clj")))
+                                 (str fram-home "/out/resolve.clj")))
 
 ;; NOTE: coord_daemon.clj + resolve.clj are load-file'd LAZILY in the COLD path only
 ;; (see below). The --port WARM path doesn't need them (the daemon does the projection),

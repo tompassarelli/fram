@@ -13,12 +13,12 @@
 set -o pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 BR="${BEAGLE:-$HOME/code/beagle}/bin/beagle-roundtrip"
-FRAM="${FRAM:-$HOME/code/fram}"
+FRAM="${FRAM:-$(cd "$HERE/.." && pwd)}"
 A="$HERE/test/cmt-a.bjs"; B="$HERE/test/cmt-b.bjs"
 
 "$BR" --emit-edn "$A" > /tmp/cf-a.edn 2>/dev/null
 "$BR" --emit-edn "$B" > /tmp/cf-b.edn 2>/dev/null
-bb -cp "$FRAM/out" "$HERE/src/resolve.clj" rename red crimson cmt-a /tmp/cf-a.edn /tmp/cf-b.edn >/dev/null 2>&1
+bb -cp "$FRAM/out" "$FRAM/out/resolve.clj" rename red crimson cmt-a /tmp/cf-a.edn /tmp/cf-b.edn >/dev/null 2>&1
 RA="$("$BR" --render /tmp/resolved-cmt-a.bjs.edn 2>/dev/null)"
 RB="$("$BR" --render /tmp/resolved-cmt-b.bjs.edn 2>/dev/null)"
 

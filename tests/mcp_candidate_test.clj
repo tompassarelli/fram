@@ -222,7 +222,7 @@
            "FRAM_CODE_LOG" code-log
            "FRAM_SRC" src-dir
            "FRAM_OUT" (str root "/out") "FRAM_BIN" (str root "/bin")
-           "FRAM_RESOLVE" (str root "/resolve.clj")
+           "FRAM_RESOLVE" (str root "/out/resolve.clj")
            "BEAGLE_HOME" beagle-home
            "FRAM_BEAGLE" beagle-bin "FRAM_CHECK_EMIT" check-emit
            "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")}

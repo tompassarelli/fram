@@ -129,7 +129,7 @@
   (println "\n## Reasoning/repair over BEAGLE CODE (the codegraph module — inside fram)")
   (println (str/join "\n"
     ["  ;; codegraph folded into fram (ADR 0001). Rent the engine resolver at $FRAM root:"
-     "  bb -cp \"$FRAM_OUT\" \"$FRAM/resolve.clj\" <mode> ...   # FRAM=~/code/fram"
+     "  bb -cp \"$FRAM_OUT\" \"$FRAM/out/resolve.clj\" <mode> ...   # FRAM=~/code/fram"
      "  ;;   modes: resolve (refers_to) | rename <old> <new> <target> | delete | callgraph"
      "  ;;   blast radius / who-calls / scope-correct rename+delete are Datalog over refers_to."
      "  ;; For QUERYING a beagle codebase relationally, see the code-as-facts skill."

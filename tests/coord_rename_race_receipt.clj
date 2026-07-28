@@ -26,7 +26,7 @@
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
                "FRAM_BEAGLE" (str beagle-home "/bin/beagle")
-               "FRAM_RESOLVE" (str root "/resolve.clj")})
+               "FRAM_RESOLVE" (str root "/out/resolve.clj")})
 
 ;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —
 ;; its modules are file-path-derived (`src.fram.schema`, not bare `schema`). `wrapper`

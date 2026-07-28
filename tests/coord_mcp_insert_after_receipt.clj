@@ -87,7 +87,7 @@
 ;; coord_crdt_insert_receipt does, so we get resolve/ord-parse for free.
 (binding [*command-line-args* []]
   (load-file "coord_daemon.clj")
-  (load-file (str here "/resolve.clj")))
+  (load-file (str here "/out/resolve.clj")))
 
 ;; a fresh read-only boot of the SAME /tmp log (separate store; never written to).
 (def ro (migrate-flat->co tmp-log))

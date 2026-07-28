@@ -30,7 +30,7 @@
           "FRAM_HOME" root
           "FRAM_OUT" (str root "/out")
           "FRAM_BEAGLE" beagle-bin
-          "FRAM_RESOLVE" (str root "/resolve.clj")
+          "FRAM_RESOLVE" (str root "/out/resolve.clj")
           "FRAM_BIN" (str root "/bin")}))
 (defn- fail-fast! [& xs]
   (binding [*out* *err*] (apply println "FAIL —" xs))

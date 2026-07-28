@@ -17,8 +17,8 @@
 #   refactors". The hole is wherever beagle check's hole is.
 set -o pipefail
 BEAGLE="${BEAGLE:-$HOME/code/beagle}"
-FRAM="${FRAM:-$HOME/code/fram}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+FRAM="${FRAM:-$(cd "$HERE/.." && pwd)}"
 old="$1"; new="$2"; target="$3"; shift 3
 RR="$BEAGLE/bin/beagle-roundtrip"
 
@@ -38,7 +38,7 @@ diags(){ "$BEAGLE/bin/beagle" check "$1" 2>&1 | grep -E 'note:|error|expected' |
 edns=(); for f in "$@"; do e="/tmp/sr-$(basename "$f").edn"; "$RR" --emit-edn "$f" > "$e" 2>/dev/null; edns+=("$e"); done
 
 # 1. BASELINE = check(render(no-rename)) — isolates the edit from projection normalization.
-bb -cp "$FRAM/out" "$HERE/src/resolve.clj" resolve "${edns[@]}" >/dev/null 2>&1
+bb -cp "$FRAM/out" "$FRAM/out/resolve.clj" resolve "${edns[@]}" >/dev/null 2>&1
 declare -A base
 for f in "$@"; do
     checkable "/tmp/resolved-$(basename "$f").edn" "/tmp/sr-base-$(basename "$f").bjs"
@@ -46,7 +46,7 @@ for f in "$@"; do
 done
 
 # 2. AFTER = check(render(rename)). (structural collision already refuses inside resolve.clj)
-out=$(bb -cp "$FRAM/out" "$HERE/src/resolve.clj" rename "$old" "$new" "$target" "${edns[@]}" 2>&1)
+out=$(bb -cp "$FRAM/out" "$FRAM/out/resolve.clj" rename "$old" "$new" "$target" "${edns[@]}" 2>&1)
 if echo "$out" | grep -q REJECTED; then echo "$out" >&2; exit 3; fi
 
 worse=0

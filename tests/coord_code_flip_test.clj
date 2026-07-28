@@ -48,7 +48,7 @@
 (def needed
   [[beagle-bin "Beagle CLI"]
    [build-all "beagle-build-all"]
-   [(str root "/resolve.clj") "engine resolve.clj"]
+   [(str root "/out/resolve.clj") "generated resolve namespace"]
    [(str root "/out/fram/tools.clj") "out/ (build first)"]
    [(str root "/src/fram/schema.bclj") "src/fram/schema.bclj"]
    [code-log ".fram/code.log (run bin/fram-ingest-code first)"]])
@@ -58,7 +58,7 @@
 
 ;; --- load the daemon machinery + resolver IN-PROCESS (coord_dropin_test pattern) --
 (load-file "coord_daemon.clj")
-(load-file (str root "/resolve.clj"))
+(load-file (str root "/out/resolve.clj"))
 
 ;; --- throwaway daemon over a /tmp COPY of the code log ----------------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/code-flip-" (System/nanoTime) ".code.log"))
@@ -193,7 +193,7 @@
 (def rfl (str kbuild "/render-from-log.bclj"))
 (def rft (str kbuild "/render-from-text.bclj"))
 (def base-env {"BEAGLE_HOME" beagle-home "FRAM_OUT" (str root "/out")
-               "FRAM_BEAGLE" beagle-bin "FRAM_RESOLVE" (str root "/resolve.clj")})
+               "FRAM_BEAGLE" beagle-bin "FRAM_RESOLVE" (str root "/out/resolve.clj")})
 ;; render-from-log over a FRESH copy of the committed code log (no bridge fact).
 (def klog (str kbuild "/code.log")) (io/copy (io/file code-log) (io/file klog))
 (proc/shell {:extra-env base-env :err :string} "bb" "-cp" "out" "bin/fram-render-code" "schema" "--log" klog "--out" rfl)
@@ -202,7 +202,7 @@
 (proc/sh {:out (io/file (str kresolve "/schema-emit.edn")) :err :string}
          beagle-bin "facts-roundtrip" "--emit-edn" (str root "/src/fram/schema.bclj"))
 (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kresolve)}
-         "bb" "-cp" "out" "resolve.clj" "resolve" (str kresolve "/schema-emit.edn"))
+         "bb" "-cp" "out" "out/resolve.clj" "resolve" (str kresolve "/schema-emit.edn"))
 (proc/sh {:out (io/file rft) :err :string}
          beagle-bin "facts-roundtrip" "--render" (str kresolve "/resolved-schema.bclj.edn"))
 (def k-byte-identical
@@ -242,7 +242,7 @@
                    "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
                    "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))"))
 (def kc-verb (proc/sh {:err :string :extra-env (assoc base-env "RESOLVE_OUT" kc-resolve)}
-                      "bb" "-cp" "out" "resolve.clj" "set-body" "cardinality" "schema" kc-body
+                      "bb" "-cp" "out" "out/resolve.clj" "set-body" "cardinality" "schema" kc-body
                       (str kc-resolve "/schema-emit.edn")))
 (def kc-verb-ok (zero? (:exit kc-verb)))
 (chk "KEYSTONE-C: set-body verb produced a render (fact op)" kc-verb-ok)
