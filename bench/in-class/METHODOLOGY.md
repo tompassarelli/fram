@@ -104,6 +104,12 @@ The coordinator aggregate scenario cites decision section
 bound `title` predicate. It returns one row per corpus subject, so lookup stays
 selective while output remains honestly O(K).
 
+For this extension only, the first 32 deterministic subjects use `kind=agent`;
+the remaining subjects keep `kind=thread`. The staffing scenario cites decision
+section `Workload derivation / Staffing`, selects those 32 subjects through the
+POS `(?,kind,agent)` prefix, then projects each subject through SPO. Its fixed
+96-fact result separates lookup behavior from a growing output.
+
 ## Golden ratchet
 
 Run the default landing gate from a clean Fram checkout:

@@ -56,7 +56,8 @@
           slot (mod (dec tx) 3)
           outage? (= corpus-size (:rotation-corpus-size contract))]
       (case slot
-        0 [(str "@corpus-" subject) "kind" "thread"]
+        0 [(str "@corpus-" subject) "kind"
+           (if (< subject 32) "agent" "thread")]
         1 [(str "@corpus-" subject) "title" (str "title-" subject)]
         2 (if (and outage? (< subject 1623))
             [(str "@corpus-" subject) "lead" "@tom_passarelli"]
@@ -129,6 +130,9 @@
     :store-id-hash (store/value-id (:store engine) value)
     :mmap-rotations (value-id-mmap (:opened engine) value)))
 
+(defn bound-id [engine value]
+  (if (integer? value) value (value-id engine value)))
+
 (defn choose-prefix [[s p o]]
   (cond
     (and s p o) [:spo [s p o]]
@@ -148,7 +152,7 @@
 
 (defn hash-probe-cids [engine pattern]
   (let [[rotation prefix] (choose-prefix pattern)
-        ids (mapv #(when % (value-id engine %)) prefix)]
+        ids (mapv #(when % (bound-id engine %)) prefix)]
     (if (some nil? ids)
       ()
       (leaf-cids (get-in (:index engine) (into [rotation] ids))))))
@@ -192,7 +196,7 @@
 
 (defn mmap-probe-triples [engine pattern]
   (let [[rotation prefix] (choose-prefix pattern)
-        ids (mapv #(when % (value-id engine %)) prefix)]
+        ids (mapv #(when % (bound-id engine %)) prefix)]
     (if (some nil? ids)
       ()
       (let [segment (get-in engine [:opened :segments rotation])
@@ -229,9 +233,18 @@
   {:result-count (count (probe-triples engine [nil "title" nil]))
    :expected-count-fn #(quot % 3)})
 
+(defn staffing-projection [engine _scenario]
+  (let [selected (map first (probe-triples engine [nil "kind" "agent"]))
+        projected (reduce + (map #(count (probe-triples engine [% nil nil]))
+                                 selected))]
+    {:result-count projected
+     :selected-subjects (count selected)
+     :expected-count-fn #(* 3 (min 32 (quot % 3)))}))
+
 ;; Scenario handlers are added one coherent scenario at a time.
 (def scenario-handlers
-  {:coordinator-aggregate-scan coordinator-aggregate-scan})
+  {:coordinator-aggregate-scan coordinator-aggregate-scan
+   :staffing-projection staffing-projection})
 
 (def started-utc (str (java.time.Instant/now)))
 (def load-start (sh-line "cat" "/proc/loadavg"))

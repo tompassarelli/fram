@@ -52,4 +52,9 @@
     :query-class :coordinator-aggregate-scan
     :corpus-sizes :default
     :decision-section "Workload derivation / Coordinator aggregate/projection scans"
-    :definition "Bound-predicate title projection; returning K rows remains O(K)."}]}}
+    :definition "Bound-predicate title projection; returning K rows remains O(K)."}
+   {:id :staffing-projection
+    :query-class :staffing-projection
+    :corpus-sizes :default
+    :decision-section "Workload derivation / Staffing"
+    :definition "Select the fixed 32 kind=agent subjects through POS, then project each subject through SPO."}]}}
