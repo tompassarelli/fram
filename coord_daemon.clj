@@ -1194,6 +1194,31 @@
                        :rows (count rows) :max-rows max-rows}))
       res)))
 
+;; ---- slow-read attribution -------------------------------------------------
+;; A read that takes seconds says nothing about WHY on its own, and that gap cost
+;; real time on 2026-07-29: an identical query measured a 24ms median with 23% of
+;; samples at 4.7-6.6s, and three of four stall episodes had NO corresponding
+;; entry in the daemon log — the coordinator was demonstrably busy with something
+;; it never named.
+;;
+;; A read has three separable phases, and which one dominates is the diagnosis:
+;;   reload    — maybe-reload! picking up external log movement
+;;   lock-wait — blocked on dlock, i.e. someone else's write or maintenance
+;;   execute   — the query itself, which is lock-free
+;; Two nanoTime calls per request buy that attribution; the line is emitted only
+;; past the threshold, so a healthy coordinator stays silent.
+(def slow-read-ms
+  (max 1 (or (some-> (System/getenv "FRAM_SLOW_READ_MS") parse-long) 1000)))
+
+(defn- report-slow-read! [op t0 t1 t2 t3]
+  (let [ms (fn [a b] (quot (- b a) 1000000))
+        total (ms t0 t3)]
+    (when (>= total slow-read-ms)
+      (println (str "[fram] slow read " op " " total "ms"
+                    " = reload " (ms t0 t1) "ms"
+                    " + lock-wait " (ms t1 t2) "ms"
+                    " + execute " (ms t2 t3) "ms")))))
+
 (defn- execute-query [req roots]
   (let [control (or *request-query-control* (new-query-control req))
         use-idx (and (= :query (:op req))
@@ -4872,9 +4897,14 @@
         (execute-query inner (:roots captured))))
 
     (= :query route)
-    (let [_ (maybe-reload!)
-          roots (locking dlock (capture-query-roots!))]
-      (execute-query req roots))
+    (let [t0 (System/nanoTime)
+          _ (maybe-reload!)
+          t1 (System/nanoTime)
+          roots (locking dlock (capture-query-roots!))
+          t2 (System/nanoTime)
+          res (execute-query req roots)]
+      (report-slow-read! :query t0 t1 t2 (System/nanoTime))
+      res)
 
     ;; Protocol-level corpus fencing. Normal requests validate and execute while
     ;; this outer dlock remains held; the recursive legacy handler may re-enter
