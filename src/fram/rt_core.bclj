@@ -15,21 +15,21 @@
 
 (define-mode strict)
 
-(def COMMA-RE :- Any (re-pattern ","))
+(def COMMA-RE :- Regex (re-pattern ","))
 
-(def SPLIT-KV-RE :- Any (re-pattern "^(\\S+)\\s+(.*)$"))
+(def SPLIT-KV-RE :- Regex (re-pattern "^(\\S+)\\s+(.*)$"))
 
-(def SLUG-NONWORD-RE :- Any (re-pattern "[^a-z0-9]+"))
+(def SLUG-NONWORD-RE :- Regex (re-pattern "[^a-z0-9]+"))
 
-(def SLUG-LEADING-RE :- Any (re-pattern "^_+"))
+(def SLUG-LEADING-RE :- Regex (re-pattern "^_+"))
 
-(def SLUG-TRAILING-RE :- Any (re-pattern "_+$"))
+(def SLUG-TRAILING-RE :- Regex (re-pattern "_+$"))
 
-(def DIGITS-ONLY-RE :- Any (re-pattern "[^0-9]"))
+(def DIGITS-ONLY-RE :- Regex (re-pattern "[^0-9]"))
 
-(def ISO19-RE :- Any (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"))
+(def ISO19-RE :- Regex (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"))
 
-(def ISO16-RE :- Any (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}"))
+(def ISO16-RE :- Regex (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}"))
 
 (defn str-index-of [s :- String sub :- String] :- Int? (str/index-of s sub))
 
@@ -80,7 +80,7 @@
     :fram-edit-batch-sha
     :fram-edit-batch})
 
-(def DIGEST-RE :- Any (re-pattern "[0-9a-f]{64}"))
+(def DIGEST-RE :- Regex (re-pattern "[0-9a-f]{64}"))
 
 (defn edit-batch-envelope-marker? [record :- Any] :- Bool
   (and (map? record) (contains? record :fram-edit-envelope)))
