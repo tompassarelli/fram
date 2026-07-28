@@ -153,6 +153,32 @@
       :else
       nil)))
 
+(defn named-def-head? [h :- String] :- Bool
+  (and (writable-def-head? h)
+    (not (contains? (into #{"defmethod"} EXTEND-FORMS) h))))
+
+(defn- extend-method-form? [f :- Any] :- Bool
+  (and (seq? f)
+    (>= (count f) 2)
+    (let [s (second f)] (or (vector? s) (and (seq? s) (vector? (first s)))))))
+
+(defn extend-target-lint [form :- Any] :- Any
+  (when (and (seq? form) (contains? #{"extend-protocol" "extend-type"} (str (first form))))
+    (let [bad (vec (filter (fn [x :- Any] :- Bool (and (seq? x) (not (extend-method-form? x)))) (vec (rest form))))]
+      (when (seq bad)
+        {:message
+         (str "extend-protocol targets must be class SYMBOLS resolvable at "
+           "macroexpansion — a runtime expression like (class (byte-array 0)) "
+           "silently mis-partitions")
+         :got
+         (pr-str (first bad))
+         :suggestion
+         (str "for runtime classes (e.g. Java arrays) write a separate top-level "
+           "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) "
+           "form instead")
+         :nearest
+         (mapv pr-str bad)}))))
+
 ;; ---------------------------------------------------------------- ord keys ---
 
 ;; The gap left between adjacent siblings. Big enough that inserting between two

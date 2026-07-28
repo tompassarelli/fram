@@ -171,8 +171,7 @@
 ;; a writable form whose IDENTITY is its def-name (def/defn/type/protocol/defmulti) — as
 ;; opposed to defmethod (name+dispatch) and the extend forms (head+target), which key
 ;; differently and coexist under a shared head/name.
-(defn named-def-head? [h] (and (writable-def-head? h)
-                               (not (contains? (into #{"defmethod"} EXTEND-FORMS) h))))
+(defn named-def-head? [h] (rc/named-def-head? h))
 ;; extend-target-lint — REPAIR-GRADE canon lint for extend-protocol / extend-type.
 ;; In these two macros the TARGET positions (the type/class being extended, and — for
 ;; extend-protocol — each type in the type/method alternation) must be class SYMBOLS
@@ -189,23 +188,7 @@
 ;; is a seq whose SECOND element is a param VECTOR `(m [args] body)` or an arity-list
 ;; `(m ([args] body) ([a b] body))`. A SYMBOL is a legal designator. A seq that is NOT a
 ;; method form sitting where a designator belongs = a runtime-expression target -> reject.
-(defn- extend-method-form? [f]
-  (and (seq? f) (>= (count f) 2)
-       (let [s (second f)]
-         (or (vector? s)                               ; (m [args] body...)
-             (and (seq? s) (vector? (first s)))))))    ; (m ([args] body) ([a b] body))
-(defn extend-target-lint [form]
-  (when (and (seq? form) (#{"extend-protocol" "extend-type"} (str (first form))))
-    (let [bad (filter #(and (seq? %) (not (extend-method-form? %))) (rest form))]
-      (when (seq bad)
-        {:message (str "extend-protocol targets must be class SYMBOLS resolvable at "
-                       "macroexpansion — a runtime expression like (class (byte-array 0)) "
-                       "silently mis-partitions")
-         :got (pr-str (first bad))
-         :suggestion (str "for runtime classes (e.g. Java arrays) write a separate top-level "
-                          "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) "
-                          "form instead")
-         :nearest (mapv pr-str bad)}))))
+(defn extend-target-lint [form] (rc/extend-target-lint form))
 (def TYPE-COLON  rc/TYPE-COLON)  ; inline type-annotation markers (`:` is legal in field/param position)
 (def LET-FORMS   rc/LET-FORMS)
 (def FOR-FORMS   rc/FOR-FORMS)             ; binding vector carries :when/:while/:let modifiers
@@ -545,7 +528,7 @@
 (defn wrapper-of [src]
   (rmi/wrapper-of ctx *view* (rco/file-entity-map file->ents) src))
 (defn structural-kids [n] (rmi/structural-kids ctx n))
-(defn descendants [root] (rmi/descendants ctx root))
+(defn descendants [root] (rmi/structural-descendants ctx root))
 (defn form-for-victim [src victim]
   (rmi/form-for-victim ctx *view* (rco/file-entity-map file->ents) unwrap-def src victim))
 ;; extract-file! — THE PROJECTION (M1 Cut I; line construction, the #36 wrapper
@@ -739,20 +722,24 @@
 ;; the arity the original used — 1 everywhere but replace-in-body's structured
 ;; disambiguation payload. Docstrings + per-def rationale live in the module header.
 ;; ============================================================================
-(defn verb-env []
-  (rvb/->Verb ctx *view* tx SUP KIND Vp (vec srcs) *capture-only?* (vec (emit-srcs))
-              (fn [code] (*reject!* code))
-              (fn [code detail] (*reject!* code detail))
-              (fn [line] (binding [*out* *err*] (println line)))
-              author-emit-scoped!
-              (fn [src] (extract-file! src (out-path src)))
-              out-path
-              def-binding file-typeframe file-modframe forms-of module-name
-              parse-require capture-refs ultimate
-              BOUND REFERS wrapper-of form-for-victim descendants
-              retire-fact! re-resolve! @file->ents
-              mint-datum! register! scope->srcs fN-facts
-              FIXED (fn [code] (System/exit code))))
+(defn verb-env
+  ([] (verb-env nil nil))
+  ([resolve-out project-srcs]
+   (rvb/make-verb!
+    {:ctx ctx :view *view* :tx tx :SUP SUP :KIND KIND :Vp Vp
+     :srcs srcs :capture-only? *capture-only?*
+     :emit-srcs (rmi/emit-srcs-for project-srcs (vec srcs))
+     :reject! *reject!* :author-emit author-emit-scoped!
+     :extract-file extract-file!
+     :out-path (fn [src] (rmi/out-path-for resolve-out src))
+     :def-binding def-binding :typeframe file-typeframe :modframe file-modframe
+     :forms-of forms-of :module-name module-name :parse-require parse-require
+     :capture-refs capture-refs :ultimate ultimate :BOUND BOUND :REFERS REFERS
+     :wrapper-of wrapper-of :form-for-victim form-for-victim
+     :descendants descendants :retire retire-fact! :reresolve re-resolve!
+     :ents (rco/file-entity-map file->ents) :mint mint-datum!
+     :register register! :scope-srcs scope->srcs :fn-facts fN-facts
+     :FIXED FIXED})))
 
 ;; rename — every INVARIANT + fact mutation from the old `rename` case arm.
 (defn verb-rename! [old new target] (rvb/verb-rename! (verb-env) old new target))
@@ -833,13 +820,14 @@
 ;; the text path calls, over the LOG-booted warm store.
 (defn run-verb-warm! [store spec]
   (let [module (:module spec)]
-    (binding [rmi/*resolve-out* (:resolve-out spec)]      ; nil => env/$RESOLVE_OUT/tmp
-      (resolve-warm-store!
-       store
-       (fn []
-         (binding [rmi/*project-srcs* (when module
-                                       (rmi/scope->srcs module-name (vec srcs) module))]
-           (rvb/dispatch-verb! (verb-env) spec)))))
+    (resolve-warm-store!
+     store
+     (fn []
+       (rvb/dispatch-verb!
+        (verb-env (:resolve-out spec)
+                  (when module
+                    (rmi/scope->srcs module-name (vec srcs) module)))
+        spec)))
     module))
 
 ;; ============================================================================
@@ -861,7 +849,7 @@
 ;; {:defn-meta {leaf -> {:key :file :module :name}} :edges [[caller-leaf callee-leaf]]
 ;; :defn-set #{leaf}} — the daemon joins footprint @concern->@node against :edges; the
 ;; CLI maps leaf->:key for JSON.
-(defn call-edges [] (rq/call-edges ctx *view* BOUND REFERS (vec srcs) file-modframe @file->ents))
+(defn call-edges [] (rq/call-edges ctx *view* BOUND REFERS (vec srcs) file-modframe (rco/file-entity-map file->ents)))
 
 ;; blast-closure — transitive blast radius over a set of [caller callee] edges via Fram
 ;; Datalog: blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks
@@ -875,7 +863,7 @@
 ;; defonce/fn/…) is PUBLIC — a reachability ROOT. Keyed on the binding NODE (identity), so
 ;; same-spelling bindings in different modules stay DISTINCT (a private `helper` in mod A is a
 ;; different node than a public `helper` in mod B). Call under with-resolve-read / resolve-edn!.
-(defn binding-privacy [] (rq/binding-privacy ctx *view* (vec srcs) @file->ents))
+(defn binding-privacy [] (rq/binding-privacy ctx *view* (vec srcs) (rco/file-entity-map file->ents)))
 
 ;; dead-private-bindings — the identity-keyed STRATIFIED-Datalog code query. Over the
 ;; scope-correct call graph (call-edges), derive the PRIVATE top-level bindings UNREACHABLE

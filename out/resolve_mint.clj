@@ -294,7 +294,7 @@
   (if (and (int? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) (do
   r)))) (c/by-l ctx n))))
 
-(defn descendants [ctx root]
+(defn structural-descendants [ctx root]
   (loop [seen #{}
    stack [root]]
   (if (empty? stack) seen (let [n (peek stack)]
@@ -307,20 +307,20 @@
   f)))) (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
 
 (defn ^Emit emit-env [ctx view BOUND REFERS FIXED ents unwrap-def]
-  (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (descendants ctx root)) #{} #{}))
+  (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (structural-descendants ctx root)) #{} #{}))
 
 (defn extract-file! [^Emit m ^String src ^String outp]
   (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
 
-(def *resolve-out* nil)
+(def DEFAULT-RESOLVE-OUT nil)
 
 (defn ^String out-path [^String src]
-  (str (or *resolve-out* (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
+  (str (or DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
 
-(def *project-srcs* nil)
+(def DEFAULT-PROJECT-SRCS nil)
 
 (defn emit-srcs [srcs]
-  (if (nil? *project-srcs*) srcs (vec *project-srcs*)))
+  (if (nil? DEFAULT-PROJECT-SRCS) srcs (vec DEFAULT-PROJECT-SRCS)))
 
 (defn author-emit-scoped! [^Emit m srcs ^Boolean capture-only? op detail]
   (if (not capture-only?) (do
@@ -338,3 +338,9 @@
 
 (defn scope->srcs [module-name srcs ^String scope]
   (vec (filter (fn [src] (scope-match? module-name src scope)) srcs)))
+
+(defn ^String out-path-for [resolve-out ^String src]
+  (str (or resolve-out DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
+
+(defn emit-srcs-for [project-srcs srcs]
+  (if (nil? project-srcs) (emit-srcs srcs) (vec project-srcs)))

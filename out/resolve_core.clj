@@ -96,3 +96,16 @@
   (or (str/starts-with? s "map->") (str/includes? s "/map->")) "map->"
   (or (str/starts-with? s "->") (str/includes? s "/->")) "->"
   :else nil)))
+
+(defn ^Boolean named-def-head? [^String h]
+  (and (writable-def-head? h) (not (contains? (into #{"defmethod"} EXTEND-FORMS) h))))
+
+(defn- ^Boolean extend-method-form? [f]
+  (and (seq? f) (>= (count f) 2) (let [s (second f)]
+  (or (vector? s) (and (seq? s) (vector? (first s)))))))
+
+(defn extend-target-lint [form]
+  (if (and (seq? form) (contains? #{"extend-protocol" "extend-type"} (str (first form)))) (do
+  (let [bad (vec (filter (fn [x] (and (seq? x) (not (extend-method-form? x)))) (vec (rest form))))]
+  (if (seq bad) (do
+  {:message (str "extend-protocol targets must be class SYMBOLS resolvable at " "macroexpansion — a runtime expression like (class (byte-array 0)) " "silently mis-partitions") :got (pr-str (first bad)) :suggestion (str "for runtime classes (e.g. Java arrays) write a separate top-level " "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) " "form instead") :nearest (mapv pr-str bad)}))))))

@@ -608,3 +608,10 @@
    exit (:exit v)]
   (warn (str "run-verb-warm!: unknown op " (:op spec)))
   (exit 2)))))
+
+(defn ^Verb make-verb! [env]
+  (let [reject! (:reject! env)
+   extract-file (:extract-file env)
+   out-path (:out-path env)]
+  (->Verb (:ctx env) (:view env) (:tx env) (:SUP env) (:KIND env) (:Vp env) (vec (:srcs env)) (:capture-only? env) (vec (:emit-srcs env)) (fn [code] (reject! code)) (fn [code detail] (reject! code detail)) (fn [line] (binding [*out* *err*]
+  (println line))) (:author-emit env) (fn [src] (extract-file src (out-path src))) out-path (:def-binding env) (:typeframe env) (:modframe env) (:forms-of env) (:module-name env) (:parse-require env) (:capture-refs env) (:ultimate env) (:BOUND env) (:REFERS env) (:wrapper-of env) (:form-for-victim env) (:descendants env) (:retire env) (:reresolve env) (:ents env) (:mint env) (:register env) (:scope-srcs env) (:fn-facts env) (:FIXED env) (fn [code] (System/exit code)))))

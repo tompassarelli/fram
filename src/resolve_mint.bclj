@@ -280,7 +280,7 @@
     "accessor_field"})
 
 ;; The projection environment. `ents` is a SNAPSHOT (@file->ents) — unlike Mint's
-;; atom, nothing here mutates. wrapper-of / descendants ride as closures: they
+;; atom, nothing here mutates. wrapper-of / structural-descendants ride as closures: they
 ;; read the same dynamic state and stayed in resolve.clj with the delete
 ;; machinery (Cut H's Verb record carries the identical pair).
 (defrecord Emit [ctx :- (Atom t/Store) view :- Any BOUND :- Int REFERS :- Int FIXED :- Int ents :- Any wrapper-of :- Any descendants :- Any deleted-forms :- Any deleted-subtree :- Any])
@@ -352,7 +352,7 @@
 (defn structural-kids [ctx :- (Atom t/Store) n :- Int] :- (Vec Int)
   (vec (keep (fn [cid :- Int] :- Int? (let [cl (c/fact-of ctx cid) p (c/literal ctx (:p cl)) r (:r cl)] (when (and (int? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) r))) (c/by-l ctx n))))
 
-(defn descendants [ctx :- (Atom t/Store) root :- Int] :- (Set Int)
+(defn structural-descendants [ctx :- (Atom t/Store) root :- Int] :- (Set Int)
   (loop [seen #{} stack [root]]
     (if (empty? stack)
       seen
@@ -373,25 +373,25 @@
     FIXED
     ents
     (fn [src :- String] :- Int? (wrapper-of ctx view ents src))
-    (fn [root :- Int] :- (Set Int) (descendants ctx root))
+    (fn [root :- Int] :- (Set Int) (structural-descendants ctx root))
     #{}
     #{}))
 
 (defn extract-file! [m :- Emit src :- String outp :- String] :- Any
   (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
 
-(def *resolve-out* :- Any nil)
+(def DEFAULT-RESOLVE-OUT :- Any nil)
 
 (defn out-path [src :- String] :- String
-  (str (or *resolve-out* (System/getenv "RESOLVE_OUT") "/tmp")
+  (str (or DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp")
     "/resolved-"
     (last (str/split src PATH-SPLIT-RE))
     ".edn"))
 
-(def *project-srcs* :- Any nil)
+(def DEFAULT-PROJECT-SRCS :- Any nil)
 
 (defn emit-srcs [srcs :- (Vec String)] :- (Vec String)
-  (if (nil? *project-srcs*) srcs (vec *project-srcs*)))
+  (if (nil? DEFAULT-PROJECT-SRCS) srcs (vec DEFAULT-PROJECT-SRCS)))
 
 (defn author-emit-scoped! [m :- Emit srcs :- (Vec String) capture-only? :- Bool op :- Any detail :- Any] :- Any
   (when-not capture-only?
@@ -408,3 +408,12 @@
 
 (defn scope->srcs [module-name :- Any srcs :- (Vec String) scope :- String] :- (Vec String)
   (vec (filter (fn [src :- String] :- Bool (scope-match? module-name src scope)) srcs)))
+
+(defn out-path-for [resolve-out :- Any src :- String] :- String
+  (str (or resolve-out DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp")
+    "/resolved-"
+    (last (str/split src PATH-SPLIT-RE))
+    ".edn"))
+
+(defn emit-srcs-for [project-srcs :- Any srcs :- (Vec String)] :- (Vec String)
+  (if (nil? project-srcs) (emit-srcs srcs) (vec project-srcs)))
