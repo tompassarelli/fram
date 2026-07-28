@@ -163,7 +163,7 @@
     (str/join "; " (map str rejection))
     (str rejection)))
 
-(defn coord-write-response [resp :- (Map Keyword Any)] :- String
+(defn coord-write-response [resp :- (Map Keyword (U String Int Keyword (Vec String)))] :- String
   (cond
     (:ok resp)
     (str "ok:" (:ok resp))
