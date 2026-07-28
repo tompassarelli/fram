@@ -81,6 +81,7 @@
 (def subscription-sockets (atom #{}))
 (def dlock (Object.))                ; serializes reload + mutation commit boundaries
 (def snapshot-build-lock (Object.)) ; serializes checkpoint publication, never writers
+(def active-snapshot-builds (atom 0))
 (def listener-socket (atom nil))
 (def accept-stopped (atom nil))
 (def drain-monitor (Object.))
@@ -343,6 +344,8 @@
   (positive-env-long "FRAM_TEST_QUERY_MONITOR_LAUNCH_DELAY_MS" 0))
 (def control-delay-test-enabled?
   (= "1" (System/getenv "FRAM_TEST_CONTROL_DELAY")))
+(def snapshot-build-test-delay-ms
+  (positive-env-long "FRAM_TEST_SNAPSHOT_BUILD_DELAY_MS" 0))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
 (def active-control-reads (atom 0))
@@ -4651,6 +4654,7 @@
        :controls {:active @active-control-reads
                   :monitors @active-control-monitors
                   :stops @control-stops}
+       :snapshots {:active @active-snapshot-builds}
        :reloads {:active @active-reloads
                  :retries @reload-retries
                  :generation @reload-generation}
@@ -4667,6 +4671,7 @@
      :last-edit-outcome (:last-edit-outcome roots)
      :queries (:queries roots)
      :controls (:controls roots)
+     :snapshots (:snapshots roots)
      :reloads (:reloads roots)
      :index (:index roots)
      :rollback_floor fram.rt/rollback-floor}))
@@ -6478,76 +6483,96 @@
          :unchanged)))))
 
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------
-;; dump-log! writes the unified live store as a v2 image the EXISTING replay consumes
-;; (reuse, not new fold code). Under dlock, a durability barrier first makes every
-;; store-visible write durable; one global :tx watermark and one byte offset per
-;; physical log are then captured from that exact turn. The metadata becomes FACTS
-;; so "latest snapshot" / "which covers seq N" / "GC candidates" are queries; a
-;; tiny sidecar mirrors the latest pointer for O(1) boot discovery.
-;; Snapshot is view-relative: of_view @view:main. The @snapshot:<seq> facts land in
-;; the tail (tx > covers_through) and are harmlessly re-applied on the next boot.
-(defn write-snapshot! [co flat]
-  (locking dlock
-    (durable-barrier!)
-    (let [st (:store co)
-          sq (current-seq co)
-          offsets (snapshot-log-offsets flat)
-          _ (.mkdirs (java.io.File. (snap-dir flat)))
+;; The Store's atom contains a persistent value, so the checkpoint can capture one
+;; exact root/version/offset tuple under dlock and serialize that immutable root
+;; outside the writer monitor. Metadata publication then takes a second short turn;
+;; an optional FRI captures the post-metadata root and likewise serializes outside.
+;; Writes racing either file build land strictly after the captured byte offset and
+;; are replayed as tail. snapshot-build-lock prevents two checkpoint publishers from
+;; racing the same temp/sidecar paths without ever serializing fact writers.
+(defn write-snapshot! [_co flat]
+  (swap! active-snapshot-builds inc)
+  (try
+    (locking snapshot-build-lock
+      (let [base
+          (locking dlock
+            ;; Every mutation visible in the captured Store root must already
+            ;; have durable flat bytes at or before the captured offsets.
+            (durable-barrier!)
+            (let [live @co
+                  store-root @(:store live)]
+              {:store (atom store-root)
+               :sq (current-seq live)
+               :offsets (snapshot-log-offsets flat)}))
+          sq (:sq base)
+          offsets (:offsets base)
+          byteoff (get offsets :coordination)
+          _ (when (pos? snapshot-build-test-delay-ms)
+              (Thread/sleep snapshot-build-test-delay-ms))
           image (snap-image flat sq)
           tmp (str image ".tmp")
-          byteoff (get offsets :coordination)
-          _ (dump-log! st tmp)
+          _ (.mkdirs (java.io.File. (snap-dir flat)))
+          _ (dump-log! (:store base) tmp)
           h (sha256-file tmp)
-          _ (rename-atomic! tmp image)     ; the image appears WHOLE or not at all
-          ccount (count (c/current-facts st))
-          subj (str "@snapshot:" sq)]
-      (doseq [[p v] [["covers_through" (str sq)] ["byte_offset" (str byteoff)]
-                     ["fact_count" (str ccount)] ["image_path" image]
-                     ["snapshot_hash" h] ["of_view" "@view:main"]]]
-        (do-assert subj p v nil))
-      ;; log identity read AFTER the @snapshot:* appends: on a previously-EMPTY log the
-      ;; first line only exists now, and boot validates against the log as it will read it.
-      ;; GROUP COMMIT: the appends above may still be queued (deferred tickets when this
-      ;; runs under a socket request); the barrier makes them durable BEFORE the identity
-      ;; read, or log-identity-of could see an empty/stale file and stamp a nil identity
-      ;; (boot would then fail closed to a whole fold — safe, but silently slower).
-      (durable-barrier!)
-      ;; FRAM_MMAP_IMAGE: emit the columnar .fri alongside the v2log image (never on
-      ;; the commit/ack path — this is the checkpoint writer). The sidecar gains
-      ;; :image_format :fri + per-segment sha256 so boot's hash gate rejects a torn
-      ;; segment -> full-log fold. The v2log image + its :hash stay for the flag-off
-      ;; boot path (unchanged) and as the fallback when a segment hash fails.
-      ;; The .fri is dumped HERE — after the @snapshot:* appends + barrier — so it
-      ;; COVERS its own metadata and boot sees an EMPTY tail (the mmap-cold path).
-      ;; :fri_covers/:fri_byte_offset (post-append) drive mmap-boot's tail read; the
-      ;; v2log image keeps the pre-append :seq/:byte_offset for the flag-off path.
-      (let [fences (snapshot-log-fences flat offsets)
-            fri-meta (when (and @mmap-image-enabled? (nil? @telemetry-log))
-                       (write-fri-snapshot! st flat (current-seq co)))
-            fri-byteoff (when fri-meta (.length (java.io.File. (str flat))))]
-        (write-sidecar! flat (cond-> {:seq sq
-                                      :watermark sq
-                                      :image image
-                                      :byte_offset byteoff
-                                      :logs fences
-                                      :fact_count ccount
-                                      :hash h
-                                      :fold_version (fold-fingerprint)
-                                      ;; Legacy single-log readers use this stamp.
-                                      :log_identity (get-in fences [:coordination :identity])
-                                      :written_at (fram.rt/now-iso)}
-                               fri-meta (assoc :image_format :fri
-                                               :fri_image (:image fri-meta)
-                                               :fri_segments (:segments fri-meta)
-                                               :fri_covers (:covers_seq fri-meta)
-                                               :fri_byte_offset fri-byteoff))))
-      ;; the snapshot's own @snapshot:<seq> facts were appended inline (do-assert),
-      ;; so the LIVE store already reflects them: advance built-through past them and
-      ;; re-stamp, so a following reload tail-reads only genuinely-new appends.
-      (reset! built-through (current-seq co))
-      (reset! flat-mtime (stamp flat))
-      (reset! flat-bytes (.length (java.io.File. (str flat))))
-      {:ok sq :image image :byte_offset byteoff :fact_count ccount :hash h})))
+          _ (rename-atomic! tmp image)
+          ccount (count (c/current-facts (:store base)))
+          subj (str "@snapshot:" sq)
+          published
+          (locking dlock
+            ;; The image is already complete and immutable. Publish its facts in
+            ;; the live head, then capture the exact post-metadata root/offset
+            ;; for the optional FRI. Intervening writes are included here and
+            ;; therefore cannot be lost or mislabeled as covered by the v2 image.
+            (doseq [[p v] [["covers_through" (str sq)]
+                           ["byte_offset" (str byteoff)]
+                           ["fact_count" (str ccount)]
+                           ["image_path" image]
+                           ["snapshot_hash" h]
+                           ["of_view" "@view:main"]]]
+              (do-assert subj p v nil))
+            (durable-barrier!)
+            (let [live @co
+                  fri-sq (current-seq live)]
+              {:fences (snapshot-log-fences flat offsets)
+               :fri-store (atom @(:store live))
+               :fri-sq fri-sq
+               :fri-byteoff (.length (java.io.File. (str flat)))}))
+          fri-meta
+          (when (and @mmap-image-enabled? (nil? @telemetry-log))
+            (write-fri-snapshot!
+             (:fri-store published) flat (:fri-sq published)))]
+      ;; Sidecar publication is atomic and names only content-complete images.
+      ;; Any write after the captured FRI offset is an ordinary replay tail.
+      (write-sidecar!
+       flat
+       (cond-> {:seq sq
+                :watermark sq
+                :image image
+                :byte_offset byteoff
+                :logs (:fences published)
+                :fact_count ccount
+                :hash h
+                :fold_version (fold-fingerprint)
+                :log_identity (get-in published
+                                      [:fences :coordination :identity])
+                :written_at (fram.rt/now-iso)}
+         fri-meta (assoc :image_format :fri
+                         :fri_image (:image fri-meta)
+                         :fri_segments (:segments fri-meta)
+                         :fri_covers (:covers_seq fri-meta)
+                         :fri_byte_offset (:fri-byteoff published))))
+      ;; Re-stamp a durable live head, not the older checkpoint watermark. This
+      ;; short final turn may include writes that raced file generation; those
+      ;; bytes are already durable and remain tail past the sidecar offsets.
+      (locking dlock
+        (durable-barrier!)
+        (reset! built-through (current-seq @co))
+        (reset! flat-mtime (stamp flat))
+        (reset! flat-bytes (.length (java.io.File. (str flat)))))
+        {:ok sq :image image :byte_offset byteoff
+         :fact_count ccount :hash h}))
+    (finally
+      (swap! active-snapshot-builds dec))))
 
 ;; ============================================================================
 ;; FRAM_MMAP_IMAGE (thread 019f82d9): checkpoint .fri emit, mmap-cold boot, the

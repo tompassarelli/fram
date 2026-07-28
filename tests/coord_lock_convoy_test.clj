@@ -60,7 +60,8 @@
       env (assoc (into {} (System/getenv))
                  "FRAM_REQUIRE_LOG_FENCE" "1"
                  "FRAM_SNAPSHOT_BOOT" "0"
-                 "FRAM_TEST_CONTROL_DELAY" "1")
+                 "FRAM_TEST_CONTROL_DELAY" "1"
+                 "FRAM_TEST_SNAPSHOT_BUILD_DELAY_MS" "2000")
       daemon (proc/process {:dir root :out :string :err :string :env env}
                            "clojure" "-M" "coord_daemon.clj" "serve-flat"
                            (str port) (.getPath log))]
@@ -124,6 +125,41 @@
                        :p "title" :r "landed"}))]
         (check! (format "post-disconnect write remains <=250ms (%.1fms)" ms)
                 (and (:ok response) (<= ms 250.0)))))
+
+    ;; The periodic checkpoint had a second, independent convoy: dump-log!,
+    ;; hashing, FRI generation, and sidecar publication all ran under dlock.
+    ;; Hold the captured-root build outside that monitor for two seconds and
+    ;; prove the same bounded write latency through the strict fence.
+    (let [snapshot
+          (future
+            (elapsed-ms
+             #(client port log {:op :snapshot})))]
+      (check! "two-second checkpoint build is observably active"
+              (eventually
+               #(pos? (get-in (client port log {:op :status})
+                              [:snapshots :active] 0))))
+      (let [writes
+            (mapv
+             (fn [i]
+               (future
+                 (elapsed-ms
+                  #(client port log
+                           {:op :assert
+                            :te (str "@during-snapshot-" i)
+                            :p "title"
+                            :r (str "snapshot-value-" i)}))))
+             (range 10))
+            results (mapv deref writes)
+            latencies (mapv first results)
+            responses (mapv second results)]
+        (check! "all ten disjoint writes commit during checkpoint build"
+                (every? :ok responses))
+        (check! (str "checkpoint-concurrent acknowledgements <=250ms; observed "
+                     (pr-str latencies))
+                (every? #(<= % 250.0) latencies)))
+      (let [[ms response] @snapshot]
+        (check! (format "checkpoint delay executed outside writer lock (%.1fms)" ms)
+                (and (integer? (:ok response)) (>= ms 1900.0)))))
 
     (finally
       (stop-process! daemon)
