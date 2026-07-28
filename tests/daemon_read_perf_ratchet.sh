@@ -20,6 +20,8 @@ mkdir -p "$scratch/threads"
 printf '%s\n' \
   '{:tx 1, :op "assert", :l "@offline", :p "title", :r "cold fallback", :by "fixture"}' \
   '{:tx 2, :op "assert", :l "@019fa4d4-93aa-7447-aae5-0a5bcfca6849", :p "title", :r "latency probe", :by "fixture"}' \
+  '{:tx 3, :op "assert", :l "@target", :p "title", :r "target", :by "fixture"}' \
+  '{:tx 4, :op "assert", :l "@019fa4d4-93aa-7447-aae5-0a5bcfca6849", :p "depends_on", :r "@target", :by "fixture"}' \
   > "$scratch/coordination.log"
 
 port="$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')"
@@ -75,6 +77,22 @@ run_tell() {
   "$ROOT/bin/fram" tell 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress "$1" >/dev/null
 }
 
+run_tell_existing() {
+  FRAM_PORT="$port" \
+  FRAM_LOG="$scratch/coordination.log" \
+  FRAM_THREADS="$scratch/threads" \
+  "$ROOT/bin/fram" tell-existing \
+    019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress "$1" >/dev/null
+}
+
+run_tell_existing_bare_ref() {
+  FRAM_PORT="$port" \
+  FRAM_LOG="$scratch/coordination.log" \
+  FRAM_THREADS="$scratch/threads" \
+  "$ROOT/bin/fram" tell-existing \
+    019fa4d4-93aa-7447-aae5-0a5bcfca6849 depends_on target >/dev/null
+}
+
 measure_ms() {
   local started stopped
   started="$(date +%s%N)"
@@ -97,8 +115,28 @@ for index in $(seq 1 10); do
   tell_samples+=("$(measure_ms run_tell "latency write $index")")
 done
 
+run_tell_existing "warmup existing write"
+tell_existing_samples=()
+for index in $(seq 1 10); do
+  tell_existing_samples+=(
+    "$(measure_ms run_tell_existing "latency existing write $index")"
+  )
+done
+
+run_tell_existing_bare_ref
+bare_existing_samples=()
+for _ in $(seq 1 10); do
+  bare_existing_samples+=("$(measure_ms run_tell_existing_bare_ref)")
+done
+
 show_p95="$(printf '%s\n' "${show_samples[@]}" | sort -n | tail -1)"
 tell_p95="$(printf '%s\n' "${tell_samples[@]}" | sort -n | tail -1)"
+tell_existing_p95="$(
+  printf '%s\n' "${tell_existing_samples[@]}" | sort -n | tail -1
+)"
+bare_existing_p95="$(
+  printf '%s\n' "${bare_existing_samples[@]}" | sort -n | tail -1
+)"
 
 (( show_p95 <= 150 )) || {
   printf 'daemon_read_perf_ratchet: exact show p95 %dms > 150ms; samples: %s\n' \
@@ -110,6 +148,16 @@ tell_p95="$(printf '%s\n' "${tell_samples[@]}" | sort -n | tail -1)"
     "$tell_p95" "${tell_samples[*]}" >&2
   exit 1
 }
+(( tell_existing_p95 <= 150 )) || {
+  printf 'daemon_read_perf_ratchet: existing exact tell p95 %dms > 150ms; samples: %s\n' \
+    "$tell_existing_p95" "${tell_existing_samples[*]}" >&2
+  exit 1
+}
+(( bare_existing_p95 <= 150 )) || {
+  printf 'daemon_read_perf_ratchet: bare existing exact tell p95 %dms > 150ms; samples: %s\n' \
+    "$bare_existing_p95" "${bare_existing_samples[*]}" >&2
+  exit 1
+}
 
-printf 'daemon_read_perf_ratchet: PASS — show p95=%dms tell p95=%dms N=10; cold fallback=%dms\n' \
-  "$show_p95" "$tell_p95" "$cold_ms"
+printf 'daemon_read_perf_ratchet: PASS — show p95=%dms tell p95=%dms existing-tell p95=%dms bare-existing-ref p95=%dms N=10; cold fallback=%dms\n' \
+  "$show_p95" "$tell_p95" "$tell_existing_p95" "$bare_existing_p95" "$cold_ms"

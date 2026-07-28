@@ -68,8 +68,8 @@
 
 (let [read-called? (atom false)
       warm-output
-      (with-redefs [rt/coord-port (constantly 7977)
-                    rt/coord-show-for-log
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-show-for-log
                     (fn [_ _ requested]
                       (when (= subject requested)
                         {:version 2 :rows projection}))
@@ -90,10 +90,10 @@
       sleeps (atom [])
       response {:version 12 :rows projection}
       result
-      (with-redefs [rt/coord-show-for-log
+      (with-redefs [fram-fast/coord-show-for-log
                     (fn [& _]
                       (if (= 3 (swap! show-calls inc)) response nil))
-                    rt/coord-version-for-log (fn [& _] -1)
+                    fram-fast/coord-version-for-log (fn [& _] -1)
                     fram-fast/retry-delays (constantly [100 250 500])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
         (#'fram-fast/coordinator-show 7977 log-path subject))]
@@ -105,9 +105,9 @@
 (let [show-calls (atom 0)
       sleeps (atom [])
       result
-      (with-redefs [rt/coord-show-for-log
+      (with-redefs [fram-fast/coord-show-for-log
                     (fn [& _] (swap! show-calls inc) nil)
-                    rt/coord-version-for-log (fn [& _] -3)
+                    fram-fast/coord-version-for-log (fn [& _] -3)
                     fram-fast/retry-delays (constantly [100 250])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
         (#'fram-fast/coordinator-show 7977 log-path subject))]
@@ -121,8 +121,8 @@
          {:version "1" :rows [["title" "ok"]]}
          {:version 1 :rows [["title" 7]]}]]
   (let [result
-        (with-redefs [rt/coord-show-for-log (fn [& _] malformed)
-                      rt/coord-version-for-log (fn [& _] 1)]
+        (with-redefs [fram-fast/coord-show-for-log (fn [& _] malformed)
+                      fram-fast/coord-version-for-log (fn [& _] 1)]
           (#'fram-fast/coordinator-show 7977 log-path subject))]
     (check! (str "malformed daemon response rejected " (pr-str malformed))
             (nil? result))))
@@ -132,8 +132,8 @@
 
 (let [scan-called? (atom false)
       output
-      (with-redefs [rt/coord-port (constantly 7977)
-                    rt/coord-show-for-log
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-show-for-log
                     (fn [& _] {:version 13 :rows [["title" "exact fast row"]]})
                     fram-fast/matching-ops
                     (fn [& _]
@@ -149,8 +149,8 @@
 (doseq [[target rows] wire-projections]
   (let [bare (subs target 1)
         warm-output
-        (with-redefs [rt/coord-port (constantly 7977)
-                      rt/coord-show-for-log
+        (with-redefs [fram-fast/coord-port (constantly 7977)
+                      fram-fast/coord-show-for-log
                       (fn [_ _ requested]
                         (when (= requested target)
                           {:version 10 :rows rows}))]
@@ -166,9 +166,9 @@
 (let [read-called? (atom false)
       write-call (atom nil)
       output
-      (with-redefs [rt/coord-port (constantly 7977)
-                    rt/coord-version-for-log (fn [_ _] 8)
-                    rt/coord-assert-for-log
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-version-for-log (fn [_ _] 8)
+                    fram-fast/coord-assert-for-log
                     (fn [port log subject predicate value version]
                       (reset! write-call
                               [port log subject predicate value version])
@@ -193,9 +193,9 @@
 
 (let [read-called? (atom false)
       output
-      (with-redefs [rt/coord-port (constantly 7977)
-                    rt/coord-version-for-log (fn [& _] 8)
-                    rt/coord-assert-for-log (fn [& _] "reject:cycle")
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-version-for-log (fn [& _] 8)
+                    fram-fast/coord-assert-for-log (fn [& _] "reject:cycle")
                     rt/read-log
                     (fn [& _]
                       (reset! read-called? true)
@@ -217,9 +217,95 @@
                  "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                  "depends_on" "possibly-a-ref")))
 
+(let [write-call (atom nil)
+      output
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-write-existing-for-log
+                    (fn [operation port log requested predicate value]
+                      (reset! write-call
+                              [operation port log requested predicate value])
+                      "ok:22")]
+        (with-out-str
+          (check! "existing exact write handled in one client"
+                  (= :handled
+                     (fram-fast/fast-write-existing!
+                      log-path "assert"
+                      "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
+                      "progress" "one client")))))]
+  (check! "existing exact write uses one atomic coordinator operation"
+          (= [:assert 7977 log-path subject "progress" "one client"]
+             @write-call))
+  (check! "existing exact write keeps CLI receipt"
+          (str/includes?
+           output
+           "committed via coordinator (v22): 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress = one client")))
+
+(let [request (atom nil)
+      response
+      (with-redefs [fram-fast/coord-request-for-log
+                    (fn [_ _ sent]
+                      (reset! request sent)
+                      {:ok 23})]
+        (#'fram-fast/coord-write-existing-for-log
+         :retract 7977 log-path subject "progress" "one client"))]
+  (check! "existing write sends one atomic coordinator request"
+          (and (= "ok:23" response)
+               (= {:op :retract-existing
+                   :te subject
+                   :p "progress"
+                   :r "one client"
+                   :frame "agent"}
+                  @request))))
+
+(let [response
+      (with-redefs [fram-fast/coord-request-for-log
+                    (fn [& _] {:error "unknown op"})]
+        (#'fram-fast/coord-write-existing-for-log
+         :assert 7977 log-path subject "progress" "one client"))]
+  (check! "old daemon rejects atomic op before any legacy mutation"
+          (= "protocol-incompatible" response)))
+
+(let [write-call (atom nil)]
+  (with-redefs [fram-fast/coord-port (constantly 7977)
+                fram-fast/coordinator-show
+                (fn [& _]
+                  (throw
+                   (ex-info
+                    "bare-token exact write performed a separate show"
+                    {})))
+                fram-fast/coord-write-existing-for-log
+                (fn [operation port log requested predicate value]
+                  (reset! write-call
+                          [operation port log requested predicate value])
+                  "ok:24")]
+    (check! "bare-token exact write stays on the atomic coordinator path"
+            (= :handled
+               (fram-fast/fast-write-existing!
+                log-path "assert"
+                "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
+                "outcome" "done")))
+    (check! "bare-token exact write requests in-lock normalization"
+            (= [:assert 7977 log-path subject "outcome" "done"]
+               @write-call))))
+
+(let [write-called? (atom false)]
+  (with-redefs [fram-fast/coord-port (constantly 7977)
+                fram-fast/coord-write-existing-for-log
+                (fn [& _]
+                  (reset! write-called? true)
+                  "missing-subject")]
+    (check! "missing exact subject is refused before write"
+            (= :missing
+               (fram-fast/fast-write-existing!
+                log-path "assert"
+                "019fa4d4-93aa-7447-aae5-0a5bcfca6800"
+                "progress" "missing probe")))
+    (check! "missing exact subject uses the atomic coordinator seam"
+            @write-called?)))
+
 (check! "daemon absence preserves cold show fallback signal"
-        (with-redefs [rt/coord-show-for-log (fn [& _] nil)
-                      rt/coord-version-for-log (fn [& _] -1)
+        (with-redefs [fram-fast/coord-show-for-log (fn [& _] nil)
+                      fram-fast/coord-version-for-log (fn [& _] -1)
                       fram-fast/retry-delays (constantly [])]
           (false? (fram-fast/fast-show!
                    log-path

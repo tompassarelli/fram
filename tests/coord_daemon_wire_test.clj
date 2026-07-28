@@ -8,7 +8,8 @@
 
 (let [cfg {:reload-checked? false
            :reload-deferred-ops #{:version}
-           :reload-mutation-ops #{:assert}}
+           :reload-mutation-ops #{:assert :assert-existing
+                                  :retract-existing}}
       clean {:durability-stop? false}]
   (check "query routes lock-free"
          (= :query (:route (wire/request-dispatch
@@ -36,6 +37,20 @@
              (wire/request-dispatch
               {:op :assert :te "@a" :p "title" :r "A"} clean cfg)
              [:handler :required :response])))
+  (check "existing-subject ops are locked mutation handlers"
+         (every?
+          (fn [[op handler]]
+            (= {:route :locked
+                :handler handler
+                :required [:te :p :r]
+                :response :mutation
+                :reload-policy :mutation}
+               (select-keys
+                (wire/request-dispatch
+                 {:op op :te "@a" :p "title" :r "A"} clean cfg)
+                [:route :handler :required :response :reload-policy])))
+          [[:assert-existing :assert-existing]
+           [:retract-existing :retract-existing]]))
   (check "required-field validation is per op"
          (= ["p is required" "r is required"]
             (wire/request-validation-errors

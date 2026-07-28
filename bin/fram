@@ -39,7 +39,7 @@ if [[ ! -d "$FRAM_THREADS" || ! -d "$log_parent" ]]; then
   mkdir -p "$FRAM_THREADS" "$log_parent"
 fi
 case "${1:-}" in
-  show|tell|retract|untell)
+  show|tell|retract|untell|tell-existing|retract-existing|untell-existing)
     exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
     ;;
 esac

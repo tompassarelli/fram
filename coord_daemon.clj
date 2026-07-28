@@ -724,6 +724,62 @@
       (set (keep #(fact->triple st %) (c/by-lp st lid pid)))
       #{})))
 
+(defn- live-subject?
+  "True only when `te` has at least one client-visible live fact.
+  Name/resolve bookkeeping does not count, matching exact `show` existence
+  semantics without projecting the whole corpus."
+  [c0 te]
+  (let [st (:store c0)
+        schema-root @schema-view]
+    (boolean
+     (or
+      (when-let [lid (s/resolve-name st te)]
+        (some #(fact->triple st %) (c/by-l st lid)))
+      (some #(contains? schema-root [te %]) schema-writable)))))
+
+(defn- all-live-predicate-values-ref?
+  "The indexed equivalent of fram.tools/ref-value's all-ref? predicate.
+  It inspects only live client-visible facts for `p`, and returns false when
+  there are none. The caller holds dlock, so normalization and mutation see one
+  authoritative store state."
+  [c0 p]
+  (let [st (:store c0)
+        pid (c/value-id st p)]
+    (when pid
+      (loop [cids (seq (c/by-p st pid))
+             seen? false]
+        (if-let [cid (first cids)]
+          (if-let [triple (fact->triple st cid)]
+            (let [value (nth triple 2)]
+              (if (and (string? value) (str/starts-with? value "@"))
+                (recur (next cids) true)
+                false))
+            (recur (next cids) seen?))
+          seen?)))))
+
+(defn- normalize-existing-write-value [c0 req]
+  (let [value (:r req)]
+    (if (and (string? value)
+             (not (str/starts-with? value "@"))
+             (not (re-find #"\s" value))
+             (all-live-predicate-values-ref? c0 (:p req)))
+      (str "@" value)
+      value)))
+
+(defn- existing-subject-write [req write!]
+  ;; The check and mutation run in the caller's one dlock turn. This is the
+  ;; exact-ID write seam: no whole-corpus :show projection, no race between an
+  ;; existence read and the commit. Ambiguous single-token values are normalized
+  ;; from the same warm root before the write; whitespace values remain literals
+  ;; because they are not valid ref-shaped names. No cold fold or check/write gap.
+  (let [c0 @co]
+    (if-not (live-subject? c0 (:te req))
+      {:reject :missing-subject
+       :code :missing-subject
+       :subject (:te req)
+       :version (current-seq c0)}
+      (write! (normalize-existing-write-value c0 req)))))
+
 ;; ---- index-accelerated read path (warm) ------------------------------------
 ;; The scan path (fram.query/run) pulls the WHOLE "triple" relation per literal
 ;; (datalog match-lit). For the common shape — ONE non-recursive rule whose body is
@@ -3999,10 +4055,10 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-batch :assert-batch-at-version
+  #{:assert :assert-existing :assert-batch :assert-batch-at-version
     :managed-agent-publish :claim-cite :claim-decision :claim-unverify
     :assert-with-fence :assert-at-version :assert-at-version-with-fence
-    :retract :retract-with-fence :bump})
+    :retract :retract-existing :retract-with-fence :bump})
 
 (defn- prepare-request-reload! [req]
   (let [op (:op req)]
@@ -4893,6 +4949,9 @@
          (case handler
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
+      :assert-existing
+      (existing-subject-write
+       req #(do-assert (:te req) (:p req) % nil))
       ;; ATOMIC multi-fact publication for ONE subject — all-or-none at every
       ;; disconnect/timeout boundary (thread 019f9063 / incident 019f8958). Additive:
       ;; single :assert above is byte-identical; old clients never send this op.
@@ -4930,6 +4989,9 @@
        (:res req) (:holder req) (:epoch req)
        #(assert-at-version (:te req) (:p req) (:r req) (:base req)))
       :retract  (do-retract (:te req) (:p req) (:r req) (:base req))
+      :retract-existing
+      (existing-subject-write
+       req #(do-retract (:te req) (:p req) % nil))
       :retract-with-fence
       (with-current-fence
        (:res req) (:holder req) (:epoch req)
