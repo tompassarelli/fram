@@ -5857,20 +5857,27 @@
         (doseq [[_ a] latest]
           (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
                 su (sub! (:l a)) pid (c/value! st p)
-                live (c/by-lp st su pid)]      ; already live-only
-            (if (= "retract" (:op a))
+                live (c/by-lp st su pid)       ; already live-only
+                retract? (= "retract" (:op a))
+                link? (link-value? p r)
+                value-present?
+                (if (and retract? single?)
+                  false
+                  (let [rid (if link? (s/resolve-name st r) (c/value-id st r))]
+                    (boolean (some #(= rid (:r (c/fact-of st %))) live))))
+                decision (cc/tail-fact-decision retract? single? value-present?)]
+            (case (:action decision)
+              :retract
               (let [sup (c/value! st "store-supersedes")
-                    link? (link-value? p r)
-                    rid (when link? (s/resolve-name st r))
-                    victims (if single? live
-                                (filter #(let [cr (:r (c/fact-of st %))]
-                                           (if link? (= rid cr) (= (c/value-id st r) cr))) live))]
+                    rid (when (= :matching (:selection decision))
+                          (if link? (s/resolve-name st r) (c/value-id st r)))
+                    victims (if (= :all (:selection decision))
+                              live
+                              (filter #(= rid (:r (c/fact-of st %))) live))]
                 (doseq [old victims] (c/fact! st old sup old tx)))
-              (let [link? (link-value? p r)
-                    exists? (some #(let [cr (:r (c/fact-of st %))]
-                                     (if link? (= (s/resolve-name st r) cr) (= (c/value-id st r) cr))) live)]
-                (when-not (and (not single?) exists?)
-                  (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx)))))))
+              :assert
+              (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx))
+              nil)))
         (let [tmax (:max-tx tail-plan)]
           (swap! st assoc :next-seq tmax)
           (swap! st update :txs assoc tx {:seq tmax :agent "tail"}))))

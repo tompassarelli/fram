@@ -248,3 +248,12 @@
     (concat (map (fn [pred :- String] :- TailPredicatePlan (let [want :- String (if (contains? single-preds pred) "single" "multi") action :- Keyword (cond (not (contains? declared-preds pred)) :define (not= want (get current-cardinality pred)) :update :else :keep) value-kind :- String (if (contains? link-preds pred) "ref" "literal")] (->TailPredicatePlan pred action want value-kind))) domain)
       (map (fn [pred :- String] :- TailPredicatePlan (let [want :- String (if (contains? single-preds pred) "single" "multi") action :- Keyword (if (not= want (get current-cardinality pred)) :define :keep)] (->TailPredicatePlan pred action want "literal")))
         card-only))))
+
+(defn tail-fact-decision [retract :- Bool single :- Bool value-present :- Bool] :- (Map Keyword Keyword)
+  (cond
+    retract
+    {:action :retract :selection (if single :all :matching)}
+    (or single (not value-present))
+    {:action :assert :selection :none}
+    :else
+    {:action :keep :selection :none}))

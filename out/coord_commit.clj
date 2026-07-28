@@ -207,3 +207,9 @@
   (->TailPredicatePlan pred action want value-kind))) domain) (map (fn [pred] (let [want (if (contains? single-preds pred) "single" "multi")
    action (if (not= want (get current-cardinality pred)) :define :keep)]
   (->TailPredicatePlan pred action want "literal"))) card-only))))
+
+(defn tail-fact-decision [^Boolean retract ^Boolean single ^Boolean value-present]
+  (cond
+  retract {:action :retract :selection (if single :all :matching)}
+  (or single (not value-present)) {:action :assert :selection :none}
+  :else {:action :keep :selection :none}))
