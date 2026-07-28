@@ -309,23 +309,37 @@
 (defn- cold-main! [args]
   (apply (requiring-resolve 'fram.main/-main) args))
 
-(defn- exact-id [id]
-  (let [bare (str/replace-first id #"^@" "")]
-    (when (re-matches
-           #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-           bare)
-      bare)))
+(defn- subject-candidate [id]
+  (when-not (str/blank? id)
+    (if (str/starts-with? id "@") id (str "@" id))))
+
+(defn- exact-spelling? [id]
+  (or
+   ;; `@` is the exact-reference marker for every Fram subject. Subject kind is
+   ;; data, so an explicit telemetry/lease/schema ref gets the same indexed
+   ;; coordinator read as an explicit thread ref.
+   (str/starts-with? id "@")
+
+   ;; Preserve the convenient bare exact-UUID spelling. Other missing bare
+   ;; tokens may be thread prefixes and still belong to the cold resolver.
+   (boolean
+    (re-matches
+     #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+     id))))
 
 (defn fast-show!
   "Serve an exact subject from the coordinator's narrow :show projection.
   Returns false when the existing CLI must own fallback or prefix resolution."
   [log id provenance?]
-  (if-let [bare (exact-id id)]
-    (let [subject (str "@" bare)
+  (if-let [subject (subject-candidate id)]
+    (let [bare (str/replace-first subject #"^@" "")
           response (coordinator-show (coord-port) log subject)
           rows (:rows response)]
       (cond
         (nil? response)
+        false
+
+        (and (empty? rows) (not (exact-spelling? id)))
         false
 
         (empty? rows)

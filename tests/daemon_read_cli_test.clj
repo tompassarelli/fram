@@ -358,6 +358,42 @@
                       (fn [& _] {:version 16 :rows []})]
           (false? (fram-fast/fast-show! log-path "019fa4d4" false))))
 
+(let [requested (atom nil)
+      scan-called? (atom false)
+      output
+      (with-redefs [fram-fast/coord-show-for-log
+                    (fn [_ _ subject]
+                      (reset! requested subject)
+                      {:version 17 :rows [["lease" "holder|9999999999999|1"]]})
+                    fram-fast/relevant-ops
+                    (fn [& _]
+                      (reset! scan-called? true)
+                      (throw (ex-info "explicit non-thread ref scanned history" {})))]
+        (with-out-str
+          (check! "explicit non-thread subject uses the daemon show path"
+                  (fram-fast/fast-show!
+                   log-path "@lease:session:native-probe" false))))]
+  (check! "explicit non-thread subject is passed through without prefix classification"
+          (= "@lease:session:native-probe" @requested))
+  (check! "explicit non-thread subject never scans history" (not @scan-called?))
+  (check! "explicit non-thread subject renders daemon rows directly"
+          (str/includes? output "  lease  holder|9999999999999|1")))
+
+(let [requested (atom nil)]
+  (check! "bare existing non-thread subject uses the daemon show path"
+          (with-redefs [fram-fast/coord-show-for-log
+                        (fn [_ _ subject]
+                          (reset! requested subject)
+                          {:version 18 :rows [["agent_death" "dead"]]})]
+            (fram-fast/fast-show! log-path "swarm" false)))
+  (check! "bare existing non-thread subject probes the canonical ref"
+          (= "@swarm" @requested)))
+
+(check! "missing bare non-UUID token preserves the resolver fallback"
+        (with-redefs [fram-fast/coord-show-for-log
+                      (fn [& _] {:version 19 :rows []})]
+          (false? (fram-fast/fast-show! log-path "missing-prefix" false))))
+
 (let [fallback-args (atom nil)]
   (with-redefs [fram-fast/coordinator-show (fn [& _] nil)
                 fram-fast/cold-main! #(reset! fallback-args %)]
