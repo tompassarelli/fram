@@ -75,6 +75,7 @@
    :version {:route :locked :handler :version :required [] :response :version}
    :assert {:route :locked :handler :assert :required [:te :p :r] :response :mutation}
    :assert-batch {:route :locked :handler :assert-batch :required [:te :facts] :response :mutation}
+   :assert-batch-at-version {:route :locked :handler :assert-batch-at-version :required [:te :facts :base] :response :mutation}
    :claim-cite {:route :locked :handler :claim-cite :required [] :validation :handler :response :mutation}
    :claim-decision {:route :locked :handler :claim-decision :required [] :validation :handler :response :mutation}
    :claim-unverify {:route :locked :handler :claim-unverify :required [] :validation :handler :response :mutation}

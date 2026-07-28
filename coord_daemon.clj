@@ -1870,6 +1870,26 @@
       :else
       (do-assert te p r base))))
 
+(defn- assert-batch-at-version [te facts base]
+  (let [head (current-seq @co)]
+    (cond
+      (not (and (integer? base) (not (neg? base))))
+      {:reject :invalid-base :version head}
+
+      (and (sequential? facts)
+           (some #(and (map? %) (contains? % :base)) facts))
+      {:reject ["assert-batch-at-version rejects fact-local :base; use only the top-level :base"]
+       :code :fact-local-base
+       :version head}
+
+      (not= base head)
+      {:reject :conflict :version head}
+
+      :else
+      ;; The top-level base is a global snapshot guard, not per-predicate OCC.
+      ;; do-assert-batch performs the one existing commit-batch! call.
+      (do-assert-batch te facts nil))))
+
 ;; the-model §9 — atomic terminal-transition cascade. Called by do-assert AFTER a
 ;; successful, non-idempotent terminal assert (outcome|abandoned). Runs INSIDE the
 ;; same serialized coordinator turn (do-assert holds no extra lock here; the
@@ -3933,7 +3953,8 @@
   ;; A first fact mutation after an external edit must absorb/validate that edit
   ;; before committing.  If another request already owns the rebuild, however,
   ;; mutate the old root and make that owner's identity check retry over both.
-  #{:assert :assert-batch :managed-agent-publish :claim-cite :claim-decision :claim-unverify
+  #{:assert :assert-batch :assert-batch-at-version
+    :managed-agent-publish :claim-cite :claim-decision :claim-unverify
     :assert-with-fence :assert-at-version :assert-at-version-with-fence
     :retract :retract-with-fence :bump})
 
@@ -4701,6 +4722,10 @@
       ;; disconnect/timeout boundary (thread 019f9063 / incident 019f8958). Additive:
       ;; single :assert above is byte-identical; old clients never send this op.
       :assert-batch (do-assert-batch (:te req) (:facts req) (:base req))
+      ;; Global read-set guard for an atomic batch. The outer dlock makes the
+      ;; head comparison and the one existing commit-batch! call indivisible.
+      :assert-batch-at-version
+      (assert-batch-at-version (:te req) (:facts req) (:base req))
       :claim-cite (do-claim-cite req)
       :claim-decision (do-claim-decision req)
       :claim-unverify (do-claim-unverify req)
