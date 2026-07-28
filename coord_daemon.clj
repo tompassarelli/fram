@@ -77,6 +77,14 @@
 (declare rotation-index-status start-rotation-compactor! rotation-stats
          snapshot-if-dirty!)
 (def projection-build-lock (Object.))
+;; Whole-corpus query-cache construction is also single-flight.  A split-log
+;; telemetry reload can invalidate `cache` while many readers are already in
+;; flight; without one owner, every reader independently walks the full Store
+;; and multiplies both CPU and memory.  The promise carries one immutable cache
+;; to readers that captured the same roots, even when a concurrent write makes
+;; global publication lose its version/identity check.
+(def query-cache-build-lock (Object.))
+(def query-cache-flight (atom nil))
 (def subscribers (atom []))
 (def subscription-sockets (atom #{}))
 (def dlock (Object.))                ; serializes reload + mutation commit boundaries
@@ -886,19 +894,28 @@
 ;; (the swarm write-ceiling). :facts is a SET of Facts (O(1) add/remove); :idx is the
 ;; triple-set + positional/compound buckets; :index (kernel, for :validate) is
 ;; lazy/whole, off the hot path.
+(defn- build-warm-cache [co-root schema-root]
+  (let [store-root @(:store co-root)
+        version (current-seq co-root)
+        facts (client-view-facts-from co-root schema-root)]
+    {:facts (set facts) :idx (idx-build facts) :index nil :version version
+     :store-root store-root :schema-root schema-root}))
+
 (defn warm! []
-  (let [co-root @co
-        store-root @(:store co-root)
-        schema-root @schema-view
-        v (current-seq co-root)
-        c @cache]
-    (when (or (not= v (:version c))
-              (not (identical? store-root (:store-root c)))
-              (not (identical? schema-root (:schema-root c))))
-      (let [facts (client-view-facts-from co-root schema-root)] ; F4: domain + schema facts
-        (reset! cache {:facts (set facts) :idx (idx-build facts) :index nil :version v
-                       :store-root store-root :schema-root schema-root})))
-    @cache))
+  (locking query-cache-build-lock
+    ;; Capture roots only after joining the global build turn. A caller that
+    ;; waited behind another version must never rebuild the older roots it saw
+    ;; before the wait and overwrite a newer cache with that stale product.
+    (let [co-root @co
+          store-root @(:store co-root)
+          schema-root @schema-view
+          v (current-seq co-root)
+          c @cache]
+      (when (or (not= v (:version c))
+                (not (identical? store-root (:store-root c)))
+                (not (identical? schema-root (:schema-root c))))
+        (reset! cache (build-warm-cache co-root schema-root)))
+      @cache)))
 (defn index! []
   (let [c (warm!)]
     (or (:index c) (let [ix (ck/build-index (vec (:facts c)))] (swap! cache assoc :index ix) ix))))
@@ -1098,16 +1115,85 @@
         (reset! cache built)
         true))))
 
+(defn- query-cache-matches-roots? [candidate roots]
+  (and candidate
+       (= (:version roots) (:version candidate))
+       (identical? (:store-root roots) (:store-root candidate))
+       (identical? (:schema-root roots) (:schema-root candidate))
+       (:facts candidate)
+       (:idx candidate)))
+
+(defn- query-flight-matches-roots? [flight roots]
+  (and flight
+       (= (:version roots) (:version flight))
+       (identical? (:store-root roots) (:store-root flight))
+       (identical? (:schema-root roots) (:schema-root flight))))
+
+(defn- await-query-cache-flight [flight]
+  (.incrementAndGet ^java.util.concurrent.atomic.AtomicInteger (:waiters flight))
+  (try
+    (loop []
+      ;; Waiting for another reader's projection remains part of THIS query's
+      ;; deadline/cancellation budget. A disconnected waiter leaves promptly;
+      ;; it never cancels the owner or poisons the shared result.
+      (query-check)
+      (let [result (deref (:result flight) 10 ::pending)]
+        (if (= ::pending result) (recur) result)))
+    (finally
+      (.decrementAndGet
+       ^java.util.concurrent.atomic.AtomicInteger (:waiters flight)))))
+
+(defn- build-query-cache-for-roots [roots]
+  (locking query-cache-build-lock
+    (let [facts (query-client-view-facts
+                 (:store-root roots) (:schema-root roots))]
+      {:facts (set facts) :idx (idx-build facts) :index nil
+       :version (:version roots)
+       :store-root (:store-root roots)
+       :schema-root (:schema-root roots)})))
+
+(defn- query-cache-for-roots [roots]
+  (loop []
+    (query-check)
+    (if-let [ready (or (when (query-cache-matches-roots? (:cache roots) roots)
+                         (:cache roots))
+                       (let [current @cache]
+                         (when (query-cache-matches-roots? current roots)
+                           current)))]
+      ready
+      (if-let [flight @query-cache-flight]
+        (let [same-roots? (query-flight-matches-roots? flight roots)
+              result (await-query-cache-flight flight)]
+          ;; Same-root readers share the immutable product even when a write
+          ;; raced publication. Different-root readers wait so at most one
+          ;; whole-corpus projection exists at a time, then retry their roots.
+          (if (and same-roots? (:cache result))
+            (:cache result)
+            (recur)))
+        (let [flight {:version (:version roots)
+                      :store-root (:store-root roots)
+                      :schema-root (:schema-root roots)
+                      :result (promise)
+                      :waiters (java.util.concurrent.atomic.AtomicInteger. 0)}]
+          (if (compare-and-set! query-cache-flight nil flight)
+            (try
+              (let [built (build-query-cache-for-roots roots)]
+                (publish-query-cache! roots built)
+                (deliver (:result flight) {:cache built})
+                built)
+              (catch Throwable t
+                ;; A cancelled owner does not cancel healthy waiters. Publish
+                ;; the failure only to wake them; they retry and elect a new
+                ;; owner under their own query controls.
+                (deliver (:result flight) {:error t})
+                (throw t))
+              (finally
+                (compare-and-set! query-cache-flight flight nil)))
+            (recur)))))))
+
 (defn- materialize-query-snapshot [roots]
   (let [history-store (atom (:store-root roots))
-        c (or (:cache roots)
-              (let [facts (query-client-view-facts (:store-root roots) (:schema-root roots))
-                    built {:facts (set facts) :idx (idx-build facts) :index nil
-                           :version (:version roots)
-                           :store-root (:store-root roots)
-                           :schema-root (:schema-root roots)}]
-                (publish-query-cache! roots built)
-                built))]
+        c (query-cache-for-roots roots)]
     {:facts (:facts c) :idx (:idx c) :version (:version roots)
      :history-co {:store history-store}
      :history-store history-store}))
@@ -6564,13 +6650,25 @@
                     (let [c0 (migrate-flat->co path)]
                       {:mode :install :co c0 :schema-root schema-root
                        :through (or (:next-seq @(:store c0)) 0)}))))))]
+      ;; Build the immutable query cache alongside the candidate, outside dlock.
+      ;; Installing a split-log reload with `cache` at version -1 exposed every
+      ;; concurrent reader to its own O(corpus) rebuild. Publishing the Store,
+      ;; schema, and ready cache in one short install turn preserves the exact
+      ;; candidate identities and lets later commits stay incremental.
+      (let [candidate
+            (if (= :install (:mode candidate))
+              (assoc candidate :cache
+                     (locking query-cache-build-lock
+                       (build-warm-cache
+                        (:co candidate) (:schema-root candidate))))
+              candidate)]
       ;; External writers do not participate in group-io-lock.  A final stamp check
       ;; is therefore mandatory after every byte of candidate construction.
       (if (and (= (:target-stamp roots) (stamp path))
                (= (:target-telemetry-stamp roots)
                   (some-> telemetry-path stamp)))
         candidate
-        {:mode :raced}))
+        {:mode :raced})))
     (finally
       (swap! active-reloads dec))))
 
@@ -6625,7 +6723,7 @@
             (reset! telemetry-mtime (:target-telemetry-stamp roots))
             (reset! telemetry-bytes (or (:target-telemetry-bytes roots) 0))
             (reset! schema-view (:schema-root candidate))
-            (reset! cache {:index nil :version -1})
+            (reset! cache (:cache candidate))
             (reset! facts-wire-cache {:version -1 :triples nil})
             (reset-refers-state!)
             (swap! reload-generation inc)
