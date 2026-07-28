@@ -20,9 +20,9 @@
         expected-runs (Long/parseLong expected-runs-arg)
         applies? (fn [scenario size]
                    (let [sizes (:corpus-sizes scenario)]
-                     (or (and (= sizes :default)
-                              (contains? (set (:default-corpus-sizes contract)) size))
-                         (contains? (set sizes) size))))
+                     (if (= sizes :default)
+                       (contains? (set (:default-corpus-sizes contract)) size)
+                       (contains? (set sizes) size))))
         expected
         (set
          (for [engine (:engines contract)
@@ -47,6 +47,10 @@
           (throw (ex-info "decision citation drift" {:row row})))
         (when-not (= (:query-class scenario) (keyword (:query-class row)))
           (throw (ex-info "query class drift" {:row row})))
+        (doseq [[key value] (:receipt-fields scenario)]
+          (when-not (= value (get row key))
+            (throw (ex-info "scenario provenance drift"
+                            {:key key :expected value :row row}))))
         (when-not (and (zero? (:errors row))
                        (= (:expected-count row) (:result-count row)))
           (throw (ex-info "index scenario result mismatch" {:row row}))))

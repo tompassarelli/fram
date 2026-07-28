@@ -121,6 +121,16 @@ re-probes the substituted subject through the exact `kind=agent` and
 `owner=@owner-0` prefixes. Its one-row result measures compound-prefix work
 rather than growing result construction.
 
+The rotation-outage scenario cites decision section `Benchmark interpretation`
+and fixes the corpus at exactly 350,701 live facts: 116,900 three-fact subjects,
+one pad fact, and `lead` in place of `owner` for the first 1,623 subjects. Its
+two-rule shape first selects every `lead`, then joins each substituted subject
+to `title`, reproducing the historical result cardinality of 1,623. Every row
+carries the committed historical observation (5,004 ms timeout to 241 ms,
+source `~/code/fram/bench/index-rotations/README.md:46-79`) as provenance-only
+fields; `query-ms` is the new observation and is never presented as a rerun of
+those old wall-clock values.
+
 ## Golden ratchet
 
 Run the default landing gate from a clean Fram checkout:

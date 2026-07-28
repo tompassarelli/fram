@@ -67,4 +67,15 @@
     :query-class :compound-datalog-join
     :corpus-sizes :default
     :decision-section "Workload derivation / Datalog joins"
-    :definition "Bind title-0 through POS, then re-probe the substituted subject against kind=agent and owner=@owner-0; result cardinality is one."}]}}
+    :definition "Bind title-0 through POS, then re-probe the substituted subject against kind=agent and owner=@owner-0; result cardinality is one."}
+   {:id :rotation-outage-350701
+    :query-class :compound-datalog-join
+    :corpus-sizes [350701]
+    :decision-section "Benchmark interpretation"
+    :definition "Reproduce the 350,701-live-fact two-rule lead->title shape with exactly 1,623 rows."
+    :receipt-fields
+    {:historical-before-ms 5004
+     :historical-after-ms 241
+     :historical-after-rows 1623
+     :historical-source "~/code/fram/bench/index-rotations/README.md:46-79"
+     :historical-timing-claim "provenance-only; current timings are newly observed"}}]}}

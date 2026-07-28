@@ -28,8 +28,11 @@
 (defn sh-line [& args]
   (-> (apply shell/sh args) :out str/trim))
 
+(def process-pid (.pid (ProcessHandle/current)))
+
 (defn proc-field [field]
-  (some->> (str/split-lines (sh-line "cat" "/proc/self/status"))
+  (some->> (str/split-lines
+            (sh-line "cat" (str "/proc/" process-pid "/status")))
            (some #(when (str/starts-with? % (str field ":")) %))
            (re-find #"[0-9]+")
            Long/parseLong))
@@ -225,9 +228,9 @@
 
 (defn scenario-applies? [scenario]
   (let [sizes (:corpus-sizes scenario)]
-    (or (and (= sizes :default)
-             (contains? (set (:default-corpus-sizes contract)) corpus-size))
-        (contains? (set sizes) corpus-size))))
+    (if (= sizes :default)
+      (contains? (set (:default-corpus-sizes contract)) corpus-size)
+      (contains? (set sizes) corpus-size))))
 
 (defn coordinator-aggregate-scan [engine _scenario]
   {:result-count (count (probe-triples engine [nil "title" nil]))
@@ -258,12 +261,24 @@
     {:result-count (count matches)
      :expected-count-fn (constantly 1)}))
 
+(defn rotation-outage-350701 [engine scenario]
+  (let [lead-subjects (map first (probe-triples engine [nil "lead" nil]))
+        joined (reduce
+                +
+                (map #(count (probe-triples engine [% "title" nil]))
+                     lead-subjects))]
+    (merge
+     {:result-count joined
+      :expected-count-fn (constantly 1623)}
+     (:receipt-fields scenario))))
+
 ;; Scenario handlers are added one coherent scenario at a time.
 (def scenario-handlers
   {:coordinator-aggregate-scan coordinator-aggregate-scan
    :staffing-projection staffing-projection
    :point-lookup point-lookup
-   :compound-datalog-join compound-datalog-join})
+   :compound-datalog-join compound-datalog-join
+   :rotation-outage-350701 rotation-outage-350701})
 
 (def started-utc (str (java.time.Instant/now)))
 (def load-start (sh-line "cat" "/proc/loadavg"))
