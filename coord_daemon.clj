@@ -965,6 +965,86 @@
       :log (or (:flat roots) (:log (:co-root roots)))
       :triples triples})))
 
+(defn- large-client-view?
+  "Does the captured client-visible corpus contain at least nine fold keys?
+
+  Stop as soon as the answer is known.  This preserves the tiny-corpus
+  PersistentArrayMap order contract without paying an O(corpus) count on the
+  ordinary large graph."
+  [roots]
+  (let [store-root (:store-root roots)
+        schema-count (count (:schema-root roots))
+        needed (- 9 schema-count)]
+    (or (not (pos? needed))
+        (>=
+         (reduce-kv
+          (fn [visible cid cl]
+            (if (and (not (contains? (:superseded store-root) cid))
+                     (store-root-fact->triple store-root cl))
+              (let [visible' (inc visible)]
+                (if (>= visible' needed) (reduced visible') visible'))
+              visible))
+          0 (:facts store-root))
+         needed))))
+
+(defn- hash-refold-order
+  "Re-key a bounded subject slice in the same PersistentHashMap regime used by
+  the ordinary (>8-key) cold fold."
+  [facts]
+  (let [ops (mapv (fn [fact]
+                    (fold/->FactOp 0 "assert"
+                                  (:l fact) (:p fact) (:r fact) "live"))
+                  facts)
+        cmap (fold/card-map ops)]
+    (vec
+     (vals
+      (reduce
+       (fn [m fact]
+         (let [key (if (ck/single-eff? cmap (:p fact))
+                     (str (:l fact) "\u0001" (:p fact))
+                     (str (:l fact) "\u0001" (:p fact)
+                          "\u0001" (:r fact)))]
+           (assoc m key fact)))
+       clojure.lang.PersistentHashMap/EMPTY
+       facts)))))
+
+(defn- subject-wire-snapshot
+  "Project one subject from the captured Store/schema roots.
+
+  Exact :show must be O(the subject's own history), not O(the corpus).  The
+  Store's by-l index supplies the domain facts and schema-view supplies the
+  deliberately log-authoritative cardinality/value_kind facts.  Refolding this
+  bounded slice preserves the same single/multi reduction and deterministic row
+  order as the full wire projection without constructing every live triple."
+  ([te] (subject-wire-snapshot (capture-read-roots!) te))
+  ([roots te]
+   (if-not (large-client-view? roots)
+     ;; Below nine global fold keys, cold order is log insertion order.  The
+     ;; complete projection is constant-bounded here and remains the oracle for
+     ;; updates to an existing ArrayMap key.
+     (let [{:keys [version triples]} (facts-wire-snapshot roots)]
+       {:version version
+        :rows (reduce (fn [rows [l p r]]
+                        (if (= l te) (conj rows [p r]) rows))
+                      [] triples)})
+     (let [c0 (:co-root roots)
+           st (:store c0)
+           lid (s/resolve-name st te)
+           domain
+           (if lid
+             (keep (fn [cid]
+                     (when-let [t (fact->triple st cid)]
+                       (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                   (c/by-l st lid))
+             [])
+           schema
+           (keep (fn [[[subject _] fact]]
+                   (when (= subject te) fact))
+                 (:schema-root roots))
+           ordered (hash-refold-order (into (vec domain) schema))]
+       {:version (:version roots)
+        :rows (mapv (fn [fact] [(:p fact) (:r fact)]) ordered)}))))
+
 (def ^:dynamic *request-query-control* nil)
 
 (defn- query-request? [req] (wire/query-request? req))
@@ -4877,12 +4957,7 @@
     (= :show handler)
     (do
       (when-not *reload-checked* (prepare-request-reload! req))
-      (let [{:keys [version triples]} (facts-wire-snapshot)
-            te (:te req)]
-        {:version version
-         :rows (reduce (fn [rows [l p r]]
-                         (if (= l te) (conj rows [p r]) rows))
-                       [] triples)}))
+      (subject-wire-snapshot (:te req)))
 
     (= :validate handler)
     (do
