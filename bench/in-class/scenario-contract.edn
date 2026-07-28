@@ -62,4 +62,9 @@
     :query-class :point-lookup
     :corpus-sizes :default
     :decision-section "Workload derivation / Point lookup"
-    :definition "Exact subject+predicate lookup for @corpus-0 title through SPO; result cardinality is one."}]}}
+    :definition "Exact subject+predicate lookup for @corpus-0 title through SPO; result cardinality is one."}
+   {:id :compound-datalog-join
+    :query-class :compound-datalog-join
+    :corpus-sizes :default
+    :decision-section "Workload derivation / Datalog joins"
+    :definition "Bind title-0 through POS, then re-probe the substituted subject against kind=agent and owner=@owner-0; result cardinality is one."}]}}

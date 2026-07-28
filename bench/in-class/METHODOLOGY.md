@@ -115,6 +115,12 @@ The point lookup scenario cites decision section
 `(@corpus-0,title,?)` SPO prefix. It always returns one fact across
 3k/30k/300k, making the fixed-result scaling test explicit.
 
+The compound scenario cites decision section
+`Workload derivation / Datalog joins`. It binds `title-0` through POS, then
+re-probes the substituted subject through the exact `kind=agent` and
+`owner=@owner-0` prefixes. Its one-row result measures compound-prefix work
+rather than growing result construction.
+
 ## Golden ratchet
 
 Run the default landing gate from a clean Fram checkout:

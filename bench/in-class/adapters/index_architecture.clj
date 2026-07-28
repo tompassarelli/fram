@@ -245,11 +245,25 @@
   {:result-count (count (probe-triples engine ["@corpus-0" "title" nil]))
    :expected-count-fn (constantly 1)})
 
+(defn compound-datalog-join [engine _scenario]
+  (let [candidates (map first
+                        (probe-triples engine [nil "title" "title-0"]))
+        matches
+        (filter
+         (fn [subject]
+           (and (seq (probe-triples engine [subject "kind" "agent"]))
+                (seq (probe-triples engine
+                                    [subject "owner" "@owner-0"]))))
+         candidates)]
+    {:result-count (count matches)
+     :expected-count-fn (constantly 1)}))
+
 ;; Scenario handlers are added one coherent scenario at a time.
 (def scenario-handlers
   {:coordinator-aggregate-scan coordinator-aggregate-scan
    :staffing-projection staffing-projection
-   :point-lookup point-lookup})
+   :point-lookup point-lookup
+   :compound-datalog-join compound-datalog-join})
 
 (def started-utc (str (java.time.Instant/now)))
 (def load-start (sh-line "cat" "/proc/loadavg"))
