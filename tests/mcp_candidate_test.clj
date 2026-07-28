@@ -409,6 +409,23 @@
             (= v0 (transaction-version))
             (= file0 (slurp jointred-file)))))
 
+(when (= "1" (System/getenv "FRAM_TRANSACTION_TEST_ONLY"))
+  (p/destroy-tree main-daemon)
+  (p/destroy-tree bad-daemon)
+  (p/destroy-tree transaction-daemon)
+  (let [cs @checks
+        fails (filter (fn [[_ ok]] (not ok)) cs)]
+    (if (empty? fails)
+      (do
+        (println (str "\nfram-mcp-edit-transaction: " (count cs) " / "
+                      (count cs) " PASS"))
+        (p/shell {} "rm" "-rf" tmp)
+        (System/exit 0))
+      (do
+        (println (str "\nfram-mcp-edit-transaction: " (count fails)
+                      " FAILED  (workspace left at " tmp ")"))
+        (System/exit 1)))))
+
 ;; ============================================================================
 ;; A. NESTED TRACKED-PATH E2E through the MCP surface.
 ;; ============================================================================
