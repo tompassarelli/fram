@@ -94,7 +94,7 @@
 (defn generation-record? [op :- (Map Keyword Any)] :- Bool
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
-(defn valid-edit-batch-envelope? [record :- Any expected-seal :- String] :- Bool
+(defn valid-edit-batch-envelope? [record :- (Map Keyword Any) expected-seal :- String] :- Bool
   (let [base (:fram-edit-base-version record) final (:fram-edit-final-version record) ops (:fram-edit-ops record) installed (:fram-edit-installed record) lines (:fram-edit-line-count record)]
     (and (map? record)
       (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record)))
@@ -154,16 +154,16 @@
     :else
     (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
 
-(defn log-envelope [canonical-log :- String req :- Any] :- Any
+(defn log-envelope [canonical-log :- String req :- (Map Keyword Any)] :- (Map Keyword Any)
   (let [base {:op :for-log :expected-log canonical-log :request req}]
     (if (contains? req :fmt) (assoc base :fmt (:fmt req)) base)))
 
-(defn reject-message [rejection :- Any] :- String
+(defn reject-message [rejection :- (Vec String)] :- String
   (if (sequential? rejection)
     (str/join "; " (map str rejection))
     (str rejection)))
 
-(defn coord-write-response [resp :- Any] :- String
+(defn coord-write-response [resp :- (Map Keyword Any)] :- String
   (cond
     (:ok resp)
     (str "ok:" (:ok resp))
@@ -181,10 +181,10 @@
     :else
     (str "error:" (pr-str resp))))
 
-(defn coord-version-response [resp :- Any] :- Int
+(defn coord-version-response [resp :- (Map Keyword Any)] :- Int
   (let [version (:version resp)] (if (integer? version) version -1)))
 
-(defn coord-version-for-log-response [resp :- Any] :- Int
+(defn coord-version-for-log-response [resp :- (Map Keyword Any)] :- Int
   (cond
     (integer? (:version resp))
     (:version resp)
@@ -193,7 +193,7 @@
     :else
     -3))
 
-(defn coord-status-response [port :- Any resp :- Any] :- String
+(defn coord-status-response [port :- Int resp :- (Map Keyword Any)] :- String
   (cond
     (integer? (:version resp))
     (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
@@ -212,11 +212,11 @@
     :else
     (str "coordinator UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
 
-(defn coord-status-down [port :- Any] :- String
+(defn coord-status-down [port :- Int] :- String
   (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
 
-(defn warm-read-response [resp :- Any] :- Any
+(defn warm-read-response [resp :- (Map Keyword Any)] :- (U (Map Keyword Any) Nil)
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
 
-(defn warm-read-for-log-response [resp :- Any] :- Any
+(defn warm-read-for-log-response [resp :- (Map Keyword Any)] :- (U (Map Keyword Any) Nil)
   (if (or (= "unknown op" (:error resp)) (contains? resp :reject)) nil resp))
