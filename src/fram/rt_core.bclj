@@ -193,7 +193,7 @@
     :else
     -3))
 
-(defn coord-status-response [port :- Int resp :- (Map Keyword Any)] :- String
+(defn coord-status-response [port :- Int resp :- (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- String
   (cond
     (integer? (:version resp))
     (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
