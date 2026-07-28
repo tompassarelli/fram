@@ -1,8 +1,8 @@
 ;; fram_mcp.clj — the AI-facing edge of a Fram instance.
 ;; ============================================================================
 ;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The surface is CLOSED
-;; and O(1): exactly the ten tools of the TELL/ASK knowledge-base core (Russell &
-;; Norvig KB interface) — tell / retract / show / ask / validate + the five graph-edit
+;; and O(1): exactly eleven tools of the TELL/ASK knowledge-base core (Russell &
+;; Norvig KB interface) — tell / retract / show / ask / validate + six graph-edit
 ;; verbs — served straight from fram.tools/catalog, never minted per-predicate. The
 ;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
@@ -33,7 +33,7 @@
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
 ;; --- the closed surface -------------------------------------------------------
-;; One instructions string; the tool list is fram.tools/catalog verbatim (10 tools).
+;; One instructions string; the tool list is fram.tools/catalog verbatim (11 tools).
 (def instructions
   (str
    "Fram is a FACT engine: every fact is a triple (subject predicate object); a "
@@ -50,9 +50,9 @@
    "the coordinator. `validate` reports integrity violations.\n\n"
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
    "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
-   "(ten tools) while the vocabulary lives in the graph as data.\n\n"
+   "(eleven tools) while the vocabulary lives in the graph as data.\n\n"
    "Graph-owned Beagle modules (registered `graph-upstream`) are authored by GRAPH "
-   "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body "
+   "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction "
    "(recompile-gated, fail-closed)."))
 
 ;; The tool catalog is deliberately closed and corpus-independent. Materialize it
@@ -351,6 +351,30 @@
                           (:within e) (assoc :within (datum! (:within e) "within")))
       nil)))
 
+;; Parse one module's multi-definition transaction. The outer module is the
+;; sole scope authority; nested edits reuse the existing set-body /
+;; replace-in-body payload shape without carrying a second module.
+(defn- edit-transaction-specs [e]
+  (let [edits (:edits e)]
+    (when-not (sequential? edits)
+      (throw (ex-info "edits must be an array" {:spec-error true})))
+    (mapv
+     (fn [i edit]
+       (when-not (map? edit)
+         (throw (ex-info (str "edits[" i "] must be an object")
+                         {:spec-error true})))
+       (when-not (#{"set-body" "replace-in-body"} (:op edit))
+         (throw (ex-info (str "edits[" i "] op must be set-body or replace-in-body")
+                         {:spec-error true})))
+       (when (str/blank? (str (:name edit)))
+         (throw (ex-info (str "edits[" i "] name is required")
+                         {:spec-error true})))
+       (or (edit-min-spec (assoc edit :module (:module e)))
+           (throw (ex-info (str "edits[" i "] has an unknown edit op")
+                           {:spec-error true}))))
+     (range)
+     edits)))
+
 ;; the corpus the verb operates over = every .bclj in the source tree (so cross-module
 ;; references resolve), with the per-file projected EDN written next to it in a temp dir.
 
@@ -595,19 +619,29 @@
       ;; NO fallback to the commit-first :edit-min flow: a coordinator that cannot
       ;; prepare/commit candidates gets a typed refusal, never a degraded write.
       (and flip-on? flip-code-port)
-      (let [spec (try (edit-min-spec e)
-                      (catch clojure.lang.ExceptionInfo ex
-                        (if (:spec-error (ex-data ex)) {:spec-error (.getMessage ex)} (throw ex))))]
+      (let [prepared (try
+                       (if (= op "edit-transaction")
+                         {:specs (edit-transaction-specs e)}
+                         {:spec (edit-min-spec e)})
+                       (catch clojure.lang.ExceptionInfo ex
+                         (if (:spec-error (ex-data ex))
+                           {:spec-error (.getMessage ex)}
+                           (throw ex))))]
         (cond
-          (nil? spec)
+          (and (nil? (:spec prepared))
+               (nil? (:specs prepared))
+               (nil? (:spec-error prepared)))
           {:isError true :text (str "unknown edit op: " op)}
-          (:spec-error spec)
+          (:spec-error prepared)
           {:isError true
-           :text (str "REJECTED (nothing prepared, nothing committed): " (:spec-error spec)
+           :text (str "REJECTED (nothing prepared, nothing committed): " (:spec-error prepared)
                       " — the edit payload must be a readable EDN form")}
           :else
           (let [port (Integer/parseInt flip-code-port)
-                prep (try (fram.rt/coord-request-for-log port (flip-log) {:op :edit-prepare :spec spec})
+                prep (try (fram.rt/coord-request-for-log
+                           port (flip-log)
+                           (merge {:op :edit-prepare}
+                                  (select-keys prepared [:spec :specs])))
                           (catch Throwable t {:reject [(str "edit-prepare socket: " (.getMessage t))]}))]
             (cond
               (= "unknown op" (:error prep))
@@ -850,16 +884,18 @@
 
 ;; the graph-AST edit tools — these route through route-edit (a long recompile-gated
 ;; transaction), NOT the query budget. Names match the structural ToolSpecs in tools.bclj.
-(def ^:private edit-tools #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
+(def ^:private edit-tools
+  #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+    "edit-transaction"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
 
 ;; ============================================================================
 ;; PROFILES — opt-in restricted tool surfaces (FRAM_MCP_PROFILE; unset = full).
 ;; ============================================================================
-;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact ten-tool
+;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact eleven-tool
 ;; closed catalog above — the pre-profile behavior, no new checks anywhere.
 ;; "graph-edit-v1" is the RESTRICTED authoring profile for graph-upstream repos
-;; (the fram-code-on wiring): exactly the five graph-edit verbs are EXPOSED
+;; (the fram-code-on wiring): exactly the six graph-edit verbs are EXPOSED
 ;; (tools/list) *and* AUTHORIZED (tools/call). The call gate is server-side and
 ;; runs BEFORE alias normalization (untell->retract, query<->ask) and BEFORE any
 ;; dispatch: a denied name never reaches tl/call, load-state, the coordinator,
@@ -879,7 +915,7 @@
 ;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
 
 ;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
-;;   (1) the name must be one of the five edit verbs — everything else
+;;   (1) the name must be one of the six edit verbs — everything else
 ;;       (tell/retract/show/ask/validate, the query/untell aliases, unknown
 ;;       names) is denied AS GIVEN, pre-normalization, pre-dispatch;
 ;;   (2) the rendered target FRAM_SRC/<module>.bclj must stay CONFINED under
@@ -889,7 +925,7 @@
   (when restricted?
     (if-not (edit-tool? nm)
       {:text (str "profile graph-edit-v1: tool '" nm "' is not authorized — this surface is exactly "
-                  "add-def / set-body / rename-def / insert-after / replace-in-body. "
+                  "add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction. "
                   "Denied before alias normalization and dispatch; nothing mutated.")}
       (let [m (:module args)]
         (cond
@@ -905,8 +941,8 @@
 (def ^:private profile-instructions
   (if restricted?
     (str instructions
-         "\n\nPROFILE graph-edit-v1 (restricted): only the five graph-edit verbs "
-         "(add-def / set-body / rename-def / insert-after / replace-in-body) are exposed and "
+         "\n\nPROFILE graph-edit-v1 (restricted): only the six graph-edit verbs "
+         "(add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction) are exposed and "
          "authorized; tell / retract / show / ask / validate (and the untell/query aliases) "
          "are denied server-side before dispatch.")
     instructions))
@@ -1160,8 +1196,8 @@
   (log! "fram-mcp: loaded as a library (FRAM_MCP_LIBRARY=1) — no profile fence, no stdio loop"))
 (when-not library-mode?
  (log! (if restricted?
-        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body ONLY)"
-        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 5 edit verbs)"))
+        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body/edit-transaction ONLY)"
+        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 6 edit verbs)"))
  (loop []
   (let [line (read-line)]
     (when (some? line)

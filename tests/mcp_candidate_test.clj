@@ -5,7 +5,7 @@
 ;; corrective contract of thread 019f8741-5b28 end to end:
 ;;
 ;;   A. NESTED TRACKED-PATH E2E — a genuinely nested module (src.fram.wkfix,
-;;      tracked at <src>/src/fram/wkfix.bclj) edits through the five-tool MCP
+;;      tracked at <src>/src/fram/wkfix.bclj) edits through the MCP
 ;;      surface; the edit compiles, writes EXACTLY the tracked nested file, and
 ;;      NO root-level <src>/src.fram.wkfix.bclj artifact is created.
 ;;   B. INVALID CANDIDATES REJECT WITH ZERO MUTATION — an unreadable payload, a
@@ -90,6 +90,7 @@
 (def src-dir (str tmp "/srcroot"))
 (def nested-dir (str src-dir "/src/fram"))
 (def code-log (str src-dir "/.fram/code.log"))
+(def transaction-log (str src-dir "/.fram/transaction.log"))
 (def bad-log (str src-dir "/.fram/bad.log"))
 (def facts-log (str tmp "/facts.log"))
 (def outside-dir (str tmp "/outside"))
@@ -110,6 +111,11 @@
       (str "#lang beagle/clj\n\n"
            ";; schema — exact verifier-reproduction fixture.\n\n"
            "(defn cardinality [ctx :- Int pname :- Int] :- Int\n  (* 2 pname))\n"))
+(spit (str nested-dir "/missmod.bclj")
+      (str "#lang beagle/clj\n\n"
+           ";; jointred — two type errors that can only cross the gate together.\n\n"
+           "(defn left-red [] :- Int\n  \"red-left\")\n\n"
+           "(defn right-red [] :- Int\n  \"red-right\")\n"))
 
 ;; HERMETIC SPAWNS — :env REPLACES the environment everywhere below. An ambient
 ;; live-runtime FRAM_TELEMETRY_LOG would otherwise leak into the daemons via
@@ -161,6 +167,7 @@
       dup (pr-str {:tx 999999 :op "assert" :l "@src.fram.dupmod#root" :p "file"
                    :r (str outside-dir "/dup2.bclj") :ts "2026-07-22T00:00:00Z" :by "test"})]
   (spit bad-log (str (str/join "\n" (concat lines [dup])) "\n")))
+(write-bytes transaction-log (read-bytes code-log))
 
 ;; --- throwaway coordinators ---------------------------------------------------
 (defn port-free? [pt]
@@ -171,6 +178,7 @@
                             (throw (ex-info "no free test port" {}))))
 (def main-port (pick-port [39911 39913 39915 39917 39919]))
 (def bad-port  (pick-port [39912 39914 39916 39918 39920]))
+(def transaction-port (pick-port [39891 39893 39895 39897 39899]))
 (def stub-port (pick-port [39921 39923 39925 39927 39929]))
 (def replay-port (pick-port [39931 39933 39935 39937 39939]))
 (def poison-port (pick-port [39941 39943 39945 39947 39949]))
@@ -206,11 +214,98 @@
 (println "booting throwaway coordinators (main:" main-port " pathology:" bad-port ") …")
 (def main-daemon (boot-daemon! main-port code-log))
 (def bad-daemon  (boot-daemon! bad-port bad-log))
+(def transaction-daemon (boot-daemon! transaction-port transaction-log))
 
 (defn coord
   ([req] (coord main-port code-log req))
   ([port log req] (rt/coord-request-for-log port log req)))
 (defn cur-version [] (:version (coord {:op :version})))
+(defn transaction-coord [req]
+  (coord transaction-port transaction-log req))
+(defn transaction-version []
+  (:version (transaction-coord {:op :version})))
+
+;; ============================================================================
+;; T0. COORDINATOR MULTI-DEFINITION CANDIDATE — one end-state projection,
+;;     one sealed emission, and exact-version serialization against a single edit.
+;; ============================================================================
+(let [specs [{:op "set-body" :module "src.fram.wkfix"
+              :name "double-it" :datum 11}
+             {:op "set-body" :module "src.fram.wkfix"
+              :name "plus-both" :datum 22}]
+      log0 (read-bytes transaction-log)
+      prep (transaction-coord {:op :edit-prepare :specs specs})
+      cand-edn (str tmp "/transaction-candidate.bclj.edn")
+      cand-src (str tmp "/transaction-candidate.bclj")
+      _ (spit cand-edn (:edn prep))
+      rendered (p/shell {:continue true :out (io/file cand-src) :err :string :env scrub-env}
+                        beagle-bin "facts-roundtrip" "--render" cand-edn)
+      text (when (zero? (:exit rendered)) (slurp cand-src))
+      commit (transaction-coord
+              {:op :edit-commit :candidate (:candidate prep)
+               :version (:version prep) :module (:module prep)
+               :path (:path prep) :ops-digest (:ops-digest prep)
+               :edn-digest (:edn-digest prep)})
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes (read-bytes transaction-log)
+                         (alength ^bytes log0)
+                         (alength ^bytes (read-bytes transaction-log)))
+                        "UTF-8")]
+  (chk "T0: coordinator accepts two distinct definition edits as one candidate"
+       (and (true? (:ok prep)) (= 2 (:edits prep)) (pos? (:ops prep))))
+  (chk "T0: the one prepared end state contains both staged bodies"
+       (and (zero? (:exit rendered))
+            (str/includes? text ":- Int 11)")
+            (str/includes? text ":- Int 22)")))
+  (chk "T0: the transaction commits through the ordinary atomic candidate path"
+       (and (true? (:ok commit)) (= (:ops commit) (:installed commit))))
+  (chk "T0: one transaction emits exactly one durable batch envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(let [batch (transaction-coord
+             {:op :edit-prepare
+              :specs [{:op "set-body" :module "src.fram.wkfix"
+                       :name "double-it" :datum 31}
+                      {:op "set-body" :module "src.fram.wkfix"
+                       :name "plus-both" :datum 32}]})
+      single (transaction-coord
+              {:op :edit-prepare
+               :spec {:op "set-body" :module "src.fram.wkfix"
+                      :name "double-it" :datum 33}})
+      single-commit (transaction-coord
+                     {:op :edit-commit :candidate (:candidate single)
+                      :version (:version single) :module (:module single)
+                      :path (:path single) :ops-digest (:ops-digest single)
+                      :edn-digest (:edn-digest single)})
+      log-after-single (vec (read-bytes transaction-log))
+      version-after-single (transaction-version)
+      batch-commit (transaction-coord
+                    {:op :edit-commit :candidate (:candidate batch)
+                     :version (:version batch) :module (:module batch)
+                     :path (:path batch) :ops-digest (:ops-digest batch)
+                     :edn-digest (:edn-digest batch)})]
+  (chk "T0: concurrent single-definition candidate commits first"
+       (true? (:ok single-commit)))
+  (chk "T0: the interleaved batch is serialized by exact-version CAS"
+       (= :stale-version (:code batch-commit)))
+  (chk "T0: stale batch rejection records and emits nothing"
+       (and (= version-after-single (transaction-version))
+            (= log-after-single (vec (read-bytes transaction-log))))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      duplicate (transaction-coord
+                 {:op :edit-prepare
+                  :specs [{:op "set-body" :module "src.fram.wkfix"
+                           :name "double-it" :datum 41}
+                          {:op "replace-in-body" :module "src.fram.wkfix"
+                           :name "double-it" :old 33 :new 42}]})]
+  (chk "T0: duplicate-definition transaction rejects before candidate creation"
+       (= :duplicate-definition (:code duplicate)))
+  (chk "T0: invalid transaction leaves log and version byte-identical"
+       (and (= v0 (transaction-version))
+            (= log0 (vec (read-bytes transaction-log))))))
 
 ;; --- spawning the MCP hermetically --------------------------------------------
 (def base-env
@@ -227,6 +322,10 @@
            "FRAM_BEAGLE" beagle-bin "FRAM_CHECK_EMIT" check-emit
            "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")}
     (System/getenv "FRAM_RACKET") (assoc "FRAM_RACKET" (System/getenv "FRAM_RACKET"))))
+(def transaction-env
+  (assoc base-env
+         "FRAM_CODE_PORT" (str transaction-port)
+         "FRAM_CODE_LOG" transaction-log))
 
 (defn run-mcp [env reqs]
   (let [in (str (str/join "\n" (map json/generate-string reqs)) "\n")
@@ -247,9 +346,71 @@
 
 (def wkfix-file (str nested-dir "/wkfix.bclj"))
 (def wkfix-root-artifact (str src-dir "/src.fram.wkfix.bclj"))
+(def jointred-file (str nested-dir "/missmod.bclj"))
 
 ;; ============================================================================
-;; A. NESTED TRACKED-PATH E2E through the five-tool MCP surface.
+;; T1. MCP END-STATE TRANSACTION — a red baseline cannot cross the sealed
+;;     checker one definition at a time, but two jointly-green edits commit as
+;;     one emission. A still-red end state rejects with zero recorded bytes.
+;; ============================================================================
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp jointred-file)
+      single (mcp-edit transaction-env 5 "set-body"
+                       {:module "src.fram.missmod" :name "left-red" :body "1"})
+      single-text (or (rtext single) "")]
+  (chk "T1: one legal definition edit is rejected while the module end state stays red"
+       (and (rerr? single)
+            (str/includes? single-text "fails the sealed Beagle parse/type check")
+            (str/includes? single-text "nothing committed")))
+  (chk "T1: rejected single edit leaves the red baseline byte-identical"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp jointred-file)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 6 "edit-transaction"
+              {:module "src.fram.missmod"
+               :edits [{:op "set-body" :name "left-red" :body "1"}
+                       {:op "set-body" :name "right-red" :body "2"}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after (alength ^bytes before) (alength ^bytes after))
+                        "UTF-8")
+      source (slurp jointred-file)]
+  (chk "T1: two jointly-green definition edits are accepted through one MCP transaction"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE-CHECKS CLEAN")
+            (str/includes? text "edit-transaction")))
+  (chk "T1: the tracked projection contains both green bodies"
+       (and (str/includes? source ":- Int 1)")
+            (str/includes? source ":- Int 2)")))
+  (chk "T1: the accepted transaction emits exactly one durable batch envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp jointred-file)
+      result (mcp-edit
+              transaction-env 7 "edit-transaction"
+              {:module "src.fram.missmod"
+               :edits [{:op "set-body" :name "left-red" :body "\"still-red\""}
+                       {:op "set-body" :name "right-red" :body "22"}]})
+      text (or (rtext result) "")]
+  (chk "T1: transaction whose end state stays red is rejected by the one sealed check"
+       (and (rerr? result)
+            (str/includes? text "fails the sealed Beagle parse/type check")
+            (str/includes? text "nothing committed")))
+  (chk "T1: rejected red transaction records nothing and leaves projection unchanged"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp jointred-file)))))
+
+;; ============================================================================
+;; A. NESTED TRACKED-PATH E2E through the MCP surface.
 ;; ============================================================================
 (let [log0 (count (read-bytes code-log))
       v0 (cur-version)
@@ -1273,6 +1434,7 @@
 ;; ---------------------------------------------------------------------------
 (p/destroy-tree main-daemon)
 (p/destroy-tree bad-daemon)
+(p/destroy-tree transaction-daemon)
 (try (.close ^java.net.ServerSocket (:socket stub-server)) (catch Throwable _ nil))
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (if (empty? fails)

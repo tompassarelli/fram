@@ -1,9 +1,9 @@
 ;; tools_test.clj — the CLOSED, O(1) tool catalog + dispatch.
-;; Proves: (1) the catalog is exactly TEN tools, never minted per-predicate;
+;; Proves: (1) the catalog is exactly ELEVEN tools, never minted per-predicate;
 ;; (2) tell/retract lower to a coordinator-routable {:write} intent (@-normalized
 ;; refs), with `untell` accepted as an alias for `retract`; (3) reads (show/validate)
 ;; return rows off the fold; (4) `ask`/`query` reach fram.query; (5) unknown tool +
-;; missing required param -> :error; (6) the five graph-AST edit verbs dispatch to the
+;; missing required param -> :error; (6) the six graph-AST edit verbs dispatch to the
 ;; {:edit} envelope. The vocabulary is DATA (a predicate is an entity), so there are no
 ;; owner-of/set-owner/<pred>-list tools — `show <pred>` and `ask` reach it instead.
 ;;   bb -cp out tests/tools_test.clj
@@ -23,12 +23,13 @@
 (defn has-tool? [nm] (boolean (some #(= (:name %) nm) cat)))
 (defn call [tool args] (t/call facts idx cat tool args))
 
-;; (1) CLOSED catalog — EXACTLY these ten names, no more, no fewer, no per-predicate tools.
+;; (1) CLOSED catalog — EXACTLY these eleven names, no more, no fewer, no per-predicate tools.
 (def expected-names
   #{"tell" "retract" "show" "ask" "validate"
-    "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
-(chk "catalog is EXACTLY the ten closed tools" (= (set (map :name cat)) expected-names))
-(chk "catalog has exactly 10 entries" (= 10 (count cat)))
+    "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+    "edit-transaction"})
+(chk "catalog is EXACTLY the eleven closed tools" (= (set (map :name cat)) expected-names))
+(chk "catalog has exactly 11 entries" (= 11 (count cat)))
 (chk "no per-predicate tools minted (owner-of/set-owner/depends_on-list absent)"
      (and (not (has-tool? "owner-of")) (not (has-tool? "set-owner"))
           (not (has-tool? "depends_on-list")) (not (has-tool? "depends_on-from"))
@@ -83,7 +84,8 @@
 ;; (6) GRAPH-AST EDIT verbs: dispatch to the {:edit} envelope (host runs it OUT-OF-BAND).
 (chk "structural edit tools present" (and (has-tool? "add-def") (has-tool? "set-body")
                                           (has-tool? "rename-def") (has-tool? "insert-after")
-                                          (has-tool? "replace-in-body")))
+                                          (has-tool? "replace-in-body")
+                                          (has-tool? "edit-transaction")))
 (chk "add-def -> {:edit upsert-form} envelope (NOT {:write})"
      (let [r (call "add-def" {:module "schema" :form "(defn f [x :- Int] :- Int x)"})]
        (and (nil? (:write r))
@@ -100,10 +102,20 @@
 (chk "replace-in-body -> {:edit replace-in-body} envelope"
      (= (:edit (call "replace-in-body" {:module "schema" :name "f" :old "(a)" :new "(b)"}))
         {:op "replace-in-body" :module "schema" :name "f" :old "(a)" :new "(b)" :within nil}))
+(chk "edit-transaction -> one multi-definition {:edit} envelope"
+     (= (:edit (call "edit-transaction"
+                     {:module "schema"
+                      :edits [{:op "set-body" :name "a" :body "1"}
+                              {:op "set-body" :name "b" :body "2"}]}))
+        {:op "edit-transaction" :module "schema"
+         :edits [{:op "set-body" :name "a" :body "1"}
+                 {:op "set-body" :name "b" :body "2"}]}))
 ;; server-side required-param enforcement on the edit verbs (fail-closed)
 (chk "add-def missing form -> :error"        (contains? (call "add-def" {:module "schema"}) :error))
 (chk "set-body missing name/body -> :error"  (contains? (call "set-body" {:module "schema"}) :error))
 (chk "edit verb missing module -> :error"    (contains? (call "add-def" {:form "(def x 1)"}) :error))
+(chk "edit-transaction missing edits -> :error"
+     (contains? (call "edit-transaction" {:module "schema"}) :error))
 (chk "edit envelope carries no single-triple :write key"
      (nil? (:write (call "set-body" {:module "schema" :name "c" :body "1"}))))
 

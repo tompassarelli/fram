@@ -201,13 +201,14 @@ bin/fram tell 2026-01-01-090700 committed 2026-06-21   # writes route through th
 
 The primary query author is a model, so the surface is tuned for what a model emits
 correctly with zero examples — a **CLOSED, O(1) tool catalog** plus a structured query
-escape hatch. The catalog is a fixed ten tools, never minted per-predicate: the
+escape hatch. The catalog is a fixed eleven tools, never minted per-predicate: the
 vocabulary is **data in the graph**, not tools.
 
-- **The closed TELL/ASK catalog — exactly ten tools.** `tell` (assert a fact) /
+- **The closed TELL/ASK catalog — exactly eleven tools.** `tell` (assert a fact) /
   `retract` (remove one) / `show` (all facts on a subject) / `ask` (structured query) /
-  `validate`, plus the five code-authoring verbs the resolver adds (`add-def` / `set-body` /
-  `rename-def` / `insert-after` / `replace-in-body`). A single-valued predicate replaces
+  `validate`, plus six code-authoring verbs the resolver adds (`add-def` / `set-body` /
+  `rename-def` / `insert-after` / `replace-in-body` / `edit-transaction`). A
+  single-valued predicate replaces
   its value; a multi-valued one accumulates — and **cardinality is itself a fact**
   (`tell <pred> cardinality single|multi`), so `tell` = assert subsumes the old
   `set-P`/`add-P` with no per-predicate tools. Predicates are entities: `show <pred>`

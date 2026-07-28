@@ -1,9 +1,9 @@
 #lang beagle/clj
 (ns fram.tools
-  "The AI-facing TOOL CATALOG — CLOSED and O(1). Exactly ten tools, never minted
+  "The AI-facing TOOL CATALOG — CLOSED and O(1). Exactly eleven tools, never minted
   per-predicate from the vocabulary: `tell`, `retract`, `show`, `ask`, `validate`,
-  and the five graph-AST edit verbs (`add-def`, `set-body`, `rename-def`,
-  `insert-after`, `replace-in-body`). Vocabulary is DATA, not tools — a predicate
+  and six graph-AST edit verbs (`add-def`, `set-body`, `rename-def`,
+  `insert-after`, `replace-in-body`, `edit-transaction`). Vocabulary is DATA, not tools — a predicate
   is an entity, so `show <pred>` reveals its cardinality/value_kind facts and `ask`
   enumerates the vocabulary; the engine never generates a `set-owner`/`owner-of` per
   fact (that catalog was a per-session context tax buying no safety the coordinator
@@ -39,7 +39,7 @@
 
 ;; The op of a tool — constrains dispatch (cond/:else) and missing-req. `:tell`/`:retract`
 ;; are the single-triple KB writes (assert/retract of ANY predicate); `:query` backs
-;; `ask`; `:show`/`:validate` are the reads. The trailing five are GRAPH-AST EDIT ops:
+;; `ask`; `:show`/`:validate` are the reads. The trailing six are GRAPH-AST EDIT ops:
 ;; they author a graph-upstream Beagle module by minting/superseding kind/v/fN facts via
 ;; the engine's resolve.clj verbs (NOT a single coordinator triple), so they return a
 ;; distinct {:edit ...} envelope the host runs out-of-band, recompile-gated and fail-closed.
@@ -48,7 +48,8 @@
 ;; next sibling (the internal verb is "insert-form"; two concurrent inserts after the
 ;; same anchor both land at distinct ties -> commute, the thing append-only could not do).
 (defenum Op :tell :retract :show :query :validate
-            :upsert-form :set-body :rename-def :insert-after :replace-in-body)
+            :upsert-form :set-body :rename-def :insert-after :replace-in-body
+            :edit-transaction)
 
 ;; row-result records (one per read arm; each producing lambda is homogeneous)
 (defrecord PredVal [pred :- String value :- String])
@@ -90,7 +91,7 @@
 (defn ref-value [facts :- (Vec k/Fact) pred :- String value :- Any] :- Any
   (if (all-ref? facts pred) (at value) value))
 
-;; --- catalog: the CLOSED, O(1) surface (exactly ten tools) -------------------
+;; --- catalog: the CLOSED, O(1) surface (exactly eleven tools) ----------------
 (defn catalog [facts :- (Vec k/Fact)] :- (Vec ToolSpec)
   (let [subj-param :- (Vec Param) [(->Param "subject" "string" true)]
         spo-params :- (Vec Param) [(->Param "subject" "string" true)
@@ -181,7 +182,16 @@
                  [(->Param "module" "string" true) (->Param "name" "string" true)
                   (->Param "old" "string" true) (->Param "new" "string" true)
                   (->Param "within" "string" false)]
-                 :replace-in-body "")]))
+                 :replace-in-body "")
+     (->ToolSpec "edit-transaction"
+                 (str "Atomically author two or more DISTINCT definitions in one graph-upstream "
+                      "Beagle module. `edits` is an array of set-body / replace-in-body objects "
+                      "(each names its definition and carries body, or old/new/optional within). "
+                      "Fram stages every edit, renders and type-checks the END STATE once, then "
+                      "emits one sealed batch or rejects with nothing emitted or recorded. "
+                      "Recompile-gated + fail-closed.")
+                 [(->Param "module" "string" true) (->Param "edits" "array" true)]
+                 :edit-transaction "")]))
 
 ;; --- dispatch ---------------------------------------------------------------
 (defn- spec-by-name [cat :- (Vec ToolSpec) name :- String] :- ToolSpec?
@@ -195,7 +205,7 @@
 (defn- missing-req [op :- Op args :- (Map Keyword Any)] :- (Vec String)
   (let [need-spo (or (= op :tell) (= op :retract))
         ;; graph-edit ops: module scope is always required; the rest by op.
-        need-module (or (= op :upsert-form) (or (= op :set-body) (or (= op :rename-def) (or (= op :insert-after) (= op :replace-in-body)))))
+        need-module (or (= op :upsert-form) (or (= op :set-body) (or (= op :rename-def) (or (= op :insert-after) (or (= op :replace-in-body) (= op :edit-transaction))))))
         e1 (if (and need-spo (or (nil? (:subject args)) (or (nil? (:predicate args)) (nil? (:object args)))))
              ["missing required param 'subject' and/or 'predicate' and/or 'object'"] [])
         e2 (if (and (= op :show) (nil? (:subject args))) ["missing required param 'subject'"] [])
@@ -209,8 +219,10 @@
         e8 (if (and (= op :insert-after) (or (nil? (:after args)) (nil? (:form args))))
              ["missing required param 'after' and/or 'form'"] [])
         e9 (if (and (= op :replace-in-body) (or (nil? (:name args)) (or (nil? (:old args)) (nil? (:new args)))))
-             ["missing required param 'name' and/or 'old' and/or 'new'"] [])]
-    (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 e9)))))))))))
+             ["missing required param 'name' and/or 'old' and/or 'new'"] [])
+        e10 (if (and (= op :edit-transaction) (nil? (:edits args)))
+              ["missing required param 'edits'"] [])]
+    (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 (concat e9 e10))))))))))))
 
 ;; READ -> {:rows [...]}.  WRITE (tell/retract) -> {:write {:op :l :p :r}} (host routes it
 ;; through the coordinator).  ask/query -> fram.query/run result.  bad/unknown -> {:error}.
@@ -259,4 +271,6 @@
               [(= op :replace-in-body) {:edit {:op "replace-in-body" :module (:module args)
                                                :name (:name args) :old (:old args) :new (:new args)
                                                :within (:within args)}}]
+              [(= op :edit-transaction) {:edit {:op "edit-transaction" :module (:module args)
+                                                :edits (:edits args)}}]
               [:else              {:error [(str "unhandled op for tool '" tool "'")]}])))))))

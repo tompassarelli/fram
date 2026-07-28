@@ -4,7 +4,7 @@
 ;; ambient FRAM_* leaks) and proves the opt-in profile seam end to end:
 ;;
 ;;   A. DEFAULT COMPATIBILITY — profile unset AND profile=full both serve the
-;;      exact ten-tool closed catalog, and the untell->retract alias still
+;;      exact eleven-tool closed catalog, and the untell->retract alias still
 ;;      resolves (the pre-profile behavior, byte-for-byte).
 ;;   B. UNKNOWN PROFILE FAILS CLOSED — any unrecognized FRAM_MCP_PROFILE exits
 ;;      nonzero before serving a single request, even with an otherwise fully
@@ -14,14 +14,14 @@
 ;;      FRAM_SRC / FRAM_CODE_LOG / FRAM_CODE_PORT identity, an EXISTING log
 ;;      INSIDE the source binding, and a LIVE STRICT-FENCED coordinator serving
 ;;      exactly that log. Dead / wrong-log / permissive daemons all fail closed.
-;;   D. RESTRICTED SURFACE — tools/list is EXACTLY the five graph-edit verbs;
+;;   D. RESTRICTED SURFACE — tools/list is EXACTLY the six graph-edit verbs;
 ;;      tools/call DENIES tell/retract/show/ask/validate, the query/untell
 ;;      aliases, and unknown names BEFORE alias normalization or dispatch, with
 ;;      ZERO mutation (both logs byte-identical across the denial batch); a
 ;;      module whose rendered target escapes FRAM_SRC is refused pre-dispatch.
 ;;   E. AUTHORIZED VERBS STILL WORK — a real set-body lands through the
 ;;      restricted surface (warm :edit-min via the strict-fenced coordinator),
-;;      proving the profile authorizes exactly the five, not zero.
+;;      proving the profile authorizes exactly the six, not zero.
 ;;
 ;;   bb -cp out tests/mcp_profile_test.clj      (run from the repo root)
 ;; Needs: bb + out/. Parts C-E boot throwaway coordinators (clojure JVM).
@@ -136,9 +136,11 @@
 (defn call-req [id tool args] {:jsonrpc "2.0" :id id :method "tools/call"
                                :params {:name tool :arguments args}})
 
-(def ten #{"tell" "retract" "show" "ask" "validate"
-           "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
-(def five #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"})
+(def eleven #{"tell" "retract" "show" "ask" "validate"
+              "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+              "edit-transaction"})
+(def six #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+           "edit-transaction"})
 
 ;; ============================================================================
 ;; A. DEFAULT COMPATIBILITY — unset + explicit full are the exact legacy surface.
@@ -148,7 +150,7 @@
                                      (call-req 3 "untell" {:subject "a" :predicate "owner"})])
       names (set (map :name (get-in (get by-id 2) [:result :tools])))]
   (chk "A: profile UNSET -> server serves (exit 0)" (zero? exit))
-  (chk "A: profile UNSET -> tools/list is EXACTLY the ten-tool closed catalog" (= names ten))
+  (chk "A: profile UNSET -> tools/list is EXACTLY the eleven-tool closed catalog" (= names eleven))
   (chk "A: profile UNSET -> untell ALIAS still resolves to retract (param error, not unknown/denied)"
        (let [r (get by-id 3) t (or (rtext r) "")]
          (and (rerr? r) (str/includes? t "object") (not (str/includes? t "not authorized"))))))
@@ -156,8 +158,8 @@
 (let [{:keys [by-id exit]} (run-mcp (assoc base-env "FRAM_MCP_PROFILE" "full")
                                     [init-req list-req])
       names (set (map :name (get-in (get by-id 2) [:result :tools])))]
-  (chk "A: profile=full -> serves the exact ten-tool catalog, no fence checks"
-       (and (zero? exit) (= names ten))))
+  (chk "A: profile=full -> serves the exact eleven-tool catalog, no fence checks"
+       (and (zero? exit) (= names eleven))))
 
 ;; ============================================================================
 ;; B. UNKNOWN PROFILE FAILS CLOSED — even with a fully valid restricted env.
@@ -235,7 +237,7 @@
   (chk "D: restricted startup serves (exit 0) against the strict-fenced coordinator" (zero? exit))
   (chk "D: initialize instructions declare the restricted profile"
        (str/includes? (str (get-in (get by-id 1) [:result :instructions])) "graph-edit-v1"))
-  (chk "D: tools/list is EXACTLY the five graph-edit verbs" (= names five))
+  (chk "D: tools/list is EXACTLY the six graph-edit verbs" (= names six))
   (doseq [[id nm] [[10 "tell"] [11 "retract"] [12 "show"] [13 "ask"] [14 "validate"]
                    [15 "query"] [16 "untell"] [17 "frobnicate"]]]
     (let [r (get by-id id) t (or (rtext r) "")]
