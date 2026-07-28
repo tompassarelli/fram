@@ -149,6 +149,136 @@
     (check! "refused regression preserves the live version"
             (= 5 (live-version)))))
 
+;; Split writers can append a lower tx after the merged Store has advanced.
+;; That physical tail must never be filtered away or installed as a version
+;; regression. The per-source byte cursor must surface it, while the source LWW
+;; index decides whether it changes a key and the shared version remains at the
+;; maximum captured/tail tx.
+(let [dir (.toFile
+           (java.nio.file.Files/createTempDirectory
+            "fram-split-interleave"
+            (make-array java.nio.file.attribute.FileAttribute 0)))
+      coordination (io/file dir "coordination.log")
+      telemetry (io/file dir "telemetry.log")
+      row (fn [tx l p r]
+            {:tx tx :op "assert" :l l :p p :r r
+             :ts "t" :by "fixture"})]
+  (write-lines! coordination [(row 1 "@thread:base" "kind" "thread")])
+  (write-lines! telemetry [(row 2 "@run:base" "kind" "run")])
+  (reset! coord-daemon/telemetry-log (.getCanonicalPath telemetry))
+  (reset! coord-daemon/snapshot-boot-enabled? false)
+  (coord-daemon/boot-flat! (.getCanonicalPath coordination))
+  (coord-daemon/warm!)
+
+  (append-line! telemetry (row 3 "@run:external" "phase" "pending"))
+  (append-line! coordination (row 4 "@thread:owned" "title" "owned"))
+  (real-apply-tail! @coord-daemon/co
+                    [(row 4 "@thread:owned" "title" "owned")])
+  (#'coord-daemon/note-source-lines!
+   [(str (pr-str (row 4 "@thread:owned" "title" "owned")) "\n")])
+  ;; Model the owned appender's exact stamp/cursor convergence while telemetry
+  ;; remains pending.
+  (reset! coord-daemon/flat-mtime
+          (#'coord-daemon/stamp coordination))
+  (reset! coord-daemon/flat-bytes (.length coordination))
+  (coord-daemon/warm!)
+  (let [roots (capture-reload! false)
+        candidate (build-reload! roots)]
+    (check! "lower split tx reconciles incrementally by source LWW"
+            (true? (:incremental? candidate)))
+    (check! "lower split tx candidate cannot regress the Store version"
+            (= 4 (:through candidate)))
+    (check! "lower split tx candidate installs"
+            (= :installed (install-reload! roots candidate)))
+    (check! "lower split tx preserves the captured owned write"
+            (= [["owned"]]
+               (:ok (coord-daemon/handle
+                     {:op :query
+                      :query (query "owned-title"
+                                    [{:var "title"}]
+                                    [{:rel "triple"
+                                      :args ["@thread:owned" "title"
+                                             {:var "title"}]}])}))))
+    (check! "lower split tx adds the pending telemetry fact"
+            (= [["pending"]]
+               (:ok (coord-daemon/handle
+                     {:op :query
+                      :query (query "external-phase"
+                                    [{:var "phase"}]
+                                    [{:rel "triple"
+                                      :args ["@run:external" "phase"
+                                             {:var "phase"}]}])}))))
+    (check! "lower split tx keeps cache and Store at version four"
+            (= 4 (live-version) (:version @coord-daemon/cache))))
+
+  ;; A physically later row can still carry an older/equal tx. Reconcile it
+  ;; against the source watermark instead of replaying it blindly: an older
+  ;; same-key value loses, while an equal-tx physically later value wins exactly
+  ;; as it does in the whole merged fold.
+  (append-line! coordination (row 2 "@thread:owned" "title" "stale"))
+  (let [roots (capture-reload! false)
+        candidate (build-reload! roots)]
+    (check! "older same-key tail reconciles incrementally"
+            (true? (:incremental? candidate)))
+    (check! "older same-key tail is excluded from the applied delta"
+            (empty? (:tail-lines candidate)))
+    (check! "older same-key tail installs without moving the version"
+            (and (= 4 (:through candidate))
+                 (= :installed (install-reload! roots candidate))))
+    (check! "older same-key tail cannot replace the newer value"
+            (= [["owned"]]
+               (:ok (coord-daemon/handle
+                     {:op :query
+                      :query (query "owned-title-after-stale"
+                                    [{:var "title"}]
+                                    [{:rel "triple"
+                                      :args ["@thread:owned" "title"
+                                             {:var "title"}]}])})))))
+
+  (append-line! coordination (row 4 "@thread:owned" "title" "equal-later"))
+  (let [roots (capture-reload! false)
+        candidate (build-reload! roots)]
+    (check! "equal-tx physically later row reconciles incrementally"
+            (true? (:incremental? candidate)))
+    (check! "equal-tx physically later row installs at the same version"
+            (and (= 4 (:through candidate))
+                 (= :installed (install-reload! roots candidate))))
+    (check! "equal-tx physically later row wins like the whole fold"
+            (= [["equal-later"]]
+               (:ok (coord-daemon/handle
+                     {:op :query
+                      :query (query "owned-title-after-equal"
+                                    [{:var "title"}]
+                                    [{:rel "triple"
+                                      :args ["@thread:owned" "title"
+                                             {:var "title"}]}])})))))
+
+  ;; A mixed physical tail must not silently discard tx3 while accepting tx5.
+  (write-lines! coordination [(row 1 "@thread:base" "kind" "thread")
+                              (row 4 "@thread:owned" "title" "owned")])
+  (write-lines! telemetry [(row 2 "@run:base" "kind" "run")])
+  (coord-daemon/boot-flat! (.getCanonicalPath coordination))
+  (coord-daemon/warm!)
+  (append-line! telemetry (row 3 "@run:mixed-low" "phase" "low"))
+  (append-line! telemetry (row 5 "@run:mixed-high" "phase" "high"))
+  (let [roots (capture-reload! false)
+        candidate (build-reload! roots)]
+    (check! "mixed lower/higher tail reconciles incrementally"
+            (true? (:incremental? candidate)))
+    (check! "mixed lower/higher tail installs through tx5"
+            (and (= 5 (:through candidate))
+                 (= :installed (install-reload! roots candidate))))
+    (check! "mixed lower/higher tail retains both physical rows"
+            (= #{["@run:mixed-low" "low"] ["@run:mixed-high" "high"]}
+               (set (:ok
+                     (coord-daemon/handle
+                      {:op :query
+                       :query (query "mixed-phase"
+                                     [{:var "subject"} {:var "phase"}]
+                                     [{:rel "triple"
+                                       :args [{:var "subject"} "phase"
+                                              {:var "phase"}]}])})))))))
+
 (let [failed (remove second @checks)]
   (println (format "\ncoord_split_log_reload: %d / %d PASS"
                    (- (count @checks) (count failed))

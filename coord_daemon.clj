@@ -499,14 +499,20 @@
 (defn- flat-line [op te p r seq]
   (str (pr-str {:tx seq :op op :l te :p p :r r :ts (fram.rt/now-ts) :by "coord"}) "\n"))
 
-(defn- advance-owned-append-stamp!
-  "Advance a known corpus stamp only when the appender proved that the bytes
-  between its before/after observations are exactly its own batch. If an
-  external prefix was already pending—or raced the append—the old stamp stays
-  visible and the next freshness-sensitive request must reload it."
-  [known-stamp {:keys [before-stamp after-stamp owned-append-exact?]}]
+(declare flat-bytes telemetry-bytes note-source-lines!)
+
+(defn- advance-owned-append-state!
+  "Advance a known corpus stamp and its exact byte cursor only when the appender
+   proved that the bytes between its before/after observations are exactly its
+   own batch. If an external prefix was already pending—or raced the append—the
+   old stamp stays visible and the next freshness-sensitive request must reload
+   it."
+  [known-stamp known-bytes
+   {:keys [before-stamp after-stamp after-bytes owned-append-exact?]}]
   (when (and owned-append-exact? (= before-stamp @known-stamp))
-    (reset! known-stamp after-stamp)))
+    (reset! known-stamp after-stamp)
+    (when (integer? after-bytes)
+      (reset! known-bytes (long after-bytes)))))
 ;; DURABILITY (finding #13) is preserved through GROUP COMMIT (coord/enqueue-durable!):
 ;; the lines are enqueued (in commit order — callers hold dlock) and the {:ok} ack only
 ;; happens after the appender thread has fsynced them (handle awaits the tickets after
@@ -566,15 +572,21 @@
         (when-let [coord (seq (:coordination g))]
           (enqueue-durable! (str @flat-log) (vec coord)
                             (fn [flush]
-                              (advance-owned-append-stamp! flat-mtime flush))))
+                              (advance-owned-append-state!
+                               flat-mtime flat-bytes flush)
+                              (note-source-lines! coord))))
         (when-let [telem (seq (:telemetry g))]
           (enqueue-durable! (str tlog) (vec telem)
                             (fn [flush]
-                              (advance-owned-append-stamp! telemetry-mtime flush)))))
+                              (advance-owned-append-state!
+                               telemetry-mtime telemetry-bytes flush)
+                              (note-source-lines! telem)))))
       ;; LEGACY single-log — BYTE-IDENTICAL to pre-split.
       (enqueue-durable! (str @flat-log) (vec lines)
                         (fn [flush]
-                          (advance-owned-append-stamp! flat-mtime flush))))))
+                          (advance-owned-append-state!
+                           flat-mtime flat-bytes flush)
+                          (note-source-lines! lines))))))
 (defn- append-flat! [op te p r seq]
   (if *flat-batch*
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
@@ -3853,8 +3865,11 @@
                                     (binding [*durable-tickets* nil]
                                       (enqueue-durable! flat (vec lines)
                                                         (fn [flush]
-                                                          (advance-owned-append-stamp!
-                                                           flat-mtime flush))))
+                                                          (advance-owned-append-state!
+                                                           flat-mtime flat-bytes
+                                                           flush)
+                                                          (note-source-lines!
+                                                           lines))))
                                     (reset! durability-stage :batch-committed)
                                     ;; Hard crash seam: the self-identifying batch is
                                     ;; fsynced, but no in-memory receipt/root and no
@@ -5968,6 +5983,54 @@
       (vec (sort-by #(or (:tx %) 0) (into coord (fram.rt/read-log tlog))))
       coord)))
 
+(defn- source-line-key [single-preds line]
+  (if (contains? single-preds (:p line))
+    [(:l line) (:p line)]
+    [(:l line) (:p line) (:r line)]))
+
+(defn- merge-source-latest
+  "Merge physical lines into the flat fold's compact per-key LWW watermark.
+   Equal tx follows the whole fold: the physically later row wins."
+  [latest single-preds lines]
+  (reduce
+   (fn [m line]
+     (if (and (:l line) (:p line) (:r line) (int? (:tx line))
+              (not (schema-preds (:p line))))
+       (let [k (source-line-key single-preds line)
+             previous (get m k)]
+         (if (and previous (> (long (:tx previous)) (long (:tx line))))
+           m
+           (assoc m k line)))
+       m))
+   (or latest {})
+   lines))
+
+(defn- source-latest-index [lines cmap]
+  (let [valid (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))
+                             (not (schema-preds (:p %))))
+                       lines)
+        single-preds
+        (into #{} (filter #(ck/single-eff? cmap %)) (map :p valid))]
+    (merge-source-latest {} single-preds valid)))
+
+(defn- note-source-lines!
+  "Advance the live source watermark for coordinator-owned projections.
+   Schema changes invalidate the key shape; the next ambiguous external tail
+   rebuilds the index from the merged whole-fold oracle."
+  [lines]
+  (when-let [source (:source-latest @co)]
+    (let [parsed (vec (keep (fn [line]
+                              (try (edn/read-string line)
+                                   (catch Throwable _ nil)))
+                            lines))]
+      (if (some #(schema-writable (:p %)) parsed)
+        (reset! source nil)
+        (let [st (:store @co)
+              single-preds
+              (into #{} (filter #(= "single" (s/cardinality st %)))
+                    (keep :p parsed))]
+          (swap! source merge-source-latest single-preds parsed))))))
+
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
         ;; without fsync, so a copy/read caught mid-write can yield an assertion
@@ -6033,7 +6096,8 @@
     (swap! st update :txs assoc tx {:seq flat-max-tx :agent "migrate"})
     ;; :log nil — DROP-IN: the flat log is canonical and is written ONLY by the
     ;; daemon's append-flat!; the reified store must NOT dump v2 :k-records into it.
-    {:store st :log nil :lock (Object.)}))
+    {:store st :log nil :lock (Object.)
+     :source-latest (atom (source-latest-index asserts cmap))}))
 
 ;; ===========================================================================
 ;; SNAPSHOT / TAIL-FOLD / AS-OF / INCREMENTAL AGGREGATES (thread 019f100f-7fff)
@@ -6605,6 +6669,7 @@
              :from-tx @built-through
              :co-version (current-seq @co)
              :store-root @(:store @co)
+             :source-root (some-> @co :source-latest deref)
              :schema-root @schema-view
              :cache-root @cache
              :generation @reload-generation}))))))
@@ -6612,19 +6677,26 @@
 (defn- reload-log-tail
   "Read one independently-cursored log only when its physical stamp moved.
 
-   The byte cursor is a seek hint and :tx remains the correctness boundary.
+   The byte cursor is the applied physical-prefix boundary. Surface every
+   complete post-cursor record: split writers do not share a monotone tx clock,
+   so filtering one log by the merged Store version can lose valid facts.
    A shorter target is an explicit truncation/regression signal: the caller
    must use the whole-corpus oracle rather than applying a partial tail."
   [path known-stamp target-stamp from-byte target-bytes from-tx]
   (if (= known-stamp target-stamp)
-    {:lines [] :max-tx (long from-tx) :append-safe? true}
+    {:lines [] :max-tx -1 :min-tx nil :append-safe? true}
     (let [append-safe? (and (integer? from-byte)
                             (integer? target-bytes)
                             (<= 0 (long from-byte) (long target-bytes)))
           tail (when append-safe?
-                 (read-log-tail* path from-byte from-tx))]
-      {:lines (vec (or (:lines tail) []))
-       :max-tx (long (or (:max-tx tail) from-tx))
+                 (read-log-tail* path from-byte -1))
+          lines (vec (or (:lines tail) []))
+          txs (keep #(when (int? (:tx %)) (long (:tx %))) lines)]
+      {:lines lines
+       :max-tx (long (or (:max-tx tail)
+                         (when (seq txs) (reduce max txs))
+                         -1))
+       :min-tx (when (seq txs) (reduce min txs))
        :append-safe? append-safe?})))
 
 (defn- split-reload-tail
@@ -6644,12 +6716,15 @@
                            (:from-telemetry-byte roots)
                            (:target-telemetry-bytes roots) from-tx))
         halves (cond-> [coordination] telemetry (conj telemetry))]
-    {:lines (->> halves
-                 (mapcat :lines)
-                 (sort-by #(long (or (:tx %) 0)))
-                 vec)
-     :max-tx (reduce max from-tx (map :max-tx halves))
-     :append-safe? (every? :append-safe? halves)}))
+    (let [lines (->> halves
+                     (mapcat :lines)
+                     (sort-by #(long (or (:tx %) 0)))
+                     vec)
+          txs (keep #(when (int? (:tx %)) (long (:tx %))) lines)]
+      {:lines lines
+       :max-tx (reduce max -1 (map :max-tx halves))
+       :min-tx (when (seq txs) (reduce min txs))
+       :append-safe? (every? :append-safe? halves)})))
 
 (defn- whole-corpus-max-tx [roots]
   (reduce max -1
@@ -6717,8 +6792,34 @@
           tail (split-reload-tail roots)
           schema-tail? (some #(schema-writable (:p %)) (:lines tail))
           append-tail? (and (:append-safe? tail)
-                            (> (long (:max-tx tail))
-                               (long (:from-tx roots))))
+                            (or (seq (:lines tail))
+                                (not (neg? (long (:max-tx tail))))))
+          source-index? (map? (:source-root roots))
+          st-for-cardinality (atom (:store-root roots))
+          single-preds
+          (into #{} (filter #(= "single"
+                                (s/cardinality st-for-cardinality %)))
+                (keep :p (:lines tail)))
+          reconciled-source
+          (when source-index?
+            (merge-source-latest
+             (:source-root roots) single-preds (:lines tail)))
+          accepted-lines
+          (if source-index?
+            (filterv
+             (fn [line]
+               (= line
+                  (get reconciled-source
+                       (source-line-key single-preds line))))
+             (:lines tail))
+            (:lines tail))
+          incremental-tail?
+          (and append-tail?
+               (not schema-tail?)
+               (or source-index?
+                   (every? #(> (long (:tx %))
+                               (long (:co-version roots)))
+                           (:lines tail))))
           candidate
           (cond
             ;; Compatibility/fail-safe for callers that predate per-log cursor
@@ -6731,30 +6832,35 @@
                :through (or (:next-seq @(:store c0)) 0)
                :incremental? false})
 
-            append-tail?
+            incremental-tail?
             (let [;; Schema changes are rare and retain the established
                   ;; log-folded schema oracle. Domain-only tails (including the
                   ;; telemetry hot path) reuse the captured schema identity.
                   schema-root (if schema-tail?
                                 (schema-view-from-flat path)
                                 (:schema-root roots))
-                  through (long (:max-tx tail))
+                  through (max (long (:co-version roots))
+                               (long (:max-tx tail)))
                   clone {:store (atom (:store-root roots))
-                         :log nil :lock (Object.)}]
-              (apply-tail! clone (:lines tail))
+                         :log nil :lock (Object.)
+                         :source-latest
+                         (when source-index? (atom reconciled-source))}]
+              (apply-tail! clone accepted-lines)
               ;; An EDN-valid incomplete row is excluded from :lines but retained
               ;; in :max-tx. Match the cold fold's version without applying it.
               (swap! (:store clone) assoc :next-seq through)
               {:mode :install :co clone :schema-root schema-root
-               :through through :tail-lines (:lines tail)
+               :through through :tail-lines accepted-lines
                :incremental? true})
 
             :else
-            ;; A shortened cursor, same-watermark rewrite, or tx regression
-            ;; cannot be represented as an append delta. The whole fold remains
-            ;; the fail-closed oracle for those rare cases.
+            ;; A shortened cursor, same-watermark rewrite, schema change, or a
+            ;; post-cursor row at/below the captured Store version cannot be
+            ;; represented by apply-tail!: its proof requires every tail line
+            ;; to dominate the materialized prefix. Use the merged whole-fold
+            ;; oracle rather than dropping the row or regressing the Store.
             (let [logmax (whole-corpus-max-tx roots)]
-              (if (< (long logmax) (long (:from-tx roots)))
+              (if (< (long logmax) (long (:co-version roots)))
                 {:mode :refused :logmax logmax}
                 (let [schema-root (schema-view-from-flat path)
                       c0 (migrate-flat->co path)]

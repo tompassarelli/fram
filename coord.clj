@@ -163,6 +163,7 @@
                                      {:path (str path)
                                       :before-stamp before-stamp
                                       :after-stamp after-stamp
+                                      :after-bytes after-bytes
                                       :owned-append-exact?
                                       (= (long after-bytes)
                                          (+ (long before-bytes)
