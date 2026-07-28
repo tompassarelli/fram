@@ -122,6 +122,15 @@
         response))
     (catch Exception _ nil)))
 
+(defn- coord-query-for-log [port log query]
+  (try
+    (let [response
+          (coord-request-for-log port log {:op :query :query query})]
+      (when-not (or (= "unknown op" (:error response))
+                    (contains? response :reject))
+        response))
+    (catch Exception _ nil)))
+
 (defn- coord-version-for-log [port log]
   (try
     (let [response
@@ -327,6 +336,39 @@
      #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
      id))))
 
+(defn fast-query!
+  "Serve `query` from the coordinator instead of folding the whole log.
+
+  fram.main/cmd-query does `(fold/fold (read-log log))` before running the
+  query, so EVERY query paid a full-corpus fold — measured 13.1s even for a
+  predicate matching ZERO rows, because the cost is the fold, not the result.
+  The daemon already answers :query over its live snapshot (routing simple
+  queries to the index and the rest to the same q engine cold uses), so the
+  fold buys nothing an exact read needs.
+
+  Returns false whenever the cold CLI must own the outcome — unreachable or
+  incompatible daemon, unparseable EDN, or a query the daemon reports errors
+  for — so every diagnostic message stays byte-identical to the cold path."
+  [log edn-string]
+  (let [parsed (try (edn/read-string edn-string) (catch Exception _ ::unparseable))]
+    (if (= ::unparseable parsed)
+      false
+      (let [response (coord-query-for-log (coord-port) log parsed)
+            rows (:ok response)]
+        (cond
+          (nil? response) false
+          ;; Cold prints one "  error: <e>" line per error; rather than
+          ;; reproduce that shape here, hand the whole query back so the
+          ;; existing renderer owns it.
+          (contains? response :error) false
+          (not (vector? rows)) false
+          :else
+          (do
+            (if (empty? rows)
+              (println "  (no results)")
+              (doseq [row rows] (println (str "  " row))))
+            true))))))
+
 (defn fast-show!
   "Serve an exact subject from the coordinator's narrow :show projection.
   Returns false when the existing CLI must own fallback or prefix resolution."
@@ -508,6 +550,9 @@
                       (nth args 1)
                       (and (>= (count args) 3)
                            (= "--provenance" (nth args 2))))
+
+          (and (= command "query") (>= (count args) 2))
+          (fast-query! log (nth args 1))
 
           (and (contains? #{"tell" "retract" "untell"} command)
                (>= (count args) 4))

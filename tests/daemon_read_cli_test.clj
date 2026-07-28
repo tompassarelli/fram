@@ -401,6 +401,79 @@
   (check! "substring show preserves full resolver fallback"
           (= ["show" "019fa4d4"] @fallback-args)))
 
+;; ---- query fast path -------------------------------------------------------
+;; fram.main/cmd-query folds the whole log before running the query, so cost was
+;; the fold, not the result: a predicate matching ZERO rows measured 13.1s. The
+;; daemon already answers :query over its live snapshot.
+
+(def sample-query "{:find \"agg\" :rules []}")
+
+(let [read-called? (atom false)
+      out (with-redefs [fram-fast/coord-port (constantly 7977)
+                        fram-fast/coord-query-for-log
+                        (fn [_ _ q]
+                          (when (= {:find "agg" :rules []} q)
+                            {:ok [["@a" "ran"] ["@b" "died"]] :version 9}))
+                        rt/read-log
+                        (fn [& _]
+                          (reset! read-called? true)
+                          (throw (ex-info "whole-log read selected" {})))]
+            (with-out-str
+              (check! "warm query handled"
+                      (fram-fast/fast-query! log-path sample-query))))]
+  (check! "warm query never selects read-log" (not @read-called?))
+  (check! "warm query renders rows with the cold two-space prefix"
+          (and (str/includes? out "  [\"@a\" \"ran\"]")
+               (str/includes? out "  [\"@b\" \"died\"]"))))
+
+(let [out (with-redefs [fram-fast/coord-port (constantly 7977)
+                        fram-fast/coord-query-for-log (fn [& _] {:ok [] :version 9})]
+            (with-out-str (fram-fast/fast-query! log-path sample-query)))]
+  (check! "empty result matches cold's (no results)"
+          (str/includes? out "  (no results)")))
+
+;; Every path the cold renderer must still own, so its diagnostics stay
+;; byte-identical rather than being half-reproduced here.
+(check! "unreachable daemon leaves query to cold"
+        (false? (with-redefs [fram-fast/coord-port (constantly 7977)
+                              fram-fast/coord-query-for-log (fn [& _] nil)]
+                  (fram-fast/fast-query! log-path sample-query))))
+
+(check! "daemon-reported query errors leave query to cold"
+        (false? (with-redefs [fram-fast/coord-port (constantly 7977)
+                              fram-fast/coord-query-for-log
+                              (fn [& _] {:error ["unbound var ?x"]})]
+                  (fram-fast/fast-query! log-path sample-query))))
+
+(let [contacted? (atom false)]
+  (check! "unparseable EDN leaves query to cold"
+          (false? (with-redefs [fram-fast/coord-port (constantly 7977)
+                                fram-fast/coord-query-for-log
+                                (fn [& _] (reset! contacted? true) {:ok []})]
+                    (fram-fast/fast-query! log-path "{:find"))))
+  (check! "unparseable EDN never contacts the daemon" (not @contacted?)))
+
+(let [fallback-args (atom nil)]
+  (with-redefs [fram-fast/coord-query-for-log (fn [& _] nil)
+                fram-fast/cold-main! #(reset! fallback-args %)]
+    (fram-fast/-main "query" sample-query))
+  (check! "query fallback reaches cold-main with its original args"
+          (= ["query" sample-query] @fallback-args)))
+
+;; The dispatch case itself. Without this, deleting the `query` branch from
+;; -main leaves every other check above green — the function is exercised
+;; directly, and the fallback check passes identically whether the branch
+;; exists or not, because an unhandled command also lands in cold-main!.
+(let [reached-cold? (atom false)
+      out (with-redefs [fram-fast/coord-port (constantly 7977)
+                        fram-fast/coord-query-for-log
+                        (fn [& _] {:ok [["@a" "ran"]] :version 9})
+                        fram-fast/cold-main! (fn [_] (reset! reached-cold? true))]
+            (with-out-str (fram-fast/-main "query" sample-query)))]
+  (check! "-main routes query to the warm path, not cold" (not @reached-cold?))
+  (check! "-main query renders the daemon rows"
+          (str/includes? out "  [\"@a\" \"ran\"]")))
+
 (println (format "daemon_read_cli: %d / %d PASS"
                  (- @checks @failures) @checks))
 (System/exit (if (zero? @failures) 0 1))
