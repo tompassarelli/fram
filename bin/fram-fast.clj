@@ -298,48 +298,68 @@
             (matching-ops telemetry subject #(run-record? subject %)))
       primary)))
 
-(def evidence-preds #{"bar_evidence" "progress" "outcome"})
-
-(defn- needs-full-renderer? [rows provenance?]
-  (or provenance?
-      (some #(contains? evidence-preds (first %)) rows)))
+(defn- needs-full-renderer? [_rows provenance?]
+  ;; Exact `show` is the everyday read path.  Keep it O(subject), even for
+  ;; progress/outcome/bar_evidence: those predicates previously selected the
+  ;; provenance renderer implicitly, which scanned both complete logs on every
+  ;; invocation.  Provenance remains available through the explicit
+  ;; `show <id> --provenance` surface.
+  provenance?)
 
 (defn- cold-main! [args]
   (apply (requiring-resolve 'fram.main/-main) args))
+
+(defn- exact-id [id]
+  (let [bare (str/replace-first id #"^@" "")]
+    (when (re-matches
+           #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+           bare)
+      bare)))
 
 (defn fast-show!
   "Serve an exact subject from the coordinator's narrow :show projection.
   Returns false when the existing CLI must own fallback or prefix resolution."
   [log id provenance?]
-  (let [subject (str "@" id)
-        rows (:rows (coordinator-show (coord-port) log subject))]
-    (if-not (seq rows)
-      false
-      (do
-        (if (needs-full-renderer? rows provenance?)
-          (let [ops (relevant-ops log subject)
-                run-facts
-                (filterv #(= "run_bar_evidence" (:p %))
-                         (:facts
-                          ((requiring-resolve 'fram.fold/fold) ops)))
-                facts
-                (into (mapv (fn [[predicate value]]
-                              ((requiring-resolve 'fram.kernel/->Fact)
-                               subject predicate value))
-                            rows)
-                      run-facts)]
-            ;; Keep full provenance joins byte-identical, but pay their engine
-            ;; and log-scan cost only when the output can contain a marker.
-            (with-redefs-fn
-              {(requiring-resolve 'fram.rt/coord-live-facts)
-               (fn [& _] facts)
-               (requiring-resolve 'fram.rt/read-log)
-               (fn [_] ops)}
-              #((requiring-resolve 'fram.main/cmd-show)
-                log id provenance?)))
-          (doseq [[predicate value] rows]
-            (println (str "  " predicate "  " value))))
-        true))))
+  (if-let [bare (exact-id id)]
+    (let [subject (str "@" bare)
+          response (coordinator-show (coord-port) log subject)
+          rows (:rows response)]
+      (cond
+        (nil? response)
+        false
+
+        (empty? rows)
+        (do
+          (println (str "no facts for " subject))
+          true)
+
+        :else
+        (do
+          (if (needs-full-renderer? rows provenance?)
+            (let [ops (relevant-ops log subject)
+                  run-facts
+                  (filterv #(= "run_bar_evidence" (:p %))
+                           (:facts
+                            ((requiring-resolve 'fram.fold/fold) ops)))
+                  facts
+                  (into (mapv (fn [[predicate value]]
+                                ((requiring-resolve 'fram.kernel/->Fact)
+                                 subject predicate value))
+                              rows)
+                        run-facts)]
+              ;; Keep explicit provenance joins byte-identical, but never charge
+              ;; their engine and full-log scan to ordinary exact reads.
+              (with-redefs-fn
+                {(requiring-resolve 'fram.rt/coord-live-facts)
+                 (fn [& _] facts)
+                 (requiring-resolve 'fram.rt/read-log)
+                 (fn [_] ops)}
+                #((requiring-resolve 'fram.main/cmd-show)
+                  log bare provenance?)))
+            (doseq [[predicate value] rows]
+              (println (str "  " predicate "  " value))))
+          true)))
+    false))
 
 (defn- safe-fast-value? [value]
   (or (str/starts-with? value "@")

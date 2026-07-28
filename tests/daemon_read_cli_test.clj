@@ -67,12 +67,17 @@
 (def projection (get wire-projections subject))
 
 (let [read-called? (atom false)
+      scan-called? (atom false)
       warm-output
       (with-redefs [fram-fast/coord-port (constantly 7977)
                     fram-fast/coord-show-for-log
                     (fn [_ _ requested]
                       (when (= subject requested)
                         {:version 2 :rows projection}))
+                    fram-fast/matching-ops
+                    (fn [& _]
+                      (reset! scan-called? true)
+                      (throw (ex-info "provenance scan selected" {})))
                     rt/read-log
                     (fn [& _]
                       (reset! read-called? true)
@@ -83,7 +88,22 @@
                                         "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                                         false))))]
   (check! "warm exact show never selects read-log" (not @read-called?))
-  (check! "warm exact show keeps provenance marker"
+  (check! "warm exact show never scans provenance logs" (not @scan-called?))
+  (check! "warm exact show renders progress directly"
+          (and (str/includes? warm-output "  progress  cli-fix probe")
+               (not (str/includes? warm-output "· by lane-probe")))))
+
+(let [warm-output
+      (with-redefs [fram-fast/coord-port (constantly 7977)
+                    fram-fast/coord-show-for-log
+                    (fn [_ _ requested]
+                      (when (= subject requested)
+                        {:version 2 :rows projection}))]
+        (with-out-str
+          (fram-fast/fast-show! log-path
+                                "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
+                                true)))]
+  (check! "explicit provenance keeps the provenance marker"
           (str/includes? warm-output "· by lane-probe")))
 
 (let [show-calls (atom 0)
@@ -156,12 +176,13 @@
                           {:version 10 :rows rows}))]
           (with-out-str
             (fram-fast/fast-show! log-path bare false)))
-        cold-output
-        (with-redefs [rt/coord-live-facts (fn [& _] [])]
-          (with-out-str
-            (main/cmd-show log-path bare false)))]
-    (check! (str "warm exact show is byte-identical for " bare)
-            (= warm-output cold-output))))
+        direct-output
+        (apply str
+               (map (fn [[predicate value]]
+                      (str "  " predicate "  " value "\n"))
+                    rows))]
+    (check! (str "warm exact show renders daemon rows directly for " bare)
+            (= warm-output direct-output))))
 
 (let [read-called? (atom false)
       write-call (atom nil)
@@ -311,6 +332,31 @@
                    log-path
                    "019fa4d4-93aa-7447-aae5-0a5bcfca6849"
                    false))))
+
+(let [scan-called? (atom false)
+      output
+      (with-redefs [fram-fast/coord-show-for-log
+                    (fn [& _] {:version 15 :rows []})
+                    fram-fast/relevant-ops
+                    (fn [& _]
+                      (reset! scan-called? true)
+                      (throw (ex-info "missing exact id scanned history" {})))]
+        (with-out-str
+          (check! "missing exact UUID is handled by the daemon response"
+                  (fram-fast/fast-show!
+                   log-path
+                   "019fa4d4-93aa-7447-aae5-0a5bcfca6800"
+                   false))))]
+  (check! "missing exact UUID never scans history" (not @scan-called?))
+  (check! "missing exact UUID keeps the no-facts response"
+          (str/includes?
+           output
+           "no facts for @019fa4d4-93aa-7447-aae5-0a5bcfca6800")))
+
+(check! "substring show preserves cold fallback on an empty daemon projection"
+        (with-redefs [fram-fast/coord-show-for-log
+                      (fn [& _] {:version 16 :rows []})]
+          (false? (fram-fast/fast-show! log-path "019fa4d4" false))))
 
 (let [fallback-args (atom nil)]
   (with-redefs [fram-fast/coordinator-show (fn [& _] nil)
