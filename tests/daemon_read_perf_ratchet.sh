@@ -23,6 +23,9 @@ printf '%s\n' \
   '{:tx 3, :op "assert", :l "@target", :p "title", :r "target", :by "fixture"}' \
   '{:tx 4, :op "assert", :l "@019fa4d4-93aa-7447-aae5-0a5bcfca6849", :p "depends_on", :r "@target", :by "fixture"}' \
   > "$scratch/coordination.log"
+printf '%s\n' \
+  '{:tx 1, :op "assert", :l "@run:wrapper-only", :p "process_outcome", :r "ran", :by "fixture"}' \
+  > "$scratch/telemetry.log"
 
 port="$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')"
 cold_started="$(date +%s%N)"
@@ -44,7 +47,8 @@ cold_ms="$(( (cold_stopped - cold_started) / 1000000 ))"
   exit 1
 }
 
-bb -cp out coord_daemon.clj serve-flat "$port" "$scratch/coordination.log" \
+FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
+  bb -cp out coord_daemon.clj serve-flat "$port" "$scratch/coordination.log" \
   >"$scratch/daemon.log" 2>&1 &
 daemon_pid="$!"
 
@@ -66,13 +70,29 @@ fi
 run_show() {
   FRAM_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
+  FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" show 019fa4d4-93aa-7447-aae5-0a5bcfca6849 >/dev/null
+}
+
+query_spec='{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]} :body [{:rel "fact" :args [{:var "x"} "process_outcome" {:var "y"}]}]}]}'
+
+run_query() {
+  FRAM_PORT="$port" \
+  FRAM_LOG="$scratch/coordination.log" \
+  FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
+  FRAM_THREADS="$scratch/threads" \
+  "$ROOT/bin/fram" query "$query_spec"
+}
+
+run_query_quiet() {
+  run_query >/dev/null
 }
 
 run_tell() {
   FRAM_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
+  FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" tell 019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress "$1" >/dev/null
 }
@@ -80,6 +100,7 @@ run_tell() {
 run_tell_existing() {
   FRAM_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
+  FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" tell-existing \
     019fa4d4-93aa-7447-aae5-0a5bcfca6849 progress "$1" >/dev/null
@@ -88,6 +109,7 @@ run_tell_existing() {
 run_tell_existing_bare_ref() {
   FRAM_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
+  FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" tell-existing \
     019fa4d4-93aa-7447-aae5-0a5bcfca6849 depends_on target >/dev/null
@@ -107,6 +129,17 @@ run_show
 show_samples=()
 for _ in $(seq 1 10); do
   show_samples+=("$(measure_ms run_show)")
+done
+
+query_actual="$(run_query)"
+[[ "$query_actual" == '  ["@run:wrapper-only" "ran"]' ]] || {
+  printf 'daemon_read_perf_ratchet: public query wrapper missed telemetry-only warm row\n%s\n' \
+    "$query_actual" >&2
+  exit 1
+}
+query_samples=()
+for _ in $(seq 1 10); do
+  query_samples+=("$(measure_ms run_query_quiet)")
 done
 
 run_tell "warmup write"
@@ -130,6 +163,7 @@ for _ in $(seq 1 10); do
 done
 
 show_p95="$(printf '%s\n' "${show_samples[@]}" | sort -n | tail -1)"
+query_p95="$(printf '%s\n' "${query_samples[@]}" | sort -n | tail -1)"
 tell_p95="$(printf '%s\n' "${tell_samples[@]}" | sort -n | tail -1)"
 tell_existing_p95="$(
   printf '%s\n' "${tell_existing_samples[@]}" | sort -n | tail -1
@@ -141,6 +175,11 @@ bare_existing_p95="$(
 (( show_p95 <= 150 )) || {
   printf 'daemon_read_perf_ratchet: exact show p95 %dms > 150ms; samples: %s\n' \
     "$show_p95" "${show_samples[*]}" >&2
+  exit 1
+}
+(( query_p95 <= 150 )) || {
+  printf 'daemon_read_perf_ratchet: public query p95 %dms > 150ms; samples: %s\n' \
+    "$query_p95" "${query_samples[*]}" >&2
   exit 1
 }
 (( tell_p95 <= 150 )) || {
@@ -159,5 +198,5 @@ bare_existing_p95="$(
   exit 1
 }
 
-printf 'daemon_read_perf_ratchet: PASS — show p95=%dms tell p95=%dms existing-tell p95=%dms bare-existing-ref p95=%dms N=10; cold fallback=%dms\n' \
-  "$show_p95" "$tell_p95" "$tell_existing_p95" "$bare_existing_p95" "$cold_ms"
+printf 'daemon_read_perf_ratchet: PASS — show p95=%dms query p95=%dms tell p95=%dms existing-tell p95=%dms bare-existing-ref p95=%dms N=10; cold fallback=%dms\n' \
+  "$show_p95" "$query_p95" "$tell_p95" "$tell_existing_p95" "$bare_existing_p95" "$cold_ms"
