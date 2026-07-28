@@ -6894,6 +6894,67 @@
 ;; can order it after accept-stop, in-flight completion, and the durability barrier.
 ;; Failures log and never take the daemon down.
 (def ^:private last-snapshot-seq (atom -1))
+(def snapshot-retain
+  (max 1 (or (some-> (System/getenv "FRAM_SNAPSHOT_RETAIN") parse-long) 3)))
+
+(defn snapshots-to-prune
+  "The checkpoint files to delete, keeping the newest `retain` SEQS.
+
+  Pure and public so the deletion decision is testable without a filesystem —
+  this function chooses what to erase, so it must never be exercised for the
+  first time against a real 3.7 GB directory.
+
+  Groups by seq so an image and any sidecar (.fri) are dropped together; a
+  sidecar without its image is unusable. Orders by seq, which is monotonic,
+  rather than mtime, which a restore or clock change can reorder. Anything not
+  matching the exact `snap-<digits>.<v2log|fri>` shape is ignored entirely, so a
+  stray file in the directory is never deleted."
+  [files retain]
+  (let [images (filter #(re-matches #"snap-\d+\.(?:v2log|fri)" (.getName ^java.io.File %))
+                       files)
+        by-seq (group-by #(parse-long (re-find #"\d+" (.getName ^java.io.File %))) images)]
+    (->> (sort-by key by-seq)
+         (drop-last retain)
+         (mapcat val))))
+
+(defn- prune-snapshots!
+  "Keep the newest `snapshot-retain` checkpoints; delete older ones.
+
+  Nothing pruned these before. On 2026-07-29 the directory held 102 images of
+  ~41.8 MB — 3.7 GB of checkpoints for a 34 MB log, still growing one image per
+  interval, and it was the largest single consumer of the ~7.7 GB north state
+  root.
+
+  Safe because checkpoints are DERIVED: a boot that finds no usable image folds
+  the flat log instead — slower boot, never wrong state. That is the same
+  argument the rotation segments already rest on.
+
+  Retains 3 rather than 1 so an interrupted or corrupt newest image still has an
+  intact fallback ahead of the full refold. Images are grouped by seq so an
+  image and any sidecar are dropped together, and ordered by seq (monotonic)
+  rather than mtime, which a restore or a clock change can reorder.
+
+  Never throws: a failed prune must not fail the checkpoint that just
+  succeeded."
+  [flat]
+  (try
+    (let [dir (java.io.File. (str (snap-dir flat)))
+          files (or (.listFiles dir) (make-array java.io.File 0))
+          doomed (snapshots-to-prune files snapshot-retain)
+          freed (reduce (fn [bytes ^java.io.File f]
+                          (let [len (.length f)]
+                            (if (.delete f) (+ bytes len) bytes)))
+                        0
+                        doomed)]
+      (when (pos? freed)
+        (println (str "[fram] checkpoint prune: kept " snapshot-retain
+                      ", removed " (count doomed) " file(s), freed "
+                      (quot freed 1048576) " MiB"))))
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "[fram] checkpoint prune FAILED (checkpoint itself is fine): "
+                      (.getMessage t)))))))
+
 (defn- snapshot-if-dirty! [why]
   (try
     (when (and @flat-log (> (long (current-seq @co)) (long @last-snapshot-seq)))
@@ -6903,7 +6964,10 @@
         ;; re-dirties the log with its own bookkeeping and every boot/interval
         ;; rewrites a whole image to cover 6 metadata facts.
         (reset! last-snapshot-seq (long (current-seq @co)))
-        (println (str "[fram] checkpoint (" why "): seq " (:ok r) " -> " (:image r)))))
+        (println (str "[fram] checkpoint (" why "): seq " (:ok r) " -> " (:image r)))
+        ;; Prune AFTER the new image is durable, so the retained set never dips
+        ;; below `snapshot-retain` intact checkpoints at any instant.
+        (prune-snapshots! @flat-log)))
     (catch Throwable t
       (binding [*out* *err*]
         (println (str "[fram] checkpoint (" why ") FAILED: " (.getMessage t)))))))
