@@ -154,7 +154,7 @@
     :else
     (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
 
-(defn log-envelope [canonical-log :- String req :- (Map Keyword Any)] :- (Map Keyword Any)
+(defn log-envelope [canonical-log :- String req :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))))
   (let [base {:op :for-log :expected-log canonical-log :request req}]
     (if (contains? req :fmt) (assoc base :fmt (:fmt req)) base)))
 
