@@ -5814,38 +5814,46 @@
             ;; below and the declaration loop; ck/single-eff? applies fact > env > fallback.
             tcmap (log-card-map lines)                       ; tail-declared cardinality
             card-pid (c/value-id st "cardinality")
-            base (reduce (fn [m p]
-                           (if (and card-pid (seq (c/by-lp st (c/value! st p) card-pid)))
-                             (assoc m p (= "single" (s/cardinality st p))) m))
-                         {} (keys by-pred))
+            domain (vec (keys by-pred))
+            card-only
+            (filterv #(and (not (schema-preds %)) (not (contains? by-pred %)))
+                     (card-only-preds tcmap lines))
+            declared-preds
+            (into #{} (filter #(and card-pid
+                                    (seq (c/by-lp st (c/value! st %) card-pid))))
+                  domain)
+            current-cardinality
+            (into {} (map (fn [p] [p (s/cardinality st p)]))
+                  (concat domain card-only))
+            base (into {} (map (fn [p]
+                                 [p (= "single" (get current-cardinality p))]))
+                       declared-preds)
             ecmap (merge base tcmap)                          ; tail declarations win
             single-preds
             (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
             latest (cc/tail-keyed-latest single-preds valid)
+            link-preds
+            (into #{} (filter #(some (fn [r] (link-value? % r))
+                                     (map :r (get by-pred %))))
+                  domain)
+            predicate-plan
+            (cc/tail-predicate-plan domain card-only single-preds
+                                    declared-preds current-cardinality link-preds)
             memo (atom {})
             sub! (fn [sid] (or (get @memo sid)
                                (let [id (or (s/resolve-name st sid)
                                             (let [e (c/entity! st)] (s/name! st e sid tx) e))]
                                  (swap! memo assoc sid id) id)))]
-        ;; declare preds new to the store; sync cardinality from the tail's own facts.
-        (doseq [p (keys by-pred)]
-          (let [pid (c/value! st p)
-                want (if (ck/single-eff? ecmap p) "single" "multi")]
-            (cond
-              ;; new pred: full declaration (cardinality effective, value_kind from data)
-              (empty? (c/by-lp st pid card-pid))
-              (s/def-predicate! st p want
-                                (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx)
-              ;; existing pred the tail RE-DECLARES to a different cardinality: update the
-              ;; cardinality fact ONLY (assert! supersedes; value_kind untouched — invariant).
-              (not= want (s/cardinality st p))
-              (s/assert! st pid "cardinality" want tx))))
-        ;; cardinality-only tail preds (declared, no domain facts): materialize the fact
-        ;; so s/cardinality (write-path authority) agrees; value_kind "literal" (no values).
-        (doseq [p (card-only-preds tcmap lines) :when (and (not (schema-preds p)) (not (contains? by-pred p)))]
-          (let [want (if (ck/single-eff? ecmap p) "single" "multi")]
-            (when (not= want (s/cardinality st p))
-              (s/def-predicate! st p want "literal" tx))))
+        ;; Execute the pure predicate plan; store mutation remains host-side.
+        (doseq [item predicate-plan]
+          (case (:action item)
+            :define
+            (s/def-predicate! st (:pred item) (:cardinality item)
+                              (:value-kind item) tx)
+            :update
+            (s/assert! st (c/value! st (:pred item))
+                       "cardinality" (:cardinality item) tx)
+            nil))
         (doseq [[_ a] latest]
           (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
                 su (sub! (:l a)) pid (c/value! st p)

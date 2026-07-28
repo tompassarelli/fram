@@ -186,3 +186,24 @@
    previous-tx (if (nil? previous) nil (:tx previous))
    line-tx (:tx line)]
   (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line)))) {} lines))
+
+(defrecord TailPredicatePlan [pred action cardinality value-kind])
+
+(defn tailpredicateplan-pred [r] (:pred r))
+
+(defn tailpredicateplan-action [r] (:action r))
+
+(defn tailpredicateplan-cardinality [r] (:cardinality r))
+
+(defn tailpredicateplan-value-kind [r] (:value-kind r))
+
+(defn tail-predicate-plan [domain card-only single-preds declared-preds current-cardinality link-preds]
+  (into [] (concat (map (fn [pred] (let [want (if (contains? single-preds pred) "single" "multi")
+   action (cond
+  (not (contains? declared-preds pred)) :define
+  (not= want (get current-cardinality pred)) :update
+  :else :keep)
+   value-kind (if (contains? link-preds pred) "ref" "literal")]
+  (->TailPredicatePlan pred action want value-kind))) domain) (map (fn [pred] (let [want (if (contains? single-preds pred) "single" "multi")
+   action (if (not= want (get current-cardinality pred)) :define :keep)]
+  (->TailPredicatePlan pred action want "literal"))) card-only))))
