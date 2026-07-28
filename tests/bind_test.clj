@@ -54,7 +54,10 @@
        :addr (ss-addr port)
        :err (slurp err-path)}
       (finally
-        (p/destroy-tree child)))))
+        (p/destroy-tree child)
+        ;; The next scenario shares this flat log. Wait for this deliberately
+        ;; stopped JVM to release its exclusive boot lock before it starts.
+        @child))))
 
 (def resultA (exercise-daemon "a" nil))
 (def resultB (exercise-daemon "b" "0.0.0.0"))
