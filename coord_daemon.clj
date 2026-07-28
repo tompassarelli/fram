@@ -34,6 +34,7 @@
            [java.security KeyStore]))
 (load-file "coord.clj")          ; the reified coordinator library (ns coord)
 (refer 'coord)                   ; this file calls coord's vars UNQUALIFIED throughout
+(load-file "coord_writer_authority.clj")
 (require 'pull)                  ; the PULL API (ns pull) — GRAPH-AUTHORED Beagle: its
                                  ; upstream is .fram/code.log, src/pull.bclj is the
                                  ; rendered view, out/pull.clj the emitted artifact (on
@@ -102,6 +103,31 @@
 (def flat-canonical? (atom false))   ; drop-in mode: flat log is canonical, reload absorbs edits
 (def require-log-fence?
   (= "1" (System/getenv "FRAM_REQUIRE_LOG_FENCE")))
+(def coordinator-role
+  ;; :active is the compatible default. A standby can fold and serve reads on a
+  ;; private endpoint, but never acquires the per-log lifetime writer lock.
+  (coord-writer-authority/role-from-env))
+(def writer-authority-handle (atom nil))
+
+(defn- standby? [] (= :standby coordinator-role))
+
+(defn- writer-authority-status []
+  (coord-writer-authority/status
+   coordinator-role @writer-authority-handle
+   (or @flat-log (some-> @co :log) "unbound")))
+
+(defn- with-writer-authority
+  "Run F with exactly one active coordinator generation authorized for LOG.
+   Standbys deliberately run without the lock and are gated read-only below."
+  [log f]
+  (let [handle (when-not (standby?)
+                 (coord-writer-authority/acquire! log))]
+    (reset! writer-authority-handle handle)
+    (try
+      (f)
+      (finally
+        (coord-writer-authority/release! handle)
+        (reset! writer-authority-handle nil)))))
 
 ;; A graph edit has only three honest durability states:
 ;;   * :healthy — the batch is durably present, OR its exact pre-state plus a
@@ -4949,6 +4975,7 @@
      :snapshots (:snapshots roots)
      :reloads (:reloads roots)
      :index (:index roots)
+     :writer-authority (writer-authority-status)
      :rollback_floor fram.rt/rollback-floor}))
 
 (defn- validate-response [req roots]
@@ -4967,6 +4994,25 @@
    {:reload-checked? *reload-checked*
     :reload-deferred-ops reload-deferred-ops
     :reload-mutation-ops reload-mutation-ops}))
+
+(def ^:private canonical-mutation-handlers
+  ;; Most fact writes identify themselves through :response :mutation/:lease in
+  ;; coord-daemon-wire. These exceptional handlers also create canonical log or
+  ;; checkpoint state and therefore require lifetime writer authority.
+  #{:write-def :edit-min :edit-commit :snapshot})
+
+(defn- canonical-mutation-request? [req]
+  (let [actual (wire/actual-request req)
+        decision (request-dispatch actual)]
+    (or (= :mutation (:response decision))
+        (= :lease (:response decision))
+        (contains? canonical-mutation-handlers (:handler decision)))))
+
+(defn- standby-write-rejection []
+  {:reject ["standby coordinator is read-only until a fenced promotion completes"]
+   :code :writer-authority-required
+   :writer-authority (writer-authority-status)
+   :version (current-seq @co)})
 
 (def ^:private detached-locked-handlers
   ;; These handlers were historically classified :locked by the wire table.
@@ -4995,6 +5041,15 @@
     (durability-stop-rejection req)
 
     invalid invalid
+
+    ;; A standby is useful before cutover only if it is impossible for an
+    ;; accidentally-routed write to reach the canonical append path. Fenced
+    ;; requests are checked inside their :for-log branch so a wrong corpus still
+    ;; reports the stronger log-fence error first.
+    (and (not= :for-log route)
+         (standby?)
+         (canonical-mutation-request? req))
+    (standby-write-rejection)
 
     ;; Query fencing covers only reload/fence validation and capture of one
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
@@ -5048,6 +5103,12 @@
         (= :for-log inner-handler)
         {:reject ["nested log-fence envelopes are not supported"]
          :code :invalid-log-fence}
+
+        (and (standby?) (canonical-mutation-request? inner))
+        (if-let [fence-reject (locking dlock
+                                (log-fence-rejection expected))]
+          fence-reject
+          (standby-write-rejection))
 
         (= :edit-min inner-handler)
         ;; Cheap preflight avoids running the lock-free compiler/harvest work
@@ -5299,6 +5360,7 @@
                  :log (or @flat-log (:log @co)) :boot @last-boot
                  :durability @edit-durability-state
                  :last-edit-outcome @last-edit-outcome
+                 :writer-authority (writer-authority-status)
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
@@ -6083,11 +6145,15 @@
     @co)))
 
 (defn serve-daemon [port log flat]
-  (boot! log flat)
-  (println (str "reified coordinator: " (count (c/current-facts (:store @co)))
-                " live facts from " (:log @co)
-                (when @flat-log (str "; flat projection -> " @flat-log))))
-  (serve port))
+  (with-writer-authority
+    log
+    (fn []
+      (boot! log flat)
+      (println (str "reified coordinator: " (count (c/current-facts (:store @co)))
+                    " live facts from " (:log @co)
+                    " [role: " (name coordinator-role) "]"
+                    (when @flat-log (str "; flat projection -> " @flat-log))))
+      (serve port))))
 
 ;; ===========================================================================
 ;; DROP-IN cutover (design B): the flat log stays canonical (no format change);
@@ -7579,7 +7645,9 @@
 
 (defn- snapshot-if-dirty! [why]
   (try
-    (when (and @flat-log (> (long (current-seq @co)) (long @last-snapshot-seq)))
+    (when (and (not (standby?))
+               @flat-log
+               (> (long (current-seq @co)) (long @last-snapshot-seq)))
       (let [r (write-snapshot! @co @flat-log)]
         ;; dirtiness is measured PAST the checkpoint's own @snapshot:* metadata
         ;; appends (current-seq, not the dump seq :ok) — else every checkpoint
@@ -7726,30 +7794,40 @@
   ;; every append re-takes the shared rewrite lock and refuses a non-LF boundary.
   ;; A fresh process begins healthy; recovery below either deterministically
   ;; resolves the sole sealed intent or throws before the daemon can serve.
-  (reset! edit-durability-state {:state :healthy})
-  (reset! edit-committed-outcomes {})
-  (reset! last-edit-outcome nil)
-  (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
-    (try
-      (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
-        (when-not (= :clean (:state healed))
-          (println (str "[fram] boot: healed crashed rewrite on " flat
-                        " (" (name (:state healed)) ")"))))
-      ;; A committed graph-edit batch is repaired before generic tail handling:
-      ;; its durable journal determines whether the entire batch is redone or
-      ;; discarded, while the exclusive rewrite lock prevents any peer from
-      ;; observing an intermediate recovery state.
-      (recover-edit-journal! (str flat))
-      (repair-flat-corpus-tails! flat)
-      (boot-flat! flat)
-         (finally (fram.rt/close-rewrite-lock! gate))))
-  (start-snapshot-writer!)
-  (start-rotation-compactor!)
-  (println (str "reified coordinator (drop-in over flat log): "
-                (count (c/current-facts (:store @co))) " live facts, canonical=" flat
-                (when @snapshot-boot-enabled? " [snapshot-boot ON]")
-                (str " [index: " (name (:boot @rotation-stats)) "]")))
-  (serve port))
+  (with-writer-authority
+    flat
+    (fn []
+      (reset! edit-durability-state {:state :healthy})
+      (reset! edit-committed-outcomes {})
+      (reset! last-edit-outcome nil)
+      (if (standby?)
+        ;; A standby must never heal, truncate, checkpoint, or compact canonical
+        ;; state. It folds an observed append-only prefix and catches up through
+        ;; the ordinary two-phase reload path while it warms on a private port.
+        (boot-flat! flat)
+        (let [gate (fram.rt/acquire-rewrite-lock! (str flat) false true)]
+          (try
+            (let [healed (fram.rt/doctor-rewrite-intent! (str flat))]
+              (when-not (= :clean (:state healed))
+                (println (str "[fram] boot: healed crashed rewrite on " flat
+                              " (" (name (:state healed)) ")"))))
+            ;; A committed graph-edit batch is repaired before generic tail handling:
+            ;; its durable journal determines whether the entire batch is redone or
+            ;; discarded, while the exclusive rewrite lock prevents any peer from
+            ;; observing an intermediate recovery state.
+            (recover-edit-journal! (str flat))
+            (repair-flat-corpus-tails! flat)
+            (boot-flat! flat)
+            (finally (fram.rt/close-rewrite-lock! gate)))))
+      (when-not (standby?)
+        (start-snapshot-writer!)
+        (start-rotation-compactor!))
+      (println (str "reified coordinator (drop-in over flat log): "
+                    (count (c/current-facts (:store @co))) " live facts, canonical=" flat
+                    " [role: " (name coordinator-role) "]"
+                    (when @snapshot-boot-enabled? " [snapshot-boot ON]")
+                    (str " [index: " (name (:boot @rotation-stats)) "]")))
+      (serve port))))
 
 ;; ---- adversarial socket test (mirrors coord.clj's run-test) ----------------
 (defn run-test [port]
