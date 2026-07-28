@@ -81,6 +81,11 @@ for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_re
     "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
   echo "  built $m"
 done
+# M1 Cut O: resolve.clj is now the namespace-preserving host shim only.
+# Runtime consumers load this generated entry; the root stays through the final
+# deletion cut so old/new namespace identity can be probed byte-for-byte.
+cp "$HERE/resolve.clj" "$OUT/resolve.clj"
+echo "  built resolve shim"
 
 # codegraph — the code-as-facts analysis driver. Lives outside src/fram (it is a
 # TENANT of the engine, renting only fram.store + fram.datalog; see
