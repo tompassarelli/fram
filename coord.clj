@@ -67,6 +67,10 @@
 (def group-io-lock (Object.))           ; batch write+fsync+callbacks vs external stat checks
 (def ^:private group-q (java.util.concurrent.LinkedBlockingQueue.))
 (def ^:private group-appender-started (atom false))
+(def ^:private group-appender-thread (atom nil))
+(def ^:private group-appender-failure (atom nil))
+(def ^:private group-appender-stopping? (atom false))
+(def ^:private group-appender-lifecycle-lock (Object.))
 
 (defn- plan-group-batch [items]
   (mapv (fn [batch] [(:path batch) (mapv #(nth items %) (:indices batch))])
@@ -119,68 +123,132 @@
           policy (group-flush-policy (.size group-q))]
       (.add buf fst)
       (.drainTo group-q buf (:drain-limit policy))
-      (let [items (vec buf)
-            [batch-lock path-lock] (group-lock-order)]
-        (when-not (group-flush-ready? policy (count items))
-          (throw (ex-info "group batch below flush threshold"
-                          {:count (count items) :policy policy})))
-        ;; group-io-lock makes (write+fsync+on-flushed) atomic w.r.t. the daemon's
-        ;; maybe-reload! stamp check, so our own async append is never mistaken
-        ;; for an external edit (stamp and file move together).
-        (with-batch-lock!
-          batch-lock
-          (fn []
-            (doseq [[path pitems] (plan-group-batch items)]
-              (let [real (vec (filter #(seq (:lines %)) pitems))
-                    written-bytes (when (seq real) (utf8-byte-count real))
-                    flush-context (volatile! nil)]
-                (try
-                  (when (and path (seq real))
-                    ;; vGUARD writer admission (B2 §2): the batch holds the SHARED
-                    ;; rewrite lock across open→write→fsync→close, so a generation
-                    ;; flip's EXCLUSIVE lock excludes it kernel-arbitrated (no scan,
-                    ;; no TOCTOU). A live flip DELAYS the batch — the ack (ticket
-                    ;; delivery below) still happens only after the fsync, so no
-                    ;; acked write can ever sit outside a flip's read set.
-                    (with-path-lock!
-                      path-lock
-                      (str path)
-                      (fn []
-                        (assert-flat-append-boundary! path)
-                        (let [before-stamp (flat-file-stamp path)
-                              before-bytes (.length (java.io.File. (str path)))]
-                          (with-open [os (java.io.FileOutputStream. (str path) true)]
-                            (doseq [{:keys [lines]} real, ^String ln lines]
-                              (.write os (.getBytes ln "UTF-8")))
-                            (.flush os)
-                            (.force (.getChannel os) true))  ; ONE fsync covers the whole batch
-                          ;; Capture the owned-byte proof before releasing shared
-                          ;; rewrite admission; a generation flip cannot hide in
-                          ;; the before/after window.
-                          (let [after-stamp (flat-file-stamp path)
-                                after-bytes (.length (java.io.File. (str path)))]
-                            (vreset! flush-context
-                                     {:path (str path)
-                                      :before-stamp before-stamp
-                                      :after-stamp after-stamp
-                                      :after-bytes after-bytes
-                                      :owned-append-exact?
-                                      (= (long after-bytes)
-                                         (+ (long before-bytes)
-                                            (long written-bytes)))}))))))
-                  (doseq [{:keys [on-flushed]} pitems :when on-flushed]
-                    (on-flushed @flush-context))
-                  (deliver-all! pitems :ok)
-                  (catch Throwable t (deliver-all! pitems t))))))))
+      (let [items (vec buf)]
+        (try
+          (let [[batch-lock path-lock] (group-lock-order)]
+            (when-not (group-flush-ready? policy (count items))
+              (throw (ex-info "group batch below flush threshold"
+                              {:count (count items) :policy policy})))
+            ;; group-io-lock makes (write+fsync+on-flushed) atomic w.r.t. the
+            ;; daemon's maybe-reload! stamp check, so our own async append is
+            ;; never mistaken for an external edit (stamp and file move together).
+            (with-batch-lock!
+              batch-lock
+              (fn []
+                (doseq [[path pitems] (plan-group-batch items)]
+                  (let [real (vec (filter #(seq (:lines %)) pitems))
+                        written-bytes (when (seq real) (utf8-byte-count real))
+                        flush-context (volatile! nil)]
+                    (try
+                      (when (and path (seq real))
+                        ;; vGUARD writer admission (B2 §2): the batch holds the
+                        ;; SHARED rewrite lock across open→write→fsync→close, so a
+                        ;; generation flip's EXCLUSIVE lock excludes it
+                        ;; kernel-arbitrated (no scan, no TOCTOU). A live flip
+                        ;; DELAYS the batch — the ack (ticket delivery below) still
+                        ;; happens only after the fsync, so no acked write can ever
+                        ;; sit outside a flip's read set.
+                        (with-path-lock!
+                          path-lock
+                          (str path)
+                          (fn []
+                            (assert-flat-append-boundary! path)
+                            (let [before-stamp (flat-file-stamp path)
+                                  before-bytes
+                                  (.length (java.io.File. (str path)))]
+                              (with-open
+                               [os (java.io.FileOutputStream. (str path) true)]
+                                (doseq [{:keys [lines]} real, ^String ln lines]
+                                  (.write os (.getBytes ln "UTF-8")))
+                                (.flush os)
+                                ;; ONE fsync covers the whole batch
+                                (.force (.getChannel os) true))
+                              ;; Capture the owned-byte proof before releasing
+                              ;; shared rewrite admission; a generation flip
+                              ;; cannot hide in the before/after window.
+                              (let [after-stamp (flat-file-stamp path)
+                                    after-bytes
+                                    (.length (java.io.File. (str path)))]
+                                (vreset! flush-context
+                                         {:path (str path)
+                                          :before-stamp before-stamp
+                                          :after-stamp after-stamp
+                                          :after-bytes after-bytes
+                                          :owned-append-exact?
+                                          (= (long after-bytes)
+                                             (+ (long before-bytes)
+                                                (long written-bytes)))}))))))
+                      (doseq [{:keys [on-flushed]} pitems :when on-flushed]
+                        (on-flushed @flush-context))
+                      (deliver-all! pitems :ok)
+                      (catch Throwable t (deliver-all! pitems t))))))))
+          (catch Throwable t
+            ;; Fail the batch already removed from the queue as well as the
+            ;; pending queue drained by run-group-appender!.  Without this, a
+            ;; terminal planner/allocator failure strands these tickets forever.
+            (deliver-all! items t)
+            (throw t)))
+        ;; A stop marker is admitted only after the daemon has stopped accepting
+        ;; requests and drained its connection workers.  It shares the normal
+        ;; FIFO batch so every earlier append/barrier is delivered before the
+        ;; appender retires; no second writer starts in the same lifecycle.
+        (when-not (some :stop items)
+          (recur))))))
+
+(defn- fail-pending-group-items! [t]
+  (loop []
+    (when-let [item (.poll group-q)]
+      (when-let [ticket (:ticket item)]
+        (deliver ticket t))
       (recur))))
 
+(defn- run-group-appender! []
+  (try
+    (group-appender-loop)
+    (catch Throwable t
+      ;; A dead appender used to leave every queued request and the shutdown
+      ;; durability barrier parked on promises forever.  Publish the terminal
+      ;; failure and wake all queued waiters; writer admission remains fail-closed
+      ;; for the rest of this process.
+      (reset! group-appender-failure t)
+      (fail-pending-group-items! t)
+      (throw t))
+    (finally
+      (reset! group-appender-thread nil)
+      (reset! group-appender-started false))))
+
 (defn- ensure-group-appender! []
+  (when-let [failure @group-appender-failure]
+    (throw (ex-info "durable appender is unavailable"
+                    {:type :durable-appender-failed} failure)))
+  (when @group-appender-stopping?
+    (throw (ex-info "durable appender is stopping"
+                    {:type :durable-appender-stopping})))
   (when (compare-and-set! group-appender-started false true)
-    (doto (Thread. ^Runnable group-appender-loop)
-      (.setName "fram-group-appender") (.setDaemon true) (.start))))
+    (let [thread (doto (Thread. ^Runnable run-group-appender!)
+                   (.setName "fram-group-appender")
+                   (.setDaemon true))]
+      (reset! group-appender-thread thread)
+      (.start thread))))
 
 (defn await-durable! [ticket]
   (let [r (deref ticket)]
+    (when (instance? Throwable r) (throw r))
+    r))
+
+(defn await-durable-bounded!
+  "Await a durability ticket for at most `timeout-ms`.  Normal request
+   acknowledgements retain the unbounded await above; this bounded form exists
+   for process shutdown, whose outer service manager must never have to SIGKILL
+   a wedged or failed appender."
+  [ticket timeout-ms]
+  (let [timeout-ms (max 0 (long timeout-ms))
+        timed-out (Object.)
+        r (deref ticket timeout-ms timed-out)]
+    (when (identical? timed-out r)
+      (throw (ex-info "durable appender timed out"
+                      {:type :durable-appender-timeout
+                       :timeout-ms timeout-ms})))
     (when (instance? Throwable r) (throw r))
     r))
 
@@ -189,20 +257,92 @@
 ;; be nil) runs on the appender thread after the batch's fsync, before delivery,
 ;; with the batch's before/after stamps and an exact-owned-byte verdict.
 (defn enqueue-durable! [path lines on-flushed]
-  (ensure-group-appender!)
   (let [t (promise)]
-    (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed})
+    (locking group-appender-lifecycle-lock
+      (ensure-group-appender!)
+      (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed}))
+    ;; Close the narrow failure-before-put race: if the appender exited after
+    ;; ensure but before this item became visible to its failure drain, wake this
+    ;; waiter with the same terminal error instead of parking forever.
+    (when-let [failure @group-appender-failure]
+      (deliver t failure))
     (case (queue-admission-decision (boolean *durable-tickets*))
       :defer (do (swap! *durable-tickets* conj t) t)
       :await (await-durable! t))))
 
 ;; barrier: returns once every enqueue that happened-before it is on disk (FIFO
 ;; queue + in-order batches). No-op if nothing was ever enqueued.
-(defn durable-barrier! []
-  (when @group-appender-started
-    (let [t (promise)]
-      (.put group-q {:path nil :lines [] :ticket t})
-      (await-durable! t))))
+(defn durable-barrier!
+  ([]
+   (when-let [failure @group-appender-failure]
+     (throw (ex-info "durable appender failed before barrier"
+                     {:type :durable-appender-failed} failure)))
+   (when @group-appender-started
+     (let [t (promise)]
+       (locking group-appender-lifecycle-lock
+         (when @group-appender-stopping?
+           (throw (ex-info "durable appender is stopping"
+                           {:type :durable-appender-stopping})))
+         (.put group-q {:path nil :lines [] :ticket t}))
+       (when-let [failure @group-appender-failure]
+         (deliver t failure))
+       (await-durable! t))))
+  ([timeout-ms]
+   (when-let [failure @group-appender-failure]
+     (throw (ex-info "durable appender failed before barrier"
+                     {:type :durable-appender-failed} failure)))
+   (when @group-appender-started
+     (let [t (promise)]
+       (locking group-appender-lifecycle-lock
+         (when @group-appender-stopping?
+           (throw (ex-info "durable appender is stopping"
+                           {:type :durable-appender-stopping})))
+         (.put group-q {:path nil :lines [] :ticket t}))
+       (when-let [failure @group-appender-failure]
+         (deliver t failure))
+       (await-durable-bounded! t timeout-ms)))))
+
+(defn group-appender-status []
+  (let [^Thread thread @group-appender-thread]
+    {:started @group-appender-started
+     :stopping @group-appender-stopping?
+     :alive (boolean (and thread (.isAlive thread)))
+     :failure (some-> @group-appender-failure class .getName)}))
+
+(defn stop-group-appender!
+  "Retire the one durable appender after its FIFO has drained.  Returns a status
+   map instead of waiting past `timeout-ms`; callers may then let process exit
+   kill the daemon thread, while every acknowledged write is already protected
+   by the preceding durability barrier."
+  [timeout-ms]
+  (let [timeout-ms (max 0 (long timeout-ms))
+        deadline-ns (+ (System/nanoTime) (* timeout-ms 1000000))
+        remaining-ms (fn []
+                       (max 0
+                            (long
+                             (quot (+ (max 0 (- deadline-ns (System/nanoTime)))
+                                      999999)
+                                   1000000))))
+        ticket (promise)
+        thread
+        (locking group-appender-lifecycle-lock
+          (reset! group-appender-stopping? true)
+          (let [^Thread thread @group-appender-thread]
+            (when (and thread (.isAlive thread))
+              (.put group-q {:path nil :lines [] :ticket ticket :stop true}))
+            thread))]
+    (when (and thread (.isAlive ^Thread thread))
+      (deref ticket (remaining-ms) ::timeout)
+      ;; Thread.join(0) means "wait forever", the opposite of our expired
+      ;; deadline.  Skip the cooperative join once the budget reaches zero.
+      (let [join-ms (remaining-ms)]
+        (when (pos? join-ms)
+          (.join ^Thread thread join-ms)))
+      (when (.isAlive ^Thread thread)
+        (.interrupt ^Thread thread)
+        (.join ^Thread thread 100)))
+    (assoc (group-appender-status)
+           :stopped (not (boolean (and thread (.isAlive ^Thread thread)))))))
 
 ;; --- atomic v2 log: a tx's records + :commit, fsync'd (via group commit) -----
 (defn- append-tx! [co records]

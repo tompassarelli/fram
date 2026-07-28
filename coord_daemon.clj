@@ -87,6 +87,7 @@
 (def query-cache-flight (atom nil))
 (def subscribers (atom []))
 (def subscription-sockets (atom #{}))
+(def connection-sockets (atom #{}))
 (def dlock (Object.))                ; serializes reload + mutation commit boundaries
 (def snapshot-build-lock (Object.)) ; serializes checkpoint publication, never writers
 (def active-snapshot-builds (atom 0))
@@ -354,6 +355,10 @@
   (= "1" (System/getenv "FRAM_TEST_CONTROL_DELAY")))
 (def snapshot-build-test-delay-ms
   (positive-env-long "FRAM_TEST_SNAPSHOT_BUILD_DELAY_MS" 0))
+(def shutdown-timeout-ms
+  (positive-env-long "FRAM_SHUTDOWN_TIMEOUT_MS" 8000))
+(def shutdown-connection-grace-ms
+  (positive-env-long "FRAM_SHUTDOWN_CONNECTION_GRACE_MS" 3000))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
 (def active-control-reads (atom 0))
@@ -5817,7 +5822,14 @@
 (defn- serve-conn-async! [^Socket s]
   ;; Count before submission: once accept returns, TERM must either observe this
   ;; connection as in-flight or wait for accept-stopped before testing the count.
-  (locking drain-monitor (swap! active-connections inc))
+  (locking drain-monitor
+    (swap! active-connections inc)
+    (swap! connection-sockets conj s)
+    ;; Accept may have returned concurrently with TERM just before the listener
+    ;; close became visible.  Register first, then close: the shutdown thread can
+    ;; now prove it owns every accepted transport.
+    (when @draining?
+      (try (.close s) (catch Throwable _ nil))))
   (try
     (future
       (try
@@ -5825,39 +5837,157 @@
         (finally
           (locking drain-monitor
             (swap! active-connections dec)
+            (swap! connection-sockets disj s)
             (.notifyAll drain-monitor)))))
     (catch Throwable t
       (try (.close s) (catch Throwable _ nil))
       (locking drain-monitor
         (swap! active-connections dec)
+        (swap! connection-sockets disj s)
         (.notifyAll drain-monitor))
       (throw t))))
 
-(defn- await-connections-drained! []
+(defn- remaining-ms [deadline-ns]
+  (max 0
+       (long
+        (quot (+ (max 0 (- deadline-ns (System/nanoTime))) 999999)
+              1000000))))
+
+(defn- await-connections-drained-until! [deadline-ns]
   (locking drain-monitor
     (loop []
-      (when (pos? @active-connections)
-        (.wait drain-monitor)
-        (recur)))))
+      (cond
+        (zero? @active-connections) true
+        (zero? (remaining-ms deadline-ns)) false
+        :else
+        (do
+          (.wait drain-monitor (max 1 (remaining-ms deadline-ns)))
+          (recur))))))
+
+(defn- await-accept-stopped-until! [deadline-ns]
+  (if-let [^java.util.concurrent.CountDownLatch stopped @accept-stopped]
+    (.await stopped
+            (max 0 (remaining-ms deadline-ns))
+            java.util.concurrent.TimeUnit/MILLISECONDS)
+    true))
+
+(defn- close-active-connections! []
+  ;; SO_TIMEOUT bounds reads only.  A client that stops consuming a large query
+  ;; response can pin SocketDispatcher.write0 indefinitely, so shutdown must own
+  ;; and close every accepted transport—not only subscriptions.
+  (let [sockets (locking drain-monitor (vec @connection-sockets))]
+    (doseq [^Socket s sockets]
+      (try (.close s) (catch Throwable _ nil)))
+    (count sockets)))
+
+(defn- close-subscription-connections! []
+  ;; Subscriptions are intentionally unbounded and can never participate in a
+  ;; graceful finite-request drain.  Retire them immediately, while ordinary
+  ;; reads/writes get the configured grace before their transports are forced
+  ;; closed.
+  (let [sockets (locking drain-monitor (vec @subscription-sockets))]
+    (doseq [^Socket s sockets]
+      (try (.close s) (catch Throwable _ nil)))
+    (count sockets)))
+
+(defn- bounded-shutdown-checkpoint! [deadline-ns]
+  ;; Checkpoints are derived and atomically published.  Give a normal clean
+  ;; checkpoint the remaining budget, but never let a slow/corrupt build hold
+  ;; process replacement past the service's shutdown bound.  An interrupted temp
+  ;; file is ignored by the verified boot path; the canonical logs remain truth.
+  (let [budget-ms (max 0 (- (remaining-ms deadline-ns) 500))]
+    (if (zero? budget-ms)
+      :skipped-no-budget
+      (let [done (promise)
+            worker
+            (doto
+             (Thread.
+              ^Runnable
+              (fn []
+                (try
+                  (snapshot-if-dirty! "shutdown")
+                  (deliver done :complete)
+                  (catch Throwable t
+                    (deliver done t)))))
+             (.setName "fram-shutdown-checkpoint")
+             (.setDaemon true))]
+        (.start worker)
+        (let [result (deref done budget-ms ::timeout)]
+          (when (= ::timeout result)
+            (.interrupt worker))
+          (if (instance? Throwable result) :failed result))))))
 
 (defn- drain-and-checkpoint! []
   ;; Ordering is the handover proof:
   ;;   1. stop accept (systemd keeps its own listener reference + backlog);
   ;;   2. wait until the accept loop has published every already-accepted socket;
-  ;;   3. close idle subscriptions and finish finite request workers;
+  ;;   3. close subscriptions, let finite requests finish inside a bounded grace,
+  ;;      then close any remaining socket (including blocked response writers);
   ;;   4. cross the group-appender FIFO barrier (all request appends fsynced);
-  ;;   5. checkpoint only that fully drained durable version.
-  (reset! draining? true)
-  (when-let [^ServerSocket ss @listener-socket]
-    (try (.close ss) (catch Throwable _ nil)))
-  (when-let [^java.util.concurrent.CountDownLatch stopped @accept-stopped]
-    (.await stopped))
-  (locking drain-monitor
-    (doseq [^Socket s @subscription-sockets]
-      (try (.close s) (catch Throwable _ nil))))
-  (await-connections-drained!)
-  (durable-barrier!)
-  (snapshot-if-dirty! "shutdown"))
+  ;;   5. checkpoint only a fully drained durable version;
+  ;;   6. retire the appender and the Clojure future pool before returning.
+  ;;
+  ;; If a worker or appender is unhealthy, the bounded path skips the derived
+  ;; checkpoint and exits.  Acknowledged writes stay safe: each ack already
+  ;; crossed its own fsync ticket; unacknowledged work may be retried after replay.
+  (let [started-ns (System/nanoTime)
+        deadline-ns (+ started-ns (* (long shutdown-timeout-ms) 1000000))
+        result (atom {:accept :unknown :connections :unknown
+                      :durability :not-attempted :checkpoint :not-attempted
+                      :appender :unknown})]
+    (try
+      (reset! draining? true)
+      (when-let [^ServerSocket ss @listener-socket]
+        (try (.close ss) (catch Throwable _ nil)))
+      (swap! result assoc :accept
+             (if (await-accept-stopped-until! deadline-ns)
+               :stopped :timed-out))
+      (close-subscription-connections!)
+      (let [grace-deadline
+            (min deadline-ns
+                 (+ (System/nanoTime)
+                    (* (long shutdown-connection-grace-ms) 1000000)))
+            graceful? (await-connections-drained-until! grace-deadline)
+            forced-count (if graceful? 0 (close-active-connections!))
+            ;; A closed socket normally wakes a blocked read/write immediately.
+            ;; Bound that cancellation handoff as well; leave the rest of the
+            ;; process deadline for the durability barrier and appender stop.
+            forced-deadline
+            (min deadline-ns
+                 (+ (System/nanoTime) 500000000))
+            drained? (or graceful?
+                         (await-connections-drained-until! forced-deadline))]
+        (swap! result assoc :forced-connections forced-count)
+        (swap! result assoc :connections
+               (if drained? :drained
+                   {:timed-out @active-connections}))
+        (when drained?
+          (try
+            (durable-barrier! (remaining-ms deadline-ns))
+            (swap! result assoc :durability :durable)
+            (swap! result assoc :checkpoint
+                   (bounded-shutdown-checkpoint! deadline-ns))
+            (catch Throwable t
+              (swap! result assoc :durability
+                     {:failed (.getSimpleName (class t))})))))
+      (catch Throwable t
+        (swap! result assoc :shutdown-error
+               {:class (.getSimpleName (class t))
+                :message (.getMessage t)}))
+      (finally
+        (try
+          (swap! result assoc :appender
+                 (stop-group-appender! (remaining-ms deadline-ns)))
+          (catch Throwable t
+            (swap! result assoc :appender
+                   {:stopped false :failure (.getSimpleName (class t))})))
+        ;; `future` uses Clojure's non-daemon send-off executor.  All owned
+        ;; connection workers have now drained or been abandoned at the hard
+        ;; boundary, so retire the pool as the final process-lifecycle step.
+        (shutdown-agents)
+        (let [elapsed-ms (quot (- (System/nanoTime) started-ns) 1000000)]
+          (println (str "[fram] shutdown complete in " elapsed-ms "ms "
+                        (pr-str @result))))))))
 
 (defn- install-drain-hook! []
   (when (compare-and-set! drain-hook-installed? false true)
@@ -5897,6 +6027,15 @@
             (recur))))
       (catch java.net.SocketException t
         (when-not @draining? (throw t)))
+      ;; An inherited listener is backed by ServerSocketChannel; closing it from
+      ;; the TERM hook wakes accept with AsynchronousCloseException rather than
+      ;; SocketException.  SCI cannot resolve that JDK class as a catch target,
+      ;; so recognize the normal shutdown signal by its exact runtime name.
+      (catch Throwable t
+        (when-not (and @draining?
+                       (= "java.nio.channels.AsynchronousCloseException"
+                          (.getName (class t))))
+          (throw t)))
       (finally
         (.countDown stopped)
         (compare-and-set! listener-socket ss nil)))))
