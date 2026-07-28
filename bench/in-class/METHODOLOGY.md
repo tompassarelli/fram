@@ -80,6 +80,30 @@ The corpus generator is committed in both current adapters and is defined
 above. It has no random input. A row's `corpus-triples` plus contract version
 fully identifies the logical corpus.
 
+## Index-architecture extension
+
+`~/code/fram/bench/in-class/run-index.sh` compares the two representations in
+the H2 decision without changing either production implementation:
+
+- `store-id-hash` uses `fram.store`'s canonical integer value and fact IDs, with
+  fact IDs posted at the leaves of benchmark-local SPO/POS/OSP hash-prefix
+  tries;
+- `mmap-rotations` uses `rotations/write-set!` and `rotations/open-set`, then
+  binary-searches exact prefixes in the production immutable SPO/POS/OSP
+  segments.
+
+Each contender runs in its own Babashka process so its retained RSS and heap
+measurements do not include the other representation. Corpus construction and
+index preparation are reported separately as `prepare-ms`; `query-ms` covers
+one functionally checked query. Each JSONL row repeats the revision, contract,
+engine, result cardinality, RSS/heap, hardware, and load metadata needed to
+interpret it without a sidecar.
+
+The coordinator aggregate scenario cites decision section
+`Workload derivation / Coordinator aggregate/projection scans` and probes the
+bound `title` predicate. It returns one row per corpus subject, so lookup stays
+selective while output remains honestly O(K).
+
 ## Golden ratchet
 
 Run the default landing gate from a clean Fram checkout:

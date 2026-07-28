@@ -29,13 +29,13 @@
   (-> (apply shell/sh args) :out str/trim))
 
 (defn proc-field [field]
-  (some->> (str/split-lines (slurp "/proc/self/status"))
+  (some->> (str/split-lines (sh-line "cat" "/proc/self/status"))
            (some #(when (str/starts-with? % (str field ":")) %))
            (re-find #"[0-9]+")
            Long/parseLong))
 
 (defn mem-total-kb []
-  (some->> (str/split-lines (slurp "/proc/meminfo"))
+  (some->> (str/split-lines (sh-line "cat" "/proc/meminfo"))
            (some #(when (str/starts-with? % "MemTotal:") %))
            (re-find #"[0-9]+")
            Long/parseLong))
@@ -225,11 +225,16 @@
              (contains? (set (:default-corpus-sizes contract)) corpus-size))
         (contains? (set sizes) corpus-size))))
 
+(defn coordinator-aggregate-scan [engine _scenario]
+  {:result-count (count (probe-triples engine [nil "title" nil]))
+   :expected-count-fn #(quot % 3)})
+
 ;; Scenario handlers are added one coherent scenario at a time.
-(def scenario-handlers {})
+(def scenario-handlers
+  {:coordinator-aggregate-scan coordinator-aggregate-scan})
 
 (def started-utc (str (java.time.Instant/now)))
-(def load-start (str/trim (slurp "/proc/loadavg")))
+(def load-start (sh-line "cat" "/proc/loadavg"))
 (def rss-before-kb (proc-field "VmRSS"))
 (def build-result
   (measured #(case engine-name
@@ -263,13 +268,13 @@
           :details (dissoc value :result-count :expected-count-fn)})))
    applicable))
 
-(def load-end (str/trim (slurp "/proc/loadavg")))
+(def load-end (sh-line "cat" "/proc/loadavg"))
 (def revision (sh-line "git" "rev-parse" "HEAD"))
 (def cpu-model
-  (or (some->> (str/split-lines (sh-line "lscpu"))
-               (some #(when (str/starts-with? % "Model name:") %))
-               (str/replace #"^Model name:\s*" ""))
-      "unknown"))
+  (if-let [line (some #(when (str/starts-with? % "Model name:") %)
+                      (str/split-lines (sh-line "lscpu")))]
+    (str/trim (subs line (inc (.indexOf line ":"))))
+    "unknown"))
 (def common
   {:receipt-kind "index-architecture"
    :contract-version contract-version

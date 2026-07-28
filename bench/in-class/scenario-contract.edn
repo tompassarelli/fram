@@ -47,4 +47,9 @@
    :expected-count :errors :rss-before-kb :rss-retained-kb :heap-retained-bytes
    :storage-bytes :started-utc :revision :kernel :nproc :cpu-model
    :mem-total-kb :load-start :load-end :java-version :babashka-version]
-  :scenarios []}}
+  :scenarios
+  [{:id :coordinator-aggregate-scan
+    :query-class :coordinator-aggregate-scan
+    :corpus-sizes :default
+    :decision-section "Workload derivation / Coordinator aggregate/projection scans"
+    :definition "Bound-predicate title projection; returning K rows remains O(K)."}]}}
