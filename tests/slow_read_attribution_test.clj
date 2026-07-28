@@ -90,6 +90,28 @@
               [:report :fenced-query true]]
              @events)))
 
+;; :show was the UNINSTRUMENTED route, and that gap hid the worst incident of
+;; 2026-07-29: `north show @swarm` took 57.8s on an idle box and produced no
+;; slow-read line at all, so the hunt for the cause took hours. The cause was a
+;; coordinator GC death spiral, which on this path shows as execute time with
+;; zero reload and zero lock-wait — the signature that separates "the JVM cannot
+;; allocate" from "this query is expensive".
+(let [events (atom [])
+      req {:op :show :te "@swarm"}
+      response
+      (with-redefs-fn
+        {#'coord-daemon/prepare-request-reload!
+         (fn [& _] (swap! events conj :reload))
+         #'coord-daemon/subject-wire-snapshot
+         (fn [te] (swap! events conj [:snapshot te]) {:rows []})
+         #'coord-daemon/report-slow-read!
+         (fn [op t0 t1 t2 t3]
+           (swap! events conj [:report op (= t1 t2) (<= t0 t1 t3)]))}
+        (fn [] ((deref #'coord-daemon/handle*) req)))]
+  (check! "show preserves its response" (= {:rows []} response))
+  (check! "show is attributed, with lock-wait reported as the zero it is"
+          (= [:reload [:snapshot "@swarm"] [:report :show true true]] @events)))
+
 (println (format "slow_read_attribution: %d / %d PASS"
                  (- @checks @failures) @checks))
 (System/exit (if (zero? @failures) 0 1))

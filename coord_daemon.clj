@@ -5099,9 +5099,23 @@
          :facts triples}))
 
     (= :show handler)
-    (do
-      (when-not *reload-checked* (prepare-request-reload! req))
-      (subject-wire-snapshot (:te req)))
+    ;; Timed for the same reason :query is, and it was the gap that hid the
+    ;; worst incident of 2026-07-29: `north show @swarm` took 57.8s on an IDLE
+    ;; box and produced NO slow-read line at all, because only :query and
+    ;; :fenced-query were instrumented. The cause turned out to be a coordinator
+    ;; GC death spiral (old-gen 99.98%, 41% of uptime collecting) — which shows
+    ;; up here as execute time with no reload and no lock-wait, exactly the
+    ;; signature that distinguishes "the JVM cannot allocate" from "this query
+    ;; is expensive".
+    (let [t0 (System/nanoTime)
+          _ (when-not *reload-checked* (prepare-request-reload! req))
+          t1 (System/nanoTime)
+          res (subject-wire-snapshot (:te req))]
+      ;; No lock is taken on this path, so the lock-wait slot is reported as the
+      ;; zero it is rather than folded into execute — a nonzero value here would
+      ;; itself be the finding.
+      (report-slow-read! :show t0 t1 t1 (System/nanoTime))
+      res)
 
     (= :validate handler)
     (do
