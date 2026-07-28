@@ -4886,15 +4886,20 @@
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
     ;; expensive or abandoned read can never block writes, leases, or status.
     (= :fenced-query route)
-    (let [_ (maybe-reload!)
+    (let [t0 (System/nanoTime)
+          _ (maybe-reload!)
+          t1 (System/nanoTime)
           inner (:request req)
           captured (locking dlock
                      (if-let [reject (log-fence-rejection (:expected-log req))]
                        {:reject reject}
-                       {:roots (capture-query-roots!)}))]
-      (if-let [reject (:reject captured)]
-        reject
-        (execute-query inner (:roots captured))))
+                       {:roots (capture-query-roots!)}))
+          t2 (System/nanoTime)
+          res (if-let [reject (:reject captured)]
+                reject
+                (execute-query inner (:roots captured)))]
+      (report-slow-read! :fenced-query t0 t1 t2 (System/nanoTime))
+      res)
 
     (= :query route)
     (let [t0 (System/nanoTime)

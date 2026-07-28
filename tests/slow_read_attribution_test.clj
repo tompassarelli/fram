@@ -58,6 +58,38 @@
                (str/includes? slow-query "lock-wait 20ms")
                (str/includes? slow-query "execute 5000ms"))))
 
+;; Public fram-fast requests are fenced so they cannot accidentally query the
+;; wrong corpus. That envelope has its own :fenced-query route; timing only the
+;; direct :query route left every public CLI stall invisible.
+(let [events (atom [])
+      req {:op :for-log
+           :expected-log "/tmp/coordination.log"
+           :request {:op :query
+                     :query {:find "x" :rules []}}}
+      response
+      (with-redefs-fn
+        {#'coord-daemon/maybe-reload!
+         (fn [& _] (swap! events conj :reload))
+         #'coord-daemon/log-fence-rejection
+         (fn [_] nil)
+         #'coord-daemon/capture-query-roots!
+         (fn [] (swap! events conj :capture) :roots)
+         #'coord-daemon/execute-query
+         (fn [inner roots]
+           (swap! events conj [:execute (:op inner) roots])
+           {:ok []})
+         #'coord-daemon/report-slow-read!
+         (fn [op t0 t1 t2 t3]
+           (swap! events conj [:report op (<= t0 t1 t2 t3)]))}
+        (fn [] ((deref #'coord-daemon/handle*) req)))]
+  (check! "fenced query preserves the query response" (= {:ok []} response))
+  (check! "fenced query attributes reload, lock capture, and execution"
+          (= [:reload
+              :capture
+              [:execute :query :roots]
+              [:report :fenced-query true]]
+             @events)))
+
 (println (format "slow_read_attribution: %d / %d PASS"
                  (- @checks @failures) @checks))
 (System/exit (if (zero? @failures) 0 1))
