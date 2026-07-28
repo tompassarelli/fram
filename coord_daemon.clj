@@ -3176,7 +3176,7 @@
                          (when (and ln bn) [:assert ln "bound_to" bn]))))
                vec))))))
 
-(defn- do-edit-prepare [req]
+(defn- do-edit-prepare-one [req]
   (try
     (let [spec (:spec req)
           module (:module spec)]
@@ -3244,6 +3244,157 @@
                  :error (ex->s-err (:module (:spec req)) (:name (:spec req)) t)
                  :version (current-seq @co)}
           (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
+
+;; A multi-definition candidate is deliberately narrower than the single-edit
+;; vocabulary: body edits only, one module, and one edit per definition.  The
+;; distinct-name rule keeps every step independent while the transaction is
+;; staged; a caller that wants to edit one definition twice can send its final
+;; body once.  The sealed candidate still uses the ordinary commit/journal path.
+(def ^:private edit-transaction-verbs #{"set-body" "replace-in-body"})
+(def ^:private max-edit-transaction-size 32)
+
+(defn- validate-edit-transaction-specs! [raw-specs]
+  (when-not (sequential? raw-specs)
+    (throw (ex-info "edit-prepare: :specs must be a batch vector"
+                    {:reject :invalid-specs})))
+  (let [specs (vec raw-specs)]
+    (when (< (count specs) 2)
+      (throw (ex-info "edit-prepare: :specs needs at least two definition edits"
+                      {:reject :invalid-specs})))
+    (when (> (count specs) max-edit-transaction-size)
+      (throw (ex-info (str "edit-prepare: :specs exceeds the "
+                           max-edit-transaction-size "-edit transaction limit")
+                      {:reject :invalid-specs})))
+    (doseq [[i spec] (map-indexed vector specs)]
+      (when-not (map? spec)
+        (throw (ex-info (str "edit-prepare: :specs[" i "] must be a map")
+                        {:reject :invalid-specs :index i})))
+      (when-not (contains? edit-transaction-verbs (:op spec))
+        (throw (ex-info (str "edit-prepare: :specs[" i "] verb "
+                             (pr-str (:op spec))
+                             " is outside the transaction surface (set-body, replace-in-body)")
+                        {:reject :unknown-verb :index i})))
+      (when (str/blank? (str (:module spec)))
+        (throw (ex-info (str "edit-prepare: :specs[" i "] :module required")
+                        {:reject :invalid-specs :index i})))
+      (when (str/blank? (str (:name spec)))
+        (throw (ex-info (str "edit-prepare: :specs[" i "] :name required")
+                        {:reject :invalid-specs :index i}))))
+    (let [modules (set (map :module specs))
+          names (mapv :name specs)]
+      (when-not (= 1 (count modules))
+        (throw (ex-info "edit-prepare: every transaction edit must target one module"
+                        {:reject :mixed-modules :modules (vec (sort modules))})))
+      (when-not (= (count names) (count (set names)))
+        (throw (ex-info "edit-prepare: every transaction edit must target a distinct definition"
+                        {:reject :duplicate-definition}))))
+    specs))
+
+;; Stage each definition edit against the preceding staged result, but never
+;; touch canonical state.  Each step reuses the byte-identical single-edit
+;; compute/harvest machinery.  The returned operation vector is rehearsed once
+;; more from the original snapshot before it is sealed, so prepare and commit
+;; share the exact end-state operation sequence.
+(defn- edit-transaction-ops [specs snap]
+  (loop [remaining specs
+         staged snap
+         ops []
+         new-nodes 0]
+    (if (empty? remaining)
+      {:ops ops :new-nodes new-nodes}
+      (let [spec (first remaining)
+            step-version (or (:next-seq staged) 0)
+            {:keys [asserts retracts new-eids]} (edit-min-compute spec staged)
+            asserts (allocate-positions asserts)
+            leaf? (fn [[_ p _]] (#{"kind" "v"} p))
+            proposed (vec
+                      (concat
+                       (map (fn [[te p r]] [:retract te p r]) retracts)
+                       (map (fn [[te p r]] [:assert te p r])
+                            (concat (filter leaf? asserts)
+                                    (remove leaf? asserts)))))
+            co-step {:store (atom staged) :log nil :lock (Object.)}
+            applied (apply-candidate-ops! co-step proposed step-version nil)]
+        (if (:reject applied)
+          (merge {:reject (:reject applied)}
+                 (select-keys applied [:at :op :code]))
+          (recur (rest remaining)
+                 @(:store co-step)
+                 (into ops (get-in applied [:ok :installed-ops]))
+                 (+ new-nodes (count new-eids))))))))
+
+(defn- do-edit-prepare-transaction [req]
+  (try
+    (let [specs (validate-edit-transaction-specs! (:specs req))
+          module (:module (first specs))
+          snap @(:store @co)
+          v0 (or (:next-seq snap) 0)
+          tp (tracked-path-of (atom snap) module)]
+      (if (:reject tp)
+        (assoc tp :version v0)
+        (let [staged (edit-transaction-ops specs snap)]
+          (if (:reject staged)
+            (merge {:reject (:reject staged) :version v0}
+                   (select-keys staged [:at :op :code]))
+            (let [co2 {:store (atom snap) :log nil :lock (Object.)}
+                  ap (apply-candidate-ops! co2 (:ops staged) v0 nil)
+                  ap (if (:reject ap)
+                       ap
+                       (try
+                         (clone-refresh-refers! (:store co2) module)
+                         (assoc ap :edn (project-module-edn (:store co2) module))
+                         (catch Throwable t
+                           {:reject [(str "candidate projection failed: " (.getMessage t))]
+                            :code :candidate-render-failed})))]
+              (cond
+                (:reject ap)
+                (merge {:reject (:reject ap) :version v0}
+                       (select-keys ap [:at :op :code]))
+
+                (:error (:edn ap))
+                {:reject [(str "candidate projection failed: " (:error (:edn ap)))]
+                 :code :candidate-render-failed
+                 :version v0}
+
+                :else
+                (let [edn-str (:edn (:edn ap))
+                      ops (get-in ap [:ok :installed-ops])
+                      id (str (java.util.UUID/randomUUID))
+                      ops-digest (sha256-hex (pr-str ops))
+                      edn-digest (sha256-hex edn-str)
+                      cand {:id id :module module :verb "edit-transaction"
+                            :edits (count specs) :ops ops :version v0
+                            :path (:path tp) :ops-digest ops-digest
+                            :edn-digest edn-digest
+                            :created (System/currentTimeMillis)}]
+                  (swap! edit-candidates
+                         (fn [cm]
+                           (let [cm (assoc cm id cand)]
+                             (if (> (count cm) max-edit-candidates)
+                               (dissoc cm (:id (apply min-key :created (vals cm))))
+                               cm))))
+                  {:ok true :protocol edit-protocol-name :candidate id
+                   :module module :edits (count specs) :version v0
+                   :path (:path tp) :edn edn-str
+                   :ops-digest ops-digest :edn-digest edn-digest
+                   :ops (count ops)
+                   :asserts (count (filter #(= :assert (first %)) ops))
+                   :retracts (count (filter #(= :retract (first %)) ops))
+                   :new-nodes (:new-nodes staged)})))))))
+    (catch Throwable t
+      (let [d (ex-data t)
+            msg (or (not-empty (str (.getMessage t))) (:message d)
+                    (str "internal error: " (.getSimpleName (class t))))]
+        {:reject [(str "edit-prepare: " msg)]
+         :error (ex->s-err (:module (first (:specs req)))
+                           (:name (first (:specs req))) t)
+         :code (or (:reject d) :invalid-specs)
+         :version (current-seq @co)}))))
+
+(defn- do-edit-prepare [req]
+  (if (contains? req :specs)
+    (do-edit-prepare-transaction req)
+    (do-edit-prepare-one req)))
 
 (defn- do-edit-commit [req expected-log fenced?]
   (locking dlock
