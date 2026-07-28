@@ -28,7 +28,8 @@
 (defn sh-line [& args]
   (-> (apply shell/sh args) :out str/trim))
 
-(def process-pid (.pid (ProcessHandle/current)))
+(def process-pid
+  (Long/parseLong (sh-line "bash" "-c" "printf %s \"$PPID\"")))
 
 (defn proc-field [field]
   (some->> (str/split-lines
