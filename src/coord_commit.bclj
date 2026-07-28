@@ -240,3 +240,11 @@
   (reduce (fn [latest :- (Map Any Any) line :- Any] :- (Map Any Any) (let [pred :- String (get line :p) key :- Any (if (contains? single-preds pred) [(get line :l) pred] [(get line :l) pred (get line :r)]) previous (get latest key) previous-tx :- Any (if (nil? previous) nil (get previous :tx)) line-tx :- Any (get line :tx)] (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line))))
     {}
     lines))
+
+(defrecord TailPredicatePlan [pred :- String action :- Keyword cardinality :- String value-kind :- String])
+
+(defn tail-predicate-plan [domain :- (Vec String) card-only :- (Vec String) single-preds :- (Set String) declared-preds :- (Set String) current-cardinality :- (Map String String) link-preds :- (Set String)] :- (Vec TailPredicatePlan)
+  (into []
+    (concat (map (fn [pred :- String] :- TailPredicatePlan (let [want :- String (if (contains? single-preds pred) "single" "multi") action :- Keyword (cond (not (contains? declared-preds pred)) :define (not= want (get current-cardinality pred)) :update :else :keep) value-kind :- String (if (contains? link-preds pred) "ref" "literal")] (->TailPredicatePlan pred action want value-kind))) domain)
+      (map (fn [pred :- String] :- TailPredicatePlan (let [want :- String (if (contains? single-preds pred) "single" "multi") action :- Keyword (if (not= want (get current-cardinality pred)) :define :keep)] (->TailPredicatePlan pred action want "literal")))
+        card-only))))
