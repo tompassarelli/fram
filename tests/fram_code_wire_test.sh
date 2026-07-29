@@ -54,6 +54,20 @@ assert_code_on_line "fram-code-on binds the edit port to the selected coordinato
   '"FRAM_CODE_PORT": "$PORT"'
 assert_code_on_line "fram-code-on binds FRAM_CODE_LOG explicitly" \
   '"FRAM_CODE_LOG": "$CODE_LOG"'
+assert_code_on_line "fram-code-on sources Beagle's pinned Racket resolver" \
+  'source "$BEAGLE_RACKET_INIT"'
+assert_code_on_line "fram-code-on seals the edit verifier into the coordinator launch" \
+  'FRAM_EDIT_VERIFIER="$EDIT_VERIFIER" \'
+assert_code_on_line "fram-code-on seals an empty verifier argv" \
+  "FRAM_EDIT_VERIFIER_ARGS='[]' \\"
+assert_code_on_line "fram-code-on seals pinned Racket into the coordinator launch" \
+  'FRAM_EDIT_VERIFIER_RACKET="$PINNED_RACKET" \'
+assert_code_on_line "fram-code-on seals the world checker into the coordinator launch" \
+  'FRAM_EDIT_VERIFIER_WORLD_CHECK="$WORLD_CHECK" \'
+assert_code_on_line "fram-code-on probes the fenced edit protocol" \
+  'coordinator_edit_protocol() {'
+assert_code_on_line "fram-code-on requires verifier-ready before wiring" \
+  'if [[ "$protocol" != '"'"'["graph-edit-candidate-v2" :ready]'"'"' ]]; then'
 
 # --- wire ON: merge, preserve unrelated keys --------------------------------
 "$HERE/bin/fram-code-wire" on "$DIR" "$SERVER_JSON"

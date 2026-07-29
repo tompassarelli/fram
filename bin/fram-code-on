@@ -18,6 +18,32 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # fram repo root
 BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
+BEAGLE_HOME="$(cd "$BEAGLE_HOME" && pwd)"
+BEAGLE_RACKET_INIT="$BEAGLE_HOME/bin/_beagle-racket"
+[[ -f "$BEAGLE_RACKET_INIT" ]] || {
+  echo "fram-code-on: missing Beagle Racket resolver: $BEAGLE_RACKET_INIT" >&2
+  exit 1
+}
+source "$BEAGLE_RACKET_INIT"
+[[ -n "${_BEAGLE_RACKET:-}" ]] || {
+  echo "fram-code-on: Beagle's pinned Racket could not be resolved" >&2
+  exit 1
+}
+PINNED_RACKET="$(readlink -f -- "$_BEAGLE_RACKET")"
+EDIT_VERIFIER="$(readlink -f -- "$HERE/bin/fram-edit-verifier")"
+WORLD_CHECK="$(readlink -f -- "$BEAGLE_HOME/beagle-lib/private/facts-check-world.rkt")"
+[[ -x "$PINNED_RACKET" ]] || {
+  echo "fram-code-on: pinned Racket is not executable: $PINNED_RACKET" >&2
+  exit 1
+}
+[[ -f "$EDIT_VERIFIER" && -x "$EDIT_VERIFIER" ]] || {
+  echo "fram-code-on: edit verifier is not a regular executable: $EDIT_VERIFIER" >&2
+  exit 1
+}
+[[ -f "$WORLD_CHECK" ]] || {
+  echo "fram-code-on: coherent-world checker is not a regular file: $WORLD_CHECK" >&2
+  exit 1
+}
 DIR="${1:?usage: fram-code-on <dir> [port] [--src <subdir>]}"; DIR="$(cd "$DIR" && pwd)"; shift
 PORT="" SRC="$DIR"
 while [ $# -gt 0 ]; do
@@ -68,8 +94,23 @@ coordinator_requires_fence() {
   [[ "$code" == "log-fence-required" ]]
 }
 
+coordinator_edit_protocol() {
+  FRAM_PROBE_PORT="$PORT" FRAM_PROBE_LOG="$CODE_LOG" \
+    timeout 5 bb -cp "$HERE/out" -e '
+      (require (quote [fram.rt :as rt]))
+      (let [response
+            (rt/coord-request-for-log
+             (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
+             (System/getenv "FRAM_PROBE_LOG")
+             {:op :edit-protocol})]
+        (print
+         (pr-str
+          [(:protocol response)
+           (get-in response [:verifier :state])])))' 2>/dev/null
+}
+
 verify_managed_coordinator() {
-  local status
+  local status protocol
   status="$(doctor_line || true)"
   if ! coordinator_matches_code_log; then
     echo "        coordinator identity check FAILED: ${status:-no fenced response}" >&2
@@ -79,6 +120,12 @@ verify_managed_coordinator() {
   if ! coordinator_requires_fence; then
     echo "        coordinator policy check FAILED: :$PORT accepts legacy unwrapped requests" >&2
     echo "        stop that daemon and rerun fram-code-on so strict log fencing is enabled" >&2
+    return 1
+  fi
+  protocol="$(coordinator_edit_protocol || true)"
+  if [[ "$protocol" != '["graph-edit-candidate-v2" :ready]' ]]; then
+    echo "        coordinator verifier check FAILED: ${protocol:-no fenced :edit-protocol response}" >&2
+    echo "        stop that daemon and rerun fram-code-on with the launch-sealed verifier" >&2
     return 1
   fi
 }
@@ -114,10 +161,17 @@ echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
 if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
   echo "  [2/3] coordinator already on :$PORT; verifying corpus + strict policy …"
   verify_managed_coordinator
-  echo "        verified exact code log + strict log fence (reusing)"
+  echo "        verified exact code log + strict log fence + ready edit verifier (reusing)"
 else
   echo "  [2/3] booting warm coordinator on :$PORT …"
-  ( cd "$HERE" && FRAM_REQUIRE_LOG_FENCE=1 setsid nohup bin/fram-daemon serve-flat "$PORT" "$CODE_LOG" \
+  ( cd "$HERE" && \
+    BEAGLE_HOME="$BEAGLE_HOME" \
+    FRAM_EDIT_VERIFIER="$EDIT_VERIFIER" \
+    FRAM_EDIT_VERIFIER_ARGS='[]' \
+    FRAM_EDIT_VERIFIER_RACKET="$PINNED_RACKET" \
+    FRAM_EDIT_VERIFIER_WORLD_CHECK="$WORLD_CHECK" \
+    FRAM_REQUIRE_LOG_FENCE=1 \
+    setsid nohup bin/fram-daemon serve-flat "$PORT" "$CODE_LOG" \
       >"$DIR/.fram/coord-$PORT.log" 2>&1 & )
   # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
   # quadratic today). Generous cap; the loop exits the moment the daemon listens.
@@ -127,7 +181,7 @@ else
   done
   if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
     verify_managed_coordinator
-    echo "        coordinator up (sole-writer, loopback, exact log, strict fence)"
+    echo "        coordinator up (sole-writer, loopback, exact log, strict fence, verifier ready)"
   else
     echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"
     exit 1
