@@ -152,26 +152,63 @@
   ;; :active is the compatible default. A standby can fold and serve reads on a
   ;; private endpoint, but never acquires the per-log lifetime writer lock.
   (coord-writer-authority/role-from-env))
+(def coordinator-phase
+  ;; nil preserves `with-redefs [coordinator-role ...]` for the host-level unit
+  ;; tests that do not enter serve-*-daemon. A serving process installs its
+  ;; configured role before boot, then promotion moves this atom through
+  ;; :demoting/:retired/:promoting/:active without changing its process identity.
+  (atom nil))
 (def writer-authority-handle (atom nil))
+(def cutover-protocol "fram-coordinator-cutover/v1")
+(def cutover-control-lock (Object.))
+(def cutover-token (System/getenv "FRAM_CUTOVER_TOKEN"))
+(def cutover-state
+  (atom {:protocol cutover-protocol :phase :uninitialized}))
 
-(defn- standby? [] (= :standby coordinator-role))
+(defn- current-coordinator-role []
+  (or @coordinator-phase coordinator-role))
+
+(defn- standby? []
+  (not= :active (current-coordinator-role)))
+
+(defn- write-authorized? []
+  (if (nil? @coordinator-phase)
+    ;; Portless library/test use predates the serving lifecycle and has no peer
+    ;; process to fence. Once with-writer-authority initializes a serving role,
+    ;; the kernel handle is mandatory for every canonical commit.
+    (= :active coordinator-role)
+    (and (= :active (current-coordinator-role))
+         (coord-writer-authority/held? @writer-authority-handle))))
+
+(declare writer-authority-rejection)
 
 (defn- writer-authority-status []
-  (coord-writer-authority/status
-   coordinator-role @writer-authority-handle
-   (or @flat-log (some-> @co :log) "unbound")))
+  (assoc
+   (coord-writer-authority/status
+    (current-coordinator-role) @writer-authority-handle
+    (or @flat-log (some-> @co :log) "unbound"))
+   :configured-role coordinator-role
+   :write-authorized (write-authorized?)))
 
 (defn- with-writer-authority
   "Run F with exactly one active coordinator generation authorized for LOG.
    Standbys deliberately run without the lock and are gated read-only below."
   [log f]
-  (let [handle (when-not (standby?)
+  (reset! coordinator-phase coordinator-role)
+  (reset! cutover-state
+          {:protocol cutover-protocol
+           :phase coordinator-role
+           :configured-role coordinator-role})
+  (let [handle (when (= :active coordinator-role)
                  (coord-writer-authority/acquire! log))]
     (reset! writer-authority-handle handle)
     (try
       (f)
       (finally
-        (coord-writer-authority/release! handle)
+        ;; A standby may have acquired authority during an in-process promotion;
+        ;; an active may already have released it during demotion. Always retire
+        ;; the handle that is live at process exit rather than the boot-local one.
+        (coord-writer-authority/release! @writer-authority-handle)
         (reset! writer-authority-handle nil)))))
 
 ;; A graph edit has only three honest durability states:
@@ -223,7 +260,8 @@
   ;; clients have an explicit stop signal. :edit-commit reaches its own receipt-
   ;; first admission gate, which returns an already-committed exact retry before
   ;; rejecting any unrelated candidate. Everything else fails closed.
-  #{:version :version-free :status :edit-protocol :reload-status :edit-commit})
+  #{:version :version-free :status :edit-protocol :reload-status
+    :cutover-status :edit-commit})
 
 (defn- durability-stop-rejection [req]
   (let [state @edit-durability-state]
@@ -430,6 +468,8 @@
   (positive-env-long "FRAM_SHUTDOWN_TIMEOUT_MS" 8000))
 (def shutdown-connection-grace-ms
   (positive-env-long "FRAM_SHUTDOWN_CONNECTION_GRACE_MS" 3000))
+(def cutover-drain-timeout-ms
+  (positive-env-long "FRAM_CUTOVER_DRAIN_TIMEOUT_MS" 8000))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
 (def active-control-reads (atom 0))
@@ -3150,6 +3190,8 @@
       ;; outside. So: compute concurrent, commit serial, cache+log safe.
       (locking dlock
        (or (durability-stop-rejection {:op :edit-min})
+           (when-not (write-authorized?)
+             (writer-authority-rejection))
            ;; The identity check and the first possible mutation share this exact
            ;; commit lock. Computation above stays lock-free; a mismatched request
            ;; may consume only transient name reservations, never corpus state.
@@ -3932,6 +3974,8 @@
   (locking dlock
     (or (committed-edit-outcome req)
         (durability-stop-rejection req)
+        (when-not (write-authorized?)
+          (writer-authority-rejection))
         (if-let [fence-reject (when fenced? (log-fence-rejection expected-log))]
           fence-reject
           (let [id (:candidate req)
@@ -4463,7 +4507,8 @@
   ;; must never make their client pay for an unrelated external corpus import.
   ;; The pending physical stamp remains visible to the next freshness-sensitive
   ;; read or fact mutation.
-  #{:version :version-free :status :edit-protocol :reload-status :built-through
+  #{:version :version-free :status :edit-protocol :reload-status :cutover-status
+    :cutover-demote :cutover-promote :built-through
     :acquire-lease :renew-lease :release-lease :fence-ok})
 (def ^:private reload-mutation-ops
   ;; A first fact mutation after an external edit must absorb/validate that edit
@@ -5179,11 +5224,14 @@
         (= :lease (:response decision))
         (contains? canonical-mutation-handlers (:handler decision)))))
 
-(defn- standby-write-rejection []
-  {:reject ["standby coordinator is read-only until a fenced promotion completes"]
+(defn- writer-authority-rejection []
+  {:reject ["coordinator generation is read-only until it holds promoted writer authority"]
    :code :writer-authority-required
    :writer-authority (writer-authority-status)
+   :cutover @cutover-state
    :version (current-seq @co)})
+
+(declare cutover-status-response cutover-demote-response cutover-promote-response)
 
 (def ^:private detached-locked-handlers
   ;; These handlers were historically classified :locked by the wire table.
@@ -5213,14 +5261,14 @@
 
     invalid invalid
 
-    ;; A standby is useful before cutover only if it is impossible for an
-    ;; accidentally-routed write to reach the canonical append path. Fenced
-    ;; requests are checked inside their :for-log branch so a wrong corpus still
-    ;; reports the stronger log-fence error first.
+    ;; A non-authoritative generation is useful before/after cutover only if an
+    ;; accidentally-routed or already-computing write cannot reach the canonical
+    ;; append path. Fenced requests are checked inside their :for-log branch so a
+    ;; wrong corpus still reports the stronger log-fence error first.
     (and (not= :for-log route)
-         (standby?)
+         (not (write-authorized?))
          (canonical-mutation-request? req))
-    (standby-write-rejection)
+    (writer-authority-rejection)
 
     ;; Query fencing covers only reload/fence validation and capture of one
     ;; immutable cache root. Evaluation happens after releasing dlock, so an
@@ -5275,11 +5323,23 @@
         {:reject ["nested log-fence envelopes are not supported"]
          :code :invalid-log-fence}
 
-        (and (standby?) (canonical-mutation-request? inner))
+        (and (not (write-authorized?))
+             (canonical-mutation-request? inner))
         (if-let [fence-reject (locking dlock
                                 (log-fence-rejection expected))]
           fence-reject
-          (standby-write-rejection))
+          (writer-authority-rejection))
+
+        ;; Cutover control owns its own short dlock turns plus a durability
+        ;; barrier. Holding this outer fence monitor across that barrier would
+        ;; recreate the coordinator convoy this protocol is meant to remove.
+        (contains? #{:cutover-status :cutover-demote :cutover-promote}
+                   inner-handler)
+        (if-let [fence-reject (locking dlock
+                                (log-fence-rejection expected))]
+          fence-reject
+          (binding [*reload-checked* true]
+            (handle* inner)))
 
         (= :edit-min inner-handler)
         ;; Cheap preflight avoids running the lock-free compiler/harvest work
@@ -5380,6 +5440,9 @@
     (= :reload-status handler)
     {:active @active-reloads :retries @reload-retries
      :generation @reload-generation}
+    (= :cutover-status handler) (cutover-status-response req)
+    (= :cutover-demote handler) (cutover-demote-response req)
+    (= :cutover-promote handler) (cutover-promote-response req)
     ;; S-PROFILE text-bridge verbs (thread A1). LOCK-FREE: write-def commits through
     ;; do-edit-min (which takes dlock itself); read-def/index are @co snapshot reads.
     ;; All return the structured ERROR shape on any malformed input — never a bare throw.
@@ -5416,6 +5479,9 @@
      ;; Recheck after acquiring dlock: a concurrent request may have passed the
      ;; outer guard before the failing edit poisoned the process.
      (or (durability-stop-rejection req)
+         (when (and (canonical-mutation-request? req)
+                    (not (write-authorized?)))
+           (writer-authority-rejection))
          (case handler
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
@@ -7491,6 +7557,457 @@
              :return result))
          :unchanged)))))
 
+;; ============================================================================
+;; BLUE/GREEN PROMOTION CONTROL
+;; ============================================================================
+;; The stable public selector lives outside this process.  These private-endpoint
+;; verbs provide the exact authority transfer it orchestrates:
+;;
+;;   active :cutover-demote
+;;     close mutation admission -> drain/fsync every earlier append -> capture
+;;     the final physical corpus marker -> release the per-log kernel lock -> ack
+;;
+;;   standby :cutover-promote
+;;     acquire the per-log kernel lock -> force final-tail reload -> compare the
+;;     exact physical marker + logical version -> become writable -> ack
+;;
+;; A selector must HOLD new public connections before demotion and atomically
+;; route both public ports only after both private endpoints acknowledge
+;; promotion.  The same verbs implement rollback: demote the newly promoted
+;; endpoint with a fresh id, then promote the retired predecessor from that
+;; marker. No separate "force" or unfenced escape hatch exists.
+(declare start-snapshot-writer! start-rotation-compactor!)
+
+(defn- cutover-rejection
+  ([code message]
+   (cutover-rejection code message nil))
+  ([code message data]
+   (merge {:reject [(str message)]
+           :code code
+           :protocol cutover-protocol
+           :phase (current-coordinator-role)
+           :instance @authority-instance
+           :version (when @co (current-seq @co))
+           :writer-authority (writer-authority-status)}
+          data)))
+
+(defn- constant-time-token= [expected actual]
+  (and (string? expected)
+       (string? actual)
+       (java.security.MessageDigest/isEqual
+        (.getBytes ^String expected java.nio.charset.StandardCharsets/UTF_8)
+        (.getBytes ^String actual java.nio.charset.StandardCharsets/UTF_8))))
+
+(defn- cutover-auth-rejection [req]
+  (cond
+    (str/blank? (str cutover-token))
+    (cutover-rejection
+     :cutover-disabled
+     "coordinator promotion is disabled because FRAM_CUTOVER_TOKEN is unset")
+
+    (not (constant-time-token= cutover-token (:token req)))
+    (cutover-rejection :cutover-unauthorized
+                       "coordinator promotion token is invalid")
+
+    :else nil))
+
+(defn- valid-cutover-id? [x]
+  (and (string? x)
+       (<= 1 (count x) 160)
+       (boolean (re-matches #"[A-Za-z0-9][A-Za-z0-9._:-]*" x))))
+
+(defn- cutover-log-paths []
+  (let [primary (served-log-path)
+        telemetry (some-> @telemetry-log canonical-path)]
+    (vec
+     (distinct
+      (remove (comp nil? second)
+              [[:primary primary]
+               [:telemetry telemetry]])))))
+
+(defn- cutover-log-marker [label path]
+  (let [path (canonical-path path)
+        file (java.io.File. path)
+        bytes (.length file)
+        fence (prefix-fence-of path bytes)]
+    (when-not (.exists file)
+      (throw (ex-info "cutover log is missing"
+                      {:code :cutover-log-missing :label label :path path})))
+    (when-not fence
+      (throw (ex-info "cutover log fence is unavailable"
+                      {:code :cutover-fence-unavailable
+                       :label label :path path :bytes bytes})))
+    {:label label
+     :path path
+     :bytes bytes
+     :file-key (:file-key fence)
+     :identity (:identity fence)
+     :boundary-sha (:boundary-sha fence)}))
+
+(defn- capture-cutover-marker!
+  "Capture one exact logical+physical corpus boundary. Caller owns dlock and no
+   canonical mutation admission; group-io-lock excludes the appender's
+   write/fsync/stamp callback while file lengths and boundary hashes are read."
+  [cutover-id]
+  (locking group-io-lock
+    {:format "fram-coordinator-cutover-marker/v1"
+     :cutover-id cutover-id
+     :source-instance @authority-instance
+     :version (long (current-seq @co))
+     :logs (mapv (fn [[label path]]
+                   (cutover-log-marker label path))
+                 (cutover-log-paths))}))
+
+(defn- comparable-cutover-marker [marker]
+  (select-keys marker [:format :cutover-id :version :logs]))
+
+(defn- marker-validation-rejection [cutover-id marker]
+  (cond
+    (not (map? marker))
+    (cutover-rejection :invalid-cutover-marker
+                       "promotion requires a marker map")
+
+    (not= "fram-coordinator-cutover-marker/v1" (:format marker))
+    (cutover-rejection :invalid-cutover-marker
+                       "promotion marker format is unsupported")
+
+    (not= cutover-id (:cutover-id marker))
+    (cutover-rejection
+     :cutover-id-mismatch
+     "promotion cutover-id does not match the demotion marker"
+     {:marker-cutover-id (:cutover-id marker)
+      :request-cutover-id cutover-id})
+
+    (not (integer? (:version marker)))
+    (cutover-rejection :invalid-cutover-marker
+                       "promotion marker version must be an integer")
+
+    (or (not (vector? (:logs marker)))
+        (empty? (:logs marker))
+        (some #(or (not (keyword? (:label %)))
+                   (not (string? (:path %)))
+                   (not (integer? (:bytes %)))
+                   (not (string? (:boundary-sha %))))
+              (:logs marker)))
+    (cutover-rejection :invalid-cutover-marker
+                       "promotion marker log proofs are malformed")
+
+    :else nil))
+
+(defn- cutover-base-response []
+  {:ok true
+   :protocol cutover-protocol
+   :phase (current-coordinator-role)
+   :configured-role coordinator-role
+   :instance @authority-instance
+   :version (current-seq @co)
+   :writer-authority (writer-authority-status)
+   :cutover @cutover-state})
+
+(defn- cutover-drain-state []
+  {:queries @active-queries
+   :reloads @active-reloads
+   :snapshots @active-snapshot-builds})
+
+(defn- cutover-drained? [state]
+  (every? zero? (vals state)))
+
+(defn- await-cutover-drain!
+  "Wait until work admitted before the :demoting fence has left every mutable
+   or snapshot-bearing read path. Public traffic must already be held by the
+   selector, so these counters can only decrease. A timeout leaves the kernel
+   authority held and lets demotion restore active admission exactly."
+  []
+  (let [started-ns (System/nanoTime)
+        deadline-ns (+ started-ns
+                       (* (long cutover-drain-timeout-ms) 1000000))]
+    (loop []
+      (let [state (cutover-drain-state)
+            now (System/nanoTime)]
+        (cond
+          (cutover-drained? state)
+          (assoc state
+                 :complete true
+                 :elapsed-ms (quot (- now started-ns) 1000000))
+
+          (>= now deadline-ns)
+          (throw
+           (ex-info
+            "cutover drain timed out before writer-authority release"
+            {:code :cutover-drain-timeout
+             :timeout-ms cutover-drain-timeout-ms
+             :drain (assoc state :complete false)}))
+
+          :else
+          (do
+            (Thread/sleep
+             (long
+              (max 1
+                   (min 10
+                        (quot (- deadline-ns now) 1000000)))))
+            (recur)))))))
+
+(defn cutover-status-response [req]
+  (or (cutover-auth-rejection req)
+      (let [drain (cutover-drain-state)]
+        (assoc (cutover-base-response)
+               :drain (assoc drain :complete (cutover-drained? drain))))))
+
+(defn cutover-demote-response [req]
+  (locking cutover-control-lock
+    (or
+     (cutover-auth-rejection req)
+     (when-not (valid-cutover-id? (:cutover-id req))
+       (cutover-rejection
+        :invalid-cutover-id
+        "cutover-id must be a nonblank protocol token"))
+     (let [cutover-id (:cutover-id req)
+           expected-instance (:expected-instance req)
+           prior @cutover-state]
+       (cond
+         ;; A lost response is safe to retry. Never release a different
+         ;; generation or mint a second marker for the same transaction.
+         (and (= :demoted (:phase prior))
+              (= cutover-id (:cutover-id prior))
+              (:marker prior))
+         (assoc (cutover-base-response)
+                :phase :demoted
+                :idempotent true
+                :cutover-id cutover-id
+                :marker (:marker prior))
+
+         (not= expected-instance @authority-instance)
+         (cutover-rejection
+          :cutover-instance-mismatch
+          "demotion expected-instance does not name this boot"
+          {:expected-instance expected-instance
+           :observed-instance @authority-instance})
+
+         (not (write-authorized?))
+         (cutover-rejection
+          :cutover-not-active
+          "only the generation currently holding writer authority can demote")
+
+         :else
+         (do
+           ;; This short dlock turn is the mutation-admission fence. Every direct
+           ;; mutation rechecks write authority inside its commit turn; edit
+           ;; compute paths do the same at their delayed commit boundary.
+           (locking dlock
+             (if-not (write-authorized?)
+               (throw
+                (ex-info "writer authority changed before demotion"
+                         {:code :cutover-authority-raced}))
+               (do
+                  (reset! coordinator-phase :demoting)
+                  (reset! cutover-state
+                          {:protocol cutover-protocol
+                           :phase :demoting
+                           :cutover-id cutover-id
+                           :source-instance @authority-instance
+                           :started-at-ms (System/currentTimeMillis)}))))
+           (try
+             ;; The selector has already held public admission. The phase fence
+             ;; rejects new mutations in-process; now wait for queries, reloads,
+             ;; and checkpoint builders admitted before that fence. Only after
+             ;; those counters reach zero may the final FIFO barrier and marker
+             ;; name the exact handoff boundary.
+             (let [drain (await-cutover-drain!)
+                   _ (durable-barrier!)
+                   marker
+                   (locking dlock
+                     (when-not (= :demoting
+                                  (current-coordinator-role))
+                       (throw
+                        (ex-info
+                         "demotion phase changed before marker capture"
+                         {:code :cutover-phase-raced})))
+                     (capture-cutover-marker! cutover-id))
+                   response
+                   (locking dlock
+                     (let [handle @writer-authority-handle]
+                       (when-not (coord-writer-authority/held? handle)
+                         (throw
+                          (ex-info
+                           "writer authority disappeared before release"
+                           {:code :cutover-authority-lost})))
+                       (coord-writer-authority/release! handle)
+                       (reset! writer-authority-handle nil)
+                       (reset! coordinator-phase :retired)
+                       (reset! cutover-state
+                               {:protocol cutover-protocol
+                                :phase :demoted
+                                :cutover-id cutover-id
+                                :source-instance @authority-instance
+                                :drain drain
+                                :marker marker
+                                :completed-at-ms
+                                (System/currentTimeMillis)})
+                       {:ok true
+                        :protocol cutover-protocol
+                        :phase :demoted
+                        :cutover-id cutover-id
+                        :instance @authority-instance
+                        :version (:version marker)
+                        :drain drain
+                        :marker marker
+                        :writer-authority
+                        (writer-authority-status)}))]
+               response)
+             (catch Throwable t
+               ;; Before release, rollback is local and exact: the same kernel
+               ;; handle still fences all peers, so reopening mutation admission
+               ;; cannot create split brain. After release, never guess.
+               (let [still-held?
+                     (coord-writer-authority/held?
+                      @writer-authority-handle)]
+                 (locking dlock
+                   (reset! coordinator-phase
+                           (if still-held? :active :faulted))
+                   (reset! cutover-state
+                           {:protocol cutover-protocol
+                            :phase (if still-held?
+                                     :demotion-rolled-back
+                                     :demotion-failed-closed)
+                            :cutover-id cutover-id
+                            :code (or (:code (ex-data t))
+                                      :cutover-demotion-failed)
+                            :message (.getMessage t)
+                            :at-ms (System/currentTimeMillis)}))
+                 (cutover-rejection
+                  (if still-held?
+                    :cutover-demotion-rolled-back
+                    :cutover-demotion-failed-closed)
+                  (str "demotion failed"
+                       (if still-held?
+                         " before authority release; active admission was restored: "
+                         " after authority became uncertain; process is fail-closed: ")
+                       (.getMessage t))
+                  (select-keys (ex-data t)
+                               [:timeout-ms :drain])))))))))))
+
+(defn cutover-promote-response [req]
+  (locking cutover-control-lock
+    (or
+     (cutover-auth-rejection req)
+     (when-not (valid-cutover-id? (:cutover-id req))
+       (cutover-rejection
+        :invalid-cutover-id
+        "cutover-id must be a nonblank protocol token"))
+     (marker-validation-rejection (:cutover-id req) (:marker req))
+     (let [cutover-id (:cutover-id req)
+           expected (:marker req)
+           prior @cutover-state]
+       (cond
+         (and (= :promoted (:phase prior))
+              (= cutover-id (:cutover-id prior))
+              (write-authorized?))
+         (assoc (cutover-base-response)
+                :idempotent true
+                :cutover-id cutover-id
+                :marker (:marker prior))
+
+         (write-authorized?)
+         (cutover-rejection
+          :cutover-already-active
+          "this generation already owns writer authority for another cutover"
+          {:active-cutover-id (:cutover-id prior)})
+
+         (not (contains? #{:standby :retired}
+                         (current-coordinator-role)))
+         (cutover-rejection
+          :cutover-invalid-phase
+          "promotion requires a warm standby or retired predecessor")
+
+         :else
+         (let [previous-role (current-coordinator-role)
+               authority-log (served-log-path)
+               handle (coord-writer-authority/try-acquire! authority-log)]
+           (if-not handle
+             (cutover-rejection
+              :cutover-authority-held
+              "another coordinator generation still holds writer authority")
+             (do
+               (reset! writer-authority-handle handle)
+               (reset! coordinator-phase :promoting)
+               (reset! cutover-state
+                       {:protocol cutover-protocol
+                        :phase :promoting
+                        :cutover-id cutover-id
+                        :source-instance (:source-instance expected)
+                        :started-at-ms (System/currentTimeMillis)})
+               (try
+                 ;; Authority freezes the physical writer set. Reload now absorbs
+                 ;; the predecessor's final tail before any write admission can
+                 ;; reopen in this process.
+                 (let [reload-result (maybe-reload!)
+                       _ (when (= :refused reload-result)
+                           (throw
+                            (ex-info "final-tail reload refused a regressed log"
+                                     {:code :cutover-reload-refused})))
+                       observed (locking dlock
+                                  (capture-cutover-marker! cutover-id))]
+                   (when-not (= (comparable-cutover-marker expected)
+                                (comparable-cutover-marker observed))
+                     (throw
+                      (ex-info
+                       "promoted standby does not match the demoted final prefix"
+                       {:code :cutover-marker-mismatch
+                        :expected (comparable-cutover-marker expected)
+                        :observed (comparable-cutover-marker observed)})))
+                   (locking dlock
+                     (when-not
+                      (coord-writer-authority/held?
+                       @writer-authority-handle)
+                       (throw
+                        (ex-info "writer authority disappeared during promotion"
+                                 {:code :cutover-authority-lost})))
+                     (reset! coordinator-phase :active)
+                     (reset! cutover-state
+                             {:protocol cutover-protocol
+                              :phase :promoted
+                              :cutover-id cutover-id
+                              :source-instance (:source-instance expected)
+                              :instance @authority-instance
+                              :marker observed
+                              :completed-at-ms (System/currentTimeMillis)}))
+                   ;; A boot-standby intentionally skipped these canonical/derived
+                   ;; maintenance loops. Start them only after the authority and
+                   ;; exact-prefix gates have both succeeded.
+                   (start-snapshot-writer!)
+                   (start-rotation-compactor!)
+                   {:ok true
+                    :protocol cutover-protocol
+                    :phase :active
+                    :cutover-id cutover-id
+                    :instance @authority-instance
+                    :version (:version observed)
+                    :marker observed
+                    :source-marker expected
+                    :writer-authority (writer-authority-status)})
+                 (catch Throwable t
+                   ;; No canonical write admission was open while :promoting.
+                   ;; Release the just-acquired lock and return to the exact prior
+                   ;; read-only role; the predecessor may be promoted back.
+                   (coord-writer-authority/release!
+                    @writer-authority-handle)
+                   (reset! writer-authority-handle nil)
+                   (reset! coordinator-phase previous-role)
+                   (reset! cutover-state
+                           {:protocol cutover-protocol
+                            :phase :promotion-rejected
+                            :cutover-id cutover-id
+                            :code (or (:code (ex-data t))
+                                      :cutover-promotion-failed)
+                            :message (.getMessage t)
+                            :at-ms (System/currentTimeMillis)})
+                   (cutover-rejection
+                    (or (:code (ex-data t))
+                        :cutover-promotion-failed)
+                    (.getMessage t)
+                    (select-keys (ex-data t)
+                                 [:expected :observed]))))))))))))
+
 ;; ---- snapshot WRITER: a thin wrapper over dump-log! + @snapshot:<seq> facts ------
 ;; The Store's atom contains a persistent value, so the checkpoint can capture one
 ;; exact root/version/offset tuple under dlock and serialize that immutable root
@@ -7505,6 +8022,11 @@
     (locking snapshot-build-lock
       (let [base
           (locking dlock
+            (when-not (write-authorized?)
+              (throw
+               (ex-info
+                "checkpoint capture requires live writer authority"
+                {:code :writer-authority-required})))
             ;; Every mutation visible in the captured Store root must already
             ;; have durable flat bytes at or before the captured offsets.
             (durable-barrier!)
@@ -7528,6 +8050,14 @@
           subj (str "@snapshot:" sq)
           published
           (locking dlock
+            ;; Demotion may have fenced admission while the immutable image was
+            ;; being serialized. Never let that already-running builder publish
+            ;; canonical @snapshot:* metadata after authority is retired.
+            (when-not (write-authorized?)
+              (throw
+               (ex-info
+                "checkpoint publication lost writer authority"
+                {:code :writer-authority-required})))
             ;; The image is already complete and immutable. Publish its facts in
             ;; the live head, then capture the exact post-metadata root/offset
             ;; for the optional FRI. Intervening writes are included here and
@@ -7753,6 +8283,7 @@
 ;; can order it after accept-stop, in-flight completion, and the durability barrier.
 ;; Failures log and never take the daemon down.
 (def ^:private last-snapshot-seq (atom -1))
+(def ^:private snapshot-writer-started? (atom false))
 (def snapshot-retain
   (max 1 (or (some-> (System/getenv "FRAM_SNAPSHOT_RETAIN") parse-long) 3)))
 
@@ -7833,7 +8364,9 @@
       (binding [*out* *err*]
         (println (str "[fram] checkpoint (" why ") FAILED: " (.getMessage t)))))))
 (defn start-snapshot-writer! []
-  (when (and @snapshot-boot-enabled? @flat-log)
+  (when (and @snapshot-boot-enabled?
+             @flat-log
+             (compare-and-set! snapshot-writer-started? false true))
     ;; booted FROM a checkpoint -> the state through the current seq is exactly
     ;; what the next boot reconstructs from image+tail; only NEW commits warrant
     ;; the next checkpoint. (A fold boot leaves the seed at -1 so the post-boot
@@ -7868,6 +8401,7 @@
 (def rotation-set (atom nil))          ; the currently-open segment set (or nil)
 (def rotation-stats (atom {:compactions 0 :last-ms nil :last-watermark nil
                            :boot :fold :last-error nil}))
+(def ^:private rotation-compactor-started? (atom false))
 (def rotation-compact-interval-ms
   (max 1000 (or (some-> (System/getenv "FRAM_ROTATION_COMPACT_MS") parse-long) 300000)))  ; 5 min
 
@@ -7945,14 +8479,22 @@
   ;; Background, daemon thread, never on the commit path. Unlike the checkpoint
   ;; writer this runs under log-split routing too: a rotation set is version-
   ;; stamped and provenance-gated, so it is safe wherever the fold is.
-  (when @flat-log
+  (when (and @flat-log
+             (compare-and-set! rotation-compactor-started? false true))
     (doto (Thread. (fn []
-                     (compact-rotations-quietly! "post-boot")
+                     (when-not (standby?)
+                       (compact-rotations-quietly! "post-boot"))
                      (loop []
                        (Thread/sleep (long rotation-compact-interval-ms))
-                       ;; only republish when commits actually moved past the set
-                       (when (not= (long (current-seq @co))
-                                   (long (or (:last-watermark @rotation-stats) -1)))
+                       ;; Retired processes keep their one daemon thread asleep
+                       ;; so rollback resumes without duplicating workers, but
+                       ;; only the authority holder may publish a derived set.
+                       (when (and (not (standby?))
+                                  (not= (long (current-seq @co))
+                                        (long
+                                         (or
+                                          (:last-watermark @rotation-stats)
+                                          -1))))
                          (compact-rotations-quietly! "interval"))
                        (recur))))
       (.setName "fram-rotation-compactor") (.setDaemon true) (.start))))

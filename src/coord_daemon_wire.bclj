@@ -65,6 +65,13 @@
    :version-free {:route :direct :handler :version-free :required [] :response :version}
    :seen {:route :direct :handler :seen :required [:v] :response :read}
    :reload-status {:route :direct :handler :reload-status :required [] :response :status}
+   ;; Blue/green control is token-gated by the host and additionally carried
+   ;; inside :for-log by production controllers.  These routes own their own
+   ;; short mutation/drain boundaries; wrapping them in the ordinary :locked
+   ;; route would retain dlock across the durability barrier.
+   :cutover-status {:route :direct :handler :cutover-status :required [:token] :response :status}
+   :cutover-demote {:route :direct :handler :cutover-demote :required [:token :cutover-id :expected-instance] :response :status}
+   :cutover-promote {:route :direct :handler :cutover-promote :required [:token :cutover-id :marker] :response :status}
    :write-def {:route :direct :handler :write-def :required [:spec] :response :structured}
    :read-def {:route :direct :handler :read-def :required [:spec] :response :structured}
    :index {:route :direct :handler :index :required [:spec] :response :structured}

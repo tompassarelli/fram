@@ -134,7 +134,7 @@
               # but require an external Beagle toolchain and are not advertised
               # as self-contained package commands.
               case "$name" in
-                fram|fram-daemon|fram-mcp|fram-primer) ;;
+                fram|fram-cutover|fram-daemon|fram-mcp|fram-primer) ;;
                 *) continue ;;
               esac
               chmod +x "$s"
