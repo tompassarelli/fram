@@ -49,7 +49,29 @@
         in
         pkgs.stdenv.mkDerivation (finalAttrs: {
           pname = "fram";
-          version = "0-unstable-2026-06-28";
+          # Derived, never hardcoded. This was the literal string
+          # "0-unstable-2026-06-28" for so long that every fram package ever
+          # built carried the same name regardless of its contents — so
+          # `north deployed`, `coord-ready` and `north-coord-runtime status`
+          # all displayed a version that described nothing, two packages built
+          # months apart were indistinguishable by name, and on 2026-07-29 that
+          # led to a confident, wrong claim that the coordinator had been
+          # running month-old code. A version that cannot be wrong is a version
+          # nobody can read.
+          #
+          # nixpkgs' 0-unstable-<date> convention means the DATE OF THE SOURCE
+          # REVISION; the short rev is appended because the date alone still
+          # cannot distinguish two commits from the same day, which is the
+          # normal case here.
+          version =
+            let
+              stamp = self.lastModifiedDate or "00000000000000";
+              date = "${builtins.substring 0 4 stamp}-"
+                     + "${builtins.substring 4 2 stamp}-"
+                     + "${builtins.substring 6 2 stamp}";
+              rev = self.shortRev or self.dirtyShortRev or "dirty";
+            in
+            "0-unstable-${date}-${rev}";
           src = ./.;
 
           nativeBuildInputs = [
