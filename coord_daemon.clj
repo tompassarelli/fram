@@ -5964,10 +5964,37 @@
           (reset! facts-text-cache {:key key :text text})
           text)))))
 
+(defn- json-fmt? [fmt] (or (= :json fmt) (= "json" fmt)))
+
 (defn- try-reply
   ([^BufferedWriter w resp] (try-reply w resp nil))
   ([^BufferedWriter w resp fmt]
-   (try (.write w (serialize-resp fmt resp)) (.newLine w) (.flush w) (catch Throwable _ nil))))
+   (try
+     ;; STREAM the whole-corpus response; never materialize it.
+     ;;
+     ;; G1HeapRegionSize is 8 MB here, so any object over 4 MB is a HUMONGOUS
+     ;; allocation placed DIRECTLY in the old generation — it never gets the
+     ;; chance to die young. The :facts payload is ~60 MB of JSON, so every
+     ;; whole-corpus read dropped ~107 MB straight into old gen (measured).
+     ;;
+     ;; Serializing once per version fixed that only while the corpus was
+     ;; QUIET. Under five concurrent agents the version moves constantly, every
+     ;; read misses the cache, and old gen fills anyway: observed 2026-07-29
+     ;; with a coordinator at 16,339 MB of a 16,384 MB heap — 99.7% — half an
+     ;; hour after a clean restart.
+     ;;
+     ;; Streaming bounds it structurally. cheshire writes through the
+     ;; BufferedWriter, so the largest live object is one buffer instead of one
+     ;; corpus, and the garbage dies in the young generation where it belongs.
+     ;; This costs CPU: the payload is re-encoded per request rather than
+     ;; reused from cache. That trade is deliberate — a slow coordinator is
+     ;; recoverable, a wedged one takes every agent down with it.
+     (if (and (json-fmt? fmt) (cacheable-facts-response? resp))
+       (json/generate-stream resp w)
+       (.write w (serialize-resp fmt resp)))
+     (.newLine w)
+     (.flush w)
+     (catch Throwable _ nil))))
 
 (defn- connection-error-selection [scope t]
   (wire/connection-error-selection
