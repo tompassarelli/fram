@@ -343,13 +343,13 @@
 (def telemetry-kinds (atom default-telemetry-kinds))
 ;; ENGINE predicates — never ordinary domain data. Split by WRITE POLICY (F3):
 ;;   hard-reserved   — identity/bookkeeping; a domain tell/retract is REJECTED (as always).
-;;   schema-writable — cardinality/value_kind: VALIDATED domain writes (the schema-write
-;;                     gate at do-assert/do-retract), routed through the schema layer and
-;;                     appended VERBATIM so the cold CLI fold's card-map still sees them.
+;;   schema-writable — predicate identity + classification metadata: VALIDATED writes
+;;                     routed through the schema layer and appended VERBATIM.
 ;; schema-preds stays their UNION, so every downstream filter (materialization skips at
 ;; migrate/apply-tail!, fact->triple/lp-live-triples read-view hiding) is byte-identical.
 (def hard-reserved #{"name" "store-supersedes"})
-(def schema-writable #{"cardinality" "value_kind"})
+(def schema-writable #{"cardinality" "value_kind" "predicate_name" "predicate_alias"})
+(def predicate-identity-preds #{"predicate_name" "predicate_alias"})
 (def schema-preds (clojure.set/union hard-reserved schema-writable))
 
 ;; ---- FRAM_MMAP_IMAGE (thread 019f82d9): the beyond-RAM mmap-cold slice ---------
@@ -790,11 +790,17 @@
 ;; :warm-check tripwire, and the read view — the corpus :query sees is exactly the AST
 ;; facts the flat log ingested, identical whether or not refers_to has been materialized.
 (declare query-check)
+(defn- store-subject-name [st id]
+  (or (s/name-of st id)
+      (when (c/value-object? st id) (str "@" (c/literal st id)))))
+
 (defn- fact->triple [st cid]
-  (let [cl (c/fact-of st cid) pstr (c/literal st (:p cl))]
+  (let [cl (c/fact-of st cid) pstr (s/predicate-name st (:p cl))]
     (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
-      [(s/name-of st (:l cl)) pstr
-       (if (c/value-object? st (:r cl)) (c/literal st (:r cl)) (s/name-of st (:r cl)))])))
+      [(store-subject-name st (:l cl)) pstr
+       (if (c/value-object? st (:r cl))
+         (c/literal st (:r cl))
+         (store-subject-name st (:r cl)))])))
 
 ;; read-bridge: reified live view -> the flat (l p r) Fact vec build-index wants.
 ;; PURE over its store: DOMAIN facts only (fact->triple hides every schema-pred). This is
@@ -820,7 +826,12 @@
 ;; mirrors the log's live schema-writable facts as [l p] -> ck/Fact in raw @-prefixed log
 ;; form. It is refreshed only at the RARE log-mutation points (boot / schema-write / external
 ;; reload), so the warm read path pays nothing per version.
-(def schema-view (atom {}))   ; [l p] -> ck/Fact — live user-declared schema-writable facts
+(def schema-view (atom {}))   ; schema-view-key -> ck/Fact — live user-declared metadata
+
+(defn- schema-view-key [cl]
+  (if (= "predicate_alias" (:p cl))
+    [(:l cl) (:p cl) (:r cl)]
+    [(:l cl) (:p cl)]))
 
 ;; recompute schema-view from a flat log's schema-writable lines (keyed-latest via the SAME
 ;; fold the cold path uses, so the facts are byte-identical to the cold projection). Called
@@ -829,7 +840,7 @@
   (->> (fram.rt/read-log flat)
        (filter #(schema-writable (:p %)))
        vec fold/fold :facts
-       (reduce (fn [m cl] (assoc m [(:l cl) (:p cl)] cl)) {})))
+       (reduce (fn [m cl] (assoc m (schema-view-key cl) cl)) {})))
 
 (defn- seed-schema-view! [flat]
   (reset! schema-view (schema-view-from-flat flat)))
@@ -858,13 +869,28 @@
                 (get (:values store-root) rid))))
           cids)))
 
+(defn- store-root-subject-name [store-root subj]
+  (or (store-root-name-of store-root subj)
+      (when (contains? (:values store-root) subj)
+        (str "@" (get (:values store-root) subj)))))
+
+(defn- store-root-predicate-name [store-root pid]
+  (let [name-pid (get (:val-intern store-root) "predicate_name")
+        cids (when name-pid (get (:idx-by-lp store-root) [pid name-pid] []))
+        canonical
+        (some (fn [cid]
+                (when-not (contains? (:superseded store-root) cid)
+                  (get (:values store-root) (get-in store-root [:facts cid :r]))))
+              (reverse cids))]
+    (or canonical (get (:values store-root) pid) (str pid))))
+
 (defn- store-root-fact->triple [store-root cl]
-  (let [pstr (get (:values store-root) (:p cl))]
+  (let [pstr (store-root-predicate-name store-root (:p cl))]
     (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
-      [(store-root-name-of store-root (:l cl)) pstr
+      [(store-root-subject-name store-root (:l cl)) pstr
        (if (contains? (:values store-root) (:r cl))
          (get (:values store-root) (:r cl))
-         (store-root-name-of store-root (:r cl)))])))
+         (store-root-subject-name store-root (:r cl)))])))
 
 (defn- query-client-view-facts [store-root schema-root]
   (let [domain
@@ -885,7 +911,7 @@
 ;; Empty when te/p don't resolve or p is a schema-pred. Bounded by the group's
 ;; cardinality (1 for a single-valued pred), so reconciling against it is cheap.
 (defn- lp-live-triples [c0 te p]
-  (let [st (:store c0) lid (s/resolve-name st te) pid (c/value-id st p)]
+  (let [st (:store c0) lid (s/resolve-name st te) pid (s/resolve-predicate st p)]
     (if (and lid pid (not (schema-preds p)))
       (set (keep #(fact->triple st %) (c/by-lp st lid pid)))
       #{})))
@@ -901,36 +927,11 @@
      (or
       (when-let [lid (s/resolve-name st te)]
         (some #(fact->triple st %) (c/by-l st lid)))
-      (some #(contains? schema-root [te %]) schema-writable)))))
+      (some #(= te (:l %)) (vals schema-root))))))
 
-(defn- all-live-predicate-values-ref?
-  "The indexed equivalent of fram.tools/ref-value's all-ref? predicate.
-  It inspects only live client-visible facts for `p`, and returns false when
-  there are none. The caller holds dlock, so normalization and mutation see one
-  authoritative store state."
-  [c0 p]
-  (let [st (:store c0)
-        pid (c/value-id st p)]
-    (when pid
-      (loop [cids (seq (c/by-p st pid))
-             seen? false]
-        (if-let [cid (first cids)]
-          (if-let [triple (fact->triple st cid)]
-            (let [value (nth triple 2)]
-              (if (and (string? value) (str/starts-with? value "@"))
-                (recur (next cids) true)
-                false))
-            (recur (next cids) seen?))
-          seen?)))))
-
-(defn- normalize-existing-write-value [c0 req]
-  (let [value (:r req)]
-    (if (and (string? value)
-             (not (str/starts-with? value "@"))
-             (not (re-find #"\s" value))
-             (all-live-predicate-values-ref? c0 (:p req)))
-      (str "@" value)
-      value)))
+(declare normalize-predicate-value)
+(defn- normalize-existing-write-value [_c0 req]
+  (normalize-predicate-value (:p req) (:r req)))
 
 (defn- existing-subject-write [req write!]
   ;; The check and mutation run in the caller's one dlock turn. This is the
@@ -1822,20 +1823,26 @@
        (= \@ (.charAt s 0))
        (not (re-find #"\s" s))))
 
-;; VALUE-PREDS — predicates whose object is ALWAYS a literal leaf value in the CODE
-;; graph, NEVER a node link, even when the value is a whitespace-free @-string. A Clojure
-;; DEREF `@atom` (malli error.cljc's `@!likely-misspelling-of`, core.cljc's `@cache`, …) is
-;; a symbol SPELLING stored under "v"; without this guard ref-shape? links it to a phantom
-;; node named "@atom", and warm-render then emits that entity-id where racket expects a
-;; string ("string->symbol: contract violation, given: <node-id>"). Structural references
-;; (fN/child/span/col/line/pos/refers_to/…) carry real @<module>#<int> node-names under
-;; OTHER predicates, so link detection there is unaffected. (Comment lexemes are also "v"
-;; segs — a comment mentioning `@id` is likewise a literal, not a link.)
-(def ^:private VALUE-PREDS #{"v"})
-;; kind from the value: a ref-shaped @-string under a NON-value predicate => ref (link),
-;; else literal (assert) — exactly the convention the migration loader uses, so daemon
-;; writes stay consistent with the migrated store.
-(defn- link-value? [p r] (and (string? r) (not (VALUE-PREDS p)) (ref-shape? r)))
+(defn- predicate-metadata-facts []
+  (vec (vals @schema-view)))
+
+(defn- canonical-predicate [p]
+  (let [reg (ck/predicate-registry (predicate-metadata-facts))]
+    (ck/predicate-name reg p)))
+
+(defn- effective-value-kind [p]
+  (ck/value-kind-of (predicate-metadata-facts) {} p))
+
+(defn- normalize-predicate-value [p r]
+  (if (and (= "ref" (effective-value-kind p))
+           (string? r)
+           (not (str/starts-with? r "@"))
+           (not (str/blank? r))
+           (not (re-find #"\s" r)))
+    (str "@" r)
+    r))
+
+(defn- link-value? [p _r] (= "ref" (effective-value-kind p)))
 (defn- kind-of [p r] (if (link-value? p r) :link :assert))
 
 ;; forward ref: the-model §9 cascade is defined after do-retract (it calls both
@@ -1852,14 +1859,21 @@
 ;; VERBATIM to the flat log so the cold CLI fold's card-map sees it (daemon⇄CLI parity).
 (defn- pred-name [s] (if (and (string? s) (str/starts-with? s "@")) (subs s 1) s))
 (def ^:private schema-allowed {"cardinality" #{"single" "multi"} "value_kind" #{"ref" "literal"}})
-(def ^:private schema-allowed-msg {"cardinality" "single|multi" "value_kind" "ref|literal"})
+(def ^:private schema-allowed-msg
+  {"cardinality" "single|multi" "value_kind" "ref|literal"
+   "predicate_name" "a non-empty spelling" "predicate_alias" "a non-empty spelling"})
+
+(defn- valid-schema-value? [p r]
+  (if-let [allowed (get schema-allowed p)]
+    (contains? allowed r)
+    (and (string? r) (not (str/blank? r)))))
 
 ;; live (subject,pred) groups on `pname` holding >1 live value — the groups a
 ;; cardinality multi->single flip would silently collapse to latest-tx (the schema-as-
 ;; facts data-loss vector). O(pname's own facts) via the by-p index, NOT O(store).
 ;; Returns {:count n :subjects [<=3 subject-names]} for a pointed reject.
 (defn- multivalued-groups [st pname]
-  (let [pid (c/value-id st pname)]
+  (let [pid (s/resolve-predicate st pname)]
     (if (nil? pid)
       {:count 0 :subjects []}
       (let [offending (->> (c/by-p st pid)
@@ -1882,21 +1896,30 @@
           tx (c/begin-tx! st "schema")
           pid (c/value! st pname)
           clear! (fn [pp] (doseq [old (c/by-lp st pid (c/value! st pp))]
-                            (c/fact! st old (c/value! st "store-supersedes") old tx)))]
+                            (c/fact! st old (c/value! st "store-supersedes") old tx)))
+          clear-value! (fn [pp value]
+                         (let [ppid (s/resolve-predicate st pp)
+                               rid (c/value-id st value)]
+                           (when (and ppid rid)
+                             (doseq [old (c/by-lp st pid ppid)
+                                     :when (= rid (:r (c/fact-of st old)))]
+                               (c/fact! st old (c/value! st "store-supersedes") old tx)))))]
       (cond
-        (= op "assert")     (s/assert! st pid p r tx)
+        (= op "assert") (s/assert! st pid p r tx)
         (= p "cardinality") (if (ck/single? pname)
                               (s/assert! st pid "cardinality" "single" tx)   ; fallback single: re-seed
                               (clear! "cardinality"))                        ; fallback multi: clear -> default
-        :else               (clear! "value_kind"))
+        (= p "predicate_alias") (clear-value! p r)
+        :else (clear! p))
       (let [seq (get-in @st [:txs tx :seq])]
         (append-flat! op te p r seq)
         ;; mirror the log fact into the READ view directly from the op (append-flat! is
         ;; async, so re-reading the file here would race): assert installs the fact,
         ;; retract drops it — exactly how the cold fold's keyed-latest treats the line.
-        (if (= op "assert")
-          (swap! schema-view assoc [te p] (ck/->Fact te p r))
-          (swap! schema-view dissoc [te p]))
+        (let [cl (ck/->Fact te p r) k (schema-view-key cl)]
+          (if (= op "assert")
+            (swap! schema-view assoc k cl)
+            (swap! schema-view dissoc k)))
         ;; force the warm cache to rebuild (schema writes skip apply-commit-delta!): the
         ;; version bump alone leaves a race window where a rebuild could tag the new
         ;; version with the pre-swap schema-view. Invalidate so the next warm! re-projects.
@@ -1910,11 +1933,19 @@
     (cond
       (not (ref-shape? te))
       {:reject [(str "schema predicate '" p "' requires an @-prefixed predicate-name subject (got '" te "')")] :version (current-seq @co)}
-      (not (contains? (schema-allowed p) r))
+      (not (valid-schema-value? p r))
       {:reject [(str "invalid " p " value '" r "' — allowed: " (schema-allowed-msg p))] :version (current-seq @co)}
       :else
       (let [pname (pred-name te)]
-        (if (and (= p "cardinality") (= r "single") (not= "single" (s/cardinality st pname)))
+        (cond
+          (and (predicate-identity-preds p)
+               (let [pid (c/value! st pname)
+                     existing (s/resolve-predicate st r)]
+                 (and (some? existing) (not= pid existing))))
+          {:reject [(str "predicate spelling collision: " r)]
+           :version (current-seq @co)}
+
+          (and (= p "cardinality") (= r "single") (not= "single" (s/cardinality st pname)))
           (let [{:keys [count subjects]} (multivalued-groups st pname)]
             (if (pos? count)
               {:reject [(str "cardinality multi->single on '" pname "' would collapse " count
@@ -1922,6 +1953,8 @@
                              (str/join ", " subjects) " — retract extra values first")]
                :version (current-seq @co)}
               (schema-store-write! "assert" te pname p r)))
+
+          :else
           (schema-store-write! "assert" te pname p r))))))
 
 (defn- do-schema-retract [te p r]
@@ -1945,19 +1978,21 @@
 ;; would collide with the reified schema layer and silently corrupt; reject at the boundary.
 ;; cardinality/value_kind are validated schema writes (do-schema-assert/retract, F3).
 (defn- do-assert [te p r base]
-  (assert-flat-corpus-append-boundaries!)
-  (cond
-    (hard-reserved p)
-    {:reject [(str "reserved predicate '" p "' (engine-internal; use a domain predicate)")] :version (current-seq @co)}
-    (schema-writable p)
-    (do-schema-assert te p r)
-    :else
-    (let [pre (current-seq @co)
-          res (commit! @co "coord" te p (kind-of p r) r base)]
-      (if (:ok res)
-        (do (when-not (:idempotent res)
-              (append-flat! "assert" te p r (:ok res))
-              (apply-commit-delta! pre te p)
+  (let [p (canonical-predicate p)
+        r (normalize-predicate-value p r)]
+    (assert-flat-corpus-append-boundaries!)
+    (cond
+      (hard-reserved p)
+      {:reject [(str "reserved predicate '" p "' (engine-internal; use a domain predicate)")] :version (current-seq @co)}
+      (schema-writable p)
+      (do-schema-assert te p r)
+      :else
+      (let [pre (current-seq @co)
+            res (commit! @co "coord" te p (kind-of p r) r base)]
+        (if (:ok res)
+          (do (when-not (:idempotent res)
+                (append-flat! "assert" te p r (:ok res))
+                (apply-commit-delta! pre te p)
               ;; #(a) a read-hidden durable pred (bound_to/withdrawn_*) is NOT AST and never
               ;; changes resolution, so it must NOT invalidate the scoped refers_to cache —
               ;; else persisting bound_to would re-dirty its module and force a wasted re-resolve.
@@ -1971,8 +2006,8 @@
             ;; :idempotent => skipped; a driver-free, clock-free thread no-ops).
             (when (and (not (:idempotent res)) (ck/vec-contains? ck/terminal-preds p))
               (terminal-cascade! te))
-            {:ok (:ok res)})
-        {:reject (:reject res) :version (:version res)}))))
+              {:ok (:ok res)})
+          {:reject (:reject res) :version (:version res)})))))
 
 ;; --- ATOMIC multi-fact publication (thread 019f9063 / incident 019f8958) -------
 ;; :assert-batch publishes N facts about ONE subject as an all-or-none unit — the
@@ -2000,9 +2035,11 @@
     (not (every? #(and (map? %) (string? (:p %)) (some? (:r %))) facts))
     {:reject ["each :facts entry needs a string :p and a :r"] :code :invalid-batch :version (current-seq @co)}
     :else
-    (let [normalized (mapv (fn [f] {:pred (:p f) :r (:r f)
-                                    :kind (kind-of (:p f) (:r f))
-                                    :base (if (contains? f :base) (:base f) base)})
+    (let [normalized (mapv (fn [f] (let [p (canonical-predicate (:p f))
+                                         r (normalize-predicate-value p (:r f))]
+                                     {:pred p :r r
+                                      :kind (kind-of p r)
+                                      :base (if (contains? f :base) (:base f) base)}))
                            facts)]
       (cond
         ;; reserved / schema-writable preds route through their own validated paths;
@@ -2011,7 +2048,7 @@
         {:reject ["assert-batch rejects reserved predicates (name/store-supersedes)"]
          :code :reserved-in-batch :version (current-seq @co)}
         (some #(schema-writable (:pred %)) normalized)
-        {:reject ["assert-batch rejects schema predicates (cardinality/value_kind) — use :assert"]
+        {:reject ["assert-batch rejects predicate metadata — use :assert"]
          :code :schema-in-batch :version (current-seq @co)}
         :else
         (let [pre     (current-seq @co)
@@ -2447,22 +2484,24 @@
                    #(release-lease! @co holder resource (:epoch acquired))))))))))))
 
 (defn- do-retract [te p r base]
-  (assert-flat-corpus-append-boundaries!)
-  (cond
-    (hard-reserved p)
-    {:reject [(str "reserved predicate '" p "'")] :version (current-seq @co)}
-    (schema-writable p)
-    (do-schema-retract te p r)
-    :else
-    (let [pre (current-seq @co)
-          res (retract! @co "coord" te p r base)]
-      (if (:ok res)
-        (do (append-flat! "retract" te p r (:ok res))
-            (apply-commit-delta! pre te p)
-            (when-not (read-hidden-preds p) (mark-dirty! te))   ; S3.3: this module's refers_to are stale (read-hidden preds are not AST)
-            (notify-subs! {:event :commit :version (:ok res) :op "retract" :l te :p p :r r})
-            {:ok (:ok res)})
-        {:reject (:reject res) :version (:version res)}))))
+  (let [p (canonical-predicate p)
+        r (normalize-predicate-value p r)]
+    (assert-flat-corpus-append-boundaries!)
+    (cond
+      (hard-reserved p)
+      {:reject [(str "reserved predicate '" p "'")] :version (current-seq @co)}
+      (schema-writable p)
+      (do-schema-retract te p r)
+      :else
+      (let [pre (current-seq @co)
+            res (retract! @co "coord" te p r base)]
+        (if (:ok res)
+          (do (append-flat! "retract" te p r (:ok res))
+              (apply-commit-delta! pre te p)
+              (when-not (read-hidden-preds p) (mark-dirty! te))   ; S3.3: this module's refers_to are stale (read-hidden preds are not AST)
+              (notify-subs! {:event :commit :version (:ok res) :op "retract" :l te :p p :r r})
+              {:ok (:ok res)})
+          {:reject (:reject res) :version (:version res)})))))
 
 (defn- with-current-fence
   "Run one fact mutation only while RES is held by HOLDER at EPOCH. The lease
@@ -6805,10 +6844,10 @@
       ;; (l,p) group — rep-stable (no fN). (interface investigation #3)
       :resolved (let [st (:store @co)
                       e (s/resolve-name st (:te req))
-                      pid (c/value-id st (:p req))
+                      pid (s/resolve-predicate st (:p req))
                       live (if (and e pid) (live-cids-lp @co e pid) [])
                       render (fn [cid] (let [r (:r (c/fact-of st cid))]
-                                         (if (c/value-object? st r) (c/literal st r) (s/name-of st r))))
+                                         (if (c/value-object? st r) (c/literal st r) (store-subject-name st r))))
                       vals (mapv render live)]
                   ;; :value is the coexist-ELECTED member (not a blind first-live); :members/
                   ;; :ambiguous?/:values still surface the full multiplicity so a contested
@@ -6834,10 +6873,10 @@
                    (assoc res :as-of s :version (current-seq @co)))
                  (:te req)
                  (let [e   (s/resolve-name st (:te req))
-                       pid (c/value-id st (:p req))
+                       pid (s/resolve-predicate st (:p req))
                        live (if (and e pid) (live-as-of-lp @co s e pid) [])
                        render (fn [cid] (let [r (:r (c/fact-of st cid))]
-                                          (if (c/value-object? st r) (c/literal st r) (s/name-of st r))))
+                                          (if (c/value-object? st r) (c/literal st r) (store-subject-name st r))))
                        vals (mapv render live)]
                    {:value (when (seq live) (render (elect @co (vec live))))
                     :members (count vals) :ambiguous? (> (count vals) 1)
@@ -7653,6 +7692,7 @@
         ;; (CLI-parity map). Authoritative over ck/single? at every classification below.
         cmap (log-card-map asserts)
         facts (:facts (fold/fold (vec asserts)))
+        metadata-facts (filterv #(schema-writable (:p %)) facts)
         by-pred (group-by :p facts)
         schema-plan (cc/migrate-schema-plan
                      (vec (keys by-pred))
@@ -7662,14 +7702,26 @@
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]
     (s/setup! st tx)
+    ;; Establish stable predicate objects and their spellings before defining
+    ;; or materializing dependent facts. The metadata subject @x denotes the
+    ;; legacy implicit predicate object value!("x"); predicate_name/alias then
+    ;; bridge every public spelling to that same object.
+    (doseq [cl metadata-facts]
+      (let [pid (c/value! st (pred-name (:l cl)))]
+        (s/assert! st pid (:p cl) (:r cl) tx)))
     (doseq [p (:domain schema-plan)]   ; skip reserved engine preds (defensive)
-      (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi")
-                            (if (some #(link-value? p %) (map :r (get by-pred p))) "ref" "literal") tx))
+      (s/def-predicate! st p
+                        (ck/cardinality-of facts {} p)
+                        (ck/value-kind-of facts {} p)
+                        tx))
     ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
     ;; NO domain facts (absent from by-pred). Materialize the fact so s/cardinality (the
     ;; write-path authority) matches the CLI map; no value facts ⇒ value_kind "literal".
     (doseq [p (:card-only schema-plan)]
-      (s/def-predicate! st p (if (ck/single-eff? cmap p) "single" "multi") "literal" tx))
+      (s/def-predicate! st p
+                        (ck/cardinality-of facts {} p)
+                        (ck/value-kind-of facts {} p)
+                        tx))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
     ;; present in the flat log AND not classified by a cardinality fact still get their
     ;; cardinality FACT, so a first runtime write supersedes (not accumulates) — the
@@ -7691,7 +7743,9 @@
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
       (doseq [cl facts :when (not (schema-preds (:p cl)))]
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
-          (if (link-value? p r) (s/link! st su p (ent! r) tx) (s/assert! st su p r tx)))))
+          (if (= "ref" (ck/value-kind-of facts {} p))
+            (s/link! st su p (ent! r) tx)
+            (s/assert! st su p r tx)))))
     ;; Seed the seq-space to the flat log's max :tx so (a) :version == the flat
     ;; fold's version (doctor reports FRESH, not STALE), (b) base_version stays
     ;; coherent, and (c) projected flat :tx CONTINUE the flat space (no collision;
@@ -7975,7 +8029,11 @@
 (defn- apply-tail! [co lines]
   (let [st (:store co)
         tail-plan (cc/tail-input-plan (vec lines) schema-preds)
-        valid (:valid tail-plan)]
+        metadata (predicate-metadata-facts)
+        reg (ck/predicate-registry metadata)
+        valid (mapv (fn [line]
+                      (assoc line :p (ck/predicate-name reg (:p line))))
+                    (:valid tail-plan))]
     (when (seq valid)
       (let [tx (c/begin-tx! st "tail")
             by-pred (group-by :p valid)
@@ -7993,7 +8051,8 @@
                      (card-only-preds tcmap lines))
             declared-preds
             (into #{} (filter #(and card-pid
-                                    (seq (c/by-lp st (c/value! st %) card-pid))))
+                                    (when-let [pid (s/resolve-predicate st %)]
+                                      (seq (c/by-lp st pid card-pid)))))
                   domain)
             current-cardinality
             (into {} (map (fn [p] [p (s/cardinality st p)]))
@@ -8006,9 +8065,7 @@
             (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
             latest (cc/tail-keyed-latest single-preds valid)
             link-preds
-            (into #{} (filter #(some (fn [r] (link-value? % r))
-                                     (map :r (get by-pred %))))
-                  domain)
+            (into #{} (filter #(= "ref" (ck/value-kind-of metadata {} %))) domain)
             predicate-plan
             (cc/tail-predicate-plan domain card-only single-preds
                                     declared-preds current-cardinality link-preds)
@@ -8029,10 +8086,10 @@
             nil))
         (doseq [[_ a] latest]
           (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
-                su (sub! (:l a)) pid (c/value! st p)
+                su (sub! (:l a)) pid (s/resolve-predicate st p)
                 live (c/by-lp st su pid)       ; already live-only
                 retract? (= "retract" (:op a))
-                link? (link-value? p r)
+                link? (= "ref" (ck/value-kind-of metadata {} p))
                 value-present?
                 (if (and retract? single?)
                   false

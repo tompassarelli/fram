@@ -15,6 +15,62 @@
 (defn fact-set [assertions]
   (set (map (juxt :l :p :r) (:facts (fold/fold assertions)))))
 
+(defn require-pass [label ok]
+  (println (str "  [" (if ok "PASS" "FAIL") "] " label))
+  (when-not ok (System/exit 1)))
+
+;; Predicate identity metadata is imported before dependent facts, aliases
+;; canonicalize, and value_kind—not the object's @ sigil—governs both directions.
+(let [root (str (System/getProperty "java.io.tmpdir") "/fram-predicate-rt-"
+                (System/currentTimeMillis))
+      src (str root "/src")
+      out (str root "/out")]
+  (.mkdirs (io/file src))
+  (.mkdirs (io/file out))
+  (spit (str src "/01-friend.md")
+        "@friend\npredicate_name  friend\npredicate_alias  :friend\ncardinality  multi\nvalue_kind  ref\n---\n")
+  (spit (str src "/02-note.md")
+        "@note\npredicate_name  note\npredicate_alias  :note\ncardinality  multi\nvalue_kind  literal\n---\n")
+  (spit (str src "/03-alice.md")
+        "@alice\ntitle  Alice\n:friend  bob\nnote  \"@bob\"\n---\n")
+  (let [ops (imp/load-corpus src)
+        facts (:facts (fold/fold ops))
+        sigs (set (map (juxt :l :p :r) facts))
+        identity? #(contains? #{"predicate_name" "predicate_alias"} (:p %))
+        identity-count (count (filter identity? ops))
+        prefix-count (count (take-while identity? ops))
+        first-domain (first (drop-while identity? ops))]
+    (require-pass "identity metadata precedes dependent import facts"
+                  (and first-domain
+                       (pos? identity-count)
+                       (= identity-count prefix-count)))
+    (require-pass "alias import resolves to canonical ref predicate"
+                  (contains? sigs ["@alice" "friend" "@bob"]))
+    (require-pass "explicit literal preserves an @-prefixed value"
+                  (contains? sigs ["@alice" "note" "@bob"]))
+    (require-pass "identity metadata remains ordinary facts"
+                  (and (contains? sigs ["@friend" "predicate_name" "friend"])
+                       (contains? sigs ["@friend" "predicate_alias" ":friend"])))
+    (doseq [te (distinct (map :l facts))]
+      (spit (str out "/" (subs te 1) ".md") (exp/thread-md facts te)))
+    (require-pass "identity-aware import/export/import is fact-identical"
+                  (= sigs (fact-set (imp/load-corpus out))))
+    (let [rendered (exp/thread-md facts "@alice")]
+      (require-pass "declared ref exports bare"
+                    (clojure.string/includes? rendered "friend  @bob"))
+      (require-pass "declared literal exports quoted"
+                    (clojure.string/includes? rendered "note  \"@bob\"")))))
+
+(let [legacy [(k/->Fact "@a" "title" "A")
+              (k/->Fact "@a" "depends_on" "@b")
+              (k/->Fact "@a" "note" "@literal")
+              (k/->Fact "@b" "title" "B")]
+      rendered (exp/thread-md legacy "@a")]
+  (require-pass "legacy ref fallback renders unchanged"
+                (clojure.string/includes? rendered "depends_on  @b"))
+  (require-pass "legacy literal @ value remains quoted"
+                (clojure.string/includes? rendered "note  \"@literal\"")))
+
 (let [src "threads"
       a-asserts (imp/load-corpus src)
       a (fact-set a-asserts)

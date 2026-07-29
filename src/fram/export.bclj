@@ -18,14 +18,6 @@
    "created_at" "updated_at" "committed" "do_on" "valid_until" "estimate_hours"
    "repo" "part_of" "depends_on" "relates_to" "clarifies" "amends" "outcome" "abandoned"])
 
-;; predicates whose object is a thread/person REF (@id), emitted bare. Everything
-;; else is a literal — EDN-quoted when needed. Deciding ref-vs-literal by the
-;; PREDICATE (not the @ prefix) is what makes a literal that happens to start with
-;; @ round-trip correctly (it gets quoted instead of misread as a ref).
-(def ref-preds :- (Vec String)
-  ["depends_on" "part_of" "relates_to" "clarifies" "amends"
-   "created_by" "lead" "driver" "proposed_by"])
-
 (defn- distinct-s [xs :- (Vec String)] :- (Vec String)
   (reduce (fn [acc :- (Vec String) x :- String] :- (Vec String)
             (if (k/vec-contains? acc x) acc (conj acc x)))
@@ -33,9 +25,9 @@
 
 ;; a ref-pred's value renders as its @id bare; a literal is EDN-quoted whenever
 ;; bare would be ambiguous — whitespace, NEWLINE, empty, or a leading @/".
-(defn- render-obj [p :- String v :- String] :- String
-  (if (k/vec-contains? ref-preds p)
-    v
+(defn- render-obj [facts :- (Vec k/Fact) p :- String v :- String] :- String
+  (if (= "ref" (k/value-kind-of facts {} p))
+    (if (str/starts-with? v "@") v (str "@" v))
     (if (or (str/blank? v)
             (str/includes? v " ") (str/includes? v "\t")
             (str/includes? v "\n") (str/includes? v "\r")
@@ -44,18 +36,33 @@
       v)))
 
 (defn thread-md [facts :- (Vec k/Fact) te :- String] :- String
-  (let [present (distinct-s (mapv (fn [c :- k/Fact] :- String (:p c)) (k/q-by-l facts te)))
+  (let [reg (k/predicate-registry facts)
+        subject-facts (k/q-by-l facts te)
+        present (distinct-s (mapv (fn [c :- k/Fact] :- String
+                                    (k/predicate-name reg (:p c)))
+                                  subject-facts))
         ordered (filterv (fn [p :- String] :- Bool (k/vec-contains? present p)) order)
         extra (vec (sort (filterv (fn [p :- String] :- Bool
                                     (and (not (k/vec-contains? order p)) (not (= p "body"))))
                                   present)))
         preds (vec (concat ordered extra))
         lines (reduce (fn [acc :- (Vec String) p :- String] :- (Vec String)
-                        (vec (concat acc
-                                     (mapv (fn [v :- String] :- String (str p "  " (render-obj p v)))
-                                           (k/many facts te p)))))
+                        (let [pid (k/predicate-id reg p)
+                              values (mapv (fn [c :- k/Fact] :- String (:r c))
+                                           (filterv
+                                            (fn [c :- k/Fact] :- Bool
+                                              (= pid (k/predicate-id reg (:p c))))
+                                            subject-facts))]
+                          (vec (concat acc
+                                       (mapv (fn [v :- String] :- String
+                                               (str p "  " (render-obj facts p v)))
+                                             values)))))
                       []
                       preds)
-        b (k/one facts te "body")
+        body-id (k/predicate-id reg "body")
+        bodies (filterv (fn [c :- k/Fact] :- Bool
+                          (= body-id (k/predicate-id reg (:p c))))
+                        subject-facts)
+        b (if (empty? bodies) nil (:r (first bodies)))
         body (if (some? b) b "")]
     (str te "\n" (str/join "\n" lines) "\n---\n" body)))

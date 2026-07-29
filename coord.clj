@@ -376,7 +376,12 @@
 ;; --- reads over the reified store -------------------------------------------
 (defn- live-cids-lp [co te pid] (cr/live-cids-lp (store co) te pid))
 (defn- seq-of [co cid] (cr/seq-of (store co) cid))
-(defn base-version [co te pid] (cr/base-version (store co) te pid))
+(defn- predicate-id-of [co pred]
+  (if (string? pred) (s/resolve-predicate (store co) pred) pred))
+(defn base-version [co te pred]
+  (if-let [pid (predicate-id-of co pred)]
+    (cr/base-version (store co) te pid)
+    0))
 (defn current-seq [co] (cr/current-seq (store co)))
 
 ;; --- coexist-elect: the default read-time election (move-B keystone) ---------
@@ -544,14 +549,15 @@
 ;; a separate entry point (retract!) since it removes rather than supersedes-by-add.
 (defn commit! [co agent te-name pred kind r-spec base]
   (locking (:lock co)
-    (let [pid    (c/value-id (store co) pred)
+    (let [pid    (s/resolve-predicate (store co) pred)
+          pname  (if (some? pid) (s/predicate-name (store co) pid) pred)
           te0    (s/resolve-name (store co) te-name)
           tgt0   (when (= kind :link) (s/resolve-name (store co) r-spec))
           vid    (when (= kind :assert) (c/value-id (store co) r-spec))
           ;; single-ness from the cardinality FACT ALONE (move-B keystone): the
           ;; ck/single? kernel-list OR-arm is gone — the fact, seeded once at boot,
           ;; is the sole runtime authority. No fact => "multi" => coexist-elect.
-          single (= "single" (s/cardinality (store co) pred))
+          single (= "single" (s/cardinality (store co) pname))
           bv     (if (and te0 pid) (base-version co te0 pid) 0)
           live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
           facts (:facts @(store co))]
@@ -569,9 +575,9 @@
         {:reject :conflict :version (current-seq co)}
 
         ;; (2)(3) obligation: acyclicity — pure pre-check, before any mutation
-        (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
+        (and (= kind :link) (contains? #{"depends_on" "part_of"} pname)
              (or (= te-name r-spec) (and te0 tgt0 (reaches? co pid tgt0 te0))))
-        {:reject [(str pred " cycle")] :version (current-seq co)}
+        {:reject [(str pname " cycle")] :version (current-seq co)}
 
         ;; (4) multi-valued idempotency: no-op if the live (l,p,r) already exists
         (and (not single)
@@ -587,8 +593,8 @@
               _  (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for pull provenance (display-only; ONE clock read per tx, mirrored into the v2 log via delta-records so live + replay agree)
               te (ent! co tx te-name)]
           (case kind
-            :link   (s/link! (store co) te pred (ent! co tx r-spec) tx)
-            :assert (s/assert! (store co) te pred r-spec tx))
+            :link   (s/link! (store co) te pname (ent! co tx r-spec) tx)
+            :assert (s/assert! (store co) te pname r-spec tx))
           (append-tx! co (delta-records co since tx))   ; (5) atomic + fsync
           {:ok (get-in @(store co) [:txs tx :seq])})))))
 
@@ -615,18 +621,19 @@
           intents
           (mapv
            (fn [[i {:keys [pred kind r base]}]]
-                  (let [pid    (c/value-id st pred)
+                  (let [pid    (s/resolve-predicate st pred)
+                        pname  (if (some? pid) (s/predicate-name st pid) pred)
                         tgt0   (when (= kind :link) (s/resolve-name st r))
                         vid    (when (= kind :assert) (c/value-id st r))
-                        single (= "single" (s/cardinality st pred))
+                        single (= "single" (s/cardinality st pname))
                         bv     (if (and te0 pid) (base-version co te0 pid) 0)
                         live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
                         fm     (:facts @st)]
                     (cc/->CommitIntent
-                     i pred kind r single bv base
+                     i pname kind r single bv base
                      (set (keep #(get-in fm [% :r]) live))
                      (if (= kind :link) tgt0 vid)
-                     (and (= kind :link) (contains? #{"depends_on" "part_of"} pred)
+                     (and (= kind :link) (contains? #{"depends_on" "part_of"} pname)
                           (or (= te-name r) (and te0 tgt0 (reaches? co pid tgt0 te0)))))))
            (map-indexed vector facts))
           plan (plan-commits (current-seq co) intents)]
@@ -751,7 +758,7 @@
       (if-not (:ok r)
         r
         (let [te  (s/resolve-name (store co) te-name)
-              pid (c/value-id (store co) pred)
+              pid (s/resolve-predicate (store co) pred)
               cid (apply max (live-cids-lp co te pid))]   ; the just-written rival = newest live cid
           (select! co view cid)
           {:ok (:ok r) :cid cid})))))
@@ -774,18 +781,24 @@
   ([co agent te-name pred r-spec base] (retract! co agent te-name pred r-spec base nil))
   ([co agent te-name pred r-spec base reason]
   (locking (:lock co)
-    (let [pid    (c/value-id (store co) pred)
+    (let [st     (store co)
+          pid    (s/resolve-predicate st pred)
+          pname  (if (some? pid) (s/predicate-name st pid) pred)
           te0    (s/resolve-name (store co) te-name)
-          single (= "single" (s/cardinality (store co) pred))]   ; fact is sole authority (move-B)
+          single (= "single" (s/cardinality st pname))]   ; fact is sole authority (move-B)
       (if (or (nil? te0) (nil? pid))
         {:ok (current-seq co)}                              ; nothing to retract
         (let [bv (base-version co te0 pid)]
           (if (version-conflict? single bv base)   ; move-C: :base optional here too (symmetric, nil-safe)
             {:reject :conflict :version (current-seq co)}
-            (let [tgt (if (and r-spec (str/starts-with? (str r-spec) "@"))
-                        (s/resolve-name (store co) r-spec)
-                        (c/value-id (store co) r-spec))
-                  facts (:facts @(store co))
+            (let [declared-kind (s/lookup st pid "value_kind")
+                  ref? (if (some? declared-kind)
+                         (= "ref" declared-kind)
+                         (and r-spec (str/starts-with? (str r-spec) "@")))
+                  tgt (if ref?
+                        (s/resolve-name st r-spec)
+                        (c/value-id st r-spec))
+                  facts (:facts @st)
                   victims (if single
                             (live-cids-lp co te0 pid)
                             (filter #(= tgt (:r (get facts %))) (live-cids-lp co te0 pid)))]
@@ -793,23 +806,23 @@
                 {:ok (current-seq co)}
                 (let [since (:next-id @(store co))
                       observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp on the retract tx
-                      tx  (c/begin-tx! (store co) agent)
-                      _   (swap! (store co) assoc-in [:txs tx :observed] observed)
-                      _   (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for the retract tx (display-only; distinct from :withdrawn_at, which holds the retract SEQ)
-                      sup (c/value! (store co) "store-supersedes")
-                      wbp (c/value! (store co) "withdrawn_by")
-                      wap (c/value! (store co) "withdrawn_at")
-                      wrp (c/value! (store co) "withdrawn_reason")
-                      ag  (c/value! (store co) (str agent))
-                      atv (c/value! (store co) (str (get-in @(store co) [:txs tx :seq])))
-                      rsv (when reason (c/value! (store co) (str reason)))]
+                      tx  (c/begin-tx! st agent)
+                      _   (swap! st assoc-in [:txs tx :observed] observed)
+                      _   (swap! st assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for the retract tx (display-only; distinct from :withdrawn_at, which holds the retract SEQ)
+                      sup (c/value! st "store-supersedes")
+                      wbp (c/value! st "withdrawn_by")
+                      wap (c/value! st "withdrawn_at")
+                      wrp (c/value! st "withdrawn_reason")
+                      ag  (c/value! st (str agent))
+                      atv (c/value! st (str (get-in @st [:txs tx :seq])))
+                      rsv (when reason (c/value! st (str reason)))]
                   (doseq [old victims]
-                    (c/fact! (store co) old sup old tx)             ; internal live-fold mechanism (remove-wins)
-                    (c/fact! (store co) old wbp ag tx)              ; cancellation SURFACE: who
-                    (c/fact! (store co) old wap atv tx)             ;   when (the retract tx seq)
-                    (when rsv (c/fact! (store co) old wrp rsv tx))) ;   why (optional)
+                    (c/fact! st old sup old tx)             ; internal live-fold mechanism (remove-wins)
+                    (c/fact! st old wbp ag tx)              ; cancellation SURFACE: who
+                    (c/fact! st old wap atv tx)             ;   when (the retract tx seq)
+                    (when rsv (c/fact! st old wrp rsv tx))) ;   why (optional)
                   (append-tx! co (delta-records co since tx))
-                  {:ok (get-in @(store co) [:txs tx :seq])}))))))))))
+                  {:ok (get-in @st [:txs tx :seq])}))))))))))
 
 ;; --- exclusive lease (mutual exclusion + fencing) — ADDITIVE -----------------
 ;; Closes the lost-update-vs-mutex gap: commit!'s base_version rejects a STALE

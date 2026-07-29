@@ -37,6 +37,29 @@
     [(str/starts-with? tok "\"") (fram.rt/edn-unquote tok)]
     [:else tok]))
 
+(defn- identity-fact? [c :- k/Fact] :- Bool
+  (or (= (:p c) "predicate_name") (= (:p c) "predicate_alias")))
+
+(defn- normalize-predicate-facts [facts :- (Vec k/Fact)] :- (Vec k/Fact)
+  (let [reg (k/predicate-registry facts)
+        normalized
+        (mapv
+         (fn [c :- k/Fact] :- k/Fact
+           (let [p (k/predicate-name reg (:p c))
+                 r (:r c)
+                 rv (if (and (= "ref" (k/value-kind-of facts {} p))
+                             (not (str/starts-with? r "@")))
+                      (str "@" r)
+                      r)]
+             (k/->Fact (:l c) p rv)))
+         facts)]
+    ;; Identity metadata establishes spelling -> object before any dependent
+    ;; fact reaches a sequential consumer. The fold is two-pass too, so this is
+    ;; compatible with legacy logs while making import order explicit.
+    (vec (concat (filterv identity-fact? normalized)
+                 (filterv (fn [c :- k/Fact] :- Bool (not (identity-fact? c)))
+                          normalized)))))
+
 ;; stderr warning — import runs as a CLI; a skipped/dropped thread must be
 ;; VISIBLE, never silent (the crash-vs-skip asymmetry the log read already has).
 (defn- warn [msg :- String] :- Nil
@@ -103,4 +126,4 @@
                          (vec (concat acc (safe-file->facts path))))
                        []
                        files)]
-    (number-fact-ops facts)))
+    (number-fact-ops (normalize-predicate-facts facts))))
