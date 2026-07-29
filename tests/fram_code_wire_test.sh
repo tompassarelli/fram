@@ -10,7 +10,7 @@ FAIL=0
 assert() { local desc="$1" cond="$2"; if eval "$cond"; then echo "ok - $desc"; else echo "FAIL - $desc"; FAIL=1; fi; }
 assert_code_on_line() {
   local desc="$1" line="$2"
-  if grep -Fq "$line" "$HERE/bin/fram-code-on"; then
+  if grep -Fq -- "$line" "$HERE/bin/fram-code-on"; then
     echo "ok - $desc"
   else
     echo "FAIL - $desc"
@@ -68,6 +68,34 @@ assert_code_on_line "fram-code-on probes the fenced edit protocol" \
   'coordinator_edit_protocol() {'
 assert_code_on_line "fram-code-on requires verifier-ready before wiring" \
   'if [[ "$protocol" != '"'"'["graph-edit-candidate-v2" :ready]'"'"' ]]; then'
+assert_code_on_line "fram-code-on excludes singular test trees from the authoring corpus" \
+  "-not -path '*/test/*'"
+assert_code_on_line "fram-code-on excludes plural tests trees from the authoring corpus" \
+  "-not -path '*/tests/*'"
+
+# The authoring corpus contains production source, not parser/checker fixtures.
+CORPUS_ROOT="$TMP/corpus-selection"
+mkdir -p "$CORPUS_ROOT/src/fram" \
+         "$CORPUS_ROOT/codegraph/test" \
+         "$CORPUS_ROOT/tests/fixtures"
+printf '(ns fram.real)\n' >"$CORPUS_ROOT/src/fram/real.bclj"
+printf '(ns codegraph.test.fixture)\n' >"$CORPUS_ROOT/codegraph/test/fixture.bclj"
+printf '(ns fram.test.fixture)\n' >"$CORPUS_ROOT/tests/fixtures/fixture.bclj"
+mapfile -t CORPUS_SRCS < <(
+  find "$CORPUS_ROOT" -regextype posix-extended \
+    -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' \
+    -not -path '*/.fram/*' \
+    -not -path '*/docs/private/*' \
+    -not -path '*/test/*' \
+    -not -path '*/tests/*' |
+    sort
+)
+assert "fram-code-on corpus selection retains a real source module" \
+  '[ "${#CORPUS_SRCS[@]}" = 1 ] && [ "${CORPUS_SRCS[0]}" = "$CORPUS_ROOT/src/fram/real.bclj" ]'
+assert "fram-code-on corpus selection excludes codegraph/test fixtures" \
+  '[[ ! " ${CORPUS_SRCS[*]} " =~ " $CORPUS_ROOT/codegraph/test/fixture.bclj " ]]'
+assert "fram-code-on corpus selection excludes tests/fixtures sources" \
+  '[[ ! " ${CORPUS_SRCS[*]} " =~ " $CORPUS_ROOT/tests/fixtures/fixture.bclj " ]]'
 
 # --- wire ON: merge, preserve unrelated keys --------------------------------
 "$HERE/bin/fram-code-wire" on "$DIR" "$SERVER_JSON"
