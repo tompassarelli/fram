@@ -3,17 +3,17 @@
 ;; Drives the REAL bin/fram-mcp over stdio (fresh hermetic :env per spawn — no
 ;; ambient FRAM_* leaks) and proves the opt-in profile seam end to end:
 ;;
-;;   A. DEFAULT COMPATIBILITY — profile unset AND profile=full both serve the
-;;      exact eleven-tool closed catalog, and the untell->retract alias still
-;;      resolves (the pre-profile behavior, byte-for-byte).
+;;   A. DEFAULT COMPATIBILITY — ordinary profile-unset/profile=full operation
+;;      serves the exact eleven-tool closed catalog; full+FRAM_GRAPH_EDIT serves
+;;      the same catalog only after binding the graph-edit identity.
 ;;   B. UNKNOWN PROFILE FAILS CLOSED — any unrecognized FRAM_MCP_PROFILE exits
 ;;      nonzero before serving a single request, even with an otherwise fully
 ;;      valid restricted environment.
-;;   C. RESTRICTED STARTUP FENCE — graph-edit-v1 refuses to start unless:
-;;      graph-edit mode (FRAM_GRAPH_EDIT=1 + FRAM_FLIP=1), canonical ABSOLUTE
-;;      FRAM_SRC / FRAM_CODE_LOG / FRAM_CODE_PORT identity, an EXISTING log
-;;      INSIDE the source binding, and a LIVE STRICT-FENCED coordinator serving
-;;      exactly that log. Dead / wrong-log / permissive daemons all fail closed.
+;;   C. GRAPH-EDIT STARTUP FENCE — graph-edit-v1, and full whenever
+;;      FRAM_GRAPH_EDIT=1, refuse to start unless FRAM_FLIP=1; FRAM_PORT and
+;;      FRAM_CODE_PORT are valid/equal; canonical FRAM_LOG and FRAM_CODE_LOG are
+;;      equal; and one LIVE STRICT-FENCED coordinator serves that exact in-tree
+;;      log with the candidate protocol.
 ;;   D. RESTRICTED SURFACE — tools/list is EXACTLY the six graph-edit verbs;
 ;;      tools/call DENIES tell/retract/show/ask/validate, the query/untell
 ;;      aliases, and unknown names BEFORE alias normalization or dispatch, with
@@ -44,11 +44,12 @@
 (def src-dir (str tmp "/srcroot"))                 ; FRAM_SRC (the source binding)
 (def code-log (str src-dir "/.fram/code.log"))     ; inside the binding, like fram-code-on
 (def other-log (str src-dir "/.fram/other.log"))   ; exists, but the daemon won't serve it
+(def permissive-log (str src-dir "/.fram/permissive.log")) ; separate writer-authority domain
 (def outside-log (str tmp "/outside.log"))         ; exists, but OUTSIDE the binding
 (def facts-log (str tmp "/facts.log"))             ; the KB corpus (irrelevant but pinned)
 (.mkdirs (io/file (str src-dir "/.fram")))
 (spit facts-log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n")
-(doseq [f [other-log outside-log]]
+(doseq [f [other-log permissive-log outside-log]]
   (spit f "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n"))
 
 ;; --- part E prerequisites (real graph edit) ----------------------------------
@@ -95,7 +96,7 @@
 
 (println "booting throwaway coordinators (strict:" strict-port " permissive:" perm-port ") …")
 (def strict-daemon (boot-daemon! strict-port code-log true))
-(def perm-daemon   (boot-daemon! perm-port   code-log false))
+(def perm-daemon   (boot-daemon! perm-port permissive-log false))
 
 ;; --- spawning the server hermetically ------------------------------------------
 ;; :env REPLACES the environment (bb inherits ambient otherwise): only PATH/HOME
@@ -109,7 +110,9 @@
   (merge base-env
          {"FRAM_MCP_PROFILE" "graph-edit-v1"
           "FRAM_GRAPH_EDIT" "1" "FRAM_FLIP" "1"
+          "FRAM_PORT" (str strict-port)
           "FRAM_CODE_PORT" (str strict-port)
+          "FRAM_LOG" code-log
           "FRAM_CODE_LOG" code-log
           "FRAM_SRC" src-dir
           "FRAM_OUT" (str root "/out") "FRAM_BIN" (str root "/bin")
@@ -161,6 +164,12 @@
   (chk "A: profile=full -> serves the exact eleven-tool catalog, no fence checks"
        (and (zero? exit) (= names eleven))))
 
+(let [{:keys [by-id exit]} (run-mcp (assoc good-env "FRAM_MCP_PROFILE" "full")
+                                    [init-req list-req])
+      names (set (map :name (get-in (get by-id 2) [:result :tools])))]
+  (chk "A: profile=full + FRAM_GRAPH_EDIT=1 -> serves eleven tools after the graph-edit fence"
+       (and (zero? exit) (= names eleven))))
+
 ;; ============================================================================
 ;; B. UNKNOWN PROFILE FAILS CLOSED — even with a fully valid restricted env.
 ;; ============================================================================
@@ -186,8 +195,18 @@
                (dissoc good-env "FRAM_GRAPH_EDIT") "FRAM_GRAPH_EDIT=1")
 (fence-refuses "FRAM_FLIP missing (graph-sourced editing required)"
                (dissoc good-env "FRAM_FLIP") "FRAM_FLIP=1")
+(fence-refuses "full-profile graph-edit with FRAM_FLIP missing"
+               (dissoc (assoc good-env "FRAM_MCP_PROFILE" "full") "FRAM_FLIP")
+               "FRAM_FLIP=1")
+(fence-refuses "FRAM_PORT missing" (dissoc good-env "FRAM_PORT") "FRAM_PORT")
+(fence-refuses "FRAM_PORT non-numeric" (assoc good-env "FRAM_PORT" "notaport") "FRAM_PORT")
 (fence-refuses "FRAM_CODE_PORT missing" (dissoc good-env "FRAM_CODE_PORT") "FRAM_CODE_PORT")
 (fence-refuses "FRAM_CODE_PORT non-numeric" (assoc good-env "FRAM_CODE_PORT" "notaport") "FRAM_CODE_PORT")
+(fence-refuses "read/edit ports diverge"
+               (assoc good-env "FRAM_PORT" (str dead-port)) "must be equal")
+(fence-refuses "full-profile graph-edit read/edit ports diverge"
+               (assoc good-env "FRAM_MCP_PROFILE" "full" "FRAM_PORT" (str dead-port))
+               "must be equal")
 (fence-refuses "FRAM_SRC missing" (dissoc good-env "FRAM_SRC") "FRAM_SRC")
 (fence-refuses "FRAM_SRC relative" (assoc good-env "FRAM_SRC" "srcroot") "ABSOLUTE")
 (fence-refuses "FRAM_SRC non-canonical (/./ segment)"
@@ -198,13 +217,26 @@
 (fence-refuses "FRAM_CODE_LOG nonexistent"
                (assoc good-env "FRAM_CODE_LOG" (str src-dir "/.fram/nope.log")) "file")
 (fence-refuses "FRAM_CODE_LOG outside the FRAM_SRC source binding"
-               (assoc good-env "FRAM_CODE_LOG" outside-log) "OUTSIDE")
+               (assoc good-env "FRAM_LOG" outside-log "FRAM_CODE_LOG" outside-log) "OUTSIDE")
+(fence-refuses "read/edit logs diverge"
+               (assoc good-env "FRAM_LOG" facts-log) "same canonical file")
+(fence-refuses "full-profile graph-edit read/edit logs diverge"
+               (assoc good-env "FRAM_MCP_PROFILE" "full" "FRAM_LOG" facts-log)
+               "same canonical file")
 (fence-refuses "dead coordinator port"
-               (assoc good-env "FRAM_CODE_PORT" (str dead-port)) "strict-fenced")
+               (assoc good-env
+                      "FRAM_PORT" (str dead-port)
+                      "FRAM_CODE_PORT" (str dead-port))
+               "strict-fenced")
 (fence-refuses "coordinator serves a DIFFERENT log"
-               (assoc good-env "FRAM_CODE_LOG" other-log) "DIFFERENT")
+               (assoc good-env "FRAM_LOG" other-log "FRAM_CODE_LOG" other-log) "DIFFERENT")
 (fence-refuses "coordinator is PERMISSIVE (no strict log fence)"
-               (assoc good-env "FRAM_CODE_PORT" (str perm-port)) "strict-fenced")
+               (assoc good-env
+                      "FRAM_PORT" (str perm-port)
+                      "FRAM_CODE_PORT" (str perm-port)
+                      "FRAM_LOG" permissive-log
+                      "FRAM_CODE_LOG" permissive-log)
+               "strict-fenced")
 
 ;; ============================================================================
 ;; D. RESTRICTED SURFACE — inventory, pre-dispatch denials, ZERO mutation.

@@ -25,6 +25,70 @@
                        {} params)
    :required (vec (keep (fn [p] (when (:required p) (:name p))) params))})
 
+(def query-term-schema
+  {:oneOf
+   [{:type "object" :properties {:var {:type "string"}} :required ["var"]}
+    {:type "string"}
+    {:type "number"}]})
+
+(def query-rule-schema
+  {:type "object"
+   :properties
+   {:head {:type "object"
+           :properties {:rel {:type "string"}
+                        :args {:type "array" :items query-term-schema}}
+           :required ["rel" "args"]}
+    :body {:type "array"
+           :description "Relational, predicate, or function literals; exact safety rules are validated before execution."
+           :items {:type "object"}}}
+   :required ["head" "body"]})
+
+(def aggregate-find-schema
+  {:type "object"
+   :properties
+   {:rel {:type "string" :description "Derived relation to aggregate."}
+    :group {:type "array"
+            :items {:type "integer" :minimum 0}
+            :description "Tuple positions that form the group key."}
+    :agg {:type "array"
+          :minItems 1
+          :items {:type "object"
+                  :properties
+                  {:op {:type "string"
+                        :enum ["count" "count-distinct" "sum" "avg" "min" "max"]}
+                   :arg {:type "integer" :minimum 0}}
+                  :required ["op"]}}
+    :having {:type "array"
+             :items {:type "object"
+                     :properties
+                     {:op {:type "string" :enum ["eq" "ne" "lt" "le" "gt" "ge"]}
+                      :agg {:type "integer" :minimum 0}
+                      :val {:type "number"}}
+                     :required ["op" "agg" "val"]}}}
+   :required ["rel" "group" "agg"]})
+
+(def ordinary-query-example
+  {:find "result"
+   :rules
+   [{:head {:rel "result" :args [{:var "r"}]}
+     :body [{:rel "fact" :args ["@subject" "title" {:var "r"}]}]}]})
+
+(def ask-query-schema
+  {:type "object"
+   :description "Ordinary find is a relation-name string, not a rule-head map. Supply exactly one of rules or strata."
+   :properties
+   {:find {:oneOf
+           [{:type "string"
+             :description "Ordinary query result relation, matching a rule head rel."}
+            aggregate-find-schema]}
+    :rules {:type "array" :items query-rule-schema}
+    :strata {:type "array" :items {:type "array" :items query-rule-schema}}}
+   :required ["find"]
+   :oneOf
+   [{:required ["rules"] :not {:required ["strata"]}}
+    {:required ["strata"] :not {:required ["rules"]}}]
+   :examples [ordinary-query-example]})
+
 (def edit-transaction-items-schema
   {:oneOf
    [{:type "object"
@@ -57,6 +121,8 @@
    :description (:desc spec)
    :inputSchema
    (cond-> (input-schema (:params spec))
+     (= "ask" (:name spec))
+     (assoc-in [:properties :query] ask-query-schema)
      (= "edit-transaction" (:name spec))
      (assoc-in [:properties :edits :items] edit-transaction-items-schema))})
 
@@ -135,6 +201,28 @@
        (every? (fn [t] (= "object" (get-in t [:inputSchema :type]))) tools)))
 
 (let [tools (get-in (get by-id 2) [:result :tools])
+      ask (some #(when (= "ask" (:name %)) %) tools)
+      query-schema (get-in ask [:inputSchema :properties :query])
+      find-arms (get-in query-schema [:properties :find :oneOf])
+      ordinary-find (some #(when (= "string" (:type %)) %) find-arms)
+      aggregate-find (some #(when (= "object" (:type %)) %) find-arms)]
+  (chk "ask schema says ordinary find is a relation-name string, not a head map"
+       (and ordinary-find
+            (str/includes? (:description ask) "relation-name string")
+            (str/includes? (:description ask) "not a rule-head map")))
+  (chk "ask schema aggregate find requires rel/group/agg and keeps having optional"
+       (and (= ["rel" "group" "agg"] (:required aggregate-find))
+            (contains? (:properties aggregate-find) :having)
+            (not (some #{"having"} (:required aggregate-find)))))
+  (chk "ask schema distinguishes rules from nested strata arrays"
+       (and (= "object" (get-in query-schema [:properties :rules :items :type]))
+            (= "array" (get-in query-schema [:properties :strata :items :type]))
+            (= "object" (get-in query-schema [:properties :strata :items :items :type]))
+            (= 2 (count (:oneOf query-schema)))))
+  (chk "ask schema includes one valid ordinary JSON query example"
+       (= [ordinary-query-example] (:examples query-schema))))
+
+(let [tools (get-in (get by-id 2) [:result :tools])
       transaction (some #(when (= "edit-transaction" (:name %)) %) tools)
       items (get-in transaction [:inputSchema :properties :edits :items])
       arms (into {}
@@ -156,6 +244,40 @@
               (not (some #{"name"} (:required arm)))
               (str/includes? (get-in arm [:properties :name :description])
                              "identity assertion")))))
+
+;; Boundary-order regression: the original malformed shape used a head-like map
+;; as find. Pair it with an invalid coordinator selector and a corrupt log. Any
+;; port/log access, load-state, or cold fold would fail before producing the
+;; structural find error; receiving that error proves validation stayed first.
+(def malformed-boundary-log (str tmp "/malformed-boundary.log"))
+(spit malformed-boundary-log "{\n")
+(def malformed-find-query
+  {:find {:rel "result" :args [{:var "r"}]}
+   :rules
+   [{:head {:rel "result" :args [{:var "r"}]}
+     :body [{:rel "fact" :args ["@a" "title" {:var "r"}]}]}]})
+(def malformed-boundary-run
+  (p/shell {:in (str (json/generate-string
+                       {:jsonrpc "2.0" :id 12 :method "tools/call"
+                        :params {:name "ask" :arguments {:query malformed-find-query}}})
+                     "\n")
+            :out :string :err :string :continue true
+            :env (scratch-process-env
+                  {"FRAM_LOG" malformed-boundary-log
+                   "FRAM_THREADS" tmp
+                   "FRAM_PORT" "not-a-port"})}
+           "bin/fram-mcp"))
+(def malformed-boundary-response
+  (some #(when (= 12 (:id %)) %)
+        (keep #(try (json/parse-string % true) (catch Exception _ nil))
+              (remove str/blank? (str/split-lines (or (:out malformed-boundary-run) ""))))))
+(let [text (get-in malformed-boundary-response [:result :content 0 :text])]
+  (chk "malformed ask validates before dead selector access or corrupt-log cold fold"
+       (and (zero? (:exit malformed-boundary-run))
+            (get-in malformed-boundary-response [:result :isError])
+            (str/includes? text ":find :group must be a vector")
+            (str/includes? text ":find :agg must be a vector")
+            (not (str/includes? text "query failed")))))
 
 ;; Cold large-corpus regression. The fixture models 10k graph entities / 30k
 ;; kind-v-f0 facts, then appends a newline-terminated corruption sentinel. A

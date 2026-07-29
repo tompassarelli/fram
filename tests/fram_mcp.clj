@@ -27,6 +27,7 @@
          '[babashka.process :as proc]
          '[fram.kernel :as k]
          '[fram.fold :as fold]
+         '[fram.query :as q]
          '[fram.tools :as tl]
          '[resolve-core :as rcore]
          '[fram.rt])
@@ -118,6 +119,78 @@
    :properties (reduce (fn [m p] (assoc m (:name p) {:type (:type p) :description (str (:name p))})) {} params)
    :required (vec (keep (fn [p] (when (:required p) (:name p))) params))})
 
+(def ^:private query-term-schema
+  {:oneOf
+   [{:type "object"
+     :properties {"var" {:type "string"}}
+     :required ["var"]}
+    {:type "string"}
+    {:type "number"}]})
+
+(def ^:private query-rule-schema
+  {:type "object"
+   :properties
+   {"head"
+    {:type "object"
+     :properties
+     {"rel" {:type "string"}
+      "args" {:type "array" :items query-term-schema}}
+     :required ["rel" "args"]}
+    "body"
+    {:type "array"
+     :description "Relational, predicate, or function literals; exact safety rules are validated before execution."
+     :items {:type "object"}}}
+   :required ["head" "body"]})
+
+(def ^:private aggregate-find-schema
+  {:type "object"
+   :properties
+   {"rel" {:type "string" :description "Derived relation to aggregate."}
+    "group" {:type "array"
+             :items {:type "integer" :minimum 0}
+             :description "Tuple positions that form the group key."}
+    "agg" {:type "array"
+           :minItems 1
+           :items
+           {:type "object"
+            :properties
+            {"op" {:type "string"
+                   :enum ["count" "count-distinct" "sum" "avg" "min" "max"]}
+             "arg" {:type "integer" :minimum 0}}
+            :required ["op"]}}
+    "having" {:type "array"
+              :items
+              {:type "object"
+               :properties
+               {"op" {:type "string" :enum ["eq" "ne" "lt" "le" "gt" "ge"]}
+                "agg" {:type "integer" :minimum 0}
+                "val" {:type "number"}}
+               :required ["op" "agg" "val"]}}}
+   :required ["rel" "group" "agg"]})
+
+(def ^:private ordinary-query-example
+  {"find" "result"
+   "rules"
+   [{"head" {"rel" "result" "args" [{"var" "r"}]}
+     "body" [{"rel" "fact" "args" ["@subject" "title" {"var" "r"}]}]}]})
+
+(def ^:private ask-query-schema
+  {:type "object"
+   :description "Ordinary find is a relation-name string, not a rule-head map. Supply exactly one of rules or strata."
+   :properties
+   {"find" {:oneOf
+            [{:type "string"
+              :description "Ordinary query result relation, matching a rule head rel."}
+             aggregate-find-schema]}
+    "rules" {:type "array" :items query-rule-schema}
+    "strata" {:type "array"
+              :items {:type "array" :items query-rule-schema}}}
+   :required ["find"]
+   :oneOf
+   [{:required ["rules"] :not {:required ["strata"]}}
+    {:required ["strata"] :not {:required ["rules"]}}]
+   :examples [ordinary-query-example]})
+
 (def ^:private edit-transaction-items-schema
   {:oneOf
    [{:type "object"
@@ -147,6 +220,8 @@
 
 (defn- tool-input-schema [spec]
   (cond-> (input-schema (:params spec))
+    (= "ask" (:name spec))
+    (assoc-in [:properties "query"] ask-query-schema)
     (= "edit-transaction" (:name spec))
     (assoc-in [:properties "edits" :items] edit-transaction-items-schema)))
 
@@ -1344,6 +1419,7 @@
 ;; constant. Unknown profile names FAIL CLOSED at startup (fence at the bottom).
 (def ^:private profile (or (System/getenv "FRAM_MCP_PROFILE") "full"))
 (def ^:private restricted? (= profile "graph-edit-v1"))
+(def ^:private graph-edit-mode? (= "1" (System/getenv "FRAM_GRAPH_EDIT")))
 ;; FRAM_MCP_LIBRARY=1: load this file as a LIBRARY (defs only — no profile
 ;; fence, no stdio loop). Test seam for driving the pinned projection
 ;; publication helpers directly and deterministically (mcp_candidate_test).
@@ -1425,9 +1501,18 @@
 ;; alias for `retract` (and `query` for `ask`). The only pre-map here is the `ask` KB
 ;; name onto the engine's `query` op (also the warm-read fast path in dispatch-call).
 (defn handle-call [name args]
-  (let [name (if (= name "ask") "query" name)
-        a (or args {})]
-    (dispatch-call name a)))
+  (let [query? (or (= name "ask") (= name "query"))
+        a (or args {})
+        errs (when query?
+               (if (nil? (:query a))
+                 ["missing required param 'query'"]
+                 (q/validate (:query a))))]
+    ;; q/validate is pure over the request object. Keep it ahead of name
+    ;; normalization and dispatch so malformed queries never touch a coordinator
+    ;; selector, log identity, load-state, or the cold-fold compatibility path.
+    (if (seq errs)
+      {:isError true :text (str/join "\n" errs)}
+      (dispatch-call (if (= name "ask") "query" name) a))))
 
 ;; wall-clock budget on the AI-facing path: validation makes a query STRUCTURALLY
 ;; safe, but evaluation is naive, so a deeply recursive query can be slow. Bound it
@@ -1527,8 +1612,9 @@
       :else (reply-err id -32601 (str "method not found: " method)))))
 
 ;; ============================================================================
-;; PROFILE STARTUP FENCE — a restricted profile binds its WHOLE identity before
-;; serving a single request; anything short of the exact contract fails closed
+;; GRAPH-EDIT STARTUP FENCE — either profile binds its WHOLE read/edit identity
+;; whenever FRAM_GRAPH_EDIT=1. The restricted profile always requires graph-edit
+;; mode. Anything short of one exact instance fails before serving a request
 ;; (exit 2, diagnostic on stderr, stdout stays a pure JSON-RPC channel).
 ;; ============================================================================
 (defn- die! [msg]
@@ -1567,67 +1653,81 @@
                (= :log-fence-required (:code (clojure.edn/read-string line)))))))
     (catch Throwable _ false)))
 
-(defn- enforce-graph-edit-v1! []
+(defn- require-port! [label raw]
+  (let [port (try (Integer/parseInt (str raw)) (catch Exception _ nil))]
+    (when-not (and port (<= 1 port 65535))
+      (die! (str label " must name a TCP port (got " (pr-str raw) ")")))
+    port))
+
+(defn- enforce-graph-edit! []
   ;; graph-edit MODE is the licensed substrate: FRAM_GRAPH_EDIT declares the
   ;; fram-code-on wiring and FRAM_FLIP routes every verb graph-sourced (warm
-  ;; :edit-min) — the text-legacy edit path is NOT licensed under this profile.
-  (when-not (= "1" (System/getenv "FRAM_GRAPH_EDIT"))
+  ;; candidate protocol) — the text-legacy edit path is not licensed in this mode.
+  (when-not graph-edit-mode?
     (die! "graph-edit mode is required: FRAM_GRAPH_EDIT=1 (wire with bin/fram-code-on)"))
   (when-not flip-on?
-    (die! "graph-sourced editing is required: FRAM_FLIP=1 (text-legacy edits are not licensed under graph-edit-v1)"))
-  (let [port (try (Integer/parseInt (str flip-code-port)) (catch Exception _ nil))]
-    (when-not (and port (<= 1 port 65535))
-      (die! (str "FRAM_CODE_PORT must name a TCP port (got " (pr-str flip-code-port) ")")))
+    (die! "graph-sourced editing is required: FRAM_FLIP=1 (text-legacy edits are not licensed in graph-edit mode)"))
+  (let [read-port (require-port! "FRAM_PORT" (System/getenv "FRAM_PORT"))
+        code-port (require-port! "FRAM_CODE_PORT" flip-code-port)]
+    (when-not (= read-port code-port)
+      (die! (str "FRAM_PORT and FRAM_CODE_PORT must be equal in graph-edit mode"
+                 " (got " read-port " and " code-port ")")))
     (let [src (require-canonical! "FRAM_SRC" (System/getenv "FRAM_SRC") true)
-          log (require-canonical! "FRAM_CODE_LOG" (System/getenv "FRAM_CODE_LOG") false)]
+          read-log (require-canonical! "FRAM_LOG" (System/getenv "FRAM_LOG") false)
+          code-log (require-canonical! "FRAM_CODE_LOG" (System/getenv "FRAM_CODE_LOG") false)]
+      (when-not (= read-log code-log)
+        (die! (str "FRAM_LOG and FRAM_CODE_LOG must be the same canonical file in graph-edit mode"
+                   " (got " read-log " and " code-log ")")))
       ;; the code log must live INSIDE the source binding (fram-code-on puts it
       ;; at <src>/.fram/code.log) — a log outside the tree is a foreign corpus.
-      (when-not (str/starts-with? log (str src "/"))
-        (die! (str "FRAM_CODE_LOG " log " lies OUTSIDE the FRAM_SRC source binding " src)))
+      (when-not (str/starts-with? code-log (str src "/"))
+        (die! (str "FRAM_CODE_LOG " code-log " lies OUTSIDE the FRAM_SRC source binding " src)))
       ;; live coordinator, STRICT fence, EXACT canonical log — all three.
-      (when-not (strict-fence-live? port)
-        (die! (str "no strict-fenced coordinator on 127.0.0.1:" port
+      (when-not (strict-fence-live? code-port)
+        (die! (str "no strict-fenced coordinator on 127.0.0.1:" code-port
                    " — unwrapped requests must be rejected with :log-fence-required"
                    " (daemon dead, or permissive/legacy; rerun bin/fram-code-on)")))
-      (let [v (fram.rt/coord-version-for-log port log)]
+      (let [v (fram.rt/coord-version-for-log code-port code-log)]
         (when (neg? v)
           (die! (case v
-                  -1 (str "no coordinator answers fenced requests on 127.0.0.1:" port)
-                  -2 (str "coordinator on 127.0.0.1:" port " serves a DIFFERENT log than " log)
-                  -3 (str "coordinator on 127.0.0.1:" port " lacks the log-fence protocol")
-                  (str "coordinator on 127.0.0.1:" port " is unusable")))))
+                  -1 (str "no coordinator answers fenced requests on 127.0.0.1:" code-port)
+                  -2 (str "coordinator on 127.0.0.1:" code-port " serves a DIFFERENT log than " code-log)
+                  -3 (str "coordinator on 127.0.0.1:" code-port " lacks the log-fence protocol")
+                  (str "coordinator on 127.0.0.1:" code-port " is unusable")))))
       ;; PROTOCOL HANDSHAKE — the restricted profile edits ONLY through the atomic
       ;; candidate gate (:edit-prepare/:edit-commit). A coordinator that cannot
       ;; answer the capability op is a legacy commit-first daemon (or a future
       ;; incompatible protocol) — refuse to serve rather than degrade to unsafe
       ;; commit-before-check editing.
-      (let [pr (try (fram.rt/coord-request-for-log port log {:op :edit-protocol})
+      (let [pr (try (fram.rt/coord-request-for-log code-port code-log {:op :edit-protocol})
                     (catch Throwable _ nil))]
         (when-not (= candidate-protocol-name (:protocol pr))
-          (die! (str "coordinator on 127.0.0.1:" port " does not speak "
+          (die! (str "coordinator on 127.0.0.1:" code-port " does not speak "
                      candidate-protocol-name
                      " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
                      ") — legacy or wrong-protocol coordinator; restart it with current Fram"
                      " (rerun bin/fram-code-on)")))
         (let [state (get-in pr [:durability :state])]
           (when (#{:poisoned :committed-repair-needed} state)
-            (die! (str "coordinator on 127.0.0.1:" port " is "
+            (die! (str "coordinator on 127.0.0.1:" code-port " is "
                        (if (= :poisoned state)
                          "DURABILITY-POISONED"
                          "COMMITTED-REPAIR-NEEDED")
                        " " (pr-str (:durability pr)) " — REFUSING to serve; stop/restart it"
                        " for sole-writer recovery/repair before authoring")))))
-      (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
-                 ", strict-fenced coordinator 127.0.0.1:" port
+      (log! (str "fram-mcp: graph-edit identity bound (profile " profile ") — src " src
+                 ", log " code-log
+                 ", strict-fenced coordinator 127.0.0.1:" code-port
                  " [" candidate-protocol-name "]")))))
 
-;; fail-closed profile admission: full = the exact legacy surface (no new
-;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.
+;; Fail-closed profile admission: ordinary full-profile operation stays
+;; compatible, while full+FRAM_GRAPH_EDIT and graph-edit-v1 both use the fence.
+;; Any other profile never serves.
 ;; FRAM_MCP_LIBRARY=1 skips admission AND the loop — library load, never serving.
 (when-not library-mode?
   (case profile
-    "full"          nil
-    "graph-edit-v1" (enforce-graph-edit-v1!)
+    "full"          (when graph-edit-mode? (enforce-graph-edit!))
+    "graph-edit-v1" (enforce-graph-edit!)
     (die! "unknown profile — known profiles: full, graph-edit-v1")))
 
 (when library-mode?

@@ -100,8 +100,10 @@
        "")
      (->ToolSpec "ask"
        (str "Ad-hoc recursive query for multi-hop questions and vocabulary "
-         "enumeration. Pass a structured Datalog-shaped object: "
-         "{:find <rel> :rules [{:head {:rel R :args [terms]} :body [{:rel r :args [terms] :neg <bool>}]}]}. "
+         "enumeration. Pass a structured JSON query object. For an ordinary query, "
+         "`find` is a relation-name string (not a rule-head map); rules carry "
+         "`head` and `body` objects. Aggregate queries instead use a `find` object "
+         "with `rel`, `group`, and `agg`. "
          "A term is {:var \"x\"} or a constant; base relations are fact(l,p,r) and fact-id(cid,l,p,r) "
          "(the pre-rename names triple/fact are accepted as aliases). "
          "Recursion and stratified negation are supported; the query is validated before it runs.")
