@@ -32,6 +32,48 @@
 (def resolved2 (s/resolve-name ctx "@t1-renamed"))
 (def old-resolves (s/resolve-name ctx "@t1"))
 
+(def open-subj (c/entity! ctx))
+(s/assert! ctx open-subj "open_pred" "open-value" tx)
+(def open-pid (s/resolve-predicate ctx "open_pred"))
+
+(def legacy-ctx (c/new-store))
+(def legacy-tx (c/begin-tx! legacy-ctx "legacy"))
+(def legacy-pid (c/value! legacy-ctx "legacy_pred"))
+(def legacy-subj (c/entity! legacy-ctx))
+(c/fact! legacy-ctx legacy-subj legacy-pid (c/value! legacy-ctx "legacy-value") legacy-tx)
+(def legacy-before (s/lookup-all legacy-ctx legacy-subj "legacy_pred"))
+(s/assert! legacy-ctx legacy-subj "legacy_pred" "new-value" legacy-tx)
+
+(def status-pid (s/def-predicate! ctx "status" "single" "literal" tx))
+(s/alias-predicate! ctx "status" "state" tx)
+(def status-subj (c/entity! ctx))
+(s/assert! ctx status-subj "status" "draft" tx)
+(s/assert! ctx status-subj "state" "ready" tx)
+(def renamed-status-pid (s/rename-predicate! ctx "status" "phase" tx))
+(s/assert! ctx status-subj "phase" "done" tx)
+
+(def collision-left (s/def-predicate! ctx "collision_left" "multi" "literal" tx))
+(def collision-right (s/def-predicate! ctx "collision_right" "multi" "literal" tx))
+(def alias-collision-rejected
+  (try
+    (s/alias-predicate! ctx "collision_left" "collision_right" tx)
+    false
+    (catch clojure.lang.ExceptionInfo _ true)))
+(def canonical-collision-rejected
+  (try
+    (s/rename-predicate! ctx "collision_left" "collision_right" tx)
+    false
+    (catch clojure.lang.ExceptionInfo _ true)))
+
+(def stable-literal-pid (s/def-predicate! ctx "stable_literal" "multi" "literal" tx))
+(s/alias-predicate! ctx "stable_literal" "stable_value" tx)
+(def stable-subj (c/entity! ctx))
+(def stable-literal-cid (s/assert! ctx stable-subj "stable_value" "needle" tx))
+(def stable-ref-pid (s/def-predicate! ctx "stable_ref" "multi" "ref" tx))
+(s/alias-predicate! ctx "stable_ref" "points_to" tx)
+(def stable-target (c/entity! ctx))
+(def stable-ref-cid (s/link! ctx stable-subj "points_to" stable-target tx))
+
 (def checks
   [["assert! then lookup"                  (= "First" title1)]
    ["single-valued update supersedes"      (= "Second" title2)]
@@ -45,7 +87,42 @@
    ["old name no longer resolves"          (nil? old-resolves)]
    ["cardinality read: single"             (= "single" (s/cardinality ctx "title"))]
    ["cardinality read: multi"              (= "multi" (s/cardinality ctx "tag"))]
-   ["unregistered predicate defaults multi" (= "multi" (s/cardinality ctx "nope"))]])
+   ["unregistered predicate defaults multi" (= "multi" (s/cardinality ctx "nope"))]
+   ["unknown write auto-registers canonical predicate"
+    (and (= open-pid (c/value-id ctx "open_pred"))
+         (= "open_pred" (s/predicate-name ctx open-pid))
+         (= [open-pid] (s/find-by ctx "predicate_name" "open_pred")))]
+   ["canonical and colon alias resolve one predicate id"
+    (= open-pid (s/resolve-predicate ctx ":open_pred"))]
+   ["legacy no-registry facts project unchanged"
+    (and (= ["legacy-value"] legacy-before)
+         (= legacy-pid (s/resolve-predicate legacy-ctx "legacy_pred"))
+         (= ["legacy-value" "new-value"]
+            (s/lookup-all legacy-ctx legacy-subj "legacy_pred")))]
+   ["alias and rename preserve predicate identity"
+    (and (= status-pid renamed-status-pid)
+         (= status-pid (s/resolve-predicate ctx "status"))
+         (= status-pid (s/resolve-predicate ctx "state"))
+         (= status-pid (s/resolve-predicate ctx "phase"))
+         (= status-pid (s/resolve-predicate ctx ":phase")))]
+   ["rename records the old canonical spelling as an alias"
+    (some #{status-pid} (s/find-by ctx "predicate_alias" "status"))]
+   ["aliases and rename share one logical value group"
+    (and (= ["done"] (s/lookup-all ctx status-subj "status"))
+         (= ["done"] (s/lookup-all ctx status-subj "state"))
+         (= ["done"] (s/lookup-all ctx status-subj "phase"))
+         (= 1 (count (c/by-lp ctx status-subj status-pid))))]
+   ["alias collision with another canonical rejects loudly"
+    alias-collision-rejected]
+   ["rename collision with another canonical rejects loudly"
+    canonical-collision-rejected]
+   ["assert and find-by resolve aliases through the stable id"
+    (and (= stable-literal-pid (:p (c/fact-of ctx stable-literal-cid)))
+         (= ["needle"] (s/lookup-all ctx stable-subj "stable_literal"))
+         (= [stable-subj] (s/find-by ctx "stable_value" "needle")))]
+   ["link and lookup resolve aliases through the stable id"
+    (and (= stable-ref-pid (:p (c/fact-of ctx stable-ref-cid)))
+         (= [stable-target] (s/lookup-all ctx stable-subj "stable_ref")))]])
 
 (let [fails (remove second checks)]
   (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))

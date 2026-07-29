@@ -37,21 +37,38 @@
 
 (require fram.types :as t)
 
-;; Bootstrap the structural predicates. Raw fact! (fresh store, no priors to
-;; supersede). superseded_by is the supersession trigger; it is multi/ref.
-;; identity lives in the graph (interned values + facts), NOT in store fields:
-;; those don't survive dump/replay, so all reads resolve preds via value-id.
 (defn setup! [ctx :- (Atom t/Store) tx :- Int] :- (Atom t/Store)
-  (let [name-p (c/value! ctx "name") sup-p (c/value! ctx "store-supersedes") card-p (c/value! ctx "cardinality") kind-p (c/value! ctx "value_kind")]
-    (c/set-supersedes-pred! ctx sup-p)
-    (c/fact! ctx name-p card-p (c/value! ctx "single") tx)
-    (c/fact! ctx card-p card-p (c/value! ctx "single") tx)
-    (c/fact! ctx kind-p card-p (c/value! ctx "single") tx)
-    (c/fact! ctx sup-p card-p (c/value! ctx "multi") tx)
-    ctx))
+  (do
+    (declare predicate-ids
+      resolve-predicate
+      predicate-name
+      register-predicate!
+      alias-predicate!
+      rename-predicate!)
+    (let [name-p (c/value! ctx "name") sup-p (c/value! ctx "store-supersedes") card-p (c/value! ctx "cardinality") kind-p (c/value! ctx "value_kind") pname-p (c/value! ctx "predicate_name") palias-p (c/value! ctx "predicate_alias") single-v (c/value! ctx "single") multi-v (c/value! ctx "multi") literal-v (c/value! ctx "literal") ref-v (c/value! ctx "ref")]
+      (c/set-supersedes-pred! ctx sup-p)
+      (register-predicate! ctx "name" tx)
+      (register-predicate! ctx "store-supersedes" tx)
+      (register-predicate! ctx "cardinality" tx)
+      (register-predicate! ctx "value_kind" tx)
+      (register-predicate! ctx "predicate_name" tx)
+      (register-predicate! ctx "predicate_alias" tx)
+      (c/fact! ctx name-p card-p single-v tx)
+      (c/fact! ctx card-p card-p single-v tx)
+      (c/fact! ctx kind-p card-p single-v tx)
+      (c/fact! ctx pname-p card-p single-v tx)
+      (c/fact! ctx palias-p card-p multi-v tx)
+      (c/fact! ctx sup-p card-p multi-v tx)
+      (c/fact! ctx name-p kind-p literal-v tx)
+      (c/fact! ctx card-p kind-p literal-v tx)
+      (c/fact! ctx kind-p kind-p literal-v tx)
+      (c/fact! ctx pname-p kind-p literal-v tx)
+      (c/fact! ctx palias-p kind-p literal-v tx)
+      (c/fact! ctx sup-p kind-p ref-v tx)
+      ctx)))
 
 (defn cardinality [ctx :- (Atom t/Store) pname :- String] :- String
-  (let [pid (c/value-id ctx pname) card-pid (c/value-id ctx "cardinality") cs (if (and (some? pid) (some? card-pid)) (c/by-lp ctx pid card-pid) [])]
+  (let [pid (resolve-predicate ctx pname) card-pid (resolve-predicate ctx "cardinality") cs (if (and (some? pid) (some? card-pid)) (c/by-lp ctx pid card-pid) [])]
     (if (empty? cs) "multi" (c/literal ctx (:r (c/fact-of ctx (first cs)))))))
 
 ;; supersede prior live (subj,pid) facts other than new-cid (single-valued write)
@@ -60,23 +77,20 @@
     (doseq [old (c/by-lp ctx subj pid)]
       (when (not (= old new-cid)) (c/fact! ctx new-cid sup old tx)))))
 
-;; v stays Any: a domain literal — the engine interns arbitrary EDN values.
 (defn assert! [ctx :- (Atom t/Store) subj :- Int pname :- String v :- Any tx :- Int] :- Int
-  (let [pid (c/value! ctx pname) new-cid (c/fact! ctx subj pid (c/value! ctx v) tx)]
+  (let [pid (register-predicate! ctx pname tx) new-cid (c/fact! ctx subj pid (c/value! ctx v) tx)]
     (when (= "single" (cardinality ctx pname))
       (replace! ctx subj pid new-cid tx))
     new-cid))
 
 (defn link! [ctx :- (Atom t/Store) subj :- Int pname :- String target :- Int tx :- Int] :- Int
-  (let [pid (c/value! ctx pname) new-cid (c/fact! ctx subj pid target tx)]
+  (let [pid (register-predicate! ctx pname tx) new-cid (c/fact! ctx subj pid target tx)]
     (when (= "single" (cardinality ctx pname))
       (replace! ctx subj pid new-cid tx))
     new-cid))
 
-;; lookup-all elements are a literal-OR-ref union -> Any (a ref returns the target
-;; id; a value-object returns its interned literal). Justified: the union is open.
 (defn lookup-all [ctx :- (Atom t/Store) subj :- Int pname :- String] :- (Vec Any)
-  (let [pid (c/value-id ctx pname) cids (if (some? pid) (c/by-lp ctx subj pid) [])]
+  (let [pid (resolve-predicate ctx pname) cids (if (some? pid) (c/by-lp ctx subj pid) [])]
     (mapv (fn [cid :- Int] :- Any (let [r (:r (c/fact-of ctx cid))] (if (c/value-object? ctx r) (c/literal ctx r) r)))
       cids)))
 
@@ -85,11 +99,11 @@
   (let [all (lookup-all ctx subj pname)] (if (empty? all) nil (first all))))
 
 (defn find-by [ctx :- (Atom t/Store) pname :- String v :- Any] :- (Vec Int)
-  (let [pid (c/value-id ctx pname) vid (c/value-id ctx v) cids (if (and (some? pid) (some? vid)) (c/by-pr ctx pid vid) [])]
+  (let [pid (resolve-predicate ctx pname) vid (c/value-id ctx v) cids (if (and (some? pid) (some? vid)) (c/by-pr ctx pid vid) [])]
     (mapv (fn [cid :- Int] :- Int (:l (c/fact-of ctx cid))) cids)))
 
 (defn def-predicate! [ctx :- (Atom t/Store) pname :- String card :- String kind :- String tx :- Int] :- Int
-  (let [pid (c/value! ctx pname)]
+  (let [pid (register-predicate! ctx pname tx)]
     (assert! ctx pid "cardinality" card tx)
     (assert! ctx pid "value_kind" kind tx)
     pid))
@@ -102,3 +116,53 @@
 
 (defn resolve-name [ctx :- (Atom t/Store) nm :- String] :- Int?
   (let [ls (find-by ctx "name" nm)] (if (empty? ls) nil (first ls))))
+
+(defn- predicate-ids [ctx :- (Atom t/Store) spelling :- String] :- (Vec Int)
+  (let [vid (c/value-id ctx spelling) name-pid (c/value-id ctx "predicate_name") alias-pid (c/value-id ctx "predicate_alias") named (if (and (some? vid) (some? name-pid)) (c/by-pr ctx name-pid vid) []) aliased (if (and (some? vid) (some? alias-pid)) (c/by-pr ctx alias-pid vid) []) ids (mapv (fn [cid :- Int] :- Int (:l (c/fact-of ctx cid))) (concat named aliased))]
+    (vec (distinct ids))))
+
+(defn resolve-predicate [ctx :- (Atom t/Store) spelling :- String] :- Int?
+  (let [ids (predicate-ids ctx spelling)]
+    (cond
+      (> (count ids) 1)
+      (throw (ex-info (str "predicate spelling collision: " spelling) {:predicate spelling :ids ids}))
+      (= (count ids) 1)
+      (first ids)
+      :else
+      (c/value-id ctx spelling))))
+
+(defn predicate-name [ctx :- (Atom t/Store) pid :- Int] :- String
+  (let [name-pid (c/value-id ctx "predicate_name") cids (if (some? name-pid) (c/by-lp ctx pid name-pid) []) raw :- Any (if (empty? cids) (if (c/value-object? ctx pid) (c/literal ctx pid) pid) (c/literal ctx (:r (c/fact-of ctx (last cids)))))]
+    (if (string? raw) raw (str raw))))
+
+(defn register-predicate! [ctx :- (Atom t/Store) spelling :- String tx :- Int] :- Int
+  (let [resolved (resolve-predicate ctx spelling) pid (if (some? resolved) resolved (c/value! ctx spelling)) name-pid (c/value! ctx "predicate_name") alias-pid (c/value! ctx "predicate_alias") name-cids (c/by-lp ctx pid name-pid)]
+    (when (empty? name-cids)
+      (c/fact! ctx pid name-pid (c/value! ctx spelling) tx))
+    (let [canonical (predicate-name ctx pid) default-alias (str ":" canonical) alias-ids (predicate-ids ctx default-alias)]
+      (when (and (not (empty? alias-ids)) (not (and (= 1 (count alias-ids)) (= pid (first alias-ids)))))
+        (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids})))
+      (when (empty? alias-ids)
+        (c/fact! ctx pid alias-pid (c/value! ctx default-alias) tx)))
+    pid))
+
+(defn alias-predicate! [ctx :- (Atom t/Store) spelling :- String alias :- String tx :- Int] :- Int
+  (let [pid (register-predicate! ctx spelling tx) ids (predicate-ids ctx alias)]
+    (when (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids)))))
+      (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids})))
+    (when (empty? ids)
+      (c/fact! ctx pid (c/value! ctx "predicate_alias") (c/value! ctx alias) tx))
+    pid))
+
+(defn rename-predicate! [ctx :- (Atom t/Store) spelling :- String new-name :- String tx :- Int] :- Int
+  (let [pid (register-predicate! ctx spelling tx) ids (predicate-ids ctx new-name)]
+    (when (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids)))))
+      (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids ids})))
+    (let [old-name (predicate-name ctx pid)]
+      (when (not (= old-name new-name))
+        (let [old-ids (predicate-ids ctx old-name) alias-pid (c/value! ctx "predicate_alias") old-vid (c/value! ctx old-name) aliases (c/by-pr ctx alias-pid old-vid)]
+          (when (and (= 1 (count old-ids)) (= pid (first old-ids)) (empty? aliases))
+            (c/fact! ctx pid alias-pid old-vid tx)))
+        (assert! ctx pid "predicate_name" new-name tx)
+        (alias-predicate! ctx new-name (str ":" new-name) tx)))
+    pid))
