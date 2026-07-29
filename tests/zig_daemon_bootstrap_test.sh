@@ -164,6 +164,48 @@ retracted="$(fenced_request "$port" "$canonical_a" \
   '{:op :retract :te "@mutation" :p "beta" :r "B"}')"
 assert_response "$retracted" '(fn [r] (= 6 (:ok r)))'
 
+lease="$(fenced_request "$port" "$canonical_a" \
+  '{:op :acquire-lease :res "native-write" :holder "holder-a" :ttl-ms 5000}')"
+assert_response "$lease" \
+  '(fn [r] (and (= 7 (:ok r)) (= "holder-a" (:holder r)) (= (:ok r) (:epoch r))))'
+
+lease_epoch="$(FRAM_TEST_RESPONSE="$lease" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
+fenced_write="$(fenced_request "$port" "$canonical_a" \
+  "{:op :assert-with-fence :res \"native-write\" :holder \"holder-a\" :epoch $lease_epoch :te \"@lease-proof\" :p \"marker\" :r \"accepted\"}")"
+assert_response "$fenced_write" '(fn [r] (= 8 (:ok r)))'
+
+before_fence_reject_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
+stale_fenced_write="$(fenced_request "$port" "$canonical_a" \
+  "{:op :assert-with-fence :res \"native-write\" :holder \"holder-a\" :epoch 1 :te \"@lease-proof\" :p \"marker\" :r \"rejected\"}")"
+assert_response "$stale_fenced_write" '(fn [r] (= :fence-lost (:reject r)))'
+[[ "$before_fence_reject_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+
+renewed="$(fenced_request "$port" "$canonical_a" \
+  "{:op :renew-lease :res \"native-write\" :holder \"holder-a\" :epoch $lease_epoch :ttl-ms 5000}")"
+assert_response "$renewed" '(fn [r] (and (= 9 (:ok r)) (= (:ok r) (:epoch r))))'
+renewed_epoch="$(FRAM_TEST_RESPONSE="$renewed" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
+released="$(fenced_request "$port" "$canonical_a" \
+  "{:op :release-lease :res \"native-write\" :holder \"holder-a\" :epoch $renewed_epoch}")"
+assert_response "$released" '(fn [r] (= 10 (:ok r)))'
+
+expiring="$(fenced_request "$port" "$canonical_a" \
+  '{:op :acquire-lease :res "native-expiry" :holder "old-holder" :ttl-ms 20}')"
+assert_response "$expiring" '(fn [r] (= 11 (:ok r)))'
+old_epoch="$(FRAM_TEST_RESPONSE="$expiring" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
+sleep 0.05
+successor="$(fenced_request "$port" "$canonical_a" \
+  '{:op :acquire-lease :res "native-expiry" :holder "new-holder" :ttl-ms 5000}')"
+assert_response "$successor" '(fn [r] (and (= 12 (:ok r)) (= "new-holder" (:holder r))))'
+before_expired_reject_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
+expired_write="$(fenced_request "$port" "$canonical_a" \
+  "{:op :assert-with-fence :res \"native-expiry\" :holder \"old-holder\" :epoch $old_epoch :te \"@expired-proof\" :p \"marker\" :r \"rejected\"}")"
+assert_response "$expired_write" '(fn [r] (= :fence-lost (:reject r)))'
+[[ "$before_expired_reject_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+successor_epoch="$(FRAM_TEST_RESPONSE="$successor" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
+successor_release="$(fenced_request "$port" "$canonical_a" \
+  "{:op :release-lease :res \"native-expiry\" :holder \"new-holder\" :epoch $successor_epoch}")"
+assert_response "$successor_release" '(fn [r] (= 13 (:ok r)))'
+
 duplicate_port="$(free_port)"
 set +e
 FRAM_REQUIRE_LOG_FENCE=1 timeout 5 \
@@ -202,15 +244,15 @@ for _ in $(seq 1 100); do
   sleep 0.025
 done
 [[ -n "$restart_ready" ]]
-assert_response "$restart_ready" '(fn [r] (= 6 (:version r)))'
+assert_response "$restart_ready" '(fn [r] (= 13 (:version r)))'
 [[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
 
 live_noop="$(fenced_request "$restart_port" "$canonical_a" \
   '{:op :assert-existing :te "@mutation" :p "progress" :r "one"}')"
-assert_response "$live_noop" '(fn [r] (= 6 (:ok r)))'
+assert_response "$live_noop" '(fn [r] (= 13 (:ok r)))'
 retracted_noop="$(fenced_request "$restart_port" "$canonical_a" \
   '{:op :retract-existing :te "@mutation" :p "beta" :r "B"}')"
-assert_response "$retracted_noop" '(fn [r] (= 6 (:ok r)))'
+assert_response "$retracted_noop" '(fn [r] (= 13 (:ok r)))'
 [[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
 
 kill -TERM "$daemon_pid"
@@ -222,4 +264,4 @@ daemon_pid=
 [[ $restart_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
 
-printf 'zig-daemon: fenced bootstrap, durable mutation/OCC/batch/retract, replay, writer exclusion, and SIGTERM passed\n'
+printf 'zig-daemon: fenced bootstrap, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'

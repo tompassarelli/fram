@@ -21,8 +21,15 @@ const Operation = enum {
     assert_existing,
     assert_batch,
     assert_at_version,
+    assert_with_fence,
+    assert_at_version_with_fence,
     retract_fact,
     retract_existing,
+    retract_with_fence,
+    acquire_lease,
+    renew_lease,
+    release_lease,
+    fence_ok,
     unknown,
 };
 
@@ -67,6 +74,10 @@ const field_p: u16 = 1 << 4;
 const field_r: u16 = 1 << 5;
 const field_base: u16 = 1 << 6;
 const field_facts: u16 = 1 << 7;
+const field_res: u16 = 1 << 8;
+const field_holder: u16 = 1 << 9;
+const field_epoch: u16 = 1 << 10;
+const field_ttl_ms: u16 = 1 << 11;
 
 const MapFields = struct {
     op: Operation = .unknown,
@@ -77,6 +88,10 @@ const MapFields = struct {
     r: StringField = .missing,
     base: IntField = .missing,
     facts: ?[]const u8 = null,
+    res: StringField = .missing,
+    holder: StringField = .missing,
+    epoch: IntField = .missing,
+    ttl_ms: IntField = .missing,
     present: u16 = 0,
     duplicate: bool = false,
     unknown_field: bool = false,
@@ -86,6 +101,8 @@ const MapFields = struct {
         fields.te.deinit(allocator);
         fields.p.deinit(allocator);
         fields.r.deinit(allocator);
+        fields.res.deinit(allocator);
+        fields.holder.deinit(allocator);
     }
 
     fn noteField(fields: *MapFields, field: u16) void {
@@ -452,6 +469,17 @@ const DaemonState = struct {
         }
         return seen;
     }
+
+    fn currentLease(
+        state: *DaemonState,
+        scratch: Allocator,
+        resource: []const u8,
+    ) !?Lease {
+        const subject = try std.fmt.allocPrint(scratch, "@lease:{s}", .{resource});
+        defer scratch.free(subject);
+        const event = try state.liveGroup(scratch, subject, "lease") orelse return null;
+        return parseLease(event.r);
+    }
 };
 
 const fallback_single_predicates = [_][]const u8{
@@ -464,7 +492,13 @@ const fallback_single_predicates = [_][]const u8{
 };
 
 const meta_single_predicates = [_][]const u8{
-    "cardinality", "value_kind", "name", "acyclic",
+    "cardinality", "value_kind", "name", "acyclic", "lease",
+};
+
+const Lease = struct {
+    holder: []const u8,
+    exp: i64,
+    epoch: i64,
 };
 
 const WriterAuthority = struct {
@@ -902,6 +936,7 @@ fn dispatchOperation(
             .assert_fact,
             false,
             false,
+            false,
         ),
         .assert_existing => mutateOne(
             allocator,
@@ -911,6 +946,7 @@ fn dispatchOperation(
             request,
             .assert_fact,
             true,
+            false,
             false,
         ),
         .assert_batch => assertBatch(
@@ -928,6 +964,29 @@ fn dispatchOperation(
             request,
             .assert_fact,
             false,
+            false,
+            true,
+        ),
+        .assert_with_fence => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+            false,
+            true,
+            false,
+        ),
+        .assert_at_version_with_fence => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+            false,
+            true,
             true,
         ),
         .retract_fact => mutateOne(
@@ -937,6 +996,7 @@ fn dispatchOperation(
             state,
             request,
             .retract_fact,
+            false,
             false,
             false,
         ),
@@ -949,7 +1009,41 @@ fn dispatchOperation(
             .retract_fact,
             true,
             false,
+            false,
         ),
+        .retract_with_fence => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .retract_fact,
+            false,
+            true,
+            false,
+        ),
+        .acquire_lease => acquireLease(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+        ),
+        .renew_lease => renewLease(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+        ),
+        .release_lease => releaseLease(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+        ),
+        .fence_ok => fenceOk(allocator, io, state, request),
         else => if (try requestFieldError(
             allocator,
             request,
@@ -1014,6 +1108,10 @@ fn requestFieldError(
         .{ .mask = field_r, .message = "r is required" },
         .{ .mask = field_base, .message = "base is required" },
         .{ .mask = field_facts, .message = "facts is required" },
+        .{ .mask = field_res, .message = "res is required" },
+        .{ .mask = field_holder, .message = "holder is required" },
+        .{ .mask = field_epoch, .message = "epoch is required" },
+        .{ .mask = field_ttl_ms, .message = "ttl-ms is required" },
     };
     for (candidates) |candidate| {
         if ((missing & candidate.mask) != 0) {
@@ -1040,6 +1138,151 @@ fn renderInvalidRequest(
     return output.toOwnedSlice();
 }
 
+fn nowMs(io: Io) i64 {
+    return @intCast(@divFloor(Io.Clock.real.now(io).nanoseconds, std.time.ns_per_ms));
+}
+
+fn validLeaseText(value: []const u8) bool {
+    return std.mem.trim(u8, value, " \t\r\n").len != 0;
+}
+
+fn parseLease(value: []const u8) ?Lease {
+    var parts = std.mem.splitScalar(u8, value, '|');
+    const holder = parts.next() orelse return null;
+    const exp_text = parts.next() orelse return null;
+    const epoch_text = parts.next() orelse return null;
+    if (parts.next() != null) return null;
+    const exp = std.fmt.parseInt(i64, exp_text, 10) catch return null;
+    const epoch = std.fmt.parseInt(i64, epoch_text, 10) catch return null;
+    return .{ .holder = holder, .exp = exp, .epoch = epoch };
+}
+
+fn leaseFields(request: *const MapFields) ?struct { res: []const u8, holder: []const u8 } {
+    const res = switch (request.res) { .value => |value| value, else => return null };
+    const holder = switch (request.holder) { .value => |value| value, else => return null };
+    if (!validLeaseText(res) or !validLeaseText(holder) or std.mem.indexOfScalar(u8, holder, '|') != null)
+        return null;
+    return .{ .res = res, .holder = holder };
+}
+
+fn validTtl(ttl: i64, now: i64) bool {
+    return ttl > 0 and now >= 0 and ttl <= std.math.maxInt(i64) - now;
+}
+
+fn requestHasCurrentFence(
+    allocator: Allocator,
+    io: Io,
+    state: *DaemonState,
+    request: *const MapFields,
+) !bool {
+    const fields = leaseFields(request) orelse return false;
+    const epoch = switch (request.epoch) { .value => |value| value, else => return false };
+    if (epoch <= 0) return false;
+    const lease = try state.currentLease(allocator, fields.res) orelse return false;
+    return lease.exp > nowMs(io) and lease.epoch == epoch and
+        std.mem.eql(u8, lease.holder, fields.holder);
+}
+
+fn appendLeaseEvent(
+    allocator: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    operation: EventOperation,
+    resource: []const u8,
+    value: []const u8,
+) !i64 {
+    if (state.version == std.math.maxInt(i64)) return error.VersionExhausted;
+    const tx = state.version + 1;
+    const subject = try std.fmt.allocPrint(allocator, "@lease:{s}", .{resource});
+    defer allocator.free(subject);
+    const timestamp = try timestampUtc(allocator, io);
+    defer allocator.free(timestamp);
+    const payload = try flat_log.encodeLine(allocator, .{
+        .tx = tx, .op = operation.wireName(), .l = subject, .p = "lease", .r = value,
+    }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
+    defer allocator.free(payload);
+    const stored = try state.copyEvent(tx, operation, subject, "lease", value);
+    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload);
+    try state.appendCommitted(stored);
+    return tx;
+}
+
+fn renderLease(allocator: Allocator, epoch: i64, holder: []const u8, exp: i64) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try output.writer.print("{{:ok {d}, :holder ", .{epoch});
+    try writeEdnString(&output.writer, holder);
+    try output.writer.print(", :exp {d}, :epoch {d}}}", .{ exp, epoch });
+    return output.toOwnedSlice();
+}
+
+fn renderLeaseReject(allocator: Allocator, reject: []const u8, version: i64) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{{:reject :{s}, :version {d}}}", .{ reject, version });
+}
+
+fn renderHeld(allocator: Allocator, lease: Lease, version: i64) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeAll(&output.writer, "{:reject :held, :holder ");
+    try writeEdnString(&output.writer, lease.holder);
+    try output.writer.print(" :exp {d}, :version {d}}}", .{ lease.exp, version });
+    return output.toOwnedSlice();
+}
+
+fn renderFenceLost(allocator: Allocator, version: i64) ![]u8 {
+    return renderLeaseReject(allocator, "fence-lost", version);
+}
+
+fn acquireLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
+    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_ttl_ms, field_res | field_holder | field_ttl_ms)) |response| return response;
+    const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
+    const ttl = switch (request.ttl_ms) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
+    const now = nowMs(io);
+    if (!validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
+    if (try state.currentLease(allocator, fields.res)) |lease| {
+        if (lease.exp > now and !std.mem.eql(u8, lease.holder, fields.holder)) return renderHeld(allocator, lease, state.version);
+    }
+    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ fields.holder, now + ttl, state.version + 1 });
+    defer allocator.free(value);
+    const epoch = try appendLeaseEvent(allocator, io, canonical_log, state, .assert_fact, fields.res, value);
+    const lease = try state.currentLease(allocator, fields.res) orelse unreachable;
+    return renderLease(allocator, epoch, lease.holder, lease.exp);
+}
+
+fn renewLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
+    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch | field_ttl_ms, field_res | field_holder | field_epoch | field_ttl_ms)) |response| return response;
+    const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
+    const epoch = switch (request.epoch) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
+    const ttl = switch (request.ttl_ms) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
+    const now = nowMs(io);
+    if (epoch <= 0 or !validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
+    const current = try state.currentLease(allocator, fields.res) orelse return renderFenceLost(allocator, state.version);
+    if (current.exp <= now or current.epoch != epoch or !std.mem.eql(u8, current.holder, fields.holder)) return renderFenceLost(allocator, state.version);
+    const next_epoch = state.version + 1;
+    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ fields.holder, now + ttl, next_epoch });
+    defer allocator.free(value);
+    _ = try appendLeaseEvent(allocator, io, canonical_log, state, .assert_fact, fields.res, value);
+    return renderLease(allocator, next_epoch, fields.holder, now + ttl);
+}
+
+fn releaseLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
+    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder)) |response| return response;
+    const fields = leaseFields(request) orelse return renderOk(allocator, state.version);
+    const current = try state.currentLease(allocator, fields.res) orelse return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
+    const epoch_matches = switch (request.epoch) { .missing => true, .value => |value| value == current.epoch, else => false };
+    if (!std.mem.eql(u8, current.holder, fields.holder) or !epoch_matches) return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
+    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ current.holder, current.exp, current.epoch });
+    defer allocator.free(value);
+    const version = try appendLeaseEvent(allocator, io, canonical_log, state, .retract_fact, fields.res, value);
+    return renderOk(allocator, version);
+}
+
+fn fenceOk(allocator: Allocator, io: Io, state: *DaemonState, request: *MapFields) ![]u8 {
+    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder | field_epoch)) |response| return response;
+    return std.fmt.allocPrint(allocator, "{{:fence-ok {}}}", .{try requestHasCurrentFence(allocator, io, state, request)});
+}
+
 fn mutateOne(
     allocator: Allocator,
     io: Io,
@@ -1048,14 +1291,21 @@ fn mutateOne(
     request: *MapFields,
     operation: EventOperation,
     existing_only: bool,
+    fenced: bool,
     global_version: bool,
 ) ![]u8 {
     if (try requestFieldError(
         allocator,
         request,
-        field_op | field_te | field_p | field_r | field_base,
+        field_op | field_te | field_p | field_r | field_base |
+            field_res | field_holder | field_epoch,
         field_te | field_p | field_r,
     )) |response| return response;
+
+    if (fenced) {
+        if (!try requestHasCurrentFence(allocator, io, state, request))
+            return renderFenceLost(allocator, state.version);
+    }
 
     const te = switch (request.te) {
         .value => |value| value,
@@ -1677,6 +1927,20 @@ fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
         } else if (std.mem.eql(u8, name, "facts")) {
             fields.noteField(field_facts);
             fields.facts = value;
+        } else if (std.mem.eql(u8, name, "res")) {
+            fields.noteField(field_res);
+            fields.res.deinit(allocator);
+            fields.res = try parseStringField(allocator, value);
+        } else if (std.mem.eql(u8, name, "holder")) {
+            fields.noteField(field_holder);
+            fields.holder.deinit(allocator);
+            fields.holder = try parseStringField(allocator, value);
+        } else if (std.mem.eql(u8, name, "epoch")) {
+            fields.noteField(field_epoch);
+            fields.epoch = parseIntField(value);
+        } else if (std.mem.eql(u8, name, "ttl-ms")) {
+            fields.noteField(field_ttl_ms);
+            fields.ttl_ms = parseIntField(value);
         } else {
             fields.unknown_field = true;
         }
@@ -1692,9 +1956,19 @@ fn parseOperation(raw: []const u8) Operation {
     if (std.mem.eql(u8, raw, ":assert-batch")) return .assert_batch;
     if (std.mem.eql(u8, raw, ":assert-at-version"))
         return .assert_at_version;
+    if (std.mem.eql(u8, raw, ":assert-with-fence"))
+        return .assert_with_fence;
+    if (std.mem.eql(u8, raw, ":assert-at-version-with-fence"))
+        return .assert_at_version_with_fence;
     if (std.mem.eql(u8, raw, ":retract")) return .retract_fact;
     if (std.mem.eql(u8, raw, ":retract-existing"))
         return .retract_existing;
+    if (std.mem.eql(u8, raw, ":retract-with-fence"))
+        return .retract_with_fence;
+    if (std.mem.eql(u8, raw, ":acquire-lease")) return .acquire_lease;
+    if (std.mem.eql(u8, raw, ":renew-lease")) return .renew_lease;
+    if (std.mem.eql(u8, raw, ":release-lease")) return .release_lease;
+    if (std.mem.eql(u8, raw, ":fence-ok")) return .fence_ok;
     return .unknown;
 }
 
