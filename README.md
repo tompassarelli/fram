@@ -194,8 +194,14 @@ single machine — **not** distributed consensus.
 
 ```sh
 bin/fram-up                                    # start the warm, multi-agent-safe daemon
+bin/fram-promote                               # clean HEAD -> restart this checkout's daemon only
 bin/fram tell 2026-01-01-090700 committed 2026-06-21   # writes route through the coordinator
 ```
+
+`bin/fram-promote` is the checkout-first development path: it refuses tracked or
+untracked dirt, captures the exact local commit, and restarts only Fram through that
+checkout's `bin/fram-up --restart`. It never builds or switches a NixOS generation.
+The Nix package remains the explicit release/system baseline.
 
 ## AI-native: tools, not a query DSL
 
@@ -512,6 +518,7 @@ Every suite lives in `tests/` and runs on babashka against the committed `out/`:
 bb -cp out tests/roundtrip_test.clj   # facts <-> files round-trip is lossless
 bb -cp out tests/coord_test.clj   # adversarial concurrency + durability
 bb -cp out tests/query_test.clj       # structured Datalog query + boundary rejections
+bb -cp out tests/fram_promotion_test.clj  # clean-commit, checkout-only daemon promotion
 ```
 
 `ls tests/*_test.clj` is the full list; CI runs them all
