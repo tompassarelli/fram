@@ -3,12 +3,11 @@
 (require '[babashka.process :as proc]
          '[clojure.edn :as edn]
          '[clojure.java.io :as io])
+(load-file "tests/log_split_readiness_lib.clj")
 
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
 (def checks (atom []))
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
-(defn free-port []
-  (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s)))
 (defn eventually [f]
   (loop [remaining 2400]
     (cond
@@ -36,6 +35,22 @@
 (defn append-line! [log row]
   (with-open [writer (java.io.FileWriter. (io/file log) true)]
     (.write writer (str (pr-str row) "\n"))))
+(defn append-reload-fixture! [log head rows]
+  (with-open [writer (java.io.FileWriter. (io/file log) true)]
+    (dotimes [i rows]
+      (.write writer
+              (str (pr-str {:tx (+ head i 1) :op "assert"
+                            :l (str "@reload-fixture-" i)
+                            :p "group" :r "reload"
+                            :ts "t" :by "external"})
+                   "\n")))
+    (let [tx (+ head rows 1)]
+      (.write writer
+              (str (pr-str {:tx tx :op "assert" :l "@external-race"
+                            :p "marker" :r "external"
+                            :ts "t" :by "external"})
+                   "\n"))
+      tx)))
 (defn subject-query [subject]
   {:find "subject-fact"
    :rules [{:head {:rel "subject-fact" :args [{:var "p"} {:var "r"}]}
@@ -78,7 +93,12 @@
                            (str port) (.getPath log))]
   (try
     (check! "141k daemon starts"
-            (eventually #(integer? (:version (client port {:op :status})))))
+            (= :ready
+               (await-ready daemon port
+                            #(try
+                               (integer? (:version (client % {:op :status})))
+                               (catch Throwable _ false))
+                            :deadline-ms 60000 :poll-ms 50)))
 
     ;; A wire schema mutation invalidates the whole warm query cache.  The cold
     ;; projection/index build must be observable as active but own no writer lock.
@@ -170,10 +190,11 @@
     ;; Both external and own edits must survive exactly once.  One physical target
     ;; produces one install generation; the losing reloader converges/supersedes.
     (let [head (:version (client port {:op :version}))
-          ext-tx (+ head 1000)
+          ;; One external row now reloads faster than the 25ms observation poll.
+          ;; A real tail keeps both lock-free builders observable without sleeps.
+          reload-fixture-rows 25000
+          _ (append-reload-fixture! log head reload-fixture-rows)
           generation-before (:generation (reload-state port))]
-      (append-line! log {:tx ext-tx :op "assert" :l "@external-race"
-                         :p "marker" :r "external" :ts "t" :by "external"})
       (let [reload-a (future (client port {:op :query
                                            :query (subject-query "@external-race")}))]
         (check! "first external reload build becomes active"
