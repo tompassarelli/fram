@@ -73,7 +73,9 @@
 
 (def VALUE-DEFS (into PARAM-FORMS DEF-FORMS))
 
-(def WRITABLE-DEFS (into (into VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
+(def TOPLEVEL-VALUE-DEFS (into DEF-FORMS #{"defn" "defn-" "defmacro"}))
+
+(def WRITABLE-DEFS (into (into TOPLEVEL-VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
 
 (defn ^Boolean writable-def-head? [^String h]
   (contains? WRITABLE-DEFS h))
@@ -109,3 +111,53 @@
   (let [bad (vec (filter (fn [x] (and (seq? x) (not (extend-method-form? x)))) (vec (rest form))))]
   (if (seq bad) (do
   {:message (str "extend-protocol targets must be class SYMBOLS resolvable at " "macroexpansion — a runtime expression like (class (byte-array 0)) " "silently mis-partitions") :got (pr-str (first bad)) :suggestion (str "for runtime classes (e.g. Java arrays) write a separate top-level " "(extend (Class/forName \"[B\") ProtocolName {:method-name (fn [args] ...)}) " "form instead") :nearest (mapv pr-str bad)}))))))
+
+(defn type-name-index [head modifier]
+  (if (and (= "defunion" (str head)) (= ":throwable" (str modifier))) 2 1))
+
+(defn named-form-name [datum]
+  (if (seq? datum) (do
+  (let [items (vec datum)
+   head (str (first items))
+   raw (nth items (type-name-index head (second items)) nil)
+   leaf (if (seq? raw) (first raw) raw)]
+  (if (and (named-def-head? head) (symbol? leaf)) (do
+  (str leaf)))))))
+
+(defn datum->canon [d]
+  (cond
+  (nil? d) [:leaf "symbol" "nil"]
+  (symbol? d) [:leaf "symbol" (str d)]
+  (keyword? d) [:leaf "symbol" (str d)]
+  (boolean? d) [:leaf "symbol" (if d "true" "false")]
+  (string? d) [:leaf "string" d]
+  (char? d) [:leaf "char" (str d)]
+  (number? d) [:leaf "number" (str d)]
+  (vector? d) (into [:list [:leaf "symbol" "#%brackets"]] (mapv datum->canon d))
+  (map? d) (into [:list [:leaf "symbol" "#%map"]] (mapv datum->canon (apply concat (seq d))))
+  (instance? java.util.regex.Pattern d) [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern d)]]
+  (set? d) (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
+  (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
+  :else [:leaf "other" (pr-str d)]))
+
+(defn writable-form-key [datum]
+  (if (seq? datum) (do
+  (let [items (vec datum)
+   head (str (first items))
+   named (named-form-name datum)]
+  (cond
+  (some? named) [:named named]
+  (and (= "defmethod" head) (>= (count items) 3)) [:defmethod (str (second items)) (datum->canon (nth items 2))]
+  (and (contains? EXTEND-FORMS head) (>= (count items) 2)) [:extension head (datum->canon (second items))]
+  :else nil)))))
+
+(defn writable-form-display-name [datum]
+  (if (seq? datum) (do
+  (let [items (vec datum)
+   head (str (first items))
+   named (named-form-name datum)]
+  (cond
+  (some? named) named
+  (and (= "defmethod" head) (>= (count items) 3)) (str (second items) ":" (pr-str (nth items 2)))
+  (and (contains? EXTEND-FORMS head) (>= (count items) 2)) (str head " " (pr-str (second items)))
+  :else nil)))))
