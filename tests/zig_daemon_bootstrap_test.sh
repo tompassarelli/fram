@@ -64,6 +64,14 @@ assert_response() {
           (System/exit 1)))'
 }
 
+fenced_request() {
+  local port=$1
+  local expected_log=$2
+  local nested=$3
+  request "$port" \
+    "{:op :for-log :expected-log \"$expected_log\" :request $nested}"
+}
+
 log_a="$test_dir/a.log"
 log_b="$test_dir/b.log"
 printf '%s\n' \
@@ -73,7 +81,7 @@ printf '%s\n' \
 : >"$log_b"
 canonical_a="$(realpath "$log_a")"
 canonical_b="$(realpath "$log_b")"
-before_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
+initial_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 
 port="$(free_port)"
 FRAM_REQUIRE_LOG_FENCE=1 \
@@ -83,8 +91,7 @@ daemon_pid=$!
 
 ready=
 for _ in $(seq 1 100); do
-  if response="$(request "$port" \
-      "{:op :for-log :expected-log \"$canonical_a\" :request {:op :version}}" \
+  if response="$(fenced_request "$port" "$canonical_a" "{:op :version}" \
       2>/dev/null)"; then
     ready=$response
     break
@@ -94,15 +101,13 @@ done
 [[ -n "$ready" ]]
 assert_response "$ready" '(fn [r] (= 3 (:version r)))'
 
-status="$(request "$port" \
-  "{:op :for-log :expected-log \"$canonical_a\" :request {:op :status}}")"
+status="$(fenced_request "$port" "$canonical_a" "{:op :status}")"
 assert_response "$status" \
   "(fn [r] (and (= 3 (:version r))
                 (= \"$canonical_a\" (:log r))
                 (true? (get-in r [:writer-authority :write-authorized]))))"
 
-mismatch="$(request "$port" \
-  "{:op :for-log :expected-log \"$canonical_b\" :request {:op :version}}")"
+mismatch="$(fenced_request "$port" "$canonical_b" "{:op :version}")"
 assert_response "$mismatch" \
   "(fn [r] (and (= :log-mismatch (:code r))
                 (= \"$canonical_b\" (:expected-log r))
@@ -112,6 +117,52 @@ unwrapped="$(request "$port" '{:op :version}')"
 assert_response "$unwrapped" \
   "(fn [r] (and (= :log-fence-required (:code r))
                 (= \"$canonical_a\" (:served-log r))))"
+
+single="$(fenced_request "$port" "$canonical_a" \
+  '{:op :assert :te "@mutation" :p "progress" :r "one"}')"
+assert_response "$single" '(fn [r] (= 4 (:ok r)))'
+
+batch="$(fenced_request "$port" "$canonical_a" \
+  '{:op :assert-batch :te "@mutation" :facts [{:p "alpha" :r "A"} {:p "beta" :r "B"}]}')"
+assert_response "$batch" \
+  '(fn [r] (and (= 5 (:ok r))
+                (= ["alpha" "beta"] (:written r))
+                (empty? (:idempotent r))
+                (true? (:batch r))))'
+
+FRAM_TEST_LOG="$log_a" FRAM_TEST_TX=5 bb -e '
+  (require (quote [clojure.edn :as edn])
+           (quote [clojure.string :as str]))
+  (let [tx (parse-long (System/getenv "FRAM_TEST_TX"))
+        records (->> (str/split-lines (slurp (System/getenv "FRAM_TEST_LOG")))
+                     (map edn/read-string)
+                     (filter #(and (= tx (:tx %))
+                                   (= "@mutation" (:l %))
+                                   (#{"alpha" "beta"} (:p %))))
+                     vec)]
+    (when-not (and (= 2 (count records))
+                   (= #{tx} (set (map :tx records))))
+      (binding [*out* *err*]
+        (println "batch was not one fsync-visible transaction:" (pr-str records)))
+      (System/exit 1)))'
+
+before_stale_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
+before_stale_size="$(stat -c %s "$log_a")"
+stale="$(fenced_request "$port" "$canonical_a" \
+  '{:op :assert-at-version :te "@stale" :p "marker" :r "must-not-land" :base 4}')"
+assert_response "$stale" \
+  '(fn [r] (and (= :conflict (:reject r)) (= 5 (:version r))))'
+[[ "$before_stale_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+[[ "$before_stale_size" == "$(stat -c %s "$log_a")" ]]
+
+invalid="$(fenced_request "$port" "$canonical_a" \
+  '{:op :assert :te "@mutation" :p "progress" :r "bad" :bogus true}')"
+assert_response "$invalid" '(fn [r] (= :invalid-request (:code r)))'
+[[ "$before_stale_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+
+retracted="$(fenced_request "$port" "$canonical_a" \
+  '{:op :retract :te "@mutation" :p "beta" :r "B"}')"
+assert_response "$retracted" '(fn [r] (= 6 (:ok r)))'
 
 duplicate_port="$(free_port)"
 set +e
@@ -123,6 +174,9 @@ set -e
 [[ $duplicate_status -ne 0 && $duplicate_status -ne 124 ]]
 grep -q "holds writer authority" "$test_dir/duplicate.out"
 
+committed_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
+[[ "$committed_hash" != "$initial_hash" ]]
+
 kill -TERM "$daemon_pid"
 set +e
 wait "$daemon_pid"
@@ -132,7 +186,40 @@ daemon_pid=
 [[ $shutdown_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/daemon.out"
 
-after_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
-[[ "$before_hash" == "$after_hash" ]]
+restart_port="$(free_port)"
+FRAM_REQUIRE_LOG_FENCE=1 \
+  "$test_dir/fram-daemon-zig" serve-flat "$restart_port" "$log_a" \
+  >"$test_dir/restart.out" 2>&1 &
+daemon_pid=$!
 
-printf 'zig-daemon-bootstrap: fenced version/status, mismatch, strict fence, writer exclusion, and SIGTERM passed\n'
+restart_ready=
+for _ in $(seq 1 100); do
+  if response="$(fenced_request \
+      "$restart_port" "$canonical_a" "{:op :version}" 2>/dev/null)"; then
+    restart_ready=$response
+    break
+  fi
+  sleep 0.025
+done
+[[ -n "$restart_ready" ]]
+assert_response "$restart_ready" '(fn [r] (= 6 (:version r)))'
+[[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+
+live_noop="$(fenced_request "$restart_port" "$canonical_a" \
+  '{:op :assert-existing :te "@mutation" :p "progress" :r "one"}')"
+assert_response "$live_noop" '(fn [r] (= 6 (:ok r)))'
+retracted_noop="$(fenced_request "$restart_port" "$canonical_a" \
+  '{:op :retract-existing :te "@mutation" :p "beta" :r "B"}')"
+assert_response "$retracted_noop" '(fn [r] (= 6 (:ok r)))'
+[[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+
+kill -TERM "$daemon_pid"
+set +e
+wait "$daemon_pid"
+restart_status=$?
+set -e
+daemon_pid=
+[[ $restart_status -eq 0 ]]
+grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
+
+printf 'zig-daemon: fenced bootstrap, durable mutation/OCC/batch/retract, replay, writer exclusion, and SIGTERM passed\n'

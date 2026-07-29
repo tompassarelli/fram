@@ -17,7 +17,25 @@ const Operation = enum {
     for_log,
     version,
     status,
+    assert_fact,
+    assert_existing,
+    assert_batch,
+    assert_at_version,
+    retract_fact,
+    retract_existing,
     unknown,
+};
+
+const EventOperation = enum {
+    assert_fact,
+    retract_fact,
+
+    fn wireName(operation: EventOperation) []const u8 {
+        return switch (operation) {
+            .assert_fact => "assert",
+            .retract_fact => "retract",
+        };
+    }
 };
 
 const StringField = union(enum) {
@@ -34,13 +52,45 @@ const StringField = union(enum) {
     }
 };
 
+const IntField = union(enum) {
+    missing,
+    nil,
+    invalid,
+    value: i64,
+};
+
+const field_op: u16 = 1 << 0;
+const field_expected_log: u16 = 1 << 1;
+const field_request: u16 = 1 << 2;
+const field_te: u16 = 1 << 3;
+const field_p: u16 = 1 << 4;
+const field_r: u16 = 1 << 5;
+const field_base: u16 = 1 << 6;
+const field_facts: u16 = 1 << 7;
+
 const MapFields = struct {
     op: Operation = .unknown,
     expected_log: StringField = .missing,
     request: ?[]const u8 = null,
+    te: StringField = .missing,
+    p: StringField = .missing,
+    r: StringField = .missing,
+    base: IntField = .missing,
+    facts: ?[]const u8 = null,
+    present: u16 = 0,
+    duplicate: bool = false,
+    unknown_field: bool = false,
 
     fn deinit(fields: *MapFields, allocator: Allocator) void {
         fields.expected_log.deinit(allocator);
+        fields.te.deinit(allocator);
+        fields.p.deinit(allocator);
+        fields.r.deinit(allocator);
+    }
+
+    fn noteField(fields: *MapFields, field: u16) void {
+        if ((fields.present & field) != 0) fields.duplicate = true;
+        fields.present |= field;
     }
 };
 
@@ -139,8 +189,282 @@ const Parser = struct {
     }
 };
 
+const StoredEvent = struct {
+    tx: i64,
+    operation: EventOperation,
+    l: []const u8,
+    p: []const u8,
+    r: []const u8,
+};
+
+const LatestDeclaration = struct {
+    tx: i64,
+    operation: EventOperation,
+    single: bool,
+};
+
 const DaemonState = struct {
+    allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
+    events: std.ArrayList(StoredEvent),
+    cardinality: std.StringHashMap(bool),
+    configured_single: std.StringHashMap(void),
+    latest: std.StringHashMap(usize),
+    subjects: std.StringHashMap(void),
     version: i64,
+
+    fn init(allocator: Allocator, environ: *const std.process.Environ.Map) !DaemonState {
+        var state: DaemonState = .{
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .events = .empty,
+            .cardinality = std.StringHashMap(bool).init(allocator),
+            .configured_single = std.StringHashMap(void).init(allocator),
+            .latest = std.StringHashMap(usize).init(allocator),
+            .subjects = std.StringHashMap(void).init(allocator),
+            .version = 0,
+        };
+        errdefer state.deinit();
+        if (environ.get("FRAM_SINGLE_VALUED")) |configured| {
+            if (std.mem.trim(u8, configured, " \t\r\n").len != 0) {
+                var tokens = std.mem.tokenizeAny(u8, configured, " \t\r\n");
+                while (tokens.next()) |predicate| {
+                    try state.configured_single.put(predicate, {});
+                }
+                return state;
+            }
+        }
+        for (fallback_single_predicates) |predicate| {
+            try state.configured_single.put(predicate, {});
+        }
+        return state;
+    }
+
+    fn deinit(state: *DaemonState) void {
+        state.subjects.deinit();
+        state.latest.deinit();
+        state.configured_single.deinit();
+        state.cardinality.deinit();
+        state.events.deinit(state.allocator);
+        state.arena.deinit();
+        state.* = undefined;
+    }
+
+    fn copyEvent(
+        state: *DaemonState,
+        tx: i64,
+        operation: EventOperation,
+        l: []const u8,
+        p: []const u8,
+        r: []const u8,
+    ) !StoredEvent {
+        const arena = state.arena.allocator();
+        return .{
+            .tx = tx,
+            .operation = operation,
+            .l = try arena.dupe(u8, l),
+            .p = try arena.dupe(u8, p),
+            .r = try arena.dupe(u8, r),
+        };
+    }
+
+    fn rebuildDerived(state: *DaemonState) !void {
+        state.cardinality.clearRetainingCapacity();
+        state.latest.clearRetainingCapacity();
+        state.subjects.clearRetainingCapacity();
+
+        for (meta_single_predicates) |predicate| {
+            try state.cardinality.put(predicate, true);
+        }
+
+        var declarations = std.StringHashMap(LatestDeclaration).init(
+            state.allocator,
+        );
+        defer declarations.deinit();
+        for (state.events.items) |event| {
+            if (!std.mem.eql(u8, event.p, "cardinality")) continue;
+            const predicate = stripAt(event.l);
+            const declaration: LatestDeclaration = .{
+                .tx = event.tx,
+                .operation = event.operation,
+                .single = std.mem.eql(u8, event.r, "single"),
+            };
+            if (declarations.get(predicate)) |previous| {
+                if (previous.tx > event.tx) continue;
+            }
+            try declarations.put(predicate, declaration);
+        }
+        var declaration_iterator = declarations.iterator();
+        while (declaration_iterator.next()) |entry| {
+            const declaration = entry.value_ptr.*;
+            if (declaration.operation == .assert_fact) {
+                try state.cardinality.put(
+                    entry.key_ptr.*,
+                    declaration.single,
+                );
+            } else {
+                _ = state.cardinality.remove(entry.key_ptr.*);
+                if (isMetaSingle(entry.key_ptr.*)) {
+                    try state.cardinality.put(entry.key_ptr.*, true);
+                }
+            }
+        }
+
+        for (state.events.items, 0..) |event, index| {
+            try state.applyEvent(index, event);
+        }
+    }
+
+    fn applyEvent(
+        state: *DaemonState,
+        index: usize,
+        event: StoredEvent,
+    ) !void {
+        try state.subjects.put(event.l, {});
+        if (!std.mem.eql(u8, event.p, "v") and refShape(event.r)) {
+            try state.subjects.put(event.r, {});
+        }
+        const key = try state.eventKey(event);
+        if (state.latest.get(key)) |previous_index| {
+            if (state.events.items[previous_index].tx > event.tx) return;
+        }
+        try state.latest.put(key, index);
+    }
+
+    fn appendCommitted(
+        state: *DaemonState,
+        event: StoredEvent,
+    ) !void {
+        try state.events.append(state.allocator, event);
+        state.version = @max(state.version, event.tx);
+        if (std.mem.eql(u8, event.p, "cardinality")) {
+            try state.rebuildDerived();
+        } else {
+            try state.applyEvent(state.events.items.len - 1, event);
+        }
+    }
+
+    fn appendCommittedBatch(
+        state: *DaemonState,
+        events: []const StoredEvent,
+    ) !void {
+        try state.events.ensureUnusedCapacity(state.allocator, events.len);
+        var changes_cardinality = false;
+        const start = state.events.items.len;
+        for (events) |event| {
+            state.events.appendAssumeCapacity(event);
+            state.version = @max(state.version, event.tx);
+            changes_cardinality = changes_cardinality or
+                std.mem.eql(u8, event.p, "cardinality");
+        }
+        if (changes_cardinality) {
+            try state.rebuildDerived();
+            return;
+        }
+        for (events, start..) |event, index| {
+            try state.applyEvent(index, event);
+        }
+    }
+
+    fn isSingle(state: *const DaemonState, predicate: []const u8) bool {
+        if (state.cardinality.get(predicate)) |single| return single;
+        return state.configured_single.contains(predicate) or
+            std.mem.startsWith(u8, predicate, "emoji_");
+    }
+
+    fn eventKey(state: *DaemonState, event: StoredEvent) ![]const u8 {
+        return if (state.isSingle(event.p))
+            groupKeyAlloc(state.arena.allocator(), event.l, event.p)
+        else
+            tripleKeyAlloc(state.arena.allocator(), event.l, event.p, event.r);
+    }
+
+    fn liveEvent(
+        state: *DaemonState,
+        scratch: Allocator,
+        l: []const u8,
+        p: []const u8,
+        r: []const u8,
+    ) !?StoredEvent {
+        const key = if (state.isSingle(p))
+            try groupKeyAlloc(scratch, l, p)
+        else
+            try tripleKeyAlloc(scratch, l, p, r);
+        defer scratch.free(key);
+        const index = state.latest.get(key) orelse return null;
+        const event = state.events.items[index];
+        if (event.operation != .assert_fact) return null;
+        if (state.isSingle(p) and !std.mem.eql(u8, event.r, r)) return null;
+        return event;
+    }
+
+    fn liveGroup(
+        state: *DaemonState,
+        scratch: Allocator,
+        l: []const u8,
+        p: []const u8,
+    ) !?StoredEvent {
+        if (state.isSingle(p)) {
+            const key = try groupKeyAlloc(scratch, l, p);
+            defer scratch.free(key);
+            const index = state.latest.get(key) orelse return null;
+            const event = state.events.items[index];
+            return if (event.operation == .assert_fact) event else null;
+        }
+        var latest = state.latest.iterator();
+        while (latest.next()) |entry| {
+            const event = state.events.items[entry.value_ptr.*];
+            if (event.operation == .assert_fact and
+                std.mem.eql(u8, event.l, l) and
+                std.mem.eql(u8, event.p, p))
+            {
+                return event;
+            }
+        }
+        return null;
+    }
+
+    fn baseVersion(
+        state: *DaemonState,
+        scratch: Allocator,
+        l: []const u8,
+        p: []const u8,
+    ) !i64 {
+        const live = try state.liveGroup(scratch, l, p);
+        return if (live) |event| event.tx else 0;
+    }
+
+    fn allLivePredicateValuesRef(
+        state: *DaemonState,
+        predicate: []const u8,
+    ) bool {
+        var latest = state.latest.iterator();
+        var seen = false;
+        while (latest.next()) |entry| {
+            const event = state.events.items[entry.value_ptr.*];
+            if (event.operation != .assert_fact or
+                !std.mem.eql(u8, event.p, predicate))
+            {
+                continue;
+            }
+            if (!refShape(event.r)) return false;
+            seen = true;
+        }
+        return seen;
+    }
+};
+
+const fallback_single_predicates = [_][]const u8{
+    "title",          "owner",         "lead",        "driver",
+    "source",         "part_of",       "do_on",       "valid_until",
+    "estimate_hours", "created_at",    "updated_at",  "name",
+    "body",           "created_by",    "committed",   "outcome",
+    "abandoned",      "superseded_by", "merged_into", "session_of",
+    "start_time",     "end_time",      "clockify_id",
+};
+
+const meta_single_predicates = [_][]const u8{
+    "cardinality", "value_kind", "name", "acyclic",
 };
 
 const WriterAuthority = struct {
@@ -222,7 +546,13 @@ fn run(init: std.process.Init) !void {
     );
     defer authority.release(init.io, init.gpa);
 
-    const state = try replayState(init.gpa, init.io, canonical_log);
+    var state = try replayState(
+        init.gpa,
+        init.io,
+        init.environ_map,
+        canonical_log,
+    );
+    defer state.deinit();
     const strict_fence = if (init.environ_map.get("FRAM_REQUIRE_LOG_FENCE")) |value|
         std.mem.eql(u8, value, "1")
     else
@@ -235,12 +565,17 @@ fn run(init: std.process.Init) !void {
         port,
         canonical_log,
         authority.path,
-        state,
+        &state,
         strict_fence,
     );
 }
 
-fn replayState(allocator: Allocator, io: Io, canonical_log: []const u8) !DaemonState {
+fn replayState(
+    allocator: Allocator,
+    io: Io,
+    environ: *const std.process.Environ.Map,
+    canonical_log: []const u8,
+) !DaemonState {
     var outcome = try flat_log.replayFile(
         allocator,
         io,
@@ -258,17 +593,33 @@ fn replayState(allocator: Allocator, io: Io, canonical_log: []const u8) !DaemonS
         },
         .replay => |*replay| {
             defer replay.deinit();
-            var version: i64 = 0;
+            var state = try DaemonState.init(allocator, environ);
+            errdefer state.deinit();
             for (replay.records) |record| {
-                if (record.fact.tx) |tx| version = @max(version, tx);
+                if (record.fact.tx) |tx| state.version = @max(state.version, tx);
+                if (!record.fact.complete()) continue;
+                const operation: EventOperation =
+                    if (std.mem.eql(u8, record.fact.op.?, "assert"))
+                        .assert_fact
+                    else
+                        .retract_fact;
+                const event = try state.copyEvent(
+                    record.fact.tx.?,
+                    operation,
+                    record.fact.l.?,
+                    record.fact.p.?,
+                    record.fact.r.?,
+                );
+                try state.events.append(allocator, event);
             }
+            try state.rebuildDerived();
             if (replay.torn_tail) |tail| {
                 std.debug.print(
                     "fram: WARN torn-tail: {s}: torn final log line at byte {d} — recovered {d} prior fact(s), incomplete tail dropped\n",
                     .{ canonical_log, tail.byte_offset, tail.recovered_records },
                 );
             }
-            return .{ .version = version };
+            return state;
         },
     }
 }
@@ -335,7 +686,7 @@ fn serve(
     port: u16,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: DaemonState,
+    state: *DaemonState,
     strict_fence: bool,
 ) !void {
     var address: std.Io.net.IpAddress = .{
@@ -389,7 +740,7 @@ fn handleConnection(
     stream: std.Io.net.Stream,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: DaemonState,
+    state: *DaemonState,
     strict_fence: bool,
 ) !void {
     defer stream.close(io);
@@ -421,7 +772,7 @@ fn handleRequest(
     line: []const u8,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: DaemonState,
+    state: *DaemonState,
     strict_fence: bool,
 ) ![]u8 {
     var outer = parseMap(allocator, line) catch
@@ -435,12 +786,21 @@ fn handleRequest(
     if (outer.op != .for_log) {
         return dispatchOperation(
             allocator,
+            io,
             outer.op,
+            &outer,
             canonical_log,
             authority_path,
             state,
         );
     }
+
+    if (try requestFieldError(
+        allocator,
+        &outer,
+        field_op | field_expected_log | field_request,
+        field_expected_log | field_request,
+    )) |response| return response;
 
     const expected = switch (outer.expected_log) {
         .value => |value| value,
@@ -493,7 +853,9 @@ fn handleRequest(
     }
     return dispatchOperation(
         allocator,
+        io,
         nested.op,
+        &nested,
         canonical_log,
         authority_path,
         state,
@@ -502,25 +864,765 @@ fn handleRequest(
 
 fn dispatchOperation(
     allocator: Allocator,
+    io: Io,
     operation: Operation,
+    request: *MapFields,
     canonical_log: []const u8,
     authority_path: []const u8,
-    state: DaemonState,
+    state: *DaemonState,
 ) ![]u8 {
     return switch (operation) {
-        .version => std.fmt.allocPrint(
+        .version => if (try requestFieldError(
+            allocator,
+            request,
+            field_op,
+            0,
+        )) |response| response else std.fmt.allocPrint(
             allocator,
             "{{:version {d}}}",
             .{state.version},
         ),
-        .status => renderStatus(
+        .status => if (try requestFieldError(
+            allocator,
+            request,
+            field_op,
+            0,
+        )) |response| response else renderStatus(
             allocator,
             canonical_log,
             authority_path,
-            state,
+            state.*,
         ),
-        else => allocator.dupe(u8, "{:error \"unknown op\"}"),
+        .assert_fact => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+            false,
+            false,
+        ),
+        .assert_existing => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+            true,
+            false,
+        ),
+        .assert_batch => assertBatch(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+        ),
+        .assert_at_version => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+            false,
+            true,
+        ),
+        .retract_fact => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .retract_fact,
+            false,
+            false,
+        ),
+        .retract_existing => mutateOne(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .retract_fact,
+            true,
+            false,
+        ),
+        else => if (try requestFieldError(
+            allocator,
+            request,
+            field_op | field_expected_log | field_request | field_te |
+                field_p | field_r | field_base | field_facts,
+            0,
+        )) |response| response else allocator.dupe(
+            u8,
+            "{:error \"unknown op\"}",
+        ),
     };
+}
+
+const BatchFact = struct {
+    p: []u8,
+    r: []u8,
+    base: IntField,
+
+    fn deinit(fact: *BatchFact, allocator: Allocator) void {
+        allocator.free(fact.p);
+        allocator.free(fact.r);
+        fact.* = undefined;
+    }
+};
+
+const ParsedBatch = struct {
+    facts: std.ArrayList(BatchFact),
+
+    fn deinit(batch: *ParsedBatch, allocator: Allocator) void {
+        for (batch.facts.items) |*fact| fact.deinit(allocator);
+        batch.facts.deinit(allocator);
+        batch.* = undefined;
+    }
+};
+
+fn requestFieldError(
+    allocator: Allocator,
+    request: *const MapFields,
+    allowed: u16,
+    required: u16,
+) !?[]u8 {
+    if (request.duplicate or request.unknown_field or
+        (request.present & ~allowed) != 0)
+    {
+        return try renderInvalidRequest(
+            allocator,
+            &.{"invalid, duplicate, or unknown request field"},
+        );
+    }
+
+    const missing = (required | field_op) & ~request.present;
+    if (missing == 0) return null;
+
+    var messages: [8][]const u8 = undefined;
+    var count: usize = 0;
+    const candidates = [_]struct { mask: u16, message: []const u8 }{
+        .{ .mask = field_op, .message = "op is required" },
+        .{ .mask = field_expected_log, .message = "expected-log is required" },
+        .{ .mask = field_request, .message = "request is required" },
+        .{ .mask = field_te, .message = "te is required" },
+        .{ .mask = field_p, .message = "p is required" },
+        .{ .mask = field_r, .message = "r is required" },
+        .{ .mask = field_base, .message = "base is required" },
+        .{ .mask = field_facts, .message = "facts is required" },
+    };
+    for (candidates) |candidate| {
+        if ((missing & candidate.mask) != 0) {
+            messages[count] = candidate.message;
+            count += 1;
+        }
+    }
+    return try renderInvalidRequest(allocator, messages[0..count]);
+}
+
+fn renderInvalidRequest(
+    allocator: Allocator,
+    messages: []const []const u8,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+    try writeAll(writer, "{:error [");
+    for (messages, 0..) |message, index| {
+        if (index != 0) try writeAll(writer, " ");
+        try writeEdnString(writer, message);
+    }
+    try writeAll(writer, "], :code :invalid-request}");
+    return output.toOwnedSlice();
+}
+
+fn mutateOne(
+    allocator: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    request: *MapFields,
+    operation: EventOperation,
+    existing_only: bool,
+    global_version: bool,
+) ![]u8 {
+    if (try requestFieldError(
+        allocator,
+        request,
+        field_op | field_te | field_p | field_r | field_base,
+        field_te | field_p | field_r,
+    )) |response| return response;
+
+    const te = switch (request.te) {
+        .value => |value| value,
+        else => return renderInvalidRequest(
+            allocator,
+            &.{"te must be a string"},
+        ),
+    };
+    const predicate = switch (request.p) {
+        .value => |value| value,
+        else => return renderInvalidRequest(
+            allocator,
+            &.{"p must be a string"},
+        ),
+    };
+    const requested_value = switch (request.r) {
+        .value => |value| value,
+        else => return renderInvalidRequest(
+            allocator,
+            &.{"r must be a string"},
+        ),
+    };
+    if (te.len == 0 or predicate.len == 0) {
+        return renderInvalidRequest(
+            allocator,
+            &.{"te and p must be non-blank strings"},
+        );
+    }
+
+    const base: ?i64 = switch (request.base) {
+        .missing, .nil => null,
+        .value => |value| value,
+        .invalid => return renderInvalidRequest(
+            allocator,
+            &.{"base must be an integer or nil"},
+        ),
+    };
+
+    if (existing_only and !state.subjects.contains(te)) {
+        return renderMissingSubject(allocator, te, state.version);
+    }
+
+    var normalized_owned: ?[]u8 = null;
+    defer if (normalized_owned) |value| allocator.free(value);
+    const value = if (existing_only and
+        requested_value.len != 0 and
+        requested_value[0] != '@' and
+        !containsWhitespace(requested_value) and
+        state.allLivePredicateValuesRef(predicate))
+    normalize: {
+        normalized_owned = try std.fmt.allocPrint(
+            allocator,
+            "@{s}",
+            .{requested_value},
+        );
+        break :normalize normalized_owned.?;
+    } else requested_value;
+
+    if (global_version) {
+        const expected = base orelse return renderInvalidBase(
+            allocator,
+            state.version,
+        );
+        if (expected < 0) return renderInvalidBase(allocator, state.version);
+        if (expected != state.version) {
+            return renderConflict(allocator, state.version);
+        }
+    } else if (state.isSingle(predicate) and base != null and
+        try state.baseVersion(allocator, te, predicate) > base.?)
+    {
+        return renderConflict(allocator, state.version);
+    }
+
+    const live = if (operation == .assert_fact)
+        try state.liveEvent(allocator, te, predicate, value)
+    else if (state.isSingle(predicate))
+        try state.liveGroup(allocator, te, predicate)
+    else
+        try state.liveEvent(allocator, te, predicate, value);
+
+    if (operation == .assert_fact and
+        !state.isSingle(predicate) and live != null)
+    {
+        return renderOk(allocator, state.version);
+    }
+    if (operation == .retract_fact and live == null) {
+        return renderOk(allocator, state.version);
+    }
+    if (state.version == std.math.maxInt(i64)) {
+        return allocator.dupe(
+            u8,
+            "{:reject :version-exhausted, :code :version-exhausted}",
+        );
+    }
+
+    const tx = state.version + 1;
+    const timestamp = try timestampUtc(allocator, io);
+    defer allocator.free(timestamp);
+    const payload = try flat_log.encodeLine(
+        allocator,
+        .{
+            .tx = tx,
+            .op = operation.wireName(),
+            .l = te,
+            .p = predicate,
+            .r = value,
+        },
+        .{ .coordinator = .{ .ts = timestamp, .by = "coord" } },
+    );
+    defer allocator.free(payload);
+    const stored = try state.copyEvent(tx, operation, te, predicate, value);
+
+    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload);
+    try state.appendCommitted(stored);
+    return renderOk(allocator, tx);
+}
+
+fn assertBatch(
+    allocator: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    request: *MapFields,
+) ![]u8 {
+    if (try requestFieldError(
+        allocator,
+        request,
+        field_op | field_te | field_facts | field_base,
+        field_te | field_facts,
+    )) |response| return response;
+
+    const te = switch (request.te) {
+        .value => |value| value,
+        else => return renderInvalidBatch(
+            allocator,
+            "assert-batch requires a subject :te",
+            state.version,
+        ),
+    };
+    if (std.mem.trim(u8, te, " \t\r\n").len == 0) {
+        return renderInvalidBatch(
+            allocator,
+            "assert-batch requires a subject :te",
+            state.version,
+        );
+    }
+    const top_base: ?i64 = switch (request.base) {
+        .missing, .nil => null,
+        .value => |value| value,
+        .invalid => return renderInvalidRequest(
+            allocator,
+            &.{"base must be an integer or nil"},
+        ),
+    };
+    const facts_raw = request.facts orelse return renderInvalidBatch(
+        allocator,
+        "assert-batch requires a non-empty :facts vector",
+        state.version,
+    );
+    var batch = parseBatchFacts(allocator, facts_raw) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidBatch => return renderInvalidBatch(
+            allocator,
+            "each :facts entry needs a string :p and a :r",
+            state.version,
+        ),
+    };
+    defer batch.deinit(allocator);
+    if (batch.facts.items.len == 0) {
+        return renderInvalidBatch(
+            allocator,
+            "assert-batch requires a non-empty :facts vector",
+            state.version,
+        );
+    }
+
+    var ordered: std.ArrayList(usize) = .empty;
+    defer ordered.deinit(allocator);
+    try ordered.ensureTotalCapacity(allocator, batch.facts.items.len);
+    for (batch.facts.items, 0..) |fact, index| {
+        if (!deliveryTrigger(fact.p)) ordered.appendAssumeCapacity(index);
+    }
+    for (batch.facts.items, 0..) |fact, index| {
+        if (deliveryTrigger(fact.p)) ordered.appendAssumeCapacity(index);
+    }
+
+    var writes: std.ArrayList(usize) = .empty;
+    defer writes.deinit(allocator);
+    var idempotent: std.ArrayList(usize) = .empty;
+    defer idempotent.deinit(allocator);
+    try writes.ensureTotalCapacity(allocator, ordered.items.len);
+    try idempotent.ensureTotalCapacity(allocator, ordered.items.len);
+
+    for (ordered.items, 0..) |fact_index, ordered_index| {
+        const fact = batch.facts.items[fact_index];
+        if (fact.p.len == 0) {
+            return renderInvalidBatch(
+                allocator,
+                "each :facts entry needs a string :p and a :r",
+                state.version,
+            );
+        }
+        const fact_base: ?i64 = switch (fact.base) {
+            .missing => top_base,
+            .nil => null,
+            .value => |value| value,
+            .invalid => return renderInvalidBatch(
+                allocator,
+                "each fact :base must be an integer or nil",
+                state.version,
+            ),
+        };
+        if (state.isSingle(fact.p) and fact_base != null and
+            try state.baseVersion(allocator, te, fact.p) > fact_base.?)
+        {
+            return renderBatchConflict(
+                allocator,
+                state.version,
+                ordered_index,
+                fact.p,
+            );
+        }
+        if (!state.isSingle(fact.p) and
+            try state.liveEvent(allocator, te, fact.p, fact.r) != null)
+        {
+            idempotent.appendAssumeCapacity(fact_index);
+        } else {
+            writes.appendAssumeCapacity(fact_index);
+        }
+    }
+
+    if (writes.items.len == 0) {
+        return renderBatchSuccess(
+            allocator,
+            state.version,
+            batch.facts.items,
+            writes.items,
+            idempotent.items,
+        );
+    }
+    if (state.version == std.math.maxInt(i64)) {
+        return allocator.dupe(
+            u8,
+            "{:reject :version-exhausted, :code :version-exhausted}",
+        );
+    }
+
+    const tx = state.version + 1;
+    var payload: Writer.Allocating = .init(allocator);
+    defer payload.deinit();
+    var stored: std.ArrayList(StoredEvent) = .empty;
+    defer stored.deinit(allocator);
+    try stored.ensureTotalCapacity(allocator, writes.items.len);
+    for (writes.items) |fact_index| {
+        const fact = batch.facts.items[fact_index];
+        const timestamp = try timestampUtc(allocator, io);
+        defer allocator.free(timestamp);
+        const line = try flat_log.encodeLine(
+            allocator,
+            .{
+                .tx = tx,
+                .op = EventOperation.assert_fact.wireName(),
+                .l = te,
+                .p = fact.p,
+                .r = fact.r,
+            },
+            .{ .coordinator = .{ .ts = timestamp, .by = "coord" } },
+        );
+        defer allocator.free(line);
+        try writeAll(&payload.writer, line);
+        stored.appendAssumeCapacity(
+            try state.copyEvent(
+                tx,
+                .assert_fact,
+                te,
+                fact.p,
+                fact.r,
+            ),
+        );
+    }
+
+    try flat_log.appendDurable(
+        io,
+        Dir.cwd(),
+        canonical_log,
+        payload.written(),
+    );
+    try state.appendCommittedBatch(stored.items);
+    return renderBatchSuccess(
+        allocator,
+        tx,
+        batch.facts.items,
+        writes.items,
+        idempotent.items,
+    );
+}
+
+fn parseBatchFacts(
+    allocator: Allocator,
+    raw: []const u8,
+) (Allocator.Error || error{InvalidBatch})!ParsedBatch {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[')
+        return error.InvalidBatch;
+    parser.index += 1;
+
+    var batch: ParsedBatch = .{ .facts = .empty };
+    errdefer batch.deinit(allocator);
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len) return error.InvalidBatch;
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len) return error.InvalidBatch;
+            return batch;
+        }
+        const fact_raw = parser.scanValue() catch return error.InvalidBatch;
+        const fact = try parseBatchFact(allocator, fact_raw);
+        try batch.facts.append(allocator, fact);
+    }
+}
+
+fn parseBatchFact(
+    allocator: Allocator,
+    raw: []const u8,
+) (Allocator.Error || error{InvalidBatch})!BatchFact {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return error.InvalidBatch;
+    parser.index += 1;
+
+    var predicate: ?[]u8 = null;
+    errdefer if (predicate) |value| allocator.free(value);
+    var value: ?[]u8 = null;
+    errdefer if (value) |item| allocator.free(item);
+    var base: IntField = .missing;
+    var seen: u8 = 0;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len) return error.InvalidBatch;
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len or predicate == null or value == null)
+                return error.InvalidBatch;
+            return .{ .p = predicate.?, .r = value.?, .base = base };
+        }
+        const key = parser.scanValue() catch return error.InvalidBatch;
+        if (key.len < 2 or key[0] != ':') return error.InvalidBatch;
+        const item = parser.scanValue() catch return error.InvalidBatch;
+        const name = key[1..];
+        if (std.mem.eql(u8, name, "p")) {
+            if ((seen & 1) != 0) return error.InvalidBatch;
+            seen |= 1;
+            const parsed = parseStringField(allocator, item) catch |err|
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidBatch,
+                };
+            predicate = switch (parsed) {
+                .value => |decoded| decoded,
+                else => return error.InvalidBatch,
+            };
+        } else if (std.mem.eql(u8, name, "r")) {
+            if ((seen & 2) != 0) return error.InvalidBatch;
+            seen |= 2;
+            const parsed = parseStringField(allocator, item) catch |err|
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidBatch,
+                };
+            value = switch (parsed) {
+                .value => |decoded| decoded,
+                else => return error.InvalidBatch,
+            };
+        } else if (std.mem.eql(u8, name, "base")) {
+            if ((seen & 4) != 0) return error.InvalidBatch;
+            seen |= 4;
+            base = parseIntField(item);
+            switch (base) {
+                .invalid => return error.InvalidBatch,
+                else => {},
+            }
+        } else {
+            return error.InvalidBatch;
+        }
+    }
+}
+
+fn renderOk(allocator: Allocator, version: i64) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{{:ok {d}}}", .{version});
+}
+
+fn renderConflict(allocator: Allocator, version: i64) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{:reject :conflict, :version {d}}}",
+        .{version},
+    );
+}
+
+fn renderInvalidBase(allocator: Allocator, version: i64) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{:reject :invalid-base, :version {d}}}",
+        .{version},
+    );
+}
+
+fn renderMissingSubject(
+    allocator: Allocator,
+    subject: []const u8,
+    version: i64,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+    try writeAll(
+        writer,
+        "{:reject :missing-subject, :code :missing-subject, :subject ",
+    );
+    try writeEdnString(writer, subject);
+    try writeAll(writer, ", :version ");
+    writer.print("{d}", .{version}) catch return error.OutOfMemory;
+    try writeAll(writer, "}");
+    return output.toOwnedSlice();
+}
+
+fn renderInvalidBatch(
+    allocator: Allocator,
+    message: []const u8,
+    version: i64,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+    try writeAll(writer, "{:reject [");
+    try writeEdnString(writer, message);
+    try writeAll(writer, "], :code :invalid-batch, :version ");
+    writer.print("{d}", .{version}) catch return error.OutOfMemory;
+    try writeAll(writer, "}");
+    return output.toOwnedSlice();
+}
+
+fn renderBatchConflict(
+    allocator: Allocator,
+    version: i64,
+    index: usize,
+    predicate: []const u8,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+    try writeAll(writer, "{:reject :conflict, :version ");
+    writer.print("{d}", .{version}) catch return error.OutOfMemory;
+    try writeAll(writer, ", :at ");
+    writer.print("{d}", .{index}) catch return error.OutOfMemory;
+    try writeAll(writer, ", :pred ");
+    try writeEdnString(writer, predicate);
+    try writeAll(writer, "}");
+    return output.toOwnedSlice();
+}
+
+fn renderBatchSuccess(
+    allocator: Allocator,
+    version: i64,
+    facts: []const BatchFact,
+    writes: []const usize,
+    idempotent: []const usize,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
+    try writeAll(writer, "{:ok ");
+    writer.print("{d}", .{version}) catch return error.OutOfMemory;
+    try writeAll(writer, ", :written [");
+    for (writes, 0..) |index, offset| {
+        if (offset != 0) try writeAll(writer, " ");
+        try writeEdnString(writer, facts[index].p);
+    }
+    try writeAll(writer, "], :idempotent [");
+    for (idempotent, 0..) |index, offset| {
+        if (offset != 0) try writeAll(writer, " ");
+        try writeEdnString(writer, facts[index].p);
+    }
+    try writeAll(writer, "], :batch true}");
+    return output.toOwnedSlice();
+}
+
+fn timestampUtc(allocator: Allocator, io: Io) ![]u8 {
+    const nanoseconds = Io.Clock.real.now(io).nanoseconds;
+    if (nanoseconds < 0) return error.InvalidSystemTime;
+    const seconds: u64 = @intCast(@divFloor(
+        nanoseconds,
+        std.time.ns_per_s,
+    ));
+    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = seconds };
+    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_seconds = epoch_seconds.getDaySeconds();
+    return std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
+        .{
+            year_day.year,
+            month_day.month.numeric(),
+            month_day.day_index + 1,
+            day_seconds.getHoursIntoDay(),
+            day_seconds.getMinutesIntoHour(),
+            day_seconds.getSecondsIntoMinute(),
+        },
+    );
+}
+
+fn groupKeyAlloc(
+    allocator: Allocator,
+    l: []const u8,
+    p: []const u8,
+) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{d}:{s}{d}:{s}",
+        .{ l.len, l, p.len, p },
+    );
+}
+
+fn tripleKeyAlloc(
+    allocator: Allocator,
+    l: []const u8,
+    p: []const u8,
+    r: []const u8,
+) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{d}:{s}{d}:{s}{d}:{s}",
+        .{ l.len, l, p.len, p, r.len, r },
+    );
+}
+
+fn stripAt(value: []const u8) []const u8 {
+    return if (value.len != 0 and value[0] == '@') value[1..] else value;
+}
+
+fn isMetaSingle(predicate: []const u8) bool {
+    for (meta_single_predicates) |candidate| {
+        if (std.mem.eql(u8, predicate, candidate)) return true;
+    }
+    return false;
+}
+
+fn refShape(value: []const u8) bool {
+    return value.len > 1 and value[0] == '@' and !containsWhitespace(value);
+}
+
+fn containsWhitespace(value: []const u8) bool {
+    for (value) |byte| {
+        if (std.ascii.isWhitespace(byte)) return true;
+    }
+    return false;
+}
+
+fn deliveryTrigger(predicate: []const u8) bool {
+    return std.mem.eql(u8, predicate, "to") or
+        std.mem.eql(u8, predicate, "target");
 }
 
 fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
@@ -548,16 +1650,35 @@ fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
         const name = key[1..];
 
         if (std.mem.eql(u8, name, "op")) {
+            fields.noteField(field_op);
             fields.op = parseOperation(value);
         } else if (std.mem.eql(u8, name, "expected-log")) {
+            fields.noteField(field_expected_log);
             fields.expected_log.deinit(allocator);
-            fields.expected_log = if (value.len >= 2 and
-                value[0] == '"' and value[value.len - 1] == '"')
-                .{ .value = try decodeEdnString(allocator, value) }
-            else
-                .invalid;
+            fields.expected_log = try parseStringField(allocator, value);
         } else if (std.mem.eql(u8, name, "request")) {
+            fields.noteField(field_request);
             fields.request = value;
+        } else if (std.mem.eql(u8, name, "te")) {
+            fields.noteField(field_te);
+            fields.te.deinit(allocator);
+            fields.te = try parseStringField(allocator, value);
+        } else if (std.mem.eql(u8, name, "p")) {
+            fields.noteField(field_p);
+            fields.p.deinit(allocator);
+            fields.p = try parseStringField(allocator, value);
+        } else if (std.mem.eql(u8, name, "r")) {
+            fields.noteField(field_r);
+            fields.r.deinit(allocator);
+            fields.r = try parseStringField(allocator, value);
+        } else if (std.mem.eql(u8, name, "base")) {
+            fields.noteField(field_base);
+            fields.base = parseIntField(value);
+        } else if (std.mem.eql(u8, name, "facts")) {
+            fields.noteField(field_facts);
+            fields.facts = value;
+        } else {
+            fields.unknown_field = true;
         }
     }
 }
@@ -566,7 +1687,32 @@ fn parseOperation(raw: []const u8) Operation {
     if (std.mem.eql(u8, raw, ":for-log")) return .for_log;
     if (std.mem.eql(u8, raw, ":version")) return .version;
     if (std.mem.eql(u8, raw, ":status")) return .status;
+    if (std.mem.eql(u8, raw, ":assert")) return .assert_fact;
+    if (std.mem.eql(u8, raw, ":assert-existing")) return .assert_existing;
+    if (std.mem.eql(u8, raw, ":assert-batch")) return .assert_batch;
+    if (std.mem.eql(u8, raw, ":assert-at-version"))
+        return .assert_at_version;
+    if (std.mem.eql(u8, raw, ":retract")) return .retract_fact;
+    if (std.mem.eql(u8, raw, ":retract-existing"))
+        return .retract_existing;
     return .unknown;
+}
+
+fn parseStringField(
+    allocator: Allocator,
+    raw: []const u8,
+) !StringField {
+    return if (raw.len >= 2 and
+        raw[0] == '"' and raw[raw.len - 1] == '"')
+        .{ .value = try decodeEdnString(allocator, raw) }
+    else
+        .invalid;
+}
+
+fn parseIntField(raw: []const u8) IntField {
+    if (std.mem.eql(u8, raw, "nil")) return .nil;
+    const value = std.fmt.parseInt(i64, raw, 10) catch return .invalid;
+    return .{ .value = value };
 }
 
 fn decodeEdnString(allocator: Allocator, raw: []const u8) ![]u8 {
@@ -736,13 +1882,18 @@ test "parse ordinary and fenced bootstrap requests" {
 }
 
 test "strict bootstrap response rejects an unwrapped request" {
+    var environ = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ.deinit();
+    var state = try DaemonState.init(std.testing.allocator, &environ);
+    defer state.deinit();
+    state.version = 7;
     const response = try handleRequest(
         std.testing.allocator,
         std.testing.io,
         "{:op :version}",
         "/tmp/facts.log",
         "/tmp/facts.log.writer-authority.lock",
-        .{ .version = 7 },
+        &state,
         true,
     );
     defer std.testing.allocator.free(response);
@@ -754,22 +1905,32 @@ test "strict bootstrap response rejects an unwrapped request" {
 }
 
 test "version and status expose replayed version and authority" {
-    const version = try dispatchOperation(
+    var environ = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ.deinit();
+    var state = try DaemonState.init(std.testing.allocator, &environ);
+    defer state.deinit();
+    state.version = 9;
+
+    const version = try handleRequest(
         std.testing.allocator,
-        .version,
+        std.testing.io,
+        "{:op :version}",
         "/tmp/facts.log",
         "/tmp/facts.log.writer-authority.lock",
-        .{ .version = 9 },
+        &state,
+        false,
     );
     defer std.testing.allocator.free(version);
     try std.testing.expectEqualStrings("{:version 9}", version);
 
-    const status = try dispatchOperation(
+    const status = try handleRequest(
         std.testing.allocator,
-        .status,
+        std.testing.io,
+        "{:op :status}",
         "/tmp/facts.log",
         "/tmp/facts.log.writer-authority.lock",
-        .{ .version = 9 },
+        &state,
+        false,
     );
     defer std.testing.allocator.free(status);
     try std.testing.expect(std.mem.indexOf(
