@@ -145,6 +145,7 @@ FRAM_SERVER_JSON=$(cat <<JSON
   "env": {
     "FRAM_FLIP": "1",
     "FRAM_GRAPH_EDIT": "1",
+    "FRAM_PORT": "$PORT",
     "FRAM_CODE_PORT": "$PORT",
     "FRAM_CODE_LOG": "$CODE_LOG",
     "_comment_read_timeout": "edit-prepare over a large code log costs seconds, above fram.rt's 2000ms default read deadline — without this, EVERY MCP edit verb fails with a prepare-deadline REJECTED that reads like a semantic rejection (learning, thread 019f9cf1-d746). This template is REWRITTEN on every fram-code-on: the line must live HERE or it is dropped (thread 019f9d7d).",

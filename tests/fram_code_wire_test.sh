@@ -41,13 +41,17 @@ args = []
 TOML
 cp "$DIR/.codex/config.toml" "$TMP/config.toml.orig"
 
-SERVER_JSON='{"command":"/fake/fram-mcp","args":[],"env":{"FRAM_CODE_PORT":"31337","FRAM_CODE_LOG":"/canonical/fram/.fram/code.log","FRAM_SRC":"/canonical/fram/src"}}'
+SERVER_JSON='{"command":"/fake/fram-mcp","args":[],"env":{"FRAM_PORT":"31337","FRAM_CODE_PORT":"31337","FRAM_LOG":"/canonical/fram/.fram/code.log","FRAM_CODE_LOG":"/canonical/fram/.fram/code.log","FRAM_SRC":"/canonical/fram/src"}}'
 
 # fram-code-on canonicalizes DIR/SRC before constructing this template. The
 # generated absolute values must survive copying the project wiring into a
 # worktree; graph-edit path confinement must never be derived from that cwd.
 assert_code_on_line "fram-code-on binds FRAM_SRC to canonicalized SRC" \
   '"FRAM_SRC": "$SRC"'
+assert_code_on_line "fram-code-on binds read and edit ports to the same selected coordinator" \
+  '"FRAM_PORT": "$PORT"'
+assert_code_on_line "fram-code-on binds the edit port to the selected coordinator" \
+  '"FRAM_CODE_PORT": "$PORT"'
 assert_code_on_line "fram-code-on binds FRAM_CODE_LOG explicitly" \
   '"FRAM_CODE_LOG": "$CODE_LOG"'
 
@@ -58,8 +62,10 @@ assert "mcp.json gains mcpServers.fram" \
   '[ "$(jq -r ".mcpServers.fram.command" "$DIR/.mcp.json")" = "/fake/fram-mcp" ]'
 assert "mcp.json preserves canonical FRAM_SRC" \
   '[ "$(jq -r ".mcpServers.fram.env.FRAM_SRC" "$DIR/.mcp.json")" = "/canonical/fram/src" ]'
-assert "mcp.json preserves canonical FRAM_CODE_LOG" \
-  '[ "$(jq -r ".mcpServers.fram.env.FRAM_CODE_LOG" "$DIR/.mcp.json")" = "/canonical/fram/.fram/code.log" ]'
+assert "mcp.json preserves one read/edit coordinator port" \
+  '[ "$(jq -r ".mcpServers.fram.env.FRAM_PORT" "$DIR/.mcp.json")" = "31337" ] && [ "$(jq -r ".mcpServers.fram.env.FRAM_CODE_PORT" "$DIR/.mcp.json")" = "31337" ]'
+assert "mcp.json preserves one read/edit log" \
+  '[ "$(jq -r ".mcpServers.fram.env.FRAM_LOG" "$DIR/.mcp.json")" = "/canonical/fram/.fram/code.log" ] && [ "$(jq -r ".mcpServers.fram.env.FRAM_CODE_LOG" "$DIR/.mcp.json")" = "/canonical/fram/.fram/code.log" ]'
 assert "mcp.json keeps unrelated mcpServers.other-tool" \
   '[ "$(jq -r ".mcpServers[\"other-tool\"].command" "$DIR/.mcp.json")" = "/bin/other" ]'
 assert "config.toml gains [mcp_servers.fram]" \
@@ -68,8 +74,10 @@ assert "config.toml fram command matches" \
   'grep -A2 "^\[mcp_servers.fram\]$" "$DIR/.codex/config.toml" | grep -q "/fake/fram-mcp"'
 assert "config.toml preserves canonical FRAM_SRC" \
   'grep -q "^FRAM_SRC = \"/canonical/fram/src\"$" "$DIR/.codex/config.toml"'
-assert "config.toml preserves canonical FRAM_CODE_LOG" \
-  'grep -q "^FRAM_CODE_LOG = \"/canonical/fram/.fram/code.log\"$" "$DIR/.codex/config.toml"'
+assert "config.toml preserves one read/edit coordinator port" \
+  'grep -q "^FRAM_PORT = \"31337\"$" "$DIR/.codex/config.toml" && grep -q "^FRAM_CODE_PORT = \"31337\"$" "$DIR/.codex/config.toml"'
+assert "config.toml preserves one read/edit log" \
+  'grep -q "^FRAM_LOG = \"/canonical/fram/.fram/code.log\"$" "$DIR/.codex/config.toml" && grep -q "^FRAM_CODE_LOG = \"/canonical/fram/.fram/code.log\"$" "$DIR/.codex/config.toml"'
 assert "config.toml keeps unrelated [projects.unrelated]" \
   'grep -q "^\[projects.unrelated\]$" "$DIR/.codex/config.toml"'
 assert "config.toml keeps unrelated [mcp_servers.other]" \
