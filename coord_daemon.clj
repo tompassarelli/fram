@@ -1220,6 +1220,60 @@
        {:version (:version roots)
         :rows (mapv (fn [fact] [(:p fact) (:r fact)]) ordered)}))))
 
+(def max-scoped-subjects 65536)
+
+(defn- scoped-facts-snapshot
+  "Project the live facts of a NAMED SET of subjects.
+
+  North's board verbs are the motivating case. `north threads` renders the 4,131
+  subjects carrying a title — 55,893 facts, 10.4 MB — and was downloading all
+  353,442 facts (59.4 MB) to filter locally, then re-indexing the whole corpus
+  in a fresh process every invocation: 8.5-12.5 s per verb, against 200 ms for
+  exact `show`. The corpus only grows, so that gap widens on its own.
+
+  This filters the per-version wire cache rather than projecting each subject
+  from the Store's by-l index, which is the opposite of what the exact-`show`
+  path does and is deliberate. Measured on the real 111,540-row corpus:
+
+    by-l, per subject     778 ms
+    filter cached wire     48 ms      (16x, identical fact set)
+
+  :show is O(one subject) and wins by never materializing the corpus. But a
+  request for thousands of subjects touches so much of the graph that the
+  already-materialized, already-cached wire projection is simply cheaper — and
+  reusing it keeps the rows in GLOBAL FOLD ORDER, so a slice is byte-identical
+  to the whole-corpus response filtered, and no caller has to re-sort.
+
+  The saving this op exists for is the CLIENT's: transfer, decode, and index
+  build all shrink to the slice."
+  ([subjects] (scoped-facts-snapshot (capture-read-roots!) subjects))
+  ([roots subjects]
+   (let [wanted (set subjects)
+         {:keys [version log triples]} (facts-wire-snapshot roots)]
+     {:version version
+      :log log
+      :facts (filterv (fn [[l _ _]] (contains? wanted l)) triples)})))
+
+(defn- scoped-facts-response [req]
+  (let [subjects (:subjects req)]
+    (cond
+      (not (sequential? subjects))
+      {:error "facts-for-subjects requires a :subjects sequence"
+       :code :invalid-scoped-subjects}
+
+      (not (every? string? subjects))
+      {:error "every :subjects entry must be a string"
+       :code :invalid-scoped-subjects}
+
+      ;; Bound the request so one client cannot pin an unbounded set. Above this
+      ;; the plain whole-corpus :facts read is the cheaper answer anyway.
+      (> (count subjects) max-scoped-subjects)
+      {:error (str "at most " max-scoped-subjects " subjects per facts-for-subjects request")
+       :code :too-many-scoped-subjects}
+
+      :else
+      (scoped-facts-snapshot subjects))))
+
 (def ^:dynamic *request-query-control* nil)
 
 (defn- query-request? [req] (wire/query-request? req))
@@ -5292,7 +5346,7 @@
   ;; Their expensive work is either a captured-snapshot read or a checkpoint
   ;; with its own phased publication, so the global mutation monitor is both
   ;; unnecessary and harmful.
-  #{:status :facts :show :validate :snapshot})
+  #{:status :facts :facts-for-subjects :show :validate :snapshot})
 
 (defn- handle* [req]
   ;; (#14 socket EXPOSURE) :edit-min runs OUTSIDE the outer dlock. do-edit-min's compute
@@ -5468,6 +5522,11 @@
       ;; itself be the finding.
       (report-slow-read! :show t0 t1 t1 (System/nanoTime))
       res)
+
+    (= :facts-for-subjects handler)
+    (do
+      (when-not *reload-checked* (prepare-request-reload! req))
+      (scoped-facts-response req))
 
     (= :validate handler)
     (do

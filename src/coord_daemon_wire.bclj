@@ -109,6 +109,11 @@
    :claims-read {:route :locked :handler :claims-read :required [] :validation :handler :response :read}
    :claims-needing-reverification {:route :locked :handler :claims-needing-reverification :required [] :validation :handler :response :read}
    :facts {:route :locked :handler :facts :required [] :response :read}
+   ;; A slice read: the same materialized live view as :facts, restricted to a
+   ;; named subject set. Locked+read like :facts because it reads the same
+   ;; captured roots; :subjects is required so an omitted key can never be
+   ;; mistaken for "all subjects".
+   :facts-for-subjects {:route :locked :handler :facts-for-subjects :required [:subjects] :response :read}
    :snapshot {:route :locked :handler :snapshot :required [] :response :snapshot}
    :snapshot-reconcile {:route :locked :handler :snapshot-reconcile :required [] :response :snapshot}
    :built-through {:route :locked :handler :built-through :required [] :response :status}
