@@ -12,6 +12,7 @@
 (require '[babashka.process :as proc]
          '[clojure.edn :as edn]
          '[clojure.java.io :as io])
+(load-file "tests/log_split_readiness_lib.clj")
 
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
 (defn free-port []
@@ -26,13 +27,6 @@
     (.flush writer)
     (edn/read reader)))
 
-(defn eventually [f]
-  (loop [remaining 200]
-    (cond
-      (try (f) (catch Exception _ false)) true
-      (zero? remaining) false
-      :else (do (Thread/sleep 25) (recur (dec remaining))))))
-
 (defn values-of [port subject predicate]
   (set (:values (client port {:op :resolved :te subject :p predicate}))))
 
@@ -45,7 +39,7 @@
       _ (spit log "")
       daemon
       (proc/process
-       {:dir root :out :string :err :string}
+       {:dir root :out :string :err :string :env (scratch-process-env)}
        "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
        (str port) (.getPath log))
       checks (atom [])
@@ -53,7 +47,13 @@
                (swap! checks conj [label (boolean value)]))]
   (try
     (check! "real socket daemon starts"
-            (eventually #(integer? (:version (client port {:op :version})))))
+            (= :ready
+               (await-ready
+                daemon port
+                (fn [ready-port]
+                  (try
+                    (integer? (:version (client ready-port {:op :version})))
+                    (catch Exception _ false))))))
 
     ;; An exact global base accepts a MULTI append. Repeating the identical
     ;; triple at the new exact head is the existing do-assert idempotent no-op:

@@ -11,6 +11,9 @@
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt]
          '[clojure.string :as str])
 (load-file "coord_daemon.clj")
+;; This in-process test owns LOG below; never compose it with the caller's live
+;; North telemetry half captured by coord_daemon at load time.
+(reset! telemetry-log nil)
 
 (def LOG "/tmp/store-snapshot-boot-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))

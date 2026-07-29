@@ -12,6 +12,7 @@
          '[fram.fold :as fold]
          '[fram.rt :as rt]
          '[fram.tools :as tl])
+(load-file "tests/log_split_readiness_lib.clj")
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
@@ -108,7 +109,7 @@
                             :params {:name "untell" :arguments {:subject "a" :predicate "owner"}}})]))
 
 (def out (:out (p/shell {:in (str requests "\n") :out :string :err :string
-                         :extra-env env}
+                         :env (scratch-process-env env)}
                         "bin/fram-mcp")))
 
 (def by-id
@@ -198,7 +199,7 @@
                               [(json/generate-string {:jsonrpc "2.0" :id 30 :method "initialize" :params {}})
                                (json/generate-string {:jsonrpc "2.0" :id 31 :method "tools/list" :params {}})])
                           "\n")
-                  :out :string :err :string :extra-env large-env}
+                  :out :string :err :string :env (scratch-process-env large-env)}
                  "bin/fram-mcp")))
 (def large-catalog-responses
   (keep #(try (json/parse-string % true) (catch Exception _ nil))
@@ -213,7 +214,7 @@
                              {:jsonrpc "2.0" :id 32 :method "tools/call"
                               :params {:name "show" :arguments {:subject "node-9999"}}})
                          "\n")
-                  :out :string :err :string :extra-env large-env}
+                  :out :string :err :string :env (scratch-process-env large-env)}
                  "bin/fram-mcp")))
 (def large-show-response
   (some #(when (= 32 (:id %)) %)
@@ -231,6 +232,7 @@
 (def cache-pb
   (doto (ProcessBuilder. (into-array String ["bin/fram-mcp"]))
     (.directory (io/file (System/getProperty "user.dir")))))
+(.remove (.environment cache-pb) "FRAM_TELEMETRY_LOG")
 (doseq [[k v] large-env]
   (.put (.environment cache-pb) k v))
 (def cache-process (.start cache-pb))
@@ -295,7 +297,7 @@
                       (json/generate-string {:jsonrpc "2.0" :id 8 :method "frobnicate"})
                       (json/generate-string {:jsonrpc "2.0" :id 9 :method "tools/list"})]) "\n")
                   :out :string :err :string
-                  :extra-env env}
+                  :env (scratch-process-env env)}
                  "bin/fram-mcp")))
 (def conf-parsed (map #(json/parse-string % true) (remove str/blank? (str/split-lines conf-out))))
 (chk "notification dropped: 3 id'd inputs -> exactly 3 replies" (= 3 (count conf-parsed)))
@@ -314,7 +316,8 @@
                               {:jsonrpc "2.0" :id 20 :method "tools/call"
                                :params {:name "show" :arguments {:subject "run-test"}}}) "\n")
                   :out :string :err :string
-                  :extra-env {"FRAM_LOG" alternate-log "FRAM_THREADS" tmp "FRAM_PORT" dead-port}}
+                  :env (scratch-process-env
+                        {"FRAM_LOG" alternate-log "FRAM_THREADS" tmp "FRAM_PORT" dead-port})}
                  "bin/fram-mcp")))
 (def alternate-response (json/parse-string (first (remove str/blank? (str/split-lines alternate-out))) true))
 (chk "an unrelated primary log does not infer telemetry.log"

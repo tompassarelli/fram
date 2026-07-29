@@ -18,6 +18,15 @@
 ;;                         failure output rather than a bare "timed out".
 (require '[babashka.process :as p])
 
+(defn scratch-process-env
+  "The current process environment with live telemetry routing removed, plus
+  scratch-test overrides. Tests that select their own coordination log must not
+  silently compose it with an unrelated ambient telemetry log."
+  ([]
+   (dissoc (into {} (System/getenv)) "FRAM_TELEMETRY_LOG"))
+  ([overrides]
+   (merge (scratch-process-env) overrides)))
+
 (defn await-ready
   "Block until (ready? port) is true, the child process (from
   babashka.process/process, NOT deref'd) exits, or deadline-ms elapses —

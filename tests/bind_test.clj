@@ -31,22 +31,20 @@
          (str/trim out))
        (catch Exception _ ::no-ss)))
 
-(def startup-deadline-ms 6000) ; unchanged: the old 40 × 150ms readiness budget
-
 (defn exercise-daemon [label bind]
   (let [port (free-port)
         err-path (str tmp "/" label ".err")
-        opts (cond-> {:out (io/file (str tmp "/" label ".out"))
-                      :err (io/file err-path)}
-               bind (assoc :extra-env {"FRAM_BIND" bind}))
+        opts {:out (io/file (str tmp "/" label ".out"))
+              :err (io/file err-path)
+              :env (scratch-process-env
+                    (cond-> {} bind (assoc "FRAM_BIND" bind)))}
         child (p/process ["bin/fram-daemon" (str port) log] opts)]
     (try
       ;; These are independent scenarios. Running them one at a time avoids
       ;; making two cold JVM boots contend and then calling that contention a
-      ;; bind failure. await-ready also distinguishes a dead child from a live,
-      ;; slow child without weakening the original startup deadline.
-      (await-ready child port version-ready?
-                   :deadline-ms startup-deadline-ms :poll-ms 150)
+      ;; bind failure. The shared bounded readiness contract also distinguishes
+      ;; a dead child from a live, slow cold JVM.
+      (await-ready child port version-ready? :poll-ms 150)
       (Thread/sleep 200)
       {:port port
        :listening true
