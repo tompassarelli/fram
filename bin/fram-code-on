@@ -164,7 +164,7 @@ if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
   echo "        verified exact code log + strict log fence + ready edit verifier (reusing)"
 else
   echo "  [2/3] booting warm coordinator on :$PORT …"
-  ( cd "$HERE" && \
+  ( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG \
     BEAGLE_HOME="$BEAGLE_HOME" \
     FRAM_EDIT_VERIFIER="$EDIT_VERIFIER" \
     FRAM_EDIT_VERIFIER_ARGS='[]' \

@@ -64,6 +64,8 @@ assert_code_on_line "fram-code-on seals pinned Racket into the coordinator launc
   'FRAM_EDIT_VERIFIER_RACKET="$PINNED_RACKET" \'
 assert_code_on_line "fram-code-on seals the world checker into the coordinator launch" \
   'FRAM_EDIT_VERIFIER_WORLD_CHECK="$WORLD_CHECK" \'
+assert_code_on_line "fram-code-on excludes inherited telemetry from graph coordinators" \
+  'exec env -u FRAM_TELEMETRY_LOG \'
 assert_code_on_line "fram-code-on probes the fenced edit protocol" \
   'coordinator_edit_protocol() {'
 assert_code_on_line "fram-code-on requires verifier-ready before wiring" \
