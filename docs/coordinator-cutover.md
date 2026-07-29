@@ -34,18 +34,33 @@ Read the token from an owner-only file. Never put it on the command line.
 
 ## Steady-state promotion
 
-The selector must apply this order independently to every public log endpoint,
-then switch all public routes as one transaction:
+The selector must prepare every successor while the predecessor is still
+serving traffic. It then applies the bounded final handoff independently to
+every public log endpoint and switches all public routes as one transaction:
 
-1. `HOLD`: stop admitting new public requests and drain selector-owned
-   connections.
-2. Read both boot identities:
+1. Read both boot identities:
 
    ```clojure
    {:op :cutover-status :token T}
    ```
 
-3. Demote each active generation:
+2. Prepare each read-only standby:
+
+   ```clojure
+   {:op :cutover-prepare
+    :token T
+    :cutover-id ID}
+   ```
+
+   Preparation reloads the current physical tail and materializes the query
+   cache without acquiring writer authority or changing the standby role. The
+   predecessor remains writable throughout this potentially expensive work.
+   A prepared marker is diagnostic only: it never substitutes for the exact
+   final demotion marker.
+
+3. `HOLD`: stop admitting new public requests and drain selector-owned
+   connections.
+4. Demote each active generation:
 
    ```clojure
    {:op :cutover-demote
@@ -65,7 +80,7 @@ then switch all public routes as one transaction:
    file-identity, and boundary-hash proof. Retrying the same demotion ID is
    idempotent and returns the same marker.
 
-4. Promote each warm standby:
+5. Promote each prepared standby:
 
    ```clojure
    {:op :cutover-promote
@@ -79,8 +94,8 @@ then switch all public routes as one transaction:
    `:phase :active`, the marker version, and
    `[:writer-authority :write-authorized] true`.
 
-5. Verify status on every newly active private endpoint.
-6. Atomically `SWAP` all public routes, then `RESUME` held requests.
+6. Verify status on every newly active private endpoint.
+7. Atomically `SWAP` all public routes, then `RESUME` held requests.
 
 If any demotion or promotion fails, keep public traffic held. Never route to a
 generation that lacks writer authority.
@@ -132,6 +147,11 @@ fram-cutover status \
   --port 17977 --log /path/to/coordination.log \
   --token-file /run/credentials/fram-cutover.token
 
+fram-cutover prepare \
+  --port 27977 --log /path/to/coordination.log \
+  --token-file /run/credentials/fram-cutover.token \
+  --cutover-id deploy-20260729-a
+
 fram-cutover demote \
   --port 17977 --log /path/to/coordination.log \
   --token-file /run/credentials/fram-cutover.token \
@@ -149,3 +169,8 @@ fram-cutover promote \
 Marker output is written atomically with mode `0600`. If local marker
 publication fails after a successful demotion, retry the same demotion ID to
 recover the identical marker.
+
+The controller's default response timeout is 65 seconds, slightly above the
+daemon's default 60-second synchronization bound. Operators may lower it only
+when the daemon's synchronization bound is lowered with it; otherwise a client
+can abandon a preparation that is still safely running on the server.

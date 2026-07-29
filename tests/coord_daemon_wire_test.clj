@@ -37,6 +37,18 @@
              (wire/request-dispatch
               {:op :assert :te "@a" :p "title" :r "A"} clean cfg)
              [:handler :required :response])))
+  (check "cutover prepare is a direct authenticated status operation"
+         (= {:route :direct
+             :handler :cutover-prepare
+             :required [:token :cutover-id]
+             :response :status}
+            (select-keys
+             (wire/request-dispatch
+              {:op :cutover-prepare
+               :token "secret"
+               :cutover-id "cutover-1"}
+              clean cfg)
+             [:route :handler :required :response])))
   (check "existing-subject ops are locked mutation handlers"
          (every?
           (fn [[op handler]]
@@ -157,5 +169,5 @@
     (check "pre-writer connection failure always selects close"
            (= {:action :close} setup))))
 
-(println "coord_daemon_wire:" (- 22 @failures) "/ 22 PASS")
+(println "coord_daemon_wire:" (- 24 @failures) "/ 24 PASS")
 (System/exit (if (zero? @failures) 0 1))

@@ -70,6 +70,7 @@
    ;; short mutation/drain boundaries; wrapping them in the ordinary :locked
    ;; route would retain dlock across the durability barrier.
    :cutover-status {:route :direct :handler :cutover-status :required [:token] :response :status}
+   :cutover-prepare {:route :direct :handler :cutover-prepare :required [:token :cutover-id] :response :status}
    :cutover-demote {:route :direct :handler :cutover-demote :required [:token :cutover-id :expected-instance] :response :status}
    :cutover-promote {:route :direct :handler :cutover-promote :required [:token :cutover-id :marker] :response :status}
    :write-def {:route :direct :handler :write-def :required [:spec] :response :structured}

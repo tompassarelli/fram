@@ -470,6 +470,13 @@
   (positive-env-long "FRAM_SHUTDOWN_CONNECTION_GRACE_MS" 3000))
 (def cutover-drain-timeout-ms
   (positive-env-long "FRAM_CUTOVER_DRAIN_TIMEOUT_MS" 8000))
+(def cutover-sync-timeout-ms
+  (positive-env-long "FRAM_CUTOVER_SYNC_TIMEOUT_MS" 60000))
+;; Test-only seam for proving that cache materialization belongs in PREPARE,
+;; while the predecessor still serves traffic, rather than in the held final
+;; handoff. Production leaves this at zero.
+(def cutover-prepare-cache-delay-ms
+  (positive-env-long "FRAM_TEST_CUTOVER_PREPARE_CACHE_DELAY_MS" 0))
 (def active-queries (atom 0))
 (def active-query-monitors (atom 0))
 (def active-control-reads (atom 0))
@@ -4508,7 +4515,7 @@
   ;; The pending physical stamp remains visible to the next freshness-sensitive
   ;; read or fact mutation.
   #{:version :version-free :status :edit-protocol :reload-status :cutover-status
-    :cutover-demote :cutover-promote :built-through
+    :cutover-prepare :cutover-demote :cutover-promote :built-through
     :acquire-lease :renew-lease :release-lease :fence-ok})
 (def ^:private reload-mutation-ops
   ;; A first fact mutation after an external edit must absorb/validate that edit
@@ -5231,7 +5238,8 @@
    :cutover @cutover-state
    :version (current-seq @co)})
 
-(declare cutover-status-response cutover-demote-response cutover-promote-response)
+(declare cutover-status-response cutover-prepare-response
+         cutover-demote-response cutover-promote-response)
 
 (def ^:private detached-locked-handlers
   ;; These handlers were historically classified :locked by the wire table.
@@ -5333,7 +5341,8 @@
         ;; Cutover control owns its own short dlock turns plus a durability
         ;; barrier. Holding this outer fence monitor across that barrier would
         ;; recreate the coordinator convoy this protocol is meant to remove.
-        (contains? #{:cutover-status :cutover-demote :cutover-promote}
+        (contains? #{:cutover-status :cutover-prepare
+                     :cutover-demote :cutover-promote}
                    inner-handler)
         (if-let [fence-reject (locking dlock
                                 (log-fence-rejection expected))]
@@ -5441,6 +5450,7 @@
     {:active @active-reloads :retries @reload-retries
      :generation @reload-generation}
     (= :cutover-status handler) (cutover-status-response req)
+    (= :cutover-prepare handler) (cutover-prepare-response req)
     (= :cutover-demote handler) (cutover-demote-response req)
     (= :cutover-promote handler) (cutover-promote-response req)
     ;; S-PROFILE text-bridge verbs (thread A1). LOCK-FREE: write-def commits through
@@ -7658,6 +7668,119 @@
                    (cutover-log-marker label path))
                  (cutover-log-paths))}))
 
+(defn- installed-cutover-log-state [label]
+  (case label
+    :primary
+    {:path @flat-log
+     :stamp @flat-mtime
+     :bytes @flat-bytes
+     :fence @flat-prefix-fence}
+
+    :telemetry
+    {:path @telemetry-log
+     :stamp @telemetry-mtime
+     :bytes @telemetry-bytes
+     :fence @telemetry-prefix-fence}
+
+    nil))
+
+(defn- cutover-log-proof-installed?
+  "True only when PROOF names the exact physical prefix already installed in
+   the live Store. A mere unchanged prefix is insufficient: byte length and
+   boundary digest must both be the installed cursor, preventing a fresh file
+   proof from being paired with a stale logical version."
+  [proof]
+  (let [{:keys [path bytes fence]
+         tracked-stamp :stamp}
+        (installed-cutover-log-state (:label proof))]
+    (and path fence (integer? bytes)
+         (= (canonical-path path) (:path proof))
+         (= (long bytes) (long (:bytes proof)))
+         (= tracked-stamp (stamp path))
+         (= (:file-key fence) (:file-key proof))
+         (= (:identity fence) (:identity proof))
+         (= (:boundary-sha fence) (:boundary-sha proof)))))
+
+(defn- capture-installed-cutover-marker [cutover-id]
+  (locking dlock
+    (locking group-io-lock
+      (let [marker (capture-cutover-marker! cutover-id)
+            installed?
+            (every? cutover-log-proof-installed? (:logs marker))]
+        {:marker marker
+         :installed? installed?
+         :installed
+         (mapv (fn [proof]
+                 (let [state (installed-cutover-log-state (:label proof))]
+                   {:label (:label proof)
+                    :path (some-> (:path state) canonical-path)
+                    :stamp (:stamp state)
+                    :bytes (:bytes state)
+                    :fence (:fence state)}))
+               (:logs marker))}))))
+
+(defn- synchronize-cutover-source!
+  "Converge the installed Store/cache and the physical log boundary before a
+   handoff marker can escape.
+
+   PREWARM? additionally materializes the query cache for the captured roots.
+   The loop is attempt- and time-bounded. Any refusal/race that cannot converge
+   throws while the caller still owns its prior authority; demotion therefore
+   fails before releasing the writer fence."
+  [cutover-id prewarm?]
+  (let [started-ns (System/nanoTime)
+        deadline-ns (+ started-ns
+                       (* (long cutover-sync-timeout-ms) 1000000))]
+    (loop [attempt 0 delayed? false last-proof nil]
+      (when (or (>= attempt reload-max-attempts)
+                (>= (System/nanoTime) deadline-ns))
+        (throw
+         (ex-info
+          "cutover source could not converge before the synchronization bound"
+          {:code :cutover-sync-timeout
+           :timeout-ms cutover-sync-timeout-ms
+           :attempts attempt
+           :last-proof last-proof})))
+      (let [reload-result (maybe-reload!)
+            _ (when (= :refused reload-result)
+                (throw
+                 (ex-info
+                  "cutover source reload refused a regressed log"
+                  {:code :cutover-reload-refused})))
+            _ (when (= :in-progress reload-result)
+                (throw
+                 (ex-info
+                  "cutover source reload did not join the active reload"
+                  {:code :cutover-reload-in-progress})))
+            _ (when (and prewarm?
+                         (not delayed?)
+                         (pos? cutover-prepare-cache-delay-ms))
+                (Thread/sleep (long cutover-prepare-cache-delay-ms)))
+            roots (when prewarm?
+                    (locking dlock (capture-query-roots!)))
+            built (when roots (query-cache-for-roots roots))
+            proof (capture-installed-cutover-marker cutover-id)
+            cache-current?
+            (or
+             (not prewarm?)
+             (locking dlock
+               (let [current-roots (capture-query-roots!)]
+                 (and
+                  (query-cache-matches-roots? built current-roots)
+                  (query-cache-matches-roots? @cache current-roots)))))]
+        (if (and (:installed? proof) cache-current?)
+          {:marker (:marker proof)
+           :reload reload-result
+           :attempts (inc attempt)
+           :prewarmed prewarm?
+           :elapsed-ms
+           (quot (- (System/nanoTime) started-ns) 1000000)}
+          (recur (inc attempt)
+                 (or delayed?
+                     (and prewarm?
+                          (pos? cutover-prepare-cache-delay-ms)))
+                 proof))))))
+
 (defn- comparable-cutover-marker [marker]
   (select-keys marker [:format :cutover-id :version :logs]))
 
@@ -7753,6 +7876,58 @@
         (assoc (cutover-base-response)
                :drain (assoc drain :complete (cutover-drained? drain))))))
 
+(defn cutover-prepare-response [req]
+  (locking cutover-control-lock
+    (or
+     (cutover-auth-rejection req)
+     (when-not (valid-cutover-id? (:cutover-id req))
+       (cutover-rejection
+        :invalid-cutover-id
+        "cutover-id must be a nonblank protocol token"))
+     (when (write-authorized?)
+       (cutover-rejection
+        :cutover-prepare-authoritative
+        "cutover prepare is read-only and may run only on a standby or retired generation"))
+     (when-not (contains? #{:standby :retired}
+                          (current-coordinator-role))
+       (cutover-rejection
+        :cutover-invalid-phase
+        "cutover prepare requires a standby or retired generation"))
+     (let [cutover-id (:cutover-id req)
+           role (current-coordinator-role)]
+       (try
+         (let [prepared (synchronize-cutover-source! cutover-id true)]
+           (when (or (write-authorized?)
+                     (not= role (current-coordinator-role)))
+             (throw
+              (ex-info
+               "cutover prepare changed writer authority or coordinator role"
+               {:code :cutover-prepare-authority-raced})))
+           (reset! cutover-state
+                   {:protocol cutover-protocol
+                    :phase :prepared
+                    :cutover-id cutover-id
+                    :role role
+                    :marker (:marker prepared)
+                    :completed-at-ms (System/currentTimeMillis)})
+           {:ok true
+            :protocol cutover-protocol
+            :phase role
+            :prepared true
+            :cutover-id cutover-id
+            :instance @authority-instance
+            :version (get-in prepared [:marker :version])
+            :marker (:marker prepared)
+            :sync (dissoc prepared :marker)
+            :writer-authority (writer-authority-status)})
+         (catch Throwable t
+           (cutover-rejection
+            (or (:code (ex-data t))
+                :cutover-prepare-failed)
+            (.getMessage t)
+            (select-keys (ex-data t)
+                         [:timeout-ms :attempts]))))))))
+
 (defn cutover-demote-response [req]
   (locking cutover-control-lock
     (or
@@ -7814,15 +7989,15 @@
              ;; name the exact handoff boundary.
              (let [drain (await-cutover-drain!)
                    _ (durable-barrier!)
-                   marker
-                   (locking dlock
-                     (when-not (= :demoting
-                                  (current-coordinator-role))
-                       (throw
-                        (ex-info
-                         "demotion phase changed before marker capture"
-                         {:code :cutover-phase-raced})))
-                     (capture-cutover-marker! cutover-id))
+                   synced (synchronize-cutover-source! cutover-id false)
+                   marker (:marker synced)
+                   _ (locking dlock
+                       (when-not (= :demoting
+                                    (current-coordinator-role))
+                         (throw
+                          (ex-info
+                           "demotion phase changed before marker capture"
+                           {:code :cutover-phase-raced}))))
                    response
                    (locking dlock
                      (let [handle @writer-authority-handle]
@@ -7840,6 +8015,7 @@
                                 :cutover-id cutover-id
                                 :source-instance @authority-instance
                                 :drain drain
+                                :sync (dissoc synced :marker)
                                 :marker marker
                                 :completed-at-ms
                                 (System/currentTimeMillis)})
@@ -7850,6 +8026,7 @@
                         :instance @authority-instance
                         :version (:version marker)
                         :drain drain
+                        :sync (dissoc synced :marker)
                         :marker marker
                         :writer-authority
                         (writer-authority-status)}))]
@@ -7940,13 +8117,9 @@
                  ;; Authority freezes the physical writer set. Reload now absorbs
                  ;; the predecessor's final tail before any write admission can
                  ;; reopen in this process.
-                 (let [reload-result (maybe-reload!)
-                       _ (when (= :refused reload-result)
-                           (throw
-                            (ex-info "final-tail reload refused a regressed log"
-                                     {:code :cutover-reload-refused})))
-                       observed (locking dlock
-                                  (capture-cutover-marker! cutover-id))]
+                 (let [synced
+                       (synchronize-cutover-source! cutover-id false)
+                       observed (:marker synced)]
                    (when-not (= (comparable-cutover-marker expected)
                                 (comparable-cutover-marker observed))
                      (throw
@@ -7982,6 +8155,7 @@
                     :cutover-id cutover-id
                     :instance @authority-instance
                     :version (:version observed)
+                    :sync (dissoc synced :marker)
                     :marker observed
                     :source-marker expected
                     :writer-authority (writer-authority-status)})

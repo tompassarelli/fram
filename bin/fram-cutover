@@ -20,12 +20,14 @@
   (str
    "usage:\n"
    "  fram-cutover status  --port P --log PATH --token-file FILE\n"
+   "  fram-cutover prepare --port P --log PATH --token-file FILE"
+   " --cutover-id ID\n"
    "  fram-cutover demote --port P --log PATH --token-file FILE"
    " --cutover-id ID --expected-instance BOOT --marker-out FILE\n"
    "  fram-cutover promote --port P --log PATH --token-file FILE"
    " --cutover-id ID --marker-file FILE\n"
    "optional: --host HOST (default 127.0.0.1)"
-   " --timeout-ms N (default 15000)\n"))
+   " --timeout-ms N (default 65000)\n"))
 
 (defn exit! [code response]
   (println (pr-str response))
@@ -169,7 +171,7 @@
       options (parse-options raw-options)
       host (or (:host options) "127.0.0.1")
       port (positive-int! (required! options :port) "--port")
-      timeout-ms (positive-int! (or (:timeout-ms options) "15000")
+      timeout-ms (positive-int! (or (:timeout-ms options) "65000")
                                 "--timeout-ms")
       log (required! options :log)
       token (read-token! (required! options :token-file))
@@ -178,6 +180,11 @@
         "status"
         {:op :cutover-status
          :token token}
+
+        "prepare"
+        {:op :cutover-prepare
+         :token token
+         :cutover-id (required! options :cutover-id)}
 
         "demote"
         {:op :cutover-demote
