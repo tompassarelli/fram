@@ -18,6 +18,7 @@
       (do (swap! failures inc) (println "FAIL" label))))
 
 (def report! #'coord-daemon/report-slow-read!)
+(def report-query! #'coord-daemon/report-query-execution!)
 (def MS 1000000)
 
 (defn emit
@@ -111,6 +112,44 @@
   (check! "show preserves its response" (= {:rows []} response))
   (check! "show is attributed, with lock-wait reported as the zero it is"
           (= [:reload [:snapshot "@swarm"] [:report :show true true]] @events)))
+
+;; The detailed query line carries fixed-cardinality shape data and phase
+;; allocation, never query text/predicate values.  Counts clamp at 32 so a
+;; hostile query cannot manufacture an unbounded metrics label vocabulary.
+(reset! coord-daemon/query-execution-stats
+        {:slow 0 :last nil :max-ms 0 :max-allocated-bytes 0})
+(let [rules
+      (mapv
+       (fn [i]
+         {:head {:rel (str "derived-" i) :args [{:var "x"}]}
+          :body [{:rel "triple"
+                  :args [{:var "x"} (str "secret-predicate-" i) {:var "v"}]}]})
+       (range 40))
+      req {:op :query-page :query {:find "derived-0" :strata [rules]}}
+      out
+      (with-redefs-fn
+        {#'coord-daemon/query-profile-ms 1}
+        (fn []
+          (with-out-str
+            (report-query!
+             req "scan" 362737
+             0 100
+             (* 2 MS) 200
+             (* 7 MS) 600
+             (* 10 MS) 1000))))
+      sample (:last @coord-daemon/query-execution-stats)]
+  (check! "slow query names snapshot/evaluate/encode phases"
+          (and (str/includes? out "snapshot 2ms")
+               (str/includes? out "evaluate 5ms")
+               (str/includes? out "encode 3ms")))
+  (check! "slow query reports exact thread allocation delta"
+          (str/includes? out "allocated=900B"))
+  (check! "query shape cardinalities are clamped"
+          (and (= :stratified (:shape sample))
+               (= 32 (:rules sample))
+               (= 32 (:literals sample))))
+  (check! "query diagnostics never emit predicate/query contents"
+          (not (str/includes? out "secret-predicate"))))
 
 (println (format "slow_read_attribution: %d / %d PASS"
                  (- @checks @failures) @checks))

@@ -86,6 +86,51 @@
 ;; global publication lose its version/identity check.
 (def query-cache-build-lock (Object.))
 (def query-cache-flight (atom nil))
+;; Bounded operational attribution: fixed-key maps only, never query text or
+;; per-shape labels.  This makes the allocation cliff observable without
+;; turning an unbounded query vocabulary into a metrics-cardinality leak.
+(def query-profile-ms
+  (max 1 (or (some-> (System/getenv "FRAM_QUERY_PROFILE_MS") parse-long) 250)))
+(def query-cache-build-stats
+  (atom {:builds 0 :last nil :max-ms 0 :max-allocated-bytes 0}))
+(def query-execution-stats
+  (atom {:slow 0 :last nil :max-ms 0 :max-allocated-bytes 0}))
+(def ^:private query-allocation-bean
+  (delay
+    (try
+      ;; Resolve through reflection so the same source remains loadable under
+      ;; Babashka, whose native image does not expose java.management classes at
+      ;; analysis time.  The production JVM resolves the HotSpot interface and
+      ;; records exact per-request thread allocation; BB cleanly reports 0.
+      (let [management (Class/forName "java.lang.management.ManagementFactory")
+            get-bean (.getMethod management "getThreadMXBean" (make-array Class 0))
+            bean (.invoke get-bean nil (object-array 0))
+            interface (Class/forName "com.sun.management.ThreadMXBean")]
+        (when (.isInstance interface bean)
+          (let [supported (.getMethod interface "isThreadAllocatedMemorySupported"
+                                      (make-array Class 0))
+                enabled (.getMethod interface "isThreadAllocatedMemoryEnabled"
+                                    (make-array Class 0))
+                enable (.getMethod interface "setThreadAllocatedMemoryEnabled"
+                                   (into-array Class [Boolean/TYPE]))
+                get-bytes (.getMethod interface "getThreadAllocatedBytes"
+                                      (into-array Class [Long/TYPE]))]
+            (when (true? (.invoke supported bean (object-array 0)))
+              (when-not (true? (.invoke enabled bean (object-array 0)))
+                (.invoke enable bean (object-array [true])))
+              {:bean bean :get-bytes get-bytes}))))
+      (catch Throwable _ nil))))
+(defn- thread-allocated-bytes []
+  (try
+    (if-let [{:keys [bean get-bytes]} @query-allocation-bean]
+      (long (.invoke get-bytes bean
+                     (object-array [(.getId (Thread/currentThread))])))
+      -1)
+    (catch Throwable _ -1)))
+(defn- allocation-delta [before after]
+  (if (and (<= 0 before) (<= before after)) (- after before) 0))
+(defn- elapsed-ms [before after]
+  (quot (- after before) 1000000))
 (def subscribers (atom []))
 (def subscription-sockets (atom #{}))
 (def connection-sockets (atom #{}))
@@ -630,6 +675,8 @@
     (swap! *flat-batch* conj (flat-line op te p r seq))    ; defer — flushed once at commit end
     (write-flat-lines! [(flat-line op te p r seq)])))       ; immediate (single-op / non-batched callers)
 
+(declare apply-commit-delta!)
+
 ;; coord.clj persists leases through its v2 transaction log. In serve-flat mode
 ;; `co` deliberately has no v2 log, so accepted lease mutations need the same
 ;; flat projection bridge used by ordinary fact writes. Keep the mutation and
@@ -639,6 +686,7 @@
   (assert-flat-corpus-append-boundaries!)
   (let [st (:store @co)
         resource (:res req)
+        pre (current-seq @co)
         before (read-lease @co resource)
         schema-single? (= "single" (s/cardinality st lease-pred))
         result (action)]
@@ -664,6 +712,18 @@
                                     (encode-lease (:holder before) (:exp before) (:epoch before))
                                     seq))]
         (write-flat-lines! (cond-> (vec schema-lines) lease-line (conj lease-line)))))
+    ;; Lease renewals are the coordinator's highest-frequency coordination
+    ;; mutation.  They used to advance the Store version without advancing the
+    ;; immutable query cache, so the very next query rebuilt the entire corpus
+    ;; and rotations (~4.5s / several GiB at 362k facts).  Once the lease schema
+    ;; already exists, the mutation changes exactly one (subject,predicate)
+    ;; group and can use the same proven delta reconciliation as ordinary
+    ;; asserts/retracts.  The first-ever lease still takes the conservative cold
+    ;; path because that transaction also introduces schema facts.
+    (when (> (current-seq @co) pre)
+      (if schema-single?
+        (apply-commit-delta! pre (lease-subj resource) lease-pred)
+        (swap! cache assoc :version -1)))
     result))
 (defn- flush-flat-batch! []
   (when *flat-batch*
@@ -1195,9 +1255,47 @@
 
 (defn- build-query-cache-for-roots [roots]
   (locking query-cache-build-lock
-    (let [facts (query-client-view-facts
-                 (:store-root roots) (:schema-root roots))]
-      {:facts (set facts) :idx (idx-build facts) :index nil
+    (let [t0 (System/nanoTime)
+          a0 (thread-allocated-bytes)
+          facts (query-client-view-facts
+                 (:store-root roots) (:schema-root roots))
+          t1 (System/nanoTime)
+          a1 (thread-allocated-bytes)
+          facts-set (set facts)
+          t2 (System/nanoTime)
+          a2 (thread-allocated-bytes)
+          idx (idx-build facts)
+          t3 (System/nanoTime)
+          a3 (thread-allocated-bytes)
+          total-ms (elapsed-ms t0 t3)
+          allocated (allocation-delta a0 a3)
+          sample {:version (:version roots)
+                  :facts (count facts)
+                  :ms total-ms
+                  :phases-ms {:facts (elapsed-ms t0 t1)
+                              :set (elapsed-ms t1 t2)
+                              :index (elapsed-ms t2 t3)}
+                  :allocated-bytes allocated
+                  :phase-allocated-bytes
+                  {:facts (allocation-delta a0 a1)
+                   :set (allocation-delta a1 a2)
+                   :index (allocation-delta a2 a3)}}]
+      (swap! query-cache-build-stats
+             (fn [stats]
+               (-> stats
+                   (update :builds inc)
+                   (assoc :last sample)
+                   (update :max-ms max total-ms)
+                   (update :max-allocated-bytes max allocated))))
+      (when (>= total-ms query-profile-ms)
+        (println
+         (str "[fram] query cache build " total-ms "ms"
+              " = facts " (get-in sample [:phases-ms :facts]) "ms"
+              " + set " (get-in sample [:phases-ms :set]) "ms"
+              " + index " (get-in sample [:phases-ms :index]) "ms"
+              "; facts=" (:facts sample)
+              " allocated=" allocated "B")))
+      {:facts facts-set :idx idx :index nil
        :version (:version roots)
        :store-root (:store-root roots)
        :schema-root (:schema-root roots)})))
@@ -1355,6 +1453,64 @@
                     " + lock-wait " (ms t1 t2) "ms"
                     " + execute " (ms t2 t3) "ms")))))
 
+(defn- bounded-metric-count [n] (min 32 (long (or n 0))))
+
+(defn- query-shape-summary [req]
+  (let [q (:query req)
+        strata (when (map? q) (:strata q))
+        rules (if (vector? strata)
+                (vec (mapcat identity strata))
+                (vec (or (when (map? q) (:rules q)) [])))
+        literals (reduce + 0 (map #(count (or (:body %) [])) rules))
+        shape (cond
+                (not (map? q)) :none
+                (mentions-fact-id? q) :fact-id
+                (vector? strata) :stratified
+                (map? (:find q)) :aggregate
+                (simple-query? q) :simple
+                :else :rules)]
+    {:op (:op req)
+     :shape shape
+     :strata (bounded-metric-count (count (or strata [])))
+     :rules (bounded-metric-count (count rules))
+     :literals (bounded-metric-count literals)}))
+
+(defn- report-query-execution!
+  [req engine fact-count t0 a0 t1 a1 t2 a2 t3 a3]
+  (let [total-ms (elapsed-ms t0 t3)]
+    (when (>= total-ms query-profile-ms)
+      (let [allocated (allocation-delta a0 a3)
+            sample (merge
+                    (query-shape-summary req)
+                    {:engine engine
+                     :facts fact-count
+                     :ms total-ms
+                     :phases-ms {:snapshot (elapsed-ms t0 t1)
+                                 :evaluate (elapsed-ms t1 t2)
+                                 :encode (elapsed-ms t2 t3)}
+                     :allocated-bytes allocated
+                     :phase-allocated-bytes
+                     {:snapshot (allocation-delta a0 a1)
+                      :evaluate (allocation-delta a1 a2)
+                      :encode (allocation-delta a2 a3)}})]
+        (swap! query-execution-stats
+               (fn [stats]
+                 (-> stats
+                     (update :slow inc)
+                     (assoc :last sample)
+                     (update :max-ms max total-ms)
+                     (update :max-allocated-bytes max allocated))))
+        (println
+         (str "[fram] slow query " total-ms "ms"
+              " = snapshot " (get-in sample [:phases-ms :snapshot]) "ms"
+              " + evaluate " (get-in sample [:phases-ms :evaluate]) "ms"
+              " + encode " (get-in sample [:phases-ms :encode]) "ms"
+              "; allocated=" allocated "B"
+              " shape=" (name (:shape sample))
+              " rules=" (:rules sample)
+              " literals=" (:literals sample)
+              " facts=" fact-count))))))
+
 (defn- execute-query [req roots]
   (let [control (or *request-query-control* (new-query-control req))
         use-idx (and (= :query (:op req))
@@ -1375,7 +1531,11 @@
         ;; a normal validation envelope after its connection already pipelined
         ;; forbidden extra input.
         (query-check)
-        (let [snapshot (materialize-query-snapshot roots)
+        (let [t0 (System/nanoTime)
+              a0 (thread-allocated-bytes)
+              snapshot (materialize-query-snapshot roots)
+              t1 (System/nanoTime)
+              a1 (thread-allocated-bytes)
               _ (query-check)
               res (case (:op req)
                     :query (if use-idx
@@ -1402,25 +1562,34 @@
                                  (assoc (q/run facts (:query req)) :as-of s)))))
               bounded (enforce-result-row-limit res control)
               stamped (assoc bounded :version version :engine engine)
+              t2 (System/nanoTime)
+              a2 (thread-allocated-bytes)
               utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
               edn-bytes (utf8-size (pr-str stamped))
               json-bytes (utf8-size (fram.rt/to-json stamped))
               max-bytes (if (= :query-page (:op req))
                           q/max-page-wire-bytes
-                          (:max-response-bytes control))]
-          (if (and (<= edn-bytes max-bytes)
-                   (<= json-bytes max-bytes))
-            stamped
-            (if (= :query-page (:op req))
-              {:error ["query page response exceeded its final wire bound"]
-               :code :query-page-response-too-large
-               :max-bytes max-bytes
-               :version version :engine engine}
-              {:error ["query response exceeded its final wire bound"]
-               :code :query-response-too-large
-               :max-bytes max-bytes
-               :edn-bytes edn-bytes :json-bytes json-bytes
-               :version version :engine engine}))))
+                          (:max-response-bytes control))
+              response
+              (if (and (<= edn-bytes max-bytes)
+                       (<= json-bytes max-bytes))
+                stamped
+                (if (= :query-page (:op req))
+                  {:error ["query page response exceeded its final wire bound"]
+                   :code :query-page-response-too-large
+                   :max-bytes max-bytes
+                   :version version :engine engine}
+                  {:error ["query response exceeded its final wire bound"]
+                   :code :query-response-too-large
+                   :max-bytes max-bytes
+                   :edn-bytes edn-bytes :json-bytes json-bytes
+                   :version version :engine engine}))
+              t3 (System/nanoTime)
+              a3 (thread-allocated-bytes)]
+          (report-query-execution!
+           req engine (count (:facts snapshot))
+           t0 a0 t1 a1 t2 a2 t3 a3)
+          response))
       (catch clojure.lang.ExceptionInfo t
         (if (= :fram-query-abort (:type (ex-data t)))
           (query-abort-response t version engine)
@@ -4951,7 +5120,9 @@
        :last-edit-outcome @last-edit-outcome
        :queries {:active @active-queries
                  :monitors @active-query-monitors
-                 :stops @query-stops}
+                 :stops @query-stops
+                 :cache-builds @query-cache-build-stats
+                 :execution @query-execution-stats}
        :controls {:active @active-control-reads
                   :monitors @active-control-monitors
                   :stops @control-stops}

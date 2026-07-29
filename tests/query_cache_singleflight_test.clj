@@ -19,6 +19,10 @@
 (def materialize! #'coord-daemon/materialize-query-snapshot)
 (def build-reload! #'coord-daemon/build-reload-candidate)
 (def install-reload! #'coord-daemon/install-reload-candidate!)
+(def build-warm! #'coord-daemon/build-warm-cache)
+(def capture-roots-var #'coord-daemon/capture-query-roots!)
+(def lease-mutate-var #'coord-daemon/lease-flat-mutation!)
+(def client-view-from-var #'coord-daemon/client-view-facts-from)
 
 (defn await!
   [pred timeout-ms]
@@ -208,6 +212,81 @@
     (check! "waiter cancellation does not cancel the shared owner"
             (not (realized? result))))
   (reset! coord-daemon/query-cache-flight nil))
+
+;; Lease traffic is continuous even when domain work is idle.  An accepted
+;; acquire/renew/release advances the Store version, so failing to patch the
+;; cache makes the next query pay one whole-corpus facts+rotations rebuild.  Use
+;; the real lease kernel here and prove every established-schema lease mutation
+;; leaves the cache byte-for-byte equal to a fresh client projection.
+(let [dir (.toFile
+           (java.nio.file.Files/createTempDirectory
+            "fram-lease-query-cache"
+            (make-array java.nio.file.attribute.FileAttribute 0)))
+      v2-log (str (java.io.File. dir "coord.v2.log"))
+      flat (str (java.io.File. dir "coordination.log"))
+      co0 (coord/new-coord v2-log)
+      schema-root {}]
+  (spit flat "")
+  (reset! coord-daemon/co co0)
+  (reset! coord-daemon/flat-log flat)
+  (reset! coord-daemon/flat-canonical? true)
+  (reset! coord-daemon/telemetry-log nil)
+  (reset! coord-daemon/schema-view schema-root)
+  ;; Establish the lease schema first.  Its first transaction is deliberately
+  ;; allowed to invalidate because it also introduces schema facts.
+  (with-redefs-fn
+    {#'coord-daemon/write-flat-lines! (fn [_] nil)}
+    (fn []
+      (lease-mutate-var
+       {:res "schema-seed" :holder "holder" :ttl-ms 60000}
+       #(coord/acquire-lease! co0 "holder" "schema-seed" 60000))))
+  (reset! coord-daemon/cache (build-warm! co0 schema-root))
+  (let [fresh? #(= (:facts @coord-daemon/cache)
+                   (set (client-view-from-var co0 schema-root)))
+        no-rebuild?
+        (fn []
+          (let [builds (atom 0)
+                roots (capture-roots-var)]
+            (with-redefs-fn
+              {#'coord-daemon/query-client-view-facts
+               (fn [& _] (swap! builds inc) [])}
+              (fn [] (materialize! roots)))
+            (zero? @builds)))]
+    (with-redefs-fn
+      {#'coord-daemon/write-flat-lines! (fn [_] nil)}
+      (fn []
+        (let [acquired
+              (lease-mutate-var
+               {:res "hot" :holder "holder" :ttl-ms 60000}
+               #(coord/acquire-lease! co0 "holder" "hot" 60000))]
+          (check! "lease acquire advances the warm cache with no result-set change"
+                  (and (= (coord/current-seq co0)
+                          (:version @coord-daemon/cache))
+                       (fresh?)))
+          (check! "query after lease acquire performs no whole-corpus rebuild"
+                  (no-rebuild?))
+          (let [renewed
+                (lease-mutate-var
+                 {:res "hot" :holder "holder" :epoch (:epoch acquired)
+                  :ttl-ms 60000}
+                 #(coord/renew-lease!
+                   co0 "holder" "hot" (:epoch acquired) 60000))]
+            (check! "lease renewal advances the warm cache with no result-set change"
+                    (and (= (coord/current-seq co0)
+                            (:version @coord-daemon/cache))
+                         (fresh?)))
+            (check! "query after lease renewal performs no whole-corpus rebuild"
+                    (no-rebuild?))
+            (lease-mutate-var
+             {:res "hot" :holder "holder" :epoch (:epoch renewed)}
+             #(coord/release-lease!
+               co0 "holder" "hot" (:epoch renewed)))
+            (check! "lease release advances the warm cache with no result-set change"
+                    (and (= (coord/current-seq co0)
+                            (:version @coord-daemon/cache))
+                         (fresh?)))
+            (check! "query after lease release performs no whole-corpus rebuild"
+                    (no-rebuild?))))))))
 
 (println (format "query_cache_singleflight: %d / %d PASS"
                  (- @checks @failures) @checks))
