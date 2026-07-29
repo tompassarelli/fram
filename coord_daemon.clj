@@ -5919,7 +5919,50 @@
 ;; instead (fram.rt/to-json = cheshire/generate-string): the Elixir client decodes
 ;; JSON ~90x faster than EDN (eden), so an opt-in JSON :query is the first-load/refresh
 ;; win. Gated purely on :fmt — no :fmt => pr-str, exactly as today.
-(defn- serialize-resp [fmt resp] (wire/serialize-response fmt resp fram.rt/to-json))
+;; The whole-corpus :facts response is ~60 MB of JSON, and it was rebuilt from
+;; scratch on EVERY request even though the triples behind it are already cached
+;; per version.
+;;
+;; That is what has been killing the coordinator. G1HeapRegionSize is 8 MB here,
+;; so anything over 4 MB is a HUMONGOUS allocation and goes straight into the old
+;; generation — it never gets the chance to die young. Measured 2026-07-29 on the
+;; live daemon: each board verb promoted ~107 MB into old gen (464 -> 784 MB over
+;; three `north threads`). At -Xmx16g that fills old gen in ~150 verbs, after
+;; which G1 thrashes: the wedged process found today was 20.5 GB RSS, old gen
+;; 99.98%, 169 full GCs, 6.5 cores pegged, accepting connections but answering
+;; nothing.
+;;
+;; The corpus version moves in only ~5% of one-second intervals, so ~95% of that
+;; allocation was rebuilding a byte-identical string.
+;;
+;; Keyed on the IDENTITY of the facts vector, not just the version: the
+;; whole-corpus path hands back the same cached vector for a given version, so it
+;; hits, while a scoped slice builds a fresh vector every time and therefore can
+;; never collide with another subject set's answer. Single entry — only the
+;; current version is worth holding, and holding two of these would itself be the
+;; memory problem.
+(def ^:private facts-text-cache (atom nil))
+
+(defn- cacheable-facts-response?
+  "The whole-corpus :facts shape. :status also carries a :facts key, but as a
+   COUNT, so the vector? test is what separates them."
+  [resp]
+  (and (map? resp)
+       (integer? (:version resp))
+       (vector? (:facts resp))))
+
+(defn- serialize-resp [fmt resp]
+  (if-not (cacheable-facts-response? resp)
+    (wire/serialize-response fmt resp fram.rt/to-json)
+    (let [key [(:version resp)
+               (if (= :json fmt) :json :edn)
+               (System/identityHashCode (:facts resp))]
+          cached @facts-text-cache]
+      (if (= key (:key cached))
+        (:text cached)
+        (let [text (wire/serialize-response fmt resp fram.rt/to-json)]
+          (reset! facts-text-cache {:key key :text text})
+          text)))))
 
 (defn- try-reply
   ([^BufferedWriter w resp] (try-reply w resp nil))
