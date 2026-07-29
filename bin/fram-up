@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Ensure the Fram coordinator daemon is running — the "revive" half of the
-# doctor handshake (analogous to `beagle-doctor --revive`). Idempotent: if a
-# daemon is already up it's a no-op; otherwise it starts one (detached) on the
-# canonical log and waits until it answers.
+# Ensure the Fram coordinator daemon is running. Idempotent: if a daemon is
+# already up it's a no-op; otherwise it starts one (detached) on the canonical
+# log and waits until it answers.
 #
 #   FRAM_PORT / FRAM_LOG select the port + log (default 7977, ./coordination.log).
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -13,9 +12,22 @@ RESTART=0; [ "$1" = "--restart" ] && RESTART=1
 # PIDs listening on the port. fuser/lsof are NOT always installed (e.g. NixOS),
 # and when they're missing the old kill silently no-opped, leaving a zombie that
 # squatted the port — the new daemon then failed to bind and `up` falsely
-# reported success because the zombie answered `doctor`. ss (iproute2) is
+# reported success because the zombie answered the readiness probe. ss (iproute2) is
 # reliably present; kill by the listener PID and VERIFY the port frees.
 port_pids() { ss -tlnpH "sport = :$FRAM_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
+
+# Readiness is only a fenced coordinator version roundtrip. `fram doctor` also
+# replays the complete log to inspect schema and recovery state, which made
+# every cold-start poll repeat the work the daemon was already doing.
+coordinator_ready() {
+  FRAM_PROBE_PORT="$FRAM_PORT" FRAM_PROBE_LOG="$LOG" \
+    bb -cp "$HERE/../out" -e '
+      (require (quote [fram.rt :as rt]))
+      (let [port (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
+            log (System/getenv "FRAM_PROBE_LOG")
+            version (rt/coord-version-for-log port log)]
+        (System/exit (if (neg? version) 1 0)))'
+}
 
 if [ "$RESTART" = 1 ]; then
   echo "stopping any coordinator on :$FRAM_PORT"
@@ -27,7 +39,7 @@ if [ "$RESTART" = 1 ]; then
     echo "ERROR: :$FRAM_PORT still held by PID(s) $(port_pids | tr '\n' ' ')after SIGKILL — kill manually." >&2
     exit 1
   fi
-elif "$HERE/fram" doctor 2>/dev/null | grep -q 'coordinator UP'; then
+elif coordinator_ready 2>/dev/null; then
   echo "coordinator already up on :$FRAM_PORT (use \`up --restart\` to reload it)"
   exit 0
 fi
@@ -44,7 +56,7 @@ disown 2>/dev/null || true
 # the whole fact log at startup, so give it room (and a first-ever run may resolve
 # deps once). ~30s ceiling; it usually answers in a few seconds.
 for _ in $(seq 120); do
-  if "$HERE/fram" doctor 2>/dev/null | grep -q 'coordinator UP'; then
+  if coordinator_ready 2>/dev/null; then
     echo "coordinator up on :$FRAM_PORT"
     exit 0
   fi
