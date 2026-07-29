@@ -6,7 +6,7 @@
 # COORDINATION (coherence scan) separate. SAFE: /tmp corpora only.
 # ============================================================================
 set -u
-cd /home/tom/code/fram
+cd "$(cd "$(dirname "$0")" && pwd)"
 mapfile -t ALL < <(ls src/fram/*.bclj)
 TOT=${#ALL[@]}
 echo "=== System 3 K-SWEEP — gate cost vs corpus size K ==="

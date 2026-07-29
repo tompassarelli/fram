@@ -1,6 +1,6 @@
 ;; force-export.clj — regenerate threads/ from the authoritative log, skipping the
 ;; symmetric export guard (which refuses unless files already == log). Replicates
-;; fram.main/cmd-export's body (main.bclj:80-87). Run: cd ~/code/fram && bb -cp out force-export.clj
+;; fram.main/cmd-export's body (main.bclj:80-87). Run: cd ~/code/fram/main && bb -cp out force-export.clj
 (require '[fram.kernel :as k] '[fram.fold :as fold] '[fram.export :as exp] '[fram.rt :as rt])
 (def log "/home/tom/.local/state/north/facts.log")
 (def out "/home/tom/.local/state/north/threads")

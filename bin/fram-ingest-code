@@ -41,7 +41,7 @@
 ;; codegraph.src.codegraph into the live :32915 store.)
 ;;
 ;; Env (overridable for CI/tests; defaults match the live tree):
-;;   BEAGLE_HOME   (default ~/code/beagle)
+;;   BEAGLE_HOME   (default ~/code/beagle/main)
 ;;   FRAM_BEAGLE    (default $BEAGLE_HOME/bin/beagle)
 ;; ============================================================================
 (require '[clojure.string :as str]

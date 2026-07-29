@@ -36,10 +36,10 @@ repo (the `~/code/<name>` layout the commands below assume) and have
 [Babashka](https://github.com/babashka/babashka) (`bb`) on `PATH`:
 
 - **[fram](https://github.com/tompassarelli/fram)** — the fact store + Datalog
-  engine. Build its classpath dir (`fram/out`); the runner loads `-cp ~/code/fram/out`.
+  engine. Build its classpath dir (`fram/out`); the runner loads `-cp ~/code/fram/main/out`.
 - **[beagle](https://github.com/tompassarelli/beagle)** — provides `bin/beagle-facts`
   and `bin/beagle-roundtrip` (the AST→facts projectors). `bin/*` here resolve it
-  via `$BEAGLE` (default `$HOME/code/beagle`); override if you check it out elsewhere.
+  via `$BEAGLE` (default `$HOME/code/beagle/main`); override if you check it out elsewhere.
 - **[gjoa](https://github.com/tompassarelli/gjoa)** — the live corpus the benchmarks
   in RESULTS.md run against. Any beagle source tree works; gjoa is just the one measured.
 
@@ -47,7 +47,7 @@ repo (the `~/code/<name>` layout the commands below assume) and have
 
 ```sh
 bin/emit-corpus  ~/code/gjoa/src ~/code/gjoa/tools ~/code/gjoa/tests  build/gjoa.facts
-bb -cp ~/code/fram/out:src:~/code/fram  -m codegraph  build/gjoa.facts
+bb -cp ~/code/fram/main/out:src:~/code/fram/main  -m codegraph  build/gjoa.facts
 ```
 
 ## What it proves (and doesn't)

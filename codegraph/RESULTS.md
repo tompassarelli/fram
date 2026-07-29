@@ -6,7 +6,7 @@ corpus the Fram-backed claim graph answers two questions the incumbent
 computes the real call-graph transitive closure correctly. The bet cleared its
 kill lines decisively. Next turtle is the source-of-truth round-trip gate.
 
-Run: `bb -cp ~/code/fram/out:src src/codegraph.clj build/gjoa-full.claims`
+Run: `bb -cp ~/code/fram/main/out:src src/codegraph.clj build/gjoa-full.claims`
 Corpus: gjoa `src` + `tools` + `tests` — **97 files, 193,179 claims**
 (29 EDN-unparseable leaf literals skipped — see caveats), **369 defns, 424
 resolved internal call-edges**.

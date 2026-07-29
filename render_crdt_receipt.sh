@@ -20,7 +20,7 @@
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
-export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
+export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 LOG=/tmp/store-render-test.log
 EDNDIR=/tmp/store-render-crdt-edn
 BCLJ=/tmp/store-render-crdt.bclj

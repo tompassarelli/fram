@@ -44,7 +44,7 @@ mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
 # Pin Beagle's Racket for the separate facts-check-emit compiler gate.
 # facts-roundtrip itself is self-hosted and enters through $BEAGLE_HOME/bin/beagle.
 # FRAM_RACKET overrides; mirrors bin/_beagle-racket.
-BEAGLE_HOME="${BEAGLE_HOME:-${HOME:+$HOME/code/beagle}}"
+BEAGLE_HOME="${BEAGLE_HOME:-${HOME:+$HOME/code/beagle/main}}"
 _pinned_racket="${FRAM_RACKET:-}"
 if [[ -z "$_pinned_racket" && -n "$BEAGLE_HOME" ]]; then
   _pinned_racket="$(direnv exec "$BEAGLE_HOME" which racket 2>/dev/null || true)"

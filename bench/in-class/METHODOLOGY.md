@@ -6,7 +6,7 @@ not compare Fram to embedded, non-durable immutable databases.
 
 ## Scenario contract
 
-`~/code/fram/bench/in-class/scenario-contract.edn` is authoritative. Corpus
+`~/code/fram/main/bench/in-class/scenario-contract.edn` is authoritative. Corpus
 sizes are live triple counts and must be positive multiples of three. The
 default sizes are 3,000 and 30,000 triples; override them with
 `BENCH_SIZES=3000,30000,300000`.
@@ -86,12 +86,12 @@ Run the default landing gate from a clean Fram checkout:
 
 ```sh
 BENCH_RUNS=2 BENCH_SIZES=3000,30000 \
-  ~/code/fram/bench/in-class/run.sh
+  ~/code/fram/main/bench/in-class/run.sh
 ```
 
-`~/code/fram/bench/in-class/golden.edn` stores the accepted median for the four
+`~/code/fram/main/bench/in-class/golden.edn` stores the accepted median for the four
 headline metrics for every default adapter/size pair. The runner invokes
-`~/code/fram/bench/in-class/check-golden.bb` automatically. A landing fails if
+`~/code/fram/main/bench/in-class/check-golden.bb` automatically. A landing fails if
 a latency exceeds 1.50 times its accepted median, throughput falls below 0.67
 times its accepted median, an expected adapter/size case is absent, a row is
 malformed, or any adapter reports an error.
@@ -113,5 +113,5 @@ valid evidence for that workload; replacing it with SQLite here narrows the
 comparison class rather than rewriting the result.
 
 Datomic-transactor-class and XTDB adapter obligations are pinned in
-`~/code/fram/bench/in-class/adapters/README.md`. They remain explicit stubs
+`~/code/fram/main/bench/in-class/adapters/README.md`. They remain explicit stubs
 until their real durable services, exact revisions, and licenses are available.

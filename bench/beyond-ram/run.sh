@@ -9,7 +9,7 @@
 # The daemon runs on the JVM (clojure -M) — the representative runtime, matching prod.
 #   BENCH_FACTS=1000000 bench/beyond-ram/run.sh
 set -euo pipefail
-ROOT="/home/tom/code/fram"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 N="${BENCH_FACTS:-1000000}"
 WORK="${BENCH_WORK:-/tmp/fram-beyond-ram}"
 mkdir -p "$WORK"

@@ -12,7 +12,7 @@
 # Any divergence falsifies the claim and fails the gate.
 set -o pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-BR="${BEAGLE:-$HOME/code/beagle}/bin/beagle-roundtrip"
+BR="${BEAGLE:-$HOME/code/beagle/main}/bin/beagle-roundtrip"
 FRAM="${FRAM:-$(cd "$HERE/.." && pwd)}"
 A="$HERE/test/cmt-a.bjs"; B="$HERE/test/cmt-b.bjs"
 

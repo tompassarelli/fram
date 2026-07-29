@@ -23,7 +23,7 @@
 # ============================================================================
 set -uo pipefail
 FRAM="$(cd "$(dirname "$0")/.." && pwd)"; cd "$FRAM"
-export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
+export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 export FRAM_OUT="$FRAM/out"
 LOG="$FRAM/.fram/code.log"; WRITE=0
 while [ $# -gt 0 ]; do case "$1" in

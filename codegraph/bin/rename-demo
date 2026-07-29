@@ -5,8 +5,8 @@
 # claims in a Fram store, then projects each module's source back out. Other
 # modules' identically-named symbol is left untouched — by construction.
 set -o pipefail
-BEAGLE="${BEAGLE:-$HOME/code/beagle}"
-FRAM="${FRAM:-$HOME/code/fram}"
+BEAGLE="${BEAGLE:-$HOME/code/beagle/main}"
+FRAM="${FRAM:-$(cd "$(dirname "$0")/../.." && pwd)}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 old="$1"; new="$2"; target="$3"; shift 3
 

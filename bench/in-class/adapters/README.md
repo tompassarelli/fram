@@ -2,7 +2,7 @@
 
 An adapter is an executable invoked as `ADAPTER LIVE_TRIPLES RUN_ID`. It must
 emit exactly one line beginning `BENCHROW ` followed by a JSON object satisfying
-`~/code/fram/bench/in-class/scenario-contract.edn`.
+`~/code/fram/main/bench/in-class/scenario-contract.edn`.
 
 Every adapter must:
 
@@ -29,5 +29,5 @@ slots are intentionally documented stubs, not measured systems:
   licenses before landing.
 
 Both future adapters must retain the JSON keys and scenario counts in
-`~/code/fram/bench/in-class/scenario-contract.edn`; a new storage system does
+`~/code/fram/main/bench/in-class/scenario-contract.edn`; a new storage system does
 not get a bespoke, easier workload.

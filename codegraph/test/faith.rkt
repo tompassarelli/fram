@@ -5,11 +5,18 @@
 ;; form intact). With no substitution args, asserts the file is byte/datum-identical
 ;; (the untouched-file case).
 ;;   racket faith.rkt <orig.bjs> <mutated.edn> [<old-sym> <new-sym>]
-;; Resolves against a sibling beagle checkout (../../beagle), the layout the rest
-;; of the repo assumes (see Prerequisites in README; bin/* default to $HOME/code/beagle).
-(require (file "../../beagle/beagle-lib/private/parse.rkt")
-         (file "../../beagle/beagle-lib/private/claims-roundtrip.rkt")
-         racket/string racket/list racket/file)
+;; BEAGLE_HOME can select another checkout; the default is the primary checkout.
+(require racket/string racket/list racket/file)
+(define beagle-home
+  (or (getenv "BEAGLE_HOME")
+      (build-path (find-system-path 'home-dir) "code" "beagle" "main")))
+(define parse-path (build-path beagle-home "beagle-lib/private/parse.rkt"))
+(define facts-roundtrip-path
+  (build-path beagle-home "beagle-lib/private/facts-roundtrip.rkt"))
+(define read-beagle-syntax (dynamic-require parse-path 'read-beagle-syntax))
+(define edn-triples->datum (dynamic-require facts-roundtrip-path 'edn-triples->datum))
+(define read-edn-triples (dynamic-require facts-roundtrip-path 'read-edn-triples))
+(define datum->src (dynamic-require facts-roundtrip-path 'datum->src))
 (define args (current-command-line-arguments))
 (define orig-file (vector-ref args 0))
 (define mut-edn   (vector-ref args 1))

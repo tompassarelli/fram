@@ -17,7 +17,7 @@
 # ============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # fram repo root
-BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
+BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 DIR="${1:?usage: fram-code-on <dir> [port] [--src <subdir>]}"; DIR="$(cd "$DIR" && pwd)"; shift
 PORT="" SRC="$DIR"
 while [ $# -gt 0 ]; do

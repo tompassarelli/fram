@@ -22,7 +22,7 @@
 ;; LispReader (see tests/coord_write_def_test.clj). Needs the Beagle CLI to ingest
 ;; (BEAGLE_HOME / FRAM_BEAGLE); SKIPs cleanly if Beagle can't be resolved.
 ;;
-;;   BEAGLE_HOME=$HOME/code/beagle \
+;;   BEAGLE_HOME=$HOME/code/beagle/main \
 ;;     clojure -M tests/coord_editpath_defect_test.clj ; echo EXIT=$?
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]
@@ -33,7 +33,7 @@
 (def home (System/getProperty "user.home"))
 
 ;; --- Beagle resolution; SKIP if the CLI cannot be found ----------------------
-(def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
+(def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle/main")))
 (def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (when-not (.canExecute (io/file beagle-bin))
   (println "SKIP — no Beagle CLI (set FRAM_BEAGLE / BEAGLE_HOME)") (System/exit 0))

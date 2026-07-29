@@ -11,7 +11,7 @@ bb -cp out tests/<file>.clj            # e.g. bb -cp out tests/coord_edit_min_sm
 FRAM_LOG=/path/to/code.log bb -cp out tests/<file>.clj   # for the ones that need a log
 ```
 
-Run from the **repo root** (`~/code/fram`), not from inside `tests/`. Each script does
+Run from the **repo root** (`~/code/fram/main`), not from inside `tests/`. Each script does
 `(load-file "coord_daemon.clj")` / `(load-file "coord.clj")` by a path **relative to the
 current working directory** — those two coordinator files intentionally stay at the repo root (the
 bins `bin/fram-daemon` / `fram-edit-code` / `fram-render-code` also `load-file` them by relative

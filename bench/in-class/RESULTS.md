@@ -3,7 +3,7 @@
 Observed 2026-07-28 on Fram engine main `37c1b74`, harness revision
 `34da6a2`. Two complete suite receipts, two repetitions per adapter/size in
 each receipt, are committed raw at
-`~/code/fram/bench/in-class/results/2026-07-28-main.jsonl`.
+`~/code/fram/main/bench/in-class/results/2026-07-28-main.jsonl`.
 
 SQLite won every headline metric at both corpus sizes. No result is elided:
 all 16 raw rows reported `errors=0`, exact join row counts, and concurrent
@@ -32,7 +32,7 @@ SQLite was about 17–18x faster on the cold join, 2.3–2.4x faster on durable
 writes under concurrent reads, and 11–12x faster on the mixed workload.
 Adapter-ready boot is not a production daemon startup comparison: the current
 sandbox-safe boundary excludes Fram JVM startup, socket bind, and transport,
-as specified in `~/code/fram/bench/in-class/METHODOLOGY.md`.
+as specified in `~/code/fram/main/bench/in-class/METHODOLOGY.md`.
 
 Absolute cold-query and Fram write-throughput variance is high on this shared
 host. The ordering is stable in every raw sample, and both stored receipts pass

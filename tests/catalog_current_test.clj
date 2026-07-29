@@ -8,7 +8,7 @@
 ;;   BEAGLE=/path/to/beagle bb -cp out catalog_current_test.clj
 (require '[clojure.java.io :as io] '[clojure.java.shell :as sh] '[clojure.string :as str])
 
-(def beagle (or (System/getenv "BEAGLE") (str (System/getProperty "user.home") "/code/beagle")))
+(def beagle (or (System/getenv "BEAGLE") (str (System/getProperty "user.home") "/code/beagle/main")))
 (def committed (str beagle "/beagle-lib/private/stdlib-fram.rkt"))
 
 (when-not (.exists (io/file committed))
@@ -24,6 +24,6 @@
       (System/exit 0))
   (do (println "catalog_current_test: FAIL — beagle stdlib-fram.rkt DRIFTED from fram's source.")
       (println "  A fram signature changed without regenerating the catalog. Fix:")
-      (println "    cd ~/code/fram && bb bin/fram-primer --beagle-catalog > \\")
+      (println "    cd ~/code/fram/main && bb bin/fram-primer --beagle-catalog > \\")
       (println "      " committed)
       (System/exit 1)))

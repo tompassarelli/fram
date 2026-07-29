@@ -8,7 +8,7 @@
 # Usage: bin/fram-defcheck [port]        (default 49060; env FRAM_DEFCHECK_PORT)
 set -euo pipefail
 
-BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle}"
+BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 # shellcheck source=/dev/null
 source "$BEAGLE_HOME/bin/_beagle-racket"
 
