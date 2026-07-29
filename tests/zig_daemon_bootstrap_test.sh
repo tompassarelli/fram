@@ -107,6 +107,18 @@ assert_response "$status" \
                 (= \"$canonical_a\" (:log r))
                 (true? (get-in r [:writer-authority :write-authorized]))))"
 
+facts="$(fenced_request "$port" "$canonical_a" '{:op :facts}')"
+assert_response "$facts" \
+  "(fn [r] (and (= 3 (:version r)) (= \"$canonical_a\" (:log r))
+                (= #{[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]}
+                   (set (:facts r)))))"
+scoped_seed="$(fenced_request "$port" "$canonical_a" \
+  '{:op :facts-for-subjects :subjects ["@seed"]}')"
+assert_response "$scoped_seed" \
+  "(fn [r] (and (= 3 (:version r)) (= \"$canonical_a\" (:log r))
+                (= [[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]]
+                   (:facts r))))"
+
 mismatch="$(fenced_request "$port" "$canonical_b" "{:op :version}")"
 assert_response "$mismatch" \
   "(fn [r] (and (= :log-mismatch (:code r))
@@ -163,6 +175,13 @@ assert_response "$invalid" '(fn [r] (= :invalid-request (:code r)))'
 retracted="$(fenced_request "$port" "$canonical_a" \
   '{:op :retract :te "@mutation" :p "beta" :r "B"}')"
 assert_response "$retracted" '(fn [r] (= 6 (:ok r)))'
+
+scoped_mutation="$(fenced_request "$port" "$canonical_a" \
+  '{:op :facts-for-subjects :subjects ["@mutation" "@missing"]}')"
+assert_response "$scoped_mutation" \
+  "(fn [r] (and (= 6 (:version r)) (= \"$canonical_a\" (:log r))
+                (= #{[\"@mutation\" \"progress\" \"one\"] [\"@mutation\" \"alpha\" \"A\"]}
+                   (set (:facts r)))))"
 
 lease="$(fenced_request "$port" "$canonical_a" \
   '{:op :acquire-lease :res "native-write" :holder "holder-a" :ttl-ms 5000}')"

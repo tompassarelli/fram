@@ -30,6 +30,8 @@ const Operation = enum {
     renew_lease,
     release_lease,
     fence_ok,
+    facts,
+    facts_for_subjects,
     unknown,
 };
 
@@ -78,6 +80,7 @@ const field_res: u16 = 1 << 8;
 const field_holder: u16 = 1 << 9;
 const field_epoch: u16 = 1 << 10;
 const field_ttl_ms: u16 = 1 << 11;
+const field_subjects: u16 = 1 << 12;
 
 const MapFields = struct {
     op: Operation = .unknown,
@@ -92,6 +95,7 @@ const MapFields = struct {
     holder: StringField = .missing,
     epoch: IntField = .missing,
     ttl_ms: IntField = .missing,
+    subjects: ?[]const u8 = null,
     present: u16 = 0,
     duplicate: bool = false,
     unknown_field: bool = false,
@@ -1044,6 +1048,8 @@ fn dispatchOperation(
             request,
         ),
         .fence_ok => fenceOk(allocator, io, state, request),
+        .facts => renderFacts(allocator, state, canonical_log, null),
+        .facts_for_subjects => factsForSubjects(allocator, state, canonical_log, request),
         else => if (try requestFieldError(
             allocator,
             request,
@@ -1112,6 +1118,7 @@ fn requestFieldError(
         .{ .mask = field_holder, .message = "holder is required" },
         .{ .mask = field_epoch, .message = "epoch is required" },
         .{ .mask = field_ttl_ms, .message = "ttl-ms is required" },
+        .{ .mask = field_subjects, .message = "subjects is required" },
     };
     for (candidates) |candidate| {
         if ((missing & candidate.mask) != 0) {
@@ -1281,6 +1288,87 @@ fn releaseLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: 
 fn fenceOk(allocator: Allocator, io: Io, state: *DaemonState, request: *MapFields) ![]u8 {
     if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder | field_epoch)) |response| return response;
     return std.fmt.allocPrint(allocator, "{{:fence-ok {}}}", .{try requestHasCurrentFence(allocator, io, state, request)});
+}
+
+const ParsedSubjects = struct {
+    items: std.ArrayList([]u8),
+
+    fn deinit(subjects: *ParsedSubjects, allocator: Allocator) void {
+        for (subjects.items.items) |item| allocator.free(item);
+        subjects.items.deinit(allocator);
+    }
+};
+
+fn parseSubjects(allocator: Allocator, raw: []const u8) !ParsedSubjects {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[') return error.InvalidSubjects;
+    parser.index += 1;
+    var subjects: ParsedSubjects = .{ .items = .empty };
+    errdefer subjects.deinit(allocator);
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len) return error.InvalidSubjects;
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len) return error.InvalidSubjects;
+            return subjects;
+        }
+        const token = parser.scanValue() catch return error.InvalidSubjects;
+        const field = parseStringField(allocator, token) catch return error.InvalidSubjects;
+        const subject = switch (field) { .value => |value| value, else => return error.InvalidSubjects };
+        try subjects.items.append(allocator, subject);
+    }
+}
+
+fn subjectWanted(subjects: []const []u8, subject: []const u8) bool {
+    for (subjects) |candidate| {
+        if (std.mem.eql(u8, candidate, subject)) return true;
+    }
+    return false;
+}
+
+fn currentEvent(state: *DaemonState, scratch: Allocator, event: StoredEvent) !bool {
+    const live = try state.liveEvent(scratch, event.l, event.p, event.r) orelse return false;
+    return live.tx == event.tx and live.operation == .assert_fact;
+}
+
+fn renderFacts(allocator: Allocator, state: *DaemonState, canonical_log: []const u8, subjects: ?[]const []u8) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try output.writer.print("{{:version {d}, :log ", .{state.version});
+    try writeEdnString(&output.writer, canonical_log);
+    try writeAll(&output.writer, " :facts [");
+    var first = true;
+    for (state.events.items) |event| {
+        if (event.operation != .assert_fact or !(try currentEvent(state, allocator, event))) continue;
+        if (subjects) |wanted| {
+            if (!subjectWanted(wanted, event.l)) continue;
+        }
+        if (!first) try writeAll(&output.writer, " ");
+        first = false;
+        try writeAll(&output.writer, "[");
+        try writeEdnString(&output.writer, event.l);
+        try writeAll(&output.writer, " ");
+        try writeEdnString(&output.writer, event.p);
+        try writeAll(&output.writer, " ");
+        try writeEdnString(&output.writer, event.r);
+        try writeAll(&output.writer, "]");
+    }
+    try writeAll(&output.writer, "]}");
+    return output.toOwnedSlice();
+}
+
+fn factsForSubjects(allocator: Allocator, state: *DaemonState, canonical_log: []const u8, request: *MapFields) ![]u8 {
+    if (try requestFieldError(allocator, request, field_op | field_subjects, field_subjects)) |response| return response;
+    const raw = request.subjects orelse unreachable;
+    var subjects = parseSubjects(allocator, raw) catch return allocator.dupe(
+        u8,
+        "{:error \"facts-for-subjects requires a :subjects sequence\", :code :invalid-scoped-subjects}",
+    );
+    defer subjects.deinit(allocator);
+    return renderFacts(allocator, state, canonical_log, subjects.items.items);
 }
 
 fn mutateOne(
@@ -1941,6 +2029,9 @@ fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
         } else if (std.mem.eql(u8, name, "ttl-ms")) {
             fields.noteField(field_ttl_ms);
             fields.ttl_ms = parseIntField(value);
+        } else if (std.mem.eql(u8, name, "subjects")) {
+            fields.noteField(field_subjects);
+            fields.subjects = value;
         } else {
             fields.unknown_field = true;
         }
@@ -1969,6 +2060,8 @@ fn parseOperation(raw: []const u8) Operation {
     if (std.mem.eql(u8, raw, ":renew-lease")) return .renew_lease;
     if (std.mem.eql(u8, raw, ":release-lease")) return .release_lease;
     if (std.mem.eql(u8, raw, ":fence-ok")) return .fence_ok;
+    if (std.mem.eql(u8, raw, ":facts")) return .facts;
+    if (std.mem.eql(u8, raw, ":facts-for-subjects")) return .facts_for_subjects;
     return .unknown;
 }
 
