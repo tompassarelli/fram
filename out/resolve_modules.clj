@@ -6,130 +6,130 @@
             [resolve-read :as rr]
             [resolve-binds :as rb]))
 
-^{:line 38 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn- sv [ctx view e]
-  ^{:line 39 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/sym-val ctx view e))
+(defn- sv [ctx view e]
+  (rr/sym-val ctx view e))
 
-^{:line 41 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn- hd [ctx view e]
-  ^{:line 42 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/head-sym ctx view e))
+(defn- hd [ctx view e]
+  (rr/head-sym ctx view e))
 
-^{:line 44 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn- wrapper [ctx view ents]
-  ^{:line 45 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (loop [i 0]
-  ^{:line 46 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 46 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (>= i ^{:line 46 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (count ents)) nil ^{:line 48 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [e ^{:line 48 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ents i)]
-  ^{:line 49 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 49 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "beagle-file" ^{:line 49 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view e)) e ^{:line 49 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (recur ^{:line 49 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc i)))))))
+(defn- wrapper [ctx view ents]
+  (loop [i 0]
+  (if (>= i (count ents)) nil (let [e (nth ents i)]
+  (if (= "beagle-file" (hd ctx view e)) e (recur (inc i)))))))
 
-^{:line 51 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn unwrap-def [ctx view form]
-  ^{:line 52 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 52 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "js/export" ^{:line 52 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view form)) ^{:line 53 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 53 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx form) 1 nil) form))
+(defn unwrap-def [ctx view form]
+  (if (= "js/export" (hd ctx view form)) (nth (rr/ordered-children ctx form) 1 nil) form))
 
-^{:line 56 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn forms-of [ctx view ents]
-  ^{:line 57 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 57 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest ^{:line 57 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx ^{:line 57 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (wrapper ctx view ents)))))
+(defn forms-of [ctx view ents]
+  (vec (rest (rr/ordered-children ctx (wrapper ctx view ents)))))
 
-^{:line 59 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn ns-form [ctx view ents]
-  ^{:line 60 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [fs ^{:line 60 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents)]
-  ^{:line 61 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (loop [i 0]
-  ^{:line 62 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 62 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (>= i ^{:line 62 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (count fs)) nil ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [f ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth fs i)]
-  ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "ns" ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view f)) f ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (recur ^{:line 64 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc i))))))))
+(defn ns-form [ctx view ents]
+  (let [fs (forms-of ctx view ents)]
+  (loop [i 0]
+  (if (>= i (count fs)) nil (let [f (nth fs i)]
+  (if (= "ns" (hd ctx view f)) f (recur (inc i))))))))
 
-^{:line 66 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn module-name [ctx view ents]
-  ^{:line 67 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nf ^{:line 67 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (ns-form ctx view ents)]
-  ^{:line 68 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 68 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nf) nil ^{:line 68 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 68 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 68 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx nf) 1 nil)))))
+(defn module-name [ctx view ents]
+  (let [nf (ns-form ctx view ents)]
+  (if (nil? nf) nil (sv ctx view (nth (rr/ordered-children ctx nf) 1 nil)))))
 
-^{:line 70 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn- logical-name-leaf* [ctx view node]
-  ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [outer ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/unwrap-meta ctx view node)
-   leaf ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "list" ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/kind-of ctx view outer)) ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 71 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx outer) 0 nil) outer)]
-  ^{:line 72 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/unwrap-meta ctx view leaf)))
+(defn- logical-name-leaf* [ctx view node]
+  (let [outer (rr/unwrap-meta ctx view node)
+   leaf (if (= "list" (rr/kind-of ctx view outer)) (nth (rr/ordered-children ctx outer) 0 nil) outer)]
+  (rr/unwrap-meta ctx view leaf)))
 
-^{:line 74 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn module-defs [ctx view ents]
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [d ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view f)
-   h ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d))]
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (cond
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? rc/TOPLEVEL-VALUE-DEFS h) ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nl ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf* ctx view ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d) 1 nil))
-   nm ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view nl)]
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nl)) acc ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc nm nl)))
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} #{"definterface" "defprotocol"} h) ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [a m] ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nl ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf* ctx view m)
-   nm ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view nl)]
-  ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nl)) a ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc a nm nl)))) acc ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop 2 ^{:line 75 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d))))
-  :else acc))) ^{:line 76 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} ^{:line 77 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents)))
+(defn module-defs [ctx view ents]
+  (reduce (fn [acc f] (let [d (unwrap-def ctx view f)
+   h (str (hd ctx view d))]
+  (cond
+  (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (logical-name-leaf* ctx view (nth (rr/ordered-children ctx d) 1 nil))
+   nm (sv ctx view nl)]
+  (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))
+  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [a m] (let [nl (logical-name-leaf* ctx view m)
+   nm (sv ctx view nl)]
+  (if (or (nil? nm) (nil? nl)) a (assoc a nm nl)))) acc (vec (drop 2 (rr/ordered-children ctx d))))
+  :else acc))) {} (forms-of ctx view ents)))
 
-^{:line 79 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn merge-import-opts [ctx view acc modn kids]
-  ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [idx ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [kw] ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (loop [i 0]
-  ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (>= i ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (count kids)) nil ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= kw ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids i)))) i ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (recur ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc i))))))
-   ri ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (idx ":refer")
-   ai ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (idx ":as")
-   rri ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (idx ":rename")
-   nb ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? ri) nil ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc ri) nil))
-   refers ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (and ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (some? nb) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rb/brackets? ctx view nb)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (keep ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [k] ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view k)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx nb))))) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [])
-   alias ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? ai) nil ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc ai) nil)))
-   rmap ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [mb ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? rri) nil ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc rri) nil))]
-  ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (and ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (some? mb) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rb/map-node? ctx view mb)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (loop [cs ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx mb)))
-   m ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} []]
-  ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (< ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (count cs) 2) m ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (recur ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop 2 cs)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (conj m ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth cs 0)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth cs 1))])))) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} []))
-   a1 ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (empty? refers) acc ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc :refer ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [m n] ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc m n modn)) ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (:refer acc ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {}) refers)))
-   a2 ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? alias) a1 ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc a1 :as ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (:as a1 ^{:line 80 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {}) alias modn)))]
-  ^{:line 81 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 81 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (empty? rmap) a2 ^{:line 83 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc a2 :rename ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [m p] ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc m ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth p 1) ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [modn ^{:line 85 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth p 0)])) ^{:line 86 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (:rename a2 ^{:line 86 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {}) rmap)))))
+(defn merge-import-opts [ctx view acc modn kids]
+  (let [idx (fn [kw] (loop [i 0]
+  (if (>= i (count kids)) nil (if (= kw (str (sv ctx view (nth kids i)))) i (recur (inc i))))))
+   ri (idx ":refer")
+   ai (idx ":as")
+   rri (idx ":rename")
+   nb (if (nil? ri) nil (nth kids (inc ri) nil))
+   refers (if (and (some? nb) (rb/brackets? ctx view nb)) (vec (keep (fn [k] (sv ctx view k)) (vec (rest (rr/ordered-children ctx nb))))) [])
+   alias (if (nil? ai) nil (sv ctx view (nth kids (inc ai) nil)))
+   rmap (let [mb (if (nil? rri) nil (nth kids (inc rri) nil))]
+  (if (and (some? mb) (rb/map-node? ctx view mb)) (loop [cs (vec (rest (rr/ordered-children ctx mb)))
+   m []]
+  (if (< (count cs) 2) m (recur (vec (drop 2 cs)) (conj m [(sv ctx view (nth cs 0)) (sv ctx view (nth cs 1))])))) []))
+   a1 (if (empty? refers) acc (assoc acc :refer (reduce (fn [m n] (assoc m n modn)) (:refer acc {}) refers)))
+   a2 (if (nil? alias) a1 (assoc a1 :as (assoc (:as a1 {}) alias modn)))]
+  (if (empty? rmap) a2 (assoc a2 :rename (reduce (fn [m p] (assoc m (nth p 1) [modn (nth p 0)])) (:rename a2 {}) rmap)))))
 
-^{:line 89 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn parse-require [ctx view ents]
-  ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [fs ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents)
-   bare ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "require" ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view f)) ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [kids ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx f)]
-  ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (merge-import-opts ctx view acc ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids 1 nil)) ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop 2 kids)))) acc)) ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {:refer ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} :as ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} :rename ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {}} fs)
-   nf ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (ns-form ctx view ents)
-   reqs ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nf) nil ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (loop [cs ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx nf)]
-  ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (empty? cs) nil ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [c ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth cs 0)]
-  ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (and ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "list" ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/kind-of ctx view c)) ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= ":require" ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx c) 0 nil))))) c ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (recur ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 90 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest cs))))))))]
-  ^{:line 91 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 91 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? reqs) bare ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc spec] ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rb/brackets? ctx view spec) ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [kids ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx spec)))]
-  ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (merge-import-opts ctx view acc ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth kids 0 nil)) ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 93 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest kids)))) acc)) bare ^{:line 95 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 95 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rest ^{:line 95 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx reqs)))))))
+(defn parse-require [ctx view ents]
+  (let [fs (forms-of ctx view ents)
+   bare (reduce (fn [acc f] (if (= "require" (hd ctx view f)) (let [kids (rr/ordered-children ctx f)]
+  (merge-import-opts ctx view acc (sv ctx view (nth kids 1 nil)) (vec (drop 2 kids)))) acc)) {:refer {} :as {} :rename {}} fs)
+   nf (ns-form ctx view ents)
+   reqs (if (nil? nf) nil (loop [cs (rr/ordered-children ctx nf)]
+  (if (empty? cs) nil (let [c (nth cs 0)]
+  (if (and (= "list" (rr/kind-of ctx view c)) (= ":require" (str (sv ctx view (nth (rr/ordered-children ctx c) 0 nil))))) c (recur (vec (rest cs))))))))]
+  (if (nil? reqs) bare (reduce (fn [acc spec] (if (rb/brackets? ctx view spec) (let [kids (vec (rest (rr/ordered-children ctx spec)))]
+  (merge-import-opts ctx view acc (sv ctx view (nth kids 0 nil)) (vec (rest kids)))) acc)) bare (vec (rest (rr/ordered-children ctx reqs)))))))
 
-^{:line 97 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn module-exports [ctx view ents]
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "js/export" ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view f)) ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [raw ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx f) 1 nil)
-   d ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/unwrap-meta ctx view raw)
-   h ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d))]
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (cond
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? rc/TOPLEVEL-VALUE-DEFS h) ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nl ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf* ctx view ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d) 1 nil))
-   nm ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view nl)]
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nl)) acc ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc nm nl)))
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (some? ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view d)) ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc ^{:line 98 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view d) d)
-  :else acc)) acc)) ^{:line 99 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} ^{:line 100 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents)))
+(defn module-exports [ctx view ents]
+  (reduce (fn [acc f] (if (= "js/export" (hd ctx view f)) (let [raw (nth (rr/ordered-children ctx f) 1 nil)
+   d (rr/unwrap-meta ctx view raw)
+   h (str (hd ctx view d))]
+  (cond
+  (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (logical-name-leaf* ctx view (nth (rr/ordered-children ctx d) 1 nil))
+   nm (sv ctx view nl)]
+  (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))
+  (some? (sv ctx view d)) (assoc acc (sv ctx view d) d)
+  :else acc)) acc)) {} (forms-of ctx view ents)))
 
-^{:line 102 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn logical-name-leaf [ctx view node]
-  ^{:line 103 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf* ctx view node))
+(defn logical-name-leaf [ctx view node]
+  (logical-name-leaf* ctx view node))
 
-^{:line 105 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn type-name-leaf [ctx view d]
-  ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [children ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d)
-   name-index ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rc/type-name-index ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d) ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 106 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth children 1 nil)))]
-  ^{:line 107 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf ctx view ^{:line 107 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth children name-index nil))))
+(defn type-name-leaf [ctx view d]
+  (let [children (rr/ordered-children ctx d)
+   name-index (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))]
+  (logical-name-leaf ctx view (nth children name-index nil))))
 
-^{:line 109 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn module-types [ctx view ents]
-  ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [defs ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (filterv ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [f] ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? rc/TYPE-DEFS ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view f))))) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents))
-   names ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nl ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (type-name-leaf ctx view ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view f))
-   nm ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view nl)]
-  ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nl)) acc ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc nm nl)))) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} defs)
-   variants ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [d ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view f)]
-  ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "defunion" ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d)) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [a v] ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [vn ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf ctx view v)
-   nm ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view vn)]
-  ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? vn)) a ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc a nm vn)))) acc ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [children ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d)]
-  ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rc/type-name-index ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth children 1 nil)))) children)))) acc))) ^{:line 110 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} defs)]
-  ^{:line 111 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (merge variants names)))
+(defn module-types [ctx view ents]
+  (let [defs (filterv (fn [f] (contains? rc/TYPE-DEFS (str (hd ctx view (unwrap-def ctx view f))))) (forms-of ctx view ents))
+   names (reduce (fn [acc f] (let [nl (type-name-leaf ctx view (unwrap-def ctx view f))
+   nm (sv ctx view nl)]
+  (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))) {} defs)
+   variants (reduce (fn [acc f] (let [d (unwrap-def ctx view f)]
+  (if (= "defunion" (hd ctx view d)) (reduce (fn [a v] (let [vn (logical-name-leaf ctx view v)
+   nm (sv ctx view vn)]
+  (if (or (nil? nm) (nil? vn)) a (assoc a nm vn)))) acc (let [children (rr/ordered-children ctx d)]
+  (vec (drop (inc (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))) children)))) acc))) {} defs)]
+  (merge variants names)))
 
-^{:line 113 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn module-accessors [ctx view ents]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc f] ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [d ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view f)]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} #{"defrecord" "deftype"} ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d))) ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [nl ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (type-name-leaf ctx view d)
-   nm ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view nl)
-   fb ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (first ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (filterv ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [k] ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rb/brackets? ctx view k)) ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop 2 ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d)))))]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm) ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? fb)) acc ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [pfx ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str/lower-case ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str nm))]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [a b] ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [fld ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view b)]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? fld) a ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc a ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str pfx "-" ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str fld)) ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [nl fld])))) acc ^{:line 114 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rb/param-binds ctx view fb))))) acc))) ^{:line 115 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {} ^{:line 116 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (forms-of ctx view ents)))
+(defn module-accessors [ctx view ents]
+  (reduce (fn [acc f] (let [d (unwrap-def ctx view f)]
+  (if (contains? #{"defrecord" "deftype"} (str (hd ctx view d))) (let [nl (type-name-leaf ctx view d)
+   nm (sv ctx view nl)
+   fb (first (filterv (fn [k] (rb/brackets? ctx view k)) (vec (drop 2 (rr/ordered-children ctx d)))))]
+  (if (or (nil? nm) (nil? fb)) acc (let [pfx (str/lower-case (str nm))]
+  (reduce (fn [a b] (let [fld (sv ctx view b)]
+  (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (rb/param-binds ctx view fb))))) acc))) {} (forms-of ctx view ents)))
 
-^{:line 118 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (defn form-binding-leaves [ctx view form]
-  ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [d ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (unwrap-def ctx view form)
-   h ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (str ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (hd ctx view d))
-   children ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rr/ordered-children ctx d)
-   top ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (type-name-leaf ctx view d)
-   top-name ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view top)
-   base ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (and ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rc/named-def-head? h) ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (some? top) ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (some? top-name)) ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [:top top-name] top} ^{:line 119 :file "/home/tom/code/fram/src/resolve_modules.bclj"} {})]
-  ^{:line 120 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (cond
-  ^{:line 121 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (= "defunion" h) ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc node] ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [leaf ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf ctx view node)
-   nm ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view leaf)]
-  ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? leaf) ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm)) acc ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc ^{:line 122 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [:variant nm] leaf)))) base ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (inc ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (rc/type-name-index h ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view ^{:line 124 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nth children 1 nil)))) children)))
-  ^{:line 125 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (contains? ^{:line 125 :file "/home/tom/code/fram/src/resolve_modules.bclj"} #{"definterface" "defprotocol"} h) ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (reduce ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (fn [acc node] ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (let [leaf ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (logical-name-leaf ctx view node)
-   nm ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (sv ctx view leaf)]
-  ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (if ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (or ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? leaf) ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (nil? nm)) acc ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (assoc acc ^{:line 126 :file "/home/tom/code/fram/src/resolve_modules.bclj"} [:member nm] leaf)))) base ^{:line 128 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (vec ^{:line 128 :file "/home/tom/code/fram/src/resolve_modules.bclj"} (drop 2 children)))
+(defn form-binding-leaves [ctx view form]
+  (let [d (unwrap-def ctx view form)
+   h (str (hd ctx view d))
+   children (rr/ordered-children ctx d)
+   top (type-name-leaf ctx view d)
+   top-name (sv ctx view top)
+   base (if (and (rc/named-def-head? h) (some? top) (some? top-name)) {[:top top-name] top} {})]
+  (cond
+  (= "defunion" h) (reduce (fn [acc node] (let [leaf (logical-name-leaf ctx view node)
+   nm (sv ctx view leaf)]
+  (if (or (nil? leaf) (nil? nm)) acc (assoc acc [:variant nm] leaf)))) base (vec (drop (inc (rc/type-name-index h (sv ctx view (nth children 1 nil)))) children)))
+  (contains? #{"definterface" "defprotocol"} h) (reduce (fn [acc node] (let [leaf (logical-name-leaf ctx view node)
+   nm (sv ctx view leaf)]
+  (if (or (nil? leaf) (nil? nm)) acc (assoc acc [:member nm] leaf)))) base (vec (drop 2 children)))
   :else base)))

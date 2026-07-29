@@ -7,9 +7,9 @@
             [resolve-binds :as rb]
             [resolve-render :as rv]))
 
-^{:line 59 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def FN-RE ^{:line 59 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-pattern "f\\d+"))
+(def FN-RE (re-pattern "f\\d+"))
 
-^{:line 65 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defrecord Mint [ctx tx SUP KIND Vp ents view BOUND REFERS FIXED])
+(defrecord Mint [ctx tx SUP KIND Vp ents view BOUND REFERS FIXED])
 
 (defn mint-ctx [r] (:ctx r))
 
@@ -31,7 +31,7 @@
 
 (defn mint-FIXED [r] (:FIXED r))
 
-^{:line 68 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defrecord FnEdge [idx cid child])
+(defrecord FnEdge [idx cid child])
 
 (defn fnedge-idx [r] (:idx r))
 
@@ -39,171 +39,171 @@
 
 (defn fnedge-child [r] (:child r))
 
-^{:line 70 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn register! [^Mint m ^String src e]
-  ^{:line 71 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ents ^{:line 71 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ents m)]
-  ^{:line 72 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  ^{:line 73 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (swap! ents ^{:line 74 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [tbl] ^{:line 74 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (assoc tbl src ^{:line 74 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (conj ^{:line 74 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (get tbl src ^{:line 74 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []) e))))
+(defn register! [^Mint m ^String src e]
+  (let [ents (:ents m)]
+  (do
+  (swap! ents (fn [tbl] (assoc tbl src (conj (get tbl src []) e))))
   e)))
 
-^{:line 77 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn mint-leaf! [^Mint m ^String src kind v]
-  ^{:line 78 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 78 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   tx ^{:line 78 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:tx m)
-   e ^{:line 78 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (register! m src ^{:line 78 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/entity! ctx))]
-  ^{:line 79 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  ^{:line 80 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact! ctx e ^{:line 80 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:KIND m) ^{:line 80 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/value! ctx kind) tx)
-  ^{:line 81 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact! ctx e ^{:line 81 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:Vp m) ^{:line 81 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/value! ctx v) tx)
+(defn mint-leaf! [^Mint m ^String src kind v]
+  (let [ctx (:ctx m)
+   tx (:tx m)
+   e (register! m src (c/entity! ctx))]
+  (do
+  (c/fact! ctx e (:KIND m) (c/value! ctx kind) tx)
+  (c/fact! ctx e (:Vp m) (c/value! ctx v) tx)
   e)))
 
-^{:line 92 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- clj-meta->beagle-meta [mt]
-  ^{:line 93 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= 1 ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count mt)) ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? mt :tag) ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol? ^{:line 94 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:tag mt))) ^{:line 95 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:tag mt)
-  ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= 1 ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count mt)) ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (true? ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (val ^{:line 96 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (first mt)))) ^{:line 97 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (key ^{:line 97 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (first mt))
+(defn- clj-meta->beagle-meta [mt]
+  (cond
+  (and (= 1 (count mt)) (contains? mt :tag) (symbol? (:tag mt))) (:tag mt)
+  (and (= 1 (count mt)) (true? (val (first mt)))) (key (first mt))
   :else mt))
 
-^{:line 101 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- reader-meta [d]
-  ^{:line 102 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 102 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (instance? clojure.lang.IObj d) ^{:line 103 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (not-empty ^{:line 103 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (apply dissoc ^{:line 103 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (meta d) ^{:line 103 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [:line :column :end-line :end-column :file])) nil))
+(defn- reader-meta [d]
+  (if (instance? clojure.lang.IObj d) (not-empty (apply dissoc (meta d) [:line :column :end-line :end-column :file])) nil))
 
-^{:line 122 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn mint-datum! [^Mint m ^String src d]
-  ^{:line 123 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [mt ^{:line 123 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reader-meta d)]
-  ^{:line 124 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 124 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? mt) ^{:line 125 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-datum! m src ^{:line 127 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (list ^{:line 127 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol "#%meta") ^{:line 127 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (clj-meta->beagle-meta mt) ^{:line 127 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (with-meta d nil))) ^{:line 128 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [reuse-node ^{:line 128 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rc/reuse-node-id d)]
-  ^{:line 129 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 129 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? reuse-node) reuse-node ^{:line 131 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 132 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? d) ^{:line 133 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "symbol" "nil")
-  ^{:line 134 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol? d) ^{:line 135 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "symbol" ^{:line 135 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str d))
-  ^{:line 136 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (keyword? d) ^{:line 137 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "symbol" ^{:line 137 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str d))
-  ^{:line 138 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (string? d) ^{:line 139 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "string" d)
-  ^{:line 140 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (boolean? d) ^{:line 141 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "symbol" ^{:line 141 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if d "true" "false"))
-  ^{:line 142 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (char? d) ^{:line 143 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "char" ^{:line 143 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str d))
-  ^{:line 144 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (number? d) ^{:line 145 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "number" ^{:line 145 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str d))
-  ^{:line 146 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or ^{:line 146 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (list? d) ^{:line 146 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seq? d) ^{:line 146 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vector? d) ^{:line 146 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (map? d)) ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   tx ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:tx m)
-   head ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vector? d) ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol "#%brackets")]
-  ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (map? d) ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol "#%map")]
-  :else ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])
-   elems ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (concat head ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (map? d) ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (apply concat ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seq d)) ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seq d))))
-   e ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (register! m src ^{:line 147 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/entity! ctx))]
-  ^{:line 148 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  ^{:line 149 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact! ctx e ^{:line 149 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:KIND m) ^{:line 149 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/value! ctx "list") tx)
-  ^{:line 150 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (doseq [i ^{:line 150 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (range ^{:line 150 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count elems))]
-  ^{:line 151 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact! ctx e ^{:line 153 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/value! ctx ^{:line 153 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "f" i)) ^{:line 154 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-datum! m src ^{:line 154 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth elems i)) tx))
+(defn mint-datum! [^Mint m ^String src d]
+  (let [mt (reader-meta d)]
+  (if (some? mt) (mint-datum! m src (list (symbol "#%meta") (clj-meta->beagle-meta mt) (with-meta d nil))) (let [reuse-node (rc/reuse-node-id d)]
+  (if (some? reuse-node) reuse-node (cond
+  (nil? d) (mint-leaf! m src "symbol" "nil")
+  (symbol? d) (mint-leaf! m src "symbol" (str d))
+  (keyword? d) (mint-leaf! m src "symbol" (str d))
+  (string? d) (mint-leaf! m src "string" d)
+  (boolean? d) (mint-leaf! m src "symbol" (if d "true" "false"))
+  (char? d) (mint-leaf! m src "char" (str d))
+  (number? d) (mint-leaf! m src "number" (str d))
+  (or (list? d) (seq? d) (vector? d) (map? d)) (let [ctx (:ctx m)
+   tx (:tx m)
+   head (cond
+  (vector? d) [(symbol "#%brackets")]
+  (map? d) [(symbol "#%map")]
+  :else [])
+   elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d))))
+   e (register! m src (c/entity! ctx))]
+  (do
+  (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
+  (doseq [i (range (count elems))]
+  (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! m src (nth elems i)) tx))
   e))
-  ^{:line 157 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (instance? java.util.regex.Pattern d) ^{:line 158 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-datum! m src ^{:line 158 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (list ^{:line 158 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol "#%regex") ^{:line 158 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (.pattern d)))
-  ^{:line 159 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (set? d) ^{:line 160 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-datum! m src ^{:line 160 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (apply list ^{:line 160 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cons ^{:line 160 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (symbol "#%set") ^{:line 160 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seq d))))
-  :else ^{:line 162 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mint-leaf! m src "other" ^{:line 162 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pr-str d))))))))
+  (instance? java.util.regex.Pattern d) (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
+  (set? d) (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
+  :else (mint-leaf! m src "other" (pr-str d))))))))
 
-^{:line 164 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn fN-facts [^Mint m parent]
-  ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   rows ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc cid] ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [f ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact-of ctx cid)
-   pi ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? f) nil ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:p f))
-   p ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (int? pi) ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/literal ctx pi) nil)
-   r ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? f) nil ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:r f))]
-  ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (string? p) ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-matches FN-RE ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str p)))) ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [n ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (parse-long ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (subs ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str p) 1))]
-  ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? n) acc ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (conj acc ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (->FnEdge n cid r)))) acc))) ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 165 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/by-l ctx parent))]
-  ^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mapv ^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [e] ^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:idx e) ^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:cid e) ^{:line 166 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:child e)]) ^{:line 167 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (sort-by ^{:line 167 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [e] ^{:line 167 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:idx e)) rows))))
+(defn fN-facts [^Mint m parent]
+  (let [ctx (:ctx m)
+   rows (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
+   pi (if (nil? f) nil (:p f))
+   p (if (int? pi) (c/literal ctx pi) nil)
+   r (if (nil? f) nil (:r f))]
+  (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))]
+  (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (c/by-l ctx parent))]
+  (mapv (fn [e] [(:idx e) (:cid e) (:child e)]) (sort-by (fn [e] (:idx e)) rows))))
 
-^{:line 169 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn retire-fact! [^Mint m oldc]
-  ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)]
-  ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact! ctx ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/entity! ctx) ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:SUP m) oldc ^{:line 170 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:tx m))))
+(defn retire-fact! [^Mint m oldc]
+  (let [ctx (:ctx m)]
+  (c/fact! ctx (c/entity! ctx) (:SUP m) oldc (:tx m))))
 
-^{:line 188 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- nn [e]
-  ^{:line 188 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 188 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? e) -1 e))
+(defn- nn [e]
+  (if (nil? e) -1 e))
 
-^{:line 190 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def COLON3 ^{:line 190 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{":-" ":" ":raises"})
+(def COLON3 #{":-" ":" ":raises"})
 
-^{:line 192 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- push [frame scope]
-  ^{:line 192 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 192 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [frame] scope))
+(defn- push [frame scope]
+  (into [frame] scope))
 
-^{:line 197 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- ^Boolean renders-as-tracked-name? [^Mint m node]
-  ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (empty? ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/by-lp ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m) ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nn node) ^{:line 198 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:FIXED m))) ^{:line 199 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? ^{:line 199 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/pred-val ^{:line 199 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m) ^{:line 199 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:view m) node "qualifier"))))
+(defn- ^Boolean renders-as-tracked-name? [^Mint m node]
+  (and (empty? (c/by-lp (:ctx m) (nn node) (:FIXED m))) (nil? (rr/pred-val (:ctx m) (:view m) node "qualifier"))))
 
-^{:line 201 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn capture-refs [^Mint m node scope B newnm]
-  ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   view ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:view m)
-   BOUND ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:BOUND m)
-   REFERS ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:REFERS m)
-   k ^{:line 202 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/kind-of ctx view node)]
-  ^{:line 203 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 204 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "symbol" k) ^{:line 205 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [tgt ^{:line 205 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/refers-target ctx view BOUND REFERS node)]
-  ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? tgt) ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= B ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rv/ultimate ctx view BOUND REFERS tgt)) ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (renders-as-tracked-name? m node) ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [fr] ^{:line 206 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (get fr newnm)) scope))) ^{:line 207 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [node] ^{:line 208 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []))
-  ^{:line 209 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "list" k) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [kids ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx node)
-   h ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/head-sym ctx view node))
-   brk? ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [e] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/brackets? ctx view e))
-   cap-arity ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [forms] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bi ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [i 0]
-  ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (>= i ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count forms)) nil ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth forms i)) i ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (inc i)))))
-   pv ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) nil ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth forms bi))
-   frame ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? pv) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/param-binds ctx view pv)))
-   or-vals ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? pv) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc kd] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/collect-or-vals ctx view kd))) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx pv)))))
-   body ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [xs ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (+ bi 1) forms)))]
-  ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? COLON3 ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/sym-val ctx view ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth xs 0 nil)))) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 xs))) xs))]
-  ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc o] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m o scope B newnm))) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] or-vals) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push frame scope) B newnm))) ^{:line 210 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] body))))]
-  ^{:line 211 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 212 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? rc/PARAM-FORMS h) ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [after-name ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{"defn" "defn-" "defmacro"} h) ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 kids)) ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 213 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest kids)))]
-  ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [f] ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 214 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? f) true nil)) after-name)) ^{:line 215 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cap-arity after-name) ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc a] ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "list" ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/kind-of ctx view a)) ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx a) 0 nil))) ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cap-arity ^{:line 216 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx a))) acc)) ^{:line 217 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] after-name)))
-  ^{:line 219 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? rc/LET-FORMS h) ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bracket ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 1 nil)
-   pairs ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? bracket) ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? bracket)) ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/let-bind-pairs ctx view bracket) ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])
-   acc0 ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [scope ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []]
-   st ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [a p] ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [sc ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth a 0)
-   caps ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth a 1)
-   bsyms ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth p 0)
-   vnode ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth p 1)
-   orvals ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth p 2)
-   c1 ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [x o] ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into x ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m o sc B newnm))) caps orvals)
-   c2 ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? vnode) ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into c1 ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m vnode sc B newnm)) c1)]
-  ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs)
-   final ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth st 0)
-   vcaps ^{:line 220 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth st 1)]
-  ^{:line 221 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 221 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 221 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 221 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b final B newnm))) vcaps ^{:line 223 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 223 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 kids))))
-  ^{:line 224 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? rc/FOR-FORMS h) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bracket ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 1 nil)
-   entries ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? bracket) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? bracket)) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/for-bind-pairs ctx view bracket) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])
-   acc0 ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [scope ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []]
-   st ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [a e] ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [sc ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth a 0)
-   caps ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth a 1)]
-  ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= :expr ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth e 0)) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [sc ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into caps ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth e 1) sc B newnm))] ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bsyms ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth e 1)
-   vnode ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth e 2)
-   orvals ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth e 3)
-   c1 ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [x o] ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into x ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m o sc B newnm))) caps orvals)
-   c2 ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? vnode) ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into c1 ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m vnode sc B newnm)) c1)]
-  ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view bsyms) sc) c2])))) acc0 entries)
-   final ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth st 0)
-   vcaps ^{:line 225 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth st 1)]
-  ^{:line 226 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 226 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 226 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 226 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b final B newnm))) vcaps ^{:line 228 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 228 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 kids))))
-  ^{:line 229 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? rc/MATCH-FORMS h) ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc clause] ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? clause) ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [cc ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx clause)))
-   pat ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth cc 0 nil)
-   body ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest cc))
-   frame ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/match-pat-binds ctx view pat))]
-  ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m pat scope B newnm)) ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [x b] ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into x ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push frame scope) B newnm))) ^{:line 230 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] body))) acc)) ^{:line 231 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m ^{:line 231 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 1 nil) scope B newnm) ^{:line 232 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 232 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 kids)))
-  ^{:line 233 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "letfn" h) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bracket ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 1 nil)
-   fnlists ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? bracket) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? bracket)) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (filter ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [f] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "list" ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/kind-of ctx view f))) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx bracket))))) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])
-   frame ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (keep ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [f] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx f) 0 nil)) fnlists)))
-   bodyscope ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push frame scope)
-   cap-fn ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [forms] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [bi ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [i 0]
-  ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (>= i ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count forms)) nil ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth forms i)) i ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (inc i)))))
-   pv ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) nil ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth forms bi))
-   pframe ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? pv) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/param-binds ctx view pv)))
-   fbody ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [xs ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (+ bi 1) forms)))]
-  ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? COLON3 ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/sym-val ctx view ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth xs 0 nil)))) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 xs))) xs))]
-  ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [x b] ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into x ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push pframe bodyscope) B newnm))) ^{:line 234 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] fbody)))]
-  ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc fl] ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cap-fn ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx fl)))))) ^{:line 235 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] fnlists) ^{:line 236 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 236 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 236 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 236 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b bodyscope B newnm))) ^{:line 237 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 238 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 238 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 kids)))))
-  ^{:line 239 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? ^{:line 239 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{"extend-type" "extend-protocol"} h) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc ch] ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "list" ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/kind-of ctx view ch)) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ic ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx ch)
-   rest-ic ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ic))
-   bi ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [i 0]
-  ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (>= i ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count rest-ic)) nil ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (brk? ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth rest-ic i)) i ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (inc i)))))
-   pv ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) nil ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth rest-ic bi))
-   pframe ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? pv) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/param-binds ctx view pv)))
-   fbody ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [xs ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? bi) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (+ bi 1) rest-ic)))]
-  ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? COLON3 ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/sym-val ctx view ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth xs 0 nil)))) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 2 xs))) xs))]
-  ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth ic 0 nil) scope B newnm)) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [x b] ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into x ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push pframe scope) B newnm))) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] fbody))) ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 240 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m ch scope B newnm)))) ^{:line 241 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ^{:line 242 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 242 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest kids)))
-  ^{:line 243 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "as->" h) ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [init ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 1 nil)
-   nmn ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth kids 2 nil)
-   frame ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rb/frame-of ctx view ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/sym-val ctx view nmn)) ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nn nmn)] ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []))
-   head ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? init) ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m init scope B newnm) ^{:line 244 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])]
-  ^{:line 245 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 245 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 245 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 245 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b ^{:line 245 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (push frame scope) B newnm))) head ^{:line 247 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 247 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (drop 3 kids))))
-  :else ^{:line 249 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 249 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc b] ^{:line 249 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into acc ^{:line 249 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (capture-refs m b scope B newnm))) ^{:line 250 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] kids)))
-  :else ^{:line 253 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])))
+(defn capture-refs [^Mint m node scope B newnm]
+  (let [ctx (:ctx m)
+   view (:view m)
+   BOUND (:BOUND m)
+   REFERS (:REFERS m)
+   k (rr/kind-of ctx view node)]
+  (cond
+  (= "symbol" k) (let [tgt (rr/refers-target ctx view BOUND REFERS node)]
+  (if (and (some? tgt) (= B (rv/ultimate ctx view BOUND REFERS tgt)) (renders-as-tracked-name? m node) (some? (some (fn [fr] (get fr newnm)) scope))) [node] []))
+  (= "list" k) (let [kids (rr/ordered-children ctx node)
+   h (str (rr/head-sym ctx view node))
+   brk? (fn [e] (rb/brackets? ctx view e))
+   cap-arity (fn [forms] (let [bi (loop [i 0]
+  (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i)))))
+   pv (if (nil? bi) nil (nth forms bi))
+   frame (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
+   or-vals (if (nil? pv) [] (reduce (fn [acc kd] (into acc (rb/collect-or-vals ctx view kd))) [] (vec (rest (rr/ordered-children ctx pv)))))
+   body (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) forms)))]
+  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
+  (into (reduce (fn [acc o] (into acc (capture-refs m o scope B newnm))) [] or-vals) (reduce (fn [acc b] (into acc (capture-refs m b (push frame scope) B newnm))) [] body))))]
+  (cond
+  (contains? rc/PARAM-FORMS h) (let [after-name (if (contains? #{"defn" "defn-" "defmacro"} h) (vec (drop 2 kids)) (vec (rest kids)))]
+  (if (some? (some (fn [f] (if (brk? f) true nil)) after-name)) (cap-arity after-name) (reduce (fn [acc a] (if (and (= "list" (rr/kind-of ctx view a)) (brk? (nth (rr/ordered-children ctx a) 0 nil))) (into acc (cap-arity (rr/ordered-children ctx a))) acc)) [] after-name)))
+  (contains? rc/LET-FORMS h) (let [bracket (nth kids 1 nil)
+   pairs (if (and (some? bracket) (brk? bracket)) (rb/let-bind-pairs ctx view bracket) [])
+   acc0 [scope []]
+   st (reduce (fn [a p] (let [sc (nth a 0)
+   caps (nth a 1)
+   bsyms (nth p 0)
+   vnode (nth p 1)
+   orvals (nth p 2)
+   c1 (reduce (fn [x o] (into x (capture-refs m o sc B newnm))) caps orvals)
+   c2 (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)]
+  [(push (rb/frame-of ctx view bsyms) sc) c2])) acc0 pairs)
+   final (nth st 0)
+   vcaps (nth st 1)]
+  (reduce (fn [acc b] (into acc (capture-refs m b final B newnm))) vcaps (vec (drop 2 kids))))
+  (contains? rc/FOR-FORMS h) (let [bracket (nth kids 1 nil)
+   entries (if (and (some? bracket) (brk? bracket)) (rb/for-bind-pairs ctx view bracket) [])
+   acc0 [scope []]
+   st (reduce (fn [a e] (let [sc (nth a 0)
+   caps (nth a 1)]
+  (if (= :expr (nth e 0)) [sc (into caps (capture-refs m (nth e 1) sc B newnm))] (let [bsyms (nth e 1)
+   vnode (nth e 2)
+   orvals (nth e 3)
+   c1 (reduce (fn [x o] (into x (capture-refs m o sc B newnm))) caps orvals)
+   c2 (if (some? vnode) (into c1 (capture-refs m vnode sc B newnm)) c1)]
+  [(push (rb/frame-of ctx view bsyms) sc) c2])))) acc0 entries)
+   final (nth st 0)
+   vcaps (nth st 1)]
+  (reduce (fn [acc b] (into acc (capture-refs m b final B newnm))) vcaps (vec (drop 2 kids))))
+  (contains? rc/MATCH-FORMS h) (reduce (fn [acc clause] (if (brk? clause) (let [cc (vec (rest (rr/ordered-children ctx clause)))
+   pat (nth cc 0 nil)
+   body (vec (rest cc))
+   frame (rb/frame-of ctx view (rb/match-pat-binds ctx view pat))]
+  (into (into acc (capture-refs m pat scope B newnm)) (reduce (fn [x b] (into x (capture-refs m b (push frame scope) B newnm))) [] body))) acc)) (capture-refs m (nth kids 1 nil) scope B newnm) (vec (drop 2 kids)))
+  (= "letfn" h) (let [bracket (nth kids 1 nil)
+   fnlists (if (and (some? bracket) (brk? bracket)) (vec (filter (fn [f] (= "list" (rr/kind-of ctx view f))) (vec (rest (rr/ordered-children ctx bracket))))) [])
+   frame (rb/frame-of ctx view (vec (keep (fn [f] (nth (rr/ordered-children ctx f) 0 nil)) fnlists)))
+   bodyscope (push frame scope)
+   cap-fn (fn [forms] (let [bi (loop [i 0]
+  (if (>= i (count forms)) nil (if (brk? (nth forms i)) i (recur (inc i)))))
+   pv (if (nil? bi) nil (nth forms bi))
+   pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
+   fbody (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) forms)))]
+  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
+  (reduce (fn [x b] (into x (capture-refs m b (push pframe bodyscope) B newnm))) [] fbody)))]
+  (into (reduce (fn [acc fl] (into acc (cap-fn (vec (rest (rr/ordered-children ctx fl)))))) [] fnlists) (reduce (fn [acc b] (into acc (capture-refs m b bodyscope B newnm))) [] (vec (drop 2 kids)))))
+  (contains? #{"extend-type" "extend-protocol"} h) (reduce (fn [acc ch] (if (= "list" (rr/kind-of ctx view ch)) (let [ic (rr/ordered-children ctx ch)
+   rest-ic (vec (rest ic))
+   bi (loop [i 0]
+  (if (>= i (count rest-ic)) nil (if (brk? (nth rest-ic i)) i (recur (inc i)))))
+   pv (if (nil? bi) nil (nth rest-ic bi))
+   pframe (rb/frame-of ctx view (if (nil? pv) [] (rb/param-binds ctx view pv)))
+   fbody (loop [xs (if (nil? bi) [] (vec (drop (+ bi 1) rest-ic)))]
+  (if (contains? COLON3 (str (rr/sym-val ctx view (nth xs 0 nil)))) (recur (vec (drop 2 xs))) xs))]
+  (into (into acc (capture-refs m (nth ic 0 nil) scope B newnm)) (reduce (fn [x b] (into x (capture-refs m b (push pframe scope) B newnm))) [] fbody))) (into acc (capture-refs m ch scope B newnm)))) [] (vec (rest kids)))
+  (= "as->" h) (let [init (nth kids 1 nil)
+   nmn (nth kids 2 nil)
+   frame (rb/frame-of ctx view (if (some? (rr/sym-val ctx view nmn)) [(nn nmn)] []))
+   head (if (some? init) (capture-refs m init scope B newnm) [])]
+  (reduce (fn [acc b] (into acc (capture-refs m b (push frame scope) B newnm))) head (vec (drop 3 kids))))
+  :else (reduce (fn [acc b] (into acc (capture-refs m b scope B newnm))) [] kids)))
+  :else [])))
 
-^{:line 277 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def INTERNAL-PREDS ^{:line 278 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
+(def INTERNAL-PREDS #{"supersedes" "refers_to" "keep_spelling" "qualifier" "ctor_prefix" "accessor_field"})
 
-^{:line 289 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defrecord Emit [ctx view BOUND REFERS FIXED ents wrapper-of descendants deleted-forms deleted-subtree])
+(defrecord Emit [ctx view BOUND REFERS FIXED ents wrapper-of descendants deleted-forms deleted-subtree])
 
 (defn emit-ctx [r] (:ctx r))
 
@@ -225,127 +225,127 @@
 
 (defn emit-deleted-subtree [r] (:deleted-subtree r))
 
-^{:line 291 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn- emit-line [^Emit m wrap e cid]
-  ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   view ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:view m)
-   cl ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact-of ctx cid)
-   p ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? cl) nil ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:p cl))
-   r ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? cl) nil ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:r cl))
-   ps ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (int? p) ^{:line 292 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/literal ctx p) nil)]
-  ^{:line 293 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? wrap) ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= e wrap) ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (string? ps) ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rc/ord-pos? ps) ^{:line 294 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (not= ps "f0")) nil
-  ^{:line 296 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? INTERNAL-PREDS ^{:line 296 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ps)) nil
-  ^{:line 298 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 298 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= ps "v") ^{:line 299 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? ^{:line 299 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/refers-target ctx view ^{:line 299 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:BOUND m) ^{:line 299 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:REFERS m) e))) ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [D ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/refers-target ctx view ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:BOUND m) ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:REFERS m) e)
-   fixed? ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (not ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (empty? ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/by-lp ctx e ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:FIXED m))))
-   qual ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/pred-val ctx view e "qualifier")
-   cpfx ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/pred-val ctx view e "ctor_prefix")
-   afield ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/pred-val ctx view e "accessor_field")
-   nm0 ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rv/binding-name ctx view ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:BOUND m) ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:REFERS m) D)
-   nm ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? cpfx) ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str cpfx nm0)
-  ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? afield) ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str/lower-case ^{:line 300 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str nm0)) "-" afield)
+(defn- emit-line [^Emit m wrap e cid]
+  (let [ctx (:ctx m)
+   view (:view m)
+   cl (c/fact-of ctx cid)
+   p (if (nil? cl) nil (:p cl))
+   r (if (nil? cl) nil (:r cl))
+   ps (if (int? p) (c/literal ctx p) nil)]
+  (cond
+  (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0")) nil
+  (contains? INTERNAL-PREDS (str ps)) nil
+  (and (= ps "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e))) (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
+   fixed? (not (empty? (c/by-lp ctx e (:FIXED m))))
+   qual (rr/pred-val ctx view e "qualifier")
+   cpfx (rr/pred-val ctx view e "ctor_prefix")
+   afield (rr/pred-val ctx view e "accessor_field")
+   nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D)
+   nm (cond
+  (some? cpfx) (str cpfx nm0)
+  (some? afield) (str (str/lower-case (str nm0)) "-" afield)
   :else nm0)]
-  ^{:line 301 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "[" e " \"v\" " ^{:line 304 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pr-str ^{:line 304 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (cond
-  fixed? ^{:line 304 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/literal ctx r)
-  ^{:line 304 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? qual) ^{:line 304 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str qual "/" nm)
+  (str "[" e " \"v\" " (pr-str (cond
+  fixed? (c/literal ctx r)
+  (some? qual) (str qual "/" nm)
   :else nm)) "]"))
-  ^{:line 306 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/value-object? ctx r) ^{:line 307 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "[" e " " ^{:line 307 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pr-str ps) " " ^{:line 307 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pr-str ^{:line 307 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/literal ctx r)) "]")
-  :else ^{:line 309 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "[" e " " ^{:line 309 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pr-str ps) " " r "]"))))
+  (c/value-object? ctx r) (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")
+  :else (str "[" e " " (pr-str ps) " " r "]"))))
 
-^{:line 311 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn extract-lines [^Emit m ^String src]
-  ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [ctx ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ctx m)
-   wrapf ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:wrapper-of m)
-   desc ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:descendants m)
-   dforms ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:deleted-forms m)
-   dsub ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:deleted-subtree m)
-   wrap ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (wrapf src)
-   root ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (empty? dforms) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (wrapf src) nil)
-   live ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? root) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (desc root) nil)
-   ents ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (get ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:ents m) src ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []))
-   rows ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc e] ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? dsub e) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? live) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (not ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? live e)))) acc ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [a cid] ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [line ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (emit-line m wrap e cid)]
-  ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? line) a ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (conj a line)))) acc ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/by-l ctx e)))) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [] ents)
-   forms ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some? wrap) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (remove ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [f] ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? dforms f)) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx wrap))))) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [])
-   formlines ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mapv ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [i] ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "[" wrap " \"f" ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (+ i 1) "\" " ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth forms i) "]")) ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (range ^{:line 312 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (count forms))))]
-  ^{:line 313 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 313 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 313 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 313 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "@file " src)] rows) formlines)))
+(defn extract-lines [^Emit m ^String src]
+  (let [ctx (:ctx m)
+   wrapf (:wrapper-of m)
+   desc (:descendants m)
+   dforms (:deleted-forms m)
+   dsub (:deleted-subtree m)
+   wrap (wrapf src)
+   root (if (empty? dforms) (wrapf src) nil)
+   live (if (some? root) (desc root) nil)
+   ents (vec (get (:ents m) src []))
+   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line m wrap e cid)]
+  (if (nil? line) a (conj a line)))) acc (c/by-l ctx e)))) [] ents)
+   forms (if (some? wrap) (vec (remove (fn [f] (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) [])
+   formlines (mapv (fn [i] (str "[" wrap " \"f" (+ i 1) "\" " (nth forms i) "]")) (vec (range (count forms))))]
+  (into (into [(str "@file " src)] rows) formlines)))
 
-^{:line 319 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn author-emit-lines [op detail srcs outp]
-  ^{:line 320 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [f outp]
-  ^{:line 321 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 321 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [^{:line 321 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "================ authoring: " op " ================") detail] ^{:line 322 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (mapv ^{:line 322 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [s] ^{:line 322 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "projected -> " ^{:line 322 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (f s) "   <- " s)) srcs))))
+(defn author-emit-lines [op detail srcs outp]
+  (let [f outp]
+  (into [(str "================ authoring: " op " ================") detail] (mapv (fn [s] (str "projected -> " (f s) "   <- " s)) srcs))))
 
-^{:line 330 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn re-resolve-frames [srcs mdefs mtypes maccs]
-  ^{:line 331 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [fd mdefs
+(defn re-resolve-frames [srcs mdefs mtypes maccs]
+  (let [fd mdefs
    ft mtypes
    fa maccs]
-  ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} {:modframe ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc s] ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (assoc acc s ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fd s))) ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} {} srcs) :typeframe ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc s] ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (assoc acc s ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (ft s))) ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} {} srcs) :accessors ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (reduce ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [acc s] ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (assoc acc s ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fa s))) ^{:line 332 :file "/home/tom/code/fram/src/resolve_mint.bclj"} {} srcs)}))
+  {:modframe (reduce (fn [acc s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc s] (assoc acc s (fa s))) {} srcs)}))
 
-^{:line 345 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def STRUCTURAL-SEG-RE ^{:line 345 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-pattern "seg\\d+"))
+(def STRUCTURAL-SEG-RE (re-pattern "seg\\d+"))
 
-^{:line 347 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def STRUCTURAL-COMMENT-RE ^{:line 347 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-pattern "comment\\d+"))
+(def STRUCTURAL-COMMENT-RE (re-pattern "comment\\d+"))
 
-^{:line 349 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def PATH-SPLIT-RE ^{:line 349 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-pattern "/"))
+(def PATH-SPLIT-RE (re-pattern "/"))
 
-^{:line 351 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn wrapper-of [ctx view ents ^String src]
-  ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [e] ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "beagle-file" ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/head-sym ctx view e)) ^{:line 352 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  e))) ^{:line 353 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 353 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (get ents src ^{:line 353 :file "/home/tom/code/fram/src/resolve_mint.bclj"} []))))
+(defn wrapper-of [ctx view ents ^String src]
+  (some (fn [e] (if (= "beagle-file" (rr/head-sym ctx view e)) (do
+  e))) (vec (get ents src []))))
 
-^{:line 355 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn structural-kids [ctx n]
-  ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (keep ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [cid] ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [cl ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/fact-of ctx cid)
-   p ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/literal ctx ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:p cl))
-   r ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (:r cl)]
-  ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (int? r) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (string? p) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rc/ord-pos? p) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-matches STRUCTURAL-SEG-RE p) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (re-matches STRUCTURAL-COMMENT-RE p) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= p "tail"))) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  r)))) ^{:line 356 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (c/by-l ctx n))))
+(defn structural-kids [ctx n]
+  (vec (keep (fn [cid] (let [cl (c/fact-of ctx cid)
+   p (c/literal ctx (:p cl))
+   r (:r cl)]
+  (if (and (int? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) (do
+  r)))) (c/by-l ctx n))))
 
-^{:line 358 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn structural-descendants [ctx root]
-  ^{:line 359 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (loop [seen ^{:line 359 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{}
-   stack ^{:line 359 :file "/home/tom/code/fram/src/resolve_mint.bclj"} [root]]
-  ^{:line 360 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 360 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (empty? stack) seen ^{:line 362 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [n ^{:line 362 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (peek stack)]
-  ^{:line 363 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 363 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (contains? seen n) ^{:line 364 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur seen ^{:line 364 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pop stack)) ^{:line 365 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (recur ^{:line 365 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (conj seen n) ^{:line 365 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (into ^{:line 365 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (pop stack) ^{:line 365 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (structural-kids ctx n))))))))
+(defn structural-descendants [ctx root]
+  (loop [seen #{}
+   stack [root]]
+  (if (empty? stack) seen (let [n (peek stack)]
+  (if (contains? seen n) (recur seen (pop stack)) (recur (conj seen n) (into (pop stack) (structural-kids ctx n))))))))
 
-^{:line 367 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn form-for-victim [ctx view ents unwrap-def ^String src victim]
-  ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (some ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [f] ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [d ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (unwrap-def f)
-   children ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx d)
-   name-index ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rc/type-name-index ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/head-sym ctx view d) ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/sym-val ctx view ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth children 1 nil)))
-   outer ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/unwrap-meta ctx view ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nth children name-index nil))
-   leaf ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= "list" ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/kind-of ctx view outer)) ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (first ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx outer)) outer)
-   logical ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/unwrap-meta ctx view leaf)]
-  ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= victim logical) ^{:line 368 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  f)))) ^{:line 369 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rest ^{:line 369 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (rr/ordered-children ctx ^{:line 369 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (wrapper-of ctx view ents src)))))
+(defn form-for-victim [ctx view ents unwrap-def ^String src victim]
+  (some (fn [f] (let [d (unwrap-def f)
+   children (rr/ordered-children ctx d)
+   name-index (rc/type-name-index (rr/head-sym ctx view d) (rr/sym-val ctx view (nth children 1 nil)))
+   outer (rr/unwrap-meta ctx view (nth children name-index nil))
+   leaf (if (= "list" (rr/kind-of ctx view outer)) (first (rr/ordered-children ctx outer)) outer)
+   logical (rr/unwrap-meta ctx view leaf)]
+  (if (= victim logical) (do
+  f)))) (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
 
-^{:line 371 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn ^Emit emit-env [ctx view BOUND REFERS FIXED ents unwrap-def]
-  ^{:line 372 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (->Emit ctx view BOUND REFERS FIXED ents ^{:line 378 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [src] ^{:line 378 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (wrapper-of ctx view ents src)) ^{:line 379 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [root] ^{:line 379 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (structural-descendants ctx root)) ^{:line 380 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{} ^{:line 381 :file "/home/tom/code/fram/src/resolve_mint.bclj"} #{}))
+(defn ^Emit emit-env [ctx view BOUND REFERS FIXED ents unwrap-def]
+  (->Emit ctx view BOUND REFERS FIXED ents (fn [src] (wrapper-of ctx view ents src)) (fn [root] (structural-descendants ctx root)) #{} #{}))
 
-^{:line 383 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn extract-file! [^Emit m ^String src ^String outp]
-  ^{:line 384 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (spit outp ^{:line 384 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 384 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str/join "\n" ^{:line 384 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (extract-lines m src)) "\n")))
+(defn extract-file! [^Emit m ^String src ^String outp]
+  (spit outp (str (str/join "\n" (extract-lines m src)) "\n")))
 
-^{:line 386 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def DEFAULT-RESOLVE-OUT nil)
+(def DEFAULT-RESOLVE-OUT nil)
 
-^{:line 388 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn ^String out-path [^String src]
-  ^{:line 389 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 389 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or DEFAULT-RESOLVE-OUT ^{:line 389 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" ^{:line 391 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (last ^{:line 391 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str/split src PATH-SPLIT-RE)) ".edn"))
+(defn ^String out-path [^String src]
+  (str (or DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
 
-^{:line 394 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (def DEFAULT-PROJECT-SRCS nil)
+(def DEFAULT-PROJECT-SRCS nil)
 
-^{:line 396 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn emit-srcs [srcs]
-  ^{:line 397 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 397 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? DEFAULT-PROJECT-SRCS) srcs ^{:line 397 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec DEFAULT-PROJECT-SRCS)))
+(defn emit-srcs [srcs]
+  (if (nil? DEFAULT-PROJECT-SRCS) srcs (vec DEFAULT-PROJECT-SRCS)))
 
-^{:line 399 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn author-emit-scoped! [^Emit m srcs ^Boolean capture-only? op detail]
-  ^{:line 400 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 400 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (not capture-only?) ^{:line 400 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (do
-  ^{:line 401 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (doseq [src srcs]
-  ^{:line 401 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (extract-file! m src ^{:line 401 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (out-path src)))
-  ^{:line 402 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (binding [*out* *err*]
-  ^{:line 403 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (println ^{:line 403 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "================ authoring: " op " ================"))
-  ^{:line 404 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (println detail)
-  ^{:line 405 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (doseq [src srcs]
-  ^{:line 406 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (println ^{:line 406 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "projected -> " ^{:line 406 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (out-path src) "   <- " src)))))))
+(defn author-emit-scoped! [^Emit m srcs ^Boolean capture-only? op detail]
+  (if (not capture-only?) (do
+  (doseq [src srcs]
+  (extract-file! m src (out-path src)))
+  (binding [*out* *err*]
+  (println (str "================ authoring: " op " ================"))
+  (println detail)
+  (doseq [src srcs]
+  (println (str "projected -> " (out-path src) "   <- " src)))))))
 
-^{:line 408 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn ^Boolean scope-match? [module-name ^String src ^String scope]
-  ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (let [seg? ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [m] ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (boolean ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (and m ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (= m scope) ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str/ends-with? m ^{:line 409 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str "." scope))))))]
-  ^{:line 410 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or ^{:line 410 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seg? src) ^{:line 410 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (seg? ^{:line 410 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (module-name src)))))
+(defn ^Boolean scope-match? [module-name ^String src ^String scope]
+  (let [seg? (fn [m] (boolean (and m (or (= m scope) (str/ends-with? m (str "." scope))))))]
+  (or (seg? src) (seg? (module-name src)))))
 
-^{:line 412 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn scope->srcs [module-name srcs ^String scope]
-  ^{:line 413 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec ^{:line 413 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (filter ^{:line 413 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (fn [src] ^{:line 413 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (scope-match? module-name src scope)) srcs)))
+(defn scope->srcs [module-name srcs ^String scope]
+  (vec (filter (fn [src] (scope-match? module-name src scope)) srcs)))
 
-^{:line 415 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn ^String out-path-for [resolve-out ^String src]
-  ^{:line 416 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str ^{:line 416 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (or resolve-out DEFAULT-RESOLVE-OUT ^{:line 416 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" ^{:line 418 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (last ^{:line 418 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (str/split src PATH-SPLIT-RE)) ".edn"))
+(defn ^String out-path-for [resolve-out ^String src]
+  (str (or resolve-out DEFAULT-RESOLVE-OUT (System/getenv "RESOLVE_OUT") "/tmp") "/resolved-" (last (str/split src PATH-SPLIT-RE)) ".edn"))
 
-^{:line 421 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (defn emit-srcs-for [project-srcs srcs]
-  ^{:line 422 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (if ^{:line 422 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (nil? project-srcs) ^{:line 422 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (emit-srcs srcs) ^{:line 422 :file "/home/tom/code/fram/src/resolve_mint.bclj"} (vec project-srcs)))
+(defn emit-srcs-for [project-srcs srcs]
+  (if (nil? project-srcs) (emit-srcs srcs) (vec project-srcs)))

@@ -8,93 +8,93 @@
             [resolve-modules :as rm]
             [resolve-render :as rv]))
 
-^{:line 58 :file "/home/tom/code/fram/src/resolve_query.bclj"} (def SLASH-RE ^{:line 58 :file "/home/tom/code/fram/src/resolve_query.bclj"} (re-pattern "/"))
+(def SLASH-RE (re-pattern "/"))
 
-^{:line 60 :file "/home/tom/code/fram/src/resolve_query.bclj"} (def EXT-RE ^{:line 60 :file "/home/tom/code/fram/src/resolve_query.bclj"} (re-pattern "\\.[^.]+$"))
+(def EXT-RE (re-pattern "\\.[^.]+$"))
 
-^{:line 62 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- call-refs [ctx view BOUND REFERS node]
-  ^{:line 63 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 63 :file "/home/tom/code/fram/src/resolve_query.bclj"} (some? ^{:line 63 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/refers-target ctx view BOUND REFERS node)) ^{:line 64 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 64 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nil? node) ^{:line 64 :file "/home/tom/code/fram/src/resolve_query.bclj"} [] ^{:line 64 :file "/home/tom/code/fram/src/resolve_query.bclj"} [node]) ^{:line 65 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 65 :file "/home/tom/code/fram/src/resolve_query.bclj"} (= "list" ^{:line 65 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/kind-of ctx view node)) ^{:line 66 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 66 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [acc ch] ^{:line 66 :file "/home/tom/code/fram/src/resolve_query.bclj"} (into acc ^{:line 66 :file "/home/tom/code/fram/src/resolve_query.bclj"} (call-refs ctx view BOUND REFERS ch))) ^{:line 67 :file "/home/tom/code/fram/src/resolve_query.bclj"} [] ^{:line 68 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/ordered-children ctx node)) ^{:line 69 :file "/home/tom/code/fram/src/resolve_query.bclj"} [])))
+(defn- call-refs [ctx view BOUND REFERS node]
+  (if (some? (rr/refers-target ctx view BOUND REFERS node)) (if (nil? node) [] [node]) (if (= "list" (rr/kind-of ctx view node)) (reduce (fn [acc ch] (into acc (call-refs ctx view BOUND REFERS ch))) [] (rr/ordered-children ctx node)) [])))
 
-^{:line 71 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- src-label [ctx view ^String src ents]
-  ^{:line 72 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [mn ^{:line 72 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/module-name ctx view ents)]
-  ^{:line 73 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 73 :file "/home/tom/code/fram/src/resolve_query.bclj"} (some? mn) mn ^{:line 75 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str/replace ^{:line 75 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str ^{:line 75 :file "/home/tom/code/fram/src/resolve_query.bclj"} (last ^{:line 75 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str/split src SLASH-RE))) EXT-RE ""))))
+(defn- src-label [ctx view ^String src ents]
+  (let [mn (rm/module-name ctx view ents)]
+  (if (some? mn) mn (str/replace (str (last (str/split src SLASH-RE))) EXT-RE ""))))
 
-^{:line 77 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- defn-meta-of [ctx view srcs file-modframe ents-of]
-  ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [acc src] ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [frame ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get file-modframe src ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} {})
-   label ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (src-label ctx view src ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get ents-of src ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} []))]
-  ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [a nm] ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [leaf ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get frame nm)]
-  ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (assoc a leaf ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} {:key ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str src "#" ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str leaf)) :file src :module label :name nm}))) acc ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 78 :file "/home/tom/code/fram/src/resolve_query.bclj"} (keys frame))))) ^{:line 79 :file "/home/tom/code/fram/src/resolve_query.bclj"} {} srcs))
+(defn- defn-meta-of [ctx view srcs file-modframe ents-of]
+  (reduce (fn [acc src] (let [frame (get file-modframe src {})
+   label (src-label ctx view src (get ents-of src []))]
+  (reduce (fn [a nm] (let [leaf (get frame nm)]
+  (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (set (keys frame))))) {} srcs))
 
-^{:line 82 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- callers-of [ctx view BOUND REFERS srcs ents-of defn-meta]
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [acc src] ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [a form] ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [d ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/unwrap-def ctx view form)
-   h ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/head-sym ctx view d))]
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (cond
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? rc/TOPLEVEL-VALUE-DEFS h) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [cl ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/logical-name-leaf ctx view ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/ordered-children ctx d) 1 nil))]
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? defn-meta cl) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (conj a ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} [cl d]) a))
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} #{"extend-protocol" "extend-type"} h) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [b cc] ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [outer ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/unwrap-meta ctx view cc)]
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (= "list" ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/kind-of ctx view outer)) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [mnode ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/logical-name-leaf ctx view cc)
-   cl ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (some? ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/sym-val ctx view mnode)) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rv/ultimate ctx view BOUND REFERS ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/refers-target ctx view BOUND REFERS mnode)) nil)]
-  ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (and ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (some? cl) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? defn-meta cl)) ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (conj b ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} [cl cc]) b)) b))) a ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rest ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/ordered-children ctx d))))
-  :else a))) acc ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/forms-of ctx view ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get ents-of src ^{:line 83 :file "/home/tom/code/fram/src/resolve_query.bclj"} [])))) ^{:line 84 :file "/home/tom/code/fram/src/resolve_query.bclj"} [] srcs))
+(defn- callers-of [ctx view BOUND REFERS srcs ents-of defn-meta]
+  (reduce (fn [acc src] (reduce (fn [a form] (let [d (rm/unwrap-def ctx view form)
+   h (str (rr/head-sym ctx view d))]
+  (cond
+  (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [cl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))]
+  (if (contains? defn-meta cl) (conj a [cl d]) a))
+  (contains? #{"extend-protocol" "extend-type"} h) (reduce (fn [b cc] (let [outer (rr/unwrap-meta ctx view cc)]
+  (if (= "list" (rr/kind-of ctx view outer)) (let [mnode (rm/logical-name-leaf ctx view cc)
+   cl (if (some? (rr/sym-val ctx view mnode)) (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS mnode)) nil)]
+  (if (and (some? cl) (contains? defn-meta cl)) (conj b [cl cc]) b)) b))) a (vec (rest (rr/ordered-children ctx d))))
+  :else a))) acc (rm/forms-of ctx view (get ents-of src [])))) [] srcs))
 
-^{:line 87 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn call-edges [ctx view BOUND REFERS srcs file-modframe ents-of]
-  ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [defn-meta ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn-meta-of ctx view srcs file-modframe ents-of)
-   defn-set ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (keys defn-meta))
-   callers ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (callers-of ctx view BOUND REFERS srcs ents-of defn-meta)
-   edges ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [acc pair] ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [caller-leaf ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth pair 0)
-   body ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth pair 1)]
-  ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [a r] ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [callee ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rv/ultimate ctx view BOUND REFERS ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/refers-target ctx view BOUND REFERS r))]
-  ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (and ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? defn-set callee) ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (not= callee caller-leaf)) ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (conj a ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} [caller-leaf callee]) a))) acc ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} (call-refs ctx view BOUND REFERS body)))) ^{:line 88 :file "/home/tom/code/fram/src/resolve_query.bclj"} [] callers)]
-  ^{:line 89 :file "/home/tom/code/fram/src/resolve_query.bclj"} {:defn-meta defn-meta :edges ^{:line 89 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec ^{:line 89 :file "/home/tom/code/fram/src/resolve_query.bclj"} (distinct edges)) :defn-set defn-set}))
+(defn call-edges [ctx view BOUND REFERS srcs file-modframe ents-of]
+  (let [defn-meta (defn-meta-of ctx view srcs file-modframe ents-of)
+   defn-set (set (keys defn-meta))
+   callers (callers-of ctx view BOUND REFERS srcs ents-of defn-meta)
+   edges (reduce (fn [acc pair] (let [caller-leaf (nth pair 0)
+   body (nth pair 1)]
+  (reduce (fn [a r] (let [callee (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS r))]
+  (if (and (contains? defn-set callee) (not= callee caller-leaf)) (conj a [caller-leaf callee]) a))) acc (call-refs ctx view BOUND REFERS body)))) [] callers)]
+  {:defn-meta defn-meta :edges (vec (distinct edges)) :defn-set defn-set}))
 
-^{:line 91 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn binding-privacy [ctx view srcs ents-of]
-  ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [acc src] ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [a f] ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [d ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/unwrap-def ctx view f)
-   h ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (str ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/head-sym ctx view d))]
-  ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? rc/TOPLEVEL-VALUE-DEFS h) ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [nl ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/logical-name-leaf ctx view ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/ordered-children ctx d) 1 nil))]
-  ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (some? ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rr/sym-val ctx view nl)) ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (assoc a nl ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (contains? ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} #{"def-" "defn-"} h) :private :public)) a)) a))) acc ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (rm/forms-of ctx view ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get ents-of src ^{:line 92 :file "/home/tom/code/fram/src/resolve_query.bclj"} [])))) ^{:line 93 :file "/home/tom/code/fram/src/resolve_query.bclj"} {} srcs))
+(defn binding-privacy [ctx view srcs ents-of]
+  (reduce (fn [acc src] (reduce (fn [a f] (let [d (rm/unwrap-def ctx view f)
+   h (str (rr/head-sym ctx view d))]
+  (if (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))]
+  (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} h) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src [])))) {} srcs))
 
-^{:line 96 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- ent! [ctx k->id k]
-  ^{:line 97 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [cur ^{:line 97 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get ^{:line 97 :file "/home/tom/code/fram/src/resolve_query.bclj"} (deref k->id) k)]
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (int? cur) cur ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [e ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/entity! ctx)]
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (do
-  ^{:line 98 :file "/home/tom/code/fram/src/resolve_query.bclj"} (swap! k->id assoc k e)
+(defn- ent! [ctx k->id k]
+  (let [cur (get (deref k->id) k)]
+  (if (int? cur) cur (let [e (c/entity! ctx)]
+  (do
+  (swap! k->id assoc k e)
   e)))))
 
-^{:line 100 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn- invert [k->id]
-  ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [m k] ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [v ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (deref k->id) k)]
-  ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (int? v) ^{:line 101 :file "/home/tom/code/fram/src/resolve_query.bclj"} (assoc m v k) m))) ^{:line 102 :file "/home/tom/code/fram/src/resolve_query.bclj"} {} ^{:line 103 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 103 :file "/home/tom/code/fram/src/resolve_query.bclj"} (keys ^{:line 103 :file "/home/tom/code/fram/src/resolve_query.bclj"} (deref k->id)))))
+(defn- invert [k->id]
+  (reduce (fn [m k] (let [v (get (deref k->id) k)]
+  (if (int? v) (assoc m v k) m))) {} (set (keys (deref k->id)))))
 
-^{:line 105 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn blast-closure! [edges]
-  ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [ctx ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/new-store)
-   tx ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/begin-tx! ctx "code")
-   EDGE ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/value! ctx "calls-defn")
-   k->id ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} (atom ^{:line 106 :file "/home/tom/code/fram/src/resolve_query.bclj"} {})]
-  ^{:line 107 :file "/home/tom/code/fram/src/resolve_query.bclj"} (do
-  ^{:line 108 :file "/home/tom/code/fram/src/resolve_query.bclj"} (doseq [e edges]
-  ^{:line 109 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/fact! ctx ^{:line 110 :file "/home/tom/code/fram/src/resolve_query.bclj"} (ent! ctx k->id ^{:line 110 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth e 0)) EDGE ^{:line 112 :file "/home/tom/code/fram/src/resolve_query.bclj"} (ent! ctx k->id ^{:line 112 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth e 1)) tx))
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [id->k ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (invert k->id)
-   db ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/run-rules ctx ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/rule "reaches" ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y)] ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "triple" ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) EDGE ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y)])]) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/rule "reaches" ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :z)] ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "triple" ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) EDGE ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y)]) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "reaches" ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :z)])])])
-   reaches ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (mapv ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [row] ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get id->k ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth row 0)) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get id->k ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth row 1))]) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/facts db "reaches"))))
-   blast ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (reduce ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [m row] ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [x ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth row 0)
-   y ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth row 1)]
-  ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (assoc m y ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (conj ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get m y ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} #{}) x)))) ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} {} ^{:line 114 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec reaches))]
-  ^{:line 115 :file "/home/tom/code/fram/src/resolve_query.bclj"} {:reaches reaches :blast blast}))))
+(defn blast-closure! [edges]
+  (let [ctx (c/new-store)
+   tx (c/begin-tx! ctx "code")
+   EDGE (c/value! ctx "calls-defn")
+   k->id (atom {})]
+  (do
+  (doseq [e edges]
+  (c/fact! ctx (ent! ctx k->id (nth e 0)) EDGE (ent! ctx k->id (nth e 1)) tx))
+  (let [id->k (invert k->id)
+   db (d/run-rules ctx [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])]) (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)]) (d/lit "reaches" [(d/v :y) (d/v :z)])])])
+   reaches (set (mapv (fn [row] [(get id->k (nth row 0)) (get id->k (nth row 1))]) (vec (d/facts db "reaches"))))
+   blast (reduce (fn [m row] (let [x (nth row 0)
+   y (nth row 1)]
+  (assoc m y (conj (get m y #{}) x)))) {} (vec reaches))]
+  {:reaches reaches :blast blast}))))
 
-^{:line 117 :file "/home/tom/code/fram/src/resolve_query.bclj"} (defn dead-private-bindings! [cg privacy]
-  ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [defn-meta ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (:defn-meta cg ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} {})
-   edges ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (:edges cg ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} [])
-   ctx ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/new-store)
-   tx ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/begin-tx! ctx "dead")
-   CALLS ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/value! ctx "calls-defn")
-   ISROOT ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/value! ctx "is-root")
-   ISPRIV ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/value! ctx "is-priv")
-   k->id ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} (atom ^{:line 118 :file "/home/tom/code/fram/src/resolve_query.bclj"} {})]
-  ^{:line 119 :file "/home/tom/code/fram/src/resolve_query.bclj"} (do
-  ^{:line 120 :file "/home/tom/code/fram/src/resolve_query.bclj"} (doseq [e edges]
-  ^{:line 121 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/fact! ctx ^{:line 122 :file "/home/tom/code/fram/src/resolve_query.bclj"} (ent! ctx k->id ^{:line 122 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth e 0)) CALLS ^{:line 124 :file "/home/tom/code/fram/src/resolve_query.bclj"} (ent! ctx k->id ^{:line 124 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth e 1)) tx))
-  ^{:line 126 :file "/home/tom/code/fram/src/resolve_query.bclj"} (doseq [leaf ^{:line 126 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 126 :file "/home/tom/code/fram/src/resolve_query.bclj"} (keys defn-meta))]
-  ^{:line 127 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [e ^{:line 127 :file "/home/tom/code/fram/src/resolve_query.bclj"} (ent! ctx k->id leaf)]
-  ^{:line 128 :file "/home/tom/code/fram/src/resolve_query.bclj"} (if ^{:line 128 :file "/home/tom/code/fram/src/resolve_query.bclj"} (= :private ^{:line 128 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get privacy leaf)) ^{:line 129 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/fact! ctx e ISPRIV e tx) ^{:line 130 :file "/home/tom/code/fram/src/resolve_query.bclj"} (c/fact! ctx e ISROOT e tx))))
-  ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (let [id->k ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (invert k->id)
-   db ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/run-strata ctx ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/rule "live" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x)] ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "triple" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) ISROOT ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x)])]) ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/rule "live" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y)] ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "triple" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x) CALLS ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :y)]) ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "live" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :x)])])] ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/rule "dead" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :p)] ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/lit "triple" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :p) ISPRIV ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :p)]) ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/nlit "live" ^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} [^{:line 131 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/v :p)])])]])]
-  ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (set ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (keep ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (fn [row] ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (get id->k ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (nth row 0))) ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (vec ^{:line 132 :file "/home/tom/code/fram/src/resolve_query.bclj"} (d/facts db "dead")))))))))
+(defn dead-private-bindings! [cg privacy]
+  (let [defn-meta (:defn-meta cg {})
+   edges (:edges cg [])
+   ctx (c/new-store)
+   tx (c/begin-tx! ctx "dead")
+   CALLS (c/value! ctx "calls-defn")
+   ISROOT (c/value! ctx "is-root")
+   ISPRIV (c/value! ctx "is-priv")
+   k->id (atom {})]
+  (do
+  (doseq [e edges]
+  (c/fact! ctx (ent! ctx k->id (nth e 0)) CALLS (ent! ctx k->id (nth e 1)) tx))
+  (doseq [leaf (set (keys defn-meta))]
+  (let [e (ent! ctx k->id leaf)]
+  (if (= :private (get privacy leaf)) (c/fact! ctx e ISPRIV e tx) (c/fact! ctx e ISROOT e tx))))
+  (let [id->k (invert k->id)
+   db (d/run-strata ctx [[(d/rule "live" [(d/v :x)] [(d/lit "triple" [(d/v :x) ISROOT (d/v :x)])]) (d/rule "live" [(d/v :y)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "live" [(d/v :x)])])] [(d/rule "dead" [(d/v :p)] [(d/lit "triple" [(d/v :p) ISPRIV (d/v :p)]) (d/nlit "live" [(d/v :p)])])]])]
+  (set (vec (keep (fn [row] (get id->k (nth row 0))) (vec (d/facts db "dead")))))))))
