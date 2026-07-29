@@ -4,99 +4,103 @@
             [resolve-core :as rc]
             [resolve-read :as rr]))
 
-(defn- sv [ctx view e]
-  (rr/sym-val ctx view e))
+^{:line 36 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn- sv [ctx view e]
+  ^{:line 37 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/sym-val ctx view e))
 
-(defn- ^Boolean type-colon? [v]
-  (and (string? v) (contains? rc/TYPE-COLON (str v))))
+^{:line 39 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn- ^Boolean type-colon? [v]
+  ^{:line 40 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (and ^{:line 40 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (string? v) ^{:line 40 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (contains? rc/TYPE-COLON ^{:line 40 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str v))))
 
-(defn ^Boolean brackets? [ctx view e]
-  (= "#%brackets" (rr/head-sym ctx view e)))
+^{:line 42 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn ^Boolean brackets? [ctx view e]
+  ^{:line 43 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= "#%brackets" ^{:line 43 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/head-sym ctx view e)))
 
-(defn ^Boolean map-node? [ctx view e]
-  (= "#%map" (rr/head-sym ctx view e)))
+^{:line 45 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn ^Boolean map-node? [ctx view e]
+  ^{:line 46 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= "#%map" ^{:line 46 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/head-sym ctx view e)))
 
-(defn- tail [ctx e]
-  (vec (rest (rr/ordered-children ctx e))))
+^{:line 48 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn- tail [ctx e]
+  ^{:line 49 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 49 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rest ^{:line 49 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/ordered-children ctx e))))
 
-(defn collect-bind-syms [ctx view node]
-  (if (nil? node) [] (let [v (sv ctx view node)]
-  (cond
-  (some? v) (if (contains? #{"_" "&"} (str v)) [] [node])
-  (brackets? ctx view node) (reduce (fn [acc k] (into acc (collect-bind-syms ctx view k))) [] (tail ctx node))
-  (map-node? ctx view node) (loop [ks (tail ctx node)
-   acc []]
-  (if (empty? ks) acc (let [k (first ks)
-   kv (sv ctx view k)
-   v2 (nth ks 1 nil)
-   ks2 (vec (drop 2 ks))]
-  (cond
-  (contains? #{":keys" ":strs" ":syms"} (str kv)) (recur ks2 (into acc (if (and (some? v2) (brackets? ctx view v2)) (filterv (fn [c] (some? (sv ctx view c))) (tail ctx v2)) [])))
-  (= ":as" (str kv)) (recur ks2 (into acc (collect-bind-syms ctx view v2)))
-  (= ":or" (str kv)) (recur ks2 acc)
-  (some? kv) (recur ks2 (if (nil? k) acc (conj acc k)))
-  :else (recur ks2 (into acc (collect-bind-syms ctx view k)))))))
-  (= "list" (rr/kind-of ctx view node)) (loop [ks (rr/ordered-children ctx node)
-   acc []]
-  (if (empty? ks) acc (let [k (first ks)]
-  (if (type-colon? (sv ctx view k)) acc (recur (vec (rest ks)) (into acc (collect-bind-syms ctx view k)))))))
-  :else []))))
+^{:line 51 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn collect-bind-syms [ctx view node]
+  ^{:line 52 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 52 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nil? node) ^{:line 53 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 54 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [n ^{:line 54 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/unwrap-meta ctx view node)
+   v ^{:line 54 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view n)]
+  ^{:line 55 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 56 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? v) ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (contains? ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} #{"_" "&"} ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str v)) ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 57 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [n])
+  ^{:line 58 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (brackets? ctx view n) ^{:line 59 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (reduce ^{:line 59 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [acc k] ^{:line 59 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 59 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k))) ^{:line 60 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 61 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx n))
+  ^{:line 62 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (map-node? ctx view n) ^{:line 63 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 63 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx n)
+   acc ^{:line 63 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []]
+  ^{:line 64 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 64 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) acc ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [k ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)
+   kv ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view k)
+   v2 ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth ks 1 nil)
+   ks2 ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 66 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (drop 2 ks))]
+  ^{:line 67 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 68 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (contains? ^{:line 68 :file "/home/tom/code/fram/src/resolve_binds.bclj"} #{":keys" ":strs" ":syms"} ^{:line 68 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 69 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 70 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 71 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 71 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (and ^{:line 71 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? v2) ^{:line 71 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (brackets? ctx view v2)) ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (keep ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [c] ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [leaf ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/unwrap-meta ctx view c)]
+  ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view leaf)) ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (do
+  leaf)))) ^{:line 72 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx v2))) ^{:line 73 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [])))
+  ^{:line 74 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= ":as" ^{:line 74 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 75 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 75 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 75 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view v2)))
+  ^{:line 76 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= ":or" ^{:line 76 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 77 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 acc)
+  ^{:line 78 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? kv) ^{:line 79 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 79 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 79 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nil? k) acc ^{:line 79 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (conj acc k)))
+  :else ^{:line 81 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 81 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 81 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k)))))))
+  ^{:line 82 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= "list" ^{:line 82 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/kind-of ctx view n)) ^{:line 83 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 83 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/ordered-children ctx n)
+   acc ^{:line 83 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []]
+  ^{:line 84 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 84 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) acc ^{:line 86 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [k ^{:line 86 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)]
+  ^{:line 87 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 87 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (type-colon? ^{:line 87 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view k)) acc ^{:line 89 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ^{:line 89 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 89 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rest ks)) ^{:line 90 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 90 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k)))))))
+  :else ^{:line 92 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []))))
 
-(defn collect-or-vals [ctx view node]
-  (if (nil? node) [] (cond
-  (map-node? ctx view node) (loop [ks (tail ctx node)
-   acc []]
-  (if (empty? ks) acc (let [k (first ks)
-   kv (sv ctx view k)
-   v2 (nth ks 1 nil)
-   ks2 (vec (drop 2 ks))]
-  (cond
-  (= ":or" (str kv)) (recur ks2 (into acc (if (and (some? v2) (map-node? ctx view v2)) (vec (keep-indexed (fn [i cc] (if (odd? i) cc nil)) (tail ctx v2))) [])))
-  (contains? #{":as" ":keys" ":strs" ":syms"} (str kv)) (recur ks2 acc)
-  (some? kv) (recur ks2 acc)
-  :else (recur ks2 (into acc (collect-or-vals ctx view k)))))))
-  (brackets? ctx view node) (reduce (fn [acc k] (into acc (collect-or-vals ctx view k))) [] (tail ctx node))
-  :else [])))
+^{:line 94 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn collect-or-vals [ctx view node]
+  ^{:line 95 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 95 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nil? node) ^{:line 96 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 97 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 98 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (map-node? ctx view node) ^{:line 99 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 99 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx node)
+   acc ^{:line 99 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []]
+  ^{:line 100 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 100 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) acc ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [k ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)
+   kv ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view k)
+   v2 ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth ks 1 nil)
+   ks2 ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 102 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (drop 2 ks))]
+  ^{:line 103 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 104 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= ":or" ^{:line 104 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 105 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 106 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 107 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 107 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (and ^{:line 107 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? v2) ^{:line 107 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (map-node? ctx view v2)) ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (keep-indexed ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [i cc] ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (odd? i) cc nil)) ^{:line 108 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx v2))) ^{:line 109 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [])))
+  ^{:line 110 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (contains? ^{:line 110 :file "/home/tom/code/fram/src/resolve_binds.bclj"} #{":as" ":keys" ":strs" ":syms"} ^{:line 110 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 111 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 acc)
+  ^{:line 112 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? kv) ^{:line 113 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 acc)
+  :else ^{:line 115 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 115 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 115 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-or-vals ctx view k)))))))
+  ^{:line 116 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (brackets? ctx view node) ^{:line 117 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (reduce ^{:line 117 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [acc k] ^{:line 117 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 117 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-or-vals ctx view k))) ^{:line 118 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 119 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx node))
+  :else ^{:line 121 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [])))
 
-(defn param-binds [ctx view bracket]
-  (loop [ks (tail ctx bracket)
-   binds []
+^{:line 123 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn param-binds [ctx view bracket]
+  ^{:line 124 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 124 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx bracket)
+   binds ^{:line 124 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []
    skip false]
-  (if (empty? ks) binds (let [k (first ks)
-   v (sv ctx view k)
-   ks2 (vec (rest ks))]
-  (cond
-  skip (recur ks2 binds false)
-  (type-colon? v) (recur ks2 binds true)
-  :else (recur ks2 (into binds (collect-bind-syms ctx view k)) false))))))
+  ^{:line 125 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 125 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) binds ^{:line 127 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [k ^{:line 127 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)
+   v ^{:line 127 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view k)
+   ks2 ^{:line 127 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 127 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rest ks))]
+  ^{:line 128 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  skip ^{:line 130 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 binds false)
+  ^{:line 131 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (type-colon? v) ^{:line 132 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 binds true)
+  :else ^{:line 134 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 134 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into binds ^{:line 134 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k)) false))))))
 
-(defn let-bind-pairs [ctx view bracket]
-  (loop [ks (tail ctx bracket)
-   acc []]
-  (if (empty? ks) acc (let [pat (first ks)
-   after (if (type-colon? (sv ctx view (nth ks 1 nil))) (vec (drop 3 ks)) (vec (rest ks)))
-   val (nth after 0 nil)]
-  (recur (vec (rest after)) (conj acc [(collect-bind-syms ctx view pat) val (collect-or-vals ctx view pat)]))))))
+^{:line 136 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn let-bind-pairs [ctx view bracket]
+  ^{:line 137 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 137 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx bracket)
+   acc ^{:line 137 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []]
+  ^{:line 138 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 138 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) acc ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [pat ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)
+   after ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (type-colon? ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth ks 1 nil))) ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (drop 3 ks)) ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rest ks)))
+   val ^{:line 140 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth after 0 nil)]
+  ^{:line 141 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ^{:line 141 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 141 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rest after)) ^{:line 142 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (conj acc ^{:line 143 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [^{:line 143 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view pat) val ^{:line 145 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-or-vals ctx view pat)]))))))
 
-(defn for-bind-pairs [ctx view bracket]
-  (loop [ks (tail ctx bracket)
-   acc []]
-  (if (empty? ks) acc (let [k (first ks)
-   kv (sv ctx view k)
-   v (nth ks 1 nil)
-   ks2 (vec (drop 2 ks))]
-  (cond
-  (contains? #{":when" ":while"} (str kv)) (recur ks2 (conj acc [:expr v]))
-  (= ":let" (str kv)) (recur ks2 (into acc (if (and (some? v) (brackets? ctx view v)) (mapv (fn [p] [:bind (nth p 0 nil) (nth p 1 nil) (nth p 2 nil)]) (let-bind-pairs ctx view v)) [])))
-  (type-colon? (sv ctx view v)) (recur (vec (drop 4 ks)) (conj acc [:bind (collect-bind-syms ctx view k) (nth ks 3 nil) (collect-or-vals ctx view k)]))
-  :else (recur ks2 (conj acc [:bind (collect-bind-syms ctx view k) v (collect-or-vals ctx view k)])))))))
+^{:line 147 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn for-bind-pairs [ctx view bracket]
+  ^{:line 148 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (loop [ks ^{:line 148 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx bracket)
+   acc ^{:line 148 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []]
+  ^{:line 149 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 149 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (empty? ks) acc ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [k ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (first ks)
+   kv ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view k)
+   v ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth ks 1 nil)
+   ks2 ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 151 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (drop 2 ks))]
+  ^{:line 152 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 153 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (contains? ^{:line 153 :file "/home/tom/code/fram/src/resolve_binds.bclj"} #{":when" ":while"} ^{:line 153 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 154 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 154 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (conj acc ^{:line 154 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [:expr v]))
+  ^{:line 155 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= ":let" ^{:line 155 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str kv)) ^{:line 156 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 157 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 158 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 158 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (and ^{:line 158 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? v) ^{:line 158 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (brackets? ctx view v)) ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (mapv ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [p] ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [:bind ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth p 0 nil) ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth p 1 nil) ^{:line 159 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth p 2 nil)]) ^{:line 160 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let-bind-pairs ctx view v)) ^{:line 161 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [])))
+  ^{:line 162 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (type-colon? ^{:line 162 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view v)) ^{:line 163 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ^{:line 163 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (vec ^{:line 163 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (drop 4 ks)) ^{:line 164 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (conj acc ^{:line 165 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [:bind ^{:line 166 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k) ^{:line 167 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nth ks 3 nil) ^{:line 168 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-or-vals ctx view k)]))
+  :else ^{:line 170 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (recur ks2 ^{:line 171 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (conj acc ^{:line 172 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [:bind ^{:line 173 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-bind-syms ctx view k) v ^{:line 175 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (collect-or-vals ctx view k)])))))))
 
-(defn frame-of [ctx view bsyms]
-  (reduce (fn [acc b] (assoc acc (sv ctx view b) b)) {} bsyms))
+^{:line 177 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn frame-of [ctx view bsyms]
+  ^{:line 178 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (reduce ^{:line 178 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [acc b] ^{:line 178 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (assoc acc ^{:line 178 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view b) b)) ^{:line 179 :file "/home/tom/code/fram/src/resolve_binds.bclj"} {} bsyms))
 
-(defn match-pat-binds [ctx view pat]
-  (if (nil? pat) [] (let [v (sv ctx view pat)]
-  (cond
-  (some? v) (if (= "_" (str v)) [] [pat])
-  (or (= "list" (rr/kind-of ctx view pat)) (brackets? ctx view pat)) (reduce (fn [acc k] (into acc (match-pat-binds ctx view k))) [] (tail ctx pat))
-  :else []))))
+^{:line 182 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (defn match-pat-binds [ctx view pat]
+  ^{:line 183 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 183 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (nil? pat) ^{:line 184 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 185 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (let [n ^{:line 185 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/unwrap-meta ctx view pat)
+   v ^{:line 185 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (sv ctx view n)]
+  ^{:line 186 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (cond
+  ^{:line 187 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (some? v) ^{:line 188 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (if ^{:line 188 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= "_" ^{:line 188 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (str v)) ^{:line 188 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 188 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [n])
+  ^{:line 189 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (or ^{:line 189 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (= "list" ^{:line 189 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (rr/kind-of ctx view n)) ^{:line 189 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (brackets? ctx view n)) ^{:line 190 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (reduce ^{:line 190 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (fn [acc k] ^{:line 190 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (into acc ^{:line 190 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (match-pat-binds ctx view k))) ^{:line 191 :file "/home/tom/code/fram/src/resolve_binds.bclj"} [] ^{:line 192 :file "/home/tom/code/fram/src/resolve_binds.bclj"} (tail ctx n))
+  :else ^{:line 194 :file "/home/tom/code/fram/src/resolve_binds.bclj"} []))))

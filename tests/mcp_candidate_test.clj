@@ -55,6 +55,13 @@
 ;;   H. TRACKED-PATH PATHOLOGIES — missing, duplicate, relative, outside-root,
 ;;      traversal, and symlink-escape file facts each reject BEFORE mutation,
 ;;      and no module-name artifact is created anywhere.
+;;   M. COHERENT MULTI-MODULE TRANSACTIONS — per-edit module overrides preserve
+;;      the top-level default, same-named definitions in different modules are
+;;      distinct targets, all touched projections cross one final-state check
+;;      and one graph envelope, and one red module rolls the whole world back.
+;;      Removing an externally referenced variant or synthesized accessor fails
+;;      closed unless its consumer is coherently rewritten in the same batch;
+;;      provider-first edit order is valid because only the final world matters.
 ;;
 ;;   bb -cp out tests/mcp_candidate_test.clj      (run from the repo root)
 ;; Needs: bb + out/ + clojure (JVM daemons) + racket + beagle. Boots throwaway
@@ -93,6 +100,9 @@
 (def transaction-log (str src-dir "/.fram/transaction.log"))
 (def bad-log (str src-dir "/.fram/bad.log"))
 (def facts-log (str tmp "/facts.log"))
+(def verifier-fixture (str root "/tests/edit_verifier_fixture.clj"))
+(def verifier-adapter (str root "/bin/fram-edit-verifier"))
+(def verifier-count-file (str tmp "/verifier-invocations.log"))
 (def outside-dir (str tmp "/outside"))
 (.mkdirs (io/file nested-dir))
 (.mkdirs (io/file (str src-dir "/.fram")))
@@ -105,6 +115,10 @@
        "(defn double-it [x :- Int] :- Int\n  (* 2 x))\n\n"
        "(defn plus-both [a :- Int b :- Int] :- Int\n  (+ (double-it a) (double-it b)))\n"))
 (def modules ["wkfix" "schema" "missmod" "typedtxn"
+              "txalpha" "txbeta"
+              "txvariantprov" "txvariantconsumer"
+              "txaccessorprov" "txaccessorconsumer"
+              "overlayroot" "overlaydependent" "overlaythird"
               "dupmod" "relmod" "outmod" "travmod" "linkmod"])
 (doseq [m modules]
   (spit (str nested-dir "/" m ".bclj") (str/replace fixture-body "%NAME%" m)))
@@ -123,6 +137,53 @@
            "existing raw throw illegal.\n\n"
            "(defn classify-rewrite-crash [path :- String] :- String\n"
            "  (throw (ex-info \"boom\" {:path path :fram/doctor-refusal true})))\n"))
+(spit (str nested-dir "/txalpha.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns src.fram.txalpha)\n\n"
+           "(defn shared-name [] :- Int 10)\n"))
+(spit (str nested-dir "/txbeta.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns src.fram.txbeta)\n\n"
+           "(defn shared-name [] :- Int 20)\n"))
+(spit (str nested-dir "/txvariantprov.bclj")
+      (str "#lang beagle/clj\n"
+           ";; Graph source id is src.fram.txvariantprov; declared namespace is intentionally different.\n"
+           "(ns fram.txvariantprov)\n\n"
+           "(defunion Event\n"
+           "  (Created [value :- Int])\n"
+           "  (Retired [reason :- String]))\n\n"
+           "(defn provider-marker [] :- Int 1)\n"))
+(spit (str nested-dir "/txvariantconsumer.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.txvariantconsumer)\n"
+           "(require fram.txvariantprov :as p)\n\n"
+           "(defn use-created [x :- Int] :- Any (p/->Created x))\n"))
+(spit (str nested-dir "/txaccessorprov.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.txaccessorprov)\n\n"
+           "(defrecord Profile [name :- String legacy :- Int])\n\n"
+           "(defn provider-marker [] :- Int 1)\n"))
+(spit (str nested-dir "/txaccessorconsumer.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.txaccessorconsumer)\n"
+           "(require fram.txaccessorprov :as p)\n\n"
+           "(defn use-legacy [x :- Int] :- Int\n"
+           "  (p/profile-legacy (p/->Profile \"fixture\" x)))\n"))
+(spit (str nested-dir "/overlayroot.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.overlayroot)\n\n"
+           "(defn root-value [x :- Int] :- Int (* 2 x))\n"))
+(spit (str nested-dir "/overlaythird.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.overlaythird)\n\n"
+           "(defn third-value [x :- Int] :- Int (+ x 1))\n"))
+(spit (str nested-dir "/overlaydependent.bclj")
+      (str "#lang beagle/clj\n"
+           "(ns fram.overlaydependent)\n"
+           "(require fram.overlayroot :as r)\n"
+           "(require fram.overlaythird :as t)\n\n"
+           "(defn dependent-value [x :- Int] :- Int\n"
+           "  (t/third-value (r/root-value x)))\n"))
 
 ;; HERMETIC SPAWNS — :env REPLACES the environment everywhere below. An ambient
 ;; live-runtime FRAM_TELEMETRY_LOG would otherwise leak into the daemons via
@@ -134,7 +195,10 @@
                    (catch Exception _ nil))]
         (when (and r (zero? (:exit r)) (not (str/blank? (:out r)))) (str/trim (:out r))))))
 (def scrub-env
-  (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home}
+  (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home
+           ;; A coherent full-world verification is deliberately allowed to
+           ;; take as long as its coordinator-side 120s verifier budget.
+           "FRAM_COORD_READ_TIMEOUT_MS" "180000"}
     fram-racket (assoc "FRAM_RACKET" fram-racket)))
 
 (println "ingesting" (count modules) "nested fixture modules …")
@@ -200,7 +264,20 @@
   (let [outf (str tmp "/daemon-" port ".log")
         _ (java.nio.file.Files/deleteIfExists (.toPath (io/file outf)))
         proc (p/process {:out (io/file outf) :err (io/file outf)
-                         :env (assoc scrub-env "FRAM_REQUIRE_LOG_FENCE" "1" "FRAM_EDIT_INJECT" "1")}
+                         :env (assoc scrub-env
+                                "FRAM_REQUIRE_LOG_FENCE" "1"
+                                "FRAM_EDIT_INJECT" "1"
+                                "FRAM_EDIT_VERIFIER" verifier-fixture
+                                "FRAM_EDIT_VERIFIER_COUNT_FILE" verifier-count-file
+                                "FRAM_EDIT_VERIFIER_FIXTURE_DELEGATE"
+                                verifier-adapter
+                                "FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
+                                "src.fram.overlaythird"
+                                ;; Candidate/OCC tests need a quiescent canonical log.
+                                ;; Snapshot behavior has dedicated suites; its async
+                                ;; post-boot metadata append would be an unrelated,
+                                ;; legitimate stale-version writer here.
+                                "FRAM_SNAPSHOT_BOOT" "0")}
                         "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
     (loop [i 0]
       (cond
@@ -223,14 +300,163 @@
 (def bad-daemon  (boot-daemon! bad-port bad-log))
 (def transaction-daemon (boot-daemon! transaction-port transaction-log))
 
+(defn coord-raw [port log req]
+  (rt/coord-request-for-log port log req))
 (defn coord
   ([req] (coord main-port code-log req))
-  ([port log req] (rt/coord-request-for-log port log req)))
+  ([port log req]
+   ;; Keep legacy candidate regressions focused on their original durability/OCC
+   ;; subject while exercising the new hard gate. An exact first commit attempt
+   ;; must say :candidate-unverified; only then does this test helper request
+   ;; coordinator-owned verification and retry the byte-identical commit.
+   (if (= :edit-commit (:op req))
+     (let [first-result (coord-raw port log req)]
+       (if (= :candidate-unverified (:code first-result))
+         (let [verified (coord-raw port log
+                                   {:op :edit-verify
+                                    :candidate (:candidate req)})]
+           (if (:ok verified)
+             (coord-raw port log req)
+             verified))
+         first-result))
+     (coord-raw port log req))))
 (defn cur-version [] (:version (coord {:op :version})))
 (defn transaction-coord [req]
   (coord transaction-port transaction-log req))
 (defn transaction-version []
   (:version (transaction-coord {:op :version})))
+
+(defn verifier-invocation-count []
+  (if (.isFile (io/file verifier-count-file))
+    (count (remove str/blank? (str/split-lines (slurp verifier-count-file))))
+    0))
+
+;; ============================================================================
+;; V0. COORDINATOR-OWNED VERIFICATION LIFECYCLE — no caller proof can authorize
+;;     commit; one launch-sealed verification is cached; a proof is exact-version
+;;     scoped; and selected checks still receive the complete provider overlay.
+;; ============================================================================
+(let [prep (transaction-coord
+            {:op :edit-prepare
+             :spec {:op "set-body" :module "src.fram.wkfix"
+                    :name "double-it" :datum 6}})
+      commit-req {:op :edit-commit
+                  :candidate (:candidate prep)
+                  :version (:version prep)
+                  :module (:module prep)
+                  :path (:path prep)
+                  :ops-digest (:ops-digest prep)
+                  :edn-digest (:edn-digest prep)}
+      log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      unverified (coord-raw transaction-port transaction-log commit-req)
+      fake (coord-raw
+            transaction-port transaction-log
+            (assoc commit-req
+                   :verification-state :verified
+                   :verification {:schema "caller-forged"
+                                  :input-digest (:edn-digest prep)}))
+      preverify-unchanged?
+      (and (= v0 (transaction-version))
+           (= log0 (vec (read-bytes transaction-log))))
+      calls0 (verifier-invocation-count)
+      verified (coord-raw transaction-port transaction-log
+                          {:op :edit-verify
+                           :candidate (:candidate prep)})
+      cached (coord-raw transaction-port transaction-log
+                        {:op :edit-verify
+                         :candidate (:candidate prep)})
+      calls1 (verifier-invocation-count)
+      commit (coord-raw transaction-port transaction-log commit-req)
+      proof (:verification verified)]
+  (chk "V0: direct prepared→commit is hard-rejected with zero canonical writes"
+       (and (= :candidate-unverified (:code unverified))
+            preverify-unchanged?))
+  (chk "V0: caller-supplied verification fields cannot authorize commit"
+       (= :candidate-unverified (:code fake)))
+  (chk "V0: coordinator invokes its launch-sealed verifier exactly once and caches success"
+       (and (true? (:ok verified))
+            (false? (:cached verified))
+            (true? (:ok cached))
+            (true? (:cached cached))
+            (= 1 (- calls1 calls0))))
+  (chk "V0: proof binds candidate/base/ops/EDN/closure/overlay and verifier closure identities"
+       (and (= (:candidate prep) (:candidate proof))
+            (= (:version prep) (:base-version proof))
+            (= (:ops-digest prep) (:ops-digest proof))
+            (= (:edn-digest prep) (:edn-digest proof))
+            (= (:checked-closure-digest prep) (:closure-digest proof))
+            (= (:overlay-digest prep) (:overlay-digest proof))
+            (re-matches #"[0-9a-f]{64}"
+                        (:verifier-content-digest proof))
+            (re-matches #"[0-9a-f]{64}"
+                        (:toolchain-closure-digest proof))
+            (= (:receipt-digest proof)
+               (sha256-hex
+                (pr-str ["fram-edit-verifier-receipt-v1"
+                         true
+                         (:input-digest proof)
+                         (:world-digest proof)
+                         (:toolchain-closure-digest proof)
+                         (:modules proof)])))))
+  (chk "V0: only the coordinator-verified candidate commits"
+       (and (true? (:ok commit)) (true? (:committed commit)))))
+
+(let [prep (transaction-coord
+            {:op :edit-prepare
+             :spec {:op "set-body" :module "src.fram.overlayroot"
+                    :name "root-value" :datum 41}})
+      checked (set (:checked-modules prep))
+      calls0 (verifier-invocation-count)
+      verified (coord-raw transaction-port transaction-log
+                          {:op :edit-verify
+                           :candidate (:candidate prep)})
+      calls1 (verifier-invocation-count)]
+  (chk "V0: reverse selector includes the dependent but not its untouched third provider"
+       (and (checked "src.fram.overlayroot")
+            (checked "src.fram.overlaydependent")
+            (not (checked "src.fram.overlaythird"))))
+  (chk "V0: complete overlay includes the untouched provider required by the verifier"
+       (and (true? (:ok verified))
+            (= 1 (- calls1 calls0))
+            (> (:overlay-module-count prep)
+               (count (:checked-modules prep))))))
+
+(let [stale-prep (transaction-coord
+                  {:op :edit-prepare
+                   :spec {:op "set-body" :module "src.fram.wkfix"
+                          :name "double-it" :datum 7}})
+      stale-verified (coord-raw transaction-port transaction-log
+                                {:op :edit-verify
+                                 :candidate (:candidate stale-prep)})
+      winner (transaction-coord
+              {:op :edit-prepare
+               :spec {:op "set-body" :module "src.fram.wkfix"
+                      :name "plus-both" :datum 8}})
+      winner-commit
+      (transaction-coord
+       {:op :edit-commit
+        :candidate (:candidate winner)
+        :version (:version winner)
+        :module (:module winner)
+        :path (:path winner)
+        :ops-digest (:ops-digest winner)
+        :edn-digest (:edn-digest winner)})
+      stale-commit
+      (coord-raw
+       transaction-port transaction-log
+       {:op :edit-commit
+        :candidate (:candidate stale-prep)
+        :version (:version stale-prep)
+        :module (:module stale-prep)
+        :path (:path stale-prep)
+        :ops-digest (:ops-digest stale-prep)
+        :edn-digest (:edn-digest stale-prep)})]
+  (chk "V0: candidate verifies before an interleaved exact-version winner"
+       (and (true? (:ok stale-verified))
+            (true? (:ok winner-commit))))
+  (chk "V0: a verified proof cannot outlive its exact base version"
+       (= :stale-version (:code stale-commit))))
 
 ;; ============================================================================
 ;; T0. COORDINATOR MULTI-DEFINITION CANDIDATE — one end-state projection,
@@ -261,6 +487,15 @@
                         "UTF-8")]
   (chk "T0: coordinator accepts two distinct definition edits as one candidate"
        (and (true? (:ok prep)) (= 2 (:edits prep)) (pos? (:ops prep))))
+  (chk "T0: one-module prepare preserves legacy scalars and publishes coherent-world metadata"
+       (and (= "src.fram.wkfix" (:module prep))
+            (= (str nested-dir "/wkfix.bclj") (:path prep))
+            (string? (:edn prep))
+            (= ["src.fram.wkfix"] (:modules prep))
+            (= {"src.fram.wkfix" (str nested-dir "/wkfix.bclj")}
+               (:paths prep))
+            (string? (get (:edn-by-module prep) "src.fram.wkfix"))
+            (some #{"src.fram.wkfix"} (:checked-modules prep))))
   (chk "T0: the one prepared end state contains both staged bodies"
        (and (zero? (:exit rendered))
             (str/includes? text ":- Int 11)")
@@ -317,6 +552,7 @@
 ;; --- spawning the MCP hermetically --------------------------------------------
 (def base-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home
+           "FRAM_COORD_READ_TIMEOUT_MS" "180000"
            "FRAM_LOG" facts-log "FRAM_THREADS" tmp "FRAM_PORT" (str dead-port)
            "FRAM_MCP_PROFILE" "graph-edit-v1"
            "FRAM_GRAPH_EDIT" "1" "FRAM_FLIP" "1"
@@ -368,7 +604,7 @@
       single-text (or (rtext single) "")]
   (chk "T1: one legal definition edit is rejected while the module end state stays red"
        (and (rerr? single)
-            (str/includes? single-text "fails the sealed Beagle parse/type check")
+            (str/includes? single-text "coordinator TYPE/WORLD check")
             (str/includes? single-text "nothing committed")))
   (chk "T1: rejected single edit leaves the red baseline byte-identical"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -390,7 +626,7 @@
       source (slurp jointred-file)]
   (chk "T1: two jointly-green definition edits are accepted through one MCP transaction"
        (and (not (rerr? result))
-            (str/includes? text "committed + TYPE-CHECKS CLEAN")
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
             (str/includes? text "edit-transaction")))
   (chk "T1: the tracked projection contains both green bodies"
        (and (str/includes? source ":- Int 1)")
@@ -409,7 +645,7 @@
       text (or (rtext result) "")]
   (chk "T1: transaction whose end state stays red is rejected by the one sealed check"
        (and (rerr? result)
-            (str/includes? text "fails the sealed Beagle parse/type check")
+            (str/includes? text "coordinator TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T1: rejected red transaction records nothing and leaves projection unchanged"
        (and (= log0 (vec (read-bytes transaction-log)))
@@ -419,12 +655,27 @@
 ;; T2. TYPE + SIGNATURE ATOMICITY — a throwable declaration changes how the
 ;; checker judges every raw throw in the module. Adding the type alone is red;
 ;; upserting the type and the function that cites it must therefore cross the
-;; candidate gate as one final-state transaction.
+;; candidate gate as one final-state transaction. Upserts derive their target
+;; from the form when :name is omitted; a supplied :name is only an assertion.
+;; A second schema/signature evolution proves retained leaf identity warm and
+;; after a cold coordinator restart.
 (def typedtxn-file (str nested-dir "/typedtxn.bclj"))
 (def rewrite-error-form
   "(defunion :throwable RewriteCrashError (RewriteCrash [message :- String path :- String doctor-refusal :- Bool]))")
 (def typed-classifier-form
   "(defn classify-rewrite-crash [path :- String] :- String :raises RewriteCrashError (throw (ex-info \"boom\" {:path path :fram/doctor-refusal true})))")
+(def evolved-rewrite-error-form
+  "(defunion :throwable RewriteCrashError (RewriteCrash [message :- String path :- String doctor-refusal :- String]))")
+(def evolved-typed-classifier-form
+  "(defn classify-rewrite-crash [path :- String refusal :- String] :- String :raises RewriteCrashError (throw (ex-info \"boom-v2\" {:path path :fram/doctor-refusal refusal})))")
+(def retained-typed-bindings
+  ["RewriteCrashError" "RewriteCrash" "classify-rewrite-crash"])
+(defn transaction-binding-targets []
+  (into {}
+        (map (fn [nm]
+               [nm (:target (transaction-coord
+                             {:op :callers :module "src.fram.typedtxn" :name nm}))])
+             retained-typed-bindings)))
 
 (let [log0 (vec (read-bytes transaction-log))
       v0 (transaction-version)
@@ -442,15 +693,34 @@
             (= v0 (transaction-version))
             (= file0 (slurp typedtxn-file)))))
 
-(let [before (read-bytes transaction-log)
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp typedtxn-file)
       result (mcp-edit
               transaction-env 9 "edit-transaction"
               {:module "src.fram.typedtxn"
                :edits [{:op "upsert-form"
-                        :name "RewriteCrashError"
+                        :name "NotRewriteCrashError"
                         :form rewrite-error-form}
                        {:op "upsert-form"
-                        :name "classify-rewrite-crash"
+                        :form typed-classifier-form}]})
+      text (or (rtext result) "")]
+  (chk "T2: an optional supplied upsert name is an assertion and mismatches reject before prepare"
+       (and (rerr? result)
+            (str/includes? text "does not match form identity")
+            (str/includes? text "nothing prepared, nothing committed")))
+  (chk "T2: supplied-name mismatch leaves log, version, and projection byte-identical"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp typedtxn-file)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 10 "edit-transaction"
+              {:module "src.fram.typedtxn"
+               :edits [{:op "upsert-form"
+                        :form rewrite-error-form}
+                       {:op "upsert-form"
                         :form typed-classifier-form}]})
       text (or (rtext result) "")
       after (read-bytes transaction-log)
@@ -459,9 +729,9 @@
                          ^bytes after (alength ^bytes before) (alength ^bytes after))
                         "UTF-8")
       source (slurp typedtxn-file)]
-  (chk "T2: type declaration + citing function upsert commit as one checked transaction"
+  (chk "T2: omitted upsert names derive type + function identities and commit atomically"
        (and (not (rerr? result))
-            (str/includes? text "committed + TYPE-CHECKS CLEAN")
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
             (str/includes? text "edit-transaction")))
   (chk "T2: final projection contains the throwable type and typed function"
        (and (str/includes? source "RewriteCrashError")
@@ -470,11 +740,17 @@
   (chk "T2: type/signature transaction emits exactly one durable batch envelope"
        (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
 
+(def retained-targets-v1 (transaction-binding-targets))
+(chk "T2: public callers lookup exposes stable addresses for the type, variant, and function"
+     (and (every? string? (vals retained-targets-v1))
+          (= (count retained-typed-bindings)
+             (count (set (vals retained-targets-v1))))))
+
 ;; Modifier-bearing type definitions key by their declared name, not by the
 ;; `:throwable` modifier. Two throwable unions must coexist.
 (let [other-form
       "(defunion :throwable OtherError (OtherFailure [message :- String code :- Int]))"
-      result (mcp-edit transaction-env 10 "add-def"
+      result (mcp-edit transaction-env 11 "add-def"
                        {:module "src.fram.typedtxn" :form other-form})
       source (slurp typedtxn-file)]
   (chk "T2: a second :throwable union appends instead of replacing the first"
@@ -486,7 +762,75 @@
       v0 (transaction-version)
       file0 (slurp typedtxn-file)
       result (mcp-edit
-              transaction-env 11 "edit-transaction"
+              transaction-env 12 "edit-transaction"
+              {:module "src.fram.typedtxn"
+               :edits [{:op "upsert-form"
+                        :form typed-classifier-form}
+                       {:op "set-body"
+                        :name "classify-rewrite-crash"
+                        :body "\"duplicate target must not stage\""}]})
+      text (or (rtext result) "")]
+  (chk "T2: a derived-identity upsert plus body edit of the same target rejects as duplicate"
+       (and (rerr? result)
+            (str/includes? text "duplicate-definition")
+            (str/includes? text "distinct module-qualified top-level definition")))
+  (chk "T2: duplicate target rejection leaves log, version, and projection byte-identical"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp typedtxn-file)))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp typedtxn-file)
+      type-only (mcp-edit transaction-env 13 "add-def"
+                          {:module "src.fram.typedtxn"
+                           :form evolved-rewrite-error-form})
+      text (or (rtext type-only) "")]
+  (chk "T2: evolving the throwable field type alone is rejected against the old classifier"
+       (and (rerr? type-only)
+            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "nothing committed")))
+  (chk "T2: rejected one-sided schema evolution is byte-identical"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= file0 (slurp typedtxn-file)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 14 "edit-transaction"
+              {:module "src.fram.typedtxn"
+               :edits [{:op "upsert-form"
+                        :name "RewriteCrashError"
+                        :form evolved-rewrite-error-form}
+                       {:op "upsert-form"
+                        :name "classify-rewrite-crash"
+                        :form evolved-typed-classifier-form}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after
+                         (alength ^bytes before)
+                         (alength ^bytes after))
+                        "UTF-8")
+      source (slurp typedtxn-file)]
+  (chk "T2: the same throwable union and classifier evolve together through one final-state check"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
+            (str/includes? source "doctor-refusal :- String")
+            (str/includes? source "[path :- String refusal :- String]")))
+  (chk "T2: second schema/signature evolution emits exactly one durable batch envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(def retained-targets-v2 (transaction-binding-targets))
+(chk "T2: whole-form schema/signature evolution retains exact binding identities"
+     (= retained-targets-v1 retained-targets-v2))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      file0 (slurp typedtxn-file)
+      result (mcp-edit
+              transaction-env 15 "edit-transaction"
               {:module "src.fram.typedtxn"
                :edits [{:op "upsert-form"
                         :name "BadError"
@@ -497,12 +841,339 @@
       text (or (rtext result) "")]
   (chk "T2: a red upsert transaction is rejected by the one sealed end-state check"
        (and (rerr? result)
-            (str/includes? text "fails the sealed Beagle parse/type check")
+            (str/includes? text "coordinator TYPE/WORLD check")
             (str/includes? text "nothing committed")))
   (chk "T2: rejected upsert transaction records nothing and preserves projection"
        (and (= log0 (vec (read-bytes transaction-log)))
             (= v0 (transaction-version))
             (= file0 (slurp typedtxn-file)))))
+
+;; ============================================================================
+;; T3. COHERENT MULTI-MODULE WORLD — a transaction's target identity is
+;;     [module, definition], every touched/downstream projection is checked from
+;;     the same final graph, and the canonical install is still one envelope.
+;;     External references make variant/accessor removal fail closed unless the
+;;     surviving consumer is rewritten in the same transaction. Provider-first
+;;     order is intentional: intermediate red worlds are not observable.
+;; ============================================================================
+(def txalpha-module "src.fram.txalpha")
+(def txbeta-module "src.fram.txbeta")
+(def txalpha-file (str nested-dir "/txalpha.bclj"))
+(def txbeta-file (str nested-dir "/txbeta.bclj"))
+
+(let [specs [{:op "set-body" :module txalpha-module
+              :name "shared-name" :datum 101}
+             {:op "set-body" :module txbeta-module
+              :name "shared-name" :datum 202}]
+      prep (transaction-coord {:op :edit-prepare :specs specs})
+      touched [txalpha-module txbeta-module]
+      paths {txalpha-module txalpha-file txbeta-module txbeta-file}]
+  (chk "T3: duplicate target spellings are scoped by module during prepare"
+       (and (true? (:ok prep))
+            (= 2 (:edits prep))))
+  (chk "T3: multi-module prepare returns all paths, projections, and check scope"
+       (and (= touched (:modules prep))
+            (= paths (:paths prep))
+            (every? string?
+                    (map #(get (:edn-by-module prep) %) touched))
+            (every? (set (:checked-modules prep)) touched))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 16 "edit-transaction"
+              {:module txalpha-module
+               :edits [{:op "set-body"
+                        :name "shared-name"
+                        :body "101"}
+                       {:op "set-body"
+                        :module txbeta-module
+                        :name "shared-name"
+                        :body "202"}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after
+                         (alength ^bytes before)
+                         (alength ^bytes after))
+                        "UTF-8")
+      alpha-source (slurp txalpha-file)
+      beta-source (slurp txbeta-file)]
+  (chk "T3: top-level module defaults one edit while a nested override targets another"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
+            (str/includes? alpha-source ":- Int 101)")
+            (str/includes? beta-source ":- Int 202)")))
+  (chk "T3: two-module commit emits exactly one durable graph envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      alpha0 (slurp txalpha-file)
+      beta0 (slurp txbeta-file)
+      result (mcp-edit
+              transaction-env 17 "edit-transaction"
+              {:module txalpha-module
+               :edits [{:op "set-body"
+                        :name "shared-name"
+                        :body "303"}
+                       {:op "set-body"
+                        :module txbeta-module
+                        :name "shared-name"
+                        :body "\"red-module\""}]})
+      text (or (rtext result) "")]
+  (chk "T3: one red module rejects the coherent final world before commit"
+       (and (rerr? result)
+            (str/includes? text "coordinator TYPE/WORLD check")
+            (str/includes? text "nothing committed")))
+  (chk "T3: red multi-module world rolls log, version, and both projections back byte-identically"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= alpha0 (slurp txalpha-file))
+            (= beta0 (slurp txbeta-file)))))
+
+(def txvariant-provider-module "src.fram.txvariantprov")
+(def txvariant-consumer-module "src.fram.txvariantconsumer")
+(def txvariant-provider-file (str nested-dir "/txvariantprov.bclj"))
+(def txvariant-consumer-file (str nested-dir "/txvariantconsumer.bclj"))
+(def event-without-created-form
+  "(defunion Event (Retired [reason :- String]))")
+(def use-created-without-provider-form
+  "(defn use-created [x :- Int] :- Int x)")
+
+(let [prep (transaction-coord
+            {:op :edit-prepare
+             :spec {:op "set-body"
+                    :module txvariant-provider-module
+                    :name "provider-marker"
+                    :datum 2}})]
+  (chk "T3: dependency closure maps graph source ids through declared namespaces"
+       (and (true? (:ok prep))
+            (some #{txvariant-provider-module} (:checked-modules prep))
+            (some #{txvariant-consumer-module} (:checked-modules prep)))))
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      provider0 (slurp txvariant-provider-file)
+      consumer0 (slurp txvariant-consumer-file)
+      result (mcp-edit
+              transaction-env 18 "edit-transaction"
+              {:module txvariant-provider-module
+               :edits [{:op "upsert-form"
+                        :form event-without-created-form}
+                       {:op "set-body"
+                        :name "provider-marker"
+                        :body "2"}]})
+      text (or (rtext result) "")]
+  (chk "T3: removing a still-referenced union variant is a typed final-world rejection"
+       (and (rerr? result)
+            (str/includes? text "orphaned-binding-references")
+            (str/includes? text "orphan")))
+  (chk "T3: rejected referenced-variant removal is byte-identical everywhere"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= provider0 (slurp txvariant-provider-file))
+            (= consumer0 (slurp txvariant-consumer-file)))))
+
+(let [provider-spec {:op "upsert-form"
+                     :module txvariant-provider-module
+                     :datum (edn/read-string event-without-created-form)}
+      consumer-spec {:op "upsert-form"
+                     :module txvariant-consumer-module
+                     :datum (edn/read-string use-created-without-provider-form)}
+      log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      provider-first
+      (transaction-coord
+       {:op :edit-prepare :specs [provider-spec consumer-spec]})
+      consumer-first
+      (transaction-coord
+       {:op :edit-prepare :specs [consumer-spec provider-spec]})
+      touched [txvariant-consumer-module txvariant-provider-module]]
+  (chk "T3: coherent final-world acceptance is invariant under provider/consumer edit order"
+       (and (true? (:ok provider-first))
+            (true? (:ok consumer-first))
+            (= touched (:modules provider-first))
+            (= touched (:modules consumer-first))
+            (= (set (:checked-modules provider-first))
+               (set (:checked-modules consumer-first)))))
+  (chk "T3: both order rehearsals are prepare-only and leave the canonical log/version untouched"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 19 "edit-transaction"
+              {:module txvariant-provider-module
+               :edits [{:op "upsert-form"
+                        :form event-without-created-form}
+                       {:op "upsert-form"
+                        :module txvariant-consumer-module
+                        :form use-created-without-provider-form}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after
+                         (alength ^bytes before)
+                         (alength ^bytes after))
+                        "UTF-8")
+      provider (slurp txvariant-provider-file)
+      consumer (slurp txvariant-consumer-file)]
+  (chk "T3: provider-first variant removal commits when the same transaction removes its consumer"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
+            (not (str/includes? provider "Created"))
+            (not (str/includes? consumer "p/->Created"))
+            (str/includes? consumer ":- Int x)")))
+  (chk "T3: coherent variant removal and consumer rewrite remain one graph envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(def txaccessor-provider-module "src.fram.txaccessorprov")
+(def txaccessor-consumer-module "src.fram.txaccessorconsumer")
+(def txaccessor-provider-file (str nested-dir "/txaccessorprov.bclj"))
+(def txaccessor-consumer-file (str nested-dir "/txaccessorconsumer.bclj"))
+(def profile-without-legacy-form
+  "(defrecord Profile [name :- String])")
+(def use-legacy-without-provider-form
+  "(defn use-legacy [x :- Int] :- Int x)")
+
+(let [log0 (vec (read-bytes transaction-log))
+      v0 (transaction-version)
+      provider0 (slurp txaccessor-provider-file)
+      consumer0 (slurp txaccessor-consumer-file)
+      result (mcp-edit
+              transaction-env 20 "edit-transaction"
+              {:module txaccessor-provider-module
+               :edits [{:op "upsert-form"
+                        :form profile-without-legacy-form}
+                       {:op "set-body"
+                        :name "provider-marker"
+                        :body "2"}]})
+      text (or (rtext result) "")]
+  (chk "T3: removing a still-referenced synthesized accessor is a typed final-world rejection"
+       (and (rerr? result)
+            (str/includes? text "orphaned-binding-references")
+            (str/includes? text "orphan")))
+  (chk "T3: rejected referenced-accessor removal is byte-identical everywhere"
+       (and (= log0 (vec (read-bytes transaction-log)))
+            (= v0 (transaction-version))
+            (= provider0 (slurp txaccessor-provider-file))
+            (= consumer0 (slurp txaccessor-consumer-file)))))
+
+(let [before (read-bytes transaction-log)
+      result (mcp-edit
+              transaction-env 21 "edit-transaction"
+              {:module txaccessor-provider-module
+               :edits [{:op "upsert-form"
+                        :form profile-without-legacy-form}
+                       {:op "upsert-form"
+                        :module txaccessor-consumer-module
+                        :form use-legacy-without-provider-form}]})
+      text (or (rtext result) "")
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after
+                         (alength ^bytes before)
+                         (alength ^bytes after))
+                        "UTF-8")
+      provider (slurp txaccessor-provider-file)
+      consumer (slurp txaccessor-consumer-file)]
+  (chk "T3: provider-first accessor removal commits with its consumer rewrite in the final world"
+       (and (not (rerr? result))
+            (str/includes? text "committed + TYPE/WORLD CHECK CLEAN")
+            (not (str/includes? provider "legacy"))
+            (not (str/includes? consumer "profile-legacy"))
+            (str/includes? consumer ":- Int x)")))
+  (chk "T3: coherent accessor removal and consumer rewrite remain one graph envelope"
+       (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+
+(def durable-multi-recovery (atom nil))
+
+(let [specs [{:op "set-body" :module txalpha-module
+              :name "shared-name" :datum 404}
+             {:op "set-body" :module txbeta-module
+              :name "shared-name" :datum 505}]
+      expected-modules [txalpha-module txbeta-module]
+      expected-paths {txalpha-module txalpha-file txbeta-module txbeta-file}
+      before (read-bytes transaction-log)
+      prep (transaction-coord {:op :edit-prepare :specs specs})
+      req {:op :edit-commit
+           :candidate (:candidate prep)
+           :version (:version prep)
+           :module (:module prep)
+           :path (:path prep)
+           :ops-digest (:ops-digest prep)
+           :edn-digest (:edn-digest prep)}
+      commit (if (:ok prep)
+               (transaction-coord req)
+               prep)
+      after (read-bytes transaction-log)
+      appended (String. ^bytes
+                        (java.util.Arrays/copyOfRange
+                         ^bytes after
+                         (alength ^bytes before)
+                         (alength ^bytes after))
+                        "UTF-8")
+      envelope
+      (some (fn [line]
+              (let [row (try (edn/read-string line)
+                             (catch Throwable _ nil))]
+                (when (and (map? row)
+                           (contains? row :fram-edit-envelope))
+                  row)))
+            (str/split-lines appended))]
+  (reset! durable-multi-recovery
+          {:req req
+           :commit commit
+           :expected-modules expected-modules
+           :expected-paths expected-paths
+           :envelope envelope})
+  (chk "T3: direct multi-module prepare/commit installs one durable canonical receipt"
+       (and (true? (:ok prep))
+            (true? (:ok commit))
+            (true? (:committed commit))
+            (= expected-modules (:modules commit))
+            (= expected-paths (:paths commit))
+            (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
+  (chk "T3: the durable envelope carries backward-compatible scalar tokens that decode losslessly"
+       (and (string? (:fram-edit-module envelope))
+            (string? (:fram-edit-path envelope))
+            (= (:module req) (:fram-edit-module envelope))
+            (= (:path req) (:fram-edit-path envelope))
+            (= expected-modules
+               (edn/read-string (:fram-edit-module envelope)))
+            (= expected-paths
+               (into {} (edn/read-string (:fram-edit-path envelope)))))))
+
+(stop-daemon! transaction-daemon)
+(let [restarted (boot-daemon! transaction-port transaction-log)]
+  (try
+    (let [{:keys [req commit expected-modules expected-paths]}
+          @durable-multi-recovery
+          bytes-before-retry (vec (read-bytes transaction-log))
+          recovered (transaction-coord req)
+          bytes-after-retry (vec (read-bytes transaction-log))
+          cold-targets (transaction-binding-targets)
+          reconcile (transaction-coord {:op :snapshot-reconcile})]
+      (chk "T3: cold exact retry reconstructs the committed multi-module receipt from its envelope"
+           (and (true? (:ok recovered))
+                (true? (:committed recovered))
+                (true? (:recovered recovered))
+                (= :committed-recovered (:code recovered))
+                (= (:candidate req) (:candidate recovered))
+                (= (:version commit) (:version recovered))
+                (= expected-modules (:modules recovered))
+                (= expected-paths (:paths recovered))))
+      (chk "T3: recovered multi-module receipt retry appends zero bytes"
+           (= bytes-before-retry bytes-after-retry))
+      (chk "T2: retained type, variant, and function identities survive a cold coordinator restart"
+           (= retained-targets-v2 cold-targets))
+      (chk "T2: cold-restarted transaction log reconciles to the authoritative snapshot"
+           (true? (:ok reconcile))))
+    (finally
+      (stop-daemon! restarted))))
 
 (when (= "1" (System/getenv "FRAM_TRANSACTION_TEST_ONLY"))
   (p/destroy-tree main-daemon)
@@ -530,12 +1201,12 @@
       t (or (rtext r) "")
       txt (slurp wkfix-file)]
   (chk "A: nested set-body through MCP -> isError=false" (and (some? r) (not (rerr? r))))
-  (chk "A: reply reports the atomic candidate gate (graph-edit-candidate-v1) + committed"
-       (and (str/includes? t "committed") (str/includes? t "graph-edit-candidate-v1")))
+  (chk "A: reply reports the atomic candidate gate (graph-edit-candidate-v2) + committed"
+       (and (str/includes? t "committed") (str/includes? t "graph-edit-candidate-v2")))
   (chk "A: EXACTLY the tracked nested file <src>/src/fram/wkfix.bclj was updated"
        (str/includes? txt "(* 21 x)"))
   (chk "A: the candidate text was compiled (type-checked) before commit — reply says so"
-       (str/includes? t "TYPE-CHECKS CLEAN"))
+       (str/includes? t "TYPE/WORLD CHECK CLEAN"))
   (chk "A: NO root-level module-name artifact <src>/src.fram.wkfix.bclj exists"
        (not (.exists (io/file wkfix-root-artifact))))
   (chk "A: the code log GREW (the sealed batch is durable)"
@@ -549,7 +1220,7 @@
 (let [ok-edit (fn [id tool args]
                 (let [r (mcp-edit base-env id tool args) t (or (rtext r) "")]
                   (and (some? r) (not (rerr? r))
-                       (str/includes? t "graph-edit-candidate-v1"))))]
+                       (str/includes? t "graph-edit-candidate-v2"))))]
   (chk "A2: add-def (upsert-form) lands through the candidate gate"
        (ok-edit 11 "add-def" {:module "src.fram.wkfix"
                               :form "(defn tripled [z :- Int] :- Int (* 3 z))"}))
@@ -1511,9 +2182,9 @@
                                         [init-req])]
   (chk "G: legacy (no candidate protocol) coordinator -> MCP REFUSES to start (exit != 0, zero replies)"
        (and (not (zero? exit)) (empty? by-id)))
-  (chk "G: refusal names graph-edit-candidate-v1"
+  (chk "G: refusal names graph-edit-candidate-v2"
        (and (str/includes? (or err "") "REFUSING to start")
-            (str/includes? (or err "") "graph-edit-candidate-v1"))))
+            (str/includes? (or err "") "graph-edit-candidate-v2"))))
 
 ;; ============================================================================
 ;; H. TRACKED-PATH PATHOLOGIES — each rejects BEFORE mutation; no artifacts.
@@ -1551,7 +2222,7 @@
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (if (empty? fails)
     (do (println (str "\nfram-mcp-candidate: " (count cs) " / " (count cs)
-                      " PASS — graph-edit-candidate-v1 is an atomic, fail-closed, tracked-path candidate gate"))
+                      " PASS — graph-edit-candidate-v2 is an atomic, fail-closed, tracked-path candidate gate"))
         (p/shell {} "rm" "-rf" tmp))
     (do (println (str "\nfram-mcp-candidate: " (count fails) " FAILED  (workspace left at " tmp ")"))
         (System/exit 1))))

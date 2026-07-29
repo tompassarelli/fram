@@ -73,7 +73,7 @@
 
 (def VALUE-DEFS (into PARAM-FORMS DEF-FORMS))
 
-(def TOPLEVEL-VALUE-DEFS (into DEF-FORMS #{"defn" "defn-" "defmacro"}))
+(def TOPLEVEL-VALUE-DEFS (into DEF-FORMS #{"defn" "defmulti" "defn-" "defmacro"}))
 
 (def WRITABLE-DEFS (into (into TOPLEVEL-VALUE-DEFS TYPE-DEFS) EFFECT-DEFS))
 
@@ -161,3 +161,59 @@
   (and (= "defmethod" head) (>= (count items) 3)) (str (second items) ":" (pr-str (nth items 2)))
   (and (contains? EXTEND-FORMS head) (>= (count items) 2)) (str head " " (pr-str (second items)))
   :else nil)))))
+
+(defrecord ReuseNode [node])
+
+(defn reusenode-node [r] (:node r))
+
+(defn reuse-node-id [datum]
+  (let [match__0 datum]
+  (cond
+    (instance? ReuseNode match__0) (let [node (:node match__0)] node)
+    :else nil)))
+
+(defn- copy-reader-meta [value template]
+  (if (instance? clojure.lang.IObj template) (with-meta value (meta template)) value))
+
+(defn logical-datum-name [datum]
+  (let [leaf (if (seq? datum) (first datum) datum)]
+  (if (symbol? leaf) (do
+  (str leaf)))))
+
+(defn reuse-logical-datum [datum node]
+  (if (seq? datum) (let [items (vec datum)
+   leaf (first items)
+   marker (copy-reader-meta (->ReuseNode node) leaf)
+   rebuilt (apply list (cons marker (rest items)))]
+  (copy-reader-meta rebuilt datum)) (copy-reader-meta (->ReuseNode node) datum)))
+
+(defn datum-binding-names [datum]
+  (if (not (seq? datum)) {} (let [items (vec datum)
+   head (str (first items))
+   name-index (type-name-index head (second items))
+   top-name (logical-datum-name (nth items name-index nil))
+   base (if (and (named-def-head? head) (some? top-name)) {[:top top-name] top-name} {})
+   member-start (cond
+  (= "defunion" head) (inc name-index)
+  (contains? #{"definterface" "defprotocol"} head) 2
+  :else -1)
+   role (if (= "defunion" head) :variant :member)]
+  (if (< member-start 0) base (reduce (fn [acc i] (let [nm (logical-datum-name (nth items i nil))]
+  (if (nil? nm) acc (assoc acc [role nm] nm)))) base (range member-start (count items)))))))
+
+(defn reuse-retained-bindings [datum old-bindings]
+  (if (not (seq? datum)) datum (let [items (vec datum)
+   head (str (first items))
+   name-index (type-name-index head (second items))
+   replace-one (fn [xs role i] (let [raw (nth xs i nil)
+   nm (logical-datum-name raw)
+   old-node (if (nil? nm) nil (get old-bindings [role nm]))]
+  (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node)))))
+   with-top (if (named-def-head? head) (replace-one items :top name-index) items)
+   member-start (cond
+  (= "defunion" head) (inc name-index)
+  (contains? #{"definterface" "defprotocol"} head) 2
+  :else -1)
+   role (if (= "defunion" head) :variant :member)
+   rewritten (if (< member-start 0) with-top (reduce (fn [xs i] (replace-one xs role i)) with-top (range member-start (count with-top))))]
+  (copy-reader-meta (apply list rewritten) datum))))

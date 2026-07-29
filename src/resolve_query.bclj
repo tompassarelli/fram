@@ -55,9 +55,9 @@
 
 (define-mode strict)
 
-(def SLASH-RE :- Any (re-pattern "/"))
+(def SLASH-RE :- Regex (re-pattern "/"))
 
-(def EXT-RE :- Any (re-pattern "\\.[^.]+$"))
+(def EXT-RE :- Regex (re-pattern "\\.[^.]+$"))
 
 (defn- call-refs [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? REFERS :- Int? node :- Int?] :- (Vec Int)
   (if (some? (rr/refers-target ctx view BOUND REFERS node))
@@ -75,12 +75,12 @@
       (str/replace (str (last (str/split src SLASH-RE))) EXT-RE ""))))
 
 (defn- defn-meta-of [ctx :- (U (Atom t/Store) Nil) view :- Any srcs :- (Vec String) file-modframe :- Any ents-of :- Any] :- (Map Any Any)
-  (reduce (fn [acc :- (Map Any Any) src :- String] :- (Map Any Any) (let [frame (get file-modframe src {}) label (src-label ctx view src (get ents-of src []))] (reduce (fn [a :- (Map Any Any) nm :- Any] :- (Map Any Any) (let [leaf (get frame nm)] (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (vec (keys frame)))))
+  (reduce (fn [acc :- (Map Any Any) src :- String] :- (Map Any Any) (let [frame (get file-modframe src {}) label (src-label ctx view src (get ents-of src []))] (reduce (fn [a :- (Map Any Any) nm :- Any] :- (Map Any Any) (let [leaf (get frame nm)] (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (set (keys frame)))))
     {}
     srcs))
 
 (defn- callers-of [ctx :- (U (Atom t/Store) Nil) view :- Any BOUND :- Int? REFERS :- Int? srcs :- (Vec String) ents-of :- Any defn-meta :- (Map Any Any)] :- (Vec Any)
-  (reduce (fn [acc :- (Vec Any) src :- String] :- (Vec Any) (reduce (fn [a :- (Vec Any) form :- Int] :- (Vec Any) (let [d (rm/unwrap-def ctx view form) h (rr/head-sym ctx view d)] (cond (contains? rc/VALUE-DEFS (str h)) (let [cl (nth (rr/ordered-children ctx d) 1 nil)] (if (contains? defn-meta cl) (conj a [cl d]) a)) (contains? #{"extend-protocol" "extend-type"} (str h)) (reduce (fn [b :- (Vec Any) cc :- Int] :- (Vec Any) (if (= "list" (rr/kind-of ctx view cc)) (let [mnode (nth (rr/ordered-children ctx cc) 0 nil) cl (if (some? (rr/sym-val ctx view mnode)) (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS mnode)) nil)] (if (and (some? cl) (contains? defn-meta cl)) (conj b [cl cc]) b)) b)) a (vec (rest (rr/ordered-children ctx d)))) :else a))) acc (rm/forms-of ctx view (get ents-of src []))))
+  (reduce (fn [acc :- (Vec Any) src :- String] :- (Vec Any) (reduce (fn [a :- (Vec Any) form :- Int] :- (Vec Any) (let [d (rm/unwrap-def ctx view form) h (str (rr/head-sym ctx view d))] (cond (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [cl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (contains? defn-meta cl) (conj a [cl d]) a)) (contains? #{"extend-protocol" "extend-type"} h) (reduce (fn [b :- (Vec Any) cc :- Int] :- (Vec Any) (let [outer (rr/unwrap-meta ctx view cc)] (if (= "list" (rr/kind-of ctx view outer)) (let [mnode (rm/logical-name-leaf ctx view cc) cl (if (some? (rr/sym-val ctx view mnode)) (rv/ultimate ctx view BOUND REFERS (rr/refers-target ctx view BOUND REFERS mnode)) nil)] (if (and (some? cl) (contains? defn-meta cl)) (conj b [cl cc]) b)) b))) a (vec (rest (rr/ordered-children ctx d)))) :else a))) acc (rm/forms-of ctx view (get ents-of src []))))
     []
     srcs))
 
@@ -89,7 +89,7 @@
     {:defn-meta defn-meta :edges (vec (distinct edges)) :defn-set defn-set}))
 
 (defn binding-privacy [ctx :- (U (Atom t/Store) Nil) view :- Any srcs :- (Vec String) ents-of :- Any] :- (Map Any Keyword)
-  (reduce (fn [acc :- (Map Any Keyword) src :- String] :- (Map Any Keyword) (reduce (fn [a :- (Map Any Keyword) f :- Int] :- (Map Any Keyword) (let [d (rm/unwrap-def ctx view f) h (rr/head-sym ctx view d)] (if (contains? rc/VALUE-DEFS (str h)) (let [nl (rr/unwrap-meta ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} (str h)) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src []))))
+  (reduce (fn [acc :- (Map Any Keyword) src :- String] :- (Map Any Keyword) (reduce (fn [a :- (Map Any Keyword) f :- Int] :- (Map Any Keyword) (let [d (rm/unwrap-def ctx view f) h (str (rr/head-sym ctx view d))] (if (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} h) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src []))))
     {}
     srcs))
 
@@ -100,7 +100,7 @@
 (defn- invert [k->id :- (Atom (Map Any Int))] :- (Map Int Any)
   (reduce (fn [m :- (Map Int Any) k :- Any] :- (Map Int Any) (let [v (get (deref k->id) k)] (if (int? v) (assoc m v k) m)))
     {}
-    (vec (keys (deref k->id)))))
+    (set (keys (deref k->id)))))
 
 (defn blast-closure! [edges :- (Vec Any)] :- (Map Keyword Any)
   (let [ctx (c/new-store) tx (c/begin-tx! ctx "code") EDGE (c/value! ctx "calls-defn") k->id :- (Atom (Map Any Int)) (atom {})]
@@ -123,7 +123,7 @@
           CALLS
           (ent! ctx k->id (nth e 1))
           tx))
-      (doseq [leaf (vec (keys defn-meta))]
+      (doseq [leaf (set (keys defn-meta))]
         (let [e (ent! ctx k->id leaf)]
           (if (= :private (get privacy leaf))
             (c/fact! ctx e ISPRIV e tx)

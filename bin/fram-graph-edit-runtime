@@ -19,6 +19,7 @@ required_internal=(
   FRAM_GRAPH_EDIT_SEALED_BUILD_ALL
   FRAM_GRAPH_EDIT_SEALED_CAT
   FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT
+  FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER
   FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS
   FRAM_GRAPH_EDIT_SEALED_ENV
   FRAM_GRAPH_EDIT_SEALED_FRAM
@@ -28,6 +29,7 @@ required_internal=(
   FRAM_GRAPH_EDIT_SEALED_RACKET
   FRAM_GRAPH_EDIT_SEALED_REALPATH
   FRAM_GRAPH_EDIT_SEALED_RESOLVE
+  FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK
 )
 for name in "${required_internal[@]}"; do
   [[ -n "${!name:-}" ]] || die "package-only entrypoint; missing sealed binding $name"
@@ -41,6 +43,7 @@ for path in \
   "$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
   "$FRAM_GRAPH_EDIT_SEALED_CAT" \
   "$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
+  "$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER" \
   "$FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS" \
   "$FRAM_GRAPH_EDIT_SEALED_ENV" \
   "$FRAM_GRAPH_EDIT_SEALED_FRAM" \
@@ -48,9 +51,14 @@ for path in \
   "$FRAM_GRAPH_EDIT_SEALED_MANIFEST" \
   "$FRAM_GRAPH_EDIT_SEALED_RACKET" \
   "$FRAM_GRAPH_EDIT_SEALED_REALPATH" \
-  "$FRAM_GRAPH_EDIT_SEALED_RESOLVE"; do
+  "$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
+  "$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK"; do
   [[ "$path" == /nix/store/* ]] || die "sealed binding escaped /nix/store: $path"
 done
+[[ -x "$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER" ]] || \
+  die "sealed edit verifier is not executable"
+[[ -f "$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK" ]] || \
+  die "sealed coherent-world checker is not a regular file"
 
 # The public ELF wrapper always removes this marker and starts Bash in
 # privileged mode, which ignores exported functions and startup hooks. Re-enter
@@ -70,6 +78,7 @@ if [[ "${FRAM_GRAPH_EDIT_SEALED_ENVIRONMENT_STAGE:-}" != "sealed-v1" ]]; then
     FRAM_GRAPH_EDIT_SEALED_BUILD_ALL="$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
     FRAM_GRAPH_EDIT_SEALED_CAT="$FRAM_GRAPH_EDIT_SEALED_CAT" \
     FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT="$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
+    FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER="$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER" \
     FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS="$FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS" \
     FRAM_GRAPH_EDIT_SEALED_ENV="$FRAM_GRAPH_EDIT_SEALED_ENV" \
     FRAM_GRAPH_EDIT_SEALED_FRAM="$FRAM_GRAPH_EDIT_SEALED_FRAM" \
@@ -79,6 +88,7 @@ if [[ "${FRAM_GRAPH_EDIT_SEALED_ENVIRONMENT_STAGE:-}" != "sealed-v1" ]]; then
     FRAM_GRAPH_EDIT_SEALED_RACKET="$FRAM_GRAPH_EDIT_SEALED_RACKET" \
     FRAM_GRAPH_EDIT_SEALED_REALPATH="$FRAM_GRAPH_EDIT_SEALED_REALPATH" \
     FRAM_GRAPH_EDIT_SEALED_RESOLVE="$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
+    FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK="$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK" \
     NORTH_FRAM_AUTHORITY_INSTANCE_ID="${NORTH_FRAM_AUTHORITY_INSTANCE_ID:-}" \
     NORTH_FRAM_AUTHORITY_LEASE_ID="${NORTH_FRAM_AUTHORITY_LEASE_ID:-}" \
     NORTH_FRAM_AUTHORITY_LEASE_EPOCH="${NORTH_FRAM_AUTHORITY_LEASE_EPOCH:-}" \
@@ -170,7 +180,8 @@ if [[ "$command_name" == preflight ]]; then
     PATH="$FRAM_GRAPH_EDIT_SEALED_PATH" \
     "$FRAM_GRAPH_EDIT_SEALED_BB" -e '
       (require (quote [cheshire.core :as json]))
-      (let [[manifest fram beagle beagle-cli racket java bb check-emit build-all resolve-clj
+      (let [[manifest fram beagle beagle-cli racket java bb check-emit check-world
+             edit-verifier build-all resolve-clj
              instance-id lease-id lease-epoch runtime-digest checkout source log port]
             *command-line-args*]
         (println
@@ -180,9 +191,11 @@ if [[ "$command_name" == preflight ]]; then
            :verificationOwner "north"
            :runtimeDigestVerifiedByEntrypoint false
            :coreManifest manifest
-           :storeExecutables {:babashka bb :beagle beagle-cli :java java :racket racket}
+           :storeExecutables {:babashka bb :beagle beagle-cli
+                              :editVerifier edit-verifier :java java :racket racket}
            :storeHelpers {:beagleRoot beagle :buildAll build-all
-                          :checkEmit check-emit :framRoot fram :resolve resolve-clj}
+                          :checkEmit check-emit :checkWorld check-world
+                          :framRoot fram :resolve resolve-clj}
            :authority {:instanceId instance-id :leaseId lease-id
                        :leaseEpoch lease-epoch
                        :northSuppliedRuntimeClosureDigest runtime-digest}
@@ -196,6 +209,8 @@ if [[ "$command_name" == preflight ]]; then
     "$FRAM_GRAPH_EDIT_SEALED_JAVA" \
     "$FRAM_GRAPH_EDIT_SEALED_BB" \
     "$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
+    "$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK" \
+    "$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER" \
     "$FRAM_GRAPH_EDIT_SEALED_BUILD_ALL" \
     "$FRAM_GRAPH_EDIT_SEALED_RESOLVE" \
     "$instance_id" "$lease_id" "$lease_epoch" "$runtime_digest" \
@@ -228,6 +243,9 @@ exec "$FRAM_GRAPH_EDIT_SEALED_ENV" -i \
   FRAM_CHECK_EMIT="$FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT" \
   FRAM_CODE_LOG="$code_log" \
   FRAM_CODE_PORT="$code_port" \
+  FRAM_EDIT_VERIFIER="$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER" \
+  FRAM_EDIT_VERIFIER_RACKET="$FRAM_GRAPH_EDIT_SEALED_RACKET" \
+  FRAM_EDIT_VERIFIER_WORLD_CHECK="$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK" \
   FRAM_FLIP=1 \
   FRAM_GRAPH_EDIT=1 \
   FRAM_HOME="$FRAM_GRAPH_EDIT_SEALED_FRAM" \

@@ -270,14 +270,9 @@
 (defn writable-disp-name [datum :- Any] :- String
   (or (rc/writable-form-display-name datum) ""))
 
-(defn- reuse-matching-binding-leaves! [v :- Verb old-form :- Int new-form :- Int] :- Any
-  (let [ctx (:ctx v) view (:view v) tx (:tx v) warn (:warn v) reject (:reject v) retire (:retire v) descendants (:descendants v) old-bindings (rm/form-binding-leaves ctx view old-form) new-bindings (rm/form-binding-leaves ctx view new-form) new-nodes (descendants new-form) plans (reduce (fn [acc :- (Vec Any) entry :- Any] :- (Vec Any) (let [nm (key entry) new-leaf (val entry) old-leaf (get old-bindings nm)] (if (and (some? old-leaf) (not= old-leaf new-leaf)) (let [incoming (vec (filter (fn [cid :- Int] :- Bool (let [fact (c/fact-of ctx cid) p (if (nil? fact) nil (c/literal ctx (:p fact)))] (and (some? fact) (= (:r fact) new-leaf) (contains? new-nodes (:l fact)) (string? p) (rc/ord-pos? p)))) (c/by-r ctx new-leaf)))] (if (= 1 (count incoming)) (conj acc [(first incoming) old-leaf]) (do (warn (str "REJECTED — cannot preserve binding identity for `" nm "`: expected one structural name edge in replacement, found " (count incoming) " (no canonical facts mutated).")) (reject 5) acc))) acc))) [] (vec new-bindings))]
-    (do
-      (doseq [plan :- Any plans]
-        (let [cid (nth plan 0) old-leaf (nth plan 1) fact (c/fact-of ctx cid)]
-          (retire cid)
-          (c/fact! ctx (:l fact) (:p fact) old-leaf tx)))
-      (count plans))))
+(defn- reuse-retained-binding-datum [v :- Verb old-form :- Int datum :- Any] :- Any
+  (rc/reuse-retained-bindings datum
+    (rm/form-binding-leaves (:ctx v) (:view v) old-form)))
 
 ;; wrap-forms (M1 Cut J) — the wrapper's top-level form edges in CRDT (path,tie)
 ;; order: [[OrdKey cid child] …]. Dual-parse (old f<int> + new f<path>~tie) rides in
@@ -429,7 +424,7 @@
     (when (and (seq? datum) (not (rc/writable-def-head? (str (first datum)))))
       (warn (str "REJECTED — upsert-form spec head `" (first datum) "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
       (reject 3))
-    (let [wof (:wrapper-of v) mint (:mint v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) disp-name (when (seq? datum) (writable-disp-name datum)) victim-form (when (seq? datum) (writable-victim v src datum)) victim-entry (when (some? victim-form) (some (fn [e :- Any] :- Any (when (= (enode e) victim-form) e)) forms)) new-root (mint src datum)]
+    (let [wof (:wrapper-of v) mint (:mint v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) disp-name (when (seq? datum) (writable-disp-name datum)) victim-form (when (seq? datum) (writable-victim v src datum)) victim-entry (when (some? victim-form) (some (fn [e :- Any] :- Any (when (= (enode e) victim-form) e)) forms)) new-root (mint src (if (some? victim-form) (let [retained (reuse-retained-binding-datum v (nn victim-form) datum)] (if (= "js/export" (rr/head-sym ctx (:view v) victim-form)) (list (symbol "js/export") retained) retained)) datum))]
       (if (some? victim-entry)
         (let [retire (:retire v)]
           (retire (ecid victim-entry))
@@ -465,7 +460,7 @@
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — insert-form scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
       (reject 3))
-    (when (and (seq? datum) (not (contains? rc/VALUE-DEFS (str (first datum)))))
+    (when (and (seq? datum) (not (contains? rc/TOPLEVEL-VALUE-DEFS (str (first datum)))))
       (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
       (reject 3))
     (let [wof (:wrapper-of v) dbind (:def-binding v) ffv (:form-for-victim v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) anchor-bind (dbind src after-name) anchor-form (when (some? anchor-bind) (ffv src anchor-bind)) i (nn (when (some? anchor-form) (first (vec (keep-indexed (fn [n :- Int e :- Any] :- Any (when (= (enode e) anchor-form) n)) forms)))))]
@@ -599,7 +594,7 @@
 ;; within-datum = nil); here there is one 5-arg function.
 ;; ---------------------------------------------------------------------------
 (defn verb-replace-in-body! [v :- Verb name :- String scope :- String old-datum :- Any new-datum :- Any within-datum :- Any] :- Any
-  (let [ctx (:ctx v) view (:view v) tx (:tx v) warn (:warn v) reject (:reject v) reject2 (:reject2 v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+  (let [ctx (:ctx v) view (:view v) tx (:tx v) warn (:warn v) reject (:reject v) reject2 (:reject2 v) target-srcs ((:scope-srcs v) scope)]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; replace-in-body needs exactly one (no facts mutated)."))
       (reject 3))

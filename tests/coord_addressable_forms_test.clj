@@ -52,10 +52,29 @@
   (when-not ok? (swap! failures inc)))
 (defn- r    [module name] (client port {:op :read-def :spec {:module module :name name}}))
 (defn- idx  [module]      (client port {:op :index    :spec {:module module}}))
+(defn- upsert [module datum]
+  (client port {:op :edit-min
+                :spec {:op "upsert-form" :module module :datum datum}}))
 (defn- names [module]     (mapv :name (:defs (idx module))))
 
 (def RP "ring.core.protocols")
 (def FS "fixt.shapes")
+
+(println "=== Seed modifier-bearing and parametric type fixtures in the scratch log ===")
+(let [throwable (upsert FS
+                        '(defunion :throwable RewriteCrashError
+                           (RewriteCrash [message :- String])))
+      parametric (upsert FS
+                         '(defunion (Result T E)
+                            (Ok [value :- T])
+                            (Err [error :- E])))
+      metadata-protocol (upsert FS
+                                '(defprotocol MetadataProtocol
+                                   (^:private tagged-method [this])))]
+  (check "throwable union upserted" (:ok throwable) (pr-str throwable))
+  (check "parametric union upserted" (:ok parametric) (pr-str parametric))
+  (check "metadata-bearing protocol member upserted"
+         (:ok metadata-protocol) (pr-str metadata-protocol)))
 
 (println "=== INDEX lists every addressable top-level form (incl. extension) ===")
 (let [ix (idx RP) ns (set (names RP))]
@@ -74,6 +93,45 @@
   (check "defmulti listed (area)" (ns "area") (pr-str ns))
   (check "defmethod entries listed (per dispatch)"
          (some #(str/starts-with? % "area:") ns) (pr-str ns)))
+
+(println "\n=== TYPE logical names, not modifiers or type parameters, are addressable ===")
+(let [ns (names FS)
+      counts (frequencies ns)]
+  (check "throwable union indexed exactly once by declared logical name"
+         (= 1 (get counts "RewriteCrashError" 0)) (pr-str ns))
+  (check "parametric union indexed exactly once by constructor name"
+         (= 1 (get counts "Result" 0)) (pr-str ns))
+  (check "metadata-bearing protocol member indexed by logical name"
+         (= 1 (get counts "tagged-method" 0)) (pr-str ns))
+  (check "metadata implementation marker never becomes an index name"
+         (zero? (get counts "#%meta" 0)) (pr-str ns))
+  (check ":throwable modifier never becomes an index name"
+         (zero? (get counts ":throwable" 0)) (pr-str ns)))
+
+(let [resp (r FS "RewriteCrashError")]
+  (check "declared throwable name read-def round-trips"
+         (and (:ok resp)
+              (str/includes? (str (:source resp)) "defunion")
+              (str/includes? (str (:source resp)) "RewriteCrashError"))
+         (pr-str resp)))
+
+(let [resp (r FS "Result")]
+  (check "parametric constructor read-def round-trips"
+         (and (:ok resp)
+              (str/includes? (str (:source resp)) "(Result T E)"))
+         (pr-str resp)))
+
+(let [resp (r FS "tagged-method")]
+  (check "metadata-bearing protocol member read-def returns its enclosing protocol"
+         (and (:ok resp)
+              (str/includes? (str (:source resp)) "MetadataProtocol")
+              (str/includes? (str (:source resp)) "tagged-method"))
+         (pr-str resp)))
+
+(let [resp (r FS ":throwable")]
+  (check ":throwable modifier is not a read-def alias"
+         (and (false? (:ok resp)) (= :lookup (:stage resp)))
+         (pr-str resp)))
 
 (println "\n=== ROUND-TRIP: read-def ACCEPTS every name index lists (the invariant) ===")
 (doseq [module [RP FS]]

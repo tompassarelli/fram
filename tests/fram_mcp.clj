@@ -123,12 +123,14 @@
    [{:type "object"
      :properties
      {"op" {:type "string" :const "set-body"}
+      "module" {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       "name" {:type "string" :description "Definition whose body will be replaced."}
       "body" {:type "string" :description "Replacement body as an EDN datum string."}}
      :required ["op" "name" "body"]}
     {:type "object"
      :properties
      {"op" {:type "string" :const "replace-in-body"}
+      "module" {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       "name" {:type "string" :description "Definition containing the form to replace."}
       "old" {:type "string" :description "Existing interior form as an EDN datum string."}
       "new" {:type "string" :description "Replacement interior form as an EDN datum string."}
@@ -137,6 +139,7 @@
     {:type "object"
      :properties
      {"op" {:type "string" :const "upsert-form"}
+      "module" {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       "form" {:type "string" :description "Whole top-level form as an EDN datum string."}
       "name" {:type "string"
               :description "Optional identity assertion; when supplied it must match the identity derived from form."}}
@@ -199,6 +202,7 @@
 (def ^:private beagle-home   (env-or "BEAGLE_HOME"   (str (System/getProperty "user.home") "/code/beagle")))
 (def ^:private beagle-bin    (env-or "FRAM_BEAGLE" (str beagle-home "/bin/beagle")))
 (def ^:private build-all     (env-or "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")))
+(def ^:private candidate-protocol-name "graph-edit-candidate-v2")
 ;; INCREMENTAL DE-HANDICAP: per-edit gate checks+emits ONLY the edited module from
 ;; its facts (facts->AST->type-check->emit clj), instead of rendering + building
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
@@ -397,8 +401,13 @@
                   (str/blank? (str (:name edit))))
          (throw (ex-info (str "edits[" i "] name is required")
                          {:spec-error true})))
-       (let [spec
-             (or (edit-min-spec (assoc edit :module (:module e)))
+       (let [edit-module (or (:module edit) (:module e))
+             _ (when (str/blank? (str edit-module))
+                 (throw (ex-info (str "edits[" i "] module is required "
+                                      "either on the edit or as the transaction default")
+                                 {:spec-error true})))
+             spec
+             (or (edit-min-spec (assoc edit :module edit-module))
                  (throw (ex-info (str "edits[" i "] has an unknown edit op")
                                  {:spec-error true})))]
          (if (= "upsert-form" (:op edit))
@@ -614,6 +623,24 @@
            :candidate (:candidate req)
            :base-version (:version req)})))))
 
+(defn- verify-candidate-exactly [port candidate]
+  ;; Verification is coordinator-owned and idempotent. One exact transport
+  ;; retry is safe: a completed first attempt is returned from the candidate's
+  ;; verified/rejected cache; an active one reports :verification-in-progress.
+  (let [req {:op :edit-verify :candidate candidate}]
+    (try
+      (fram.rt/coord-request-for-log port (flip-log) req)
+      (catch Throwable first-error
+        (try
+          (fram.rt/coord-request-for-log port (flip-log) req)
+          (catch Throwable retry-error
+            {:reject [(str "verification response unavailable after one exact retry: "
+                           (.getMessage ^Throwable first-error) "; retry: "
+                           (.getMessage ^Throwable retry-error))]
+             :code :verification-response-unknown
+             :candidate candidate
+             :retryable true}))))))
+
 (defn- coordinator-commit-warning [commit]
   (when (or (:repair-needed commit) (seq (:warnings commit)))
     (str " (WARNING: coordinator reports "
@@ -642,7 +669,287 @@
               (str/join " " (flip-log-args)) " --out " (:path commit)
               (coordinator-commit-warning commit))})
 
-(defn route-edit [e]
+(defn- candidate-layout [prep fallback-module]
+  (let [modules (vec (or (:modules prep)
+                         (when-let [m (or (:primary-module prep)
+                                          fallback-module
+                                          (:module prep))]
+                           [m])))
+        primary (or (:primary-module prep) (first modules))
+        paths (or (:paths prep)
+                  (when (and primary (string? (:path prep)))
+                    {primary (:path prep)}))
+        edn-by-module (or (:edn-by-module prep)
+                          (when (and primary (string? (:edn prep)))
+                            {primary (:edn prep)}))
+        checked (vec (or (:checked-modules prep)
+                         (sort (keys edn-by-module))))
+        missing-paths (vec (remove #(string? (get paths %)) modules))
+        missing-edn (vec (remove #(string? (get edn-by-module %)) checked))
+        duplicate-paths (->> modules
+                             (group-by #(get paths %))
+                             (keep (fn [[path ms]]
+                                     (when (and path (> (count ms) 1))
+                                       [path ms])))
+                             vec)]
+    (cond
+      (empty? modules)
+      {:err "coordinator returned no touched modules for the candidate"}
+      (not= (count modules) (count (set modules)))
+      {:err (str "coordinator returned duplicate touched modules: " (pr-str modules))}
+      (seq missing-paths)
+      {:err (str "coordinator returned no tracked path for touched module(s): "
+                 (str/join ", " missing-paths))}
+      (seq missing-edn)
+      {:err (str "coordinator returned no candidate EDN for checked module(s): "
+                 (str/join ", " missing-edn))}
+      (seq duplicate-paths)
+      {:err (str "multiple modules alias the same tracked projection path: "
+                 (pr-str duplicate-paths))}
+      :else
+      {:modules modules
+       :primary primary
+       :paths paths
+       :checked checked
+       :edn-by-module edn-by-module})))
+
+(defn- pin-candidate-paths! [{:keys [modules paths]}]
+  (loop [remaining modules pins {}]
+    (if (empty? remaining)
+      {:pins pins}
+      (let [module (first remaining)
+            target (get paths module)]
+        (if-let [pe (validate-tracked-path target)]
+          (do (doseq [pin (vals pins)] (release-pin! pin))
+              {:err (str "module " module ": " (:err pe))})
+          (let [pin (pin-parent-dir! (.getParent (io/file target)))]
+            (if (:err pin)
+              (do (doseq [prior (vals pins)] (release-pin! prior))
+                  {:err (str "module " module
+                             " projection parent-directory pin failed: "
+                             (:err pin))})
+              (recur (rest remaining) (assoc pins module pin)))))))))
+
+(defn- byte-identical-files? [left right]
+  (java.util.Arrays/equals
+   ^bytes (java.nio.file.Files/readAllBytes (.toPath (io/file left)))
+   ^bytes (java.nio.file.Files/readAllBytes (.toPath (io/file right)))))
+
+(defn- render-and-prove-candidate! [work layout]
+  ;; Projection integrity and type/world validity are separate obligations.
+  ;; The MCP renders only TOUCHED files and proves a rendered-source fixed point:
+  ;; A = render(sealed EDN), B-edn = emit(A), B = render(B-edn), bytes(A)==bytes(B).
+  ;; Comparing sealed EDN to B-edn is intentionally WRONG: @file identity, the
+  ;; beagle-file wrapper, and graph node ids are reminted by emit and therefore
+  ;; cannot be byte-identical even for the same program.
+  ;;
+  ;; The coordinator's
+  ;; :edit-verify command is the sole type/effect/world authority and receives
+  ;; the complete final overlay; a per-file checker cannot soundly replace it.
+  (loop [remaining (:modules layout)
+         index 0
+         files {}]
+    (if (empty? remaining)
+      {:files files}
+      (let [module (first remaining)
+            ednf (str work "/candidate-" index ".bclj.edn")
+            candf (str work "/candidate-" index ".bclj")
+            chk-edn (str candf ".chk.edn")
+            fixedf (str candf ".fixed.bclj")
+            _ (spit ednf (get-in layout [:edn-by-module module]))
+            rendered (sh {:out (io/file candf) :err :string}
+                         beagle-bin "facts-roundtrip" "--render" ednf)]
+        (if-not (zero? (:exit rendered))
+          {:err (str "candidate module `" module
+                     "` render failed (nothing committed):\n"
+                     (str/trim (:err rendered)))}
+          (let [parsed (sh {:out (io/file chk-edn) :err :string}
+                           beagle-bin "facts-roundtrip" "--emit-edn" candf)]
+            (if-not (zero? (:exit parsed))
+              {:err (str "candidate module `" module "` does not PARSE "
+                         "(nothing committed). Re-issue the edit with valid Beagle "
+                         "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n"
+                         (str/trim (:err parsed)))}
+              (let [rerendered
+                    (sh {:out (io/file fixedf) :err :string}
+                        beagle-bin "facts-roundtrip" "--render" chk-edn)]
+                (cond
+                  (not (zero? (:exit rerendered)))
+                  {:err (str "candidate module `" module
+                             "` round-trip EDN does not render "
+                             "(nothing committed):\n"
+                             (str/trim (:err rerendered)))}
+
+                  (not (byte-identical-files? candf fixedf))
+                  {:err (str "candidate module `" module
+                             "` rendered source is not a byte-identical "
+                             "parse/render fixed point (nothing committed)")}
+
+                  :else
+                  (recur (rest remaining)
+                         (inc index)
+                         (assoc files module candf)))))))))))
+
+(defn- repair-command [module target]
+  (str "bin/fram-render-code " module " --port " flip-code-port " "
+       (str/join " " (flip-log-args)) " --out " target))
+
+(defn- publish-candidate-projections!
+  [{:keys [modules paths]} pins files]
+  (mapv
+   (fn [module]
+     (let [target (get paths module)
+           result (try
+                    (publish-projection-pinned!
+                     (get pins module)
+                     (io/file (get files module))
+                     (.getName (io/file target)))
+                    (catch Throwable t
+                      {:proj-err (or (.getMessage ^Throwable t)
+                                     (.getSimpleName (class t)))}))]
+       {:module module :path target :result result}))
+   modules))
+
+(defn- committed-projection-message [op commit layout outcomes]
+  (let [bad (filterv #(some? (:result %)) outcomes)
+        modules (str/join ", " (:modules layout))
+        base (str "committed"
+                  (when (seq bad) " (graph canonical; projection repair required)")
+                  " + TYPE/WORLD CHECK CLEAN (" candidate-protocol-name
+                  ", atomic batch): "
+                  op " on [" modules "] — candidate " (:candidate commit) ", "
+                  (:installed commit) " ops at exact version " (:version commit))]
+    (if (empty? bad)
+      {:text (str base "; tracked views "
+                  (str/join ", " (map #(get-in layout [:paths %])
+                                     (:modules layout)))
+                  " updated"
+                  (coordinator-commit-warning commit))}
+      {:text
+       (str base
+            " (WARNING: graph batch is COMMITTED; DO NOT RETRY. "
+            (str/join
+             "; "
+             (map (fn [{:keys [module path result]}]
+                    (str module " projection STALE: "
+                         (or (:proj-err result) (:stale result) (pr-str result))
+                         "; repair with: " (repair-command module path)))
+                  bad))
+            ")"
+            (coordinator-commit-warning commit))})))
+
+(defn- finish-candidate-edit! [port op fallback-module prep]
+  (let [layout (candidate-layout prep fallback-module)]
+    (if (:err layout)
+      {:isError true
+       :text (str "REJECTED (nothing committed): invalid sealed candidate layout: "
+                  (:err layout))}
+      (let [pin-result (pin-candidate-paths! layout)]
+        (if (:err pin-result)
+          {:isError true
+           :text (str "REJECTED (nothing committed): " (:err pin-result))}
+          (let [pins (:pins pin-result)
+                work (str (System/getProperty "java.io.tmpdir")
+                          "/fram-cand-" (System/nanoTime))
+                committed (atom nil)]
+            (.mkdirs (io/file work))
+            (try
+              (let [checked (render-and-prove-candidate! work layout)]
+                (if (:err checked)
+                  {:isError true :text (str "REJECTED — " (:err checked))}
+                  (let [verification
+                        (verify-candidate-exactly port (:candidate prep))
+                        _ (when-not (:ok verification)
+                            (throw
+                             (ex-info
+                              (str "REJECTED (coordinator TYPE/WORLD check — "
+                                   "nothing committed"
+                                   (when-let [code (:code verification)]
+                                     (str ", " (name code)))
+                                   ")"
+                                   ": "
+                                   (str/join
+                                    "; "
+                                    (map str
+                                         (concat (:reject verification)
+                                                 (:errors verification)))))
+                              {:code (or (:code verification)
+                                         :candidate-verification-failed)
+                               :verification verification})))
+                        commit-req {:op :edit-commit
+                                    :candidate (:candidate prep)
+                                    :version (:version prep)
+                                    :module (:module prep)
+                                    :path (:path prep)
+                                    :ops-digest (:ops-digest prep)
+                                    :edn-digest (:edn-digest prep)
+                                    :src-root (canon fram-src)}
+                        commit (commit-candidate-exactly port commit-req)]
+                    (cond
+                      (:reject commit)
+                      (if (#{:durability-indeterminate :durability-poisoned
+                             :committed-repair-needed :commit-response-unknown}
+                           (:code commit))
+                        {:isError true
+                         :text (str "STOPPED (" candidate-protocol-name ", "
+                                    (name (:code commit)) "): "
+                                    (str/join "; " (map str (:reject commit)))
+                                    " — outcome is NOT an ordinary rejection and may "
+                                    "already be committed; DO NOT RETRY. Stop/restart "
+                                    "the coordinator and inspect "
+                                    ":edit-protocol/:status for the exact receipt")}
+                        {:isError true
+                         :text (str "REJECTED (" candidate-protocol-name " commit — "
+                                    "nothing committed"
+                                    (when-let [c (:code commit)]
+                                      (str ", " (name c)))
+                                    "): "
+                                    (str/join "; " (map str (:reject commit)))
+                                    (when (= "stale-version"
+                                             (some-> (:code commit) name))
+                                      " — a concurrent edit landed first; re-issue "
+                                      "this edit"))})
+
+                      (:ok commit)
+                      (let [_ (reset! committed commit)
+                            outcomes (publish-candidate-projections!
+                                      layout pins (:files checked))]
+                        (committed-projection-message op commit layout outcomes))
+
+                      :else
+                      {:isError true
+                       :text (str "edit-commit unexpected response: "
+                                  (pr-str commit))}))))
+              (catch Throwable t
+                (if-let [commit @committed]
+                  {:text
+                   (str "COMMITTED WITH WARNING "
+                        "(" candidate-protocol-name ", atomic batch): "
+                        op " on [" (str/join ", " (:modules layout)) "] — "
+                        "candidate " (:candidate commit) ", "
+                        (:installed commit) " ops at exact version "
+                        (:version commit)
+                        ". Post-commit projection/response handling failed: "
+                        (or (.getMessage ^Throwable t)
+                            (.getSimpleName (class t)))
+                        ". The graph batch is COMMITTED; DO NOT RETRY. Repair: "
+                        (str/join
+                         "; "
+                         (map (fn [module]
+                                (repair-command
+                                 module (get-in layout [:paths module])))
+                              (:modules layout)))
+                        (coordinator-commit-warning commit))}
+                  {:isError true
+                   :text (str "candidate finalization failed before a known commit "
+                              "receipt: "
+                              (or (.getMessage ^Throwable t)
+                                  (.getSimpleName (class t))))}))
+              (finally
+                (doseq [pin (vals pins)] (release-pin! pin))
+                (sh {} "rm" "-rf" work)))))))))
+
+(defn- route-edit-single-path-legacy [e]
   (let [op (:op e) module (:module e)]
     (cond
       ;; FLIP path (FRAM_FLIP=1 + a code coordinator): the LOG is canonical, and the
@@ -846,6 +1153,83 @@
       {:isError true :text "FRAM_FLIP=1 but FRAM_CODE_PORT is unset — refusing to fall back to text-sourced edits (set the code coordinator port or unset FRAM_FLIP)"}
 
       :else (route-edit-text e))))
+
+;; Coherent-world graph edit path.  The singular implementation above remains
+;; as a readable protocol-history oracle for the extensive direct pinning and
+;; post-commit tests, but live dispatch uses this module-agnostic arm: prepare
+;; once, check every dependency-selected candidate module, commit one canonical
+;; graph batch, then publish every touched file as a repairable projection.
+(defn route-edit [e]
+  (let [op (:op e)
+        module (:module e)]
+    (cond
+      (and flip-on? flip-code-port)
+      (let [prepared
+            (try
+              (if (= op "edit-transaction")
+                {:specs (edit-transaction-specs e)}
+                {:spec (edit-min-spec e)})
+              (catch clojure.lang.ExceptionInfo ex
+                (if (:spec-error (ex-data ex))
+                  {:spec-error (.getMessage ex)}
+                  (throw ex))))]
+        (cond
+          (and (nil? (:spec prepared))
+               (nil? (:specs prepared))
+               (nil? (:spec-error prepared)))
+          {:isError true :text (str "unknown edit op: " op)}
+
+          (:spec-error prepared)
+          {:isError true
+           :text (str "REJECTED (nothing prepared, nothing committed): "
+                      (:spec-error prepared)
+                      " — the edit payload must be a readable EDN form")}
+
+          :else
+          (let [port (Integer/parseInt flip-code-port)
+                prep
+                (try
+                  (fram.rt/coord-request-for-log
+                   port (flip-log)
+                   (merge {:op :edit-prepare}
+                          (select-keys prepared [:spec :specs])))
+                  (catch Throwable t
+                    {:reject [(str "edit-prepare socket: "
+                                   (.getMessage ^Throwable t))]}))]
+            (cond
+              (= "unknown op" (:error prep))
+              {:isError true
+               :text (str "REJECTED (nothing committed): the coordinator does "
+                          "not speak " candidate-protocol-name " "
+                          "(legacy :edit-min-only daemon) — restart it with "
+                          "current Fram (bin/fram-code-on)")}
+
+              (:reject prep)
+              {:isError true
+               :text (str "REJECTED (" candidate-protocol-name " prepare — "
+                          "nothing committed"
+                          (when-let [c (:code prep)] (str ", " (name c)))
+                          "): "
+                          (str/join "; " (map str (:reject prep)))
+                          (when-let [d (:disambiguation prep)]
+                            (str "\n" (:message d)))
+                          (when-let [orphans (seq (:orphaned prep))]
+                            (str "\n  surviving references: "
+                                 (pr-str (vec orphans)))))}
+
+              (not (:ok prep))
+              {:isError true
+               :text (str "edit-prepare unexpected response: " (pr-str prep))}
+
+              :else
+              (finish-candidate-edit! port op module prep)))))
+
+      flip-on?
+      {:isError true
+       :text "FRAM_FLIP=1 but FRAM_CODE_PORT is unset — refusing to fall back to text-sourced edits (set the code coordinator port or unset FRAM_FLIP)"}
+
+      :else
+      (route-edit-text e))))
 
 ;; ---- LEGACY (text-canonical) edit path — the pre-flip behavior, used when
 ;; FRAM_FLIP is unset. Sources from text, applies the verb, recompiles, overwrites
@@ -1219,8 +1603,9 @@
       ;; commit-before-check editing.
       (let [pr (try (fram.rt/coord-request-for-log port log {:op :edit-protocol})
                     (catch Throwable _ nil))]
-        (when-not (= "graph-edit-candidate-v1" (:protocol pr))
-          (die! (str "coordinator on 127.0.0.1:" port " does not speak graph-edit-candidate-v1"
+        (when-not (= candidate-protocol-name (:protocol pr))
+          (die! (str "coordinator on 127.0.0.1:" port " does not speak "
+                     candidate-protocol-name
                      " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
                      ") — legacy or wrong-protocol coordinator; restart it with current Fram"
                      " (rerun bin/fram-code-on)")))
@@ -1234,7 +1619,7 @@
                        " for sole-writer recovery/repair before authoring")))))
       (log! (str "fram-mcp: profile graph-edit-v1 bound — src " src ", log " log
                  ", strict-fenced coordinator 127.0.0.1:" port
-                 " [graph-edit-candidate-v1]")))))
+                 " [" candidate-protocol-name "]")))))
 
 ;; fail-closed profile admission: full = the exact legacy surface (no new
 ;; checks); graph-edit-v1 = the fence above; any OTHER name never serves.

@@ -29,12 +29,14 @@
    [{:type "object"
      :properties
      {:op {:type "string" :const "set-body"}
+      :module {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       :name {:type "string" :description "Definition whose body will be replaced."}
       :body {:type "string" :description "Replacement body as an EDN datum string."}}
      :required ["op" "name" "body"]}
     {:type "object"
      :properties
      {:op {:type "string" :const "replace-in-body"}
+      :module {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       :name {:type "string" :description "Definition containing the form to replace."}
       :old {:type "string" :description "Existing interior form as an EDN datum string."}
       :new {:type "string" :description "Replacement interior form as an EDN datum string."}
@@ -43,6 +45,7 @@
     {:type "object"
      :properties
      {:op {:type "string" :const "upsert-form"}
+      :module {:type "string" :description "Optional module override; inherits the transaction module when omitted."}
       :form {:type "string" :description "Whole top-level form as an EDN datum string."}
       :name {:type "string"
              :description "Optional identity assertion; when supplied it must match the identity derived from form."}}

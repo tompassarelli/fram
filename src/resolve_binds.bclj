@@ -51,16 +51,16 @@
 (defn collect-bind-syms [ctx :- (U (Atom t/Store) Nil) view :- Any node :- Int?] :- (Vec Int)
   (if (nil? node)
     []
-    (let [v (sv ctx view node)]
+    (let [n (rr/unwrap-meta ctx view node) v (sv ctx view n)]
       (cond
         (some? v)
-        (if (contains? #{"_" "&"} (str v)) [] [node])
-        (brackets? ctx view node)
+        (if (contains? #{"_" "&"} (str v)) [] [n])
+        (brackets? ctx view n)
         (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int) (into acc (collect-bind-syms ctx view k)))
           []
-          (tail ctx node))
-        (map-node? ctx view node)
-        (loop [ks :- (Vec Int) (tail ctx node) acc :- (Vec Int) []]
+          (tail ctx n))
+        (map-node? ctx view n)
+        (loop [ks :- (Vec Int) (tail ctx n) acc :- (Vec Int) []]
           (if (empty? ks)
             acc
             (let [k (first ks) kv (sv ctx view k) v2 (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -69,8 +69,7 @@
                 (recur ks2
                   (into acc
                     (if (and (some? v2) (brackets? ctx view v2))
-                      (filterv (fn [c :- Int] :- Bool (some? (sv ctx view c)))
-                        (tail ctx v2))
+                      (vec (keep (fn [c :- Int] :- Int? (let [leaf (rr/unwrap-meta ctx view c)] (when (some? (sv ctx view leaf)) leaf))) (tail ctx v2)))
                       [])))
                 (= ":as" (str kv))
                 (recur ks2 (into acc (collect-bind-syms ctx view v2)))
@@ -80,8 +79,8 @@
                 (recur ks2 (if (nil? k) acc (conj acc k)))
                 :else
                 (recur ks2 (into acc (collect-bind-syms ctx view k)))))))
-        (= "list" (rr/kind-of ctx view node))
-        (loop [ks :- (Vec Int) (rr/ordered-children ctx node) acc :- (Vec Int) []]
+        (= "list" (rr/kind-of ctx view n))
+        (loop [ks :- (Vec Int) (rr/ordered-children ctx n) acc :- (Vec Int) []]
           (if (empty? ks)
             acc
             (let [k (first ks)]
@@ -183,14 +182,14 @@
 (defn match-pat-binds [ctx :- (U (Atom t/Store) Nil) view :- Any pat :- Int?] :- (Vec Int)
   (if (nil? pat)
     []
-    (let [v (sv ctx view pat)]
+    (let [n (rr/unwrap-meta ctx view pat) v (sv ctx view n)]
       (cond
         (some? v)
-        (if (= "_" (str v)) [] [pat])
-        (or (= "list" (rr/kind-of ctx view pat)) (brackets? ctx view pat))
+        (if (= "_" (str v)) [] [n])
+        (or (= "list" (rr/kind-of ctx view n)) (brackets? ctx view n))
         (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int) (into acc (match-pat-binds ctx view k)))
           []
-          (tail ctx pat))
+          (tail ctx n))
         :else
         []))))
 

@@ -256,6 +256,7 @@
               beagle = "${beaglePkg}/bin/beagle";
               coordinatorJava = "${pkgs.jdk}/bin/java";
               coordinatorSource = "${framRoot}/coord_daemon.clj";
+              editVerifier = "${framRoot}/bin/fram-edit-verifier";
               entrypointRelative = "bin/fram-graph-edit-runtime";
               mcpSource = "${framRoot}/tests/fram_mcp.clj";
               racket = "${pkgs.racket}/bin/racket";
@@ -263,6 +264,7 @@
             helpers = {
               beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
               factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
+              factsCheckWorld = "${beaglePkg}/beagle-lib/private/facts-check-world.rkt";
               framResolve = "${framRoot}/out/resolve.clj";
             };
             environment = {
@@ -348,6 +350,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_BUILD_ALL "${beaglePkg}/bin/beagle-build-all" \
               --set FRAM_GRAPH_EDIT_SEALED_CAT "${pkgs.coreutils}/bin/cat" \
               --set FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt" \
+              --set FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER "${framRoot}/bin/fram-edit-verifier" \
               --set FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS "$out/share/fram/empty-threads" \
               --set FRAM_GRAPH_EDIT_SEALED_ENV "${pkgs.coreutils}/bin/env" \
               --set FRAM_GRAPH_EDIT_SEALED_FRAM "${framRoot}" \
@@ -356,7 +359,8 @@
               --set FRAM_GRAPH_EDIT_SEALED_PATH "${runtimePath}" \
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
-              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj"
+              --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj" \
+              --set FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK "${beaglePkg}/beagle-lib/private/facts-check-world.rkt"
             set -u
 
             runHook postInstall

@@ -1,0 +1,209 @@
+;; ============================================================================
+;; resolve_logical_identity_test.clj — canonical logical identity in emitted
+;; resolver modules, exercised directly against an in-memory fact corpus.
+;;
+;;   clojure -M tests/resolve_logical_identity_test.clj
+;;
+;; SAFE: no daemon, socket, filesystem fixture, or canonical log.
+;; ============================================================================
+(require '[fram.store :as c]
+         '[resolve-binds :as rb]
+         '[resolve-corpus :as rco]
+         '[resolve-mint :as rmi]
+         '[resolve-modules :as rm]
+         '[resolve-query]
+         '[resolve-read :as rr]
+         '[resolve-verbs :as rvb])
+
+(def failures (atom 0))
+
+(defn- check [label ok? detail]
+  (println (format "  [%s] %s%s"
+                   (if ok? "PASS" "FAIL")
+                   label
+                   (if ok? "" (str "  <-- " detail))))
+  (when-not ok?
+    (swap! failures inc)))
+
+;; Reader metadata is deliberately placed both around a member/variant and on
+;; its head symbol. mint-datum! turns either spelling into #%meta fact nodes.
+(def protocol-form
+  (list 'defprotocol 'CanonicalProtocol
+        (with-meta (list 'outer-method ['self] ':- 'Any) {:private true})
+        (list (with-meta 'head-method {:private true}) ['self] ':- 'Any)))
+
+(def union-form
+  (list 'defunion 'Event
+        (with-meta (list 'OuterVariant ['value ':- 'Int]) {:private true})
+        (list (with-meta 'HeadVariant {:private true}) ['value ':- 'Int])
+        (with-meta 'BareVariant {:private true})))
+
+(def meta-caller-form
+  (list 'defn (with-meta 'meta-caller {:private true})
+        ['x ':- 'Int] ':- 'Int 'x))
+
+(def plain-caller-form
+  (list 'defn 'plain-caller ['x ':- 'Int] ':- 'Int 'x))
+
+(def hinted-form
+  (list 'defn 'hinted
+        [(with-meta 'x {:tag 'String}) ':- 'String
+         (with-meta 'y {:private true}) ':- 'Int]
+        ':- 'Any
+        ['x 'y]))
+
+(def source-id "logical.identity")
+(def datum
+  (apply list
+         (concat
+          ['beagle-file
+           (list 'define-target 'clj)
+           (list 'ns 'logical.identity)]
+          [protocol-form
+           union-form
+           (list 'fn 'phantom ['x] 'x)
+           (list 'defmulti 'dispatch ':kind)
+           meta-caller-form
+           plain-caller-form
+           hinted-form])))
+
+(def ctx (c/new-store))
+(def tx (c/begin-tx! ctx "resolve-logical-identity-test"))
+(def SUP (c/value! ctx "supersedes"))
+(def KIND (c/value! ctx "kind"))
+(def Vp (c/value! ctx "v"))
+(def BOUND (c/value! ctx "bound_to"))
+(def REFERS (c/value! ctx "refers_to"))
+(def FIXED (c/value! ctx "keep_spelling"))
+(c/set-supersedes-pred! ctx SUP)
+
+(def ents (atom {}))
+(def mint (rmi/->Mint ctx tx SUP KIND Vp ents nil BOUND REFERS FIXED))
+(rmi/mint-datum! mint source-id datum)
+
+(def module-ents (get @ents source-id))
+(def modframe (rm/module-defs ctx nil module-ents))
+(def typeframe (rm/module-types ctx nil module-ents))
+
+(println "=== Canonical logical identities from emitted resolver modules ===")
+
+(let [names (set (keys modframe))]
+  (check "metadata-bearing protocol members use their declared names"
+         (every? names ["outer-method" "head-method"])
+         (pr-str names))
+  (check "metadata implementation nodes never become module keys"
+         (not (contains? names "#%meta"))
+         (pr-str names))
+  (check "a named top-level fn expression is not a definition"
+         (not (contains? names "phantom"))
+         (pr-str names))
+  (check "defmulti is a top-level value definition"
+         (contains? names "dispatch")
+         (pr-str names))
+  (check "metadata-named and plain defns are both module definitions"
+         (every? names ["meta-caller" "plain-caller"])
+         (pr-str names)))
+
+(let [names (set (keys typeframe))]
+  (check "the union and all metadata-bearing variants are addressable"
+         (every? names ["Event" "OuterVariant" "HeadVariant" "BareVariant"])
+         (pr-str names))
+  (check "metadata implementation nodes never become type keys"
+         (not (contains? names "#%meta"))
+         (pr-str names)))
+
+(check "module keys point at leaves with the same canonical spelling"
+       (every? (fn [[name leaf]]
+                 (= name (rr/sym-val ctx nil leaf)))
+               modframe)
+       (pr-str modframe))
+
+(check "type keys point at leaves with the same canonical spelling"
+       (every? (fn [[name leaf]]
+                 (= name (rr/sym-val ctx nil leaf)))
+               typeframe)
+       (pr-str typeframe))
+
+(check "defmulti resolves through the corpus definition lookup"
+       (= (get modframe "dispatch")
+          (rco/def-binding {source-id modframe}
+                           {source-id typeframe}
+                           source-id
+                           "dispatch"))
+       (pr-str (get modframe "dispatch")))
+
+;; Query construction keeps caller identities as canonical leaves. Reachability
+;; is intentionally not needed here; callers-of is the fact-frame boundary whose
+;; former positional naming admitted #%meta and omitted defmulti.
+(def defn-meta-of (ns-resolve 'resolve-query 'defn-meta-of))
+(def callers-of (ns-resolve 'resolve-query 'callers-of))
+(def defn-meta
+  (defn-meta-of ctx nil [source-id] {source-id modframe} @ents))
+(def caller-leaves
+  (set (map first
+            (callers-of ctx nil BOUND REFERS [source-id] @ents defn-meta))))
+
+(check "metadata-named defn is represented as a query caller"
+       (contains? caller-leaves (get modframe "meta-caller"))
+       (pr-str caller-leaves))
+
+(check "plain defn is represented as a query caller"
+       (contains? caller-leaves (get modframe "plain-caller"))
+       (pr-str caller-leaves))
+
+;; The verb must delegate module selection to the canonical, segment-aware
+;; resolver.  `pkg.gen` and `pkg.gen_seq` deliberately collide under the old
+;; `str/includes?` implementation.  Stop at :no-def after exact selection so
+;; this remains a small unit proof rather than constructing an editable AST.
+(def prefix-collision-result
+  (try
+    (rvb/verb-replace-in-body!
+     (rvb/make-verb!
+      {:ctx ctx
+       :view nil
+       :tx tx
+       :srcs ["pkg.gen" "pkg.gen_seq"]
+       :emit-srcs []
+       :capture-only? true
+       :reject! (fn [code & [detail]]
+                  (throw (ex-info "expected verb rejection"
+                                  (merge {:code code} detail))))
+       :scope-srcs (fn [scope]
+                     (if (= scope "pkg.gen") ["pkg.gen"] []))
+       :def-binding (fn [_ _] nil)})
+     "missing-def" "pkg.gen" '(old) '(new) nil)
+    {:unexpected :accepted}
+    (catch clojure.lang.ExceptionInfo e
+      (ex-data e))))
+
+(check "replace-in-body preserves exact module identity across prefix siblings"
+       (and (= 5 (:code prefix-collision-result))
+            (= :no-def (:reason prefix-collision-result)))
+       (pr-str prefix-collision-result))
+
+(def hinted-def
+  (some (fn [form]
+          (let [d (rm/unwrap-def ctx nil form)
+                children (rr/ordered-children ctx d)
+                name-leaf (rm/logical-name-leaf ctx nil (nth children 1 nil))]
+            (when (and (= "defn" (rr/head-sym ctx nil d))
+                       (= "hinted" (rr/sym-val ctx nil name-leaf)))
+              d)))
+        (rm/forms-of ctx nil module-ents)))
+
+(def hinted-params
+  (some #(when (rb/brackets? ctx nil %) %)
+        (rr/ordered-children ctx hinted-def)))
+
+(def hinted-bind-names
+  (mapv #(rr/sym-val ctx nil %)
+        (rb/param-binds ctx nil hinted-params)))
+
+(check "hinted parameters collect exactly x and y"
+       (= ["x" "y"] hinted-bind-names)
+       (pr-str hinted-bind-names))
+
+(println (format "\n==== %s : %d failure(s) ===="
+                 (if (zero? @failures) "PASS" "FAIL")
+                 @failures))
+(System/exit (if (zero? @failures) 0 1))

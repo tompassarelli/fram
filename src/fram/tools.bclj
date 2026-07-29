@@ -172,11 +172,13 @@
        :replace-in-body
        "")
      (->ToolSpec "edit-transaction"
-       (str "Atomically author two or more DISTINCT definitions in one graph-upstream "
-         "Beagle module. `edits` is an array of set-body, replace-in-body, or upsert-form objects "
-         "(each names its definition and carries body, old/new/optional within, or a whole form). "
-         "Fram stages every edit, renders and type-checks the END STATE once, then "
-         "emits one sealed batch or rejects with nothing emitted or recorded. "
+       (str "Atomically author two or more DISTINCT module-qualified definitions as one coherent graph world. "
+         "`module` is the default module; any edit may carry its own `module` override. `edits` contains "
+         "set-body, replace-in-body, or upsert-form objects; upsert identity is derived from its whole form "
+         "and an optional `name` is only an assertion. Fram stages every edit across all touched modules, "
+         "derives the dependency check scope from the graph, renders and type-checks only the FINAL WORLD, "
+         "and rejects surviving references to removed bindings, variants, members, or record accessors. "
+         "Success is one sealed canonical graph batch; failure emits and records nothing. "
          "Recompile-gated + fail-closed.")
        [(->Param "module" "string" true) (->Param "edits" "array" true)]
        :edit-transaction

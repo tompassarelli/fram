@@ -125,38 +125,41 @@
       (mint-datum! m
         src
         (list (symbol "#%meta") (clj-meta->beagle-meta mt) (with-meta d nil)))
-      (cond
-        (nil? d)
-        (mint-leaf! m src "symbol" "nil")
-        (symbol? d)
-        (mint-leaf! m src "symbol" (str d))
-        (keyword? d)
-        (mint-leaf! m src "symbol" (str d))
-        (string? d)
-        (mint-leaf! m src "string" d)
-        (boolean? d)
-        (mint-leaf! m src "symbol" (if d "true" "false"))
-        (char? d)
-        (mint-leaf! m src "char" (str d))
-        (number? d)
-        (mint-leaf! m src "number" (str d))
-        (or (list? d) (seq? d) (vector? d) (map? d))
-        (let [ctx (:ctx m) tx (:tx m) head :- Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) e (register! m src (c/entity! ctx))]
-          (do
-            (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
-            (doseq [i :- Int (range (count elems))]
-              (c/fact! ctx
-                e
-                (c/value! ctx (str "f" i))
-                (mint-datum! m src (nth elems i))
-                tx))
-            e))
-        (instance? java.util.regex.Pattern d)
-        (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
-        (set? d)
-        (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
-        :else
-        (mint-leaf! m src "other" (pr-str d))))))
+      (let [reuse-node (rc/reuse-node-id d)]
+        (if (some? reuse-node)
+          reuse-node
+          (cond
+            (nil? d)
+            (mint-leaf! m src "symbol" "nil")
+            (symbol? d)
+            (mint-leaf! m src "symbol" (str d))
+            (keyword? d)
+            (mint-leaf! m src "symbol" (str d))
+            (string? d)
+            (mint-leaf! m src "string" d)
+            (boolean? d)
+            (mint-leaf! m src "symbol" (if d "true" "false"))
+            (char? d)
+            (mint-leaf! m src "char" (str d))
+            (number? d)
+            (mint-leaf! m src "number" (str d))
+            (or (list? d) (seq? d) (vector? d) (map? d))
+            (let [ctx (:ctx m) tx (:tx m) head :- Any (cond (vector? d) [(symbol "#%brackets")] (map? d) [(symbol "#%map")] :else []) elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d)))) e (register! m src (c/entity! ctx))]
+              (do
+                (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
+                (doseq [i :- Int (range (count elems))]
+                  (c/fact! ctx
+                    e
+                    (c/value! ctx (str "f" i))
+                    (mint-datum! m src (nth elems i))
+                    tx))
+                e))
+            (instance? java.util.regex.Pattern d)
+            (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
+            (set? d)
+            (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
+            :else
+            (mint-leaf! m src "other" (pr-str d))))))))
 
 (defn fN-facts [m :- Mint parent :- Int] :- (Vec Any)
   (let [ctx (:ctx m) rows (reduce (fn [acc :- (Vec FnEdge) cid :- Int] :- (Vec FnEdge) (let [f (c/fact-of ctx cid) pi :- Any (if (nil? f) nil (get f :p)) p :- Any (if (int? pi) (c/literal ctx pi) nil) r :- Any (if (nil? f) nil (get f :r))] (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))] (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (c/by-l ctx parent))]
@@ -362,7 +365,7 @@
           (recur (conj seen n) (into (pop stack) (structural-kids ctx n))))))))
 
 (defn form-for-victim [ctx :- (Atom t/Store) view :- Any ents :- Any unwrap-def :- Any src :- String victim :- Int] :- Int?
-  (some (fn [f :- Int] :- Int? (let [d (unwrap-def f) children (rr/ordered-children ctx d) name-index (rc/type-name-index (rr/head-sym ctx view d) (rr/sym-val ctx view (nth children 1 nil))) nl0 (rr/unwrap-meta ctx view (nth children name-index nil)) nl (if (= "list" (rr/kind-of ctx view nl0)) (first (rr/ordered-children ctx nl0)) nl0)] (when (= victim nl) f)))
+  (some (fn [f :- Int] :- Int? (let [d (unwrap-def f) children (rr/ordered-children ctx d) name-index (rc/type-name-index (rr/head-sym ctx view d) (rr/sym-val ctx view (nth children 1 nil))) outer (rr/unwrap-meta ctx view (nth children name-index nil)) leaf (if (= "list" (rr/kind-of ctx view outer)) (first (rr/ordered-children ctx outer)) outer) logical (rr/unwrap-meta ctx view leaf)] (when (= victim logical) f)))
     (rest (rr/ordered-children ctx (wrapper-of ctx view ents src)))))
 
 (defn emit-env [ctx :- (Atom t/Store) view :- Any BOUND :- Int REFERS :- Int FIXED :- Int ents :- Any unwrap-def :- Any] :- Emit

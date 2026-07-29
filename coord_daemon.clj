@@ -3134,7 +3134,14 @@
           ;; so it must NOT be scoped. reorder is a pure wrapper order-key re-spell (reads
           ;; only its own module's wrapper) — single-module, scope it like the inserts.
           scope? (#{"set-body" "upsert-form" "insert-form" "reorder" "replace-in-body"} (:op spec))
-          scope  (when scope? (fn [s] (str/includes? s module)))
+          ;; `groups` is keyed by the exact canonical module encoded in each
+          ;; @module#node name.  Substring matching here would merge frames for
+          ;; similarly named modules (for example `app.user` and
+          ;; `app.user_admin`) and could make a module-qualified transaction
+          ;; target the wrong definition.  Candidate identity is
+          ;; [module, definition], so the fast-path scope must preserve that
+          ;; exact boundary too.
+          scope  (when scope? (fn [s] (= s module)))
           ;; the supersedes pred the migrate store uses (set by s/setup!); the verb's
           ;; resolve-warm-store! re-points :supersedes-pred at "supersedes", but the
           ;; clone-local marker FACTS it writes carry whatever pred-id it used. We
@@ -3308,7 +3315,8 @@
                :version (current-seq @co)})))))))))
 
 ;; ============================================================================
-;; graph-edit-candidate-v1 — the ATOMIC CANDIDATE GATE (:edit-prepare/:edit-commit).
+;; graph-edit-candidate-v2 — the ATOMIC CANDIDATE GATE
+;; (:edit-prepare/:edit-verify/:edit-commit).
 ;; ============================================================================
 ;; Corrects the two audited :edit-min authoring defects:
 ;;   (1) COMMIT-BEFORE-CHECK — :edit-min made the delta durable, then the MCP
@@ -3332,6 +3340,10 @@
 ;;     * returns {:candidate <id> :version V :path P :edn ... :ops-digest
 ;;       :edn-digest ...}; the sealed candidate is retained SERVER-SIDE — the
 ;;       client can never substitute ops between prepare and commit.
+;;   :edit-verify {:candidate id} — invokes the launch-sealed verifier over the
+;;     exact server-side candidate. A caller cannot submit a proof. Deterministic
+;;     checker failures are cached; unavailable/malformed verifier executions
+;;     return the candidate to :prepared for an exact retry.
 ;;   :edit-commit {:candidate id :version V :module M :path P :ops-digest
 ;;                 :edn-digest [:src-root R]} — under dlock:
 ;;     * revalidates log fence (envelope), candidate identity, BOTH digests, the
@@ -3365,14 +3377,21 @@
 ;;       runs ONLY at daemon boot under the rewrite gate (sole writer) — never
 ;;       from read-only paths.
 ;;   :edit-protocol — capability handshake; a restricted MCP profile refuses to
-;;     start against a coordinator that does not answer graph-edit-candidate-v1
+;;     start against a coordinator that does not answer graph-edit-candidate-v2
 ;;     (legacy daemons answer {:error "unknown op"}).
 ;; :edit-min stays untouched (CLI fram-edit-code + regression surface); the MCP
 ;; warm path no longer calls it.
 ;; ============================================================================
-(def edit-protocol-name "graph-edit-candidate-v1")
+(def edit-protocol-name "graph-edit-candidate-v2")
 (def edit-candidates (atom {}))          ; id -> sealed candidate (server-side seal)
 (def ^:private max-edit-candidates 16)   ; bounded; stale ones die by version CAS anyway
+(def ^:private edit-verifier-protocol "fram-edit-verifier-command-v1")
+(def ^:private edit-verifier-request-schema "fram-edit-verifier-request-v1")
+(def ^:private edit-verifier-receipt-schema "fram-edit-verifier-receipt-v1")
+(def ^:private edit-verification-proof-schema "fram-edit-verification-proof-v1")
+(def ^:private edit-verifier-timeout-ms 120000)
+(def ^:private edit-verifier-stdout-max-bytes (* 1024 1024))
+(def ^:private edit-verifier-stderr-max-bytes 4096)
 (declare publish-edit-journal! remove-edit-journal! restore-log-pre-state!
          sha256-file-prefix ex->s-err)
 ;; env-gated test seam (FRAM_EDIT_INJECT=1 + request flag): force a directory-
@@ -3384,23 +3403,123 @@
   (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))]
     (apply str (map #(format "%02x" %) d))))
 
+(defn- sha256-file-content [path]
+  (let [digest (java.security.MessageDigest/getInstance "SHA-256")
+        buffer (byte-array 65536)]
+    (with-open [in (java.io.FileInputStream. (java.io.File. ^String path))]
+      (loop []
+        (let [n (.read in buffer)]
+          (when (pos? n)
+            (.update digest buffer 0 n)
+            (recur)))))
+    (apply str (map #(format "%02x" %) (.digest digest)))))
+
+(defn- verifier-launch-args []
+  (let [raw (System/getenv "FRAM_EDIT_VERIFIER_ARGS")]
+    (if (str/blank? raw)
+      []
+      (let [args (edn/read-string raw)]
+        (when-not (and (vector? args) (every? string? args))
+          (throw (ex-info "FRAM_EDIT_VERIFIER_ARGS must be an EDN vector of strings"
+                          {:code :invalid-verifier-launch})))
+        args))))
+
+;; Captured exactly once at coordinator load. A request can neither select nor
+;; alter the verifier. The executable bytes, argv, and closed protocol schemas
+;; are one launch identity which every successful proof records and commit
+;; revalidates. Missing configuration is an honest, retryable unavailable state.
+(defn- capture-edit-verifier-launch []
+  (let [raw (System/getenv "FRAM_EDIT_VERIFIER")]
+    (if (str/blank? raw)
+      {:state :unconfigured
+       :protocol edit-verifier-protocol
+       :request-schema edit-verifier-request-schema
+       :receipt-schema edit-verifier-receipt-schema}
+      (try
+        (let [file (.getCanonicalFile (java.io.File. ^String raw))
+              path (.getPath file)
+              args (verifier-launch-args)]
+          (cond
+            (not (.isFile file))
+            {:state :invalid :code :verification-unavailable
+             :message (str "configured verifier is not a regular file: " path)}
+
+            (not (.canExecute file))
+            {:state :invalid :code :verification-unavailable
+             :message (str "configured verifier is not executable: " path)}
+
+            :else
+            (let [content-digest (sha256-file-content path)
+                  launch-digest
+                  (sha256-hex
+                   (pr-str [edit-verifier-protocol
+                            edit-verifier-request-schema
+                            edit-verifier-receipt-schema
+                            path args content-digest]))]
+              {:state :ready
+               :protocol edit-verifier-protocol
+               :request-schema edit-verifier-request-schema
+               :receipt-schema edit-verifier-receipt-schema
+               :command path
+               :args args
+               :content-digest content-digest
+               :launch-digest launch-digest})))
+        (catch Throwable t
+          {:state :invalid :code :verification-unavailable
+           :message (str "invalid verifier launch configuration: "
+                         (or (.getMessage ^Throwable t)
+                             (.getSimpleName (class t))))})))))
+
+(def edit-verifier-launch (capture-edit-verifier-launch))
+
+(defn- receipt-modules [cand]
+  (or (:modules cand)
+      (let [token (:module cand)
+            decoded (when (string? token)
+                      (try (edn/read-string token) (catch Throwable _ nil)))]
+        (if (and (vector? decoded) (every? string? decoded))
+          decoded
+          (when (string? token) [token])))))
+
+(defn- receipt-paths [cand modules]
+  (or (:paths cand)
+      (let [token (:path cand)
+            decoded (when (string? token)
+                      (try (edn/read-string token) (catch Throwable _ nil)))]
+        (cond
+          (and (vector? decoded)
+               (every? #(and (vector? %) (= 2 (count %))
+                             (string? (first %)) (string? (second %)))
+                       decoded))
+          (into {} decoded)
+
+          (and (= 1 (count modules)) (string? token))
+          {(first modules) token}
+
+          :else {}))))
+
 (defn- base-committed-receipt [cand installed final-version]
-  {:ok true
-   :committed true
-   :code :committed
-   :protocol edit-protocol-name
-   :module (:module cand)
-   :candidate (:id cand)
-   :batch (:id cand)
-   :base-version (:version cand)
-   :version final-version
-   :ops (count (:ops cand))
-   :installed installed
-   :path (:path cand)
-   :ops-digest (:ops-digest cand)
-   :edn-digest (:edn-digest cand)
-   :warnings []
-   :repair-needed false})
+  (let [modules (vec (receipt-modules cand))
+        paths (receipt-paths cand modules)]
+    {:ok true
+     :committed true
+     :code :committed
+     :protocol edit-protocol-name
+     :module (:module cand)
+     :modules modules
+     :primary-module (or (:primary-module cand) (first modules))
+     :candidate (:id cand)
+     :batch (:id cand)
+     :base-version (:version cand)
+     :version final-version
+     :ops (count (:ops cand))
+     :installed installed
+     :path (:path cand)
+     :paths paths
+     :ops-digest (:ops-digest cand)
+     :edn-digest (:edn-digest cand)
+     :warnings []
+     :repair-needed false}))
 
 (defn- remember-edit-outcome! [receipt]
   (let [receipt (assoc receipt :recorded-at-ms (System/currentTimeMillis))]
@@ -3789,12 +3908,321 @@
 ;; refresh refers_to for ONE module on a CLONE store (the candidate rehearsal):
 ;; scoped strip + scoped walk + seq-space restore — the clone-local mirror of
 ;; materialize-refers-scoped!, with no global dirty/export state touched.
-(defn- clone-refresh-refers! [st module]
-  (let [before @st
-        keep-ids (module-node-ids st #{module})]
+(defn- clone-refresh-refers-modules! [st modules]
+  (let [modules (set modules)
+        before @st
+        keep-ids (module-node-ids st modules)]
     (strip-resolve-facts! st (or keep-ids #{}))
-    (resolve/resolve-modules! st #{module} (fn [] nil))
+    (resolve/resolve-modules! st modules (fn [] nil))
     (restore-seq-space! st before)))
+
+(defn- clone-refresh-refers! [st module]
+  (clone-refresh-refers-modules! st #{module}))
+
+;; A candidate transaction is a coherent WORLD, not a sequence of independently
+;; valid intermediate programs.  The helpers below derive that world's checking
+;; boundary from facts:
+;;
+;;   touched modules
+;;     -> reverse import closure (old AND final graph)
+;;     -> final resolved projections checked by the MCP edge
+;;
+;; A macro-bearing touched module conservatively checks the whole corpus because
+;; macro expansion is not bounded by the ordinary import surface.  This is the
+;; same sound fallback as the live scoped-refers classifier, applied to a clone.
+(defn- candidate-world-meta [st]
+  (with-resolve-read st
+    (let [srcs (set (remove nil? resolve/srcs))
+          ;; Graph authoring addresses a source by its stable @<src># node
+          ;; prefix, while Beagle imports name the namespace declared by that
+          ;; source.  Those are intentionally not required to coincide:
+          ;; `src.fram.tools` is the graph source whose `(ns fram.tools)` is
+          ;; imported as `fram.tools`.  Keep both aliases, and make namespace
+          ;; lookup one-to-many so split/package namespaces remain sound.
+          src->namespace
+          (into {}
+                (map (fn [src]
+                       [src (some-> (resolve/module-name src) str)]))
+                srcs)
+          address->srcs
+          (reduce (fn [index [src namespace]]
+                    (cond-> (update index (str src) (fnil conj #{}) src)
+                      namespace
+                      (update namespace (fnil conj #{}) src)))
+                  {}
+                  src->namespace)
+          imports
+          (into {}
+                (map
+                 (fn [src]
+                   [src
+                    (->> (resolve/module-imports src)
+                         (mapcat #(get address->srcs (str %) #{}))
+                         set)]))
+                srcs)]
+      {:srcs srcs
+       :src->namespace src->namespace
+       :address->srcs address->srcs
+       :imports imports
+       :macros (set (filter resolve/module-has-macro? srcs))})))
+
+(defn- candidate-source-seeds [world addresses]
+  (reduce (fn [seeds address]
+            (let [address (str address)
+                  resolved (get (:address->srcs world) address)]
+              (cond
+                (seq resolved) (into seeds resolved)
+                (contains? (:srcs world) address) (conj seeds address)
+                :else seeds)))
+          #{}
+          addresses))
+
+(defn- reverse-import-closure [imports seeds]
+  (loop [seen (set seeds)
+         frontier (set seeds)]
+    (if (empty? frontier)
+      seen
+      (let [more (->> imports
+                      (keep (fn [[consumer imported]]
+                              (when (seq (clojure.set/intersection frontier
+                                                                  (set imported)))
+                                consumer)))
+                      set
+                      (#(clojure.set/difference % seen)))]
+        (recur (into seen more) more)))))
+
+(defn- candidate-check-modules [base-st final-st touched]
+  (let [base (candidate-world-meta base-st)
+        final (candidate-world-meta final-st)
+        touched (set touched)
+        touched-srcs (into (candidate-source-seeds base touched)
+                           (candidate-source-seeds final touched))
+        all (into (:srcs base) (:srcs final))]
+    (if (or (seq (clojure.set/intersection touched-srcs (:macros base)))
+            (seq (clojure.set/intersection touched-srcs (:macros final))))
+      all
+      (into (reverse-import-closure (:imports base) touched-srcs)
+            (reverse-import-closure (:imports final) touched-srcs)))))
+
+;; Logical binding surfaces are role-qualified.  A record accessor is a
+;; capability [record-binding field], not a distinct binding node: references
+;; point at the record leaf and carry accessor_field as a render marker.  Keeping
+;; the three surfaces separate is what lets the final-world guard catch field
+;; removal even though the record target itself remains reachable.
+(defn- candidate-binding-surfaces [st]
+  (with-resolve-read st
+    {:values (set (mapcat vals (vals resolve/file-modframe)))
+     :types (set (mapcat vals (vals resolve/file-typeframe)))
+     :accessors (set (mapcat vals (vals resolve/file-accessors)))}))
+
+(defn- candidate-live-nodes [st]
+  (with-resolve-read st
+    (reduce (fn [acc src]
+              (if-let [wrapper (resolve/wrapper-of src)]
+                (into acc (resolve/descendants wrapper))
+                acc))
+            #{}
+            resolve/srcs)))
+
+(defn- clone-refresh-refers-whole! [st]
+  (let [before @st]
+    (strip-resolve-facts! st)
+    (resolve/resolve-warm-store! st)
+    (restore-seq-space! st before)))
+
+(defn- candidate-reference-map [st live]
+  (with-resolve-read st
+    (binding [resolve/BOUND (c/value-id st "bound_to")]
+      (let [preds (remove nil? [resolve/BOUND resolve/REFERS])
+            leaves (->> preds
+                        (mapcat #(c/by-p st %))
+                        (keep #(some-> (c/fact-of st %) :l))
+                        set)]
+        (into {}
+              (keep
+               (fn [leaf]
+                 (when (contains? live leaf)
+                   (when-let [direct (resolve/refers-target leaf)]
+                     (let [target (resolve/ultimate direct)]
+                       (when (integer? target)
+                         [leaf {:target target
+                                :accessor (resolve/pred-val leaf "accessor_field")
+                                :module (some-> (s/name-of st leaf)
+                                                resolve/name->module)
+                                :spelling (resolve/sym-val leaf)}]))))))
+              leaves)))))
+
+(defn- removed-surface [base final]
+  {:values (clojure.set/difference (:values base) (:values final))
+   :types (clojure.set/difference (:types base) (:types final))
+   :accessors (clojure.set/difference (:accessors base) (:accessors final))})
+
+(defn- surface-removed? [removed]
+  (boolean (some seq (vals removed))))
+
+;; Fail closed only after the COMPLETE staged world exists.  A per-upsert guard
+;; would make transactions order-dependent (provider-first would reject before
+;; the consumer edit was staged).  The exact base snapshot is freshly resolved
+;; on a throwaway clone so even a just-authored reference that has not yet gained
+;; durable bound_to participates in the proof.  A base reference matters only
+;; if its leaf is still wrapper-reachable in the final world; replacing its
+;; enclosing consumer form makes the old leaf unreachable and is therefore the
+;; explicit, identity-safe way to remove or retarget the use.
+(defn- candidate-final-world-errors [snap final-st]
+  (let [base-st (atom snap)
+        base-surfaces (candidate-binding-surfaces base-st)
+        final-surfaces (candidate-binding-surfaces final-st)
+        removed (removed-surface base-surfaces final-surfaces)]
+    (if-not (surface-removed? removed)
+      []
+      (do
+        (clone-refresh-refers-whole! base-st)
+        (let [base-live (candidate-live-nodes base-st)
+              final-live (candidate-live-nodes final-st)
+              refs (candidate-reference-map base-st base-live)]
+          (->> refs
+               (keep
+                (fn [[leaf {:keys [target accessor module spelling]}]]
+                  (when (contains? final-live leaf)
+                    (let [value? (contains? (:values removed) target)
+                          type? (contains? (:types removed) target)
+                          accessor? (and (some? accessor)
+                                         (contains? (:accessors removed)
+                                                    [target accessor]))]
+                      (when (or value? type? accessor?)
+                        {:reference leaf
+                         :referring-module module
+                         :spelling spelling
+                         :target target
+                         :role (cond accessor? :accessor
+                                     type? :type
+                                     :else :value)
+                         :accessor accessor})))))
+               vec))))))
+
+(defn- project-modules-edn [st modules]
+  (reduce (fn [acc module]
+            (let [projection (project-module-edn st module)]
+              (if (:error projection)
+                (reduced {:error (:error projection) :module module})
+                (assoc acc module (:edn projection)))))
+          {}
+          (sort modules)))
+
+(defn- tracked-paths-of [st modules]
+  (reduce (fn [acc module]
+            (let [tp (tracked-path-of st module)]
+              (if (:reject tp)
+                (reduced (assoc tp :module module))
+                (assoc acc module (:path tp)))))
+          {}
+          (sort modules)))
+
+(defn- candidate-module-token [modules]
+  (if (= 1 (count modules))
+    (first modules)
+    (pr-str (vec modules))))
+
+(defn- candidate-path-token [modules paths]
+  (if (= 1 (count modules))
+    (get paths (first modules))
+    (pr-str (mapv (fn [module] [module (get paths module)]) modules))))
+
+(defn- candidate-edn-digest [edn-by-module]
+  (let [entries (mapv (fn [module] [module (get edn-by-module module)])
+                      (sort (keys edn-by-module)))]
+    (if (= 1 (count entries))
+      (sha256-hex (second (first entries)))
+      (sha256-hex (pr-str entries)))))
+
+(defn- candidate-closure-entries [cand]
+  (mapv
+   (fn [module]
+     [module
+      (get (:checked-module-namespaces cand) module)
+      (sha256-hex (get (:edn-by-module cand) module))])
+   (sort (:checked-modules cand))))
+
+(defn- candidate-closure-digest [cand]
+  (sha256-hex (pr-str (candidate-closure-entries cand))))
+
+(defn- candidate-overlay-seal-entries [cand]
+  (mapv
+   (fn [module]
+     [module
+      (get (:overlay-module-namespaces cand) module)
+      (sha256-hex (get (:overlay-edn-by-module cand) module))])
+   (sort (:overlay-modules cand))))
+
+(defn- candidate-overlay-digest [cand]
+  (sha256-hex (pr-str (candidate-overlay-seal-entries cand))))
+
+(defn- candidate-verification-input-digest [cand]
+  ;; A vector, not a map, is the canonical encoding: field order is part of the
+  ;; protocol and cannot depend on hash-map iteration.
+  (sha256-hex
+   (pr-str [edit-verifier-request-schema
+            (:id cand)
+            (:version cand)
+            (:ops-digest cand)
+            (:edn-digest cand)
+            (:checked-closure-digest cand)
+            (:overlay-digest cand)])))
+
+(defn- with-prepared-verification [cand]
+  (let [cand (assoc cand
+                    :checked-closure-digest
+                    (candidate-closure-digest cand)
+                    :overlay-digest
+                    (candidate-overlay-digest cand))]
+    (assoc cand
+           :verification-state :prepared
+           :verification-attempt 0
+           :verification nil)))
+
+(defn- candidate-final-world [snap final-st touched]
+  (let [touched (vec (sort (set touched)))
+        check-modules (vec (sort (candidate-check-modules (atom snap)
+                                                          final-st
+                                                          touched)))
+        ;; The selected reverse closure says WHAT must be checked, not everything
+        ;; required to resolve it. Beagle's world checker deliberately has no
+        ;; disk fallback, so pass the COMPLETE final graph overlay and use the
+        ;; smaller closure only as check selectors.
+        overlay-modules (vec (sort (:srcs (candidate-world-meta final-st))))]
+    (clone-refresh-refers-modules! final-st overlay-modules)
+    (let [errors (candidate-final-world-errors snap final-st)]
+      (if (seq errors)
+        {:reject [(str "candidate final world would orphan "
+                       (count errors)
+                       " surviving binding reference(s); update/remove those "
+                       "consumers in the same coherent transaction")]
+         :code :orphaned-binding-references
+         :orphaned (vec (take 16 errors))}
+        (let [world (candidate-world-meta final-st)
+              overlay-module-namespaces
+              (into (sorted-map)
+                    (map (fn [module]
+                           [module (get (:src->namespace world) module)]))
+                    overlay-modules)
+              overlay-edn-by-module
+              (project-modules-edn final-st overlay-modules)]
+          (if (:error overlay-edn-by-module)
+            {:reject [(str "candidate projection failed for "
+                           (:module overlay-edn-by-module) ": "
+                           (:error overlay-edn-by-module))]
+             :code :candidate-render-failed}
+            (let [checked-module-namespaces
+                  (select-keys overlay-module-namespaces check-modules)
+                  edn-by-module
+                  (select-keys overlay-edn-by-module check-modules)]
+              {:modules touched
+               :checked-modules check-modules
+               :checked-module-namespaces checked-module-namespaces
+               :edn-by-module edn-by-module
+               :overlay-modules overlay-modules
+               :overlay-module-namespaces overlay-module-namespaces
+               :overlay-edn-by-module overlay-edn-by-module})))))))
 
 ;; RENAME identity edges, computed CLONE-SIDE and sealed into the batch: whole-corpus
 ;; refers_to over the clone (the same ground-truth walk refers-keyset uses), then the
@@ -3850,34 +4278,62 @@
                 co2 {:store (atom snap) :log nil :lock (Object.)}
                 ap (apply-candidate-ops! co2 proposed-ops v0 nil)
                 ap (if (:reject ap) ap
-                       (try (clone-refresh-refers! (:store co2) module)
-                            (assoc ap :edn (project-module-edn (:store co2) module))
+                       (try (assoc ap :world
+                                   (candidate-final-world snap (:store co2)
+                                                          #{module}))
                             (catch Throwable t {:reject [(str "candidate projection failed: " (.getMessage t))]
                                                 :code :candidate-render-failed})))]
             (cond
               (:reject ap)
               (merge {:reject (:reject ap) :version v0}
-                     (select-keys ap [:at :op :code]))
-              (:error (:edn ap))
-              {:reject [(str "candidate projection failed: " (:error (:edn ap)))]
-               :code :candidate-render-failed :version v0}
+                     (select-keys ap [:at :op :code :orphaned]))
+              (:reject (:world ap))
+              (merge {:reject (:reject (:world ap)) :version v0}
+                     (select-keys (:world ap) [:code :orphaned]))
               :else
-              (let [edn-str (:edn (:edn ap))
+              (let [{:keys [modules checked-modules
+                            checked-module-namespaces
+                            edn-by-module
+                            overlay-modules
+                            overlay-module-namespaces
+                            overlay-edn-by-module]} (:world ap)
+                    edn-str (get edn-by-module module)
                     ops (get-in ap [:ok :installed-ops])
                     id (str (java.util.UUID/randomUUID))
                     ops-digest (sha256-hex (pr-str ops))
-                    edn-digest (sha256-hex edn-str)
-                    cand {:id id :module module :verb (:op spec) :ops ops :version v0
-                          :path (:path tp) :ops-digest ops-digest :edn-digest edn-digest
-                          :created (System/currentTimeMillis)}]
+                    edn-digest (candidate-edn-digest edn-by-module)
+                    paths {module (:path tp)}
+                    cand (with-prepared-verification
+                           {:id id :module module :modules modules
+                            :primary-module module
+                            :verb (:op spec) :ops ops :version v0
+                            :path (:path tp) :paths paths
+                            :checked-modules checked-modules
+                            :checked-module-namespaces
+                            checked-module-namespaces
+                            :edn-by-module edn-by-module
+                            :overlay-modules overlay-modules
+                            :overlay-module-namespaces
+                            overlay-module-namespaces
+                            :overlay-edn-by-module overlay-edn-by-module
+                            :ops-digest ops-digest :edn-digest edn-digest
+                            :created (System/currentTimeMillis)})]
                 (swap! edit-candidates
                        (fn [cm] (let [cm (assoc cm id cand)]
                                   (if (> (count cm) max-edit-candidates)
                                     (dissoc cm (:id (apply min-key :created (vals cm))))
                                     cm))))
                 {:ok true :protocol edit-protocol-name :candidate id :module module
-                 :version v0 :path (:path tp) :edn edn-str
+                 :modules modules :primary-module module
+                 :version v0 :path (:path tp) :paths paths :edn edn-str
+                 :checked-modules checked-modules
+                 :checked-module-namespaces checked-module-namespaces
+                 :edn-by-module edn-by-module
                  :ops-digest ops-digest :edn-digest edn-digest
+                 :checked-closure-digest (:checked-closure-digest cand)
+                 :overlay-digest (:overlay-digest cand)
+                 :overlay-module-count (count overlay-modules)
+                 :verification-state :prepared
                  :ops (count ops)
                  :asserts (count (filter #(= :assert (first %)) ops))
                  :retracts (count (filter #(= :retract (first %)) ops))
@@ -3891,12 +4347,14 @@
                  :version (current-seq @co)}
           (:disambiguation d) (assoc :disambiguation (:disambiguation d)))))))
 
-;; A multi-definition candidate is deliberately narrower than the single-edit
-;; vocabulary: body edits plus named top-level upserts, one module, and one edit
-;; per definition. The distinct-name rule keeps every step independent while
-;; the transaction is staged; a caller that wants to edit one definition twice
-;; sends its final form once. The sealed candidate still uses the ordinary
-;; commit/journal path.
+;; A coherent-world candidate is deliberately narrower than the single-edit
+;; vocabulary: body edits plus top-level upserts, and one edit per logical
+;; definition identity.  Definitions may span modules.  The identity key is
+;; [module, writable-definition-key], so the same local spelling in two modules
+;; is independent while two edits of the same definition remain a typed
+;; duplicate.  A caller that wants to edit one definition twice sends its final
+;; form once.  Intermediate staged worlds are never checked; the sealed FINAL
+;; world uses the ordinary one-batch commit/journal path.
 (def ^:private edit-transaction-verbs
   #{"set-body" "replace-in-body" "upsert-form"})
 (def ^:private max-edit-transaction-size 32)
@@ -3961,13 +4419,9 @@
                         (normalize-edit-transaction-spec! i spec))
                       (range)
                       specs)
-          modules (set (map :module specs))
-          targets (mapv :target-key specs)]
-      (when-not (= 1 (count modules))
-        (throw (ex-info "edit-prepare: every transaction edit must target one module"
-                        {:reject :mixed-modules :modules (vec (sort modules))})))
+          targets (mapv (fn [spec] [(:module spec) (:target-key spec)]) specs)]
       (when-not (= (count targets) (count (set targets)))
-        (throw (ex-info "edit-prepare: every transaction edit must target a distinct top-level definition"
+        (throw (ex-info "edit-prepare: every transaction edit must target a distinct module-qualified top-level definition"
                         {:reject :duplicate-definition})))
       specs)))
 
@@ -4007,12 +4461,12 @@
 (defn- do-edit-prepare-transaction [req]
   (try
     (let [specs (validate-edit-transaction-specs! (:specs req))
-          module (:module (first specs))
+          modules (vec (sort (set (map :module specs))))
           snap @(:store @co)
           v0 (or (:next-seq snap) 0)
-          tp (tracked-path-of (atom snap) module)]
-      (if (:reject tp)
-        (assoc tp :version v0)
+          paths (tracked-paths-of (atom snap) modules)]
+      (if (:reject paths)
+        (assoc paths :version v0)
         (let [staged (edit-transaction-ops specs snap)]
           (if (:reject staged)
             (merge {:reject (:reject staged) :version v0}
@@ -4022,32 +4476,52 @@
                   ap (if (:reject ap)
                        ap
                        (try
-                         (clone-refresh-refers! (:store co2) module)
-                         (assoc ap :edn (project-module-edn (:store co2) module))
+                         (assoc ap :world
+                                (candidate-final-world snap (:store co2) modules))
                          (catch Throwable t
                            {:reject [(str "candidate projection failed: " (.getMessage t))]
                             :code :candidate-render-failed})))]
               (cond
                 (:reject ap)
                 (merge {:reject (:reject ap) :version v0}
-                       (select-keys ap [:at :op :code]))
+                       (select-keys ap [:at :op :code :orphaned]))
 
-                (:error (:edn ap))
-                {:reject [(str "candidate projection failed: " (:error (:edn ap)))]
-                 :code :candidate-render-failed
-                 :version v0}
+                (:reject (:world ap))
+                (merge {:reject (:reject (:world ap)) :version v0}
+                       (select-keys (:world ap) [:code :orphaned]))
 
                 :else
-                (let [edn-str (:edn (:edn ap))
+                (let [{:keys [modules checked-modules
+                              checked-module-namespaces
+                              edn-by-module
+                              overlay-modules
+                              overlay-module-namespaces
+                              overlay-edn-by-module]} (:world ap)
+                      module-token (candidate-module-token modules)
+                      path-token (candidate-path-token modules paths)
+                      primary-module (first modules)
+                      edn-str (get edn-by-module primary-module)
                       ops (get-in ap [:ok :installed-ops])
                       id (str (java.util.UUID/randomUUID))
                       ops-digest (sha256-hex (pr-str ops))
-                      edn-digest (sha256-hex edn-str)
-                      cand {:id id :module module :verb "edit-transaction"
-                            :edits (count specs) :ops ops :version v0
-                            :path (:path tp) :ops-digest ops-digest
-                            :edn-digest edn-digest
-                            :created (System/currentTimeMillis)}]
+                      edn-digest (candidate-edn-digest edn-by-module)
+                      cand (with-prepared-verification
+                             {:id id :module module-token :modules modules
+                              :primary-module primary-module
+                              :path path-token :paths paths
+                              :verb "edit-transaction"
+                              :edits (count specs) :ops ops :version v0
+                              :checked-modules checked-modules
+                              :checked-module-namespaces
+                              checked-module-namespaces
+                              :edn-by-module edn-by-module
+                              :overlay-modules overlay-modules
+                              :overlay-module-namespaces
+                              overlay-module-namespaces
+                              :overlay-edn-by-module overlay-edn-by-module
+                              :ops-digest ops-digest
+                              :edn-digest edn-digest
+                              :created (System/currentTimeMillis)})]
                   (swap! edit-candidates
                          (fn [cm]
                            (let [cm (assoc cm id cand)]
@@ -4055,9 +4529,18 @@
                                (dissoc cm (:id (apply min-key :created (vals cm))))
                                cm))))
                   {:ok true :protocol edit-protocol-name :candidate id
-                   :module module :edits (count specs) :version v0
-                   :path (:path tp) :edn edn-str
+                   :module module-token :modules modules
+                   :primary-module primary-module
+                   :edits (count specs) :version v0
+                   :path path-token :paths paths :edn edn-str
+                   :checked-modules checked-modules
+                   :checked-module-namespaces checked-module-namespaces
+                   :edn-by-module edn-by-module
                    :ops-digest ops-digest :edn-digest edn-digest
+                   :checked-closure-digest (:checked-closure-digest cand)
+                   :overlay-digest (:overlay-digest cand)
+                   :overlay-module-count (count overlay-modules)
+                   :verification-state :prepared
                    :ops (count ops)
                    :asserts (count (filter #(= :assert (first %)) ops))
                    :retracts (count (filter #(= :retract (first %)) ops))
@@ -4076,6 +4559,434 @@
   (if (contains? req :specs)
     (do-edit-prepare-transaction req)
     (do-edit-prepare-one req)))
+
+(defn- verifier-closure-rows [cand]
+  (mapv (fn [[source namespace source-digest]]
+          {:source source
+           :namespace namespace
+           :source-digest source-digest})
+        (candidate-closure-entries cand)))
+
+(defn- verifier-overlay-rows [cand]
+  (mapv (fn [[source namespace source-digest]]
+          {:source source
+           :namespace namespace
+           :source-digest source-digest
+           :edn (get (:overlay-edn-by-module cand) source)})
+        (candidate-overlay-seal-entries cand)))
+
+(defn- verifier-request [cand]
+  {:schema edit-verifier-request-schema
+   :protocol edit-verifier-protocol
+   :input-digest (candidate-verification-input-digest cand)
+   :candidate (:id cand)
+   :base-version (:version cand)
+   :ops-digest (:ops-digest cand)
+   :edn-digest (:edn-digest cand)
+   :closure-digest (:checked-closure-digest cand)
+   :overlay-digest (:overlay-digest cand)
+   :checked-modules (vec (sort (:checked-modules cand)))
+   :closure (verifier-closure-rows cand)
+   :overlay (verifier-overlay-rows cand)})
+
+(def ^:private verifier-success-receipt-keys
+  #{:schema :ok :input-digest :world-digest
+    :toolchain-closure-digest :modules})
+(def ^:private verifier-failure-receipt-keys
+  #{:schema :ok :input-digest :code :errors})
+(def ^:private verifier-success-module-keys
+  #{:source :namespace :source-digest :interface-digest :emitted-digest})
+
+(defn- sha256-digest? [x]
+  (and (string? x) (boolean (re-matches #"[0-9a-f]{64}" x))))
+
+(defn- verifier-module-rows-valid? [rows closure]
+  (and (vector? rows)
+       (= (count rows) (count closure))
+       (= (count rows) (count (set (map :source rows))))
+       (every? #(and (map? %)
+                     (= verifier-success-module-keys (set (keys %)))
+                     (string? (:source %))
+                     (or (nil? (:namespace %))
+                         (string? (:namespace %)))
+                     (sha256-digest? (:source-digest %))
+                     (sha256-digest? (:interface-digest %))
+                     (sha256-digest? (:emitted-digest %)))
+               rows)
+       (= closure
+          (mapv #(select-keys %
+                              [:source :namespace :source-digest])
+                rows))))
+
+(defn- verifier-success-receipt? [receipt request]
+  (and (map? receipt)
+       (= verifier-success-receipt-keys (set (keys receipt)))
+       (= edit-verifier-receipt-schema (:schema receipt))
+       (true? (:ok receipt))
+       (= (:input-digest request) (:input-digest receipt))
+       (sha256-digest? (:world-digest receipt))
+       (sha256-digest? (:toolchain-closure-digest receipt))
+       (verifier-module-rows-valid? (:modules receipt)
+                                    (:closure request))))
+
+(defn- verifier-failure-receipt? [receipt request]
+  (and (map? receipt)
+       (= verifier-failure-receipt-keys (set (keys receipt)))
+       (= edit-verifier-receipt-schema (:schema receipt))
+       (false? (:ok receipt))
+       (= (:input-digest request) (:input-digest receipt))
+       (string? (:code receipt))
+       (not (str/blank? (:code receipt)))
+       (vector? (:errors receipt))))
+
+(defn- read-verifier-output [stream max-bytes]
+  ;; Drain the stream completely so the child can never block on a full pipe,
+  ;; but retain only the protocol cap. In particular, never truncate stdout and
+  ;; then attempt to parse the prefix as if it were a complete JSON receipt.
+  (with-open [in stream
+              kept (java.io.ByteArrayOutputStream.)]
+    (let [buffer (byte-array 8192)]
+      (loop [total 0]
+        (let [n (.read in buffer)]
+          (if (neg? n)
+            {:oversize? (> total max-bytes)
+             :bytes total
+             :text (String. (.toByteArray kept)
+                            java.nio.charset.StandardCharsets/UTF_8)}
+            (let [room (max 0 (- max-bytes (.size kept)))
+                  retain (min n room)]
+              (when (pos? retain)
+                (.write kept buffer 0 retain))
+              (recur (+ total n)))))))))
+
+(defn- verifier-unavailable [code message]
+  {:outcome :unavailable
+   :code code
+   :message (str message)})
+
+(defn- invoke-edit-verifier [cand]
+  (let [launch edit-verifier-launch
+        request (verifier-request cand)]
+    (if-not (= :ready (:state launch))
+      (verifier-unavailable
+       :verification-unavailable
+       (or (:message launch)
+           "no launch-sealed verifier is configured (set FRAM_EDIT_VERIFIER before coordinator start)"))
+      (try
+        ;; Rehash immediately before and after execution. A mutable command path
+        ;; cannot silently drift away from the content identity captured at boot.
+        (if-not (= (:content-digest launch)
+                   (sha256-file-content (:command launch)))
+          (verifier-unavailable
+           :verification-unavailable
+           "launch-sealed verifier executable changed after coordinator start")
+          (let [command (java.util.ArrayList.
+                         ^java.util.Collection
+                         (into [(:command launch)] (:args launch)))
+                process (.start (ProcessBuilder. ^java.util.List command))
+                stdout-f
+                (future
+                  (read-verifier-output
+                   (.getInputStream process)
+                   edit-verifier-stdout-max-bytes))
+                stderr-f
+                (future
+                  (read-verifier-output
+                   (.getErrorStream process)
+                   edit-verifier-stderr-max-bytes))]
+            (with-open [writer (java.io.OutputStreamWriter.
+                                (.getOutputStream process)
+                                java.nio.charset.StandardCharsets/UTF_8)]
+              (.write writer (json/generate-string request))
+              (.write writer "\n")
+              (.flush writer))
+            (if-not (.waitFor process
+                              (long edit-verifier-timeout-ms)
+                              java.util.concurrent.TimeUnit/MILLISECONDS)
+              (do
+                (.destroyForcibly process)
+                (.waitFor process)
+                (verifier-unavailable
+                 :verification-timeout
+                 (str "verifier exceeded " edit-verifier-timeout-ms "ms")))
+              (let [exit (.exitValue process)
+                    stdout-result
+                    (deref stdout-f 5000
+                           {:oversize? true :bytes :unknown :text ""})
+                    stderr-result
+                    (deref stderr-f 5000
+                           {:oversize? true :bytes :unknown :text ""})
+                    stdout (:text stdout-result)
+                    stderr (:text stderr-result)
+                    post-digest (sha256-file-content (:command launch))
+                    receipt (when (and (not (:oversize? stdout-result))
+                                       (not (str/blank? stdout)))
+                              (try (json/parse-string stdout true)
+                                   (catch Throwable _ nil)))]
+                (cond
+                  (not= (:content-digest launch) post-digest)
+                  (verifier-unavailable
+                   :verification-unavailable
+                   "launch-sealed verifier executable changed during execution")
+
+                  (:oversize? stdout-result)
+                  (verifier-unavailable
+                   :verification-receipt-too-large
+                   (str "verifier stdout exceeded the closed protocol cap of "
+                        edit-verifier-stdout-max-bytes " bytes"
+                        (when (number? (:bytes stdout-result))
+                          (str " (received " (:bytes stdout-result) ")"))))
+
+                  (and (zero? exit)
+                       (verifier-success-receipt? receipt request))
+                  {:outcome :verified :request request :receipt receipt}
+
+                  (and (= 1 exit)
+                       (verifier-failure-receipt? receipt request))
+                  {:outcome :rejected :request request :receipt receipt}
+
+                  :else
+                  (verifier-unavailable
+                   :verification-protocol-error
+                   (str "verifier violated the closed receipt protocol (exit "
+                        exit
+                        (when-not (str/blank? stderr)
+                          (str "; stderr: " stderr))
+                        ")")))))))
+        (catch Throwable t
+          (verifier-unavailable
+           :verification-unavailable
+           (str "verifier launch failed: "
+                (or (.getMessage ^Throwable t)
+                    (.getSimpleName (class t))))))))))
+
+(defn- verification-receipt-digest [receipt]
+  (if (:ok receipt)
+    (sha256-hex
+     (pr-str [(:schema receipt) true (:input-digest receipt)
+              (:world-digest receipt)
+              (:toolchain-closure-digest receipt)
+              (:modules receipt)]))
+    (sha256-hex
+     (pr-str [(:schema receipt) false (:input-digest receipt)
+              (:code receipt) (:errors receipt)]))))
+
+(defn- verified-proof [cand receipt]
+  {:schema edit-verification-proof-schema
+   :candidate (:id cand)
+   :base-version (:version cand)
+   :ops-digest (:ops-digest cand)
+   :edn-digest (:edn-digest cand)
+   :closure-digest (:checked-closure-digest cand)
+   :overlay-digest (:overlay-digest cand)
+   :input-digest (candidate-verification-input-digest cand)
+   :verifier-protocol (:protocol edit-verifier-launch)
+   :verifier-request-schema (:request-schema edit-verifier-launch)
+   :verifier-receipt-schema (:receipt-schema edit-verifier-launch)
+   :verifier-content-digest (:content-digest edit-verifier-launch)
+   :verifier-launch-digest (:launch-digest edit-verifier-launch)
+   :receipt-digest (verification-receipt-digest receipt)
+   :world-digest (:world-digest receipt)
+   :toolchain-closure-digest (:toolchain-closure-digest receipt)
+   :modules (:modules receipt)
+   :checked-modules (mapv :source (:modules receipt))
+   :verified-at-ms (System/currentTimeMillis)})
+
+(defn- verified-proof-valid? [cand]
+  (let [proof (:verification cand)]
+    (and (= :verified (:verification-state cand))
+         (= edit-verification-proof-schema (:schema proof))
+         (= (:id cand) (:candidate proof))
+         (= (:version cand) (:base-version proof))
+         (= (:ops-digest cand) (:ops-digest proof))
+         (= (:edn-digest cand) (:edn-digest proof))
+         (= (candidate-closure-digest cand)
+            (:checked-closure-digest cand)
+            (:closure-digest proof))
+         (= (candidate-overlay-digest cand)
+            (:overlay-digest cand)
+            (:overlay-digest proof))
+         (= (candidate-verification-input-digest cand)
+            (:input-digest proof))
+         (= (:protocol edit-verifier-launch)
+            (:verifier-protocol proof))
+         (= (:request-schema edit-verifier-launch)
+            (:verifier-request-schema proof))
+         (= (:receipt-schema edit-verifier-launch)
+            (:verifier-receipt-schema proof))
+         (= (:content-digest edit-verifier-launch)
+            (:verifier-content-digest proof))
+         (= (:launch-digest edit-verifier-launch)
+            (:verifier-launch-digest proof))
+         (= (vec (sort (:checked-modules cand)))
+            (:checked-modules proof))
+         (verifier-module-rows-valid? (:modules proof)
+                                      (verifier-closure-rows cand))
+         (sha256-digest? (:world-digest proof))
+         (sha256-digest? (:toolchain-closure-digest proof))
+         (= (:receipt-digest proof)
+            (verification-receipt-digest
+             {:schema edit-verifier-receipt-schema
+              :ok true
+              :input-digest (:input-digest proof)
+              :world-digest (:world-digest proof)
+              :toolchain-closure-digest
+              (:toolchain-closure-digest proof)
+              :modules (:modules proof)})))))
+
+(defn- verification-ok-response [cand cached?]
+  {:ok true
+   :verified true
+   :cached (boolean cached?)
+   :code :verified
+   :protocol edit-protocol-name
+   :candidate (:id cand)
+   :version (:version cand)
+   :verification-state :verified
+   :verification (:verification cand)})
+
+(defn- verification-rejected-response [cand cached?]
+  (let [failure (:verification cand)]
+    {:reject [(str "candidate verification failed deterministically: "
+                   (:code failure))]
+     :code :candidate-check-failed
+     :candidate (:id cand)
+     :version (:version cand)
+     :cached (boolean cached?)
+     :retryable false
+     :verification-state :rejected
+     :errors (:errors failure)}))
+
+(defn- stale-verification-response [cand head]
+  {:reject [(str "stale candidate: prepared at version " (:version cand)
+                 " but canonical is " head
+                 " — re-prepare against the current version")]
+   :code :stale-version
+   :candidate (:id cand)
+   :version head})
+
+(defn- begin-edit-verification [req expected-log fenced?]
+  (locking dlock
+    (or (durability-stop-rejection req)
+        (when fenced? (log-fence-rejection expected-log))
+        (let [id (:candidate req)
+              cand (get @edit-candidates id)
+              head (current-seq @co)]
+          (cond
+            (nil? cand)
+            {:reject [(str "unknown candidate " (pr-str id)
+                           " (expired, committed, or never prepared)")]
+             :code :unknown-candidate :version head}
+
+            (not= head (:version cand))
+            (do (swap! edit-candidates dissoc id)
+                (stale-verification-response cand head))
+
+            (= :verified (:verification-state cand))
+            (if (verified-proof-valid? cand)
+              (verification-ok-response cand true)
+              {:reject ["candidate carries an invalid server-side verification proof"]
+               :code :candidate-verification-invalid
+               :candidate id :version head})
+
+            (= :rejected (:verification-state cand))
+            (verification-rejected-response cand true)
+
+            (= :verifying (:verification-state cand))
+            {:reject ["candidate verification is already in progress"]
+             :code :verification-in-progress
+             :candidate id :version head :retryable true}
+
+            (not= :prepared (:verification-state cand))
+            {:reject [(str "candidate has unknown verification state "
+                           (pr-str (:verification-state cand)))]
+             :code :candidate-verification-invalid
+             :candidate id :version head}
+
+            :else
+            (let [attempt (inc (long (or (:verification-attempt cand) 0)))
+                  claimed (assoc cand
+                                 :verification-state :verifying
+                                 :verification-attempt attempt
+                                 :verification nil)]
+              (swap! edit-candidates assoc id claimed)
+              {::verify-run true :candidate claimed :attempt attempt}))))))
+
+(defn- finish-edit-verification [cand attempt outcome]
+  (locking dlock
+    (let [id (:id cand)
+          current (get @edit-candidates id)
+          head (current-seq @co)]
+      (cond
+        (nil? current)
+        {:reject [(str "candidate " id " expired during verification")]
+         :code :unknown-candidate :candidate id :version head}
+
+        (not= head (:version current))
+        (do (swap! edit-candidates dissoc id)
+            (stale-verification-response current head))
+
+        (or (not= :verifying (:verification-state current))
+            (not= attempt (:verification-attempt current)))
+        {:reject ["candidate verification attempt was superseded"]
+         :code :verification-superseded
+         :candidate id :version head :retryable true}
+
+        (= :verified (:outcome outcome))
+        (let [proof (verified-proof current (:receipt outcome))
+              verified (assoc current
+                              :verification-state :verified
+                              :verification proof
+                              :verification-last-error nil)]
+          (swap! edit-candidates assoc id verified)
+          (verification-ok-response verified false))
+
+        (= :rejected (:outcome outcome))
+        (let [receipt (:receipt outcome)
+              failure {:schema edit-verification-proof-schema
+                       :candidate id
+                       :base-version (:version current)
+                       :ops-digest (:ops-digest current)
+                       :edn-digest (:edn-digest current)
+                       :closure-digest (:checked-closure-digest current)
+                       :overlay-digest (:overlay-digest current)
+                       :input-digest (candidate-verification-input-digest current)
+                       :verifier-launch-digest (:launch-digest edit-verifier-launch)
+                       :receipt-digest (verification-receipt-digest receipt)
+                       :code (:code receipt)
+                       :errors (:errors receipt)
+                       :rejected-at-ms (System/currentTimeMillis)}
+              rejected (assoc current
+                              :verification-state :rejected
+                              :verification failure
+                              :verification-last-error nil)]
+          (swap! edit-candidates assoc id rejected)
+          (verification-rejected-response rejected false))
+
+        :else
+        (let [prepared (assoc current
+                              :verification-state :prepared
+                              :verification nil
+                              :verification-last-error
+                              {:code (:code outcome)
+                               :message (:message outcome)
+                               :at-ms (System/currentTimeMillis)})]
+          (swap! edit-candidates assoc id prepared)
+          {:reject [(:message outcome)]
+           :code (:code outcome)
+           :candidate id
+           :version head
+           :retryable true
+           :verification-state :prepared})))))
+
+(defn- do-edit-verify [req expected-log fenced?]
+  (let [begin (begin-edit-verification req expected-log fenced?)]
+    (if-not (::verify-run begin)
+      begin
+      (let [cand (:candidate begin)
+            attempt (:attempt begin)
+            outcome (invoke-edit-verifier cand)]
+        (finish-edit-verification cand attempt outcome)))))
 
 (defn- do-edit-commit [req expected-log fenced?]
   (locking dlock
@@ -4109,15 +5020,40 @@
           (do (swap! edit-candidates dissoc id)
               (fail :stale-version "stale candidate: prepared at version " (:version cand)
                     " but canonical is " head " — re-prepare against the current version"))
+          (= :prepared (:verification-state cand))
+          (fail :candidate-unverified
+                "candidate is prepared but not verified — call :edit-verify before :edit-commit")
+          (= :verifying (:verification-state cand))
+          (fail :verification-in-progress
+                "candidate verification is still in progress")
+          (= :rejected (:verification-state cand))
+          (fail :candidate-check-failed
+                "candidate verification failed deterministically; this candidate cannot commit")
+          (not (verified-proof-valid? cand))
+          (fail :candidate-verification-invalid
+                "candidate does not carry a valid coordinator-owned verification proof")
           :else
-          (let [tp (tracked-path-of (:store @co) (:module cand))]
+          (let [modules (vec (or (:modules cand)
+                                 (receipt-modules cand)))
+                sealed-paths (or (:paths cand)
+                                 (receipt-paths cand modules))
+                fresh-paths (tracked-paths-of (:store @co) modules)
+                unconfined (when (string? (:src-root req))
+                             (some (fn [[module path]]
+                                     (when-not (str/starts-with?
+                                                (str path)
+                                                (str (:src-root req) "/"))
+                                       [module path]))
+                                   sealed-paths))]
             (cond
-              (:reject tp) (assoc tp :version head)
-              (not= (:path tp) (:path cand))
-              (fail :path-mismatch "tracked path moved since prepare: " (pr-str (:path tp)) " != sealed " (pr-str (:path cand)))
-              (and (string? (:src-root req))
-                   (not (str/starts-with? (str (:path cand)) (str (:src-root req) "/"))))
-              (fail :path-unconfined "tracked path " (:path cand) " lies OUTSIDE the declared source root " (:src-root req))
+              (:reject fresh-paths) (assoc fresh-paths :version head)
+              (not= fresh-paths sealed-paths)
+              (fail :path-mismatch "tracked paths moved since prepare: "
+                    (pr-str fresh-paths) " != sealed " (pr-str sealed-paths))
+              unconfined
+              (fail :path-unconfined "tracked path " (second unconfined)
+                    " for module " (first unconfined)
+                    " lies OUTSIDE the declared source root " (:src-root req))
               :else
               (let [snap @(:store @co)
                     co3 {:store (atom snap) :log nil :lock (Object.)}
@@ -5017,13 +5953,14 @@
 ;; (EXP-025 p1c ring-01: 10 dead read-def lookups). This makes every top-level
 ;; form addressable and each :name resolvable back to its enclosing form's text.
 (defn- addr-name-leaf [fnode]                 ; def/type/multi NAME leaf, ^meta peeled
-  (let [nl0 (resolve/unwrap-meta (second (resolve/ordered-children (resolve/unwrap-def fnode))))]
-    (if (= "list" (resolve/kind-of nl0)) (first (resolve/ordered-children nl0)) nl0)))
+  (resolve/type-name-leaf (resolve/unwrap-def fnode)))
 (defn- target-str [node]                      ; a type/protocol target as a stable string
   (or (resolve/sym-val node) (resolve/node->str node)))
 (defn- proto-methods [fnode]                  ; defprotocol/definterface member names
-  (keep (fn [m] (when (= "list" (resolve/kind-of m))
-                  (resolve/sym-val (first (resolve/ordered-children m)))))
+  (keep (fn [m]
+          (let [outer (resolve/unwrap-meta m)]
+            (when (= "list" (resolve/kind-of outer))
+              (resolve/sym-val (resolve/logical-name-leaf m)))))
         (drop 2 (resolve/ordered-children fnode))))
 (defn- impl-list? [node]                       ; a `(method [params] body)` impl — NOT a target
   (and (= "list" (resolve/kind-of node))
@@ -5039,7 +5976,7 @@
              (let [h   (str (resolve/head-sym fnode))
                    sig #(try (sig-of-form (edn/read-string (resolve/node->str fnode))) (catch Throwable _ nil))]
                (cond
-                 (resolve/VALUE-DEFS h)
+                 (resolve/TOPLEVEL-VALUE-DEFS h)
                  (when-let [nm (resolve/sym-val (addr-name-leaf fnode))]
                    [{:name nm :head h :fnode fnode :sig (sig)}])
                  ;; defprotocol/definterface: the protocol name AND each member var
@@ -5311,12 +6248,23 @@
     {:violations (all-violations (ck/build-index (vec facts)))}))
 
 (defn- request-dispatch [req]
-  (wire/request-dispatch
-   req
-   {:durability-stop? (boolean (durability-stop-rejection req))}
-   {:reload-checked? *reload-checked*
-    :reload-deferred-ops reload-deferred-ops
-    :reload-mutation-ops reload-mutation-ops}))
+  ;; Temporary local registration while the wire table remains a separately
+  ;; generated Beagle artifact. Keeping the descriptor identical to that table's
+  ;; shape preserves validation and strict-fence behavior without editing
+  ;; generated output by hand.
+  ;; Match only a direct frame here. `effective-request-op` intentionally
+  ;; unwraps :for-log; using it would misclassify the OUTER envelope as an
+  ;; :edit-verify request and then (correctly but irrelevantly) report that the
+  ;; outer map has no :candidate.
+  (if (= :edit-verify (:op req))
+    {:route :direct :handler :edit-verify
+     :required [:candidate] :response :edit}
+    (wire/request-dispatch
+     req
+     {:durability-stop? (boolean (durability-stop-rejection req))}
+     {:reload-checked? *reload-checked*
+      :reload-deferred-ops reload-deferred-ops
+      :reload-mutation-ops reload-mutation-ops})))
 
 (def ^:private canonical-mutation-handlers
   ;; Most fact writes identify themselves through :response :mutation/:lease in
@@ -5415,12 +6363,7 @@
     (= :for-log route)
     (let [inner (:request req)
           expected (:expected-log req)
-          inner-decision (wire/request-dispatch
-                          inner
-                          {:durability-stop? false}
-                          {:reload-checked? true
-                           :reload-deferred-ops reload-deferred-ops
-                           :reload-mutation-ops reload-mutation-ops})
+          inner-decision (request-dispatch inner)
           inner-handler (:handler inner-decision)]
       (cond
         (not (map? inner))
@@ -5459,7 +6402,7 @@
           fence-reject
           (edit-min-response inner expected true))
 
-        ;; graph-edit-candidate-v1: prepare is LOCK-FREE compute (like :edit-min's
+        ;; graph-edit-candidate-v2: prepare is LOCK-FREE compute (like :edit-min's
         ;; compute) behind a cheap fence preflight; it writes NOTHING canonical, so
         ;; no fence recheck is needed at its end. Commit takes dlock itself and
         ;; rechecks the fence inside it (do-edit-commit).
@@ -5468,6 +6411,9 @@
                                 (log-fence-rejection expected))]
           fence-reject
           (do-edit-prepare inner))
+
+        (= :edit-verify inner-handler)
+        (do-edit-verify inner expected true)
 
         (= :edit-commit inner-handler)
         (edit-commit-response inner expected true)
@@ -5580,9 +6526,10 @@
        :message "whole-tree :check not wired (advisory phase; set FRAM_DEFCHECK=1 + out/defcheck_gate.clj)"
        :version (current-seq @co)})
     (= :edit-min handler) (edit-min-response req nil false)
-    ;; graph-edit-candidate-v1 unfenced arms (parity with :edit-min — a strict-fence
+    ;; graph-edit-candidate-v2 unfenced arms (parity with :edit-min — a strict-fence
     ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
     (= :edit-prepare handler) (do-edit-prepare req)
+    (= :edit-verify handler) (do-edit-verify req nil false)
     (= :edit-commit handler) (edit-commit-response req nil false)
   :else
   (do
@@ -5676,10 +6623,18 @@
               (release-lease! @co (:holder req) (:res req) (:epoch req))
               (release-lease! @co (:holder req) (:res req))))
       :fence-ok      {:fence-ok (fence-ok? @co (:res req) (:holder req) (:epoch req))}
-      ;; graph-edit-candidate-v1 capability handshake — the restricted MCP profile
+      ;; graph-edit-candidate-v2 capability handshake — the restricted MCP profile
       ;; refuses to start against a daemon that cannot answer this (legacy daemons
       ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
       :edit-protocol {:ok true :protocol edit-protocol-name
+                      :candidate-states
+                      (frequencies (map :verification-state
+                                        (vals @edit-candidates)))
+                      :verifier
+                      (select-keys edit-verifier-launch
+                                   [:state :code :message :protocol
+                                    :request-schema :receipt-schema
+                                    :command :content-digest :launch-digest])
                       :durability @edit-durability-state
                       :last-edit-outcome @last-edit-outcome
                       :version (current-seq @co)}
@@ -8696,7 +9651,12 @@
 
 (defn- snapshot-if-dirty! [why]
   (try
-    (when (and (not (standby?))
+    ;; FRAM_SNAPSHOT_BOOT=0 is the whole snapshot-subsystem escape hatch, not
+    ;; merely a read-path preference.  In particular, a test or operator that
+    ;; disables snapshots must not get six @snapshot:* facts appended by the
+    ;; shutdown hook after an otherwise quiescent run.
+    (when (and @snapshot-boot-enabled?
+               (not (standby?))
                @flat-log
                (> (long (current-seq @co)) (long @last-snapshot-seq)))
       (let [r (write-snapshot! @co @flat-log)]
@@ -9332,7 +10292,7 @@
   (authority/seal-authority-descriptor!
    (assoc snapshot
           "descriptorVersion" "fram.graph-edit-authority/v1"
-          "candidateProtocol" "graph-edit-candidate-v1"
+          "candidateProtocol" edit-protocol-name
           "coordinator"
           {"instanceId" instance
            "endpoint" endpoint

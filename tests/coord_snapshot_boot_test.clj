@@ -74,6 +74,16 @@
   (chk "flag OFF: whole-log fold" (= :fold (boot-mode)))
   (chk "flag OFF: reason says disabled" (str/includes? (boot-reason) "disabled"))
   (chk "flag OFF: state still correct" (= (live-name-triples @co) truth))
+  (let [log-before (slurp LOG)
+        sidecar-before (slurp (sidecar-path LOG))]
+    ;; The escape hatch covers automatic writes as well as checkpoint reads.
+    ;; The always-installed graceful-drain hook calls this exact helper.
+    (reset! last-snapshot-seq -1)
+    (snapshot-if-dirty! "disabled-probe")
+    (chk "flag OFF: automatic checkpoint leaves the canonical log byte-identical"
+         (= log-before (slurp LOG)))
+    (chk "flag OFF: automatic checkpoint leaves the sidecar byte-identical"
+         (= sidecar-before (slurp (sidecar-path LOG)))))
   (reset! snapshot-boot-enabled? true)
 
   ;; --- (3) fold-version mismatch: checkpoint from OLDER fold logic self-invalidates ---

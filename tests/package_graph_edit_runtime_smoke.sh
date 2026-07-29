@@ -54,6 +54,12 @@ trap cleanup EXIT INT TERM
                    (= expected-system (:system m))
                    (= #{"babashka" "beagle" "fram" "jdk" "racket"}
                       (set (map :role roots)))
+                   (clojure.string/starts-with?
+                    (str (get-in m [:executables :editVerifier]))
+                    "/nix/store/")
+                   (clojure.string/starts-with?
+                    (str (get-in m [:helpers :factsCheckWorld]))
+                    "/nix/store/")
                    (every? store? roots))
       (binding [*out* *err*] (println (pr-str m)))
       (System/exit 1)))' "$manifest" "$expected_system"
@@ -95,6 +101,15 @@ for name, rhs in expected_assignments.items():
     line = f"  {name}={rhs} \\"
     if line not in final_boundary:
         raise SystemExit(f"graph-edit runtime smoke: final env-i lost exact {name} bridge")
+sealed_verifier_assignments = {
+    "FRAM_EDIT_VERIFIER": '"$FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER"',
+    "FRAM_EDIT_VERIFIER_RACKET": '"$FRAM_GRAPH_EDIT_SEALED_RACKET"',
+    "FRAM_EDIT_VERIFIER_WORLD_CHECK": '"$FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK"',
+}
+for name, rhs in sealed_verifier_assignments.items():
+    line = f"  {name}={rhs} \\"
+    if line not in final_boundary:
+        raise SystemExit(f"graph-edit runtime smoke: final env-i lost sealed {name}")
 if "NORTH_FRAM_" in final_boundary:
     raise SystemExit("graph-edit runtime smoke: NORTH_FRAM_* crossed final env-i")
 
@@ -175,6 +190,10 @@ common_hostile=(
   FRAM_CHECKOUT_ROOT="$evil/checkout"
   FRAM_CODE_LOG="$evil/code.log"
   FRAM_CODE_PORT=1
+  FRAM_EDIT_VERIFIER="$evil/bin/verifier"
+  FRAM_EDIT_VERIFIER_ARGS='["hostile"]'
+  FRAM_EDIT_VERIFIER_RACKET="$evil/bin/racket"
+  FRAM_EDIT_VERIFIER_WORLD_CHECK="$evil/check-world.rkt"
   FRAM_HOME="$evil/fram"
   FRAM_LOG="$evil/facts.log"
   FRAM_MCP_PROFILE=full

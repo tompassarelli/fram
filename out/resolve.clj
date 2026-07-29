@@ -152,7 +152,8 @@
 ;; --- binding extraction -----------------------------------------------------
 (def PARAM-FORMS rc/PARAM-FORMS)   ; have a [param] vector
 (def DEF-FORMS   rc/DEF-FORMS)    ; module value binding: (def name :- T val)
-(def VALUE-DEFS  rc/VALUE-DEFS) ; everything that binds a value at module scope
+(def VALUE-DEFS  rc/VALUE-DEFS)    ; value-shaped forms, including nested fn/fn*
+(def TOPLEVEL-VALUE-DEFS rc/TOPLEVEL-VALUE-DEFS) ; actual module bindings
 (def TYPE-DEFS   rc/TYPE-DEFS)
 ;; EFFECT-DEFS — top-level forms whose effect is a REGISTRATION (a multimethod method,
 ;; a defmulti dispatch table, a protocol extension) rather than a fresh value binding.
@@ -263,6 +264,7 @@
 (defn merge-import-opts [acc modn kids] (rm/merge-import-opts ctx *view* acc modn (vec kids)))
 (defn parse-require [src] (rm/parse-require ctx *view* (rco/file-entities file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
 (defn module-exports [src] (rm/module-exports ctx *view* (rco/file-entities file->ents src))) ; {exported-name -> binding-node}
+(defn logical-name-leaf [node] (rm/logical-name-leaf ctx *view* node))
 (defn type-name-leaf [d] (rm/type-name-leaf ctx *view* d))                   ; a type def's name-leaf, (Name Params) head unwrapped
 (defn module-types [src] (rm/module-types ctx *view* (rco/file-entities file->ents src)))     ; {type-name -> name-leaf}
 (defn module-accessors [src] (rm/module-accessors ctx *view* (rco/file-entities file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
