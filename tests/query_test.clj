@@ -20,6 +20,38 @@
    (k/->Fact "@c" "kind" "hub")
    (k/->Fact "@a" "title" "Alpha")])
 
+;; Predicate reflection is additive. A fact predicate joins to its stable
+;; identity and effective metadata, then the same identity enumerates aliases.
+(let [rfs [(k/->Fact "@a" "title" "Alpha")
+           (k/->Fact "@title" "predicate_name" "title")
+           (k/->Fact "@title" "predicate_alias" ":title")
+           (k/->Fact "@title" "cardinality" "single")
+           (k/->Fact "@title" "value_kind" "literal")]
+      r (q/run rfs
+          {:find "predicate-meta"
+           :rules [{:head {:rel "predicate-meta"
+                           :args [{:var "p"} {:var "pid"} {:var "alias"}
+                                  {:var "canonical"} {:var "card"} {:var "kind"}]}
+                    :body [{:rel "fact"
+                            :args [{:var "subject"} {:var "p"} {:var "value"}]}
+                           {:rel "predicate"
+                            :args [{:var "pid"} {:var "p"} {:var "canonical"}
+                                   {:var "card"} {:var "kind"}]}
+                           {:rel "predicate"
+                            :args [{:var "pid"} {:var "alias"} {:var "canonical"}
+                                   {:var "card"} {:var "kind"}]}]}]})
+      raw (get (q/facts->edb rfs) "fact")]
+  (chk "fact predicate joins to identity/name/alias/cardinality/value kind"
+       (contains? (set (:ok r))
+                  ["title" "@title" ":title" "title" "single" "literal"]))
+  (chk "predicate reflection leaves raw fact tuples unchanged"
+       (= raw (set (map (fn [c] [(:l c) (:p c) (:r c)]) rfs)))))
+
+(let [legacy [(k/->Fact "@x" "nickname" "X")]
+      reflected (get (q/facts->edb legacy) "predicate")]
+  (chk "legacy no-registry predicate gets its implicit identity"
+       (contains? reflected ["@nickname" "nickname" "nickname" "multi" "literal"])))
+
 ;; (1) positive 2-literal join: hubdep(X,H) :- triple(X,depends_on,H), triple(H,kind,hub)
 (let [r (q/run facts
           {:find "hubdep"

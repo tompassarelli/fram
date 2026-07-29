@@ -17,12 +17,40 @@
   :else nil)]
   (if (nil? code) nil (throw (ex-info (str "query evaluation stopped: " (name code)) {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps (:max-steps *query-control*) :timeout-ms (:timeout-ms *query-control*)}))))))
 
+(def base-rel-arities {"fact" 3 "fact-id" 4 "predicate" 5})
+
+(def base-relations ["fact" "fact-id" "predicate"])
+
+(defn- ^Boolean base-rel? [^String rel]
+  (contains? base-rel-arities rel))
+
+(def predicate-properties #{"predicate_name" "predicate_alias" "cardinality" "value_kind" "acyclic"})
+
+(defn- add-predicate-spelling [spellings ^String spelling ^String identity]
+  (if (contains? spellings spelling) spellings (assoc spellings spelling identity)))
+
+(defn- predicate-spellings [facts reg]
+  (reduce (fn [spellings c] (let [pname (k/predicate-name reg (:p c))
+   with-p (add-predicate-spelling spellings pname (k/predicate-id reg (:p c)))]
+  (if (contains? predicate-properties pname) (let [identity (k/predicate-id reg (:l c))
+   canonical (k/predicate-name reg identity)]
+  (add-predicate-spelling with-p canonical identity)) with-p))) (:by-name reg) facts))
+
+(defn- predicate-reflection [facts]
+  (let [reg (k/predicate-registry facts)
+   spellings (predicate-spellings facts reg)]
+  (reduce (fn [rows entry] (let [_ (query-check)
+   spelling (nth entry 0)
+   identity (nth entry 1)
+   canonical (k/predicate-name reg identity)]
+  (conj rows [identity spelling canonical (k/cardinality-of facts {} identity) (k/value-kind-of facts {} identity)]))) #{} spellings)))
+
 (defn facts->edb [facts]
   (loop [cs facts
    i 0
    fact #{}
    fact-id #{}]
-  (if (empty? cs) {"fact" fact "fact-id" fact-id} (let [_ (query-check)
+  (if (empty? cs) {"fact" fact "fact-id" fact-id "predicate" (predicate-reflection facts)} (let [_ (query-check)
    c (first cs)]
   (recur (rest cs) (+ i 1) (conj fact [(:l c) (:p c) (:r c)]) (conj fact-id [(str "c" i) (:l c) (:p c) (:r c)]))))))
 
@@ -101,7 +129,7 @@
   (if (>= i (count strata)) probs (let [stratum (nth strata i)
    this-rels (stratum-head-rels stratum)
    avail (reduce (fn [a rel] (conj a rel)) lower (vec this-rels))
-   bad (filterv (fn [rel] (and (contains? all-derived rel) (not (= rel "fact")) (not (= rel "fact-id")) (not (contains? avail rel)))) (stratum-positive-rels stratum))
+   bad (filterv (fn [rel] (and (contains? all-derived rel) (not (base-rel? rel)) (not (contains? avail rel)))) (stratum-positive-rels stratum))
    probs2 (vec (concat probs (mapv (fn [rel] (str "stratum " i ": positively references '" rel "' which is defined only in a LATER stratum — it would evaluate against an empty relation (reorder so '" rel "' is defined first)")) bad)))]
   (recur (+ i 1) avail probs2)))))
 
@@ -168,7 +196,7 @@
    agg (:agg find)
    e-rel (cond
   (not (string? rel)) [":find :rel must be a string relation name"]
-  (or (= rel "fact") (= rel "fact-id")) [":find :rel cannot be a base relation (fact/fact-id) — aggregate over a :head rel you derive"]
+  (and (string? rel) (base-rel? rel)) [":find :rel cannot be a base relation (fact/fact-id/predicate) — aggregate over a :head rel you derive"]
   (not (contains? derived rel)) [(str ":find :rel '" (str rel) "' is not a derived head relation")]
   :else [])
    arity (get arities (if (string? rel) rel ""))
@@ -210,13 +238,12 @@
    args (:args litt)
    e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
    e2 (if (vector? args) [] ["literal :args must be a vector"])
-   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use fact, fact-id (alias: triple), or a :head rel you define")] [])
-   e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3))) ["relation fact takes 3 args (l p r)"] [])
-   e5 (if (and (= rel "fact-id") (vector? args) (not (= (count args) 4))) ["relation fact-id takes 4 args (cid l p r)"] [])
+   e3 (if (and (string? rel) (not (contains? known rel))) [(str "unknown relation '" rel "' — use fact, fact-id, predicate (alias: triple), or a :head rel you define")] [])
+   e4 (if (and (string? rel) (base-rel? rel) (vector? args) (not (= (count args) (get base-rel-arities rel)))) [(str "relation " rel " takes " (get base-rel-arities rel) " args")] [])
    en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false))) ["literal :neg must be true or false"] [])
    e6 (if (vector? args) (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad term " (str t) " — use {:var \"n\"} or a constant")))) [] args) [])
    e7 (if (and (= (:neg litt) true) (vector? args)) (reduce (fn [acc v] (if (contains? bound v) acc (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal")))) [] (vec (vars-of args))) [])]
-  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))))
+  (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat en (concat e6 e7))))))))))))
 
 (defn- body-errors [body known]
   (loop [ls body
@@ -232,7 +259,7 @@
    body (:body r)
    head-ok (and (map? head) (string? (:rel head)) (vector? (:args head)))
    eh (if head-ok [] ["rule :head must be {:rel <string> :args [terms]}"])
-   ehrel (if (and head-ok (or (= (:rel head) "fact") (= (:rel head) "fact-id"))) ["rule :head :rel cannot be a base relation (fact/fact-id)"] [])
+   ehrel (if (and head-ok (base-rel? (:rel head))) ["rule :head :rel cannot be a base relation (fact/fact-id/predicate)"] [])
    ehargs (if head-ok (reduce (fn [acc t] (if (term-ok? t) acc (conj acc (str "bad head term " (str t) " — use {:var \"n\"} or a constant")))) [] (:args head)) [])
    eb (if (vector? body) (body-errors body known) ["rule :body must be a vector of literals"])
    ehsafe (if (and head-ok (vector? body)) (let [bound (positive-body-vars body)]
@@ -244,7 +271,7 @@
   (if (not (map? q)) ["query must be a map: {:find <rel> :rules [<rule>...]} (or :strata [[...]...])"] (if (and (contains? q :rules) (not (vector? (:rules q)))) [":rules must be a vector of rules"] (if (and (contains? q :strata) (not (and (vector? (:strata q)) (all-vectors? (:strata q))))) [":strata must be a vector of strata, each a vector of rules"] (let [rules (all-rules q)
    strata (strata-of q)
    derived (head-rels rules)
-   known (conj (conj derived "fact") "fact-id")
+   known (reduce (fn [rels rel] (conj rels rel)) derived base-relations)
    find (:find q)
    ef (cond
   (string? find) (if (contains? known find) [] [(str "unknown :find relation '" find "' — name a :head rel you define")])
@@ -441,7 +468,9 @@
    agg (vec (:agg find))]
   (if (empty? rel) {:ok []} (let [nerrs (numeric-errors rel rel-name agg)]
   (if (not (empty? nerrs)) {:error nerrs} (let [groups (group-rel rel group)
-   rows (mapv (fn [gkey] (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))
+   rows (reduce (fn [acc entry] (let [gkey (nth entry 0)
+   tuples (nth entry 1)]
+  (conj acc (agg-row gkey tuples agg)))) [] groups)
    having (:having find)
    survivors (if (and (vector? having) (not (empty? having))) (filterv (fn [row] (having-eval row (count group) having)) rows) rows)
    ns (count survivors)]

@@ -9,8 +9,9 @@
   VALIDATION at the boundary: the caller cannot parse-fail (it's data, not text),
   cannot reference an undefined relation, cannot ground an unbound head variable,
   cannot shadow a base relation, and unstratified negation is rejected — all BEFORE
-  anything runs. Runs over the current fact fold's EDB (fact/fact-id) — no store
-  store, no name->id, no new dependency. The reserve surface for ad-hoc recursion;
+  anything runs. Runs over the current fact fold's EDB: fact/fact-id preserve the
+  raw triples, while predicate exposes the folded predicate registry and effective
+  metadata. The reserve surface for ad-hoc recursion;
   point/neighbor lookups are tools (fram.tools). Caveat: evaluation is naive (no
   semi-naive); a deeply recursive query can be expensive — the MCP path bounds it
   with a time budget; the CLI runs it unbounded.
@@ -49,15 +50,64 @@
                          :steps steps :max-steps (:max-steps *query-control*)
                          :timeout-ms (:timeout-ms *query-control*)}))))))
 
-;; --- EDB: project the current fact fold into fact/fact-id tuple-sets ---------
+;; --- EDB: raw facts plus predicate reflection -------------------------------
 ;; Strings throughout — the flat fold's l/p/r are already strings, so a caller's
 ;; constant predicate/entity names match with no resolution step.
 ;; Base relations: fact(l,p,r) and fact-id(cid,l,p,r). The pre-rename names
 ;; triple is accepted as an alias for fact (canon-rel below), so old queries still run.
+;; predicate(pid,spelling,canonical,cardinality,value-kind) is additive: one row
+;; per canonical spelling/alias. Legacy predicates without registry facts receive
+;; their implicit @<name> identity; fact/fact-id remain byte-for-byte projections.
+(def base-rel-arities :- (Map String Int)
+  {"fact" 3 "fact-id" 4 "predicate" 5})
+(def base-relations :- (Vec String) ["fact" "fact-id" "predicate"])
+
+(defn- base-rel? [rel :- String] :- Bool
+  (contains? base-rel-arities rel))
+
+(def predicate-properties :- (Set String)
+  #{"predicate_name" "predicate_alias" "cardinality" "value_kind" "acyclic"})
+
+(defn- add-predicate-spelling
+  [spellings :- (Map String String) spelling :- String identity :- String] :- (Map String String)
+  (if (contains? spellings spelling)
+    spellings
+    (assoc spellings spelling identity)))
+
+(defn- predicate-spellings
+  [facts :- (Vec k/Fact) reg :- k/PredicateRegistry] :- (Map String String)
+  (reduce
+   (fn [spellings :- (Map String String) c :- k/Fact] :- (Map String String)
+     (let [pname (k/predicate-name reg (:p c))
+           with-p (add-predicate-spelling spellings pname (k/predicate-id reg (:p c)))]
+       (if (contains? predicate-properties pname)
+         (let [identity (k/predicate-id reg (:l c))
+               canonical (k/predicate-name reg identity)]
+           (add-predicate-spelling with-p canonical identity))
+         with-p)))
+   (:by-name reg)
+   facts))
+
+(defn- predicate-reflection [facts :- (Vec k/Fact)] :- (Set (Vec String))
+  (let [reg (k/predicate-registry facts)
+        spellings (predicate-spellings facts reg)]
+    (reduce
+     (fn [rows :- (Set (Vec String)) entry :- (Vec Any)] :- (Set (Vec String))
+       (let [_ (query-check)
+             spelling :- String (nth entry 0)
+             identity :- String (nth entry 1)
+             canonical (k/predicate-name reg identity)]
+         (conj rows
+               [identity spelling canonical
+                (k/cardinality-of facts {} identity)
+                (k/value-kind-of facts {} identity)])))
+     #{}
+     spellings)))
+
 (defn facts->edb [facts :- (Vec k/Fact)] :- (Map String (Set (Vec String)))
   (loop [cs facts i 0 fact :- (Set (Vec String)) #{} fact-id :- (Set (Vec String)) #{}]
     (if (empty? cs)
-      {"fact" fact "fact-id" fact-id}
+      {"fact" fact "fact-id" fact-id "predicate" (predicate-reflection facts)}
       (let [_ (query-check)
             c (first cs)]
         (recur (rest cs) (+ i 1)
@@ -190,8 +240,7 @@
             avail (reduce (fn [a :- (Set String) rel :- String] :- (Set String) (conj a rel)) lower (vec this-rels))
             bad (filterv (fn [rel :- String] :- Bool
                            (and (contains? all-derived rel)            ; a relation the program derives
-                                (not (= rel "fact"))
-                                (not (= rel "fact-id"))
+                                (not (base-rel? rel))
                                 (not (contains? avail rel))))           ; but not available yet (defined only later)
                          (stratum-positive-rels stratum))
             probs2 (vec (concat probs
@@ -321,8 +370,8 @@
   (let [rel (:rel find) group (:group find) agg (:agg find)
         e-rel (cond
                 [(not (string? rel)) [":find :rel must be a string relation name"]]
-                [(or (= rel "fact") (= rel "fact-id"))
-                 [":find :rel cannot be a base relation (fact/fact-id) — aggregate over a :head rel you derive"]]
+                [(and (string? rel) (base-rel? rel))
+                 [":find :rel cannot be a base relation (fact/fact-id/predicate) — aggregate over a :head rel you derive"]]
                 [(not (contains? derived rel))
                  [(str ":find :rel '" (str rel) "' is not a derived head relation")]]
                 [:else []])
@@ -415,12 +464,12 @@
           e1 (if (string? rel) [] [(str "literal :rel must be a string, got " (str rel))])
           e2 (if (vector? args) [] ["literal :args must be a vector"])
           e3 (if (and (string? rel) (not (contains? known rel)))
-               [(str "unknown relation '" rel "' — use fact, fact-id (alias: triple), or a :head rel you define")]
+               [(str "unknown relation '" rel "' — use fact, fact-id, predicate (alias: triple), or a :head rel you define")]
                [])
-          e4 (if (and (= rel "fact") (vector? args) (not (= (count args) 3)))
-               ["relation fact takes 3 args (l p r)"] [])
-          e5 (if (and (= rel "fact-id") (vector? args) (not (= (count args) 4)))
-               ["relation fact-id takes 4 args (cid l p r)"] [])
+          e4 (if (and (string? rel) (base-rel? rel) (vector? args)
+                      (not (= (count args) (get base-rel-arities rel))))
+               [(str "relation " rel " takes " (get base-rel-arities rel) " args")]
+               [])
           en (if (and (contains? litt :neg) (not (= (:neg litt) true)) (not (= (:neg litt) false)))
                ["literal :neg must be true or false"] [])
           e6 (if (vector? args)
@@ -435,7 +484,7 @@
                            (conj acc (str "negated var '" (str v) "' must be bound by an earlier positive literal"))))
                        [] (vec (vars-of args)))
                [])]
-      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat en (concat e6 e7)))))))))))))
+      (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat en (concat e6 e7))))))))))))
 
 (defn- body-errors [body :- (Vec Any) known :- (Set String)] :- (Vec String)
   (loop [ls body bound :- (Set String) #{} errs :- (Vec String) []]
@@ -454,8 +503,8 @@
           head-ok (and (map? head) (string? (:rel head)) (vector? (:args head)))
           eh (if head-ok [] ["rule :head must be {:rel <string> :args [terms]}"])
           ;; head :rel cannot shadow a base relation (would inject fabricated EDB facts)
-          ehrel (if (and head-ok (or (= (:rel head) "fact") (= (:rel head) "fact-id")))
-                  ["rule :head :rel cannot be a base relation (fact/fact-id)"] [])
+          ehrel (if (and head-ok (base-rel? (:rel head)))
+                  ["rule :head :rel cannot be a base relation (fact/fact-id/predicate)"] [])
           ;; head args must be valid terms (same rigor as the body)
           ehargs (if head-ok
                    (reduce (fn [acc :- (Vec String) t :- Any] :- (Vec String)
@@ -490,7 +539,10 @@
         (let [rules (all-rules q)
               strata (strata-of q)
               derived (head-rels rules)
-              known (conj (conj derived "fact") "fact-id")
+              known (reduce (fn [rels :- (Set String) rel :- String] :- (Set String)
+                              (conj rels rel))
+                            derived
+                            base-relations)
               find (:find q)
               ef (cond
                    [(string? find)
@@ -802,7 +854,13 @@
           {:error nerrs}
           (let [groups (group-rel rel group)
                 rows :- (Vec (Vec Any))
-                (mapv (fn [gkey :- (Vec String)] :- (Vec Any) (agg-row gkey (get groups gkey []) agg)) (vec (keys groups)))
+                (reduce
+                 (fn [acc :- (Vec (Vec Any)) entry :- (Vec Any)] :- (Vec (Vec Any))
+                   (let [gkey :- (Vec String) (nth entry 0)
+                         tuples :- (Vec (Vec String)) (nth entry 1)]
+                     (conj acc (agg-row gkey tuples agg))))
+                 []
+                 groups)
                 having :- Any (:having find)
                 survivors :- (Vec (Vec Any))
                 (if (and (vector? having) (not (empty? having)))

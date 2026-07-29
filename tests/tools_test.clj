@@ -36,7 +36,7 @@
           (not (has-tool? "threads")) (not (has-tool? "dependents-of"))))
 (chk "catalog has no duplicate tool names" (= (count (map :name cat)) (count (set (map :name cat)))))
 
-;; (2) tell/retract -> coordinator {:write} intent, refs @-normalized by value-driven rule
+;; (2) tell/retract -> coordinator {:write} intent, refs @-normalized by value_kind
 (chk "tell (literal pred) -> assert intent, value verbatim"
      (= (:write (call "tell" {:subject "x" :predicate "owner" :object "work"}))
         {:op "assert" :l "@x" :p "owner" :r "work"}))
@@ -50,12 +50,39 @@
 (chk "untell ALIAS -> same retract intent as retract"
      (= (:write (call "untell" {:subject "x" :predicate "depends_on" :object "@y"}))
         {:op "retract" :l "@x" :p "depends_on" :r "@y"}))
-;; mixed-ref predicate: a literal write value is stored VERBATIM (no spurious @-prefix).
+;; An undeclared predicate defaults to literal even when prior values happen to be refs.
 (let [mc [(k/->Fact "@x" "tag" "@refnode") (k/->Fact "@x" "tag" "plainword")]
       mi (k/build-index mc) mcat (t/catalog mc)]
-  (chk "mixed-ref retract keeps literal verbatim (no spurious @)"
+  (chk "undeclared predicate keeps literal verbatim (no value-shape inference)"
        (= (:write (t/call mc mi mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))
           {:op "retract" :l "@x" :p "tag" :r "plainword"})))
+
+;; A declaration governs the FIRST value; aliases normalize to the canonical
+;; spelling before the write intent reaches the coordinator.
+(let [df (vec (concat facts
+                      [(k/->Fact "@friend" "predicate_name" "friend")
+                       (k/->Fact "@friend" "predicate_alias" ":friend")
+                       (k/->Fact "@friend" "value_kind" "ref")]))
+      di (k/build-index df)
+      dcat (t/catalog df)]
+  (chk "declared reference predicate normalizes its first bare write"
+       (= (:write (t/call df di dcat "tell"
+                          {:subject "x" :predicate ":friend" :object "z"}))
+          {:op "assert" :l "@x" :p "friend" :r "@z"}))
+  (chk "shared predicate normalization resolves aliases for CLI callers"
+       (= "friend" (t/canonical-predicate df ":friend"))))
+
+;; An explicit negative declaration wins over the transitional depends_on
+;; fallback, so a literal that happens to look like an id stays literal.
+(let [lf (vec (concat facts
+                      [(k/->Fact "@depends_on" "predicate_name" "depends_on")
+                       (k/->Fact "@depends_on" "value_kind" "literal")]))
+      li (k/build-index lf)
+      lcat (t/catalog lf)]
+  (chk "explicit literal overrides reference fallback"
+       (= (:write (t/call lf li lcat "tell"
+                          {:subject "x" :predicate "depends_on" :object "z"}))
+          {:op "assert" :l "@x" :p "depends_on" :r "z"})))
 
 ;; (3) reads off the fold
 (chk "show @x returns its facts (pred/value rows)"

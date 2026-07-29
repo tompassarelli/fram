@@ -47,32 +47,19 @@
 (defn- at [id :- Any] :- Any
   (if (string? id) (if (str/starts-with? id "@") id (str "@" id)) id))
 
-;; ALL values are @-entities (and there is at least one) -> a pure reference
-;; predicate, so a bare write value is auto-@-prefixed. A MIXED predicate is NOT
-;; pure-ref, so its literal values are stored verbatim (no spurious @-prefix that
-;; would make an untell silently miss the real fact).
-;; This value-driven normalization is the single write convention for both the
-;; tool/MCP surface AND the `tell`/`set` CLI verbs (main.bclj routes through
-;; `ref-value` below) — no hardcoded ref-pred list, so the engine stays
-;; domain-neutral. (A value already starting with @ is kept as-is; `at` never
-;; double-prefixes.)
-(defn- all-ref? [facts :- (Vec k/Fact) pred :- String] :- Bool
-  (loop [cs facts seen false]
-    (if (empty? cs)
-      seen
-      (let [c (first cs)]
-        (if (= (:p c) pred)
-          (if (and (string? (:r c)) (str/starts-with? (:r c) "@"))
-            (recur (rest cs) true)
-            false)
-          (recur (rest cs) seen))))))
+;; Resolve every public predicate spelling through the folded registry. The
+;; flat-log write still carries a string predicate, but aliases are normalized to
+;; the canonical display name before the coordinator sees the intent.
+(defn canonical-predicate [facts :- (Vec k/Fact) pred :- String] :- String
+  (k/predicate-name (k/predicate-registry facts) pred))
 
-;; the shared write-value normalization: @-prefix a bare value for a pure-reference
-;; predicate, store verbatim otherwise (`at` keeps an already-@ value as-is). Used by
-;; tool writes AND the CLI tell/set verbs so both surfaces agree.
+;; Shared write-value normalization for tool/MCP and CLI writes. value_kind is
+;; the sole classifier: explicit facts override configured/fallback behavior,
+;; including the negative `literal` declaration. A value already starting with
+;; @ is kept as-is.
 ;; GAP: value is an EDN write-value -> Any (the engine interns arbitrary EDN).
 (defn ref-value [facts :- (Vec k/Fact) pred :- String value :- Any] :- Any
-  (if (all-ref? facts pred) (at value) value))
+  (if (= "ref" (k/value-kind-of facts {} pred)) (at value) value))
 
 ;; --- catalog: the CLOSED, O(1) surface (exactly eleven tools) ----------------
 (defn catalog [facts :- (Vec k/Fact)] :- (Vec ToolSpec)
@@ -104,7 +91,8 @@
          "`find` is a relation-name string (not a rule-head map); rules carry "
          "`head` and `body` objects. Aggregate queries instead use a `find` object "
          "with `rel`, `group`, and `agg`. "
-         "A term is {:var \"x\"} or a constant; base relations are fact(l,p,r) and fact-id(cid,l,p,r) "
+         "A term is {:var \"x\"} or a constant; base relations are fact(l,p,r), "
+         "fact-id(cid,l,p,r), and predicate(pid,spelling,canonical,cardinality,value-kind) "
          "(the pre-rename names triple/fact are accepted as aliases). "
          "Recursion and stratified negation are supported; the query is validated before it runs.")
        [(->Param "query" "object" true)]
@@ -213,7 +201,9 @@
       (let [op :- Op (:op spec) miss (missing-req op args)]
         (if (not (empty? miss))
           {:error miss}
-          (let [subj (:subject args) pred :- String (str (:predicate args)) te (at subj)]
+          (let [subj (:subject args)
+                pred :- String (canonical-predicate facts (str (:predicate args)))
+                te (at subj)]
             (cond
               [(= op :tell)
                {:write

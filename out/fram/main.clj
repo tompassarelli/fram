@@ -133,12 +133,13 @@
    facts (:facts f)
    cmap (fold/card-map as)
    te (str "@" id)
-   rv (tl/ref-value facts pred value)
-   cand (k/apply-assert-c cmap facts (k/->Fact te pred rv))
+   canonical-pred (tl/canonical-predicate facts pred)
+   rv (tl/ref-value facts canonical-pred value)
+   cand (k/apply-assert-c cmap facts (k/->Fact te canonical-pred rv))
    viol (k/violations cand te)]
   (if (not (empty? viol)) (println (str "REJECTED — " (str/join "; " viol))) (let [tx (+ (fold/max-tx (fram.rt/read-log log)) 1)]
-  (fram.rt/append-fact-op log (fold/->FactOp tx "assert" te pred rv "cli"))
-  (println (str "ok — " id " " pred " = " rv " (v" tx ")"))))))
+  (fram.rt/append-fact-op log (fold/->FactOp tx "assert" te canonical-pred rv "cli"))
+  (println (str "ok — " id " " canonical-pred " = " rv " (v" tx ")"))))))
 
 (defn- facts->fact-ops [facts ^String frame]
   (loop [cs facts
@@ -171,14 +172,15 @@
 (defn cmd-tell [^String log ^String op ^String id ^String pred ^String value]
   (let [facts (:facts (fold/fold (fram.rt/read-log log)))
    te (str "@" id)
-   rv (tl/ref-value facts pred value)
-   resp (tell-retry (fram.rt/coord-port) log op te pred rv 5)]
+   canonical-pred (tl/canonical-predicate facts pred)
+   rv (tl/ref-value facts canonical-pred value)
+   resp (tell-retry (fram.rt/coord-port) log op te canonical-pred rv 5)]
   (cond
   (= resp "nodaemon") (println (str "no coordinator on 127.0.0.1:" (fram.rt/coord-port) " — start it with bin/fram-up, or use `set` (single-writer)"))
   (= resp "log-mismatch") (println "REJECTED by coordinator: the daemon serves a different log (run `fram doctor` for both paths)")
   (= resp "protocol-incompatible") (println "REJECTED by coordinator: daemon lacks the required log-fence protocol; restart it with current Fram")
   (= resp "conflict") (println "rejected: write conflict after retries (another agent is racing this id+pred)")
-  (str/starts-with? resp "ok:") (println (str "committed via coordinator (v" (subs resp 3) "): " id " " pred " = " rv))
+  (str/starts-with? resp "ok:") (println (str "committed via coordinator (v" (subs resp 3) "): " id " " canonical-pred " = " rv))
   :else (println (str "REJECTED by coordinator: " resp)))))
 
 (defn cmd-watch [^String log]
@@ -186,7 +188,7 @@
   (println (str "watching coordinator on 127.0.0.1:" port " — Ctrl-C to stop"))
   (fram.rt/coord-watch-for-log port log)))
 
-(defn cmd-doctor [^String log]
+(defn cmd-doctor! [^String log]
   (let [rewrite-line (fram.rt/doctor-rewrite! log)
    port (fram.rt/coord-port)
    as (fram.rt/read-log log)
@@ -241,14 +243,14 @@
   (if (some? (:error res)) (doseq [e (:error res)]
   (println (str "  error: " e))) (print-rows (:ok res)))))))
 
-(defn dispatch [args ^String threads-dir ^String log]
+(defn dispatch! [args ^String threads-dir ^String log]
   (let [cmd (if (empty? args) "" (first args))]
   (cond
   (= cmd "import") (cmd-import threads-dir log (and (> (count args) 1) (= (nth args 1) "--force")))
   (= cmd "export") (if (> (count args) 1) (cmd-export threads-dir log (nth args 1) (and (> (count args) 2) (= (nth args 2) "--force"))) (println "usage: export <out-dir> [--force]"))
   (= cmd "validate") (cmd-validate log)
   (= cmd "watch") (cmd-watch log)
-  (= cmd "doctor") (cmd-doctor log)
+  (= cmd "doctor") (cmd-doctor! log)
   (= cmd "show") (cmd-show log (if (> (count args) 1) (nth args 1) "") (and (> (count args) 2) (= (nth args 2) "--provenance")))
   (= cmd "history") (if (> (count args) 1) (fram.rt/history log (nth args 1)) (println "usage: history <id>"))
   (= cmd "tools") (cmd-tools log)
@@ -261,4 +263,4 @@
   :else (println "fram (engine) usage: import | export <out-dir> | show <id> | history <id> | validate | watch | doctor | set <id> <pred> <value> | tell <id> <pred> <value> | retract <id> <pred> <value> (alias: untell) | merge <from> <to> | tools | query <edn> | call <tool> <edn> | selfcheck --deep"))))
 
 (defn -main [& args]
-  (dispatch (vec args) (fram.rt/threads-dir) (fram.rt/log-path)))
+  (dispatch! (vec args) (fram.rt/threads-dir) (fram.rt/log-path)))
