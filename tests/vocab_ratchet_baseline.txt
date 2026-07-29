@@ -1,5 +1,6 @@
 2	.github/workflows/ci.yml
 8	README.md
+2	RELEASE-v0.3.0.md
 1	bin/fram-graph-edit-runtime
 1	build.sh
 26	codegraph/RESULTS.md
@@ -12,6 +13,9 @@
 99	coord_daemon.clj
 41	docs/claims-design.md
 9	docs/naming.md
+1	flake.nix
+2	integrations/north/hooks/code-upstream-guard.sh
+2	integrations/north/hooks/code-upstream-guard.test.sh
 1	out/coord_daemon_wire.clj
 28	out/fram/claims.clj
 1	out/fram/rt.clj
@@ -28,6 +32,7 @@
 1	tests/authority_primitives_test.clj
 77	tests/claims_daemon_test.clj
 108	tests/claims_spec_test.clj
+1	tests/daemon_read_cli_test.clj
 1	tests/goldens/resolve/callgraph-fram.out
 1	tests/package_graph_edit_runtime_smoke.sh
 1	tests/resolve_golden.sh

@@ -8,7 +8,7 @@ description: >-
   one-off fact reads — just rent the store and call by-lp.
 ---
 
-# Claim modeling — building on the Fram engine (facts + Datalog)
+# Fact modeling — building on the Fram engine (facts + Datalog)
 
 The thesis (ADR 0001 in `fram:docs/adr/`): **the program/app/work IS a fact
 graph.** Data, logic, and structure live as facts, so each is *reasoned* (Datalog:

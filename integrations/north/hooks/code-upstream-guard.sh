@@ -22,7 +22,7 @@
 #
 # SCOPING — why this never blocks ordinary edits (the critical requirement)
 #   The guard is FAIL-OPEN and CLOSED-LIST. A file is graph-upstream iff it is named
-#   in the explicit all\-list resolved by is_claim_canonical() below. The list starts
+#   in the explicit allow-list resolved by the registry/marker checks below. The list starts
 #   as EXACTLY ONE adopted module. A file that is missing, unreadable, not in the
 #   list, or that the check errors on -> the script prints nothing and exits 0, i.e.
 #   the edit is ALLOWED. The deny path is reached only on a positive, explicit match.
