@@ -4,7 +4,6 @@
   Pure projection over fact-ops; the log bytes are read via fram.rt.")
 
 (require fram.kernel :as k)
-(require clojure.string :as str)
 
 (defrecord FactOp [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
@@ -31,6 +30,40 @@
 (defn max-tx [ops :- (Vec FactOp)] :- Int
   (reduce (fn [m :- Int a :- FactOp] :- Int (let [t (tx-of a)] (if (> t m) t m))) 0 ops))
 
+(defn- valid-fact-op? [a :- FactOp] :- Bool
+  (and (some? (:l a)) (and (some? (:p a)) (some? (:r a)))))
+
+(defn- registry-key [a :- FactOp] :- String
+  (if (= (:p a) "predicate_name")
+    (str (:l a) "" (:p a))
+    (str (:l a) "" (:p a) "" (:r a))))
+
+(defn predicate-registry-of [ops :- (Vec FactOp)] :- k/PredicateRegistry
+  (let [latest
+        (reduce
+         (fn [m :- (Map String FactOp) a :- FactOp] :- (Map String FactOp)
+           (if (or (not (valid-fact-op? a))
+                   (not (or (= (:p a) "predicate_name") (= (:p a) "predicate_alias"))))
+             m
+             (let [kk (registry-key a)
+                   prior (get m kk)
+                   atx (tx-of a)]
+               (if (and (some? prior) (> (:tx prior) atx))
+                 m
+                 (assoc m kk a)))))
+         {}
+        ops)
+        facts
+        (reduce
+         (fn [acc :- (Vec k/Fact) e :- (Vec Any)] :- (Vec k/Fact)
+           (let [v :- FactOp (nth e 1)]
+             (if (= (:op v) "assert")
+               (conj acc (k/->Fact (:l v) (:p v) (:r v)))
+               acc)))
+         []
+         latest)]
+    (k/predicate-registry facts)))
+
 ;; --- SCHEMA-AS-FACTS cardinality: PASS 1 ------------------------------------
 ;; Predicate cardinality is DATA in the log: a fact `@<pred> cardinality single|multi`
 ;; declares it (the subject is the pred entity `@<predname>`; strip the leading @ to get
@@ -46,31 +79,37 @@
 ;; itself replaced (not accumulated) on re-declaration even when the log doesn't declare
 ;; the meta-preds' own cardinality; a real fact on any of them still overrides the seed.
 (def meta-single-seed :- (Map String Bool)
-  {"cardinality" true "value_kind" true "name" true "acyclic" true})
-
-(defn- strip-at [s :- String] :- String
-  (if (str/starts-with? s "@") (subs s 1) s))
+  {"cardinality" true "value_kind" true "name" true "acyclic" true
+   "predicate_name" true})
 
 ;; Latest-tx-wins per declared predicate; a retracted declaration falls back to single?.
 ;; Returns predname -> is-single, meta-preds seeded then overlaid by live declarations.
-(defn card-map [ops :- (Vec FactOp)] :- (Map String Bool)
+(defn- card-map-r [reg :- k/PredicateRegistry ops :- (Vec FactOp)] :- (Map String Bool)
   (let [latest (reduce
                 (fn [m :- (Map String Card) a :- FactOp] :- (Map String Card)
-                  (if (not (= (:p a) "cardinality"))
+                  (if (not (= (k/predicate-id reg (:p a))
+                              (k/predicate-id reg "cardinality")))
                     m
-                    (let [pn (strip-at (:l a))
+                    (let [identity (k/predicate-id reg (:l a))
                           atx (tx-of a)
-                          prev (get m pn)]
+                          prev (get m identity)]
                       (if (and (some? prev) (> (:tx prev) atx))
                         m
-                        (assoc m pn (->Card atx (= (:r a) "single") (= (:op a) "assert")))))))
+                        (assoc m identity (->Card atx (= (:r a) "single") (= (:op a) "assert")))))))
                 {}
                 ops)]
     (reduce (fn [acc :- (Map String Bool) e :- (Vec Any)] :- (Map String Bool)
-              (let [pn :- String (nth e 0) c :- Card (nth e 1)]
+              (let [identity :- String (nth e 0)
+                    pn :- String (k/predicate-name reg identity)
+                    c :- Card (nth e 1)]
                 (if (:live c) (assoc acc pn (:single c)) acc)))
             meta-single-seed
-            (vec (seq latest)))))
+            latest)))
+
+(defn card-map [ops :- (Vec FactOp)] :- (Map String Bool)
+  (let [valid (filterv valid-fact-op? ops)
+        reg (predicate-registry-of valid)]
+    (card-map-r reg valid)))
 
 ;; --- PASS 2 ------------------------------------------------------------------
 ;; O(n) fold: collapse to the latest fact-op per key in one pass (a hash map),
@@ -80,20 +119,23 @@
 ;; (l/p, and multi-valued r's, are clean refs that never contain the separator.)
 (defrecord Latest [tx :- Int op :- String l :- String p :- String r :- String frame :- String])
 
-(defn- key-of [cmap :- (Map String Bool) a :- FactOp] :- String
-  (if (k/single-eff? cmap (:p a))
-    (str (:l a) "" (:p a))
-    (str (:l a) "" (:p a) "" (:r a))))
+(defn- key-of [reg :- k/PredicateRegistry cmap :- (Map String Bool) a :- FactOp] :- String
+  (let [identity (k/predicate-key reg (:p a))]
+    (if (k/single-eff-reg? reg cmap (:p a))
+      (str (:l a) "" identity)
+      (str (:l a) "" identity "" (:r a)))))
 
-(defn- keyed-latest [cmap :- (Map String Bool) ops :- (Vec FactOp)] :- (Map String Latest)
+(defn- keyed-latest [reg :- k/PredicateRegistry cmap :- (Map String Bool) ops :- (Vec FactOp)] :- (Map String Latest)
   (reduce
    (fn [m :- (Map String Latest) a :- FactOp] :- (Map String Latest)
-     (let [k (key-of cmap a)
+     (let [k (key-of reg cmap a)
            prev (get m k)
            atx (tx-of a)]
        (if (and (some? prev) (> (:tx prev) atx))
          m
-         (assoc m k (->Latest atx (:op a) (:l a) (:p a) (:r a) (:frame a))))))
+         (assoc m k (->Latest atx (:op a) (:l a)
+                              (k/predicate-name reg (:p a))
+                              (:r a) (:frame a))))))
    {}
    ops))
 
@@ -103,29 +145,35 @@
   ;; fact-op, and key-of calls single-eff? on :p. An incomplete line is an unfinished
   ;; write that must not become a fact. max-tx still counts ALL :tx (version
   ;; high-water mark, kept consistent with the coordinator's seq seeding).
-  (let [valid (filterv (fn [a :- FactOp] :- Bool
-                         (and (some? (:l a)) (and (some? (:p a)) (some? (:r a))))) ops)
-        cmap (card-map valid)
-        keyed (keyed-latest cmap valid)
+  (let [valid (filterv valid-fact-op? ops)
+        reg (predicate-registry-of valid)
+        cmap (card-map-r reg valid)
+        keyed (keyed-latest reg cmap valid)
         facts (reduce
-                (fn [acc :- (Vec k/Fact) v :- Latest] :- (Vec k/Fact)
-                  (if (= (:op v) "assert")
-                    (conj acc (k/->Fact (:l v) (:p v) (:r v)))
-                    acc))
+                (fn [acc :- (Vec k/Fact) e :- (Vec Any)] :- (Vec k/Fact)
+                  (let [v :- Latest (nth e 1)]
+                    (if (= (:op v) "assert")
+                      (conj acc (k/->Fact (:l v) (:p v) (:r v)))
+                      acc)))
                 []
-                (vec (vals keyed)))]
+                keyed)]
     (->Fold facts (max-tx ops))))
 
 ;; Current facts as Latest records (assert-op only) — carries `frame`, so a
 ;; reader can tell coordinator/agent writes from import-derived values.
 (defn fold-latest [ops :- (Vec FactOp)] :- (Vec Latest)
-  (filterv (fn [v :- Latest] :- Bool (= (:op v) "assert"))
-           (vec (vals (keyed-latest (card-map ops) ops)))))
+  (let [valid (filterv valid-fact-op? ops)
+        reg (predicate-registry-of valid)
+        keyed (keyed-latest reg (card-map-r reg valid) valid)]
+    (reduce (fn [acc :- (Vec Latest) e :- (Vec Any)] :- (Vec Latest)
+              (let [v :- Latest (nth e 1)]
+                (if (= (:op v) "assert") (conj acc v) acc)))
+            [] keyed)))
 
 ;; Reconstruct fold's emission ORDER from a set-equal live view. The coordinator's
 ;; :facts op serves its warm store through this (cached per version), so the CLI's
 ;; daemon-first read path renders byte-identically to the cold fold. fold emits
-;; (vals keyed-latest) — hash-map iteration order over the key-of strings — and
+;; keyed-latest's hash-map iteration order over the key-of strings — and
 ;; downstream output order (build-index subjects, every projection listing)
 ;; inherits it. Re-keying a set-equal fact vec through the SAME key-of yields the
 ;; same relative order: an entry's position in a persistent hash map is a function
@@ -135,10 +183,17 @@
 ;; CLI-computed order. (The synthetic FactOp exists only to reuse key-of
 ;; verbatim — same \001 separator bytes.)
 (defn refold-order [facts :- (Vec k/Fact)] :- (Vec k/Fact)
-  (let [cmap (card-map (mapv (fn [c :- k/Fact] :- FactOp
-                               (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) facts))]
-    (vec (vals (reduce
-                (fn [m :- (Map String k/Fact) c :- k/Fact] :- (Map String k/Fact)
-                  (assoc m (key-of cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) c))
-                {}
-                facts)))))
+  (let [reg (k/predicate-registry facts)
+        ops (mapv (fn [c :- k/Fact] :- FactOp
+                    (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) facts)
+        cmap (card-map-r reg ops)
+        keyed (reduce
+               (fn [m :- (Map String k/Fact) c :- k/Fact] :- (Map String k/Fact)
+                 (assoc m
+                        (key-of reg cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live"))
+                        (k/->Fact (:l c) (k/predicate-name reg (:p c)) (:r c))))
+               {}
+               facts)]
+    (reduce (fn [acc :- (Vec k/Fact) e :- (Vec Any)] :- (Vec k/Fact)
+              (conj acc (nth e 1)))
+            [] keyed)))

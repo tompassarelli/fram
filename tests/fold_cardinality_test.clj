@@ -50,6 +50,32 @@
   (chk "fold: kernel-single 'title' forced MULTI keeps {A,B}" (= #{"A" "B"} titles))
   (chk "fold: non-kernel 'tag' forced SINGLE collapses to {y}" (= #{"y"} tags)))
 
+;; A predicate's metadata subject is its stable identity. Renaming changes the
+;; canonical spelling and retains the old spelling as an alias; historical and
+;; current spellings must therefore share one single-valued (l,p) group.
+(let [f (fold/fold [(a 1 "assert" "@title" "predicate_name" "title")
+                    (a 2 "assert" "@T1" "title" "before")
+                    (a 3 "assert" "@title" "predicate_alias" "title")
+                    (a 4 "assert" "@title" "predicate_alias" ":title")
+                    (a 5 "assert" "@title" "predicate_name" "heading")
+                    (a 6 "assert" "@T1" ":title" "during")
+                    (a 7 "assert" "@T1" "heading" "after")])
+      cl (:facts f)
+      reg (k/predicate-registry cl)
+      values (filter #(and (= (:l %) "@T1") (= (:p %) "heading")) cl)]
+  (chk "rename: canonical and aliases resolve to one stable predicate id"
+       (and (= "@title" (k/predicate-id reg "title"))
+            (= "@title" (k/predicate-id reg ":title"))
+            (= "@title" (k/predicate-id reg "heading"))))
+  (chk "rename: stable predicate reports the new canonical name"
+       (= "heading" (k/predicate-name reg "title")))
+  (chk "rename: old, alias, and canonical writes collapse to one value group"
+       (= ["after"] (mapv :r values)))
+  (chk "rename: ordinary facts expose only the canonical predicate spelling"
+       (empty? (filter #(and (= (:l %) "@T1")
+                             (contains? #{"title" ":title"} (:p %)))
+                       cl))))
+
 ;; back-compat: a log with NO cardinality facts folds by env/fallback exactly as before.
 (let [f (fold/fold [(a 1 "assert" "@T1" "title" "A")
                     (a 2 "assert" "@T1" "title" "B")   ; title is kernel-single -> B wins

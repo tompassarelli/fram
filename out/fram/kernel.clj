@@ -25,7 +25,8 @@
   (str "single=" (sorted-join single-valued) " |terminal=" (sorted-join terminal-preds) " |withdrawn=" (sorted-join withdrawn-preds)))
 
 (defn ^String cards-fingerprint [cmap]
-  (str/join "," (vec (sort (mapv (fn [e] (str (nth e 0) "=" (if (= (nth e 1) true) "single" "multi"))) (vec (seq cmap)))))))
+  (let [pairs (reduce (fn [acc e] (conj acc (str (nth e 0) "=" (if (= (nth e 1) true) "single" "multi")))) [] cmap)]
+  (str/join "," (vec (sort pairs)))))
 
 (def single-valued-set (reduce (fn [m p] (assoc m p true)) {} single-valued))
 
@@ -112,16 +113,101 @@
 (defn- ^String strip-at [^String s]
   (if (str/starts-with? s "@") (subs s 1) s))
 
-(defn- preds-facting [facts ^String mp ^String mv]
-  (uniq (mapv (fn [c] (strip-at (:l c))) (filterv (fn [c] (and (= (:p c) mp) (= (:r c) mv))) facts))))
+(defrecord PredicateRegistry [by-name canonical])
+
+(defn predicateregistry-by-name [r] (:by-name r))
+
+(defn predicateregistry-canonical [r] (:canonical r))
+
+(defn- ^Boolean registry-fact? [^Fact c]
+  (or (= (:p c) "predicate_name") (= (:p c) "predicate_alias")))
+
+(defn- bind-predicate-spelling [m ^String spelling ^String identity]
+  (let [prior (get m spelling)]
+  (if (and (some? prior) (not (= prior identity))) (throw (ex-info (str "predicate spelling collision: " spelling " resolves to both " prior " and " identity) {:predicate spelling :left prior :right identity})) (assoc m spelling identity))))
+
+(defn ^PredicateRegistry predicate-registry [facts]
+  (let [registry-facts (filterv registry-fact? facts)
+   canonical (reduce (fn [m c] (if (= (:p c) "predicate_name") (assoc m (:l c) (:r c)) m)) {} registry-facts)
+   by-name (reduce (fn [m c] (bind-predicate-spelling m (:r c) (:l c))) {} registry-facts)]
+  (->PredicateRegistry by-name canonical)))
+
+(defn ^String predicate-id [^PredicateRegistry reg ^String spelling]
+  (if (str/starts-with? spelling "@") spelling (let [identity (get (:by-name reg) spelling)]
+  (if (some? identity) identity (str "@" spelling)))))
+
+(defn ^String predicate-key [^PredicateRegistry reg ^String spelling]
+  (let [identity (get (:by-name reg) spelling)]
+  (if (some? identity) identity spelling)))
+
+(defn ^String predicate-name [^PredicateRegistry reg ^String spelling]
+  (let [identity (predicate-id reg spelling)
+   canonical (get (:canonical reg) identity)]
+  (if (some? canonical) canonical (strip-at identity))))
+
+(defn ^Boolean single-eff-reg? [^PredicateRegistry reg cmap ^String p]
+  (let [identity (predicate-id reg p)
+   by-id (get cmap identity)
+   by-name (get cmap (predicate-name reg p))
+   explicit (if (nil? by-id) by-name by-id)]
+  (if (some? explicit) explicit (loop [xs single-valued]
+  (if (empty? xs) (single? p) (if (= identity (predicate-id reg (first xs))) true (recur (rest xs))))))))
+
+(def ref-kind-fallback {"depends_on" "ref" "part_of" "ref" "relates_to" "ref" "clarifies" "ref" "amends" "ref"})
+
+(def acyclic-kind-fallback {"depends_on" "true" "part_of" "true"})
+
+(defn- predicate-property-values [^PredicateRegistry reg facts ^String property]
+  (let [property-id (predicate-id reg property)]
+  (reduce (fn [m c] (if (= (predicate-id reg (:p c)) property-id) (assoc m (:l c) (:r c)) m)) {} facts)))
+
+(defn- registry-map-value [^PredicateRegistry reg values ^String pname]
+  (let [identity (predicate-id reg pname)]
+  (reduce (fn [found e] (let [spelling (nth e 0)
+   value (nth e 1)]
+  (if (= identity (predicate-id reg spelling)) value found))) nil values)))
+
+(defn- effective-predicate-value-r [^PredicateRegistry reg explicit configured fallback ^String pname]
+  (let [fact-value (registry-map-value reg explicit pname)]
+  (if (some? fact-value) fact-value (let [configured-value (registry-map-value reg configured pname)]
+  (if (some? configured-value) configured-value (registry-map-value reg fallback pname))))))
+
+(defn effective-predicate-value [facts configured fallback ^String pname ^String property]
+  (let [reg (predicate-registry facts)
+   explicit (predicate-property-values reg facts property)]
+  (effective-predicate-value-r reg explicit configured fallback pname)))
+
+(defn ^String cardinality-of [facts configured ^String pname]
+  (let [reg (predicate-registry facts)
+   explicit (predicate-property-values reg facts "cardinality")
+   value (effective-predicate-value-r reg explicit configured {} pname)]
+  (if (some? value) value (if (single-eff-reg? reg {} pname) "single" "multi"))))
+
+(defn ^String value-kind-of [facts configured ^String pname]
+  (let [value (effective-predicate-value facts configured ref-kind-fallback pname "value_kind")]
+  (if (some? value) value "literal")))
+
+(defn ^Boolean acyclic-of? [facts configured ^String pname]
+  (= "true" (effective-predicate-value facts configured acyclic-kind-fallback pname "acyclic")))
+
+(defn- property-predicates [^PredicateRegistry reg facts ^String property]
+  (let [property-id (predicate-id reg property)]
+  (mapv (fn [c] (predicate-name reg (:l c))) (filterv (fn [c] (= (predicate-id reg (:p c)) property-id)) facts))))
+
+(defn- canonical-predicates [^PredicateRegistry reg preds]
+  (uniq (mapv (fn [p] (predicate-name reg p)) preds)))
+
+(defn- predicates-with-value [facts ^String property ^String wanted fallback-preds fallback]
+  (let [reg (predicate-registry facts)
+   explicit (predicate-property-values reg facts property)
+   candidates (canonical-predicates reg (vec (concat fallback-preds (property-predicates reg facts property))))]
+  (filterv (fn [p] (= wanted (effective-predicate-value-r reg explicit {} fallback p))) candidates)))
 
 (defn ref-preds-of [facts]
-  (let [d (preds-facting facts "value_kind" "ref")]
-  (if (empty? d) ref-preds-fallback d)))
+  (predicates-with-value facts "value_kind" "ref" ref-preds-fallback ref-kind-fallback))
 
 (defn acyclic-preds-of [facts]
-  (let [d (preds-facting facts "acyclic" "true")]
-  (if (empty? d) acyclic-preds-fallback d)))
+  (predicates-with-value facts "acyclic" "true" acyclic-preds-fallback acyclic-kind-fallback))
 
 (defn violations [facts ^String te]
   (let [ids (entity-ids facts)

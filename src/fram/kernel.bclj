@@ -97,9 +97,11 @@
 ;; here even if they booted with different FRAM_SINGLE_VALUED — the fact wins for both.
 ;; Combined with vocab-fingerprint (env/fallback layer) it is the value an operator compares.
 (defn cards-fingerprint [cmap :- (Map String Bool)] :- String
-  (str/join "," (vec (sort (mapv (fn [e :- (Vec Any)] :- String
-                                   (str (nth e 0) "=" (if (= (nth e 1) true) "single" "multi")))
-                                 (vec (seq cmap)))))))
+  (let [pairs (reduce (fn [acc :- (Vec String) e :- (Vec Any)] :- (Vec String)
+                        (conj acc (str (nth e 0) "="
+                                       (if (= (nth e 1) true) "single" "multi"))))
+                      [] cmap)]
+    (str/join "," (vec (sort pairs)))))
 
 ;; Map-backed membership for single?: it runs once per assertion in every
 ;; fold/refold (and per fact in the daemon's migrate/tail-fold), so the
@@ -259,18 +261,148 @@
 (defn- strip-at [s :- String] :- String
   (if (str/starts-with? s "@") (subs s 1) s))
 
-;; declared pred names (@ stripped) whose meta-predicate `mp` facts value `mv`.
-(defn- preds-facting [facts :- (Vec Fact) mp :- String mv :- String] :- (Vec String)
-  (uniq (mapv (fn [c :- Fact] :- String (strip-at (:l c)))
-              (filterv (fn [c :- Fact] :- Bool (and (= (:p c) mp) (= (:r c) mv))) facts))))
+(defrecord PredicateRegistry
+  [by-name :- (Map String String)
+   canonical :- (Map String String)])
 
-;; ref-valued preds (targets must exist) — declared via `value_kind ref`, else fallback.
+(defn- registry-fact? [c :- Fact] :- Bool
+  (or (= (:p c) "predicate_name") (= (:p c) "predicate_alias")))
+
+(defn- bind-predicate-spelling [m :- (Map String String) spelling :- String identity :- String] :- (Map String String)
+  (let [prior (get m spelling)]
+    (if (and (some? prior) (not (= prior identity)))
+      (throw (ex-info (str "predicate spelling collision: " spelling
+                           " resolves to both " prior " and " identity)
+                      {:predicate spelling :left prior :right identity}))
+      (assoc m spelling identity))))
+
+(defn predicate-registry [facts :- (Vec Fact)] :- PredicateRegistry
+  (let [registry-facts (filterv registry-fact? facts)
+        canonical (reduce (fn [m :- (Map String String) c :- Fact] :- (Map String String)
+                            (if (= (:p c) "predicate_name") (assoc m (:l c) (:r c)) m))
+                          {} registry-facts)
+        by-name (reduce (fn [m :- (Map String String) c :- Fact] :- (Map String String)
+                          (bind-predicate-spelling m (:r c) (:l c)))
+                        {} registry-facts)]
+    (->PredicateRegistry by-name canonical)))
+
+(defn predicate-id [reg :- PredicateRegistry spelling :- String] :- String
+  (if (str/starts-with? spelling "@")
+    spelling
+    (let [identity (get (:by-name reg) spelling)]
+      (if (some? identity) identity (str "@" spelling)))))
+
+(defn predicate-key [reg :- PredicateRegistry spelling :- String] :- String
+  (let [identity (get (:by-name reg) spelling)]
+    (if (some? identity) identity spelling)))
+
+(defn predicate-name [reg :- PredicateRegistry spelling :- String] :- String
+  (let [identity (predicate-id reg spelling)
+        canonical (get (:canonical reg) identity)]
+    (if (some? canonical) canonical (strip-at identity))))
+
+(defn single-eff-reg? [reg :- PredicateRegistry cmap :- (Map String Bool) p :- String] :- Bool
+  (let [identity (predicate-id reg p)
+        by-id :- Bool? (get cmap identity)
+        by-name :- Bool? (get cmap (predicate-name reg p))
+        explicit :- Bool? (if (nil? by-id) by-name by-id)]
+    (if (some? explicit)
+      explicit
+      (loop [xs single-valued]
+        (if (empty? xs)
+          (single? p)
+          (if (= identity (predicate-id reg (first xs))) true (recur (rest xs))))))))
+
+(def ref-kind-fallback :- (Map String String)
+  {"depends_on" "ref" "part_of" "ref" "relates_to" "ref" "clarifies" "ref" "amends" "ref"})
+
+(def acyclic-kind-fallback :- (Map String String)
+  {"depends_on" "true" "part_of" "true"})
+
+(defn- predicate-property-values [reg :- PredicateRegistry facts :- (Vec Fact) property :- String] :- (Map String String)
+  (let [property-id (predicate-id reg property)]
+    (reduce
+     (fn [m :- (Map String String) c :- Fact] :- (Map String String)
+       (if (= (predicate-id reg (:p c)) property-id)
+         (assoc m (:l c) (:r c))
+         m))
+     {}
+     facts)))
+
+(defn- registry-map-value [reg :- PredicateRegistry values :- (Map String String) pname :- String] :- String?
+  (let [identity (predicate-id reg pname)]
+    (reduce
+     (fn [found :- String? e :- (Vec Any)] :- String?
+       (let [spelling :- String (nth e 0) value :- String (nth e 1)]
+         (if (= identity (predicate-id reg spelling)) value found)))
+     nil
+     values)))
+
+(defn- effective-predicate-value-r
+  [reg :- PredicateRegistry
+   explicit :- (Map String String)
+   configured :- (Map String String)
+   fallback :- (Map String String)
+   pname :- String] :- String?
+  (let [fact-value (registry-map-value reg explicit pname)]
+    (if (some? fact-value)
+      fact-value
+      (let [configured-value (registry-map-value reg configured pname)]
+        (if (some? configured-value)
+          configured-value
+          (registry-map-value reg fallback pname))))))
+
+;; Shared fact > configured > fallback accessor. "literal" and "false" are
+;; explicit negative declarations, not absence.
+(defn effective-predicate-value
+  [facts :- (Vec Fact)
+   configured :- (Map String String)
+   fallback :- (Map String String)
+   pname :- String
+   property :- String] :- String?
+  (let [reg (predicate-registry facts)
+        explicit (predicate-property-values reg facts property)]
+    (effective-predicate-value-r reg explicit configured fallback pname)))
+
+(defn cardinality-of [facts :- (Vec Fact) configured :- (Map String String) pname :- String] :- String
+  (let [reg (predicate-registry facts)
+        explicit (predicate-property-values reg facts "cardinality")
+        value (effective-predicate-value-r reg explicit configured {} pname)]
+    (if (some? value)
+      value
+      (if (single-eff-reg? reg {} pname) "single" "multi"))))
+
+(defn value-kind-of [facts :- (Vec Fact) configured :- (Map String String) pname :- String] :- String
+  (let [value (effective-predicate-value facts configured ref-kind-fallback pname "value_kind")]
+    (if (some? value) value "literal")))
+
+(defn acyclic-of? [facts :- (Vec Fact) configured :- (Map String String) pname :- String] :- Bool
+  (= "true" (effective-predicate-value facts configured acyclic-kind-fallback pname "acyclic")))
+
+(defn- property-predicates [reg :- PredicateRegistry facts :- (Vec Fact) property :- String] :- (Vec String)
+  (let [property-id (predicate-id reg property)]
+    (mapv (fn [c :- Fact] :- String (predicate-name reg (:l c)))
+          (filterv (fn [c :- Fact] :- Bool (= (predicate-id reg (:p c)) property-id))
+                   facts))))
+
+(defn- canonical-predicates [reg :- PredicateRegistry preds :- (Vec String)] :- (Vec String)
+  (uniq (mapv (fn [p :- String] :- String (predicate-name reg p)) preds)))
+
+(defn- predicates-with-value
+  [facts :- (Vec Fact) property :- String wanted :- String
+   fallback-preds :- (Vec String) fallback :- (Map String String)] :- (Vec String)
+  (let [reg (predicate-registry facts) explicit (predicate-property-values reg facts property)
+        candidates (canonical-predicates reg (vec (concat fallback-preds
+                                                          (property-predicates reg facts property))))]
+    (filterv (fn [p :- String] :- Bool
+               (= wanted (effective-predicate-value-r reg explicit {} fallback p)))
+             candidates)))
+
 (defn ref-preds-of [facts :- (Vec Fact)] :- (Vec String)
-  (let [d (preds-facting facts "value_kind" "ref")] (if (empty? d) ref-preds-fallback d)))
+  (predicates-with-value facts "value_kind" "ref" ref-preds-fallback ref-kind-fallback))
 
-;; acyclic preds (no cycle) — declared via `acyclic true`, else fallback.
 (defn acyclic-preds-of [facts :- (Vec Fact)] :- (Vec String)
-  (let [d (preds-facting facts "acyclic" "true")] (if (empty? d) acyclic-preds-fallback d)))
+  (predicates-with-value facts "acyclic" "true" acyclic-preds-fallback acyclic-kind-fallback))
 
 ;; --- obligation rules ------------------------------------------------------
 
