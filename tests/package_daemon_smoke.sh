@@ -26,6 +26,7 @@ required=(
   "$package_root/bin/fram-primer"
   "$package_root/libexec/fram/coord.clj"
   "$package_root/libexec/fram/coord_daemon.clj"
+  "$package_root/libexec/fram/coord_writer_authority.clj"
   "$package_root/libexec/fram/out/pull.clj"
   "$package_root/libexec/fram/rotations.clj"
   "$package_root/libexec/fram/fri.clj"

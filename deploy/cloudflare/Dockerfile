@@ -17,10 +17,12 @@ RUN clojure -P
 # exactly what coord_daemon.clj needs at runtime:
 #   out/                 compiled engine namespaces (classpath, deps.edn :paths)
 #   coord.clj            reified coordinator library (load-file'd)
+#   coord_writer_authority.clj  writer-token admission (load-file'd)
+#   rotations.clj        covering read indexes (load-file'd)
 #   out/resolve.clj      generated namespace-preserving resolver shim
 #   out/defcheck_gate.clj conditional load (FRAM_DEFCHECK=1)
 COPY out/ out/
-COPY coord.clj coord_daemon.clj ./
+COPY coord.clj coord_daemon.clj coord_writer_authority.clj rotations.clj ./
 COPY bin/fram-daemon bin/fram-daemon
 
 # The wire protocol is UNAUTHENTICATED — 0.0.0.0 is safe ONLY because
