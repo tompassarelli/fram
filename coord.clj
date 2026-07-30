@@ -511,7 +511,8 @@
 ;; (so setup!'s name=single and any prior def-predicate! ref-kind are untouched).
 (defn- seed-kernel-cardinality! [st tx]
   (doseq [p ck/single-valued :when (not= "single" (s/cardinality st p))]
-    (s/def-predicate! st p "single" "literal" tx)))
+    (let [pid (s/register-predicate! st p tx)]
+      (s/assert! st pid "cardinality" "single" tx))))
 
 ;; --- obligation: depends_on/part_of acyclicity (pure, over resolved ids) ----
 (defn- succ [co pid x]

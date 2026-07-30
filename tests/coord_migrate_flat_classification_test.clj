@@ -21,7 +21,8 @@
 
 (def representative-preds
   ["edge" "old_edge" "depends_on" "title" "single_note"
-   "f0" "f1.2~7" "child" "tail" "seg3" "comment4" "ordinary"])
+   "session_of" "f0" "f1.2~7" "child" "tail" "seg3" "comment4"
+   "ordinary"])
 
 (def domain-lines
   (mapv
@@ -31,7 +32,8 @@
         :op "assert"
         :l (str "@subject-" i)
         :p p
-        :r (if (#{"edge" "old_edge" "f0" "f1.2~7" "child"
+        :r (if (#{"edge" "old_edge" "depends_on" "session_of"
+                  "f0" "f1.2~7" "child"
                   "tail" "seg3" "comment4"} p)
              (str "@target-" i)
              (str "value-" i))}))
@@ -41,6 +43,8 @@
 (def facts (:facts (fold/fold raw)))
 (def metadata-facts
   (filterv #(#'coord-daemon/schema-writable (:p %)) facts))
+(def legacy-config
+  (#'coord-daemon/legacy-ref-config facts))
 (def schema-plan
   (cc/migrate-schema-plan
    (vec (distinct representative-preds))
@@ -51,17 +55,19 @@
 (def oracle
   (into {}
         (map (fn [p]
-               (let [value-kind
+               (let [configured
                      (if (#'coord-daemon/code-structural-link-pred? p)
-                       "ref"
-                       (ck/value-kind-of facts {} p))]
+                       (assoc legacy-config p "ref")
+                       legacy-config)
+                     value-kind (ck/value-kind-of facts configured p)]
                  [p {:cardinality (ck/cardinality-of facts {} p)
                      :value-kind value-kind
                      :link? (= "ref" value-kind)}])))
         representative-preds))
 
 (def classifications
-  (#'coord-daemon/migrate-predicate-classifications metadata-facts schema-plan))
+  (#'coord-daemon/migrate-predicate-classifications
+   metadata-facts schema-plan legacy-config))
 
 (check! "compiled classifications equal the effective migration oracle"
         (= oracle classifications))
@@ -72,6 +78,10 @@
         (let [classification (get classifications "depends_on")]
           (and (= "literal" (:value-kind classification))
                (false? (:link? classification)))))
+(check! "legacy session_of rows preserve their per-predicate reference kind"
+        (= {:value-kind "ref" :link? true}
+           (select-keys (get classifications "session_of")
+                        [:value-kind :link?])))
 (check! "structural code predicates remain links"
         (every? #(= {:value-kind "ref" :link? true}
                     (select-keys (get classifications %)

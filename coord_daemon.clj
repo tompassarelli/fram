@@ -1830,14 +1830,47 @@
   (let [reg (ck/predicate-registry (predicate-metadata-facts))]
     (ck/predicate-name reg p)))
 
-(defn- effective-value-kind [p]
-  (ck/value-kind-of (predicate-metadata-facts) {} p))
-
 (defn- code-structural-link-pred? [p]
   (or (#{"child" "tail"} p)
       (boolean (and (string? p)
                     (or (re-matches #"f\d+(?:\.\d+)*~(?:\d+|PENDING)" p)
                         (re-matches #"(?:f|seg|comment)\d+" p))))))
+
+(def ^:private legacy-literal-preds #{"v"})
+
+(defn- legacy-ref-config [facts]
+  (reduce
+   (fn [configured cl]
+     (let [p (:p cl) r (:r cl)]
+       (if (and (string? p)
+                (not (legacy-literal-preds p))
+                (string? r)
+                (ref-shape? r))
+         (assoc configured p "ref")
+         configured)))
+   {}
+   facts))
+
+(defn- store-value-kind [st p]
+  (when st
+    (when-let [pid (s/resolve-predicate st p)]
+      (let [kind (s/lookup st pid "value_kind")]
+        (when (#{"ref" "literal"} kind) kind)))))
+
+(defn- effective-value-kind* [metadata st legacy-config p]
+  (let [stored (store-value-kind st p)
+        configured (cond
+                     (some? stored) {p stored}
+                     (code-structural-link-pred? p) (assoc legacy-config p "ref")
+                     :else legacy-config)]
+    (ck/value-kind-of metadata configured p)))
+
+(defn- effective-value-kind [p]
+  (effective-value-kind*
+   (predicate-metadata-facts)
+   (some-> @co :store)
+   {}
+   p))
 
 (defn- normalize-predicate-value [p r]
   (if (and (= "ref" (effective-value-kind p))
@@ -7815,16 +7848,16 @@
 
 (defn- migrate-predicate-classifications
   "Compile the kernel's predicate oracle once per spelling used by migration.
-   Predicate classification depends only on live schema metadata, not on every
-   domain fact. Keeping the kernel accessors as the oracle preserves aliases,
-   explicit negative declarations, and fallback precedence without rescanning
-   the whole folded corpus for each materialized fact."
-  [metadata-facts schema-plan]
+   Live metadata wins, then an injected per-predicate classification, then the
+   kernel fallback. The injected map preserves the legacy no-registry meaning
+   of an existing ref-shaped value without rescanning the whole corpus for each
+   materialized fact."
+  [metadata-facts schema-plan legacy-config]
   (into {}
         (map (fn [p]
-               (let [value-kind (if (code-structural-link-pred? p)
-                                  "ref"
-                                  (ck/value-kind-of metadata-facts {} p))]
+               (let [value-kind
+                     (effective-value-kind*
+                      metadata-facts nil legacy-config p)]
                  [p {:cardinality (ck/cardinality-of metadata-facts {} p)
                      :value-kind value-kind
                      :link? (= "ref" value-kind)}])))
@@ -7855,8 +7888,10 @@
                      (vec (card-only-preds cmap asserts))
                      (set (keys by-pred))
                      schema-preds)
+        legacy-config (legacy-ref-config facts)
         predicate-classifications
-        (migrate-predicate-classifications metadata-facts schema-plan)
+        (migrate-predicate-classifications
+         metadata-facts schema-plan legacy-config)
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]
     (s/setup! st tx)
@@ -7891,7 +7926,8 @@
           (cc/migrate-kernel-seed-plan
            (vec ck/single-valued) schema-preds cmap current-single)]
       (doseq [p kernel-seeds]
-        (s/def-predicate! st p "single" "literal" tx)))
+        (let [pid (s/register-predicate! st p tx)]
+          (s/assert! st pid "cardinality" "single" tx))))
     (let [memo (atom {})
           ent! (fn [sid] (or (get @memo sid)
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
@@ -8199,14 +8235,16 @@
             ;; below and the declaration loop; ck/single-eff? applies fact > env > fallback.
             tcmap (log-card-map lines)                       ; tail-declared cardinality
             card-pid (c/value-id st "cardinality")
+            kind-pid (c/value-id st "value_kind")
             domain (vec (keys by-pred))
             card-only
             (filterv #(and (not (schema-preds %)) (not (contains? by-pred %)))
                      (card-only-preds tcmap lines))
             declared-preds
-            (into #{} (filter #(and card-pid
+            (into #{} (filter #(and card-pid kind-pid
                                     (when-let [pid (s/resolve-predicate st %)]
-                                      (seq (c/by-lp st pid card-pid)))))
+                                      (and (seq (c/by-lp st pid card-pid))
+                                           (seq (c/by-lp st pid kind-pid))))))
                   domain)
             current-cardinality
             (into {} (map (fn [p] [p (s/cardinality st p)]))
@@ -8218,9 +8256,15 @@
             single-preds
             (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
             latest (cc/tail-keyed-latest single-preds valid)
+            legacy-config (legacy-ref-config valid)
+            value-kinds
+            (into {}
+                  (map (fn [p]
+                         [p (effective-value-kind*
+                             metadata st legacy-config p)]))
+                  domain)
             link-preds
-            (into #{} (filter #(or (code-structural-link-pred? %)
-                                    (= "ref" (ck/value-kind-of metadata {} %))) domain))
+            (into #{} (filter #(= "ref" (get value-kinds %))) domain)
             predicate-plan
             (cc/tail-predicate-plan domain card-only single-preds
                                     declared-preds current-cardinality link-preds)
@@ -8244,8 +8288,7 @@
                 su (sub! (:l a)) pid (s/resolve-predicate st p)
                 live (c/by-lp st su pid)       ; already live-only
                 retract? (= "retract" (:op a))
-                link? (or (code-structural-link-pred? p)
-                          (= "ref" (ck/value-kind-of metadata {} p)))
+                link? (= "ref" (get value-kinds p))
                 value-present?
                 (if (and retract? single?)
                   false
