@@ -98,8 +98,9 @@
    reg (predicate-registry-of valid)
    cmap (card-map-r reg valid)
    keyed (keyed-latest reg cmap valid)
+   ordered (sort-by first (vec keyed))
    facts (reduce (fn [acc e] (let [v (nth e 1)]
-  (if (= (:op v) "assert") (conj acc (k/->Fact (:l v) (:p v) (:r v))) acc))) [] keyed)]
+  (if (= (:op v) "assert") (conj acc (k/->Fact (:l v) (:p v) (:r v))) acc))) [] ordered)]
   (->Fold facts (max-tx ops))))
 
 (defn fold-latest [ops]
@@ -113,5 +114,6 @@
   (let [reg (k/predicate-registry facts)
    ops (mapv (fn [c] (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) facts)
    cmap (card-map-r reg ops)
-   keyed (reduce (fn [m c] (assoc m (key-of reg cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) (k/->Fact (:l c) (k/predicate-name reg (:p c)) (:r c)))) {} facts)]
-  (reduce (fn [acc e] (conj acc (nth e 1))) [] keyed)))
+   keyed (reduce (fn [m c] (assoc m (key-of reg cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live")) (k/->Fact (:l c) (k/predicate-name reg (:p c)) (:r c)))) {} facts)
+   ordered (sort-by first (vec keyed))]
+  (reduce (fn [acc e] (conj acc (nth e 1))) [] ordered)))

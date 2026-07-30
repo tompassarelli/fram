@@ -145,10 +145,12 @@
   ;; fact-op, and key-of calls single-eff? on :p. An incomplete line is an unfinished
   ;; write that must not become a fact. max-tx still counts ALL :tx (version
   ;; high-water mark, kept consistent with the coordinator's seq seeding).
+  ;; Emission order is sorted by the key-of string — canonical, target-independent.
   (let [valid (filterv valid-fact-op? ops)
         reg (predicate-registry-of valid)
         cmap (card-map-r reg valid)
         keyed (keyed-latest reg cmap valid)
+        ordered (sort-by first (vec keyed))
         facts (reduce
                 (fn [acc :- (Vec k/Fact) e :- (Vec Any)] :- (Vec k/Fact)
                   (let [v :- Latest (nth e 1)]
@@ -156,7 +158,7 @@
                       (conj acc (k/->Fact (:l v) (:p v) (:r v)))
                       acc)))
                 []
-                keyed)]
+                ordered)]
     (->Fold facts (max-tx ops))))
 
 ;; Current facts as Latest records (assert-op only) — carries `frame`, so a
@@ -170,18 +172,8 @@
                 (if (= (:op v) "assert") (conj acc v) acc)))
             [] keyed)))
 
-;; Reconstruct fold's emission ORDER from a set-equal live view. The coordinator's
-;; :facts op serves its warm store through this (cached per version), so the CLI's
-;; daemon-first read path renders byte-identically to the cold fold. fold emits
-;; keyed-latest's hash-map iteration order over the key-of strings — and
-;; downstream output order (build-index subjects, every projection listing)
-;; inherits it. Re-keying a set-equal fact vec through the SAME key-of yields the
-;; same relative order: an entry's position in a persistent hash map is a function
-;; of its own key hash, not of insertion order; the cold map's extra retract-latest
-;; keys (skipped when fold emits facts) don't reorder the surviving entries; and
-;; bb + the JVM share clojure.lang.PersistentHashMap, so daemon-computed order ==
-;; CLI-computed order. (The synthetic FactOp exists only to reuse key-of
-;; verbatim — same \001 separator bytes.)
+;; Reconstruct fold's emission ORDER (sorted by key-of, same as fold) from a
+;; set-equal live view — lets the coordinator's warm :facts read match cold fold.
 (defn refold-order [facts :- (Vec k/Fact)] :- (Vec k/Fact)
   (let [reg (k/predicate-registry facts)
         ops (mapv (fn [c :- k/Fact] :- FactOp
@@ -193,7 +185,8 @@
                         (key-of reg cmap (->FactOp 0 "assert" (:l c) (:p c) (:r c) "live"))
                         (k/->Fact (:l c) (k/predicate-name reg (:p c)) (:r c))))
                {}
-               facts)]
+               facts)
+        ordered (sort-by first (vec keyed))]
     (reduce (fn [acc :- (Vec k/Fact) e :- (Vec Any)] :- (Vec k/Fact)
               (conj acc (nth e 1)))
-            [] keyed)))
+            [] ordered)))
