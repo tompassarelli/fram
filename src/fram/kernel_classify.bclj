@@ -1,0 +1,13 @@
+#lang beagle/clj
+
+;; @upstream:graph — author via the fram MCP graph-edit verbs, never Edit/Write.
+
+(ns fram.kernel-classify
+  "The ONE classification authority fram.kernel / fram.fold / coord_daemon
+  delegate to, so a daemon and a CLI can never classify differently: predicate
+  cardinality, reference shape, fold key bytes, lease codec, delivery candidacy.
+
+  INVARIANT: stays inside the zig-lowerable subset — String/Int/Bool/records/Vec
+  only, no Any, no higher-order fns, no throw, no env reads.")
+
+(require clojure.string :as str)
