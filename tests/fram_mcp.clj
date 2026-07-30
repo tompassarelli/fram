@@ -199,6 +199,7 @@
 (def ^:private beagle-home   (env-or "BEAGLE_HOME"   (str (System/getProperty "user.home") "/code/beagle")))
 (def ^:private beagle-bin    (env-or "FRAM_BEAGLE" (str beagle-home "/bin/beagle")))
 (def ^:private build-all     (env-or "FRAM_BUILD_ALL" (str beagle-home "/bin/beagle-build-all")))
+(def ^:private racket-bin    (env-or "FRAM_RACKET" "racket"))
 ;; INCREMENTAL DE-HANDICAP: per-edit gate checks+emits ONLY the edited module from
 ;; its facts (facts->AST->type-check->emit clj), instead of rendering + building
 ;; the whole tree. beagle's checker is per-file (declare-extern resolves cross-module
@@ -217,6 +218,12 @@
 
 ;; shell helper (used by the flip helpers below + route-edit).
 (defn- sh [opts & args] (apply proc/sh opts args))
+
+(defn- sealed-check [ednf]
+  (try
+    {:result (sh {:out :string :err :string} racket-bin check-emit-rkt ednf)}
+    (catch Throwable t
+      {:unavailable (or (.getMessage t) (str t))})))
 
 ;; ============================================================================
 ;; THE FLIP — source-of-truth demotion for CODE (staged; OFF by default).
@@ -299,12 +306,19 @@
                   (do (sh {} "rm" "-rf" work) {:isError true :text (str "FLIP — " render-fail)})
                   ;; 4. INCREMENTAL GATE: facts-check-emit the edited module (facts->AST->type-check
                   ;;    ->clj), fail-closed on exit. No whole-tree build-all (the .bclj round-trip handicap).
-                  (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt ednf)
-                        built (str (:out bg) (:err bg))]
-                    (if-not (zero? (:exit bg))
+                  (let [{:keys [result unavailable]} (sealed-check ednf)
+                        built (str (:out result) (:err result))]
+                    (cond
+                      unavailable
+                      (do (sh {} "rm" "-rf" work)
+                          {:isError true
+                           :text (str "REJECTED — sealed Beagle compiler unavailable; "
+                                      "nothing committed: " unavailable)})
+                      (not (zero? (:exit result)))
                       (do (sh {} "rm" "-rf" work)
                           {:isError true :text (str "REJECTED — edited module does not type-check (nothing committed):\n"
                                                     (str/trim built))})
+                      :else
                       ;; PASS — commit the affected module's AST delta through the coordinator.
                       (let [commit (apply sh {:out :string :err :string}
                                           "bb" "-cp" fram-out (str flip-bin-dir "/fram-commit-code")
@@ -753,13 +767,20 @@
                                           "(nothing committed). Re-issue the edit with valid Beagle "
                                           "(typed Clojure: `(defn f [x :- T] :- R body)`). Syntax error:\n"
                                           (str/trim (:err pe2)))})
-                          (let [bg (sh {:out :string :err :string} "racket" check-emit-rkt chk-edn)]
-                            (if-not (zero? (:exit bg))
+                          (let [{:keys [result unavailable]} (sealed-check chk-edn)]
+                            (cond
+                              unavailable
+                              (do (sh {} "rm" "-rf" work)
+                                  {:isError true
+                                   :text (str "REJECTED — sealed Beagle compiler unavailable; "
+                                              "nothing committed: " unavailable)})
+                              (not (zero? (:exit result)))
                               (do (sh {} "rm" "-rf" work)
                                   {:isError true
                                    :text (str "REJECTED — candidate module `" module "` fails the sealed Beagle "
                                               "parse/type check (nothing committed). Re-issue the edit. Beagle error:\n"
-                                              (str/trim (str (:out bg) (:err bg))))})
+                                              (str/trim (str (:out result) (:err result))))})
+                              :else
                               ;; checks green — commit the sealed candidate at its exact version.
                               (let [commit-req {:op :edit-commit
                                                 :candidate (:candidate prep)

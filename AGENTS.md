@@ -13,3 +13,8 @@ engineering provenance guardrail, not legal advice.
   `b45f6bb7ae2b75140dff069b4558737c7e4008ea` is MIT OR Apache-2.0. Use
   Datahike for ideas and mechanisms only: copy or derive no source expression
   without a fresh license-compatibility review.
+
+- 2026-07-30 — Beagle revision
+  `a0dac6bb5cd3d064ced5948dc60438e7703b1355` is MIT OR Apache-2.0.
+  FRAM copies Beagle's Racket 9.1 CS CI prerequisite shape under compatible
+  terms and links the checked-out Beagle packages for its sealed compiler gate.

@@ -136,7 +136,10 @@
     {:exit (:exit res) :out (:out res) :err (:err res) :by-id by-id}))
 
 (defn rtext [r] (get-in r [:result :content 0 :text]))
-(defn rerr? [r] (boolean (get-in r [:result :isError])))
+(defn rerr? [r]
+  (or (not (contains? r :result))
+      (some? (:error r))
+      (true? (get-in r [:result :isError]))))
 (def init-req {:jsonrpc "2.0" :id 1 :method "initialize" :params {}})
 (def list-req {:jsonrpc "2.0" :id 2 :method "tools/list" :params {}})
 (defn call-req [id tool args] {:jsonrpc "2.0" :id id :method "tools/call"

@@ -346,11 +346,19 @@
                       {} (str/split-lines (or (:out res) "")))]
     {:exit (:exit res) :out (:out res) :err (:err res) :by-id by-id}))
 (defn rtext [r] (get-in r [:result :content 0 :text]))
-(defn rerr? [r] (boolean (get-in r [:result :isError])))
+(defn rerr? [r]
+  (or (not (contains? r :result))
+      (some? (:error r))
+      (true? (get-in r [:result :isError]))))
 (def init-req {:jsonrpc "2.0" :id 1 :method "initialize" :params {}})
 (defn call-req [id tool args] {:jsonrpc "2.0" :id id :method "tools/call"
                                :params {:name tool :arguments args}})
 (defn mcp-edit [env id tool args] (get (:by-id (run-mcp env [init-req (call-req id tool args)])) id))
+
+(chk "MCP response helper treats a top-level JSON-RPC error as failure"
+     (rerr? {:jsonrpc "2.0" :id 90 :error {:code -32603 :message "boom"}}))
+(chk "MCP response helper treats a missing result as failure"
+     (rerr? {:jsonrpc "2.0" :id 91}))
 
 (def wkfix-file (str nested-dir "/wkfix.bclj"))
 (def wkfix-root-artifact (str src-dir "/src.fram.wkfix.bclj"))
@@ -573,6 +581,23 @@
 ;; ============================================================================
 ;; B. INVALID CANDIDATES — typed rejection, ZERO canonical mutation.
 ;; ============================================================================
+(let [snap-log (vec (read-bytes code-log))
+      snap-file (slurp wkfix-file)
+      snap-v (cur-version)
+      r (mcp-edit (assoc base-env "FRAM_RACKET" "/nonexistent/fram-racket")
+                  19 "set-body"
+                  {:module "src.fram.wkfix" :name "double-it" :body "(* 22 x)"})
+      t (or (rtext r) "")]
+  (chk "B: unavailable sealed compiler returns structured isError"
+       (rerr? r))
+  (chk "B: unavailable sealed compiler explicitly reports nothing committed"
+       (and (str/includes? t "compiler unavailable")
+            (str/includes? t "nothing committed")))
+  (chk "B: unavailable sealed compiler leaves log, version, and projection unchanged"
+       (and (= snap-log (vec (read-bytes code-log)))
+            (= snap-v (cur-version))
+            (= snap-file (slurp wkfix-file)))))
+
 (let [snap-log (vec (read-bytes code-log))
       snap-file (slurp wkfix-file)
       snap-v (cur-version)

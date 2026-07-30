@@ -5,12 +5,9 @@
 (require '[babashka.process :as proc]
          '[clojure.edn :as edn]
          '[clojure.java.io :as io])
+(load-file "tests/log_split_readiness_lib.clj")
 
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
-
-(defn free-port []
-  (with-open [socket (java.net.ServerSocket. 0)]
-    (.getLocalPort socket)))
 
 (defn client [port request]
   (with-open [socket (java.net.Socket. "127.0.0.1" (int port))
@@ -20,15 +17,13 @@
     (.flush writer)
     (edn/read reader)))
 
-(defn eventually [f]
-  (loop [remaining 200]
-    (cond
-      (try (f) (catch Exception _ false)) true
-      (zero? remaining) false
-      :else (do (Thread/sleep 25) (recur (dec remaining))))))
-
 (defn values-of [port subject predicate]
   (set (:values (client port {:op :resolved :te subject :p predicate}))))
+
+(defn version-ready? [port]
+  (try
+    (integer? (:version (client port {:op :version})))
+    (catch Exception _ false)))
 
 (let [port (free-port)
       dir (.toFile
@@ -39,7 +34,8 @@
       _ (spit log "")
       daemon
       (proc/process
-       {:dir root :out :string :err :string}
+       {:dir root :out :string :err :string
+        :extra-env {"FRAM_SNAPSHOT_BOOT" "0"}}
        "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
        (str port) (.getPath log))
       checks (atom [])
@@ -47,7 +43,9 @@
                (swap! checks conj [label (boolean value)]))]
   (try
     (check! "real socket daemon starts"
-            (eventually #(integer? (:version (client port {:op :version})))))
+            (= :ready
+               (await-ready daemon port version-ready?
+                            :deadline-ms 120000 :poll-ms 50)))
 
     (let [base (:version (client port {:op :version}))
           result

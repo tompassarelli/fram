@@ -24,6 +24,23 @@ jobs:
           repository: Autonymy/beagle
           path: .beagle
 
+      # Keep this compiler prerequisite aligned with Beagle's own test/native
+      # workflows: the MCP candidate gate invokes its Racket checker directly.
+      - name: Install Racket
+        uses: Bogdanp/setup-racket@v1.14
+        with:
+          architecture: x64
+          distribution: full
+          variant: CS
+          version: '9.1'
+
+      - name: Link beagle packages and pin Racket
+        run: |
+          raco pkg install --auto --link \
+            .beagle/beagle-lib/ .beagle/beagle-test/ .beagle/beagle/
+          echo "FRAM_RACKET=$(command -v racket)" >> "$GITHUB_ENV"
+          echo "_BEAGLE_RACKET=$(command -v racket)" >> "$GITHUB_ENV"
+
       - name: Install babashka
         run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
 

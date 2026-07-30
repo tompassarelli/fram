@@ -79,7 +79,10 @@
     [(get by-id id) out]))
 
 (defn reply-text [r] (get-in r [:result :content 0 :text]))
-(defn reply-iserr [r] (boolean (get-in r [:result :isError])))
+(defn reply-iserr [r]
+  (or (not (contains? r :result))
+      (some? (:error r))
+      (true? (get-in r [:result :isError]))))
 
 ;; tools/list must surface the three edit tools (catalog regeneration).
 (let [reqs (str/join "\n"
