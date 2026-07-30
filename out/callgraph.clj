@@ -33,8 +33,9 @@
    calls (index-by "calls" ts)
    kids (reduce (fn [m t] (if (= "child" (nth t 1)) (assoc m (nth t 0) (conj (vec (get m (nth t 0) [])) (nth t 2))) m)) {} ts)
    childset (reduce (fn [s t] (if (= "child" (nth t 1)) (conj s (nth t 2)) s)) #{} ts)
-   roots (filterv (fn [k] (not (contains? childset k))) (vec (keys fk)))
-   defns (mapv (fn [s] {:key [file s] :name (get names s) :file file :module (module-of file)}) (filterv (fn [s] (= "defn" (get fk s))) (vec (keys fk))))
+   ordered-keys (vec (sort (set (keys fk))))
+   roots (filterv (fn [k] (not (contains? childset k))) ordered-keys)
+   defns (mapv (fn [s] {:key [file s] :name (get names s) :file file :module (module-of file)}) (filterv (fn [s] (= "defn" (get fk s))) ordered-keys))
    mentions (loop [stack (mapv (fn [r] [r nil]) roots)
    ms []]
   (if (empty? stack) ms (let [top (peek stack)
