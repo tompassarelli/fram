@@ -119,6 +119,7 @@
 (def code-log (str src-dir "/.fram/code.log"))
 (def transaction-log (str src-dir "/.fram/transaction.log"))
 (def slow-log (str src-dir "/.fram/slow.log"))
+(def overlay-log (str src-dir "/.fram/overlay.log"))
 (def bad-log (str src-dir "/.fram/bad.log"))
 (def facts-log (str tmp "/facts.log"))
 (def verifier-fixture (str root "/tests/edit_verifier_fixture.clj"))
@@ -267,6 +268,7 @@
   (spit bad-log (str (str/join "\n" (concat lines [dup])) "\n")))
 (write-bytes transaction-log (read-bytes code-log))
 (write-bytes slow-log (read-bytes code-log))
+(write-bytes overlay-log (read-bytes code-log))
 
 ;; --- throwaway coordinators ---------------------------------------------------
 (defn port-free? [pt]
@@ -279,6 +281,7 @@
 (def bad-port  (pick-port [39912 39914 39916 39918 39920]))
 (def transaction-port (pick-port [39891 39893 39895 39897 39899]))
 (def slow-port (pick-port [39791 39793 39795 39797 39799]))
+(def overlay-port (pick-port [39781 39783 39785 39787 39789]))
 (def stub-port (pick-port [39921 39923 39925 39927 39929]))
 (def replay-port (pick-port [39931 39933 39935 39937 39939]))
 (def poison-port (pick-port [39941 39943 39945 39947 39949]))
@@ -287,7 +290,6 @@
 (def post-restart-port (pick-port [39962 39964 39966 39968 39970]))
 (def crash-port (pick-port [39971 39973 39975 39977 39979]))
 (def crash-restart-port (pick-port [39972 39974 39976 39978 39980]))
-(def dead-port (pick-port [59981 59983 59985 59987 59989]))
 
 (defn boot-daemon!
   ([port log] (boot-daemon! port log {}))
@@ -302,8 +304,6 @@
                                        "FRAM_EDIT_VERIFIER_COUNT_FILE" verifier-count-file
                                        "FRAM_EDIT_VERIFIER_FIXTURE_DELEGATE"
                                        verifier-adapter
-                                       "FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
-                                       "src.fram.overlaythird"
                                        ;; Candidate/OCC tests need a quiescent canonical log.
                                        ;; Snapshot behavior has dedicated suites; its async
                                        ;; post-boot metadata append would be an unrelated,
@@ -441,24 +441,32 @@
   (chk "V0: only the coordinator-verified candidate commits"
        (and (true? (:ok commit)) (true? (:committed commit)))))
 
-(let [prep (transaction-coord
-            {:op :edit-prepare
-             :spec {:op "set-body" :module "src.fram.overlayroot"
-                    :name "root-value" :datum 41}})
-      checked (set (:checked-modules prep))
-      calls0 (verifier-invocation-count)
-      verified (coord-raw transaction-port transaction-log
-                          {:op :edit-verify
-                           :candidate (:candidate prep)})
-      calls1 (verifier-invocation-count)]
-  (chk "V0: reverse selector includes the dependent but not its untouched third provider"
-       (and (checked "src.fram.overlayroot")
-            (checked "src.fram.overlaydependent")
-            (not (checked "src.fram.overlaythird"))))
-  (chk "V0: sealed overlay is exactly the selected modules plus their provider closure"
-       (and (true? (:ok verified))
-            (= 1 (- calls1 calls0))
-            (= 3 (:overlay-module-count prep)))))
+;; REQUIRE_SOURCE is scoped to this daemon: the overlay is the forward closure of
+;; the selected consumers, so demanding an untouched provider daemon-wide would
+;; reject every candidate whose closure legitimately excludes it.
+(let [daemon (boot-daemon! overlay-port overlay-log
+                           {"FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
+                            "src.fram.overlaythird"})]
+  (try
+    (let [prep (coord-raw overlay-port overlay-log
+                          {:op :edit-prepare
+                           :spec {:op "set-body" :module "src.fram.overlayroot"
+                                  :name "root-value" :datum 41}})
+          checked (set (:checked-modules prep))
+          calls0 (verifier-invocation-count)
+          verified (coord-raw overlay-port overlay-log
+                              {:op :edit-verify
+                               :candidate (:candidate prep)})
+          calls1 (verifier-invocation-count)]
+      (chk "V0: reverse selector includes the dependent but not its untouched third provider"
+           (and (checked "src.fram.overlayroot")
+                (checked "src.fram.overlaydependent")
+                (not (checked "src.fram.overlaythird"))))
+      (chk "V0: sealed overlay is exactly the selected modules plus their provider closure"
+           (and (true? (:ok verified))
+                (= 1 (- calls1 calls0))
+                (= 3 (:overlay-module-count prep)))))
+    (finally (stop-daemon! daemon))))
 
 (let [daemon (boot-daemon! slow-port slow-log
                            {"FRAM_EDIT_VERIFIER_FIXTURE_MODE" "accept"
@@ -664,7 +672,9 @@
 (def base-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home
            "FRAM_COORD_READ_TIMEOUT_MS" "180000"
-           "FRAM_LOG" facts-log "FRAM_THREADS" tmp "FRAM_PORT" (str dead-port)
+           ;; graph-edit mode fences the adapter to ONE coordinator: FRAM_PORT/FRAM_LOG
+           ;; must name the same port and canonical file as their FRAM_CODE_* twins.
+           "FRAM_LOG" code-log "FRAM_THREADS" tmp "FRAM_PORT" (str main-port)
            "FRAM_MCP_PROFILE" "graph-edit-v1"
            "FRAM_GRAPH_EDIT" "1" "FRAM_FLIP" "1"
            "FRAM_CODE_PORT" (str main-port)
@@ -678,7 +688,9 @@
     (System/getenv "FRAM_RACKET") (assoc "FRAM_RACKET" (System/getenv "FRAM_RACKET"))))
 (def transaction-env
   (assoc base-env
+         "FRAM_PORT" (str transaction-port)
          "FRAM_CODE_PORT" (str transaction-port)
+         "FRAM_LOG" transaction-log
          "FRAM_CODE_LOG" transaction-log))
 
 (defn run-mcp [env reqs]
@@ -1076,10 +1088,13 @@
                         :name "provider-marker"
                         :body "2"}]})
       text (or (rtext result) "")]
+  ;; The reference-orphan gate answers from the coordinator pre-check OR the sealed
+  ;; world check, whichever sees the dangling reference first; both are typed.
   (chk "T3: removing a still-referenced union variant is a typed final-world rejection"
        (and (rerr? result)
-            (str/includes? text "orphaned-binding-references")
-            (str/includes? text "orphan")))
+            (str/includes? text "nothing committed")
+            (or (str/includes? text "orphaned-binding-references")
+                (str/includes? text "beagle-world-rejected"))))
   (chk "T3: rejected referenced-variant removal is byte-identical everywhere"
        (and (= log0 (vec (read-bytes transaction-log)))
             (= v0 (transaction-version))
@@ -1164,8 +1179,9 @@
       text (or (rtext result) "")]
   (chk "T3: removing a still-referenced synthesized accessor is a typed final-world rejection"
        (and (rerr? result)
-            (str/includes? text "orphaned-binding-references")
-            (str/includes? text "orphan")))
+            (str/includes? text "nothing committed")
+            (or (str/includes? text "orphaned-binding-references")
+                (str/includes? text "beagle-world-rejected"))))
   (chk "T3: rejected referenced-accessor removal is byte-identical everywhere"
        (and (= log0 (vec (read-bytes transaction-log)))
             (= v0 (transaction-version))

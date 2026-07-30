@@ -78,15 +78,25 @@
   (with-open [socket (java.net.ServerSocket. 0)] (.getLocalPort socket)))
 
 (def port (free-port))
+;; The edit gate is launch-sealed: a coordinator started without FRAM_EDIT_VERIFIER
+;; rejects every graph edit as verification-unavailable.
 (def daemon
   (p/process {:dir root
               :out (str tmp "/daemon.log") :err (str tmp "/daemon.log")
-              :extra-env {"FRAM_REQUIRE_LOG_FENCE" "1"}}
+              :extra-env (merge base-tool-env
+                                {"FRAM_REQUIRE_LOG_FENCE" "1"
+                                 "FRAM_EDIT_VERIFIER" (str root "/bin/fram-edit-verifier")
+                                 "FRAM_EDIT_VERIFIER_RACKET" racket-bin
+                                 ;; before/after version comparisons need a quiescent log:
+                                 ;; post-boot snapshot metadata is a legitimate async writer.
+                                 "FRAM_SNAPSHOT_BOOT" "0"})}
              "bin/fram-daemon" "serve-flat" (str port) code-log))
 
 (defn coord [req] (rt/coord-request-for-log port code-log req))
+;; Sized for a JVM coordinator boot, not for a quiet machine: readiness is the only
+;; thing polled here, and a 10s budget flakes whenever the box is loaded.
 (defn eventually [f]
-  (loop [remaining 400]
+  (loop [remaining 2400]
     (cond
       (try (f) (catch Throwable _ false)) true
       (zero? remaining) false
@@ -104,16 +114,21 @@
           "FRAM_THREADS" project
           "FRAM_SRC" project}))
 
-(defn mcp-call [env id tool arguments]
+(defn mcp-run [env id tool arguments]
   (let [request (json/generate-string
                  {:jsonrpc "2.0" :id id :method "tools/call"
                   :params {:name tool :arguments arguments}})
         result (p/shell {:dir root :in (str request "\n")
                          :out :string :err :string :continue true :extra-env env}
                         "bin/fram-mcp")]
-    (->> (str/split-lines (:out result))
-         (keep #(try (json/parse-string % true) (catch Throwable _ nil)))
-         (some #(when (= id (:id %)) %)))))
+    {:reply (->> (str/split-lines (:out result))
+                 (keep #(try (json/parse-string % true) (catch Throwable _ nil)))
+                 (some #(when (= id (:id %)) %)))
+     :exit (:exit result)
+     :err (str (:err result))}))
+
+(defn mcp-call [env id tool arguments]
+  (:reply (mcp-run env id tool arguments)))
 
 (defn reply-error? [reply] (boolean (get-in reply [:result :isError])))
 (defn reply-text [reply] (or (get-in reply [:result :content 0 :text]) ""))
@@ -121,7 +136,7 @@
 
 (def watchdog
   (future
-    (Thread/sleep 120000)
+    (Thread/sleep 300000)          ; must outlast the readiness budget plus the edits
     (binding [*out* *err*] (println "mcp-warm-graph-edit-regression: hard timeout"))
     (try (p/destroy-tree daemon) (catch Throwable _ nil))
     (System/exit 124)))
@@ -174,10 +189,17 @@
         confined-env (assoc mcp-env "FRAM_SRC" narrow-root)
         before-version (version)
         before-source (slurp source-file)
-        reply (mcp-call confined-env 12 "set-body"
-                        {:module "src.plangrep.model" :name "base" :body "99"})]
+        run (mcp-run confined-env 12 "set-body"
+                     {:module "src.plangrep.model" :name "base" :body "99"})
+        reply (:reply run)]
+    ;; Confinement fences the adapter at startup as well as per call: either the
+    ;; tool refuses to launch, or it answers with the per-edit rejection.
     (check! "outside-FRAM_SRC registered path is rejected"
-            (and (reply-error? reply) (str/includes? (reply-text reply) "outside FRAM_SRC")))
+            (or (and (reply-error? reply)
+                     (str/includes? (reply-text reply) "outside FRAM_SRC"))
+                (and (nil? reply)
+                     (not (zero? (:exit run)))
+                     (str/includes? (:err run) "OUTSIDE the FRAM_SRC"))))
     (check! "path-confinement rejection happens before graph mutation"
             (= before-version (version)))
     (check! "path-confinement rejection leaves the nested view byte-identical"

@@ -25,7 +25,8 @@
 ;; Needs: bb + out/ + resolve.clj + Beagle (facts-roundtrip CLI
 ;; + beagle-build-all). Skips with a clear message if a prerequisite is missing.
 (require '[babashka.process :as p] '[cheshire.core :as json]
-         '[clojure.string :as str] '[clojure.java.io :as io])
+         '[clojure.string :as str] '[clojure.java.io :as io]
+         '[clojure.edn :as edn])
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
@@ -34,6 +35,13 @@
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def root (System/getProperty "user.dir"))
+(def racket-bin
+  (or (System/getenv "FRAM_RACKET")
+      (let [r (try (p/sh {:out :string :err :string}
+                         "direnv" "exec" beagle-home "which" "racket")
+                   (catch Throwable _ nil))]
+        (when (and r (zero? (:exit r))) (str/trim (:out r))))
+      ""))
 (def needed
   [[beagle-bin "Beagle CLI"]
    [(str beagle-home "/bin/beagle-build-all") "beagle-build-all"]
@@ -165,10 +173,33 @@
                                     (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int p)) 300) false)
                                   (catch Exception _ true)))
           port (or (some #(when (port-free? %) %) [7993 7994 7991 7999 7992]) 7993)
-          daemon (p/process {:extra-env base-env :out (str tmp "/code-daemon.log") :err (str tmp "/code-daemon.log")}
+          ;; The graph edit gate is launch-sealed: a coordinator started without
+          ;; FRAM_EDIT_VERIFIER rejects every FLIP edit as verification-unavailable.
+          daemon (p/process {:extra-env (merge base-env
+                                               {"FRAM_EDIT_VERIFIER" (str root "/bin/fram-edit-verifier")
+                                                "FRAM_EDIT_VERIFIER_RACKET" racket-bin})
+                             :out (str tmp "/code-daemon.log") :err (str tmp "/code-daemon.log")}
                             "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) code-log)]
       (try
-        (Thread/sleep 7000)
+        ;; Wait for the coordinator to answer, never a constant: this corpus folds a
+        ;; ~300k-fact code log, so any fixed sleep races the boot fold on a busy box.
+        (let [ready?
+              (fn []
+                (try
+                  (with-open [socket (java.net.Socket.)]
+                    (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 300)
+                    (.setSoTimeout socket 5000)
+                    (let [writer (io/writer (.getOutputStream socket))
+                          reader (java.io.PushbackReader. (io/reader (.getInputStream socket)))]
+                      (.write writer (str (pr-str {:op :status}) "\n"))
+                      (.flush writer)
+                      (integer? (:version (edn/read reader)))))
+                  (catch Exception _ false)))]
+          (chk "FLIP: code coordinator answers before the edit"
+               (loop [remaining 360]
+                 (cond (ready?) true
+                       (zero? remaining) false
+                       :else (do (Thread/sleep 500) (recur (dec remaining)))))))
         (let [flip-env (assoc base-env "FRAM_FLIP" "1" "FRAM_CODE_PORT" (str port)
                               "FRAM_CODE_LOG" code-log "FRAM_BIN" (str root "/bin"))
               ;; re-run call! but with the FLIP env (a fresh server fold each call).
@@ -198,10 +229,10 @@
           ;; the text-legacy arm says none of these. Accept every graph-sourced
           ;; marker — asserting only the older ones goes stale as the protocol
           ;; hardens.
-          (chk "FLIP: reply reports the graph-sourced path (FLIP / WARM :edit-min / candidate-v1)"
+          (chk "FLIP: reply reports the graph-sourced path (FLIP / WARM :edit-min / candidate-vN)"
                (let [t (or (reply-text r) "")]
                  (or (str/includes? t "FLIP") (str/includes? t "WARM :edit-min")
-                     (str/includes? t "graph-edit-candidate-v1"))))
+                     (str/includes? t "graph-edit-candidate-v"))))
           (chk "FLIP: .bclj re-rendered (new body present -> render-from-log ran)"
                (and (not= before after) (str/includes? after "p (c/value-id ctx pname)")))
           (chk "FLIP: the AST delta is DURABLE in the code log (kind/v/fN lines appended)"

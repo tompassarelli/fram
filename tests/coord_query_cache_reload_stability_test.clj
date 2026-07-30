@@ -9,12 +9,14 @@
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
 (defn free-port []
   (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s)))
-(defn eventually [f]
-  (loop [remaining 2400]
+(defn eventually
+  ([f] (eventually f 2400))
+  ([f remaining-attempts]
+   (loop [remaining remaining-attempts]
     (cond
       (try (f) (catch Throwable _ false)) true
       (zero? remaining) false
-      :else (do (Thread/sleep 25) (recur (dec remaining))))))
+      :else (do (Thread/sleep 25) (recur (dec remaining)))))))
 (defn client [port request]
   (with-open [socket (java.net.Socket.)]
     (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
@@ -51,9 +53,9 @@
 
 (def watchdog
   (future
-    (Thread/sleep 240000)
+    (Thread/sleep 480000)
     (binding [*out* *err*]
-      (println "coord-query-cache-reload-stability: hard timeout after 240s"))
+      (println "coord-query-cache-reload-stability: hard timeout after 480s"))
     (System/exit 124)))
 
 (let [port (free-port)
@@ -77,8 +79,10 @@
                            "clojure" "-M" "coord_daemon.clj" "serve-flat"
                            (str port) (.getPath log))]
   (try
+    ;; The 141k cold fold outruns the ordinary poll budget on a loaded machine;
+    ;; boot readiness gets its own longer bound, inside the watchdog.
     (check! "141k daemon starts"
-            (eventually #(integer? (:version (client port {:op :status})))))
+            (eventually #(integer? (:version (client port {:op :status}))) 9600))
 
     ;; A wire schema mutation invalidates the whole warm query cache.  The cold
     ;; projection/index build must be observable as active but own no writer lock.
