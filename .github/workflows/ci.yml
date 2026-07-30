@@ -39,6 +39,8 @@ jobs:
         run: |
           export _BEAGLE_RACKET="$(command -v racket)"
           export _BEAGLE_ZO_CHECKED=1
+          # Package linking owns collection resolution in this step.
+          export _BEAGLE_SCOPE_ROOT="$BEAGLE_HOME"
           source "$BEAGLE_HOME/bin/_beagle-racket"
           "$RACO" pkg install --auto --link \
             "$BEAGLE_HOME/beagle-lib/" \
