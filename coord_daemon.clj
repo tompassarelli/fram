@@ -6295,8 +6295,8 @@
   ;; unwraps :for-log; using it would misclassify the OUTER envelope as an
   ;; :edit-verify request and then (correctly but irrelevantly) report that the
   ;; outer map has no :candidate.
-  (if (= :edit-verify (:op req))
-    {:route :direct :handler :edit-verify
+  (if (#{:edit-verify :edit-candidate-status} (:op req))
+    {:route :direct :handler (:op req)
      :required [:candidate] :response :edit}
     (wire/request-dispatch
      req
