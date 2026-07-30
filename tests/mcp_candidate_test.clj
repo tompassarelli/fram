@@ -422,6 +422,25 @@
             (> (:overlay-module-count prep)
                (count (:checked-modules prep))))))
 
+(let [prep (transaction-coord
+            {:op :edit-prepare
+             :spec {:op "set-body" :module "src.fram.wkfix"
+                    :name "double-it" :datum "\"not-an-int\""}})
+      rejected (coord-raw transaction-port transaction-log
+                          {:op :edit-verify :candidate (:candidate prep)})
+      status (transaction-coord
+              {:op :edit-candidate-status :candidate (:candidate prep)})
+      diagnostic (:diagnostic status)]
+  (chk "V0: rejected candidate status retains a bounded checker diagnostic"
+       (and (= :candidate-check-failed (:code rejected))
+            (= (:candidate prep) (:candidate rejected))
+            (= (:candidate prep) (:candidate status) (:candidate diagnostic))
+            (= :rejected (:verification-state status) (:status diagnostic))
+            (= 1 (:exit diagnostic))
+            (string? (:code diagnostic))
+            (vector? (:errors diagnostic))
+            (string? (:stderr diagnostic)))))
+
 (let [stale-prep (transaction-coord
                   {:op :edit-prepare
                    :spec {:op "set-body" :module "src.fram.wkfix"

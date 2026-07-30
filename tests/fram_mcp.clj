@@ -941,7 +941,7 @@
                                    "nothing committed"
                                    (when-let [code (:code verification)]
                                      (str ", " (name code)))
-                                   ")"
+                                   "; candidate " (:candidate prep) ")"
                                    ": "
                                    (str/join
                                     "; "
