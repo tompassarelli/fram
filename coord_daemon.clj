@@ -7725,6 +7725,23 @@
                     (keep :p parsed))]
           (swap! source merge-source-latest single-preds parsed))))))
 
+(defn- migrate-predicate-classifications
+  "Compile the kernel's predicate oracle once per spelling used by migration.
+   Predicate classification depends only on live schema metadata, not on every
+   domain fact. Keeping the kernel accessors as the oracle preserves aliases,
+   explicit negative declarations, and fallback precedence without rescanning
+   the whole folded corpus for each materialized fact."
+  [metadata-facts schema-plan]
+  (into {}
+        (map (fn [p]
+               (let [value-kind (ck/value-kind-of metadata-facts {} p)]
+                 [p {:cardinality (ck/cardinality-of metadata-facts {} p)
+                     :value-kind value-kind
+                     :link? (boolean
+                             (or (code-structural-link-pred? p)
+                                 (= "ref" value-kind)))}])))
+        (distinct (concat (:domain schema-plan) (:card-only schema-plan)))))
+
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
         ;; without fsync, so a copy/read caught mid-write can yield an assertion
@@ -7750,6 +7767,8 @@
                      (vec (card-only-preds cmap asserts))
                      (set (keys by-pred))
                      schema-preds)
+        predicate-classifications
+        (migrate-predicate-classifications metadata-facts schema-plan)
         st (c/new-store)
         tx (c/begin-tx! st "migrate")]
     (s/setup! st tx)
@@ -7761,18 +7780,14 @@
       (let [pid (c/value! st (pred-name (:l cl)))]
         (s/assert! st pid (:p cl) (:r cl) tx)))
     (doseq [p (:domain schema-plan)]   ; skip reserved engine preds (defensive)
-      (s/def-predicate! st p
-                        (ck/cardinality-of facts {} p)
-                        (ck/value-kind-of facts {} p)
-                        tx))
+      (let [{:keys [cardinality value-kind]} (get predicate-classifications p)]
+        (s/def-predicate! st p cardinality value-kind tx)))
     ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
     ;; NO domain facts (absent from by-pred). Materialize the fact so s/cardinality (the
     ;; write-path authority) matches the CLI map; no value facts ⇒ value_kind "literal".
     (doseq [p (:card-only schema-plan)]
-      (s/def-predicate! st p
-                        (ck/cardinality-of facts {} p)
-                        (ck/value-kind-of facts {} p)
-                        tx))
+      (let [{:keys [cardinality value-kind]} (get predicate-classifications p)]
+        (s/def-predicate! st p cardinality value-kind tx)))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
     ;; present in the flat log AND not classified by a cardinality fact still get their
     ;; cardinality FACT, so a first runtime write supersedes (not accumulates) — the
@@ -7794,8 +7809,7 @@
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
       (doseq [cl facts :when (not (schema-preds (:p cl)))]
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
-          (if (or (code-structural-link-pred? p)
-                  (= "ref" (ck/value-kind-of facts {} p)))
+          (if (:link? (get predicate-classifications p))
             (s/link! st su p (ent! r) tx)
             (s/assert! st su p r tx)))))
     ;; Seed the seq-space to the flat log's max :tx so (a) :version == the flat
