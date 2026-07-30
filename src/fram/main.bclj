@@ -110,7 +110,14 @@
                     "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or "
                     "`export <dir> --force` to regenerate files FROM the log (discards those edits)."))
       (let [idx (k/build-index log-facts)
-            tes (k/thread-ids-i idx)]
+            predicate-subjects
+            (mapv (fn [c :- k/Fact] :- String (:l c))
+                  (filterv (fn [c :- k/Fact] :- Bool
+                             (or (= (:p c) "predicate_name")
+                                 (= (:p c) "predicate_alias")))
+                           log-facts))
+            tes (vec (distinct (concat (k/thread-ids-i idx)
+                                       predicate-subjects)))]
         (fram.rt/ensure-dir out-dir)
         (doseq [te tes]
           (let [title (k/one-i idx te "title")

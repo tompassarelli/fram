@@ -118,36 +118,47 @@
 
 (defn register-predicate! [ctx ^String spelling tx]
   (let [resolved (resolve-predicate ctx spelling)
-   pid (if (some? resolved) resolved (c/value! ctx spelling))
+   legacy (c/value-id ctx spelling)
+   candidate (if (some? resolved) resolved legacy)
+   canonical (if (some? candidate) (predicate-name ctx candidate) spelling)
+   default-alias (str ":" canonical)
+   alias-ids (predicate-ids ctx default-alias)]
+  (if (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids)))))) (do
+  (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids}))))
+  (let [pid (if (some? candidate) candidate (c/value! ctx spelling))
    name-pid (c/value! ctx "predicate_name")
    alias-pid (c/value! ctx "predicate_alias")
    name-cids (c/by-lp ctx pid name-pid)]
   (if (empty? name-cids) (do
   (c/fact! ctx pid name-pid (c/value! ctx spelling) tx)))
-  (let [canonical (predicate-name ctx pid)
-   default-alias (str ":" canonical)
-   alias-ids (predicate-ids ctx default-alias)]
-  (if (and (not (empty? alias-ids)) (not (and (= 1 (count alias-ids)) (= pid (first alias-ids))))) (do
-  (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids}))))
   (if (empty? alias-ids) (do
-  (c/fact! ctx pid alias-pid (c/value! ctx default-alias) tx))))
-  pid))
+  (c/fact! ctx pid alias-pid (c/value! ctx default-alias) tx)))
+  pid)))
 
 (defn alias-predicate! [ctx ^String spelling ^String alias tx]
+  (let [resolved (resolve-predicate ctx spelling)
+   candidate (if (some? resolved) resolved (c/value-id ctx spelling))
+   ids-before (predicate-ids ctx alias)]
+  (if (and (not (empty? ids-before)) (or (nil? candidate) (not (and (= 1 (count ids-before)) (= candidate (first ids-before)))))) (do
+  (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids-before}))))
   (let [pid (register-predicate! ctx spelling tx)
    ids (predicate-ids ctx alias)]
-  (if (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids))))) (do
-  (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids}))))
   (if (empty? ids) (do
   (c/fact! ctx pid (c/value! ctx "predicate_alias") (c/value! ctx alias) tx)))
-  pid))
+  pid)))
 
 (defn rename-predicate! [ctx ^String spelling ^String new-name tx]
+  (let [resolved (resolve-predicate ctx spelling)
+   candidate (if (some? resolved) resolved (c/value-id ctx spelling))
+   name-ids (predicate-ids ctx new-name)
+   default-alias (str ":" new-name)
+   alias-ids (predicate-ids ctx default-alias)]
+  (if (and (not (empty? name-ids)) (or (nil? candidate) (not (and (= 1 (count name-ids)) (= candidate (first name-ids)))))) (do
+  (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids name-ids}))))
+  (if (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids)))))) (do
+  (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate spelling :new-name new-name :alias default-alias :ids alias-ids}))))
   (let [pid (register-predicate! ctx spelling tx)
-   ids (predicate-ids ctx new-name)]
-  (if (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids))))) (do
-  (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids ids}))))
-  (let [old-name (predicate-name ctx pid)]
+   old-name (predicate-name ctx pid)]
   (if (not (= old-name new-name)) (do
   (let [old-ids (predicate-ids ctx old-name)
    alias-pid (c/value! ctx "predicate_alias")
@@ -156,5 +167,5 @@
   (if (and (= 1 (count old-ids)) (= pid (first old-ids)) (empty? aliases)) (do
   (c/fact! ctx pid alias-pid old-vid tx))))
   (assert! ctx pid "predicate_name" new-name tx)
-  (alias-predicate! ctx new-name (str ":" new-name) tx))))
-  pid))
+  (alias-predicate! ctx new-name default-alias tx)))
+  pid)))

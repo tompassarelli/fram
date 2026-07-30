@@ -136,33 +136,40 @@
     (if (string? raw) raw (str raw))))
 
 (defn register-predicate! [ctx :- (Atom t/Store) spelling :- String tx :- Int] :- Int
-  (let [resolved (resolve-predicate ctx spelling) pid (if (some? resolved) resolved (c/value! ctx spelling)) name-pid (c/value! ctx "predicate_name") alias-pid (c/value! ctx "predicate_alias") name-cids (c/by-lp ctx pid name-pid)]
-    (when (empty? name-cids)
-      (c/fact! ctx pid name-pid (c/value! ctx spelling) tx))
-    (let [canonical (predicate-name ctx pid) default-alias (str ":" canonical) alias-ids (predicate-ids ctx default-alias)]
-      (when (and (not (empty? alias-ids)) (not (and (= 1 (count alias-ids)) (= pid (first alias-ids)))))
-        (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids})))
+  (let [resolved (resolve-predicate ctx spelling) legacy (c/value-id ctx spelling) candidate (if (some? resolved) resolved legacy) canonical (if (some? candidate) (predicate-name ctx candidate) spelling) default-alias (str ":" canonical) alias-ids (predicate-ids ctx default-alias)]
+    (when (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids))))))
+      (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids})))
+    (let [pid (if (some? candidate) candidate (c/value! ctx spelling)) name-pid (c/value! ctx "predicate_name") alias-pid (c/value! ctx "predicate_alias") name-cids (c/by-lp ctx pid name-pid)]
+      (when (empty? name-cids)
+        (c/fact! ctx pid name-pid (c/value! ctx spelling) tx))
       (when (empty? alias-ids)
-        (c/fact! ctx pid alias-pid (c/value! ctx default-alias) tx)))
-    pid))
+        (c/fact! ctx pid alias-pid (c/value! ctx default-alias) tx))
+      pid)))
 
 (defn alias-predicate! [ctx :- (Atom t/Store) spelling :- String alias :- String tx :- Int] :- Int
-  (let [pid (register-predicate! ctx spelling tx) ids (predicate-ids ctx alias)]
-    (when (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids)))))
-      (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids})))
-    (when (empty? ids)
-      (c/fact! ctx pid (c/value! ctx "predicate_alias") (c/value! ctx alias) tx))
-    pid))
+  (let [resolved (resolve-predicate ctx spelling) candidate (if (some? resolved) resolved (c/value-id ctx spelling)) ids-before (predicate-ids ctx alias)]
+    (when (and (not (empty? ids-before)) (or (nil? candidate) (not (and (= 1 (count ids-before)) (= candidate (first ids-before))))))
+      (throw (ex-info (str "predicate spelling collision: " alias) {:predicate spelling :alias alias :ids ids-before})))
+    (let [pid (register-predicate! ctx spelling tx) ids (predicate-ids ctx alias)]
+      (when (empty? ids)
+        (c/fact! ctx
+          pid
+          (c/value! ctx "predicate_alias")
+          (c/value! ctx alias)
+          tx))
+      pid)))
 
 (defn rename-predicate! [ctx :- (Atom t/Store) spelling :- String new-name :- String tx :- Int] :- Int
-  (let [pid (register-predicate! ctx spelling tx) ids (predicate-ids ctx new-name)]
-    (when (and (not (empty? ids)) (not (and (= 1 (count ids)) (= pid (first ids)))))
-      (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids ids})))
-    (let [old-name (predicate-name ctx pid)]
+  (let [resolved (resolve-predicate ctx spelling) candidate (if (some? resolved) resolved (c/value-id ctx spelling)) name-ids (predicate-ids ctx new-name) default-alias (str ":" new-name) alias-ids (predicate-ids ctx default-alias)]
+    (when (and (not (empty? name-ids)) (or (nil? candidate) (not (and (= 1 (count name-ids)) (= candidate (first name-ids))))))
+      (throw (ex-info (str "predicate spelling collision: " new-name) {:predicate spelling :new-name new-name :ids name-ids})))
+    (when (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids))))))
+      (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate spelling :new-name new-name :alias default-alias :ids alias-ids})))
+    (let [pid (register-predicate! ctx spelling tx) old-name (predicate-name ctx pid)]
       (when (not (= old-name new-name))
         (let [old-ids (predicate-ids ctx old-name) alias-pid (c/value! ctx "predicate_alias") old-vid (c/value! ctx old-name) aliases (c/by-pr ctx alias-pid old-vid)]
           (when (and (= 1 (count old-ids)) (= pid (first old-ids)) (empty? aliases))
             (c/fact! ctx pid alias-pid old-vid tx)))
         (assert! ctx pid "predicate_name" new-name tx)
-        (alias-predicate! ctx new-name (str ":" new-name) tx)))
-    pid))
+        (alias-predicate! ctx new-name default-alias tx))
+      pid)))

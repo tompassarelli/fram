@@ -43,7 +43,8 @@
    log-sigs (sig-member-map log-facts)
    file-ahead (filterv (fn [c] (nil? (get log-sigs (fact-sig c)))) file-facts)]
   (if (and (not (empty? file-ahead)) (not force)) (println (str "REFUSING export: " (count file-ahead) " file fact(s) are not in the log " "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or " "`export <dir> --force` to regenerate files FROM the log (discards those edits).")) (let [idx (k/build-index log-facts)
-   tes (k/thread-ids-i idx)]
+   predicate-subjects (mapv (fn [c] (:l c)) (filterv (fn [c] (or (= (:p c) "predicate_name") (= (:p c) "predicate_alias"))) log-facts))
+   tes (vec (distinct (concat (k/thread-ids-i idx) predicate-subjects)))]
   (fram.rt/ensure-dir out-dir)
   (doseq [te tes]
   (let [title (k/one-i idx te "title")

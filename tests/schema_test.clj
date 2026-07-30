@@ -65,6 +65,43 @@
     false
     (catch clojure.lang.ExceptionInfo _ true)))
 
+(def atomic-ctx (c/new-store))
+(def atomic-tx (c/begin-tx! atomic-ctx "atomic-collision"))
+(s/setup! atomic-ctx atomic-tx)
+(s/def-predicate! atomic-ctx ":atomic_auto" "multi" "literal" atomic-tx)
+(def atomic-before-store @atomic-ctx)
+(def atomic-before-dump (pr-str (c/dump-store atomic-ctx)))
+(def auto-register-collision-rejected
+  (try
+    (s/register-predicate! atomic-ctx "atomic_auto" atomic-tx)
+    false
+    (catch clojure.lang.ExceptionInfo _ true)))
+(def auto-register-store-unchanged (= atomic-before-store @atomic-ctx))
+(def auto-register-dump-unchanged
+  (= atomic-before-dump (pr-str (c/dump-store atomic-ctx))))
+
+(def user-alias-before-store @atomic-ctx)
+(def user-alias-before-dump (pr-str (c/dump-store atomic-ctx)))
+(def user-alias-collision-rejected
+  (try
+    (s/alias-predicate! atomic-ctx "fresh_alias_source" ":atomic_auto" atomic-tx)
+    false
+    (catch clojure.lang.ExceptionInfo _ true)))
+(def user-alias-store-unchanged (= user-alias-before-store @atomic-ctx))
+(def user-alias-dump-unchanged
+  (= user-alias-before-dump (pr-str (c/dump-store atomic-ctx))))
+
+(def rename-before-store @atomic-ctx)
+(def rename-before-dump (pr-str (c/dump-store atomic-ctx)))
+(def rename-preflight-collision-rejected
+  (try
+    (s/rename-predicate! atomic-ctx "fresh_rename_source" ":atomic_auto" atomic-tx)
+    false
+    (catch clojure.lang.ExceptionInfo _ true)))
+(def rename-store-unchanged (= rename-before-store @atomic-ctx))
+(def rename-dump-unchanged
+  (= rename-before-dump (pr-str (c/dump-store atomic-ctx))))
+
 (def stable-literal-pid (s/def-predicate! ctx "stable_literal" "multi" "literal" tx))
 (s/alias-predicate! ctx "stable_literal" "stable_value" tx)
 (def stable-subj (c/entity! ctx))
@@ -116,6 +153,21 @@
     alias-collision-rejected]
    ["rename collision with another canonical rejects loudly"
     canonical-collision-rejected]
+   ["auto-register default-alias collision rejects before mutation"
+    (and auto-register-collision-rejected
+         auto-register-store-unchanged
+         auto-register-dump-unchanged
+         (nil? (c/value-id atomic-ctx "atomic_auto")))]
+   ["user alias collision rejects before registering its source"
+    (and user-alias-collision-rejected
+         user-alias-store-unchanged
+         user-alias-dump-unchanged
+         (nil? (c/value-id atomic-ctx "fresh_alias_source")))]
+   ["rename collision rejects before registering its source"
+    (and rename-preflight-collision-rejected
+         rename-store-unchanged
+         rename-dump-unchanged
+         (nil? (c/value-id atomic-ctx "fresh_rename_source")))]
    ["assert and find-by resolve aliases through the stable id"
     (and (= stable-literal-pid (:p (c/fact-of ctx stable-literal-cid)))
          (= ["needle"] (s/lookup-all ctx stable-subj "stable_literal"))

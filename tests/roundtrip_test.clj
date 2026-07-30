@@ -10,7 +10,8 @@
          '[fram.import :as imp]
          '[fram.export :as exp]
          '[fram.rt]
-         '[clojure.java.io :as io])
+         '[clojure.java.io :as io]
+         '[babashka.process :as proc])
 
 (defn fact-set [assertions]
   (set (map (juxt :l :p :r) (:facts (fold/fold assertions)))))
@@ -24,7 +25,8 @@
 (let [root (str (System/getProperty "java.io.tmpdir") "/fram-predicate-rt-"
                 (System/currentTimeMillis))
       src (str root "/src")
-      out (str root "/out")]
+      out (str root "/out")
+      log (str root "/facts.log")]
   (.mkdirs (io/file src))
   (.mkdirs (io/file out))
   (spit (str src "/01-friend.md")
@@ -51,10 +53,17 @@
     (require-pass "identity metadata remains ordinary facts"
                   (and (contains? sigs ["@friend" "predicate_name" "friend"])
                        (contains? sigs ["@friend" "predicate_alias" ":friend"])))
-    (doseq [te (distinct (map :l facts))]
-      (spit (str out "/" (subs te 1) ".md") (exp/thread-md facts te)))
-    (require-pass "identity-aware import/export/import is fact-identical"
-                  (= sigs (fact-set (imp/load-corpus out))))
+    (fram.rt/write-log log ops)
+    (let [run (proc/shell {:continue true
+                           :out :string
+                           :err :string
+                           :extra-env {"FRAM_THREADS" src
+                                       "FRAM_LOG" log}}
+                          "./bin/fram" "export" out "--force")]
+      (require-pass "real CLI export succeeds"
+                    (= 0 (:exit run)))
+      (require-pass "real CLI export includes predicate metadata subjects"
+                    (= sigs (fact-set (imp/load-corpus out)))))
     (let [rendered (exp/thread-md facts "@alice")]
       (require-pass "declared ref exports bare"
                     (clojure.string/includes? rendered "friend  @bob"))
