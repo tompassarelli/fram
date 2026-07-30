@@ -9,6 +9,7 @@
 (require '[fram.store :as c]
          '[resolve-binds :as rb]
          '[resolve-corpus :as rco]
+         '[resolve-core :as rc]
          '[resolve-mint :as rmi]
          '[resolve-modules :as rm]
          '[resolve-query]
@@ -180,6 +181,121 @@
        (and (= 5 (:code prefix-collision-result))
             (= :no-def (:reason prefix-collision-result)))
        (pr-str prefix-collision-result))
+
+;; Upsert replacement must choose both identity and position from the same live
+;; wrapper snapshot. This catches the split-projection failure that appended a
+;; second same-name form when a separately-resolved victim could not be rematched.
+(def upsert-wrapper (rmi/wrapper-of ctx nil @ents source-id))
+
+(defn- form-name [form]
+  (let [d (rm/unwrap-def ctx nil form)
+        children (rr/ordered-children ctx d)
+        head (rr/head-sym ctx nil d)
+        name-index (rc/type-name-index
+                    head
+                    (rr/sym-val ctx nil (nth children 1 nil)))]
+    (rr/sym-val
+     ctx nil
+     (rm/logical-name-leaf ctx nil (nth children name-index nil)))))
+
+(defn- named-wrapper-entries [verb name]
+  (filterv (fn [entry]
+             (= name (form-name (nth entry 2))))
+           (rvb/wrap-forms verb upsert-wrapper)))
+
+(defn- upsert-verb [wrapper binding-fn mint-fn]
+  (rvb/make-verb!
+   {:ctx ctx
+    :view nil
+    :tx tx
+    :SUP SUP
+    :KIND KIND
+    :Vp Vp
+    :srcs [source-id]
+    :emit-srcs []
+    :capture-only? false
+    :reject! (fn [code & [detail]]
+               (throw (ex-info "expected upsert rejection"
+                               (merge {:code code} detail))))
+    :author-emit (fn [& _] nil)
+    :extract-file (fn [& _] nil)
+    :out-path identity
+    :def-binding binding-fn
+    :wrapper-of (fn [_] wrapper)
+    :retire (fn [cid] (rmi/retire-fact! mint cid))
+    :reresolve (fn [] nil)
+    :mint mint-fn
+    :scope-srcs (fn [scope] (if (= scope source-id) [source-id] []))
+    :BOUND BOUND
+    :REFERS REFERS
+    :FIXED FIXED}))
+
+(def initial-binding
+  (fn [src name]
+    (rco/def-binding {source-id modframe}
+                     {source-id typeframe}
+                     src name)))
+
+(def live-upsert-verb
+  (upsert-verb
+   upsert-wrapper
+   initial-binding
+   (fn [src form] (rmi/mint-datum! mint src form))))
+
+(def replace-before
+  (first (named-wrapper-entries live-upsert-verb "plain-caller")))
+
+(rvb/verb-upsert-form!
+ live-upsert-verb source-id
+ '(defn plain-caller [x :- Int] :- Int (+ x 1)))
+
+(def replace-after
+  (named-wrapper-entries live-upsert-verb "plain-caller"))
+
+(check "same-name upsert replaces exactly one live wrapper/source form"
+       (and (some? replace-before)
+            (= 1 (count replace-after))
+            (not= (nth replace-before 2)
+                  (nth (first replace-after) 2)))
+       (pr-str replace-after))
+
+(def append-count-before
+  (count (rvb/wrap-forms live-upsert-verb upsert-wrapper)))
+
+(rvb/verb-upsert-form!
+ live-upsert-verb source-id
+ '(defn newly-appended [x :- Int] :- Int x))
+
+(check "new-name upsert appends one wrapper/source form"
+       (and (= (inc append-count-before)
+               (count (rvb/wrap-forms live-upsert-verb upsert-wrapper)))
+            (= 1 (count (named-wrapper-entries
+                         live-upsert-verb "newly-appended"))))
+       (pr-str (rvb/wrap-forms live-upsert-verb upsert-wrapper)))
+
+(def unresolved-wrapper (c/entity! ctx))
+(def unresolved-mints (atom 0))
+(def unresolved-verb
+  (upsert-verb
+   unresolved-wrapper
+   (fn [_ name] (when (= name "plain-caller") (get modframe name)))
+   (fn [_ _] (swap! unresolved-mints inc))))
+(def unresolved-facts-before (count (c/current-facts ctx)))
+(def unresolved-result
+  (try
+    (rvb/verb-upsert-form!
+     unresolved-verb source-id
+     '(defn plain-caller [x :- Int] :- Int (+ x 2)))
+    {:unexpected :accepted}
+    (catch clojure.lang.ExceptionInfo e
+      (ex-data e))))
+
+(check "same-name binding with no live wrapper entry rejects before minting"
+       (and (= 3 (:code unresolved-result))
+            (zero? @unresolved-mints)
+            (= unresolved-facts-before (count (c/current-facts ctx))))
+       (pr-str {:result unresolved-result
+                :mints @unresolved-mints}))
 
 (def hinted-def
   (some (fn [form]

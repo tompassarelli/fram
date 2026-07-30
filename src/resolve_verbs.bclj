@@ -264,6 +264,10 @@
       :else
       nil)))
 
+(defn writable-victim-in-snapshot [v :- Verb datum :- Any forms :- (Vec Any)] :- Any
+  (let [ctx (:ctx v) view (:view v) BOUND (:BOUND v) REFERS (:REFERS v) FIXED (:FIXED v) key :- (Vec Any) (vec (or (rc/writable-form-key datum) [])) victim-entry (cond (= :defmethod (first key)) (let [m (str (second key)) dv (nth key 2)] (some (fn [entry :- Any] :- Any (let [f (nn (enode entry)) d (rm/unwrap-def ctx view f) k (rr/ordered-children ctx d)] (when (and (= "defmethod" (rr/head-sym ctx view d)) (= m (rr/sym-val ctx view (second k))) (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil)))) entry))) forms)) (= :extension (first key)) (let [head (str (second key)) tgt (nth key 2)] (some (fn [entry :- Any] :- Any (let [f (nn (enode entry)) d (rm/unwrap-def ctx view f)] (when (and (= head (rr/head-sym ctx view d)) (= tgt (rv/node->canon ctx view BOUND REFERS FIXED (second (rr/ordered-children ctx d))))) entry))) forms)) (= :named (first key)) (let [nm (str (second key))] (some (fn [entry :- Any] :- Any (let [f (nn (enode entry))] (when (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f))) (= nm (node-def-name v f))) entry))) forms)) :else nil)]
+    {:entry victim-entry :form (when (some? victim-entry) (enode victim-entry))}))
+
 ;; a human label for the upserted form (author-emit + result naming). For a value def
 ;; it is the name; for defmethod it is `M:dispatch`; for an extension it is
 ;; `head <target>`.
@@ -424,30 +428,34 @@
     (when (and (seq? datum) (not (rc/writable-def-head? (str (first datum)))))
       (warn (str "REJECTED — upsert-form spec head `" (first datum) "` is not a writable top-level def (def/defn/deftype/defmulti/defmethod/extend-*); no facts mutated."))
       (reject 3))
-    (let [wof (:wrapper-of v) mint (:mint v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) disp-name (when (seq? datum) (writable-disp-name datum)) victim-form (when (seq? datum) (writable-victim v src datum)) victim-entry (when (some? victim-form) (some (fn [e :- Any] :- Any (when (= (enode e) victim-form) e)) forms)) new-root (mint src (if (some? victim-form) (let [retained (reuse-retained-binding-datum v (nn victim-form) datum)] (if (= "js/export" (rr/head-sym ctx (:view v) victim-form)) (list (symbol "js/export") retained) retained)) datum))]
-      (if (some? victim-entry)
-        (let [retire (:retire v)]
-          (retire (ecid victim-entry))
-          (c/fact! ctx
-            (nn wrap)
-            (c/value! ctx (ord-str* (:path (ekey victim-entry)) (ord-tie v)))
-            (nn new-root)
-            tx))
-        (let [last-path (when (> (count forms) 0) (:path (ekey (last forms))))]
-          (c/fact! ctx
-            (nn wrap)
-            (c/value! ctx (ord-str* (rc/ord-append last-path) (ord-tie v)))
-            (nn new-root)
-            tx)))
-      (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
-      (let [emit (:emit v)]
-        (emit "upsert-form"
-          (str (if (some? victim-entry) "replaced" "added")
-            " top-level def `"
-            disp-name
-            "` in \""
-            scope
-            "\" (1 form minted as facts; refs resolved via refers_to)"))))))
+    (let [wof (:wrapper-of v) dbind (:def-binding v) mint (:mint v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) victim (writable-victim-in-snapshot v datum forms) disp-name (when (seq? datum) (writable-disp-name datum)) victim-entry (get victim :entry) victim-form (get victim :form) named-name (when (seq? datum) (rc/named-form-name datum)) named-binding (when (some? named-name) (dbind src (str named-name)))]
+      (when (and (some? named-binding) (nil? victim-entry))
+        (warn (str "REJECTED — existing top-level def `" named-name "` in \"" scope "\" has no live wrapper entry (no facts mutated)."))
+        (reject 3))
+      (let [new-root (mint src (if (some? victim-form) (let [retained (reuse-retained-binding-datum v (nn victim-form) datum)] (if (= "js/export" (rr/head-sym ctx (:view v) (nn victim-form))) (list (symbol "js/export") retained) retained)) datum))]
+        (if (some? victim-entry)
+          (let [retire (:retire v)]
+            (retire (ecid victim-entry))
+            (c/fact! ctx
+              (nn wrap)
+              (c/value! ctx (ord-str* (:path (ekey victim-entry)) (ord-tie v)))
+              (nn new-root)
+              tx))
+          (let [last-path (when (> (count forms) 0) (:path (ekey (last forms))))]
+            (c/fact! ctx
+              (nn wrap)
+              (c/value! ctx (ord-str* (rc/ord-append last-path) (ord-tie v)))
+              (nn new-root)
+              tx)))
+        (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
+        (let [emit (:emit v)]
+          (emit "upsert-form"
+            (str (if (some? victim-entry) "replaced" "added")
+              " top-level def `"
+              disp-name
+              "` in \""
+              scope
+              "\" (1 form minted as facts; refs resolved via refers_to)")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; insert-form — the MIDDLE-INSERT (#36): insert a def AFTER an anchor def, at a
