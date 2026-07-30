@@ -3,26 +3,26 @@
             [clojure.string :as str]
             [fram.rt :as rt]))
 
-^{:line 16 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (def order ^{:line 17 :file "/home/tom/code/fram/main/src/fram/export.bclj"} ["title" "owner" "lead" "driver" "source" "proposed_by" "created_by" "created_at" "updated_at" "committed" "do_on" "valid_until" "estimate_hours" "repo" "part_of" "depends_on" "relates_to" "clarifies" "amends" "outcome" "abandoned"])
+(def order ["title" "owner" "lead" "driver" "source" "proposed_by" "created_by" "created_at" "updated_at" "committed" "do_on" "valid_until" "estimate_hours" "repo" "part_of" "depends_on" "relates_to" "clarifies" "amends" "outcome" "abandoned"])
 
-^{:line 21 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (defn- distinct-s [xs]
-  ^{:line 22 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (reduce ^{:line 22 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [acc x] ^{:line 23 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 23 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/vec-contains? acc x) acc ^{:line 23 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (conj acc x))) ^{:line 24 :file "/home/tom/code/fram/main/src/fram/export.bclj"} [] xs))
+(defn- distinct-s [xs]
+  (reduce (fn [acc x] (if (k/vec-contains? acc x) acc (conj acc x))) [] xs))
 
-^{:line 28 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (defn- ^String render-obj [facts ^String p ^String v]
-  ^{:line 29 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 29 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (= "ref" ^{:line 29 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/value-kind-of facts ^{:line 29 :file "/home/tom/code/fram/main/src/fram/export.bclj"} {} p)) ^{:line 30 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 30 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/starts-with? v "@") v ^{:line 30 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str "@" v)) ^{:line 31 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 31 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (or ^{:line 31 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/blank? v) ^{:line 32 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/includes? v " ") ^{:line 32 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/includes? v "\t") ^{:line 33 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/includes? v "\n") ^{:line 33 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/includes? v "\r") ^{:line 34 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/starts-with? v "@") ^{:line 34 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/starts-with? v "\"")) ^{:line 35 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fram.rt/edn-quote v) v)))
+(defn- ^String render-obj [facts ^String p ^String v]
+  (if (= "ref" (k/value-kind-of facts {} p)) (if (str/starts-with? v "@") v (str "@" v)) (if (or (str/blank? v) (str/includes? v " ") (str/includes? v "\t") (str/includes? v "\n") (str/includes? v "\r") (str/starts-with? v "@") (str/starts-with? v "\"")) (fram.rt/edn-quote v) v)))
 
-^{:line 38 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (defn ^String thread-md [facts ^String te]
-  ^{:line 39 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (let [reg ^{:line 39 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-registry facts)
-   subject-facts ^{:line 40 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/q-by-l facts te)
-   present ^{:line 41 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (distinct-s ^{:line 41 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (mapv ^{:line 41 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [c] ^{:line 42 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-name reg ^{:line 42 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (:p c))) subject-facts))
-   ordered ^{:line 44 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (filterv ^{:line 44 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [p] ^{:line 44 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/vec-contains? present p)) order)
-   extra ^{:line 45 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (vec ^{:line 45 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (sort ^{:line 45 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (filterv ^{:line 45 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [p] ^{:line 46 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (and ^{:line 46 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (not ^{:line 46 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/vec-contains? order p)) ^{:line 46 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (not ^{:line 46 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (= p "body")))) present)))
-   preds ^{:line 48 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (vec ^{:line 48 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (concat ordered extra))
-   lines ^{:line 49 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (reduce ^{:line 49 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [acc p] ^{:line 50 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (let [pid ^{:line 50 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-id reg p)
-   values ^{:line 51 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (mapv ^{:line 51 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [c] ^{:line 51 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (:r c)) ^{:line 52 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (filterv ^{:line 53 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [c] ^{:line 54 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (= pid ^{:line 54 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-id reg ^{:line 54 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (:p c)))) subject-facts))]
-  ^{:line 56 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (vec ^{:line 56 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (concat acc ^{:line 57 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (mapv ^{:line 57 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [v] ^{:line 58 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str p "  " ^{:line 58 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (render-obj facts p v))) values))))) ^{:line 60 :file "/home/tom/code/fram/main/src/fram/export.bclj"} [] preds)
-   body-id ^{:line 62 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-id reg "body")
-   bodies ^{:line 63 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (filterv ^{:line 63 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (fn [c] ^{:line 64 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (= body-id ^{:line 64 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (k/predicate-id reg ^{:line 64 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (:p c)))) subject-facts)
-   b ^{:line 66 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 66 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (empty? bodies) nil ^{:line 66 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (:r ^{:line 66 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (first bodies)))
-   body ^{:line 67 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (if ^{:line 67 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (some? b) b "")]
-  ^{:line 68 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str te "\n" ^{:line 68 :file "/home/tom/code/fram/main/src/fram/export.bclj"} (str/join "\n" lines) "\n---\n" body)))
+(defn ^String thread-md [facts ^String te]
+  (let [reg (k/predicate-registry facts)
+   subject-facts (k/q-by-l facts te)
+   present (distinct-s (mapv (fn [c] (k/predicate-name reg (:p c))) subject-facts))
+   ordered (filterv (fn [p] (k/vec-contains? present p)) order)
+   extra (vec (sort (filterv (fn [p] (and (not (k/vec-contains? order p)) (not (= p "body")))) present)))
+   preds (vec (concat ordered extra))
+   lines (reduce (fn [acc p] (let [pid (k/predicate-id reg p)
+   values (mapv (fn [c] (:r c)) (filterv (fn [c] (= pid (k/predicate-id reg (:p c)))) subject-facts))]
+  (vec (concat acc (mapv (fn [v] (str p "  " (render-obj facts p v))) values))))) [] preds)
+   body-id (k/predicate-id reg "body")
+   bodies (filterv (fn [c] (= body-id (k/predicate-id reg (:p c)))) subject-facts)
+   b (if (empty? bodies) nil (:r (first bodies)))
+   body (if (some? b) b "")]
+  (str te "\n" (str/join "\n" lines) "\n---\n" body)))
