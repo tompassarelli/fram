@@ -76,6 +76,23 @@
 (defn chk [nm ok] (swap! checks conj [nm ok]) (println (if ok "  [PASS] " "  [FAIL] ") nm))
 
 (def root (System/getProperty "user.dir"))
+(when (= "1" (System/getenv "FRAM_CANDIDATE_FORWARD_CLOSURE_ONLY"))
+  (load-file (str root "/coord_daemon.clj"))
+  (let [imports {"consumer" #{"provider-a" "provider-b"}
+                 "provider-a" #{"shared"}
+                 "provider-b" #{}
+                 "shared" #{"consumer"}
+                 "unrelated" #{}}
+        closure-fn (ns-resolve 'coord-daemon 'forward-import-closure)
+        closure (closure-fn imports #{"consumer"})]
+    (chk "forward closure includes every transitive and ambiguous provider"
+         (= #{"consumer" "provider-a" "provider-b" "shared"} closure))
+    (chk "forward closure excludes unrelated standalone modules"
+         (not (contains? closure "unrelated"))))
+  (let [failed (filter (comp not second) @checks)]
+    (println "\n" (- (count @checks) (count failed)) "/" (count @checks) "checks passed")
+    (System/exit (if (seq failed) 1 0))))
+
 (def home (System/getProperty "user.home"))
 (def beagle-home (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
 (def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
@@ -438,11 +455,10 @@
        (and (checked "src.fram.overlayroot")
             (checked "src.fram.overlaydependent")
             (not (checked "src.fram.overlaythird"))))
-  (chk "V0: complete overlay includes the untouched provider required by the verifier"
+  (chk "V0: sealed overlay is exactly the selected modules plus their provider closure"
        (and (true? (:ok verified))
             (= 1 (- calls1 calls0))
-            (> (:overlay-module-count prep)
-               (count (:checked-modules prep))))))
+            (= 3 (:overlay-module-count prep)))))
 
 (let [daemon (boot-daemon! slow-port slow-log
                            {"FRAM_EDIT_VERIFIER_FIXTURE_MODE" "accept"

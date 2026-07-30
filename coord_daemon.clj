@@ -4120,6 +4120,17 @@
                       (#(clojure.set/difference % seen)))]
         (recur (into seen more) more)))))
 
+(defn- forward-import-closure [imports seeds]
+  (loop [seen (set seeds)
+         frontier (set seeds)]
+    (if (empty? frontier)
+      seen
+      (let [more (->> frontier
+                      (mapcat #(get imports % #{}))
+                      set
+                      (#(clojure.set/difference % seen)))]
+        (recur (into seen more) more)))))
+
 (defn- candidate-check-modules [base-st final-st touched]
   (let [base (candidate-world-meta base-st)
         final (candidate-world-meta final-st)
@@ -4314,11 +4325,11 @@
         check-modules (vec (sort (candidate-check-modules (atom snap)
                                                           final-st
                                                           touched)))
-        ;; The selected reverse closure says WHAT must be checked, not everything
-        ;; required to resolve it. Beagle's world checker deliberately has no
-        ;; disk fallback, so pass the COMPLETE final graph overlay and use the
-        ;; smaller closure only as check selectors.
-        overlay-modules (vec (sort (:srcs (candidate-world-meta final-st))))]
+        world (candidate-world-meta final-st)
+        ;; Reverse closure selects consumers to check; forward closure seals every
+        ;; provider those consumers can resolve without admitting unrelated code.
+        overlay-modules
+        (vec (sort (forward-import-closure (:imports world) check-modules)))]
     (clone-refresh-refers-modules! final-st overlay-modules)
     (let [errors (candidate-final-world-errors snap final-st)]
       (if (seq errors)
@@ -4328,8 +4339,7 @@
                        "consumers in the same coherent transaction")]
          :code :orphaned-binding-references
          :orphaned (vec (take 16 errors))}
-        (let [world (candidate-world-meta final-st)
-              overlay-module-namespaces
+        (let [overlay-module-namespaces
               (into (sorted-map)
                     (map (fn [module]
                            [module (get (:src->namespace world) module)]))
