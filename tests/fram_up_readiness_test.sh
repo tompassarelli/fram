@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fram_up_source="${FRAM_UP_UNDER_TEST:-$repo_root/bin/fram-up}"
+real_sleep="$(command -v sleep)"
 scratch="$(mktemp -d)"
 
 cleanup() {
@@ -36,6 +37,9 @@ esac
 [[ "${TEST_MODE:-}" != "unavailable" ]] || exit 1
 [[ -s "$TEST_STATE/served-log" ]] || exit 1
 [[ "$(readlink -f "$FRAM_PROBE_LOG")" == "$(cat "$TEST_STATE/served-log")" ]] || exit 1
+if [[ "${TEST_MODE:-}" == "slow-start" ]]; then
+  "$TEST_SLEEP" 0.5
+fi
 STUB
 
   cat >"$case_dir/bin/fram-daemon" <<'STUB'
@@ -74,13 +78,16 @@ run_up() {
   local case_dir="$1"
   local mode="$2"
   local log="$3"
+  local timeout_seconds="${4:-2}"
   (
     cd "$case_dir/work"
     PATH="$case_dir/bin:$PATH" \
       TEST_STATE="$case_dir/state" \
       TEST_MODE="$mode" \
+      TEST_SLEEP="$real_sleep" \
       FRAM_PORT=43129 \
       FRAM_LOG="$log" \
+      FRAM_STARTUP_TIMEOUT_SECONDS="$timeout_seconds" \
       "$case_dir/bin/fram-up"
   )
 }
@@ -112,17 +119,43 @@ wrong_output="$(run_up "$wrong_dir" wrong-log "$wrong_log")" ||
 [[ -s "$wrong_dir/state/daemon.calls" ]] ||
   fail "wrong-log daemon did not trigger a fresh start"
 
+slow_dir="$(make_case slow-start)"
+slow_log="$slow_dir/work/coordination.log"
+: >"$slow_log"
+slow_output="$(run_up "$slow_dir" slow-start "$slow_log" 2)" ||
+  fail "delayed healthy daemon missed the configured deadline"
+[[ "$slow_output" == *"starting coordinator"* &&
+   "$slow_output" == *"coordinator up"* ]] ||
+  fail "delayed healthy daemon did not complete the startup path"
+
 down_dir="$(make_case unavailable)"
 down_log="$down_dir/work/coordination.log"
 : >"$down_log"
-if run_up "$down_dir" unavailable "$down_log" >"$down_dir/state/output" 2>&1; then
+down_started_ms="$(date +%s%3N)"
+if run_up "$down_dir" unavailable "$down_log" 1 >"$down_dir/state/output" 2>&1; then
   fail "unavailable daemon was accepted as ready"
 fi
+down_elapsed_ms="$(( $(date +%s%3N) - down_started_ms ))"
 grep -q "daemon did not come up" "$down_dir/state/output" ||
   fail "unavailable daemon did not report the readiness deadline"
+(( down_elapsed_ms >= 800 && down_elapsed_ms < 3000 )) ||
+  fail "readiness deadline was not absolute (elapsed ${down_elapsed_ms}ms)"
+
+invalid_dir="$(make_case invalid-timeout)"
+invalid_log="$invalid_dir/work/coordination.log"
+: >"$invalid_log"
+if run_up "$invalid_dir" ready "$invalid_log" 0 >"$invalid_dir/state/output" 2>&1; then
+  fail "zero startup timeout was accepted"
+fi
+grep -q "FRAM_STARTUP_TIMEOUT_SECONDS must be an integer from 1 to 3600" \
+  "$invalid_dir/state/output" ||
+  fail "invalid startup timeout did not report its accepted range"
+[[ ! -s "$invalid_dir/state/daemon.calls" ]] ||
+  fail "invalid startup timeout launched the daemon"
 
 for calls in "$ready_dir/state/bb.calls" \
              "$wrong_dir/state/bb.calls" \
+             "$slow_dir/state/bb.calls" \
              "$down_dir/state/bb.calls"; do
   [[ -s "$calls" ]] || fail "lightweight runtime probe was not invoked"
   if grep -Eq 'doctor|read-log|fold' "$calls"; then

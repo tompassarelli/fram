@@ -7,7 +7,14 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export FRAM_PORT="${FRAM_PORT:-7977}"
 LOG="${FRAM_LOG:-$PWD/coordination.log}"
+STARTUP_TIMEOUT_SECONDS="${FRAM_STARTUP_TIMEOUT_SECONDS:-240}"
 RESTART=0; [ "$1" = "--restart" ] && RESTART=1
+
+if [[ ! "$STARTUP_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+   (( STARTUP_TIMEOUT_SECONDS > 3600 )); then
+  echo "ERROR: FRAM_STARTUP_TIMEOUT_SECONDS must be an integer from 1 to 3600" >&2
+  exit 2
+fi
 
 # PIDs listening on the port. fuser/lsof are NOT always installed (e.g. NixOS),
 # and when they're missing the old kill silently no-opped, leaving a zombie that
@@ -20,8 +27,11 @@ port_pids() { ss -tlnpH "sport = :$FRAM_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+
 # replays the complete log to inspect schema and recovery state, which made
 # every cold-start poll repeat the work the daemon was already doing.
 coordinator_ready() {
-  FRAM_PROBE_PORT="$FRAM_PORT" FRAM_PROBE_LOG="$LOG" \
-    bb -cp "$HERE/../out" -e '
+  local port="$1"
+  local log="$2"
+  local classpath="$3"
+  FRAM_PROBE_PORT="$port" FRAM_PROBE_LOG="$log" \
+    bb -cp "$classpath" -e '
       (require (quote [fram.rt :as rt]))
       (let [port (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
             log (System/getenv "FRAM_PROBE_LOG")
@@ -39,7 +49,7 @@ if [ "$RESTART" = 1 ]; then
     echo "ERROR: :$FRAM_PORT still held by PID(s) $(port_pids | tr '\n' ' ')after SIGKILL — kill manually." >&2
     exit 1
   fi
-elif coordinator_ready 2>/dev/null; then
+elif coordinator_ready "$FRAM_PORT" "$LOG" "$HERE/../out" 2>/dev/null; then
   echo "coordinator already up on :$FRAM_PORT (use \`up --restart\` to reload it)"
   exit 0
 fi
@@ -54,13 +64,17 @@ disown 2>/dev/null || true
 
 # the daemon now runs on the JVM (Clojure) — slower to boot than bb, and it reads
 # the whole fact log at startup, so give it room (and a first-ever run may resolve
-# deps once). ~30s ceiling; it usually answers in a few seconds.
-for _ in $(seq 120); do
-  if coordinator_ready 2>/dev/null; then
-    echo "coordinator up on :$FRAM_PORT"
-    exit 0
-  fi
-  sleep 0.25
-done
-echo "ERROR: daemon did not come up — see /tmp/fram-daemon-$FRAM_PORT.log" >&2
+# deps once). GNU timeout supplies one monotonic deadline for the complete poll
+# loop; probe runtime no longer shortens the configured startup window.
+export -f coordinator_ready
+if timeout --foreground "${STARTUP_TIMEOUT_SECONDS}s" \
+    bash -c '
+      until coordinator_ready "$1" "$2" "$3" 2>/dev/null; do
+        sleep 0.25
+      done
+    ' _ "$FRAM_PORT" "$LOG" "$HERE/../out"; then
+  echo "coordinator up on :$FRAM_PORT"
+  exit 0
+fi
+echo "ERROR: daemon did not come up within ${STARTUP_TIMEOUT_SECONDS}s — see /tmp/fram-daemon-$FRAM_PORT.log" >&2
 exit 1
