@@ -119,6 +119,38 @@ assert_response "$scoped_seed" \
                 (= [[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]]
                    (:facts r))))"
 
+joined="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "seed-row" :rules [{:head {:rel "seed-row" :args [{:var "subject"} {:var "title"} {:var "note"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]} {:rel "fact" :args [{:var "subject"} "note" {:var "note"}]}]}]}}')"
+assert_response "$joined" \
+  '(fn [r] (and (= [["@seed" "one" "two"]] (:ok r))
+                (= 3 (:version r))
+                (= "scan" (:engine r))))'
+
+fact_ids="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "identified" :rules [{:head {:rel "identified" :args [{:var "cid"} {:var "subject"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact-id" :args [{:var "cid"} {:var "subject"} {:var "predicate"} {:var "value"}]}]}]}}')"
+assert_response "$fact_ids" \
+  '(fn [r] (= [["c0" "@seed" "title" "one"]
+               ["c1" "@seed" "note" "two"]]
+              (:ok r)))'
+
+deterministic="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "all-facts" :rules [{:head {:rel "all-facts" :args [{:var "subject"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact" :args [{:var "subject"} {:var "predicate"} {:var "value"}]}]}]}}')"
+assert_response "$deterministic" \
+  '(fn [r] (= [["@seed" "note" "two"] ["@seed" "title" "one"]]
+              (:ok r)))'
+
+negation="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "missing" :rules [{:head {:rel "missing" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}] :neg true}]}]}}')"
+assert_response "$negation" '(fn [r] (= :unsupported-query (:code r)))'
+
+multiple_rules="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "many" :rules [{:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]} {:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "note" {:var "note"}]}]}]}}')"
+assert_response "$multiple_rules" '(fn [r] (= :unsupported-query (:code r)))'
+
+aggregate="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find {:rel "values" :group [0] :agg [{:op :count}]} :rules [{:head {:rel "values" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]}}')"
+assert_response "$aggregate" '(fn [r] (= :unsupported-query (:code r)))'
+
 mismatch="$(fenced_request "$port" "$canonical_b" "{:op :version}")"
 assert_response "$mismatch" \
   "(fn [r] (and (= :log-mismatch (:code r))
@@ -283,4 +315,4 @@ daemon_pid=
 [[ $restart_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
 
-printf 'zig-daemon: fenced bootstrap, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'
+printf 'zig-daemon: fenced bootstrap, base fact/fact-id queries, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'

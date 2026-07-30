@@ -32,6 +32,7 @@ const Operation = enum {
     fence_ok,
     facts,
     facts_for_subjects,
+    query,
     unknown,
 };
 
@@ -81,6 +82,7 @@ const field_holder: u16 = 1 << 9;
 const field_epoch: u16 = 1 << 10;
 const field_ttl_ms: u16 = 1 << 11;
 const field_subjects: u16 = 1 << 12;
+const field_query: u16 = 1 << 13;
 
 const MapFields = struct {
     op: Operation = .unknown,
@@ -96,6 +98,7 @@ const MapFields = struct {
     epoch: IntField = .missing,
     ttl_ms: IntField = .missing,
     subjects: ?[]const u8 = null,
+    query: ?[]const u8 = null,
     present: u16 = 0,
     duplicate: bool = false,
     unknown_field: bool = false,
@@ -1050,11 +1053,13 @@ fn dispatchOperation(
         .fence_ok => fenceOk(allocator, io, state, request),
         .facts => renderFacts(allocator, state, canonical_log, null),
         .facts_for_subjects => factsForSubjects(allocator, state, canonical_log, request),
+        .query => queryFacts(allocator, state, request),
         else => if (try requestFieldError(
             allocator,
             request,
             field_op | field_expected_log | field_request | field_te |
-                field_p | field_r | field_base | field_facts,
+                field_p | field_r | field_base | field_facts |
+                field_subjects | field_query,
             0,
         )) |response| response else allocator.dupe(
             u8,
@@ -1165,8 +1170,14 @@ fn parseLease(value: []const u8) ?Lease {
 }
 
 fn leaseFields(request: *const MapFields) ?struct { res: []const u8, holder: []const u8 } {
-    const res = switch (request.res) { .value => |value| value, else => return null };
-    const holder = switch (request.holder) { .value => |value| value, else => return null };
+    const res = switch (request.res) {
+        .value => |value| value,
+        else => return null,
+    };
+    const holder = switch (request.holder) {
+        .value => |value| value,
+        else => return null,
+    };
     if (!validLeaseText(res) or !validLeaseText(holder) or std.mem.indexOfScalar(u8, holder, '|') != null)
         return null;
     return .{ .res = res, .holder = holder };
@@ -1183,7 +1194,10 @@ fn requestHasCurrentFence(
     request: *const MapFields,
 ) !bool {
     const fields = leaseFields(request) orelse return false;
-    const epoch = switch (request.epoch) { .value => |value| value, else => return false };
+    const epoch = switch (request.epoch) {
+        .value => |value| value,
+        else => return false,
+    };
     if (epoch <= 0) return false;
     const lease = try state.currentLease(allocator, fields.res) orelse return false;
     return lease.exp > nowMs(io) and lease.epoch == epoch and
@@ -1206,7 +1220,11 @@ fn appendLeaseEvent(
     const timestamp = try timestampUtc(allocator, io);
     defer allocator.free(timestamp);
     const payload = try flat_log.encodeLine(allocator, .{
-        .tx = tx, .op = operation.wireName(), .l = subject, .p = "lease", .r = value,
+        .tx = tx,
+        .op = operation.wireName(),
+        .l = subject,
+        .p = "lease",
+        .r = value,
     }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
     defer allocator.free(payload);
     const stored = try state.copyEvent(tx, operation, subject, "lease", value);
@@ -1244,7 +1262,10 @@ fn renderFenceLost(allocator: Allocator, version: i64) ![]u8 {
 fn acquireLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
     if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_ttl_ms, field_res | field_holder | field_ttl_ms)) |response| return response;
     const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    const ttl = switch (request.ttl_ms) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
+    const ttl = switch (request.ttl_ms) {
+        .value => |value| value,
+        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
+    };
     const now = nowMs(io);
     if (!validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
     if (try state.currentLease(allocator, fields.res)) |lease| {
@@ -1260,8 +1281,14 @@ fn acquireLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: 
 fn renewLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
     if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch | field_ttl_ms, field_res | field_holder | field_epoch | field_ttl_ms)) |response| return response;
     const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    const epoch = switch (request.epoch) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
-    const ttl = switch (request.ttl_ms) { .value => |value| value, else => return renderLeaseReject(allocator, "invalid-lease-request", state.version) };
+    const epoch = switch (request.epoch) {
+        .value => |value| value,
+        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
+    };
+    const ttl = switch (request.ttl_ms) {
+        .value => |value| value,
+        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
+    };
     const now = nowMs(io);
     if (epoch <= 0 or !validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
     const current = try state.currentLease(allocator, fields.res) orelse return renderFenceLost(allocator, state.version);
@@ -1277,7 +1304,11 @@ fn releaseLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: 
     if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder)) |response| return response;
     const fields = leaseFields(request) orelse return renderOk(allocator, state.version);
     const current = try state.currentLease(allocator, fields.res) orelse return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
-    const epoch_matches = switch (request.epoch) { .missing => true, .value => |value| value == current.epoch, else => false };
+    const epoch_matches = switch (request.epoch) {
+        .missing => true,
+        .value => |value| value == current.epoch,
+        else => false,
+    };
     if (!std.mem.eql(u8, current.holder, fields.holder) or !epoch_matches) return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
     const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ current.holder, current.exp, current.epoch });
     defer allocator.free(value);
@@ -1317,7 +1348,10 @@ fn parseSubjects(allocator: Allocator, raw: []const u8) !ParsedSubjects {
         }
         const token = parser.scanValue() catch return error.InvalidSubjects;
         const field = parseStringField(allocator, token) catch return error.InvalidSubjects;
-        const subject = switch (field) { .value => |value| value, else => return error.InvalidSubjects };
+        const subject = switch (field) {
+            .value => |value| value,
+            else => return error.InvalidSubjects,
+        };
         try subjects.items.append(allocator, subject);
     }
 }
@@ -1369,6 +1403,888 @@ fn factsForSubjects(allocator: Allocator, state: *DaemonState, canonical_log: []
     );
     defer subjects.deinit(allocator);
     return renderFacts(allocator, state, canonical_log, subjects.items.items);
+}
+
+const QueryIssueCode = enum {
+    invalid_query,
+    unsupported_query,
+
+    fn wireName(code: QueryIssueCode) []const u8 {
+        return switch (code) {
+            .invalid_query => "invalid-query",
+            .unsupported_query => "unsupported-query",
+        };
+    }
+};
+
+const QueryIssue = struct {
+    code: QueryIssueCode = .invalid_query,
+    message: []const u8 = "invalid query",
+};
+
+const QueryParseError = Allocator.Error || error{InvalidQuery};
+
+fn rejectQuery(
+    issue: *QueryIssue,
+    code: QueryIssueCode,
+    message: []const u8,
+) error{InvalidQuery} {
+    issue.* = .{ .code = code, .message = message };
+    return error.InvalidQuery;
+}
+
+const QueryTerm = union(enum) {
+    variable: []u8,
+    constant: []u8,
+
+    fn deinit(term: *QueryTerm, allocator: Allocator) void {
+        switch (term.*) {
+            .variable, .constant => |value| allocator.free(value),
+        }
+        term.* = undefined;
+    }
+};
+
+const QueryRelation = enum {
+    fact,
+    fact_id,
+
+    fn arity(relation: QueryRelation) usize {
+        return switch (relation) {
+            .fact => 3,
+            .fact_id => 4,
+        };
+    }
+};
+
+const QueryLiteral = struct {
+    relation: QueryRelation,
+    args: std.ArrayList(QueryTerm),
+
+    fn deinit(literal: *QueryLiteral, allocator: Allocator) void {
+        for (literal.args.items) |*term| term.deinit(allocator);
+        literal.args.deinit(allocator);
+        literal.* = undefined;
+    }
+};
+
+const ParsedQuery = struct {
+    head_args: std.ArrayList(QueryTerm),
+    body: std.ArrayList(QueryLiteral),
+
+    fn deinit(query: *ParsedQuery, allocator: Allocator) void {
+        for (query.head_args.items) |*term| term.deinit(allocator);
+        query.head_args.deinit(allocator);
+        for (query.body.items) |*literal| literal.deinit(allocator);
+        query.body.deinit(allocator);
+        query.* = undefined;
+    }
+};
+
+fn parseQueryString(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+    description: []const u8,
+) QueryParseError![]u8 {
+    const field = parseStringField(allocator, raw) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidEdn => return rejectQuery(issue, .invalid_query, description),
+    };
+    return switch (field) {
+        .value => |value| value,
+        else => rejectQuery(issue, .invalid_query, description),
+    };
+}
+
+fn parseVariableTerm(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!QueryTerm {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return rejectQuery(issue, .invalid_query, "query variable must be {:var \"name\"}");
+    parser.index += 1;
+
+    var variable_raw: ?[]const u8 = null;
+    var duplicate = false;
+    var unknown = false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query variable map is incomplete");
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query variable has trailing input");
+            break;
+        }
+        const key = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query variable map is invalid EDN");
+        const value = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query variable map is invalid EDN");
+        if (std.mem.eql(u8, key, ":var")) {
+            duplicate = variable_raw != null;
+            variable_raw = value;
+        } else {
+            unknown = true;
+        }
+    }
+    if (duplicate or unknown or variable_raw == null)
+        return rejectQuery(issue, .invalid_query, "query variable must contain exactly :var");
+    return .{ .variable = try parseQueryString(
+        allocator,
+        variable_raw.?,
+        issue,
+        "query :var must be a string",
+    ) };
+}
+
+fn parseQueryTerm(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!QueryTerm {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len != 0 and trimmed[0] == '{')
+        return parseVariableTerm(allocator, trimmed, issue);
+    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
+        return .{ .constant = try parseQueryString(
+            allocator,
+            trimmed,
+            issue,
+            "query constant must be a valid EDN string",
+        ) };
+    }
+    return rejectQuery(
+        issue,
+        .unsupported_query,
+        "native query v1 supports string constants and {:var \"name\"} terms",
+    );
+}
+
+fn parseQueryTerms(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!std.ArrayList(QueryTerm) {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[')
+        return rejectQuery(issue, .invalid_query, "query :args must be a vector");
+    parser.index += 1;
+
+    var terms: std.ArrayList(QueryTerm) = .empty;
+    errdefer {
+        for (terms.items) |*term| term.deinit(allocator);
+        terms.deinit(allocator);
+    }
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query :args vector is incomplete");
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query :args has trailing input");
+            return terms;
+        }
+        const term_raw = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query :args contains invalid EDN");
+        try terms.append(allocator, try parseQueryTerm(allocator, term_raw, issue));
+    }
+}
+
+fn parseQueryRelation(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!QueryRelation {
+    const relation = try parseQueryString(
+        allocator,
+        raw,
+        issue,
+        "query literal :rel must be a string",
+    );
+    defer allocator.free(relation);
+    if (std.mem.eql(u8, relation, "fact")) return .fact;
+    if (std.mem.eql(u8, relation, "fact-id")) return .fact_id;
+    return rejectQuery(
+        issue,
+        .unsupported_query,
+        "native query v1 body literals support only the fact and fact-id base relations",
+    );
+}
+
+fn parseQueryLiteral(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!QueryLiteral {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return rejectQuery(issue, .invalid_query, "query body literal must be a map");
+    parser.index += 1;
+
+    var relation_raw: ?[]const u8 = null;
+    var args_raw: ?[]const u8 = null;
+    var neg_raw: ?[]const u8 = null;
+    var duplicate = false;
+    var unknown = false;
+    var unsupported_clause = false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query body literal is incomplete");
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query body literal has trailing input");
+            break;
+        }
+        const key = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query body literal is invalid EDN");
+        const value = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query body literal is invalid EDN");
+        if (std.mem.eql(u8, key, ":rel")) {
+            duplicate = duplicate or relation_raw != null;
+            relation_raw = value;
+        } else if (std.mem.eql(u8, key, ":args")) {
+            duplicate = duplicate or args_raw != null;
+            args_raw = value;
+        } else if (std.mem.eql(u8, key, ":neg")) {
+            duplicate = duplicate or neg_raw != null;
+            neg_raw = value;
+        } else if (std.mem.eql(u8, key, ":pred") or
+            std.mem.eql(u8, key, ":fn"))
+        {
+            unsupported_clause = true;
+        } else {
+            unknown = true;
+        }
+    }
+    if (unsupported_clause)
+        return rejectQuery(
+            issue,
+            .unsupported_query,
+            "native query v1 does not support comparison or arithmetic clauses",
+        );
+    if (duplicate or unknown or relation_raw == null or args_raw == null)
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query body literal needs unique :rel and :args fields",
+        );
+    if (neg_raw) |neg| {
+        if (std.mem.eql(u8, neg, "true"))
+            return rejectQuery(
+                issue,
+                .unsupported_query,
+                "native query v1 does not support negated literals",
+            );
+        if (!std.mem.eql(u8, neg, "false"))
+            return rejectQuery(issue, .invalid_query, "query literal :neg must be true or false");
+    }
+
+    const relation = try parseQueryRelation(allocator, relation_raw.?, issue);
+    var args = try parseQueryTerms(allocator, args_raw.?, issue);
+    errdefer {
+        for (args.items) |*term| term.deinit(allocator);
+        args.deinit(allocator);
+    }
+    if (args.items.len != relation.arity())
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query base relation has the wrong argument count",
+        );
+    return .{ .relation = relation, .args = args };
+}
+
+fn parseQueryBody(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!std.ArrayList(QueryLiteral) {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[')
+        return rejectQuery(issue, .invalid_query, "query rule :body must be a vector");
+    parser.index += 1;
+
+    var body: std.ArrayList(QueryLiteral) = .empty;
+    errdefer {
+        for (body.items) |*literal| literal.deinit(allocator);
+        body.deinit(allocator);
+    }
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query rule :body vector is incomplete");
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query rule :body has trailing input");
+            if (body.items.len == 0)
+                return rejectQuery(issue, .invalid_query, "query rule :body must not be empty");
+            return body;
+        }
+        const literal_raw = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query rule :body contains invalid EDN");
+        try body.append(allocator, try parseQueryLiteral(allocator, literal_raw, issue));
+    }
+}
+
+const ParsedQueryHead = struct {
+    relation: []u8,
+    args: std.ArrayList(QueryTerm),
+
+    fn deinit(head: *ParsedQueryHead, allocator: Allocator) void {
+        allocator.free(head.relation);
+        for (head.args.items) |*term| term.deinit(allocator);
+        head.args.deinit(allocator);
+        head.* = undefined;
+    }
+};
+
+fn parseQueryHead(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!ParsedQueryHead {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return rejectQuery(issue, .invalid_query, "query rule :head must be a map");
+    parser.index += 1;
+
+    var relation_raw: ?[]const u8 = null;
+    var args_raw: ?[]const u8 = null;
+    var duplicate = false;
+    var unknown = false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query rule :head is incomplete");
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query rule :head has trailing input");
+            break;
+        }
+        const key = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query rule :head is invalid EDN");
+        const value = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query rule :head is invalid EDN");
+        if (std.mem.eql(u8, key, ":rel")) {
+            duplicate = duplicate or relation_raw != null;
+            relation_raw = value;
+        } else if (std.mem.eql(u8, key, ":args")) {
+            duplicate = duplicate or args_raw != null;
+            args_raw = value;
+        } else {
+            unknown = true;
+        }
+    }
+    if (duplicate or unknown or relation_raw == null or args_raw == null)
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query rule :head needs unique :rel and :args fields",
+        );
+
+    const relation = try parseQueryString(
+        allocator,
+        relation_raw.?,
+        issue,
+        "query head :rel must be a string",
+    );
+    errdefer allocator.free(relation);
+    var args = try parseQueryTerms(allocator, args_raw.?, issue);
+    errdefer {
+        for (args.items) |*term| term.deinit(allocator);
+        args.deinit(allocator);
+    }
+    return .{ .relation = relation, .args = args };
+}
+
+const ParsedQueryRule = struct {
+    head: ParsedQueryHead,
+    body: std.ArrayList(QueryLiteral),
+
+    fn deinit(rule: *ParsedQueryRule, allocator: Allocator) void {
+        rule.head.deinit(allocator);
+        for (rule.body.items) |*literal| literal.deinit(allocator);
+        rule.body.deinit(allocator);
+        rule.* = undefined;
+    }
+};
+
+fn parseQueryRule(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!ParsedQueryRule {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return rejectQuery(issue, .invalid_query, "query rule must be a map");
+    parser.index += 1;
+
+    var head_raw: ?[]const u8 = null;
+    var body_raw: ?[]const u8 = null;
+    var duplicate = false;
+    var unknown = false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query rule is incomplete");
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query rule has trailing input");
+            break;
+        }
+        const key = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query rule is invalid EDN");
+        const value = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query rule is invalid EDN");
+        if (std.mem.eql(u8, key, ":head")) {
+            duplicate = duplicate or head_raw != null;
+            head_raw = value;
+        } else if (std.mem.eql(u8, key, ":body")) {
+            duplicate = duplicate or body_raw != null;
+            body_raw = value;
+        } else {
+            unknown = true;
+        }
+    }
+    if (duplicate or unknown or head_raw == null or body_raw == null)
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query rule needs unique :head and :body fields",
+        );
+
+    var head = try parseQueryHead(allocator, head_raw.?, issue);
+    errdefer head.deinit(allocator);
+    var body = try parseQueryBody(allocator, body_raw.?, issue);
+    errdefer {
+        for (body.items) |*literal| literal.deinit(allocator);
+        body.deinit(allocator);
+    }
+    return .{ .head = head, .body = body };
+}
+
+fn parseSingleQueryRule(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!ParsedQueryRule {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[')
+        return rejectQuery(issue, .invalid_query, "query :rules must be a vector");
+    parser.index += 1;
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] == ']')
+        return rejectQuery(
+            issue,
+            .unsupported_query,
+            "native query v1 requires exactly one non-recursive rule",
+        );
+    const rule_raw = parser.scanValue() catch
+        return rejectQuery(issue, .invalid_query, "query :rules contains invalid EDN");
+    parser.skipSeparators();
+    if (parser.index >= raw.len)
+        return rejectQuery(issue, .invalid_query, "query :rules vector is incomplete");
+    if (raw[parser.index] != ']')
+        return rejectQuery(
+            issue,
+            .unsupported_query,
+            "native query v1 supports exactly one non-recursive rule",
+        );
+    parser.index += 1;
+    parser.skipSeparators();
+    if (parser.index != raw.len)
+        return rejectQuery(issue, .invalid_query, "query :rules has trailing input");
+    return parseQueryRule(allocator, rule_raw, issue);
+}
+
+fn termVariableBound(body: []const QueryLiteral, name: []const u8) bool {
+    for (body) |literal| {
+        for (literal.args.items) |term| switch (term) {
+            .variable => |candidate| {
+                if (std.mem.eql(u8, name, candidate)) return true;
+            },
+            .constant => {},
+        };
+    }
+    return false;
+}
+
+fn parseQuery(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!ParsedQuery {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '{')
+        return rejectQuery(issue, .invalid_query, "query must be a map");
+    parser.index += 1;
+
+    var find_raw: ?[]const u8 = null;
+    var rules_raw: ?[]const u8 = null;
+    var duplicate = false;
+    var unknown = false;
+    var strata = false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query map is incomplete");
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query map has trailing input");
+            break;
+        }
+        const key = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query map is invalid EDN");
+        const value = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query map is invalid EDN");
+        if (std.mem.eql(u8, key, ":find")) {
+            duplicate = duplicate or find_raw != null;
+            find_raw = value;
+        } else if (std.mem.eql(u8, key, ":rules")) {
+            duplicate = duplicate or rules_raw != null;
+            rules_raw = value;
+        } else if (std.mem.eql(u8, key, ":strata")) {
+            strata = true;
+        } else {
+            unknown = true;
+        }
+    }
+    if (strata)
+        return rejectQuery(
+            issue,
+            .unsupported_query,
+            "native query v1 does not support stratified or recursive rules",
+        );
+    if (duplicate or unknown or find_raw == null or rules_raw == null)
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query needs unique :find and :rules fields",
+        );
+    if (find_raw.?[0] == '{')
+        return rejectQuery(
+            issue,
+            .unsupported_query,
+            "native query v1 does not support aggregate :find maps",
+        );
+
+    const find = try parseQueryString(
+        allocator,
+        find_raw.?,
+        issue,
+        "query :find must be a relation-name string",
+    );
+    defer allocator.free(find);
+    var rule = try parseSingleQueryRule(allocator, rules_raw.?, issue);
+    defer rule.deinit(allocator);
+
+    if (!std.mem.eql(u8, find, rule.head.relation))
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query :find must name the single rule head relation",
+        );
+    if (std.mem.eql(u8, find, "fact") or std.mem.eql(u8, find, "fact-id"))
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query rule head cannot shadow a base relation",
+        );
+    for (rule.head.args.items) |term| switch (term) {
+        .variable => |name| {
+            if (!termVariableBound(rule.body.items, name))
+                return rejectQuery(
+                    issue,
+                    .invalid_query,
+                    "query head variable is not bound by a body literal",
+                );
+        },
+        .constant => {},
+    };
+
+    const head_args = rule.head.args;
+    rule.head.args = .empty;
+    const body = rule.body;
+    rule.body = .empty;
+    return .{ .head_args = head_args, .body = body };
+}
+
+const QueryFact = struct {
+    cid: []const u8,
+    l: []const u8,
+    p: []const u8,
+    r: []const u8,
+};
+
+const QueryBinding = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+const QuerySubstitution = struct {
+    bindings: std.ArrayList(QueryBinding),
+};
+
+fn lookupQueryBinding(
+    substitution: QuerySubstitution,
+    name: []const u8,
+) ?[]const u8 {
+    for (substitution.bindings.items) |binding| {
+        if (std.mem.eql(u8, binding.name, name)) return binding.value;
+    }
+    return null;
+}
+
+fn cloneQuerySubstitution(
+    allocator: Allocator,
+    substitution: QuerySubstitution,
+) Allocator.Error!QuerySubstitution {
+    var bindings: std.ArrayList(QueryBinding) = .empty;
+    try bindings.appendSlice(allocator, substitution.bindings.items);
+    return .{ .bindings = bindings };
+}
+
+fn unifyQueryTerm(
+    allocator: Allocator,
+    substitution: *QuerySubstitution,
+    term: QueryTerm,
+    value: []const u8,
+) Allocator.Error!bool {
+    return switch (term) {
+        .constant => |constant| std.mem.eql(u8, constant, value),
+        .variable => |name| if (lookupQueryBinding(substitution.*, name)) |bound|
+            std.mem.eql(u8, bound, value)
+        else blk: {
+            try substitution.bindings.append(
+                allocator,
+                .{ .name = name, .value = value },
+            );
+            break :blk true;
+        },
+    };
+}
+
+fn queryFactValue(
+    relation: QueryRelation,
+    fact: QueryFact,
+    index: usize,
+) []const u8 {
+    return switch (relation) {
+        .fact => switch (index) {
+            0 => fact.l,
+            1 => fact.p,
+            else => fact.r,
+        },
+        .fact_id => switch (index) {
+            0 => fact.cid,
+            1 => fact.l,
+            2 => fact.p,
+            else => fact.r,
+        },
+    };
+}
+
+const max_native_query_rows = 100_000;
+
+fn buildQueryFacts(
+    allocator: Allocator,
+    state: *DaemonState,
+) !std.ArrayList(QueryFact) {
+    var facts: std.ArrayList(QueryFact) = .empty;
+    for (state.events.items) |event| {
+        if (event.operation != .assert_fact or
+            !(try currentEvent(state, allocator, event)))
+        {
+            continue;
+        }
+        const cid = try std.fmt.allocPrint(allocator, "c{d}", .{facts.items.len});
+        try facts.append(allocator, .{
+            .cid = cid,
+            .l = event.l,
+            .p = event.p,
+            .r = event.r,
+        });
+    }
+    return facts;
+}
+
+fn evaluateQueryRows(
+    allocator: Allocator,
+    state: *DaemonState,
+    query: ParsedQuery,
+) !std.ArrayList([]const u8) {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const facts = try buildQueryFacts(arena, state);
+    var current: std.ArrayList(QuerySubstitution) = .empty;
+    try current.append(arena, .{ .bindings = .empty });
+
+    for (query.body.items) |literal| {
+        var next: std.ArrayList(QuerySubstitution) = .empty;
+        for (current.items) |substitution| {
+            for (facts.items) |fact| {
+                var candidate = try cloneQuerySubstitution(arena, substitution);
+                var matches = true;
+                for (literal.args.items, 0..) |term, index| {
+                    if (!(try unifyQueryTerm(
+                        arena,
+                        &candidate,
+                        term,
+                        queryFactValue(literal.relation, fact, index),
+                    ))) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (!matches) continue;
+                if (next.items.len >= max_native_query_rows)
+                    return error.QueryWorkLimit;
+                try next.append(arena, candidate);
+            }
+        }
+        current = next;
+    }
+
+    var unique = std.StringHashMap(void).init(allocator);
+    defer unique.deinit();
+    for (current.items) |substitution| {
+        var row: Writer.Allocating = .init(arena);
+        try writeAll(&row.writer, "[");
+        for (query.head_args.items, 0..) |term, index| {
+            if (index != 0) try writeAll(&row.writer, " ");
+            const value = switch (term) {
+                .constant => |constant| constant,
+                .variable => |name| lookupQueryBinding(substitution, name) orelse
+                    return error.InvalidQueryState,
+            };
+            try writeEdnString(&row.writer, value);
+        }
+        try writeAll(&row.writer, "]");
+        const encoded = try row.toOwnedSlice();
+        try unique.put(encoded, {});
+    }
+
+    var rows: std.ArrayList([]const u8) = .empty;
+    errdefer rows.deinit(allocator);
+    try rows.ensureTotalCapacity(allocator, unique.count());
+    var iterator = unique.keyIterator();
+    while (iterator.next()) |row| rows.appendAssumeCapacity(row.*);
+    std.mem.sort([]const u8, rows.items, {}, struct {
+        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+            return std.mem.order(u8, left, right) == .lt;
+        }
+    }.lessThan);
+
+    var owned: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (owned.items) |row| allocator.free(row);
+        owned.deinit(allocator);
+    }
+    try owned.ensureTotalCapacity(allocator, rows.items.len);
+    for (rows.items) |row| {
+        owned.appendAssumeCapacity(try allocator.dupe(u8, row));
+    }
+    rows.deinit(allocator);
+    return owned;
+}
+
+fn renderQueryIssue(
+    allocator: Allocator,
+    state: *const DaemonState,
+    issue: QueryIssue,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeAll(&output.writer, "{:error [");
+    try writeEdnString(&output.writer, issue.message);
+    try writeAll(&output.writer, "] :code :");
+    try writeAll(&output.writer, issue.code.wireName());
+    try output.writer.print(
+        " :version {d} :engine \"scan\"}}",
+        .{state.version},
+    );
+    return output.toOwnedSlice();
+}
+
+fn renderQueryWorkLimit(
+    allocator: Allocator,
+    state: *const DaemonState,
+) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{:error [\"native query exceeded its {d}-row intermediate limit\"] :code :query-work-limit :max-rows {d} :version {d} :engine \"scan\"}}",
+        .{ max_native_query_rows, max_native_query_rows, state.version },
+    );
+}
+
+fn queryFacts(
+    allocator: Allocator,
+    state: *DaemonState,
+    request: *MapFields,
+) ![]u8 {
+    if (try requestFieldError(
+        allocator,
+        request,
+        field_op | field_query,
+        field_query,
+    )) |response| return response;
+    const raw = request.query orelse unreachable;
+    var issue: QueryIssue = .{};
+    var query = parseQuery(allocator, raw, &issue) catch |err| switch (err) {
+        error.InvalidQuery => return renderQueryIssue(allocator, state, issue),
+        else => return err,
+    };
+    defer query.deinit(allocator);
+
+    var rows = evaluateQueryRows(allocator, state, query) catch |err| switch (err) {
+        error.QueryWorkLimit => return renderQueryWorkLimit(allocator, state),
+        else => return err,
+    };
+    defer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
+
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeAll(&output.writer, "{:ok [");
+    for (rows.items, 0..) |row, index| {
+        if (index != 0) try writeAll(&output.writer, " ");
+        try writeAll(&output.writer, row);
+    }
+    try output.writer.print(
+        "] :version {d} :engine \"scan\"}}",
+        .{state.version},
+    );
+    return output.toOwnedSlice();
 }
 
 fn mutateOne(
@@ -2032,6 +2948,9 @@ fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
         } else if (std.mem.eql(u8, name, "subjects")) {
             fields.noteField(field_subjects);
             fields.subjects = value;
+        } else if (std.mem.eql(u8, name, "query")) {
+            fields.noteField(field_query);
+            fields.query = value;
         } else {
             fields.unknown_field = true;
         }
@@ -2062,6 +2981,7 @@ fn parseOperation(raw: []const u8) Operation {
     if (std.mem.eql(u8, raw, ":fence-ok")) return .fence_ok;
     if (std.mem.eql(u8, raw, ":facts")) return .facts;
     if (std.mem.eql(u8, raw, ":facts-for-subjects")) return .facts_for_subjects;
+    if (std.mem.eql(u8, raw, ":query")) return .query;
     return .unknown;
 }
 
