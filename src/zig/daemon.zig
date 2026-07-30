@@ -1448,6 +1448,7 @@ const QueryTerm = union(enum) {
 const QueryLiteral = struct {
     relation: []u8,
     args: std.ArrayList(QueryTerm),
+    negated: bool,
 
     fn deinit(literal: *QueryLiteral, allocator: Allocator) void {
         allocator.free(literal.relation);
@@ -1457,14 +1458,24 @@ const QueryLiteral = struct {
     }
 };
 
+const ParsedQueryStratum = struct {
+    rules: std.ArrayList(ParsedQueryRule),
+
+    fn deinit(stratum: *ParsedQueryStratum, allocator: Allocator) void {
+        for (stratum.rules.items) |*rule| rule.deinit(allocator);
+        stratum.rules.deinit(allocator);
+        stratum.* = undefined;
+    }
+};
+
 const ParsedQuery = struct {
     find: []u8,
-    rules: std.ArrayList(ParsedQueryRule),
+    strata: std.ArrayList(ParsedQueryStratum),
 
     fn deinit(query: *ParsedQuery, allocator: Allocator) void {
         allocator.free(query.find);
-        for (query.rules.items) |*rule| rule.deinit(allocator);
-        query.rules.deinit(allocator);
+        for (query.strata.items) |*stratum| stratum.deinit(allocator);
+        query.strata.deinit(allocator);
         query.* = undefined;
     }
 };
@@ -1661,15 +1672,13 @@ fn parseQueryLiteral(
             .invalid_query,
             "query body literal needs unique :rel and :args fields",
         );
+    var negated = false;
     if (neg_raw) |neg| {
-        if (std.mem.eql(u8, neg, "true"))
-            return rejectQuery(
-                issue,
-                .unsupported_query,
-                "native query v1 does not support negated literals",
-            );
-        if (!std.mem.eql(u8, neg, "false"))
+        if (std.mem.eql(u8, neg, "true")) {
+            negated = true;
+        } else if (!std.mem.eql(u8, neg, "false")) {
             return rejectQuery(issue, .invalid_query, "query literal :neg must be true or false");
+        }
     }
 
     const relation = try parseQueryRelation(allocator, relation_raw.?, issue);
@@ -1679,7 +1688,7 @@ fn parseQueryLiteral(
         for (args.items) |*term| term.deinit(allocator);
         args.deinit(allocator);
     }
-    return .{ .relation = relation, .args = args };
+    return .{ .relation = relation, .args = args, .negated = negated };
 }
 
 fn parseQueryBody(
@@ -1895,16 +1904,41 @@ fn parseQueryRules(
     }
 }
 
-fn termVariableBound(body: []const QueryLiteral, name: []const u8) bool {
-    for (body) |literal| {
-        for (literal.args.items) |term| switch (term) {
-            .variable => |candidate| {
-                if (std.mem.eql(u8, name, candidate)) return true;
-            },
-            .constant => {},
-        };
+fn parseQueryStrata(
+    allocator: Allocator,
+    raw: []const u8,
+    issue: *QueryIssue,
+) QueryParseError!std.ArrayList(ParsedQueryStratum) {
+    var parser: Parser = .{ .input = raw };
+    parser.skipSeparators();
+    if (parser.index >= raw.len or raw[parser.index] != '[')
+        return rejectQuery(issue, .invalid_query, "query :strata must be a vector");
+    parser.index += 1;
+
+    var strata: std.ArrayList(ParsedQueryStratum) = .empty;
+    errdefer {
+        for (strata.items) |*stratum| stratum.deinit(allocator);
+        strata.deinit(allocator);
     }
-    return false;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query :strata vector is incomplete");
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query :strata has trailing input");
+            if (strata.items.len == 0)
+                return rejectQuery(issue, .invalid_query, "query :strata must not be empty");
+            return strata;
+        }
+        const stratum_raw = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query :strata contains invalid EDN");
+        try strata.append(allocator, .{
+            .rules = try parseQueryRules(allocator, stratum_raw, issue),
+        });
+    }
 }
 
 fn baseQueryArity(relation: []const u8) ?usize {
@@ -1931,9 +1965,9 @@ fn parseQuery(
 
     var find_raw: ?[]const u8 = null;
     var rules_raw: ?[]const u8 = null;
+    var strata_raw: ?[]const u8 = null;
     var duplicate = false;
     var unknown = false;
-    var strata = false;
     while (true) {
         parser.skipSeparators();
         if (parser.index >= raw.len)
@@ -1956,23 +1990,23 @@ fn parseQuery(
             duplicate = duplicate or rules_raw != null;
             rules_raw = value;
         } else if (std.mem.eql(u8, key, ":strata")) {
-            strata = true;
+            duplicate = duplicate or strata_raw != null;
+            strata_raw = value;
         } else {
             unknown = true;
         }
     }
-    if (strata)
-        return rejectQuery(
-            issue,
-            .unsupported_query,
-            "native query v1 does not support explicit strata",
-        );
-    if (duplicate or unknown or find_raw == null or rules_raw == null)
+    if (duplicate or
+        unknown or
+        find_raw == null or
+        (rules_raw == null) == (strata_raw == null))
+    {
         return rejectQuery(
             issue,
             .invalid_query,
-            "query needs unique :find and :rules fields",
+            "query needs unique :find and exactly one of :rules or :strata",
         );
+    }
     if (find_raw.?[0] == '{')
         return rejectQuery(
             issue,
@@ -1987,30 +2021,45 @@ fn parseQuery(
         "query :find must be a relation-name string",
     );
     errdefer allocator.free(find);
-    var rules = try parseQueryRules(allocator, rules_raw.?, issue);
+
+    var strata: std.ArrayList(ParsedQueryStratum) = if (strata_raw) |strata_value|
+        try parseQueryStrata(allocator, strata_value, issue)
+    else blk: {
+        var one: std.ArrayList(ParsedQueryStratum) = .empty;
+        const rules = try parseQueryRules(allocator, rules_raw.?, issue);
+        one.append(allocator, .{ .rules = rules }) catch |err| {
+            var owned_rules = rules;
+            for (owned_rules.items) |*rule| rule.deinit(allocator);
+            owned_rules.deinit(allocator);
+            return err;
+        };
+        break :blk one;
+    };
     errdefer {
-        for (rules.items) |*rule| rule.deinit(allocator);
-        rules.deinit(allocator);
+        for (strata.items) |*stratum| stratum.deinit(allocator);
+        strata.deinit(allocator);
     }
 
     var arities = std.StringHashMap(usize).init(allocator);
     defer arities.deinit();
-    for (rules.items) |rule| {
-        if (baseQueryArity(rule.head.relation) != null)
-            return rejectQuery(
-                issue,
-                .invalid_query,
-                "query rule head cannot shadow a base relation",
-            );
-        if (arities.get(rule.head.relation)) |arity| {
-            if (arity != rule.head.args.items.len)
+    for (strata.items) |stratum| {
+        for (stratum.rules.items) |rule| {
+            if (baseQueryArity(rule.head.relation) != null)
                 return rejectQuery(
                     issue,
                     .invalid_query,
-                    "query rules define one head relation at inconsistent arities",
+                    "query rule head cannot shadow a base relation",
                 );
-        } else {
-            try arities.put(rule.head.relation, rule.head.args.items.len);
+            if (arities.get(rule.head.relation)) |arity| {
+                if (arity != rule.head.args.items.len)
+                    return rejectQuery(
+                        issue,
+                        .invalid_query,
+                        "query rules define one head relation at inconsistent arities",
+                    );
+            } else {
+                try arities.put(rule.head.relation, rule.head.args.items.len);
+            }
         }
     }
     if (!arities.contains(find))
@@ -2020,36 +2069,98 @@ fn parseQuery(
             "query :find must name a rule head relation",
         );
 
-    for (rules.items) |rule| {
-        for (rule.body.items) |literal| {
-            const arity = baseQueryArity(literal.relation) orelse
-                arities.get(literal.relation) orelse
-                return rejectQuery(
-                    issue,
-                    .invalid_query,
-                    "query body references an unknown relation",
-                );
-            if (literal.args.items.len != arity)
-                return rejectQuery(
-                    issue,
-                    .invalid_query,
-                    "query relation has the wrong argument count",
-                );
+    var lower_relations = std.StringHashMap(void).init(allocator);
+    defer lower_relations.deinit();
+    for (strata.items) |stratum| {
+        var current_relations = std.StringHashMap(void).init(allocator);
+        defer current_relations.deinit();
+        for (stratum.rules.items) |rule| {
+            try current_relations.put(rule.head.relation, {});
         }
-        for (rule.head.args.items) |term| switch (term) {
-            .variable => |name| {
-                if (!termVariableBound(rule.body.items, name))
+
+        for (stratum.rules.items) |rule| {
+            var bound = std.StringHashMap(void).init(allocator);
+            defer bound.deinit();
+            for (rule.body.items) |literal| {
+                const base_arity = baseQueryArity(literal.relation);
+                const arity = base_arity orelse
+                    arities.get(literal.relation) orelse
                     return rejectQuery(
                         issue,
                         .invalid_query,
-                        "query head variable is not bound by a body literal",
+                        "query body references an unknown relation",
                     );
-            },
-            .constant => {},
-        };
+                if (literal.args.items.len != arity)
+                    return rejectQuery(
+                        issue,
+                        .invalid_query,
+                        "query relation has the wrong argument count",
+                    );
+
+                if (literal.negated) {
+                    if (current_relations.contains(literal.relation))
+                        return rejectQuery(
+                            issue,
+                            .invalid_query,
+                            "query has recursion through negation in one stratum",
+                        );
+                    if (base_arity == null and
+                        !lower_relations.contains(literal.relation))
+                    {
+                        return rejectQuery(
+                            issue,
+                            .invalid_query,
+                            "negated relation must be a base relation or a completed lower stratum",
+                        );
+                    }
+                    for (literal.args.items) |term| switch (term) {
+                        .variable => |name| {
+                            if (!bound.contains(name))
+                                return rejectQuery(
+                                    issue,
+                                    .invalid_query,
+                                    "negated query variable must be bound by an earlier positive literal",
+                                );
+                        },
+                        .constant => {},
+                    };
+                } else {
+                    if (base_arity == null and
+                        !lower_relations.contains(literal.relation) and
+                        !current_relations.contains(literal.relation))
+                    {
+                        return rejectQuery(
+                            issue,
+                            .invalid_query,
+                            "positive query relation is defined only in a later stratum",
+                        );
+                    }
+                    for (literal.args.items) |term| switch (term) {
+                        .variable => |name| try bound.put(name, {}),
+                        .constant => {},
+                    };
+                }
+            }
+            for (rule.head.args.items) |term| switch (term) {
+                .variable => |name| {
+                    if (!bound.contains(name))
+                        return rejectQuery(
+                            issue,
+                            .invalid_query,
+                            "query head variable is not bound by a positive body literal",
+                        );
+                },
+                .constant => {},
+            };
+        }
+
+        var current_iterator = current_relations.iterator();
+        while (current_iterator.next()) |entry| {
+            try lower_relations.put(entry.key_ptr.*, {});
+        }
     }
 
-    return .{ .find = find, .rules = rules };
+    return .{ .find = find, .strata = strata };
 }
 
 const QueryFact = struct {
@@ -2402,10 +2513,72 @@ fn appendUnifiedQueryRow(
     try next.append(allocator, candidate);
 }
 
+fn queryTermsMatch(
+    substitution: QuerySubstitution,
+    args: []const QueryTerm,
+    values: []const []const u8,
+) bool {
+    for (args, values) |term, value| switch (term) {
+        .constant => |constant| {
+            if (!std.mem.eql(u8, constant, value)) return false;
+        },
+        .variable => |name| {
+            const bound = lookupQueryBinding(substitution, name) orelse
+                return false;
+            if (!std.mem.eql(u8, bound, value)) return false;
+        },
+    };
+    return true;
+}
+
+fn negativeQueryLiteralMatches(
+    facts: []const QueryFact,
+    predicates: []const QueryPredicateRow,
+    completed: []const QueryDerivedRow,
+    literal: QueryLiteral,
+    substitution: QuerySubstitution,
+) bool {
+    if (std.mem.eql(u8, literal.relation, "fact") or
+        std.mem.eql(u8, literal.relation, "triple"))
+    {
+        for (facts) |fact| {
+            const values = [_][]const u8{ fact.l, fact.p, fact.r };
+            if (queryTermsMatch(substitution, literal.args.items, &values))
+                return true;
+        }
+        return false;
+    }
+    if (std.mem.eql(u8, literal.relation, "fact-id")) {
+        for (facts) |fact| {
+            const values = [_][]const u8{ fact.cid, fact.l, fact.p, fact.r };
+            if (queryTermsMatch(substitution, literal.args.items, &values))
+                return true;
+        }
+        return false;
+    }
+    if (std.mem.eql(u8, literal.relation, "predicate")) {
+        for (predicates) |predicate| {
+            if (queryTermsMatch(
+                substitution,
+                literal.args.items,
+                &predicate.values,
+            )) return true;
+        }
+        return false;
+    }
+    for (completed) |row| {
+        if (!std.mem.eql(u8, literal.relation, row.relation)) continue;
+        if (queryTermsMatch(substitution, literal.args.items, row.values))
+            return true;
+    }
+    return false;
+}
+
 fn evaluateQueryBody(
     allocator: Allocator,
     facts: []const QueryFact,
     predicates: []const QueryPredicateRow,
+    completed: []const QueryDerivedRow,
     derived: []const QueryDerivedRow,
     body: []const QueryLiteral,
 ) !std.ArrayList(QuerySubstitution) {
@@ -2415,6 +2588,23 @@ fn evaluateQueryBody(
     for (body) |literal| {
         var next: std.ArrayList(QuerySubstitution) = .empty;
         for (current.items) |substitution| {
+            if (literal.negated) {
+                if (!negativeQueryLiteralMatches(
+                    facts,
+                    predicates,
+                    completed,
+                    literal,
+                    substitution,
+                )) {
+                    if (next.items.len >= max_native_query_rows)
+                        return error.QueryWorkLimit;
+                    try next.append(
+                        allocator,
+                        try cloneQuerySubstitution(allocator, substitution),
+                    );
+                }
+                continue;
+            }
             if (std.mem.eql(u8, literal.relation, "fact") or
                 std.mem.eql(u8, literal.relation, "triple"))
             {
@@ -2522,39 +2712,43 @@ fn evaluateQueryRows(
     const predicates = try buildQueryPredicates(arena, state, facts.items);
     var derived: std.ArrayList(QueryDerivedRow) = .empty;
     var seen = std.StringHashMap(void).init(arena);
-    while (true) {
-        var changed = false;
-        for (query.rules.items) |rule| {
-            const substitutions = try evaluateQueryBody(
-                arena,
-                facts.items,
-                predicates.items,
-                derived.items,
-                rule.body.items,
-            );
-            for (substitutions.items) |substitution| {
-                const values = try groundQueryHead(
+    for (query.strata.items) |stratum| {
+        const completed_count = derived.items.len;
+        while (true) {
+            var changed = false;
+            for (stratum.rules.items) |rule| {
+                const substitutions = try evaluateQueryBody(
                     arena,
-                    rule.head.args.items,
-                    substitution,
+                    facts.items,
+                    predicates.items,
+                    derived.items[0..completed_count],
+                    derived.items,
+                    rule.body.items,
                 );
-                const key = try encodeQueryTuple(
-                    arena,
-                    rule.head.relation,
-                    values,
-                );
-                if (seen.contains(key)) continue;
-                if (derived.items.len >= max_native_query_rows)
-                    return error.QueryWorkLimit;
-                try seen.put(key, {});
-                try derived.append(arena, .{
-                    .relation = rule.head.relation,
-                    .values = values,
-                });
-                changed = true;
+                for (substitutions.items) |substitution| {
+                    const values = try groundQueryHead(
+                        arena,
+                        rule.head.args.items,
+                        substitution,
+                    );
+                    const key = try encodeQueryTuple(
+                        arena,
+                        rule.head.relation,
+                        values,
+                    );
+                    if (seen.contains(key)) continue;
+                    if (derived.items.len >= max_native_query_rows)
+                        return error.QueryWorkLimit;
+                    try seen.put(key, {});
+                    try derived.append(arena, .{
+                        .relation = rule.head.relation,
+                        .values = values,
+                    });
+                    changed = true;
+                }
             }
+            if (!changed) break;
         }
-        if (!changed) break;
     }
 
     var rows: std.ArrayList([]const u8) = .empty;

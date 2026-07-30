@@ -187,13 +187,14 @@ unbound_recursive_head="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find "bad" :rules [{:head {:rel "bad" :args [{:var "unbound"}]} :body [{:rel "bad" :args [{:var "bound"}]}]}]}}')"
 assert_response "$unbound_recursive_head" '(fn [r] (= :invalid-query (:code r)))'
 
-negation="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "missing" :rules [{:head {:rel "missing" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}] :neg true}]}]}}')"
-assert_response "$negation" '(fn [r] (= :unsupported-query (:code r)))'
+stratified_anti_join="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "open" :strata [[{:head {:rel "done" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "depends_on" "@c"]}]}] [{:head {:rel "open" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "depends_on" {:var "target"}]} {:rel "done" :args [{:var "subject"}] :neg true}]}]]}}')"
+assert_response "$stratified_anti_join" \
+  '(fn [r] (= [["@a"] ["@c"]] (:ok r)))'
 
-strata="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "many" :strata [[{:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]]}}')"
-assert_response "$strata" '(fn [r] (= :unsupported-query (:code r)))'
+unstratified="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "q" :strata [[{:head {:rel "p" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "depends_on" "@c"]}]}] [{:head {:rel "q" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "depends_on" {:var "target"}]} {:rel "p" :args [{:var "subject"}] :neg true}]} {:head {:rel "p" :args [{:var "subject"}]} :body [{:rel "q" :args [{:var "subject"}]}]}]]}}')"
+assert_response "$unstratified" '(fn [r] (= :invalid-query (:code r)))'
 
 aggregate="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find {:rel "values" :group [0] :agg [{:op :count}]} :rules [{:head {:rel "values" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]}}')"
