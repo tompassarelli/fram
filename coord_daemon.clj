@@ -3903,9 +3903,10 @@
 ;; -> {:ok {:lines [..] :events [..] :installed-ops [..]}}
 ;;    | {:reject r :at i [:op op] :code ..}
 ;; installed-ops is the canonical effective candidate: kernel-confirmed
-;; idempotent asserts produce no line/event and are omitted.  Prepare seals this
-;; exact vector, so cold recovery can recompute its digest from persisted fact
-;; rows without storing or guessing discarded no-ops.
+;; operations that do not advance the sequence (idempotent asserts and no-op
+;; retracts) produce no line/event and are omitted. Prepare seals this exact
+;; vector, so cold recovery can recompute its digest from persisted fact rows
+;; without storing or guessing discarded no-ops.
 (defn- apply-candidate-ops! [co2 ops base inject-at]
   (let [n (count ops)]
     (loop [i 0 lines [] events [] installed-ops []]
@@ -3920,7 +3921,8 @@
                        (candidate-pred-ok? p))
             {:reject [(str "candidate op " i " is outside the sealed AST vocabulary: " (pr-str op))]
              :at i :op op :code :sealed-vocabulary}
-            (let [res (case verb
+            (let [before (current-seq co2)
+                  res (case verb
                         :assert  (commit! co2 "coord" te p
                                           (if (code-structural-link-pred? p)
                                             :link
@@ -3929,8 +3931,10 @@
                         :retract (retract! co2 "coord" te p r base))]
               (cond
                 (:reject res) {:reject (:reject res) :at i :op op :code :op-rejected}
-                ;; multi-valued idempotent assert: no line, no event (do-assert parity).
-                (and (= verb :assert) (:idempotent res))
+                ;; A successful kernel no-op has no durable row or version of its
+                ;; own. Counting it would forge an inclusive receipt interval.
+                (and (contains? res :ok)
+                     (= before (current-seq co2)))
                 (recur (inc i) lines events installed-ops)
                 :else (recur (inc i)
                              (conj lines (flat-line (name verb) te p r (:ok res)))

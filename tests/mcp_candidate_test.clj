@@ -1895,8 +1895,8 @@
             final (+ v0 (:installed r))
             warning (some #(when (= stage (:stage %)) %) (:warnings r))
             committed-bytes (vec (read-bytes seam-log))]
-        (chk (str "L: " (name stage) " candidate is the exact four-op schema/cardinality batch")
-             (and (true? (:ok prep)) (= 4 (:ops prep)) (= 4 (:installed r))))
+        (chk (str "L: " (name stage) " candidate is the exact three-op effective schema/cardinality batch")
+             (and (true? (:ok prep)) (= 3 (:ops prep)) (= 3 (:installed r))))
         (chk (str "L: " (name stage) " returns explicit COMMITTED warning with exact receipt")
              (and (true? (:ok r)) (true? (:committed r))
                   (= :committed-with-warning (:code r))
@@ -1996,8 +1996,8 @@
       response (try (coord crash-port crash-log req)
                     (catch Throwable t {:transport-error (.getMessage t)}))]
   (Thread/sleep 250)
-  (chk "L: hard-crash candidate is the exact four-op schema/cardinality batch"
-       (and (true? (:ok prep)) (= 4 (:ops prep))))
+  (chk "L: hard-crash candidate is the exact three-op effective schema/cardinality batch"
+       (and (true? (:ok prep)) (= 3 (:ops prep))))
   (chk "L: Runtime.halt immediately after append acknowledgement yields no ordinary failure response"
        (and (:transport-error response)
             (not (.isAlive ^Process (:proc daemon)))))
@@ -2166,9 +2166,9 @@
           scan-results (try (edn/read-string
                              (last (remove str/blank? (str/split-lines (or (:out probe) "")))))
                             (catch Throwable _ nil))]
-      (chk "M: live commit appends one closed envelope plus its exact four operation rows"
-           (and (true? (:ok committed)) (= 4 (:installed committed))
-                (= 5 (count region-lines))
+      (chk "M: live commit appends one closed envelope plus its exact three effective operation rows"
+           (and (true? (:ok committed)) (= 3 (:installed committed))
+                (= 4 (count region-lines))
                 (rt/valid-edit-batch-envelope? envelope0)
                 (= (:candidate prep) (:fram-edit-candidate envelope0)
                    (:fram-edit-batch envelope0))))
