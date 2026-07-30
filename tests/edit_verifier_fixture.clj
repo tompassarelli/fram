@@ -35,6 +35,9 @@
 (when-let [path (System/getenv "FRAM_EDIT_VERIFIER_COUNT_FILE")]
   (spit path (str (:candidate request) "\n") :append true))
 
+(when-let [raw (System/getenv "FRAM_EDIT_VERIFIER_SLEEP_MS")]
+  (Thread/sleep (Long/parseLong raw)))
+
 (when (and (not (str/blank? required-source))
            (not (some #(= required-source (:source %))
                       (:overlay request))))

@@ -3437,6 +3437,9 @@
 (def ^:private edit-verifier-timeout-ms 120000)
 (def ^:private edit-verifier-stdout-max-bytes (* 1024 1024))
 (def ^:private edit-verifier-stderr-max-bytes 4096)
+(def ^:private edit-verifier-diagnostic-max-errors 8)
+(def ^:private edit-verifier-diagnostic-max-error-chars 512)
+(def ^:private edit-verifier-diagnostic-max-stderr-chars 2048)
 (declare publish-edit-journal! remove-edit-journal! restore-log-pre-state!
          sha256-file-prefix ex->s-err)
 ;; env-gated test seam (FRAM_EDIT_INJECT=1 + request flag): force a directory-
@@ -4792,7 +4795,8 @@
 
                   (and (= 1 exit)
                        (verifier-failure-receipt? receipt request))
-                  {:outcome :rejected :request request :receipt receipt}
+                  {:outcome :rejected :request request :receipt receipt
+                   :exit exit :stderr stderr}
 
                   :else
                   (verifier-unavailable
@@ -4894,6 +4898,22 @@
    :verification-state :verified
    :verification (:verification cand)})
 
+(defn- bounded-diagnostic-text [x limit]
+  (let [s (str (or x ""))]
+    (if (> (count s) limit)
+      (str (subs s 0 limit) "…")
+      s)))
+
+(defn- verifier-rejection-diagnostic [id outcome receipt]
+  {:candidate id
+   :status :rejected
+   :exit (:exit outcome)
+   :code (:code receipt)
+   :errors (mapv #(bounded-diagnostic-text % edit-verifier-diagnostic-max-error-chars)
+                 (take edit-verifier-diagnostic-max-errors (:errors receipt)))
+   :stderr (bounded-diagnostic-text (:stderr outcome)
+                                    edit-verifier-diagnostic-max-stderr-chars)})
+
 (defn- verification-rejected-response [cand cached?]
   (let [failure (:verification cand)]
     {:reject [(str "candidate verification failed deterministically: "
@@ -4904,7 +4924,22 @@
      :cached (boolean cached?)
      :retryable false
      :verification-state :rejected
-     :errors (:errors failure)}))
+     :errors (:errors failure)
+     :diagnostic (:diagnostic failure)}))
+
+(defn- edit-candidate-status [req]
+  (let [id (:candidate req)
+        cand (get @edit-candidates id)
+        head (current-seq @co)]
+    (if-not cand
+      {:reject [(str "unknown candidate " (pr-str id)
+                     " (expired, committed, or never prepared)")]
+       :code :unknown-candidate :candidate id :version head}
+      {:ok true
+       :candidate id
+       :version head
+       :verification-state (:verification-state cand)
+       :diagnostic (get-in cand [:verification :diagnostic])})))
 
 (defn- stale-verification-response [cand head]
   {:reject [(str "stale candidate: prepared at version " (:version cand)
@@ -4992,6 +5027,7 @@
 
         (= :rejected (:outcome outcome))
         (let [receipt (:receipt outcome)
+              diagnostic (verifier-rejection-diagnostic id outcome receipt)
               failure {:schema edit-verification-proof-schema
                        :candidate id
                        :base-version (:version current)
@@ -5004,6 +5040,7 @@
                        :receipt-digest (verification-receipt-digest receipt)
                        :code (:code receipt)
                        :errors (:errors receipt)
+                       :diagnostic diagnostic
                        :rejected-at-ms (System/currentTimeMillis)}
               rejected (assoc current
                               :verification-state :rejected
@@ -6578,6 +6615,7 @@
     ;; graph-edit-candidate-v2 unfenced arms (parity with :edit-min — a strict-fence
     ;; daemon still rejects unwrapped requests at serve-conn before reaching here).
     (= :edit-prepare handler) (do-edit-prepare req)
+    (= :edit-candidate-status handler) (edit-candidate-status req)
     (= :edit-verify handler) (do-edit-verify req nil false)
     (= :edit-commit handler) (edit-commit-response req nil false)
   :else
@@ -6676,6 +6714,9 @@
       ;; refuses to start against a daemon that cannot answer this (legacy daemons
       ;; return {:error "unknown op"}). Version echo keeps it a cheap liveness read.
       :edit-protocol {:ok true :protocol edit-protocol-name
+                      :configured-logs
+                      {:coordination (served-log-path)
+                       :telemetry (some-> @telemetry-log str)}
                       :candidate-states
                       (frequencies (map :verification-state
                                         (vals @edit-candidates)))

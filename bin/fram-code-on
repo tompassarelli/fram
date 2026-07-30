@@ -109,8 +109,29 @@ coordinator_edit_protocol() {
            (get-in response [:verifier :state])])))' 2>/dev/null
 }
 
+coordinator_configured_log_identity() {
+  FRAM_PROBE_PORT="$PORT" FRAM_PROBE_LOG="$CODE_LOG" \
+    timeout 5 bb -cp "$HERE/out" -e '
+      (require (quote [fram.rt :as rt]))
+      (let [expected (.getCanonicalPath
+                      (java.io.File. (System/getenv "FRAM_PROBE_LOG")))
+            response
+            (rt/coord-request-for-log
+             (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
+             expected
+             {:op :edit-protocol})
+            configured (:configured-logs response)]
+        (if (and (= expected (:coordination configured))
+                 (nil? (:telemetry configured)))
+          (print "exact-single-log")
+          (print
+           (pr-str
+            {:expected {:coordination expected :telemetry nil}
+             :configured configured}))))' 2>/dev/null
+}
+
 verify_managed_coordinator() {
-  local status protocol
+  local status protocol configured
   status="$(doctor_line || true)"
   if ! coordinator_matches_code_log; then
     echo "        coordinator identity check FAILED: ${status:-no fenced response}" >&2
@@ -126,6 +147,12 @@ verify_managed_coordinator() {
   if [[ "$protocol" != '["graph-edit-candidate-v2" :ready]' ]]; then
     echo "        coordinator verifier check FAILED: ${protocol:-no fenced :edit-protocol response}" >&2
     echo "        stop that daemon and rerun fram-code-on with the launch-sealed verifier" >&2
+    return 1
+  fi
+  configured="$(coordinator_configured_log_identity || true)"
+  if [[ "$configured" != "exact-single-log" ]]; then
+    echo "        coordinator configured-log check FAILED: ${configured:-no configured-log identity}" >&2
+    echo "        refusing reuse: graph authoring requires the exact code log with no telemetry overlay" >&2
     return 1
   fi
 }
@@ -172,12 +199,18 @@ else
     FRAM_EDIT_VERIFIER_WORLD_CHECK="$WORLD_CHECK" \
     FRAM_REQUIRE_LOG_FENCE=1 \
     setsid nohup bin/fram-daemon serve-flat "$PORT" "$CODE_LOG" \
-      >"$DIR/.fram/coord-$PORT.log" 2>&1 & )
+      >"$DIR/.fram/coord-$PORT.log" 2>&1 ) &
+  DAEMON_PID=$!
   # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
   # quadratic today). Generous cap; the loop exits the moment the daemon listens.
   for _ in $(seq 1 2400); do
     sleep 0.5
     grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break
+    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+      echo "        FAILED to boot — coordinator exited; see $DIR/.fram/coord-$PORT.log" >&2
+      tail -n 8 "$DIR/.fram/coord-$PORT.log" >&2 || true
+      exit 1
+    fi
   done
   if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
     verify_managed_coordinator
@@ -219,6 +252,16 @@ FRAM_SERVER_JSON=$(cat <<JSON
 JSON
 )
 "$HERE/bin/fram-code-wire" on "$DIR" "$FRAM_SERVER_JSON"
+
+# The transport wiring and coordinator boot are separate steps. Prove the
+# user-visible stack is complete before reporting success.
+STACK_STATUS="$("$HERE/bin/fram-code-status" "$DIR")"
+if [[ ! "$STACK_STATUS" =~ ^level=3\  ]] || \
+   [[ "$STACK_STATUS" != *"mcp=present port=$PORT coord=alive"* ]] || \
+   ! grep -q '^\[mcp_servers\.fram\]$' "$DIR/.codex/config.toml"; then
+  echo "fram-code-on: FAILED final graph stack postcondition: $STACK_STATUS" >&2
+  exit 1
+fi
 
 cat <<EOF
 

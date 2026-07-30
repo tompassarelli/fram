@@ -70,6 +70,14 @@ assert_code_on_line "fram-code-on probes the fenced edit protocol" \
   'coordinator_edit_protocol() {'
 assert_code_on_line "fram-code-on requires verifier-ready before wiring" \
   'if [[ "$protocol" != '"'"'["graph-edit-candidate-v2" :ready]'"'"' ]]; then'
+assert_code_on_line "fram-code-on requires exact single-log identity before reuse" \
+  'coordinator_configured_log_identity() {'
+assert_code_on_line "fram-code-on refuses a reused telemetry-overlay coordinator" \
+  'refusing reuse: graph authoring requires the exact code log with no telemetry overlay'
+assert_code_on_line "fram-code-on proves a complete L3 graph stack before success" \
+  'fram-code-on: FAILED final graph stack postcondition:'
+assert_code_on_line "fram-code-on stops immediately when its coordinator exits" \
+  'FAILED to boot — coordinator exited; see $DIR/.fram/coord-$PORT.log'
 assert_code_on_line "fram-code-on excludes singular test trees from the authoring corpus" \
   "-not -path '*/test/*'"
 assert_code_on_line "fram-code-on excludes plural tests trees from the authoring corpus" \

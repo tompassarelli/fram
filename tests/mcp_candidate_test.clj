@@ -63,7 +63,8 @@
 ;;      closed unless its consumer is coherently rewritten in the same batch;
 ;;      provider-first edit order is valid because only the final world matters.
 ;;
-;;   bb -cp out tests/mcp_candidate_test.clj      (run from the repo root)
+;;   FRAM_COORD_READ_TIMEOUT_MS=180000 bb -cp out tests/mcp_candidate_test.clj
+;;   (run from the repo root; coherent-world verification owns the long bound)
 ;; Needs: bb + out/ + clojure (JVM daemons) + racket + beagle. Boots throwaway
 ;; coordinators; NEVER touches a live daemon (fresh high ports, hermetic tmp).
 (require '[babashka.process :as p] '[cheshire.core :as json]
@@ -82,7 +83,9 @@
 (doseq [[f label] [[beagle-bin "Beagle CLI"] [check-emit "facts-check-emit.rkt"]
                    [(str root "/out/fram/rt.clj") "out/ (build first)"]]]
   (when-not (.exists (io/file f))
-    (println "SKIP — missing prerequisite:" label "(" f ")") (System/exit 0)))
+    (binding [*out* *err*]
+      (println "FAIL — missing required prerequisite:" label "(" f ")"))
+    (System/exit 1)))
 
 (defn sha256-hex [^String s]
   (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))]
@@ -98,6 +101,7 @@
 (def nested-dir (str src-dir "/src/fram"))
 (def code-log (str src-dir "/.fram/code.log"))
 (def transaction-log (str src-dir "/.fram/transaction.log"))
+(def slow-log (str src-dir "/.fram/slow.log"))
 (def bad-log (str src-dir "/.fram/bad.log"))
 (def facts-log (str tmp "/facts.log"))
 (def verifier-fixture (str root "/tests/edit_verifier_fixture.clj"))
@@ -194,6 +198,11 @@
       (let [r (try (p/sh {:out :string :err :string} "direnv" "exec" beagle-home "which" "racket")
                    (catch Exception _ nil))]
         (when (and r (zero? (:exit r)) (not (str/blank? (:out r)))) (str/trim (:out r))))))
+(when-not (and fram-racket (.canExecute (io/file fram-racket)))
+  (binding [*out* *err*]
+    (println "FAIL — missing required prerequisite: executable pinned Racket"
+             (pr-str fram-racket)))
+  (System/exit 1))
 (def scrub-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home
            ;; A coherent full-world verification is deliberately allowed to
@@ -208,8 +217,9 @@
                  ;; (src/fram/wkfix.bclj -> src.fram.wkfix).
                  "bin/fram-ingest-code" nested-dir "--root" src-dir "--out" code-log)]
   (when-not (zero? (:exit r))
-    (println "SKIP — ingest failed (beagle/racket unavailable?):" (str/trim (str (:err r))))
-    (System/exit 0)))
+    (binding [*out* *err*]
+      (println "FAIL — required Beagle ingest failed:" (str/trim (str (:err r)))))
+    (System/exit 1)))
 
 ;; --- pathology log: same corpus with each module's file fact doctored ---------
 ;; missmod: file fact DELETED; dupmod: second (conflicting) file fact appended;
@@ -239,6 +249,7 @@
                    :r (str outside-dir "/dup2.bclj") :ts "2026-07-22T00:00:00Z" :by "test"})]
   (spit bad-log (str (str/join "\n" (concat lines [dup])) "\n")))
 (write-bytes transaction-log (read-bytes code-log))
+(write-bytes slow-log (read-bytes code-log))
 
 ;; --- throwaway coordinators ---------------------------------------------------
 (defn port-free? [pt]
@@ -250,6 +261,7 @@
 (def main-port (pick-port [39911 39913 39915 39917 39919]))
 (def bad-port  (pick-port [39912 39914 39916 39918 39920]))
 (def transaction-port (pick-port [39891 39893 39895 39897 39899]))
+(def slow-port (pick-port [39791 39793 39795 39797 39799]))
 (def stub-port (pick-port [39921 39923 39925 39927 39929]))
 (def replay-port (pick-port [39931 39933 39935 39937 39939]))
 (def poison-port (pick-port [39941 39943 39945 39947 39949]))
@@ -260,31 +272,34 @@
 (def crash-restart-port (pick-port [39972 39974 39976 39978 39980]))
 (def dead-port (pick-port [59981 59983 59985 59987 59989]))
 
-(defn boot-daemon! [port log]
-  (let [outf (str tmp "/daemon-" port ".log")
-        _ (java.nio.file.Files/deleteIfExists (.toPath (io/file outf)))
-        proc (p/process {:out (io/file outf) :err (io/file outf)
-                         :env (assoc scrub-env
-                                "FRAM_REQUIRE_LOG_FENCE" "1"
-                                "FRAM_EDIT_INJECT" "1"
-                                "FRAM_EDIT_VERIFIER" verifier-fixture
-                                "FRAM_EDIT_VERIFIER_COUNT_FILE" verifier-count-file
-                                "FRAM_EDIT_VERIFIER_FIXTURE_DELEGATE"
-                                verifier-adapter
-                                "FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
-                                "src.fram.overlaythird"
-                                ;; Candidate/OCC tests need a quiescent canonical log.
-                                ;; Snapshot behavior has dedicated suites; its async
-                                ;; post-boot metadata append would be an unrelated,
-                                ;; legitimate stale-version writer here.
-                                "FRAM_SNAPSHOT_BOOT" "0")}
-                        "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
-    (loop [i 0]
-      (cond
-        (and (.exists (io/file outf)) (str/includes? (slurp outf) "listening on")) proc
-        (> i 360) (do (p/destroy-tree proc)
-                      (throw (ex-info (str "daemon on :" port " never came up") {:log outf})))
-        :else (do (Thread/sleep 500) (recur (inc i)))))))
+(defn boot-daemon!
+  ([port log] (boot-daemon! port log {}))
+  ([port log extra-env]
+   (let [outf (str tmp "/daemon-" port ".log")
+         _ (java.nio.file.Files/deleteIfExists (.toPath (io/file outf)))
+         proc (p/process {:out (io/file outf) :err (io/file outf)
+                          :env (merge scrub-env
+                                      {"FRAM_REQUIRE_LOG_FENCE" "1"
+                                       "FRAM_EDIT_INJECT" "1"
+                                       "FRAM_EDIT_VERIFIER" verifier-fixture
+                                       "FRAM_EDIT_VERIFIER_COUNT_FILE" verifier-count-file
+                                       "FRAM_EDIT_VERIFIER_FIXTURE_DELEGATE"
+                                       verifier-adapter
+                                       "FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
+                                       "src.fram.overlaythird"
+                                       ;; Candidate/OCC tests need a quiescent canonical log.
+                                       ;; Snapshot behavior has dedicated suites; its async
+                                       ;; post-boot metadata append would be an unrelated,
+                                       ;; legitimate stale-version writer here.
+                                       "FRAM_SNAPSHOT_BOOT" "0"}
+                                      extra-env)}
+                         "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
+     (loop [i 0]
+       (cond
+         (and (.exists (io/file outf)) (str/includes? (slurp outf) "listening on")) proc
+         (> i 360) (do (p/destroy-tree proc)
+                       (throw (ex-info (str "daemon on :" port " never came up") {:log outf})))
+         :else (do (Thread/sleep 500) (recur (inc i))))))))
 
 (defn stop-daemon! [proc]
   (when (and proc (.isAlive ^Process (:proc proc)))
@@ -336,6 +351,13 @@
 ;;     commit; one launch-sealed verification is cached; a proof is exact-version
 ;;     scoped; and selected checks still receive the complete provider overlay.
 ;; ============================================================================
+(let [configured (:configured-logs
+                  (transaction-coord {:op :edit-protocol}))]
+  (chk "V0: edit protocol exposes the exact single-log coordinator identity"
+       (= {:coordination (.getCanonicalPath (io/file transaction-log))
+           :telemetry nil}
+          configured)))
+
 (let [prep (transaction-coord
             {:op :edit-prepare
              :spec {:op "set-body" :module "src.fram.wkfix"
@@ -422,6 +444,46 @@
             (> (:overlay-module-count prep)
                (count (:checked-modules prep))))))
 
+(let [daemon (boot-daemon! slow-port slow-log
+                           {"FRAM_EDIT_VERIFIER_FIXTURE_MODE" "accept"
+                            "FRAM_EDIT_VERIFIER_SLEEP_MS" "1500"})]
+  (try
+    (let [prep (coord-raw slow-port slow-log
+                          {:op :edit-prepare
+                           :spec {:op "set-body" :module "src.fram.wkfix"
+                                  :name "double-it" :datum 12}})
+          verification (future
+                         (coord-raw slow-port slow-log
+                                    {:op :edit-verify
+                                     :candidate (:candidate prep)}))
+          deadline (+ (System/currentTimeMillis) 2000)
+          active
+          (loop []
+            (let [status (coord-raw slow-port slow-log
+                                    {:op :edit-candidate-status
+                                     :candidate (:candidate prep)})]
+              (cond
+                (= :verifying (:verification-state status)) status
+                (< (System/currentTimeMillis) deadline)
+                (do (Thread/sleep 10) (recur))
+                :else status)))
+          started (System/nanoTime)
+          in-progress (coord-raw slow-port slow-log
+                                 {:op :edit-verify
+                                  :candidate (:candidate prep)})
+          elapsed-ms (/ (- (System/nanoTime) started) 1000000.0)
+          completed (deref verification 5000 ::timed-out)]
+      (chk "V0: slow verifier exposes the addressable in-progress candidate directly"
+           (and (= (:candidate prep) (:candidate active))
+                (= :verifying (:verification-state active))))
+      (chk "V0: concurrent direct verification returns bounded in-progress instead of waiting"
+           (and (= :verification-in-progress (:code in-progress))
+                (= (:candidate prep) (:candidate in-progress))
+                (true? (:retryable in-progress))
+                (< elapsed-ms 500.0)
+                (true? (:ok completed)))))
+    (finally (stop-daemon! daemon))))
+
 (let [prep (transaction-coord
             {:op :edit-prepare
              :spec {:op "set-body" :module "src.fram.wkfix"
@@ -430,10 +492,21 @@
                           {:op :edit-verify :candidate (:candidate prep)})
       status (transaction-coord
               {:op :edit-candidate-status :candidate (:candidate prep)})
+      rows (->> (str/split-lines (:edn prep))
+                rest
+                (mapv edn/read-string))
+      structural-rows
+      (filterv
+       (fn [[_ p _]]
+         (and (string? p)
+              (or (#{"child" "tail"} p)
+                  (re-matches #"f\d+" p)
+                  (re-matches #"(?:seg|comment)\d+" p))))
+       rows)
       diagnostic (:diagnostic status)]
   (chk "V0: candidate EDN keeps structural edges as node references"
-       (not (re-find #"(?m)\\[\\d+ \\\"(?:child|tail|f\\d+(?:\\.\\d+)*~?\\d*|seg\\d+|comment\\d+)\\\" \\\"@[^\\\"]+#\\d+\\\"\\]"
-                     (:edn prep))))
+       (and (seq structural-rows)
+            (every? integer? (map #(nth % 2) structural-rows))))
   (chk "V0: rejected candidate status retains a bounded checker diagnostic"
        (and (= :candidate-check-failed (:code rejected))
             (= (:candidate prep) (:candidate rejected))

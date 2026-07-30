@@ -12,6 +12,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      BEAGLE_HOME: ${{ github.workspace }}/.beagle
+      FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,6 +26,26 @@ jobs:
         with:
           repository: Autonymy/beagle
           path: .beagle
+
+      - name: Install Racket (Beagle graph-authoring runtime)
+        uses: Bogdanp/setup-racket@v1.14
+        with:
+          architecture: x64
+          distribution: full
+          variant: CS
+          version: '9.1'
+
+      - name: Link checked-out Beagle packages with pinned Racket
+        run: |
+          export _BEAGLE_RACKET="$(command -v racket)"
+          export _BEAGLE_ZO_CHECKED=1
+          source "$BEAGLE_HOME/bin/_beagle-racket"
+          "$RACO" pkg install --auto --link \
+            "$BEAGLE_HOME/beagle-lib/" \
+            "$BEAGLE_HOME/beagle-test/" \
+            "$BEAGLE_HOME/beagle/"
+          echo "FRAM_RACKET=$RACKET" >> "$GITHUB_ENV"
+          echo "_BEAGLE_RACKET=$RACKET" >> "$GITHUB_ENV"
 
       - name: Install babashka
         run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
@@ -51,7 +74,11 @@ jobs:
           for t in tests/*_test.clj; do
             [ "$t" = tests/tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
             echo "== $t =="
-            bb -cp out "$t" || fail=1
+            if [ "$t" = tests/mcp_candidate_test.clj ]; then
+              FRAM_COORD_READ_TIMEOUT_MS=180000 bb -cp out "$t" || fail=1
+            else
+              bb -cp out "$t" || fail=1
+            fi
           done
           exit $fail
 
