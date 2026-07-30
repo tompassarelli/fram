@@ -61,16 +61,20 @@ Expected: two services build and start; `docker compose ps` shows
 ```sh
 curl -s -X POST http://127.0.0.1:8080/q \
   -H "Authorization: Bearer $SHIM_TOKEN" -d '{:op :version}'
-# -> {:version 0}
+# -> {:version <n>}
 
 curl -s -X POST http://127.0.0.1:8080/assert \
   -H "Authorization: Bearer $SHIM_TOKEN" \
   -d '{:op :assert :te "@smoke" :p "title" :r "hello"}'
-# -> {:ok 1}
+# -> {:ok <n+1>}
 
 curl -s -X POST http://127.0.0.1:8080/q -d '{:op :version}'
 # -> {:error "unauthorized"}        (no token: shim refuses — expected)
 ```
+
+The version is a monotonic log sequence, not an application-fact count. The
+snapshot-enabled image can initialize an empty volume with internal snapshot
+metadata, so a fresh deployment need not start at version zero.
 
 ## 3. Expose the shim to Cloudflare
 
@@ -103,7 +107,7 @@ Expected: wrangler prints the deployed URL, e.g.
 W=https://fram-bench.<you>.workers.dev
 curl -s $W/health                          # -> coordinator :status JSON (version, facts, log path)
 curl -s -X POST $W/fact -d '{"l":"@bench1","p":"title","r":"hello from workers"}'
-# -> {"ok": 2}
+# -> {"ok": <next-version>}
 curl -s "$W/facts?p=title"                 # -> {"ok":[["@smoke","hello"],["@bench1","hello from workers"]], "engine":"index", ...}
 curl -s "$W/bench?n=20&p=title"            # -> p50/min/max ms for 20 round-trips
 ```
@@ -114,7 +118,9 @@ This exact transcript was produced against a real daemon
 (`bin/fram-daemon serve-flat 7999 <scratch>/facts.log`), the real shim
 (`FRAM_PORT=7999 SHIM_PORT=8799 SHIM_TOKEN=... bb shim.clj`), driving
 `worker-client.js` under **node 24** — three asserts, two queries, an auth
-probe:
+probe. This no-Docker transcript did not enable snapshot boot, so its
+application writes begin at one; the Docker path may have internal metadata
+at earlier versions:
 
 ```
 assert 1 -> {"ok":1}
