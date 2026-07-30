@@ -168,30 +168,22 @@
   (str "f" (str/join "." path) "~" tie))
 
 (defn datum->canon [d]
-  (cond
-  (nil? d) [:leaf "symbol" "nil"]
-  (symbol? d) [:leaf "symbol" (str d)]
-  (keyword? d) [:leaf "symbol" (str d)]
-  (boolean? d) [:leaf "symbol" (if d "true" "false")]
-  (string? d) [:leaf "string" d]
-  (char? d) [:leaf "char" (str d)]
-  (number? d) [:leaf "number" (str d)]
-  (vector? d) (into [:list [:leaf "symbol" "#%brackets"]] (mapv datum->canon d))
-  (map? d) (into [:list [:leaf "symbol" "#%map"]] (mapv datum->canon (apply concat (seq d))))
-  (instance? java.util.regex.Pattern d) [:list [:leaf "symbol" "#%regex"] [:leaf "string" (.pattern d)]]
-  (set? d) (into [:list [:leaf "symbol" "#%set"]] (mapv datum->canon d))
-  (or (list? d) (seq? d)) (into [:list] (mapv datum->canon d))
-  :else [:leaf "other" (pr-str d)]))
+  (rc/datum->canon d))
 
 (defn- ^Boolean named-def-head? [h]
   (and (rc/writable-def-head? (str h)) (not (contains? (into #{"defmethod"} rc/EXTEND-FORMS) (str h)))))
 
-(defn- node-def-name [^Verb v f]
+(defn- node-def-name-leaf [^Verb v f]
   (let [ctx (:ctx v)
    view (:view v)
-   nl0 (rr/unwrap-meta ctx view (second (rr/ordered-children ctx (rm/unwrap-def ctx view f))))
-   nl (if (= "list" (rr/kind-of ctx view nl0)) (first (rr/ordered-children ctx nl0)) nl0)]
-  (rr/sym-val ctx view nl)))
+   d (rm/unwrap-def ctx view f)
+   children (rr/ordered-children ctx d)
+   head (rr/head-sym ctx view d)
+   name-index (rc/type-name-index head (rr/sym-val ctx view (nth children 1 nil)))]
+  (rm/logical-name-leaf ctx view (nth children name-index nil))))
+
+(defn- node-def-name [^Verb v f]
+  (rr/sym-val (:ctx v) (:view v) (node-def-name-leaf v f)))
 
 (defn writable-victim [^Verb v ^String src datum]
   (let [ctx (:ctx v)
@@ -200,29 +192,57 @@
    REFERS (:REFERS v)
    FIXED (:FIXED v)
    wrapper (:wrapper-of v)
-   head (str (first datum))
+   key (rc/writable-form-key datum)
    forms (rest (rr/ordered-children ctx (wrapper src)))]
   (cond
-  (= head "defmethod") (let [m (str (second datum))
-   dv (datum->canon (nth (vec datum) 2 nil))]
+  (= :defmethod (first key)) (let [m (str (second key))
+   dv (nth key 2)]
   (some (fn [f] (let [d (rm/unwrap-def ctx view f)
    k (rr/ordered-children ctx d)]
   (if (and (= "defmethod" (rr/head-sym ctx view d)) (= m (rr/sym-val ctx view (second k))) (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil)))) (do
   f)))) forms))
-  (contains? rc/EXTEND-FORMS head) (let [tgt (datum->canon (second datum))]
+  (= :extension (first key)) (let [head (str (second key))
+   tgt (nth key 2)]
   (some (fn [f] (let [d (rm/unwrap-def ctx view f)]
   (if (and (= head (rr/head-sym ctx view d)) (= tgt (rv/node->canon ctx view BOUND REFERS FIXED (second (rr/ordered-children ctx d))))) (do
   f)))) forms))
-  :else (let [nm (str (second datum))]
+  (= :named (first key)) (let [nm (str (second key))]
   (some (fn [f] (if (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f))) (= nm (node-def-name v f))) (do
-  f))) forms)))))
+  f))) forms))
+  :else nil)))
 
 (defn ^String writable-disp-name [datum]
-  (let [head (str (first datum))]
-  (cond
-  (= head "defmethod") (str (second datum) ":" (pr-str (nth (vec datum) 2 nil)))
-  (contains? rc/EXTEND-FORMS head) (str head " " (pr-str (second datum)))
-  :else (str (second datum)))))
+  (or (rc/writable-form-display-name datum) ""))
+
+(defn- reuse-matching-binding-leaves! [^Verb v old-form new-form]
+  (let [ctx (:ctx v)
+   view (:view v)
+   tx (:tx v)
+   warn (:warn v)
+   reject (:reject v)
+   retire (:retire v)
+   descendants (:descendants v)
+   old-bindings (rm/form-binding-leaves ctx view old-form)
+   new-bindings (rm/form-binding-leaves ctx view new-form)
+   new-nodes (descendants new-form)
+   plans (reduce (fn [acc entry] (let [nm (key entry)
+   new-leaf (val entry)
+   old-leaf (get old-bindings nm)]
+  (if (and (some? old-leaf) (not= old-leaf new-leaf)) (let [incoming (vec (filter (fn [cid] (let [fact (c/fact-of ctx cid)
+   p (if (nil? fact) nil (c/literal ctx (:p fact)))]
+  (and (some? fact) (= (:r fact) new-leaf) (contains? new-nodes (:l fact)) (string? p) (rc/ord-pos? p)))) (c/by-r ctx new-leaf)))]
+  (if (= 1 (count incoming)) (conj acc [(first incoming) old-leaf]) (do
+  (warn (str "REJECTED — cannot preserve binding identity for `" nm "`: expected one structural name edge in replacement, found " (count incoming) " (no canonical facts mutated)."))
+  (reject 5)
+  acc))) acc))) [] (vec new-bindings))]
+  (do
+  (doseq [plan plans]
+  (let [cid (nth plan 0)
+   old-leaf (nth plan 1)
+   fact (c/fact-of ctx cid)]
+  (retire cid)
+  (c/fact! ctx (:l fact) (:p fact) old-leaf tx)))
+  (count plans))))
 
 (defn wrap-forms [^Verb v parent]
   (let [ctx (:ctx v)
