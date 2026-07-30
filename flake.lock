@@ -12,17 +12,17 @@
         "zig-overlay": "zig-overlay"
       },
       "locked": {
-        "lastModified": 1785355001,
-        "narHash": "sha256-3U5aJjPpA4UWMmqyYXsUdk4/oXP07Hpv6/aoVrGbe3A=",
+        "lastModified": 1785404312,
+        "narHash": "sha256-7Wi93DVASoVy6iji0y4ob9aoInGv/74TVwT7tvitbVU=",
         "owner": "tompassarelli",
         "repo": "beagle",
-        "rev": "76e7f9494a13616f379f9502ee04574f3fe9e38a",
+        "rev": "80e0c27409236a2cc4c7e7a33aafed25dc9fde7c",
         "type": "github"
       },
       "original": {
         "owner": "tompassarelli",
         "repo": "beagle",
-        "rev": "76e7f9494a13616f379f9502ee04574f3fe9e38a",
+        "rev": "80e0c27409236a2cc4c7e7a33aafed25dc9fde7c",
         "type": "github"
       }
     },
