@@ -1122,18 +1122,10 @@
          (or (:cached-triples roots)
              (let [live (client-view-facts-from
                          (:co-root roots) (:schema-root roots))
-                   ;; Below nine distinct fold keys Clojure uses an
-                   ;; insertion-ordered PersistentArrayMap. Preserve the cold
-                   ;; fold's byte order, but truncate the concurrently-readable
-                   ;; log at the captured version so response version and rows
-                   ;; still describe one snapshot.
-                   ordered
-                   (if (and (:flat roots) (< (count live) 9))
-                     (:facts
-                      (fold/fold
-                       (filterv #(<= (long (or (:tx %) 0)) (long v))
-                                (read-logs-merged (:flat roots)))))
-                     (fold/refold-order live))
+                   ;; The portable fold owns one canonical key order at every
+                   ;; corpus size; the daemon only reorders its captured live
+                   ;; projection through that authority.
+                   ordered (fold/refold-order live)
                    ts (mapv (fn [c] [(:l c) (:p c) (:r c)]) ordered)]
                (publish-facts-wire-cache! roots ts)
                ts))]
@@ -1141,85 +1133,33 @@
       :log (or (:flat roots) (:log (:co-root roots)))
       :triples triples})))
 
-(defn- large-client-view?
-  "Does the captured client-visible corpus contain at least nine fold keys?
-
-  Stop as soon as the answer is known.  This preserves the tiny-corpus
-  PersistentArrayMap order contract without paying an O(corpus) count on the
-  ordinary large graph."
-  [roots]
-  (let [store-root (:store-root roots)
-        schema-count (count (:schema-root roots))
-        needed (- 9 schema-count)]
-    (or (not (pos? needed))
-        (>=
-         (reduce-kv
-          (fn [visible cid cl]
-            (if (and (not (contains? (:superseded store-root) cid))
-                     (store-root-fact->triple store-root cl))
-              (let [visible' (inc visible)]
-                (if (>= visible' needed) (reduced visible') visible'))
-              visible))
-          0 (:facts store-root))
-         needed))))
-
-(defn- hash-refold-order
-  "Re-key a bounded subject slice in the same PersistentHashMap regime used by
-  the ordinary (>8-key) cold fold."
-  [facts]
-  (let [ops (mapv (fn [fact]
-                    (fold/->FactOp 0 "assert"
-                                  (:l fact) (:p fact) (:r fact) "live"))
-                  facts)
-        cmap (fold/card-map ops)]
-    (vec
-     (vals
-      (reduce
-       (fn [m fact]
-         (let [key (if (ck/single-eff? cmap (:p fact))
-                     (str (:l fact) "\u0001" (:p fact))
-                     (str (:l fact) "\u0001" (:p fact)
-                          "\u0001" (:r fact)))]
-           (assoc m key fact)))
-       clojure.lang.PersistentHashMap/EMPTY
-       facts)))))
-
 (defn- subject-wire-snapshot
   "Project one subject from the captured Store/schema roots.
 
   Exact :show must be O(the subject's own history), not O(the corpus).  The
   Store's by-l index supplies the domain facts and schema-view supplies the
-  deliberately log-authoritative cardinality/value_kind facts.  Refolding this
-  bounded slice preserves the same single/multi reduction and deterministic row
-  order as the full wire projection without constructing every live triple."
+  deliberately log-authoritative cardinality/value_kind facts.  The portable
+  fold's canonical order applies to this bounded live slice without constructing
+  every live triple."
   ([te] (subject-wire-snapshot (capture-read-roots!) te))
   ([roots te]
-   (if-not (large-client-view? roots)
-     ;; Below nine global fold keys, cold order is log insertion order.  The
-     ;; complete projection is constant-bounded here and remains the oracle for
-     ;; updates to an existing ArrayMap key.
-     (let [{:keys [version triples]} (facts-wire-snapshot roots)]
-       {:version version
-        :rows (reduce (fn [rows [l p r]]
-                        (if (= l te) (conj rows [p r]) rows))
-                      [] triples)})
-     (let [c0 (:co-root roots)
-           st (:store c0)
-           lid (s/resolve-name st te)
-           domain
-           (if lid
-             (keep (fn [cid]
-                     (when-let [t (fact->triple st cid)]
-                       (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
-                   (c/by-l st lid))
-             [])
-           schema
-           (keep (fn [[[subject _] fact]]
-                   (when (= subject te) fact))
-                 (:schema-root roots))
-           ordered (hash-refold-order (into (vec domain) schema))]
-       {:version (:version roots)
-        :rows (mapv (fn [fact] [(:p fact) (:r fact)]) ordered)}))))
+   (let [c0 (:co-root roots)
+         st (:store c0)
+         lid (s/resolve-name st te)
+         domain
+         (if lid
+           (keep (fn [cid]
+                   (when-let [t (fact->triple st cid)]
+                     (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
+                 (c/by-l st lid))
+           [])
+         schema
+         (keep (fn [[[subject _] fact]]
+                 (when (= subject te) fact))
+               (:schema-root roots))
+         ordered (fold/refold-order (into (vec domain) schema))]
+     {:version (:version roots)
+      :rows (mapv (fn [fact] [(:p fact) (:r fact)]) ordered)})))
 
 (def max-scoped-subjects 65536)
 
@@ -6893,8 +6833,8 @@
       ;; (fram.fold/refold-order), for daemon-first CLI reads (thread 019f2190): the
       ;; client feeds these straight into its kernel index instead of paying the
       ;; per-process cold fold. Ordering here is part of the op's CONTRACT — the
-      ;; client renders byte-identical output without re-ordering, and bb shares
-      ;; clojure.lang.PersistentHashMap with the JVM so the hash order agrees.
+      ;; client renders byte-identical output without re-ordering. The portable
+      ;; fold defines the order; host map representation is irrelevant.
       ;; Computed AFTER maybe-reload! above (exactly as fresh as the flat log at
       ;; request time) and cached per version — a read storm re-serializes, never
       ;; re-orders. :log echoes which log this daemon serves so a client can refuse
