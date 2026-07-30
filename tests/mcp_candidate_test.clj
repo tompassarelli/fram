@@ -134,7 +134,8 @@
                    (catch Exception _ nil))]
         (when (and r (zero? (:exit r)) (not (str/blank? (:out r)))) (str/trim (:out r))))))
 (def scrub-env
-  (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home}
+  (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home
+           "FRAM_SNAPSHOT_BOOT" "0"}
     fram-racket (assoc "FRAM_RACKET" fram-racket)))
 
 (println "ingesting" (count modules) "nested fixture modules …")
