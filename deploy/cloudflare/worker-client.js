@@ -2,7 +2,8 @@
 //
 // Talks to the shim (deploy/cloudflare/shim.clj) over HTTP with a bearer token;
 // the shim forwards one line of EDN per request to the coordinator daemon's TCP
-// socket and returns the daemon's EDN reply verbatim.
+// socket. Replies stay EDN by default; format: 'json' opts into the daemon's
+// existing :fmt :json response serializer.
 //
 //   import { framClient, kw, raw, tripleQuery } from './worker-client.js';
 //   const fram = framClient({ url: 'http://127.0.0.1:8787', token: '...' });
@@ -172,20 +173,51 @@ export function tripleQuery({ l, p, r } = {}) {
 
 // ------------------------------------------------------------------- client
 
-export function framClient({ url, host, port, token, fetch: fetchImpl } = {}) {
+export function framClient({ url, host, port, token, format = 'edn', fetch: fetchImpl } = {}) {
   if (!token) throw new Error('framClient: token required');
+  if (format !== 'edn' && format !== 'json') {
+    throw new Error("framClient: format must be 'edn' or 'json'");
+  }
   const base = (url || `http://${host || '127.0.0.1'}:${port || 8787}`).replace(/\/+$/, '');
   const doFetch = fetchImpl || fetch;
+  const wantsJson = format === 'json';
 
   async function send(path, reqMap) {
+    // Requests remain EDN in both modes. Only the response serializer changes;
+    // keeping RawEdn intact is what preserves the full query escape hatch.
+    const wireRequest = wantsJson ? { ...reqMap, fmt: kw('json') } : reqMap;
     const res = await doFetch(base + path, {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + token, 'content-type': 'application/edn' },
-      body: ednEncode(reqMap),
+      headers: {
+        authorization: 'Bearer ' + token,
+        'content-type': 'application/edn',
+        ...(wantsJson ? { accept: 'application/json' } : {}),
+      },
+      body: ednEncode(wireRequest),
     });
     const text = (await res.text()).trim();
-    if (!res.ok) throw new Error(`fram shim HTTP ${res.status}: ${text.slice(0, 300)}`);
-    return ednDecode(text);
+    const contentType = (res.headers?.get?.('content-type') || '')
+      .split(';', 1)[0].trim().toLowerCase();
+    let decoded;
+    try {
+      decoded = contentType === 'application/json'
+        ? JSON.parse(text)
+        : ednDecode(text);
+    } catch (cause) {
+      const error = new Error(
+        `fram shim ${contentType || 'unknown content-type'} decode failed: ${text.slice(0, 300)}`,
+        { cause });
+      error.status = res.status;
+      error.raw = text;
+      throw error;
+    }
+    if (!res.ok) {
+      const error = new Error(`fram shim HTTP ${res.status}: ${text.slice(0, 300)}`);
+      error.status = res.status;
+      error.body = decoded;
+      throw error;
+    }
+    return decoded;
   }
 
   const withBase = (opts = {}) => (opts.base === undefined ? {} : { base: opts.base });

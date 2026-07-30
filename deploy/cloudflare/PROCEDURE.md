@@ -4,11 +4,12 @@ Goal: an app on **ephemeral Cloudflare Workers** uses a **Fram coordinator**
 (this repo's fact engine) as its durable fact store. The Worker holds no
 state; one Docker'd coordinator is the single writer; a tiny authenticated
 shim bridges the Worker's `fetch()` to the coordinator's one-line-EDN TCP
-protocol.
+protocol. Requests remain EDN; replies can be EDN or negotiated JSON.
 
 ```
 Worker (ephemeral isolate)
-   │  fetch() POST /q | /assert   Authorization: Bearer <token>
+   │  fetch() POST /q | /assert   EDN request, EDN or JSON reply
+   │                              Authorization: Bearer <token>
    ▼
 shim  (bb shim.clj, Docker)  ── the ONLY public ingress
    │  one line of EDN over TCP, private Docker network
@@ -37,9 +38,34 @@ Files in this kit (`deploy/cloudflare/`):
 | `Dockerfile.shim` | shim image (babashka) |
 | `docker-compose.yml` | coordinator + shim, private network, volume |
 | `shim.clj` | bearer-token HTTP→TCP bridge (`POST /q`, `POST /assert`) |
-| `worker-client.js` | zero-dep JS client + minimal EDN codec (Workers **and** node) |
+| `worker-client.js` | zero-dep JS client; EDN requests plus EDN/JSON response decoding (Workers **and** node) |
 | `worker-example.js` | runnable example Worker |
 | `wrangler.toml` | deploys the example |
+
+### Exact request/response boundary
+
+The coordinator's request language is still EDN. JSON mode is deliberately
+response-only: it does not translate arbitrary JSON into Datalog or replace the
+raw-query escape hatch.
+
+```js
+const fram = framClient({
+  url: env.SHIM_URL,
+  token: env.SHIM_TOKEN,
+  format: 'json',
+});
+```
+
+That client still sends one `application/edn` body, adding `:fmt :json` to the
+request and `Accept: application/json`. The shim forwards that EDN map to the
+coordinator, which owns the JSON response serializer. The shim forwards the
+resulting bytes as `application/json`; its own authentication, validation, and
+upstream errors use JSON too. Once a valid request map exists, `:fmt` is
+authoritative. `Accept` selects only errors that happen before the body can be
+parsed, such as a bad bearer token.
+
+Omit `format` (or use `format: 'edn'`) for the original byte-compatible EDN
+request/reply path. The example Worker opts into JSON.
 
 ---
 
@@ -62,6 +88,13 @@ Expected: two services build and start; `docker compose ps` shows
 curl -s -X POST http://127.0.0.1:8080/q \
   -H "Authorization: Bearer $SHIM_TOKEN" -d '{:op :version}'
 # -> {:version <n>}
+
+# Same EDN request protocol, negotiated JSON response:
+curl -s -X POST http://127.0.0.1:8080/q \
+  -H "Authorization: Bearer $SHIM_TOKEN" \
+  -H "Accept: application/json" \
+  -d '{:op :version :fmt :json}'
+# -> {"version":<n>}
 
 curl -s -X POST http://127.0.0.1:8080/assert \
   -H "Authorization: Bearer $SHIM_TOKEN" \
@@ -172,6 +205,21 @@ then drive `framClient({url:'http://127.0.0.1:8799', token:'t'})` from node.
 
 Comparing this against an **embedded/bespoke nodes-edges SQL DB**:
 
+- **Codec-only local baseline, not Cloudflare performance.** On 2026-07-31,
+  Node 24 ran the exact `worker-client.js` codec on isolated local cores. Each
+  sample encoded and decoded in-process; it did not include the shim, JVM,
+  network, Worker isolate, or application query:
+
+  | payload | EDN bytes / median | JSON bytes / median |
+  |---|---:|---:|
+  | representative single-triple query | 155 B / 0.014102 ms | 170 B / 0.003340 ms |
+  | 1,000-row facts reply | 54,707 B / 1.524087 ms | 54,710 B / 0.444440 ms |
+
+  JSON was about 4.22× faster for the small codec round-trip and 3.43× faster
+  for the large one; the large payload sizes were effectively identical. This
+  motivates the example's JSON response mode. It is not an end-to-end latency
+  claim and does not show what a real Cloudflare region or Internet path will
+  do.
 - **You are measuring a network hop; he is measuring a function call.** Every
   Fram operation here pays Worker→shim (public internet or tunnel) +
   shim→coordinator (sub-ms Docker bridge). If his SQL DB is queried in-process

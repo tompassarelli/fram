@@ -18,7 +18,11 @@ const json = (v, status = 200) =>
 
 export default {
   async fetch(request, env) {
-    const fram = framClient({ url: env.SHIM_URL, token: env.SHIM_TOKEN });
+    const fram = framClient({
+      url: env.SHIM_URL,
+      token: env.SHIM_TOKEN,
+      format: 'json',
+    });
     const u = new URL(request.url);
     try {
       if (u.pathname === '/health') return json(await fram.status());
