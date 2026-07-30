@@ -1,7 +1,7 @@
 ;; coord_test.clj — Stage 6 gate: adversarial concurrency + durability proof
 ;; for the reified coordinator (mirrors coord.clj's run-test).
 ;;   bb -cp out coord_test.clj
-(require '[fram.store :as c] '[fram.schema :as s])
+(require '[fram.store :as c] '[fram.types :as ft] '[fram.schema :as s])
 (load-file "coord.clj")   ; side-effect-free library: new-coord/commit!/replay/...
 
 (let [log "/tmp/store-coord-test.log"
@@ -71,7 +71,7 @@
     (let [rp (replay log)]
       (chk "atomicity: torn trailing tx dropped on replay" (= before (live-triples rp)))
       (chk "atomicity: torn value not present after replay"
-           (not (contains? (set (vals (:values @rp))) "torn")))))
+           (not (some #(= "torn" (ft/storedvalue-value %)) (c/value-entries rp))))))
 
   (let [cs @checks fails (remove second cs)]
     (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))

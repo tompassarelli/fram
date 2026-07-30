@@ -1,33 +1,28 @@
 #lang beagle/clj
-;; ============================================================================
-;; fram.types — the store-internal store record (shared leaf module).
-;; ============================================================================
-;; Depends on nothing. store requires it as (require fram.types :as t).
-;; Holds the reified-store record shape that store builds + reads back via
-;; (let [s :- Store (deref ctx)] …) — recovering the record shape that bare
-;; `Atom` erases on deref.
-;;
-;; DECISION (empirical, not the plan's first choice): the reified FACT value and
-;; the TX value stay keyword-MAPS, not records. Two consumers force it:
-;;   (1) coord.clj/assemble-dump (hand-written .clj, out of scope) feeds PLAIN
-;;       MAPS into load-store!, so fact-of's value is a map in the replay path —
-;;       a Fact record return type would be a runtime LIE there.
-;;   (2) store_test.clj asserts (= {:l e :p p :r foo} (fact-of …)) and tools_test
-;;       asserts the write-intent map shape; a record is NOT = to a map literal in
-;;       Clojure, so recordizing those values breaks green tests for no runtime gain
-;;       (every real consumer uses field access, which works on a map too).
-;; So a fact value is (Map Keyword Any) (l/p/r are Int IDS, but stored under
-;; keyword keys in an open map) and a tx value is (Map Keyword Any). The Store
-;; record still NAMES the 15 fields; its facts/txs values are these maps.
-;; (Plan §4's explicit fallback clause: Store.facts/txs :- (Map Int <map>).)
-;; ============================================================================
+;; The portable store ABI deliberately uses only records and homogeneous
+;; vectors.  Clojure-facing accessors may project map-shaped facts, but no map
+;; crosses into native code.
 (ns fram.types)
 (define-mode strict)
 
+(defalias StoreValue (Dyn String Int Bool Keyword (Vec Int)))
+
+(defrecord StoredValue [id :- Int value :- StoreValue])
+(defrecord StoredFact [id :- Int l :- Int p :- Int r :- Int])
+(defrecord StoredTxOf [cid :- Int tx :- Int])
+(defrecord StoredTx [id :- Int seq :- Int agent :- StoreValue observed :- Int? ts :- String?])
+(defrecord IdBucket [key :- Int ids :- (Vec Int)])
+(defrecord PairBucket [left :- Int right :- Int ids :- (Vec Int)])
+
+(defrecord StoreDump
+  [version :- Int next-id :- Int next-seq :- Int supersedes-pred :- Int?
+   objects :- (Vec Int) values :- (Vec StoredValue)
+   facts :- (Vec StoredFact) tx-of :- (Vec StoredTxOf) txs :- (Vec StoredTx)
+   superseded :- (Vec Int)])
+
 (defrecord Store
   [next-id :- Int next-seq :- Int supersedes-pred :- Int?
-   objects :- (Map Int Bool) values :- (Map Int Any) val-intern :- (Map Any Int)
-   facts :- (Map Int (Map Keyword Any)) tx-of :- (Map Int Int) txs :- (Map Int (Map Keyword Any))
-   superseded :- (Map Int Bool)
-   idx-by-l :- (Map Int (Vec Int)) idx-by-p :- (Map Int (Vec Int)) idx-by-r :- (Map Int (Vec Int))
-   idx-by-lp :- (Map (Vec Int) (Vec Int)) idx-by-pr :- (Map (Vec Int) (Vec Int))])
+   objects :- (Vec Int) values :- (Vec StoredValue) facts :- (Vec StoredFact)
+   tx-of :- (Vec StoredTxOf) txs :- (Vec StoredTx) superseded :- (Vec Int)
+   idx-by-l :- (Vec IdBucket) idx-by-p :- (Vec IdBucket) idx-by-r :- (Vec IdBucket)
+   idx-by-lp :- (Vec PairBucket) idx-by-pr :- (Vec PairBucket)])

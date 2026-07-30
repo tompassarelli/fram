@@ -1,0 +1,21 @@
+#lang beagle/clj
+(ns zig-store-abi-smoke
+  (:require [fram.store :as store]
+            [fram.types :as types]))
+
+(defn store-roundtrip?! [] :- Bool
+  (let [ctx :- (Atom types/Store) (store/new-store)
+        tx (store/begin-tx! ctx "zig-store-abi")
+        entity (store/entity! ctx)
+        predicate (store/value! ctx "status")
+        value (store/value! ctx "ready")
+        cid (store/fact! ctx entity predicate value tx)
+        image :- types/StoreDump (store/dump-store ctx)
+        restored :- (Atom types/Store) (store/new-store)]
+    (store/load-store! restored image)
+    (and (= 1 (types/storedump-version image))
+         (= {:l entity :p predicate :r value} (store/fact-of restored cid))
+         (= "ready" (store/literal restored value)))))
+
+(defn main [] :- Nil
+  (println (if (store-roundtrip?!) "zig-store-abi ok" "zig-store-abi failed")))

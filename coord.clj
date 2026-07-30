@@ -31,7 +31,8 @@
 ;; those vars into `user` so the existing load-file callers keep working
 ;; unchanged. See the bridge comment for why load-file (not require) remains.
 (ns coord
-  (:require [fram.store :as c] [fram.schema :as s] [fram.kernel :as ck]
+  (:require [fram.store :as c] [fram.types :as ft]
+            [fram.schema :as s] [fram.kernel :as ck]
             [fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
             [fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
             [coord-read :as cr]
@@ -397,19 +398,21 @@
 ;; the records minted in `store` since id `since` (new values/entities/facts),
 ;; plus this tx's provenance and the terminating :commit marker.
 (defn- delta-records [co since txid]
-  (let [m @(store co)]
+  (let [st (store co)]
     (concat
-     (for [[id v] (:values m) :when (>= id since)] {:k :value :id id :v v})
-     (for [id (keys (:objects m))
+     (for [entry (c/value-entries st) :when (>= (ft/storedvalue-id entry) since)]
+       {:k :value :id (ft/storedvalue-id entry) :v (ft/storedvalue-value entry)})
+     (for [id (c/object-ids st)
            :when (and (>= id since)
-                      (not (contains? (:values m) id))
-                      (not (contains? (:facts m) id)))]
+                      (not (c/value-object? st id))
+                      (nil? (c/fact-of st id)))]
        {:k :entity :id id})
-     (for [[cid mm] (:facts m) :when (>= cid since)]
-       {:k :fact :cid cid :l (:l mm) :p (:p mm) :r (:r mm) :tx (get (:tx-of m) cid)})
-     [{:k :tx :tx txid :seq (get-in m [:txs txid :seq]) :agent (get-in m [:txs txid :agent])
-       :observed (get-in m [:txs txid :observed])          ; causality (thread H): the global seq the writer had SEEN when it decided
-       :ts (get-in m [:txs txid :ts])}                     ; wall-clock (display-only): the SAME instant stamped into the store map, so replay recovers the identical :ts pull rendered live. nil for internal txs that never stamped (bootstrap/schema/lease/bump) -> pull omits :ts.
+     (for [entry (c/fact-entries st) :when (>= (ft/storedfact-id entry) since)]
+       {:k :fact :cid (ft/storedfact-id entry) :l (ft/storedfact-l entry) :p (ft/storedfact-p entry) :r (ft/storedfact-r entry)
+        :tx (c/fact-tx st (ft/storedfact-id entry))})
+     [{:k :tx :tx txid :seq (c/tx-seq st txid) :agent (c/tx-agent st txid)
+       :observed (c/tx-observed st txid)
+       :ts (c/tx-ts st txid)}
       {:k :commit :tx txid}])))
 
 ;; --- reads over the reified store -------------------------------------------
@@ -555,9 +558,7 @@
 
 ;; --- obligation: depends_on/part_of acyclicity (pure, over resolved ids) ----
 (defn- succ [co pid x]
-  (let [m @(store co)]
-    (map #(:r (get (:facts m) %))
-         (remove #(contains? (:superseded m) %) (get (:idx-by-lp m) [x pid])))))
+  (map #(c/fact-r (store co) %) (c/by-lp (store co) x pid)))
 ;; reachability over the reified store — routed through the kernel's ONE verified
 ;; traversal (ck/reachable-from?) instead of a second hand-rolled DFS. The store
 ;; supplies `succ`; the algorithm (and its correctness) lives once, in Beagle.
@@ -600,7 +601,7 @@
           single (= "single" (s/cardinality (store co) pname))
           bv     (if (and te0 pid) (base-version co te0 pid) 0)
           live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
-          facts (:facts @(store co))]
+          facts (into {} (map (fn [cid] [cid (c/fact-of (store co) cid)]) (c/all-facts (store co))))]
       (cond
         ;; (1)(6) base_version: reject a stale single-valued write — ONLY when a base
         ;; was supplied (move-C: :base is OPTIONAL). The cardinality-typed verbs split
@@ -629,14 +630,14 @@
         (let [since    (:next-id @(store co))
               observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp, clamped to head (no future)
               tx (c/begin-tx! (store co) agent)
-              _  (swap! (store co) assoc-in [:txs tx :observed] observed)
-              _  (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for pull provenance (display-only; ONE clock read per tx, mirrored into the v2 log via delta-records so live + replay agree)
+              _  (c/set-tx-observed! (store co) tx observed)
+              _  (c/set-tx-ts! (store co) tx (rt/now-ts))
               te (ent! co tx te-name)]
           (case kind
             :link   (s/link! (store co) te pname (ent! co tx r-spec) tx)
             :assert (s/assert! (store co) te pname r-spec tx))
           (append-tx! co (delta-records co since tx))   ; (5) atomic + fsync
-          {:ok (get-in @(store co) [:txs tx :seq])})))))
+          {:ok (c/tx-seq (store co) tx)})))))
 
 ;; commit-batch! — ATOMIC multi-fact publication for ONE subject (thread 019f9063,
 ;; incident 019f8958). The all-or-none primitive the torn-mail bug demands: a send
@@ -668,7 +669,7 @@
                         single (= "single" (s/cardinality st pname))
                         bv     (if (and te0 pid) (base-version co te0 pid) 0)
                         live   (if (and te0 pid) (live-cids-lp co te0 pid) [])
-                        fm     (:facts @st)]
+                        fm     (into {} (map (fn [cid] [cid (c/fact-of st cid)]) (c/all-facts st)))]
                     (cc/->CommitIntent
                      i pname kind r single bv base
                      (set (keep #(get-in fm [% :r]) live))
@@ -687,15 +688,15 @@
         (let [since    (:next-id @st)
               observed (current-seq co)                 ; the head the batch was decided at
               tx       (c/begin-tx! st agent)
-              _        (swap! st assoc-in [:txs tx :observed] observed)
-              _        (swap! st assoc-in [:txs tx :ts] (rt/now-ts))]
+              _        (c/set-tx-observed! st tx observed)
+              _        (c/set-tx-ts! st tx (rt/now-ts))]
           (doseq [{:keys [pred kind r]} (:writes plan)]
             (let [te (ent! co tx te-name)]
               (case kind
                 :link   (s/link! st te pred (ent! co tx r) tx)
                 :assert (s/assert! st te pred r tx))))
           (append-tx! co (delta-records co since tx))
-          {:ok (get-in @st [:txs tx :seq])
+          {:ok (c/tx-seq st tx)
            :written (:writes plan) :idempotent (:idempotent plan)})))))
 
 ;; --- views-as-facts writers (thread E) -------------------------------------
@@ -708,18 +709,18 @@
     (let [selp    (c/value-id (store co) "selects")
           ve0     (s/resolve-name (store co) view)
           already (when (and selp ve0)
-                    (some #(= cid (:r (get (:facts @(store co)) %)))
+                    (some #(= cid (c/fact-r (store co) %))
                           (live-cids-lp co ve0 selp)))]
       (if already
         {:ok (current-seq co) :idempotent true :cid cid}
         (let [since (:next-id @(store co))
               tx    (c/begin-tx! (store co) view)
-              _     (swap! (store co) assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp (display-only) — view-select facts are pullable too
+              _     (c/set-tx-ts! (store co) tx (rt/now-ts))
               ve    (ent! co tx view)
               sp    (c/value! (store co) "selects")]
           (c/fact! (store co) ve sp cid tx)            ; object IS the selected fact's cid
           (append-tx! co (delta-records co since tx))
-          {:ok (get-in @(store co) [:txs tx :seq]) :cid cid})))))
+          {:ok (c/tx-seq (store co) tx) :cid cid})))))
 
 ;; about! writes one fact whose SUBJECT is an existing fact cid. This is the
 ;; public coordinator seam for modules such as fram.claims that model
@@ -738,7 +739,7 @@
           target  (when (= kind :link) (s/resolve-name st r-spec))
           value   (when (= kind :assert) (c/value-id st r-spec))
           live    (if pid (live-cids-lp co cid pid) [])
-          facts   (:facts @st)
+          facts   (into {} (map (fn [id] [id (c/fact-of st id)]) (c/all-facts st)))
           wanted  (if (= kind :link) target value)]
       (cond
         (or (nil? victim) (not (c/live? st cid)))
@@ -753,12 +754,12 @@
         :else
         (let [since (:next-id @st)
               tx    (c/begin-tx! st agent)
-              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+              _     (c/set-tx-ts! st tx (rt/now-ts))
               new   (case kind
                       :link   (s/link! st cid pred target tx)
                       :assert (s/assert! st cid pred r-spec tx))]
           (append-tx! co (delta-records co since tx))
-          {:ok (get-in @st [:txs tx :seq]) :subject-cid cid :cid new})))))
+          {:ok (c/tx-seq st tx) :subject-cid cid :cid new})))))
 
 ;; supersede-cid! retires ONE fact by cid with the store's own supersession
 ;; marker — the exact write retract! performs internally, reachable by cid
@@ -780,11 +781,11 @@
         :else
         (let [since (:next-id @st)
               tx    (c/begin-tx! st agent)
-              _     (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+              _     (c/set-tx-ts! st tx (rt/now-ts))
               sup   (c/value! st "store-supersedes")]
           (c/fact! st cid sup cid tx)
           (append-tx! co (delta-records co since tx))
-          {:ok (get-in @st [:txs tx :seq]) :cid cid})))))
+          {:ok (c/tx-seq st tx) :cid cid})))))
 
 ;; commit-on-view! — write a rival fact AND select it into `view` in one breath: the
 ;; "write on a branch" verb. Always coexists (no base -> never staleness-rejected); the
@@ -838,7 +839,7 @@
                   tgt (if ref?
                         (s/resolve-name st r-spec)
                         (c/value-id st r-spec))
-                  facts (:facts @st)
+                  facts (into {} (map (fn [id] [id (c/fact-of st id)]) (c/all-facts st)))
                   victims (if single
                             (live-cids-lp co te0 pid)
                             (filter #(= tgt (:r (get facts %))) (live-cids-lp co te0 pid)))]
@@ -847,14 +848,14 @@
                 (let [since (:next-id @(store co))
                       observed (let [pre (current-seq co)] (min (or base pre) pre))  ; causal stamp on the retract tx
                       tx  (c/begin-tx! st agent)
-                      _   (swap! st assoc-in [:txs tx :observed] observed)
-                      _   (swap! st assoc-in [:txs tx :ts] (rt/now-ts))  ; wall-clock stamp for the retract tx (display-only; distinct from :withdrawn_at, which holds the retract SEQ)
+                      _   (c/set-tx-observed! st tx observed)
+                      _   (c/set-tx-ts! st tx (rt/now-ts))
                       sup (c/value! st "store-supersedes")
                       wbp (c/value! st "withdrawn_by")
                       wap (c/value! st "withdrawn_at")
                       wrp (c/value! st "withdrawn_reason")
                       ag  (c/value! st (str agent))
-                      atv (c/value! st (str (get-in @st [:txs tx :seq])))
+                      atv (c/value! st (str (c/tx-seq st tx)))
                       rsv (when reason (c/value! st (str reason)))]
                   (doseq [old victims]
                     (c/fact! st old sup old tx)             ; internal live-fold mechanism (remove-wins)
@@ -862,7 +863,7 @@
                     (c/fact! st old wap atv tx)             ;   when (the retract tx seq)
                     (when rsv (c/fact! st old wrp rsv tx))) ;   why (optional)
                   (append-tx! co (delta-records co since tx))
-                  {:ok (get-in @st [:txs tx :seq])}))))))))))
+                  {:ok (c/tx-seq st tx)}))))))))))
 
 ;; --- exclusive lease (mutual exclusion + fencing) — ADDITIVE -----------------
 ;; Closes the lost-update-vs-mutex gap: commit!'s base_version rejects a STALE
@@ -890,7 +891,7 @@
         pid (c/value-id st lease-pred)]
     (when (and te pid)
       (let [cid (first (live-cids-lp co te pid))]
-        (when cid (decode-lease (get (:values @st) (:r (get (:facts @st) cid)))))))))
+        (when cid (decode-lease (c/literal st (c/fact-r st cid))))))))
 
 (defn- lease-snapshot [lease] (when lease (cc/->LeaseSnapshot (:holder lease) (:exp lease) (:epoch lease))))
 (defn- lease-grant-decision [lease holder res ttl-ms now version] (cc/lease-grant-decision (lease-snapshot lease) holder res ttl-ms now Long/MAX_VALUE version))
@@ -905,7 +906,7 @@
   (let [exp   (+ now ttl-ms)
         since (:next-id @(store co))
         tx    (c/begin-tx! (store co) holder)
-        epoch (get-in @(store co) [:txs tx :seq])
+        epoch (c/tx-seq (store co) tx)
         te    (ent! co tx (lease-subj res))]
     (when (not= "single" (s/cardinality (store co) lease-pred))
       (s/def-predicate! (store co) lease-pred "single" "literal" tx))
@@ -989,7 +990,7 @@
         pid (c/value-id st p)]
     (when (and te pid)
       (when-let [cid (first (live-cids-lp co te pid))]
-        (parse-long (str (get (:values @st) (:r (get (:facts @st) cid)))))))))
+        (parse-long (str (c/literal st (c/fact-r st cid))))))))
 
 (defn bump-counter! [co te-name p delta]
   (locking (:lock co)
@@ -1001,7 +1002,7 @@
         (s/def-predicate! (store co) p "single" "literal" tx))
       (s/assert! (store co) te p (str newn) tx)
       (append-tx! co (delta-records co since tx))
-      {:ok (get-in @(store co) [:txs tx :seq]) :value newn})))
+      {:ok (c/tx-seq (store co) tx) :value newn})))
 
 ;; --- replay: rebuild the store from the v2 log (drops torn/uncommitted txs) --
 (defn- read-records [path]
@@ -1033,10 +1034,17 @@
     ;; the kernel's counters hold the LAST-used id/seq (fresh-id!/begin-tx! return
     ;; the post-increment value), so recover them as max — NOT max+1 — else the
     ;; next mint would skip an id/seq (a gap) instead of continuing contiguously.
-    {:next-id (reduce max 0 all-id) :next-seq (reduce max 0 all-sq)
-     :supersedes-pred sup
-     :objects (vec (concat (map first vals) ents (map first facts)))
-     :values vals :facts facts :tx-of tx-of :txs txs :superseded superd}))
+    (ft/->StoreDump
+      1
+      (reduce max 0 all-id)
+      (reduce max 0 all-sq)
+      sup
+      (vec (concat (map first vals) ents (map first facts)))
+      (mapv (fn [[id v]] (ft/->StoredValue id v)) vals)
+      (mapv (fn [[id fact]] (ft/->StoredFact id (:l fact) (:p fact) (:r fact))) facts)
+      (mapv (fn [[cid tx]] (ft/->StoredTxOf cid tx)) tx-of)
+      (mapv (fn [[id tx]] (ft/->StoredTx id (:seq tx) (:agent tx) (:observed tx) (:ts tx))) txs)
+      superd)))
 
 (defn replay [path]
   (let [st (c/new-store)]
@@ -1049,24 +1057,26 @@
 ;; logged ids, so its appends continue cleanly from where migration left off.
 (defn dump-log! [st path]
   (spit path "")
-  (let [m @st]
-    (with-open [os (java.io.FileOutputStream. (str path) true)]
-      (let [emit (fn [r] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))]
-        (doseq [[id v] (:values m)] (emit {:k :value :id id :v v}))
-        (doseq [id (keys (:objects m))
-                :when (and (not (contains? (:values m) id)) (not (contains? (:facts m) id)))]
+  (with-open [os (java.io.FileOutputStream. (str path) true)]
+    (let [emit (fn [r] (.write os (.getBytes (str (pr-str r) "\n") "UTF-8")))]
+      (doseq [entry (c/value-entries st)]
+        (emit {:k :value :id (ft/storedvalue-id entry) :v (ft/storedvalue-value entry)}))
+      (doseq [id (c/object-ids st)
+                :when (and (not (c/value-object? st id)) (nil? (c/fact-of st id)))]
           (emit {:k :entity :id id}))
-        (doseq [[cid cl] (:facts m)]
-          (emit {:k :fact :cid cid :l (:l cl) :p (:p cl) :r (:r cl) :tx (get (:tx-of m) cid)}))
-        (doseq [[tx t] (:txs m)] (emit {:k :tx :tx tx :seq (:seq t) :agent (:agent t) :observed (:observed t) :ts (:ts t)}))
-        (emit {:k :commit :tx :migration}))
-      (.force (.getChannel os) true))))
+      (doseq [entry (c/fact-entries st)]
+        (let [cid (ft/storedfact-id entry)]
+          (emit {:k :fact :cid cid :l (ft/storedfact-l entry) :p (ft/storedfact-p entry) :r (ft/storedfact-r entry) :tx (c/fact-tx st cid)})))
+      (doseq [entry (c/tx-entries st)]
+        (emit {:k :tx :tx (ft/storedtx-id entry) :seq (ft/storedtx-seq entry) :agent (ft/storedtx-agent entry)
+               :observed (ft/storedtx-observed entry) :ts (ft/storedtx-ts entry)}))
+      (emit {:k :commit :tx :migration}))
+    (.force (.getChannel os) true)))
 
 ;; live (l,p,r) id-triples of a reified store (substrate identity for tests/diff)
 (defn live-triples [st]
-  (let [m @st]
-    (set (for [cid (keys (:facts m)) :when (not (contains? (:superseded m) cid))]
-           (let [cl (get (:facts m) cid)] [(:l cl) (:p cl) (:r cl)])))))
+  (set (for [cid (c/current-facts st)]
+         (let [cl (c/fact-of st cid)] [(:l cl) (:p cl) (:r cl)]))))
 
 ;; ============================================================================
 ;; WORLDS — the durability layer (thread 019f93bb / authority design 019f9358)
@@ -1126,12 +1136,12 @@
     (let [st    (store co)
           since (:next-id @st)
           tx    (c/begin-tx! st agent)]
-      (swap! st assoc-in [:txs tx :observed] (current-seq co))
-      (swap! st assoc-in [:txs tx :ts] (rt/now-ts))
+      (c/set-tx-observed! st tx (current-seq co))
+      (c/set-tx-ts! st tx (rt/now-ts))
       (doseq [[subj pred v] triples]
         (s/assert! st (ent! co tx subj) pred v tx))
       (append-tx! co (delta-records co since tx))
-      {:ok (get-in @st [:txs tx :seq])})))
+      {:ok (c/tx-seq st tx)})))
 
 ;; --- heads are DERIVED, never stored ----------------------------------------
 (defn world-head
@@ -1142,12 +1152,8 @@
         e   (s/resolve-name st (world-subject nm))
         pid (c/value-id st "world.head")]
     (when (and e pid)
-      (let [m @(store co)]
-        (->> (get (:idx-by-lp m) [e pid])
-             (remove #(contains? (:superseded m) %))
-             sort
-             last
-             (#(when % (get (:values m) (:r (get (:facts m) %))))))))))
+      (let [cid (last (sort (c/by-lp st e pid)))]
+        (when cid (c/literal st (c/fact-r st cid)))))))
 
 (defn world-create! [co agent nm version-id]
   (or (w/validate-world-name nm)
