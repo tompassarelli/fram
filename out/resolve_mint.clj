@@ -241,11 +241,12 @@
    cpfx (rr/pred-val ctx view e "ctor_prefix")
    afield (rr/pred-val ctx view e "accessor_field")
    nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D)
-   nm (cond
+   nm (if (nil? nm0) nil (cond
   (some? cpfx) (str cpfx nm0)
   (some? afield) (str (str/lower-case (str nm0)) "-" afield)
-  :else nm0)]
+  :else nm0))]
   (str "[" e " \"v\" " (pr-str (cond
+  (nil? nm0) (rr/pred-val ctx view e "v")
   fixed? (c/literal ctx r)
   (some? qual) (str qual "/" nm)
   :else nm)) "]"))

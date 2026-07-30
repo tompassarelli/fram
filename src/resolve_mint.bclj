@@ -297,11 +297,11 @@
       nil
       (and (= ps "v")
         (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)))
-      (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e) fixed? (not (empty? (c/by-lp ctx e (:FIXED m)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D) nm (cond (some? cpfx) (str cpfx nm0) (some? afield) (str (str/lower-case (str nm0)) "-" afield) :else nm0)]
+      (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e) fixed? (not (empty? (c/by-lp ctx e (:FIXED m)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (rv/binding-name ctx view (:BOUND m) (:REFERS m) D) nm (if (nil? nm0) nil (cond (some? cpfx) (str cpfx nm0) (some? afield) (str (str/lower-case (str nm0)) "-" afield) :else nm0))]
         (str "["
           e
           " \"v\" "
-          (pr-str (cond fixed? (c/literal ctx r) (some? qual) (str qual "/" nm) :else nm))
+          (pr-str (cond (nil? nm0) (rr/pred-val ctx view e "v") fixed? (c/literal ctx r) (some? qual) (str qual "/" nm) :else nm))
           "]"))
       (c/value-object? ctx r)
       (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")
