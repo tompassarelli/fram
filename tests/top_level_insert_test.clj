@@ -10,8 +10,8 @@
 ;;      gate each reject with byte-identical log/projection and an unmoved version.
 ;;
 ;; Parent-red:
-;;   FRAM_TEST_ROOT=/home/tom/code/fram/main \
-;;     bb -cp /home/tom/code/fram/main/out tests/top_level_insert_test.clj
+;;   FRAM_TEST_ROOT=<repo-root> \
+;;     bb -cp <repo-root>/out tests/top_level_insert_test.clj
 ;; Candidate:
 ;;   bb -cp out tests/top_level_insert_test.clj
 ;;
