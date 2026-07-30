@@ -31,6 +31,8 @@
             [resolve-core :as rcore])
   (:import [java.net ServerSocket Socket InetSocketAddress]
            [java.io BufferedReader InputStreamReader OutputStreamWriter BufferedWriter FileInputStream]
+           [java.util.concurrent ArrayBlockingQueue ScheduledThreadPoolExecutor
+            ThreadPoolExecutor TimeUnit]
            [javax.net.ssl SSLContext KeyManagerFactory TrustManagerFactory]
            [java.security KeyStore]))
 (load-file "coord.clj")          ; the reified coordinator library (ns coord)
@@ -142,6 +144,13 @@
 (def accept-stopped (atom nil))
 (def drain-monitor (Object.))
 (def active-connections (atom 0))
+(def connection-executor (atom nil))
+(def request-deadline-executor (atom nil))
+(def admission-active (atom 0))
+(def admission-max-active (atom 0))
+(def admission-max-pending (atom 0))
+(def admission-rejections (atom 0))
+(def request-timeouts (atom 0))
 (def draining? (atom false))
 (def drain-hook-installed? (atom false))
 (def flat-mtime (atom nil))          ; last-seen flat-log stamp (to detect external edits)
@@ -452,6 +461,30 @@
 (defn- positive-env-long [name fallback]
   (let [n (some-> (System/getenv name) parse-long)]
     (if (and n (pos? n)) n fallback)))
+(defn- bounded-positive-env-int [name fallback ceiling]
+  (let [raw (System/getenv name)
+        n (some-> raw parse-long)]
+    (cond
+      (nil? raw) fallback
+      (or (nil? n) (not (pos? n)) (> n ceiling))
+      (throw (ex-info (str name " must be an integer in [1," ceiling "]")
+                      {:variable name :value raw :ceiling ceiling}))
+      :else (int n))))
+
+;; Socket admission is a resource envelope, not an implementation detail. Every
+;; accepted connection is either running in this fixed pool, waiting in this
+;; finite queue, or rejected synchronously by the accept loop.
+(def connection-worker-limit
+  (bounded-positive-env-int "FRAM_CONNECTION_WORKERS" 32 512))
+(def connection-pending-limit
+  (bounded-positive-env-int "FRAM_CONNECTION_QUEUE" 128 65536))
+;; One accepted-at deadline spans queue wait, request read, dispatch, execution,
+;; and response. Query-specific ceilings may shorten it. A canonical append that
+;; has already crossed its irreversible boundary still completes its durability
+;; barrier before acknowledgement; cancelling there would manufacture an
+;; ambiguous write outcome.
+(def request-timeout-ms
+  (positive-env-long "FRAM_REQUEST_TIMEOUT_MS" 120000))
 (def query-timeout-ms (positive-env-long "FRAM_QUERY_TIMEOUT_MS" 5000))
 (def query-max-steps (positive-env-long "FRAM_QUERY_MAX_STEPS" 10000000))
 (def query-max-rows (min q/max-results (positive-env-long "FRAM_QUERY_MAX_ROWS" q/max-results)))
@@ -789,7 +822,7 @@
 ;; + render markers (materialized over `co` for :callers) invisible to :query, the
 ;; :warm-check tripwire, and the read view — the corpus :query sees is exactly the AST
 ;; facts the flat log ingested, identical whether or not refers_to has been materialized.
-(declare query-check)
+(declare query-check request-expired?)
 (defn- store-subject-name [st id]
   (or (s/name-of st id)
       (when (c/value-object? st id) (str "@" (c/literal st id)))))
@@ -1014,14 +1047,17 @@
             now (System/nanoTime)
             cancelled @(:cancelled control)
             code (cond
+                   (request-expired? control) :request-timeout
                    cancelled :query-cancelled
                    (> steps (:max-steps control)) :query-work-limit
-                   (>= now (:deadline-ns control)) :query-time-limit)]
+                   (>= now (:query-deadline-ns control)) :query-time-limit)]
         (when code
           (throw (ex-info (str "query evaluation stopped: " (name code))
                           {:type :fram-query-abort :code code :reason cancelled
                            :steps steps :max-steps (:max-steps control)
-                           :timeout-ms (:timeout-ms control)})))))))
+                           :timeout-ms (if (= :request-timeout code)
+                                         (:request-timeout-ms control)
+                                         (:timeout-ms control))})))))))
 (defn- eval-body-idx [idx body]
   (reduce (fn [substs litt]
             (reduce (fn [acc s]
@@ -1276,25 +1312,122 @@
       (scoped-facts-snapshot subjects))))
 
 (def ^:dynamic *request-query-control* nil)
+(def ^:dynamic *request-control* nil)
+(def ^:dynamic *request-mutation?* false)
 
 (defn- query-request? [req] (wire/query-request? req))
 
-(defn- new-query-control [req]
-  (let [plan (wire/query-limit-plan
-              req
-              {:timeout-ms query-timeout-ms
-               :max-steps query-max-steps
-               :max-rows query-max-rows
-               :max-response-bytes query-max-response-bytes}
-              (System/nanoTime))]
-    {:cancelled (atom nil)
-     :done (atom false)
-     :steps (java.util.concurrent.atomic.AtomicLong. 0)
-     :timeout-ms (:timeout-ms plan)
-     :deadline-ns (:deadline-ns plan)
-     :max-steps (:max-steps plan)
-     :max-rows (:max-rows plan)
-     :max-response-bytes (:max-response-bytes plan)}))
+(defn- new-request-control [accepted-ns]
+  {:accepted-ns accepted-ns
+   :request-timeout-ms request-timeout-ms
+   :request-deadline-ns (+ accepted-ns (* (long request-timeout-ms) 1000000))
+   :cancelled (atom nil)
+   :done (atom false)
+   :outcome (atom :open)
+   :timeout-recorded? (atom false)})
+
+(defn- request-timeout-wins! [control]
+  (when control
+    (loop []
+      (case @(:outcome control)
+        :open (if (compare-and-set! (:outcome control) :open :timed-out)
+                true
+                (recur))
+        :timed-out true
+        false))))
+
+(defn- request-expired?
+  ([] (request-expired? *request-control*))
+  ([control]
+   (when control
+     (case @(:outcome control)
+       :timed-out true
+       (:durable :complete) false
+       :open (and (>= (System/nanoTime) (:request-deadline-ns control))
+                  (request-timeout-wins! control))))))
+
+(declare request-check!)
+
+(defn- request-admit-durable!
+  ([] (request-admit-durable! *request-control*))
+  ([control]
+   (if-not control
+     true
+     (loop []
+       (case @(:outcome control)
+         :durable true
+         :timed-out (request-check! control :mutation-admission)
+         :complete false
+         :open
+         (if (>= (System/nanoTime) (:request-deadline-ns control))
+           (do (request-timeout-wins! control)
+               (recur))
+           (if (compare-and-set! (:outcome control) :open :durable)
+             true
+             (recur))))))))
+
+(defn- request-complete! [control]
+  (if-not control
+    true
+    (loop []
+      (case @(:outcome control)
+        :open (if (compare-and-set! (:outcome control) :open :complete)
+                true
+                (recur))
+        (:durable :complete) true
+        :timed-out false))))
+
+(defn- record-request-timeout! [control]
+  (when (and control
+             (compare-and-set! (:timeout-recorded? control) false true))
+    (swap! request-timeouts inc)))
+
+(defn- request-timeout-response [control phase]
+  (when-not (= :timed-out @(:outcome control))
+    (throw (ex-info "request timeout did not win the outcome race"
+                    {:type :invalid-request-outcome
+                     :outcome @(:outcome control)})))
+  (record-request-timeout! control)
+  {:error ["request deadline exceeded"]
+   :code :request-timeout
+   :retryable true
+   :phase phase
+   :timeout-ms (:request-timeout-ms control)})
+
+(defn- request-check!
+  ([phase] (request-check! *request-control* phase))
+  ([control phase]
+   (when (request-expired? control)
+     (throw
+      (ex-info "request deadline exceeded"
+               {:type :fram-request-timeout
+                :code :request-timeout
+                :phase phase
+                :timeout-ms (:request-timeout-ms control)})))))
+
+(defn- request-timeout-ex? [t]
+  (= :fram-request-timeout (:type (ex-data t))))
+
+(defn- new-query-control
+  ([req]
+   (new-query-control req (new-request-control (System/nanoTime))))
+  ([req request-control]
+   (let [plan (wire/query-limit-plan
+               req
+               {:timeout-ms query-timeout-ms
+                :max-steps query-max-steps
+                :max-rows query-max-rows
+                :max-response-bytes query-max-response-bytes}
+               (System/nanoTime))]
+     (assoc request-control
+            :steps (java.util.concurrent.atomic.AtomicLong. 0)
+            :timeout-ms (:timeout-ms plan)
+            :query-deadline-ns (:deadline-ns plan)
+            :deadline-ns (min (:request-deadline-ns request-control)
+                              (:deadline-ns plan))
+            :max-steps (:max-steps plan)
+            :max-rows (:max-rows plan)
+            :max-response-bytes (:max-response-bytes plan)))))
 
 (defn- cancel-query! [control reason]
   (compare-and-set! (:cancelled control) nil reason))
@@ -1519,6 +1652,8 @@
   (let [data (ex-data t)
         code (:code data)]
     (swap! query-stops update code (fnil inc 0))
+    (when (= :request-timeout code)
+      (record-request-timeout! *request-control*))
     (merge {:error [(or (.getMessage t) (name code))]
             :code code :version version :engine engine}
            (select-keys data [:reason :steps :max-steps :timeout-ms :rows :max-rows]))))
@@ -3396,6 +3531,7 @@
                                    (log-fence-rejection expected-log))]
              fence-reject
              (do
+           (request-admit-durable!)
            ;; #(a) persist identity UNDER THE SAME lock as the commit (no lock-free window).
            ;; ensure-refers! re-derives fresh refers_to (so a reference a concurrent agent committed
            ;; BEFORE this lock is captured; one arriving AFTER sees the renamed def — old spelling
@@ -5276,6 +5412,7 @@
                                   {:reject [(str "durable install failed with the batch proven absent: " msg)]
                                    :code :durability-failure})]
                             (try
+                              (request-admit-durable!)
                               (durable-barrier!)
                               (let [pre (.length (java.io.File. ^String flat))
                                     pre-sha (sha256-file-prefix flat pre)
@@ -6334,6 +6471,21 @@
 (defn- control-request? [req]
   (contains? #{:status :validate} (:op req)))
 
+(defn- connection-admission-status []
+  (let [^ThreadPoolExecutor executor @connection-executor]
+    {:worker-limit connection-worker-limit
+     :pending-limit connection-pending-limit
+     :request-timeout-ms request-timeout-ms
+     :workers (if executor (.getPoolSize executor) 0)
+     :active-workers @admission-active
+     :pending (if executor (.size (.getQueue executor)) 0)
+     :largest-workers (if executor (.getLargestPoolSize executor) 0)
+     :max-active @admission-max-active
+     :max-pending @admission-max-pending
+     :accepted @active-connections
+     :rejected @admission-rejections
+     :request-timeouts @request-timeouts}))
+
 (defn- maybe-delay-control! [req]
   ;; Test-only cancellation seam. The sleep is deliberately cooperative so the
   ;; socket EOF monitor can abandon a timed-out control read; production
@@ -6345,13 +6497,21 @@
       (try
         (loop [remaining delay-ms]
           (when-let [reason (some-> *request-query-control* :cancelled deref)]
-            (swap! control-stops update reason (fnil inc 0))
-            (throw (ex-info "control request cancelled"
-                            {:type :control-request-cancelled
-                             :reason reason})))
+            (if (= :request-timeout reason)
+              (request-check! :control-execution)
+              (do
+                (swap! control-stops update reason (fnil inc 0))
+                (throw (ex-info "control request cancelled"
+                                {:type :control-request-cancelled
+                                 :reason reason})))))
+          (request-check! :control-execution)
           (when (pos? remaining)
             (let [slice (min 10 remaining)]
-              (Thread/sleep (long slice))
+              (try
+                (Thread/sleep (long slice))
+                (catch InterruptedException t
+                  (request-check! :control-execution)
+                  (throw t)))
               (recur (- remaining slice)))))
         (finally
           (swap! active-control-reads dec))))))
@@ -6379,6 +6539,7 @@
        :controls {:active @active-control-reads
                   :monitors @active-control-monitors
                   :stops @control-stops}
+       :admission (connection-admission-status)
        :snapshots {:active @active-snapshot-builds}
        :reloads {:active @active-reloads
                  :retries @reload-retries
@@ -6396,6 +6557,7 @@
      :last-edit-outcome (:last-edit-outcome roots)
      :queries (:queries roots)
      :controls (:controls roots)
+     :admission (:admission roots)
      :snapshots (:snapshots roots)
      :reloads (:reloads roots)
      :index (:index roots)
@@ -6598,10 +6760,13 @@
         (do
           (prepare-request-reload! inner)
           (locking dlock
-          (if-let [fence-reject (log-fence-rejection expected)]
-            fence-reject
-            (binding [*reload-checked* true]
-              (handle* inner)))))))
+            (request-check! :mutation-lock)
+            (if-let [fence-reject (log-fence-rejection expected)]
+              fence-reject
+              (binding [*reload-checked* true]
+                (when *request-mutation?*
+                  (request-admit-durable!))
+                (handle* inner)))))))
 
     (= :status handler)
     (status-response req (capture-status-roots!))
@@ -6703,13 +6868,17 @@
     ;; recursive dispatch from repeating it while the outer fence holds the monitor.
     (when-not *reload-checked* (prepare-request-reload! req))
     (locking dlock                     ; serialize writes + short immutable captures
+     (request-check! :mutation-lock)
      ;; Recheck after acquiring dlock: a concurrent request may have passed the
      ;; outer guard before the failing edit poisoned the process.
      (or (durability-stop-rejection req)
          (when (and (canonical-mutation-request? req)
                     (not (write-authorized?)))
            (writer-authority-rejection))
-         (case handler
+         (do
+           (when *request-mutation?*
+             (request-admit-durable!))
+           (case handler
       :version  {:version (current-seq @co)}
       :assert   (do-assert (:te req) (:p req) (:r req) (:base req))
       :assert-existing
@@ -6836,6 +7005,7 @@
                  :durability @edit-durability-state
                  :last-edit-outcome @last-edit-outcome
                  :writer-authority (writer-authority-status)
+                 :admission (connection-admission-status)
                  :queries {:active @active-queries :monitors @active-query-monitors
                            :stops @query-stops}
                  :reloads {:active @active-reloads :retries @reload-retries
@@ -7011,7 +7181,7 @@
                     :members (count vals) :ambiguous? (> (count vals) 1)
                     :values vals :as-of s :version (current-seq @co)})
                  :else {:error ":as-of needs :query or :te/:p"}))
-      (wire/unknown-op-response))))))))
+      (wire/unknown-op-response)))))))))
 
 ;; GROUP COMMIT boundary: collect this request's durability tickets while the
 ;; work (and dlock) runs, then await them AFTER the lock is released — so the
@@ -7023,11 +7193,27 @@
 (defn handle
   ([req] (handle req nil))
   ([req query-control]
-   (binding [*durable-tickets* (atom [])
-             *request-query-control* query-control]
-     (let [resp (handle* req)]
-       (doseq [t @*durable-tickets*] (await-durable! t))
-       resp))))
+   (let [control (or query-control *request-control*)
+         mutation? (canonical-mutation-request? req)
+         tickets (atom [])]
+     (binding [*durable-tickets* tickets
+               *request-query-control* control
+               *request-control* control
+               *request-mutation?* mutation?]
+       (try
+         (request-check! :dispatch)
+         (let [resp (handle* req)
+               durable-tickets @*durable-tickets*]
+           ;; Once durable admission wins, finish every durability ticket and
+           ;; return its real outcome. A deadline must not turn a committed
+           ;; write into a false rejection.
+           (doseq [t durable-tickets] (await-durable! t))
+           (request-check! :execution)
+           resp)
+         (catch Throwable t
+           (if (request-timeout-ex? t)
+             (request-timeout-response control (:phase (ex-data t)))
+             (throw t))))))))
 
 ;; ---- socket server (verbatim shape from the proven coord.clj) ---------------
 ;; Hardened (findings #2/#5/#19/#20): every accepted socket gets a read timeout
@@ -7090,9 +7276,13 @@
 (defn- json-fmt? [fmt] (or (= :json fmt) (= "json" fmt)))
 
 (defn- try-reply
-  ([^BufferedWriter w resp] (try-reply w resp nil))
-  ([^BufferedWriter w resp fmt]
+  ([^BufferedWriter w resp] (try-reply w resp nil nil))
+  ([^BufferedWriter w resp fmt] (try-reply w resp fmt nil))
+  ([^BufferedWriter w resp fmt control]
    (try
+     (let [timeout-response? (= :request-timeout (:code resp))]
+       (when-not timeout-response?
+         (request-check! control :response-encoding))
      ;; STREAM the whole-corpus response; never materialize it.
      ;;
      ;; G1HeapRegionSize is 8 MB here, so any object over 4 MB is a HUMONGOUS
@@ -7112,12 +7302,33 @@
      ;; This costs CPU: the payload is re-encoded per request rather than
      ;; reused from cache. That trade is deliberate — a slow coordinator is
      ;; recoverable, a wedged one takes every agent down with it.
-     (if (and (json-fmt? fmt) (cacheable-facts-response? resp))
-       (json/generate-stream resp w)
-       (.write w (serialize-resp fmt resp)))
-     (.newLine w)
-     (.flush w)
-     (catch Throwable _ nil))))
+       (if (and (json-fmt? fmt) (cacheable-facts-response? resp))
+         (json/generate-stream resp w)
+         (let [text (serialize-resp fmt resp)]
+           (when-not timeout-response?
+             (request-check! control :response-encoding))
+           (.write w text)))
+       (when-not timeout-response?
+         (request-check! control :response-write))
+       (.newLine w)
+       (.flush w)
+       (or timeout-response?
+           (request-complete! control)))
+     (catch Throwable t
+       (if (and control (request-timeout-ex? t))
+         (try-reply
+          w
+          (request-timeout-response control (:phase (ex-data t)))
+          fmt
+          nil)
+         false)))))
+
+(defn- server-busy-response []
+  {:error ["coordinator request capacity exhausted"]
+   :code :server-busy
+   :retryable true
+   :admission {:worker-limit connection-worker-limit
+               :pending-limit connection-pending-limit}})
 
 (defn- connection-error-selection [scope t]
   (wire/connection-error-selection
@@ -7191,100 +7402,177 @@
 (defn- monitor-control-disconnect [^Socket s ^BufferedReader r control]
   (monitor-request-disconnect s r control active-control-monitors 0))
 
-(defn serve-conn [^Socket s]
-  (try
-    (.setSoTimeout s sock-read-timeout-ms)         ; bound idle/slow-loris reads
-    (let [r (BufferedReader. (InputStreamReader. (.getInputStream s)))
-          w (BufferedWriter. (OutputStreamWriter. (.getOutputStream s)))]
-      (try
-        (when-let [line (read-line-bounded r max-line-bytes)]
-          (let [req (parse-req line)
-                strict-reject (wire/strict-log-fence-rejection
-                               require-log-fence? req (served-log-path))
-                fenced-subscribe? (wire/fenced-subscribe? req)
-                fence-reject (when fenced-subscribe?
-                               (locking dlock
-                                 (log-fence-rejection (:expected-log req))))
-                state (wire/connection-transition
-                       (wire/connection-start)
-                       {:event :request
-                        :request req
-                        :strict-reject strict-reject
-                        :fence-reject fence-reject})]
-            (case (:phase state)
-              :reply
-              (try-reply w (:response state) (:format state))
+(defn- request-remaining-ms [control]
+  (max 0
+       (long
+        (quot (+ (max 0 (- (:request-deadline-ns control)
+                           (System/nanoTime)))
+                 999999)
+              1000000))))
 
-              :subscribe
-              (let [subscribe-req (:actual state)]
-                (do
-                  (locking drain-monitor
-                    (swap! subscription-sockets conj s)
-                    ;; TERM may have closed the listener after this connection was
-                    ;; accepted but before its request was classified. A subscription
-                    ;; is idle transport, not finite in-flight work; close it now so
-                    ;; drain cannot wait forever.
-                    (when @draining?
-                      (try (.close s) (catch Throwable _ nil))))
-                  (swap! subscribers conj {:w w :s s :flt (:filter subscribe-req)}) ; P5: opt-in scoped filter (nil = firehose)
-                  ;; A subscriber is long-lived: it RECEIVES pushed events and sends
-                  ;; nothing, so the request-path read timeout (5s) must NOT apply or
-                  ;; it would drop every idle subscriber. Disable it for this socket;
-                  ;; the loop now blocks on read purely to detect disconnect (EOF).
-                  ;; The 1 MiB line cap still guards against a flooding subscriber.
-                  (.setSoTimeout s 0)
-                  (.write w (pr-str (wire/subscription-response
-                                     (current-seq @co)
-                                     (:fenced-subscription state)
-                                     (served-log-path))))
-                  (.newLine w)
-                  (.flush w)
-                  (loop [] (when (read-line-bounded r max-line-bytes) (recur)))))
+(defn- maybe-delay-subscription-handshake! [req control]
+  (let [delay-ms (when control-delay-test-enabled?
+                   (some-> (:test-delay-ms req) long))]
+    (when (and delay-ms (pos? delay-ms))
+      (loop [remaining delay-ms]
+        (request-check! control :subscription-handshake)
+        (when (pos? remaining)
+          (let [slice (min 10 remaining)]
+            (try
+              (Thread/sleep (long slice))
+              (catch InterruptedException t
+                (request-check! control :subscription-handshake)
+                (throw t)))
+            (recur (- remaining slice))))))))
 
-              :handle
-              (let [actual (:actual state)
-                    query-control (when (:query state)
-                                    (new-query-control actual))
-                    control-control (when (and (not (:query state))
-                                               (control-request? actual))
-                                      {:cancelled (atom nil)
-                                       :done (atom false)})
-                    control (or query-control control-control)
-                    _ (cond
-                        query-control
-                        (monitor-query-disconnect s r query-control)
+(defn- arm-request-deadline! [^Socket s control]
+  (if-let [^ScheduledThreadPoolExecutor scheduler @request-deadline-executor]
+    (let [worker (Thread/currentThread)
+          delay-ns (max 0 (- (:request-deadline-ns control)
+                             (System/nanoTime)))
+          interrupt-task
+          (.schedule
+           scheduler
+           ^Runnable
+           (reify Runnable
+             (run [_]
+               (when (and (not @(:done control))
+                          (request-timeout-wins! control))
+                 (cancel-query! control :request-timeout)
+                 (.interrupt worker))))
+           delay-ns TimeUnit/NANOSECONDS)
+          close-task
+          (.schedule
+           scheduler
+           ^Runnable
+           (reify Runnable
+             (run [_]
+               (when (and (not @(:done control))
+                          (= :timed-out @(:outcome control)))
+                 (try (.close s) (catch Throwable _ nil)))))
+           (+ delay-ns 100000000) TimeUnit/NANOSECONDS)]
+      [interrupt-task close-task])
+    []))
 
-                        control-control
-                        (monitor-control-disconnect s r control-control))]
-                (try
-                  (let [resp (if control (handle req control) (handle req))]
-                    (try-reply
-                     w
-                     (:response
-                      (wire/connection-transition
-                       state {:event :handled :response resp}))
-                     (:format state)))
-                  (finally
-                    ;; The monitor owns input after request parse and has a 100ms
-                    ;; read timeout. Marking done lets it retire by itself; do not
-                    ;; future-cancel it (cancelling before scheduling could skip
-                     ;; its finally and leak the monitor count).
-                    (when control (reset! (:done control) true)))))
+(defn- disarm-request-deadline! [control tasks]
+  (request-complete! control)
+  (reset! (:done control) true)
+  (doseq [task tasks]
+    (.cancel ^java.util.concurrent.Future task false))
+  (when (= :request-timeout @(:cancelled control))
+    (Thread/interrupted)))
 
-              nil)))
-        ;; StackOverflowError is an Error (not Exception); catching Throwable here
-        ;; keeps a deep-nest / malformed line from taking down the conn thread.
-        (catch java.net.SocketTimeoutException t
-          ;; Slow client: the pure selector closes without an envelope.
-          (apply-request-error!
-           w nil (connection-error-selection :request t)))
-        (catch Throwable t
-          (apply-request-error!
-           w nil (connection-error-selection :request t)))))
-    (catch Throwable _ nil)
-    (finally
-      (swap! subscription-sockets disj s)
-      (try (.close s) (catch Throwable _ nil)))))
+(defn serve-conn
+  ([^Socket s] (serve-conn s (System/nanoTime)))
+  ([^Socket s accepted-ns]
+   (let [request-control (new-request-control accepted-ns)]
+     (try
+       (.setSoTimeout
+        s
+        (int (max 1 (min sock-read-timeout-ms
+                         (request-remaining-ms request-control)))))
+       (let [r (BufferedReader. (InputStreamReader. (.getInputStream s)))
+             w (BufferedWriter. (OutputStreamWriter. (.getOutputStream s)))
+             deadline-tasks (arm-request-deadline! s request-control)]
+         (try
+           (request-check! request-control :request-read)
+           (when-let [line (read-line-bounded r max-line-bytes)]
+             (request-check! request-control :request-parse)
+             (let [req (parse-req line)
+                   strict-reject (wire/strict-log-fence-rejection
+                                  require-log-fence? req (served-log-path))
+                   fenced-subscribe? (wire/fenced-subscribe? req)
+                   fence-reject (when fenced-subscribe?
+                                  (locking dlock
+                                    (log-fence-rejection (:expected-log req))))
+                   state (wire/connection-transition
+                          (wire/connection-start)
+                          {:event :request
+                           :request req
+                           :strict-reject strict-reject
+                           :fence-reject fence-reject})]
+               (case (:phase state)
+                 :reply
+                 (try-reply w (:response state) (:format state) request-control)
+
+                 :subscribe
+                 (let [subscribe-req (:actual state)]
+                   (do
+                     ;; The deadline covers the subscription handshake, not the
+                     ;; deliberately long-lived event stream that follows it.
+                     (maybe-delay-subscription-handshake!
+                      subscribe-req request-control)
+                     (locking drain-monitor
+                       (swap! subscription-sockets conj s)
+                       (when @draining?
+                         (try (.close s) (catch Throwable _ nil))))
+                     (when
+                      (try-reply
+                       w
+                       (wire/subscription-response
+                        (current-seq @co)
+                        (:fenced-subscription state)
+                        (served-log-path))
+                       (:format state)
+                       request-control)
+                       (disarm-request-deadline!
+                        request-control deadline-tasks)
+                       (swap! subscribers conj
+                              {:w w :s s :flt (:filter subscribe-req)})
+                       (.setSoTimeout s 0)
+                       (loop []
+                         (when (read-line-bounded r max-line-bytes)
+                           (recur))))))
+
+                 :handle
+                 (let [actual (:actual state)
+                       query-control (when (:query state)
+                                       (new-query-control actual request-control))
+                       control (or query-control request-control)
+                       _ (cond
+                           query-control
+                           (monitor-query-disconnect s r query-control)
+
+                           (control-request? actual)
+                           (monitor-control-disconnect s r control))]
+                   (try
+                     (binding [*request-control* control]
+                       (let [resp (handle req control)]
+                         (try-reply
+                          w
+                          (:response
+                           (wire/connection-transition
+                            state {:event :handled :response resp}))
+                          (:format state)
+                          control)))
+                     (finally
+                       ;; The monitor owns input after request parse. Marking
+                       ;; done lets it retire and release its bounded count.
+                       (reset! (:done control) true))))
+
+                 nil)))
+           (catch java.net.SocketTimeoutException t
+             (if (request-expired? request-control)
+               (try-reply
+                w (request-timeout-response request-control :request-read))
+               (apply-request-error!
+                w nil (connection-error-selection :request t))))
+           (catch Throwable t
+             (if (or (request-timeout-ex? t)
+                     (= :timed-out @(:outcome request-control)))
+               (try-reply
+                w
+                (request-timeout-response
+                 request-control
+                 (or (:phase (ex-data t)) :execution)))
+               (apply-request-error!
+                w nil (connection-error-selection :request t))))
+           (finally
+             (disarm-request-deadline! request-control deadline-tasks))))
+       (catch Throwable _ nil)
+       (finally
+         (swap! subscription-sockets disj s)
+         (try (.close s) (catch Throwable _ nil)))))))
 
 ;; bind address: loopback by default (no existing single-machine user is silently
 ;; exposed); honor FRAM_BIND for gateway-fronted / cross-host deployment. The wire
@@ -7426,7 +7714,44 @@
       {:socket (adopt-listen-socket fd) :inherited? true})
     {:socket (listen-socket addr port tls) :inherited? false}))
 
-(defn- serve-conn-async! [^Socket s]
+(defn- start-request-executors! []
+  (when-let [^ThreadPoolExecutor existing @connection-executor]
+    (when-not (.isTerminated existing)
+      (throw (ex-info "connection executor is already running" {}))))
+  (let [executor
+        (ThreadPoolExecutor.
+         connection-worker-limit
+         connection-worker-limit
+         0 TimeUnit/MILLISECONDS
+         (ArrayBlockingQueue. connection-pending-limit))
+        scheduler (ScheduledThreadPoolExecutor. 1)]
+    (.setRemoveOnCancelPolicy scheduler true)
+    (reset! admission-active 0)
+    (reset! admission-max-active 0)
+    (reset! admission-max-pending 0)
+    (reset! admission-rejections 0)
+    (reset! request-timeouts 0)
+    (reset! connection-executor executor)
+    (reset! request-deadline-executor scheduler)
+    executor))
+
+(defn- finish-accepted-connection! [^Socket s]
+  (locking drain-monitor
+    (swap! active-connections dec)
+    (swap! connection-sockets disj s)
+    (.notifyAll drain-monitor)))
+
+(defn- reject-overloaded-connection! [^Socket s]
+  (swap! admission-rejections inc)
+  (try
+    (let [w (BufferedWriter. (OutputStreamWriter. (.getOutputStream s)))]
+      (try-reply w (server-busy-response)))
+    (catch Throwable _ nil)
+    (finally
+      (try (.close s) (catch Throwable _ nil))
+      (finish-accepted-connection! s))))
+
+(defn- serve-conn-async! [^Socket s accepted-ns]
   ;; Count before submission: once accept returns, TERM must either observe this
   ;; connection as in-flight or wait for accept-stopped before testing the count.
   (locking drain-monitor
@@ -7438,21 +7763,28 @@
     (when @draining?
       (try (.close s) (catch Throwable _ nil))))
   (try
-    (future
-      (try
-        (serve-conn s)
-        (finally
-          (locking drain-monitor
-            (swap! active-connections dec)
-            (swap! connection-sockets disj s)
-            (.notifyAll drain-monitor)))))
+    (let [^ThreadPoolExecutor executor @connection-executor]
+      (.execute
+       executor
+       ^Runnable
+       (reify Runnable
+         (run [_]
+           (let [active (swap! admission-active inc)]
+             (swap! admission-max-active max active)
+             (try
+               (serve-conn s accepted-ns)
+               (finally
+                 (swap! admission-active dec)
+                 (finish-accepted-connection! s)))))))
+      (swap! admission-max-pending max (.size (.getQueue executor))))
     (catch Throwable t
-      (try (.close s) (catch Throwable _ nil))
-      (locking drain-monitor
-        (swap! active-connections dec)
-        (swap! connection-sockets disj s)
-        (.notifyAll drain-monitor))
-      (throw t))))
+      (if (= "java.util.concurrent.RejectedExecutionException"
+             (.getName (class t)))
+        (reject-overloaded-connection! s)
+        (do
+          (try (.close s) (catch Throwable _ nil))
+          (finish-accepted-connection! s)
+          (throw t))))))
 
 (defn- remaining-ms [deadline-ns]
   (max 0
@@ -7541,11 +7873,13 @@
         deadline-ns (+ started-ns (* (long shutdown-timeout-ms) 1000000))
         result (atom {:accept :unknown :connections :unknown
                       :durability :not-attempted :checkpoint :not-attempted
-                      :appender :unknown})]
+                      :executor :unknown :appender :unknown})]
     (try
       (reset! draining? true)
       (when-let [^ServerSocket ss @listener-socket]
         (try (.close ss) (catch Throwable _ nil)))
+      (when-let [^ThreadPoolExecutor executor @connection-executor]
+        (.shutdown executor))
       (swap! result assoc :accept
              (if (await-accept-stopped-until! deadline-ns)
                :stopped :timed-out))
@@ -7582,15 +7916,31 @@
                {:class (.getSimpleName (class t))
                 :message (.getMessage t)}))
       (finally
+        (when-let [^ThreadPoolExecutor executor @connection-executor]
+          (let [terminated?
+                (try
+                  (.awaitTermination
+                   executor
+                   (remaining-ms deadline-ns)
+                   TimeUnit/MILLISECONDS)
+                  (catch Throwable _ false))]
+            (when-not terminated?
+              (.shutdownNow executor))
+            (swap! result assoc :executor
+                   {:terminated terminated?
+                    :active @admission-active
+                    :pending (.size (.getQueue executor))})))
+        (when-let [^ScheduledThreadPoolExecutor scheduler
+                   @request-deadline-executor]
+          (.shutdownNow scheduler))
         (try
           (swap! result assoc :appender
                  (stop-group-appender! (remaining-ms deadline-ns)))
           (catch Throwable t
             (swap! result assoc :appender
                    {:stopped false :failure (.getSimpleName (class t))})))
-        ;; `future` uses Clojure's non-daemon send-off executor.  All owned
-        ;; connection workers have now drained or been abandoned at the hard
-        ;; boundary, so retire the pool as the final process-lifecycle step.
+        ;; Query/control EOF monitors still use Clojure futures. Connection
+        ;; workers are owned by the finite executor retired above.
         (shutdown-agents)
         (let [elapsed-ms (quot (- (System/nanoTime) started-ns) 1000000)]
           (println (str "[fram] shutdown complete in " elapsed-ms "ms "
@@ -7611,6 +7961,7 @@
         inherited? (:inherited? opened)
         actual-port (.getLocalPort ^ServerSocket ss)
         stopped (java.util.concurrent.CountDownLatch. 1)]
+    (start-request-executors!)
     (reset! draining? false)
     (reset! listener-socket ss)
     (reset! accept-stopped stopped)
@@ -7630,7 +7981,7 @@
       (loop []
         (when-not @draining?
           (let [s (.accept ^ServerSocket ss)]
-            (serve-conn-async! s)
+            (serve-conn-async! s (System/nanoTime))
             (recur))))
       (catch java.net.SocketException t
         (when-not @draining? (throw t)))
@@ -7645,7 +7996,13 @@
           (throw t)))
       (finally
         (.countDown stopped)
-        (compare-and-set! listener-socket ss nil)))))
+        (compare-and-set! listener-socket ss nil)
+        (when-not @draining?
+          (when-let [^ThreadPoolExecutor executor @connection-executor]
+            (.shutdownNow executor))
+          (when-let [^ScheduledThreadPoolExecutor scheduler
+                     @request-deadline-executor]
+            (.shutdownNow scheduler)))))))
 
 (defn client [port m]
   (with-open [s (Socket.)]
