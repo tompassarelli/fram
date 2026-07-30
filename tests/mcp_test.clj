@@ -1,6 +1,6 @@
 ;; mcp_test.clj — drives the real bin/fram-mcp process over stdio and asserts the
 ;; JSON-RPC contract end to end for the CLOSED catalog: initialize, tools/list (exactly
-;; eleven tools: tell/retract/show/ask/validate + 6 edit verbs), KB reads (show), a
+;; twelve tools: tell/retract/show/ask/validate + 7 edit verbs), KB reads (show), a
 ;; structured ask/query, the `untell`->`retract` alias, and server-side param rejection.
 ;; FRAM_PORT pins a dead port so no live coordinator can leak into the run.
 ;;   bb -cp out tests/mcp_test.clj      (run from the repo root)
@@ -191,9 +191,10 @@
   (chk "initialize includes instructions" (seq (get-in r1 [:result :instructions]))))
 
 (let [tools (get-in (get by-id 2) [:result :tools]) names (set (map :name tools))]
-  (chk "tools/list is EXACTLY the closed catalog (11 tools, retract not untell, no threads)"
+  (chk "tools/list is EXACTLY the closed catalog (12 tools, retract not untell, no threads)"
        (= names #{"tell" "retract" "show" "ask" "validate"
-                  "add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+                  "add-def" "set-body" "rename-def" "insert-after" "insert-before"
+                  "replace-in-body"
                   "edit-transaction"}))
   (chk "tools/list preserves the canonical catalog descriptions, schemas, and order"
        (= expected-tools tools))

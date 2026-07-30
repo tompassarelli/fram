@@ -1,8 +1,8 @@
 ;; fram_mcp.clj — the AI-facing edge of a Fram instance.
 ;; ============================================================================
 ;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The surface is CLOSED
-;; and O(1): exactly eleven tools of the TELL/ASK knowledge-base core (Russell &
-;; Norvig KB interface) — tell / retract / show / ask / validate + six graph-edit
+;; and O(1): exactly twelve tools of the TELL/ASK knowledge-base core (Russell &
+;; Norvig KB interface) — tell / retract / show / ask / validate + seven graph-edit
 ;; verbs — served straight from fram.tools/catalog, never minted per-predicate. The
 ;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
@@ -35,7 +35,7 @@
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
 ;; --- the closed surface -------------------------------------------------------
-;; One instructions string; the tool list is fram.tools/catalog verbatim (11 tools).
+;; One instructions string; the tool list is fram.tools/catalog verbatim (12 tools).
 (def instructions
   (str
    "Fram is a FACT engine: every fact is a triple (subject predicate object); a "
@@ -52,9 +52,9 @@
    "the coordinator. `validate` reports integrity violations.\n\n"
    "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
    "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
-   "(eleven tools) while the vocabulary lives in the graph as data.\n\n"
+   "(twelve tools) while the vocabulary lives in the graph as data.\n\n"
    "Graph-owned Beagle modules (registered `graph-upstream`) are authored by GRAPH "
-   "EDIT: add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction "
+   "EDIT: add-def / set-body / rename-def / insert-after / insert-before / replace-in-body / edit-transaction "
    "(recompile-gated, fail-closed)."))
 
 ;; The tool catalog is deliberately closed and corpus-independent. Materialize it
@@ -418,6 +418,8 @@
     ;; slurps + read-string's it, same as upsert-form), the anchor as --after.
     "insert-form" (let [sf (str work "/spec.edn")] (spit sf (:form e))
                     ["insert-form" ["--after" (:after e) "--spec-file" sf]])
+    "insert-before" (let [sf (str work "/spec.edn")] (spit sf (:form e))
+                      ["insert-before" ["--before" (:before e) "--spec-file" sf]])
     "replace-in-body" (let [of (str work "/old.edn") nf (str work "/new.edn")]
                         (spit of (:old e)) (spit nf (:new e))
                         ["replace-in-body" ["--name" (:name e) "--old-file" of "--new-file" nf]])
@@ -450,6 +452,7 @@
       "set-body"    {:op "set-body"    :module (:module e) :name (:name e) :datum (datum! (:body e) "body")}
       "upsert-form" {:op "upsert-form" :module (:module e) :datum (datum! (:form e) "form")}
       "insert-form" {:op "insert-form" :module (:module e) :after (:after e) :datum (datum! (:form e) "form")}
+      "insert-before" {:op "insert-before" :module (:module e) :before (:before e) :datum (datum! (:form e) "form")}
       ;; SUB-DEF surgical edit — old/new are EDN-datum STRINGS from the MCP arg; parse them
       ;; to datums here (the verb canonicalizes/mints datums, exactly as the CLI does via
       ;; edn/read-string of the spec/body file), so the warm socket path is byte-correct.
@@ -1416,17 +1419,17 @@
 ;; the graph-AST edit tools — these route through route-edit (a long recompile-gated
 ;; transaction), NOT the query budget. Names match the structural ToolSpecs in tools.bclj.
 (def ^:private edit-tools
-  #{"add-def" "set-body" "rename-def" "insert-after" "replace-in-body"
+  #{"add-def" "set-body" "rename-def" "insert-after" "insert-before" "replace-in-body"
     "edit-transaction"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
 
 ;; ============================================================================
 ;; PROFILES — opt-in restricted tool surfaces (FRAM_MCP_PROFILE; unset = full).
 ;; ============================================================================
-;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact eleven-tool
+;; "full" (the default when FRAM_MCP_PROFILE is unset) is the exact twelve-tool
 ;; closed catalog above — the pre-profile behavior, no new checks anywhere.
 ;; "graph-edit-v1" is the RESTRICTED authoring profile for graph-upstream repos
-;; (the fram-code-on wiring): exactly the six graph-edit verbs are EXPOSED
+;; (the fram-code-on wiring): exactly the seven graph-edit verbs are EXPOSED
 ;; (tools/list) *and* AUTHORIZED (tools/call). The call gate is server-side and
 ;; runs BEFORE alias normalization (untell->retract, query<->ask) and BEFORE any
 ;; dispatch: a denied name never reaches tl/call, load-state, the coordinator,
@@ -1447,7 +1450,7 @@
 ;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
 
 ;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
-;;   (1) the name must be one of the six edit verbs — everything else
+;;   (1) the name must be one of the seven edit verbs — everything else
 ;;       (tell/retract/show/ask/validate, the query/untell aliases, unknown
 ;;       names) is denied AS GIVEN, pre-normalization, pre-dispatch;
 ;;   (2) the rendered target FRAM_SRC/<module>.bclj must stay CONFINED under
@@ -1457,7 +1460,7 @@
   (when restricted?
     (if-not (edit-tool? nm)
       {:text (str "profile graph-edit-v1: tool '" nm "' is not authorized — this surface is exactly "
-                  "add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction. "
+                  "add-def / set-body / rename-def / insert-after / insert-before / replace-in-body / edit-transaction. "
                   "Denied before alias normalization and dispatch; nothing mutated.")}
       (let [m (:module args)]
         (cond
@@ -1473,8 +1476,8 @@
 (def ^:private profile-instructions
   (if restricted?
     (str instructions
-         "\n\nPROFILE graph-edit-v1 (restricted): only the six graph-edit verbs "
-         "(add-def / set-body / rename-def / insert-after / replace-in-body / edit-transaction) are exposed and "
+         "\n\nPROFILE graph-edit-v1 (restricted): only the seven graph-edit verbs "
+         "(add-def / set-body / rename-def / insert-after / insert-before / replace-in-body / edit-transaction) are exposed and "
          "authorized; tell / retract / show / ask / validate (and the untell/query aliases) "
          "are denied server-side before dispatch.")
     instructions))
@@ -1753,8 +1756,8 @@
   (log! "fram-mcp: loaded as a library (FRAM_MCP_LIBRARY=1) — no profile fence, no stdio loop"))
 (when-not library-mode?
  (log! (if restricted?
-        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/replace-in-body/edit-transaction ONLY)"
-        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 6 edit verbs)"))
+        "fram-mcp: ready on stdio (profile graph-edit-v1: add-def/set-body/rename-def/insert-after/insert-before/replace-in-body/edit-transaction ONLY)"
+        "fram-mcp: ready on stdio (closed catalog: tell/retract/show/ask/validate + 7 edit verbs)"))
  (loop []
   (let [line (read-line)]
     (when (some? line)

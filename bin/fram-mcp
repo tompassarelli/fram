@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fram MCP server — the AI-facing edge of one instance. Speaks MCP (JSON-RPC 2.0
 # over stdio). The surface is the CLOSED TELL/ASK knowledge-base catalog — exactly
-# eleven tools: tell / retract / show / ask / validate + six graph-edit verbs
-# (add-def / set-body / rename-def / insert-after / replace-in-body /
+# twelve tools: tell / retract / show / ask / validate + seven graph-edit verbs
+# (add-def / set-body / rename-def / insert-after / insert-before / replace-in-body /
 # edit-transaction). It is never
 # minted per-predicate: the vocabulary is DATA in the graph (a predicate is an
 # entity — `show <pred>` reveals its cardinality/value_kind), so the tool count is
@@ -13,8 +13,8 @@
 #
 #   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
 #   names its split telemetry half. Reads expose the pair as one logical store.
-#   FRAM_MCP_PROFILE (optional; unset = "full", the exact eleven-tool surface):
-#   "graph-edit-v1" exposes AND server-authorizes ONLY the six graph-edit verbs
+#   FRAM_MCP_PROFILE (optional; unset = "full", the exact twelve-tool surface):
+#   "graph-edit-v1" exposes AND server-authorizes ONLY the seven graph-edit verbs
 #   (denials pre-alias, pre-dispatch, zero mutation) and refuses to start unless
 #   graph-edit mode is wired with canonical absolute FRAM_SRC / FRAM_CODE_LOG /
 #   FRAM_CODE_PORT identity, an existing in-tree log, and a live strict-fenced

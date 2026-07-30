@@ -51,6 +51,7 @@ does not recompile, writes no tree.
 | Replace a defn's body | `mcp__fram__set-body` | supersedes the post-params `fN` edges |
 | Rename a def | `mcp__fram__rename-def` | O(1), scope-correct via `refers_to`, shadow-safe |
 | Insert a form after an anchor | `mcp__fram__insert-after` | ordered placement |
+| Insert any valid top-level form before a named def | `mcp__fram__insert-before` | ordered wrapper edge; candidate compilation must pass |
 | Delete a def | _(engine verb `delete` exists; MCP tool not yet exposed)_ | fail-closed on orphaned references |
 
 The new form/body is **structured data you emit** (an EDN datum, the structured

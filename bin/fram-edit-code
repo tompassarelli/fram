@@ -34,6 +34,7 @@
 ;;       set-body    <module> --name <defn> --body-file <edn>
 ;;       upsert-form <module> --spec-file <edn>
 ;;       insert-form <module> --after <anchor> --spec-file <edn>   (CRDT mid-insert, commute)
+;;       insert-before <module> --before <anchor> --spec-file <edn> (arbitrary true top-level form)
 ;;       delete      <module> --name <def>                         (fail-closed: refuses if it orphans a ref)
 ;;       reorder     <module> --name <def> [--after <anchor>]      (move in place — re-spell order key, no node churn; no --after = front)
 ;;     --port   REQUIRED unless --no-commit — coordinator serving the CODE log.
@@ -109,7 +110,8 @@
   (loop [a (drop 2 args)
          opts {:op (first args) :module (second args)
                :port nil :log nil :out nil :no-commit false :whole-module false
-               :old nil :new nil :name nil :body-file nil :spec-file nil :after nil :text nil :placement nil}]
+               :old nil :new nil :name nil :body-file nil :spec-file nil
+               :after nil :before nil :text nil :placement nil}]
     (cond
       (empty? a) opts
       (= "--port" (first a)) (recur (drop 2 a) (assoc opts :port (Integer/parseInt (second a))))
@@ -127,6 +129,7 @@
       (= "--old-file" (first a)) (recur (drop 2 a) (assoc opts :old-file (second a)))
       (= "--new-file" (first a)) (recur (drop 2 a) (assoc opts :new-file (second a)))
       (= "--after" (first a)) (recur (drop 2 a) (assoc opts :after (second a)))
+      (= "--before" (first a)) (recur (drop 2 a) (assoc opts :before (second a)))
       (= "--text" (first a)) (recur (drop 2 a) (assoc opts :text (second a)))
       (= "--placement" (first a)) (recur (drop 2 a) (assoc opts :placement (second a)))
       :else (recur (rest a) opts))))
@@ -136,9 +139,9 @@
 (defn- coord-rt [port log-path req]
   (rt/coord-request-for-log port log-path req))
 
-(let [{:keys [op module port log out no-commit whole-module old new name body-file spec-file after text placement old-file new-file]} (parse-args the-args)
+(let [{:keys [op module port log out no-commit whole-module old new name body-file spec-file after before text placement old-file new-file]} (parse-args the-args)
       log-path (or log (str (System/getProperty "user.dir") "/.fram/code.log"))]
-  (when (str/blank? op) (die "usage: bin/fram-edit-code <op> <module> [verb args] --port <P> [--log <code.log>] [--out <file>] [--no-commit] [--whole-module]\n  ops: rename --old <n> --new <n> | set-body --name <defn> --body-file <edn> | upsert-form --spec-file <edn> | insert-form --after <anchor> --spec-file <edn> | delete --name <def> | reorder --name <def> [--after <anchor>]"))
+  (when (str/blank? op) (die "usage: bin/fram-edit-code <op> <module> [verb args] --port <P> [--log <code.log>] [--out <file>] [--no-commit] [--whole-module]\n  ops: rename --old <n> --new <n> | set-body --name <defn> --body-file <edn> | upsert-form --spec-file <edn> | insert-form --after <anchor> --spec-file <edn> | insert-before --before <anchor> --spec-file <edn> | delete --name <def> | reorder --name <def> [--after <anchor>]"))
   (when (str/blank? module) (die "module is required (the @<mod># prefix to edit, e.g. schema)"))
   (when-not (.exists (io/file log-path)) (die "no code log at" log-path "(run bin/fram-ingest-code first)"))
   (when (and (not no-commit) (nil? port)) (die "--port <P> is REQUIRED unless --no-commit"))
@@ -169,6 +172,11 @@
                                    (when-not (.exists (io/file spec-file)) (die "no spec file:" spec-file))
                                    {:op "insert-form" :module module :after after
                                     :datum (edn/read-string (slurp spec-file))})
+                 "insert-before" (do (when (or (str/blank? before) (str/blank? spec-file))
+                                       (die "insert-before needs --before <anchor> --spec-file <edn>"))
+                                     (when-not (.exists (io/file spec-file)) (die "no spec file:" spec-file))
+                                     {:op "insert-before" :module module :before before
+                                      :datum (edn/read-string (slurp spec-file))})
                  "insert-comment" (do (when (or (str/blank? after) (str/blank? text))
                                         (die "insert-comment needs --after <anchor> --text <comment> [--placement leading|trailing]"))
                                       {:op "insert-comment" :module module :after after :text text :placement placement})
@@ -183,7 +191,7 @@
                                        {:op "replace-in-body" :module module :name name
                                         :old (edn/read-string (slurp old-file))
                                         :new (edn/read-string (slurp new-file))})
-                 (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-comment | delete | reorder | replace-in-body)"))]
+                 (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-before | insert-comment | delete | reorder | replace-in-body)"))]
       ;; SAFETY GATE: refuse unless the daemon serves a CODE log (never north).
       (let [st (coord-rt port log-path {:op :status})
             _ (when (:reject st)
@@ -233,6 +241,11 @@
                                  (when-not (.exists (io/file spec-file)) (die "no spec file:" spec-file))
                                  {:op "insert-form" :module module :after after
                                   :datum (edn/read-string (slurp spec-file))})
+               "insert-before" (do (when (or (str/blank? before) (str/blank? spec-file))
+                                     (die "insert-before needs --before <anchor> --spec-file <edn>"))
+                                   (when-not (.exists (io/file spec-file)) (die "no spec file:" spec-file))
+                                   {:op "insert-before" :module module :before before
+                                    :datum (edn/read-string (slurp spec-file))})
                "insert-comment" (do (when (or (str/blank? after) (str/blank? text))
                                       (die "insert-comment needs --after <anchor> --text <comment> [--placement leading|trailing]"))
                                     {:op "insert-comment" :module module :after after :text text :placement placement})
@@ -240,7 +253,7 @@
                                  {:op "delete" :module module :name name})
                "reorder"     (do (when (str/blank? name) (die "reorder needs --name <def> [--after <anchor>]"))
                                  {:op "reorder" :module module :name name :after after})
-               (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-comment | delete | reorder)"))]
+               (die "unknown op:" op "(rename | set-body | upsert-form | insert-form | insert-before | insert-comment | delete | reorder)"))]
 
     ;; 1. boot the reified store over the code log (in-process; this IS the corpus).
     (let [coord (migrate-flat->co log-path)
@@ -258,7 +271,10 @@
       ;;    extract-file! projection into resolve-out (in-process, no env needed);
       ;;    run-verb-warm! binds *project-srcs* to the affected module so only that
       ;;    module's resolved EDN is written. NO src/fram/*.bclj is read.
-      (let [affected (resolve/run-verb-warm! st (assoc spec :resolve-out resolve-out))
+      (let [prepared (assoc spec :resolve-out resolve-out)
+            affected (if (= "insert-before" op)
+                       (run-insert-before-warm! st prepared)
+                       (resolve/run-verb-warm! st prepared))
             proj-edn (str resolve-out "/resolved-" affected ".edn")]
         (when-not (.exists (io/file proj-edn))
           (die "verb produced no projected EDN at" proj-edn

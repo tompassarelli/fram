@@ -3159,6 +3159,77 @@
             (flush-flat-batch!)))
         (count edges)))))
 
+;; insert-before — bootstrap-safe true top-level authoring. The portable resolver
+;; already exposes every fact primitive this needs, but its graph-upstream verb
+;; table only accepts named definitions. Keep this bounded host seam text-upstream:
+;; locate a named definition anchor, mint any non-empty top-level datum, and attach
+;; it to the SAME wrapper through a CRDT order key immediately before the anchor.
+;; Candidate preparation runs this over a discardable clone; the existing
+;; render/check/commit gate therefore rejects invalid top-level forms with zero
+;; canonical mutation.
+(defn- run-insert-before-warm! [store spec]
+  (let [module (:module spec)
+        before (:before spec)
+        datum  (:datum spec)]
+    (resolve/resolve-warm-store!
+     store
+     (fn []
+       (let [base-v      (resolve/verb-env (:resolve-out spec) nil)
+             target-srcs (vec ((:scope-srcs base-v) module))
+             v           (resolve/verb-env (:resolve-out spec) target-srcs)
+             warn        (:warn v)
+             reject2     (:reject2 v)]
+         (when (not= 1 (count target-srcs))
+           (let [message (str "REJECTED — insert-before scope \"" module "\" matches "
+                              (count target-srcs) " source files (need 1); no facts mutated.")]
+             (warn message)
+             (reject2 3 {:message message})))
+         (when-not (and (seq? datum) (seq datum))
+           (let [message "REJECTED — insert-before form must be a non-empty top-level list; no facts mutated."]
+             (warn message)
+             (reject2 3 {:message message})))
+         (let [src          (first target-srcs)
+               wrap         ((:wrapper-of v) src)
+               forms        (vec (resolve/wrap-forms wrap))
+               anchor-bind  ((:def-binding v) src before)
+               anchor-form  (when (some? anchor-bind)
+                              ((:form-for-victim v) src anchor-bind))
+               anchor-index (when (some? anchor-form)
+                              (first
+                               (keep-indexed
+                                (fn [i entry]
+                                  (when (= (nth entry 2) anchor-form) i))
+                                forms)))]
+           (when (nil? anchor-index)
+             (let [message (str "REJECTED — insert-before anchor `" before
+                                "` not found in \"" module "\"; no facts mutated.")]
+               (warn message)
+               (reject2 3 {:message message})))
+           (let [i        (long anchor-index)
+                 lo       (when (pos? i) (:path (nth (nth forms (dec i)) 0)))
+                 hi       (:path (nth (nth forms i) 0))
+                 path     (rcore/ord-between lo hi)
+                 tie      (if (:capture-only? v) "PENDING" "0")
+                 position (str "f" (str/join "." path) "~" tie)
+                 new-root ((:mint v) src datum)]
+             (c/fact! (:ctx v)
+                      wrap
+                      (c/value! (:ctx v) position)
+                      new-root
+                      (:tx v))
+             (when-not (:capture-only? v)
+               ((:reresolve v)))
+             ((:emit v)
+              "insert-before"
+              (str "inserted top-level form before `" before "` in \"" module
+                   "\" (CRDT ordered-wrapper fact; refs resolved via refers_to)")))))))
+    module))
+
+(defn- run-edit-verb-warm! [store spec]
+  (if (= "insert-before" (:op spec))
+    (run-insert-before-warm! store spec)
+    (resolve/run-verb-warm! store spec)))
+
 ;; edit-min-compute: run the verb over a DISCARDABLE clone of store snapshot `snap`
 ;; and harvest the minimal wire delta. NO canonical state is touched here — the
 ;; clone is thrown away, nothing is appended, `co` is never written; the only
@@ -3178,7 +3249,8 @@
           ;; across every module (a surviving cross-module ref to a victim must REFUSE),
           ;; so it must NOT be scoped. reorder is a pure wrapper order-key re-spell (reads
           ;; only its own module's wrapper) — single-module, scope it like the inserts.
-          scope? (#{"set-body" "upsert-form" "insert-form" "reorder" "replace-in-body"} (:op spec))
+          scope? (#{"set-body" "upsert-form" "insert-form" "insert-before"
+                    "reorder" "replace-in-body"} (:op spec))
           ;; `groups` is keyed by the exact canonical module encoded in each
           ;; @module#node name.  Substring matching here would merge frames for
           ;; similarly named modules (for example `app.user` and
@@ -3207,7 +3279,7 @@
                                      resolve/*resolve-walk?* false  ; Build B: skip the whole-corpus walk
                                      resolve/*corpus-scope* scope    ; Build B: scope frames to the edited module
                                      resolve/*corpus-cache* (when scope? (ensure-corpus-groups! module))]  ; skip O(total) name reduce
-                             (resolve/run-verb-warm! clone spec))]
+                             (run-edit-verb-warm! clone spec))]
                    (when (= "1" (System/getenv "FRAM_PROF"))
                      (binding [*out* *err*] (println (format "PROF run-verb-warm!=%.1fms" (/ (- (System/nanoTime) tv0) 1e6)))))
                    res)
@@ -3286,8 +3358,9 @@
     ;; (#26) reject UNKNOWN verbs early — before the expensive clone/corpus build and before
     ;; they can fall through to run-verb-warm!'s `(System/exit 2)` default, which would HARD-EXIT
     ;; the daemon on a malformed client request. Known verbs: set-body, upsert-form, rename.
-    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
-      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-comment, rename, delete, reorder, replace-in-body)")
+    (when-not (#{"set-body" "upsert-form" "insert-form" "insert-before"
+                 "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+      (throw (ex-info (str "edit-min: unknown verb '" (:op spec) "' (known: set-body, upsert-form, insert-form, insert-before, insert-comment, rename, delete, reorder, replace-in-body)")
                       {:reject :unknown-verb})))
     ;; #(a) GRAPH RENAME IS NOW O(1) — references carry DURABLE identity. verb-rename! rewrites
     ;; the DEF binding's spelling only; references follow `bound_to` (the binding's stable @mod#int),
@@ -4314,7 +4387,8 @@
         (throw (ex-info "edit-prepare: :spec map required" {:reject :invalid-spec})))
       (when (str/blank? (str module))
         (throw (ex-info "edit-prepare: :module required" {:reject :invalid-spec})))
-      (when-not (#{"set-body" "upsert-form" "insert-form" "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
+      (when-not (#{"set-body" "upsert-form" "insert-form" "insert-before"
+                   "insert-comment" "rename" "delete" "reorder" "replace-in-body"} (:op spec))
         (throw (ex-info (str "edit-prepare: unknown verb '" (:op spec) "'") {:reject :unknown-verb})))
       ;; ONE snapshot deref: the candidate's version, verb clone, rehearsal clone, and
       ;; tracked path all come from the same immutable store value.
