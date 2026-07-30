@@ -1,131 +1,272 @@
 (ns fram.store
   (:require [fram.types :as t]))
 
-(defn new-store []
-  (atom (t/->Store 0 0 nil {} {} {} {} {} {} {} {} {} {} {} {})))
+^{:line 8 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-ids ^{:line 8 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
 
-(defn fresh-id! [ctx]
-  (:next-id (swap! ctx update :next-id inc)))
+^{:line 9 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-values ^{:line 9 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
 
-(defn entity! [ctx]
-  (let [id (fresh-id! ctx)]
-  (swap! ctx update :objects assoc id true)
+^{:line 10 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-facts ^{:line 10 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
+
+^{:line 11 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-tx-of ^{:line 11 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
+
+^{:line 12 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-txs ^{:line 12 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
+
+^{:line 13 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-id-buckets ^{:line 13 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
+
+^{:line 14 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (def empty-pair-buckets ^{:line 14 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} [])
+
+^{:line 16 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn new-store []
+  ^{:line 17 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (atom ^{:line 17 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets)))
+
+^{:line 20 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- ^Boolean includes-id? [ids id]
+  ^{:line 21 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 22 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 22 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 22 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count ids)) false ^{:line 23 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 23 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= id ^{:line 23 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth ids i)) true ^{:line 23 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 23 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i))))))
+
+^{:line 25 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- add-id [ids id]
+  ^{:line 26 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 26 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (includes-id? ids id) ids ^{:line 26 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj ids id)))
+
+^{:line 28 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fresh-id! [ctx]
+  ^{:line 29 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:next-id ^{:line 29 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :next-id inc)))
+
+^{:line 31 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn entity! [ctx]
+  ^{:line 32 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [id ^{:line 32 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fresh-id! ctx)]
+  ^{:line 33 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :objects ^{:line 33 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [ids] ^{:line 33 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (add-id ids id)))
   id))
 
-(defn value! [ctx v]
-  (let [vi (let [s (deref ctx)]
-  (:val-intern s))]
-  (if (contains? vi v) (get vi v) (let [id (fresh-id! ctx)]
-  (swap! ctx update :objects assoc id true)
-  (swap! ctx update :values assoc id v)
-  (swap! ctx update :val-intern assoc v id)
+^{:line 36 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- ^Boolean value=? [a b]
+  ^{:line 37 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 37 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (string? a) ^{:line 37 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 37 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (string? b) ^{:line 37 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= a b)) ^{:line 38 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 38 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (integer? a) ^{:line 38 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 38 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (integer? b) ^{:line 38 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= a b)) ^{:line 39 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 39 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (boolean? a) ^{:line 39 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 39 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (boolean? b) ^{:line 39 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= a b)) ^{:line 40 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 40 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (keyword? a) ^{:line 40 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 40 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (keyword? b) ^{:line 40 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= a b)) ^{:line 41 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 41 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (vector? b) ^{:line 41 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= a b)))))))
+
+^{:line 43 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- find-value [values v]
+  ^{:line 44 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 45 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 45 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 45 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count values)) nil ^{:line 46 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 46 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth values i)]
+  ^{:line 47 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 47 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (value=? ^{:line 47 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedvalue-value entry) v) entry ^{:line 47 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 47 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 49 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- find-value-by-id [values id]
+  ^{:line 50 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 51 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 51 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 51 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count values)) nil ^{:line 52 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 52 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth values i)]
+  ^{:line 53 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 53 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= id ^{:line 53 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedvalue-id entry)) entry ^{:line 53 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 53 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 55 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- find-fact [facts cid]
+  ^{:line 56 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 57 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 57 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 57 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count facts)) nil ^{:line 58 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 58 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth facts i)]
+  ^{:line 59 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 59 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= cid ^{:line 59 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-id entry)) entry ^{:line 59 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 59 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 61 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- find-tx-of [entries cid]
+  ^{:line 62 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 63 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 63 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 63 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count entries)) nil ^{:line 64 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 64 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth entries i)]
+  ^{:line 65 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 65 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= cid ^{:line 65 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtxof-cid entry)) entry ^{:line 65 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 65 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 67 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- find-tx [entries id]
+  ^{:line 68 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 69 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 69 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 69 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count entries)) nil ^{:line 70 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 70 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth entries i)]
+  ^{:line 71 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 71 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= id ^{:line 71 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-id entry)) entry ^{:line 71 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 71 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 73 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn value! [ctx v]
+  ^{:line 74 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 74 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)
+   known ^{:line 74 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-value ^{:line 74 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values s) v)]
+  ^{:line 75 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 75 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? known) ^{:line 76 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedvalue-id known) ^{:line 77 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [id ^{:line 77 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fresh-id! ctx)]
+  ^{:line 78 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :objects ^{:line 78 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [ids] ^{:line 78 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (add-id ids id)))
+  ^{:line 79 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :values ^{:line 79 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [entries] ^{:line 80 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj entries ^{:line 80 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoredValue id v))))
   id))))
 
-(defn ^Boolean value-object? [ctx id]
-  (let [s (deref ctx)]
-  (contains? (:values s) id)))
+^{:line 83 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn ^Boolean value-object? [ctx id]
+  ^{:line 84 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? ^{:line 84 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-value-by-id ^{:line 84 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values ^{:line 84 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 84 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) id)))
 
-(defn literal [ctx id]
-  (let [s (deref ctx)]
-  (get (:values s) id)))
+^{:line 86 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn literal [ctx id]
+  ^{:line 87 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 87 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-value-by-id ^{:line 87 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values ^{:line 87 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 87 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) id)]
+  ^{:line 88 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 88 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 88 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedvalue-value entry) nil)))
 
-(defn value-id [ctx v]
-  (let [s (deref ctx)]
-  (get (:val-intern s) v)))
+^{:line 90 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn value-id [ctx v]
+  ^{:line 91 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 91 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-value ^{:line 91 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values ^{:line 91 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 91 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) v)]
+  ^{:line 92 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 92 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 92 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedvalue-id entry) nil)))
 
-(defn begin-tx! [ctx agent]
-  (let [tx (fresh-id! ctx)
-   seq (:next-seq (swap! ctx update :next-seq inc))]
-  (swap! ctx update :txs assoc tx {:seq seq :agent agent})
+^{:line 94 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn begin-tx! [ctx agent]
+  ^{:line 95 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [tx ^{:line 95 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fresh-id! ctx)
+   updated ^{:line 95 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :next-seq inc)
+   seq ^{:line 96 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:next-seq updated)]
+  ^{:line 97 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :txs ^{:line 97 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [entries] ^{:line 98 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj entries ^{:line 98 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoredTx tx seq agent nil nil))))
   tx))
 
-(defn tx-seq [ctx tx]
-  (let [s (deref ctx)
-   m (get (:txs s) tx)]
-  (if (some? m) (:seq m) 0)))
+^{:line 101 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn tx-seq [ctx tx]
+  ^{:line 102 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 102 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 102 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 102 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 102 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 103 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 103 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 103 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-seq entry) 0)))
 
-(defn set-supersedes-pred! [ctx pid]
-  (swap! ctx assoc :supersedes-pred pid))
+^{:line 104 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn tx-agent [ctx tx]
+  ^{:line 105 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 105 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 105 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 105 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 105 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 106 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 106 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 106 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-agent entry) nil)))
 
-(defn- index-fact! [ctx cid l p r]
-  (swap! ctx update :idx-by-l update l (fn [o] (conj (or o []) cid)))
-  (swap! ctx update :idx-by-p update p (fn [o] (conj (or o []) cid)))
-  (swap! ctx update :idx-by-r update r (fn [o] (conj (or o []) cid)))
-  (swap! ctx update :idx-by-lp update [l p] (fn [o] (conj (or o []) cid)))
-  (swap! ctx update :idx-by-pr update [p r] (fn [o] (conj (or o []) cid))))
+^{:line 107 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn tx-observed [ctx tx]
+  ^{:line 108 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 108 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 108 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 108 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 108 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 109 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 109 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 109 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-observed entry) nil)))
 
-(defn fact! [ctx l p r tx]
-  (let [cid (fresh-id! ctx)]
-  (swap! ctx update :objects assoc cid true)
-  (swap! ctx update :facts assoc cid {:l l :p p :r r})
-  (swap! ctx update :tx-of assoc cid tx)
-  (index-fact! ctx cid l p r)
-  (if (= p (let [s (deref ctx)]
-  (:supersedes-pred s))) (do
-  (swap! ctx update :superseded assoc r true)))
+^{:line 110 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn tx-ts [ctx tx]
+  ^{:line 111 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 111 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 111 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 111 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 111 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 112 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 112 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 112 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-ts entry) nil)))
+
+^{:line 113 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn current-seq [ctx]
+  ^{:line 113 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:next-seq ^{:line 113 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 113 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 114 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn supersedes-pred [ctx]
+  ^{:line 114 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:supersedes-pred ^{:line 114 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 114 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 116 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- replace-tx [entries id observed ts]
+  ^{:line 117 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (mapv ^{:line 117 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [entry] ^{:line 118 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 118 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= id ^{:line 118 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-id entry)) ^{:line 119 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoredTx id ^{:line 119 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-seq entry) ^{:line 119 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-agent entry) observed ts) entry)) entries))
+
+^{:line 121 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn set-tx-observed! [ctx tx observed]
+  ^{:line 122 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [old ^{:line 122 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 122 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 122 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 122 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 123 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 123 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? old) ^{:line 124 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :txs replace-tx tx observed ^{:line 124 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-ts old)) ^{:line 125 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 125 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s))))
+
+^{:line 126 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn set-tx-ts! [ctx tx ^String ts]
+  ^{:line 127 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [old ^{:line 127 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx ^{:line 127 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 127 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 127 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) tx)]
+  ^{:line 128 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 128 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? old) ^{:line 129 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :txs replace-tx tx ^{:line 129 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtx-observed old) ts) ^{:line 130 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 130 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s))))
+
+^{:line 131 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn set-supersedes-pred! [ctx pid]
+  ^{:line 131 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx assoc :supersedes-pred pid))
+
+^{:line 133 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- bucket-ids [buckets key]
+  ^{:line 134 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 135 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 135 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 135 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count buckets)) empty-ids ^{:line 136 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [bucket ^{:line 136 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth buckets i)]
+  ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= key ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/idbucket-key bucket)) ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/idbucket-ids bucket) ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 137 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 138 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- put-bucket [buckets key cid]
+  ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [found ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count buckets)) false ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= key ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/idbucket-key ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth buckets i))) true ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 139 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))]
+  ^{:line 140 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if found ^{:line 141 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (mapv ^{:line 141 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [bucket] ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= key ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/idbucket-key bucket)) ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->IdBucket key ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj ^{:line 142 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/idbucket-ids bucket) cid)) bucket)) buckets) ^{:line 143 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj buckets ^{:line 143 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->IdBucket key ^{:line 143 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj empty-ids cid))))))
+
+^{:line 144 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- pair-bucket-ids [buckets left right]
+  ^{:line 145 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 146 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 146 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 146 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count buckets)) empty-ids ^{:line 147 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [bucket ^{:line 147 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth buckets i)]
+  ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= left ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-left bucket)) ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= right ^{:line 148 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-right bucket))) ^{:line 149 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-ids bucket) ^{:line 149 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 149 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i)))))))
+
+^{:line 150 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- put-pair-bucket [buckets left right cid]
+  ^{:line 151 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [found ^{:line 151 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (loop [i 0]
+  ^{:line 151 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 151 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (>= i ^{:line 151 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (count buckets)) false ^{:line 152 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [bucket ^{:line 152 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (nth buckets i)]
+  ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= left ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-left bucket)) ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= right ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-right bucket))) true ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (recur ^{:line 153 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (inc i))))))]
+  ^{:line 154 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if found ^{:line 155 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (mapv ^{:line 155 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [bucket] ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (and ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= left ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-left bucket)) ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= right ^{:line 156 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-right bucket))) ^{:line 157 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->PairBucket left right ^{:line 157 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj ^{:line 157 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/pairbucket-ids bucket) cid)) bucket)) buckets) ^{:line 158 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj buckets ^{:line 158 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->PairBucket left right ^{:line 158 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj empty-ids cid))))))
+
+^{:line 160 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- index-fact! [ctx cid l p r]
+  ^{:line 161 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :idx-by-l put-bucket l cid)
+  ^{:line 162 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :idx-by-p put-bucket p cid)
+  ^{:line 163 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :idx-by-r put-bucket r cid)
+  ^{:line 164 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :idx-by-lp put-pair-bucket l p cid)
+  ^{:line 165 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :idx-by-pr put-pair-bucket p r cid))
+
+^{:line 167 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact! [ctx l p r tx]
+  ^{:line 168 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [cid ^{:line 168 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fresh-id! ctx)]
+  ^{:line 169 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :objects ^{:line 169 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [ids] ^{:line 169 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (add-id ids cid)))
+  ^{:line 170 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :facts ^{:line 170 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [facts] ^{:line 170 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj facts ^{:line 170 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoredFact cid l p r))))
+  ^{:line 171 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :tx-of ^{:line 171 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [entries] ^{:line 171 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (conj entries ^{:line 171 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoredTxOf cid tx))))
+  ^{:line 172 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (index-fact! ctx cid l p r)
+  ^{:line 173 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 173 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (= p ^{:line 173 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (supersedes-pred ctx)) ^{:line 173 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (do
+  ^{:line 174 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (swap! ctx update :superseded ^{:line 174 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [ids] ^{:line 174 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (add-id ids r)))))
   cid))
 
-(defn fact-of [ctx cid]
-  (let [s (deref ctx)]
-  (get (:facts s) cid)))
+^{:line 179 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-of [ctx cid]
+  ^{:line 180 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 180 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-fact ^{:line 180 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:facts ^{:line 180 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 180 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) cid)]
+  ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->FactView ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-l entry) ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-p entry) ^{:line 181 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-r entry)) nil)))
 
-(defn fact-tx [ctx cid]
-  (let [s (deref ctx)]
-  (get (:tx-of s) cid)))
+^{:line 182 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-tx [ctx cid]
+  ^{:line 183 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [entry ^{:line 183 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (find-tx-of ^{:line 183 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:tx-of ^{:line 183 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 183 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) cid)]
+  ^{:line 184 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 184 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? entry) ^{:line 184 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedtxof-tx entry) nil)))
 
-(defn ^Boolean live? [ctx cid]
-  (let [s (deref ctx)]
-  (not (contains? (:superseded s) cid))))
+^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-l [ctx cid]
+  ^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [f ^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fact-of ctx cid)]
+  ^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? f) ^{:line 185 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:l f) nil)))
 
-(defn- live-only [ctx cids]
-  (filterv (fn [c] (live? ctx c)) cids))
+^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-p [ctx cid]
+  ^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [f ^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fact-of ctx cid)]
+  ^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? f) ^{:line 186 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:p f) nil)))
 
-(defn by-l [ctx l]
-  (live-only ctx (let [s (deref ctx)]
-  (get (:idx-by-l s) l []))))
+^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-r [ctx cid]
+  ^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [f ^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fact-of ctx cid)]
+  ^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (if ^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (some? f) ^{:line 187 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:r f) nil)))
 
-(defn by-p [ctx p]
-  (live-only ctx (let [s (deref ctx)]
-  (get (:idx-by-p s) p []))))
+^{:line 188 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn ^Boolean live? [ctx cid]
+  ^{:line 189 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (not ^{:line 189 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (includes-id? ^{:line 189 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:superseded ^{:line 189 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 189 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) cid)))
 
-(defn by-r [ctx r]
-  (live-only ctx (let [s (deref ctx)]
-  (get (:idx-by-r s) r []))))
+^{:line 190 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn- live-only [ctx ids]
+  ^{:line 191 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (filterv ^{:line 191 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [id] ^{:line 191 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live? ctx id)) ids))
 
-(defn by-lp [ctx l p]
-  (live-only ctx (let [s (deref ctx)]
-  (get (:idx-by-lp s) [l p] []))))
+^{:line 192 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn raw-by-l [ctx l]
+  ^{:line 192 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (bucket-ids ^{:line 192 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:idx-by-l ^{:line 192 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 192 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) l))
 
-(defn by-pr [ctx p r]
-  (live-only ctx (let [s (deref ctx)]
-  (get (:idx-by-pr s) [p r] []))))
+^{:line 193 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn raw-by-p [ctx p]
+  ^{:line 193 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (bucket-ids ^{:line 193 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:idx-by-p ^{:line 193 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 193 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) p))
 
-(defn current-facts [ctx]
-  (live-only ctx (let [s (deref ctx)]
-  (vec (keys (:facts s))))))
+^{:line 194 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn raw-by-r [ctx r]
+  ^{:line 194 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (bucket-ids ^{:line 194 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:idx-by-r ^{:line 194 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 194 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) r))
 
-(defn dump-store [ctx]
-  (let [s (deref ctx)]
-  {:next-id (:next-id s) :next-seq (:next-seq s) :supersedes-pred (:supersedes-pred s) :objects (vec (keys (:objects s))) :values (vec (:values s)) :facts (vec (:facts s)) :tx-of (vec (:tx-of s)) :txs (vec (:txs s)) :superseded (vec (keys (:superseded s)))}))
+^{:line 195 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn raw-by-lp [ctx l p]
+  ^{:line 195 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (pair-bucket-ids ^{:line 195 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:idx-by-lp ^{:line 195 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 195 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) l p))
 
-(defn load-store! [ctx data]
-  (swap! ctx (fn [old] (t/->Store (:next-id data) (:next-seq data) (:supersedes-pred data) {} {} {} {} {} {} {} {} {} {} {} {})))
-  (doseq [id (:objects data)]
-  (swap! ctx update :objects assoc id true))
-  (doseq [e (:values data)]
-  (let [id (first e)
-   v (nth e 1)]
-  (swap! ctx update :values assoc id v)
-  (swap! ctx update :val-intern assoc v id)))
-  (doseq [e (:facts data)]
-  (let [cid (first e)
-   m (nth e 1)]
-  (swap! ctx update :facts assoc cid m)
-  (index-fact! ctx cid (:l m) (:p m) (:r m))))
-  (doseq [e (:tx-of data)]
-  (swap! ctx update :tx-of assoc (first e) (nth e 1)))
-  (doseq [e (:txs data)]
-  (swap! ctx update :txs assoc (first e) (nth e 1)))
-  (doseq [cid (:superseded data)]
-  (swap! ctx update :superseded assoc cid true))
+^{:line 196 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn raw-by-pr [ctx p r]
+  ^{:line 196 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (pair-bucket-ids ^{:line 196 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:idx-by-pr ^{:line 196 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 196 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)) p r))
+
+^{:line 197 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn by-l [ctx l]
+  ^{:line 197 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 197 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (raw-by-l ctx l)))
+
+^{:line 198 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn by-p [ctx p]
+  ^{:line 198 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 198 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (raw-by-p ctx p)))
+
+^{:line 199 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn by-r [ctx r]
+  ^{:line 199 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 199 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (raw-by-r ctx r)))
+
+^{:line 200 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn by-lp [ctx l p]
+  ^{:line 200 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 200 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (raw-by-lp ctx l p)))
+
+^{:line 201 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn by-pr [ctx p r]
+  ^{:line 201 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 201 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (raw-by-pr ctx p r)))
+
+^{:line 202 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn all-facts [ctx]
+  ^{:line 203 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (mapv ^{:line 203 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (fn [entry] ^{:line 203 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-id entry)) ^{:line 204 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:facts ^{:line 204 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 204 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s))))
+
+^{:line 205 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn current-facts [ctx]
+  ^{:line 205 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (live-only ctx ^{:line 205 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (all-facts ctx)))
+
+^{:line 206 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn object-ids [ctx]
+  ^{:line 206 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:objects ^{:line 206 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 206 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 207 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn value-entries [ctx]
+  ^{:line 207 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values ^{:line 207 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 207 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 208 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn fact-entries [ctx]
+  ^{:line 208 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:facts ^{:line 208 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 208 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 209 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn tx-entries [ctx]
+  ^{:line 209 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs ^{:line 209 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 209 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  s)))
+
+^{:line 211 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn dump-store [ctx]
+  ^{:line 212 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (let [s ^{:line 212 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (deref ctx)]
+  ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->StoreDump 1 ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:next-id s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:next-seq s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:supersedes-pred s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:objects s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:values s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:facts s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:tx-of s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:txs s) ^{:line 213 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (:superseded s))))
+
+^{:line 214 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (defn load-store! [ctx data]
+  ^{:line 215 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (reset! ctx ^{:line 215 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/->Store ^{:line 215 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-next-id data) ^{:line 215 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-next-seq data) ^{:line 215 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-supersedes-pred data) ^{:line 216 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-objects data) ^{:line 216 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-values data) ^{:line 216 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-facts data) ^{:line 217 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-tx-of data) ^{:line 217 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-txs data) ^{:line 217 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-superseded data) empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets))
+  ^{:line 219 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (doseq [entry ^{:line 219 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedump-facts data)]
+  ^{:line 220 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (index-fact! ctx ^{:line 220 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-id entry) ^{:line 220 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-l entry) ^{:line 220 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-p entry) ^{:line 220 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/store.bclj"} (t/storedfact-r entry)))
   ctx)

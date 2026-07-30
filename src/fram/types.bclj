@@ -9,6 +9,7 @@
 
 (defrecord StoredValue [id :- Int value :- StoreValue])
 (defrecord StoredFact [id :- Int l :- Int p :- Int r :- Int])
+(defrecord FactView [l :- Int p :- Int r :- Int])
 (defrecord StoredTxOf [cid :- Int tx :- Int])
 (defrecord StoredTx [id :- Int seq :- Int agent :- StoreValue observed :- Int? ts :- String?])
 (defrecord IdBucket [key :- Int ids :- (Vec Int)])

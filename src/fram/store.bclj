@@ -23,7 +23,7 @@
       (if (= id (nth ids i)) true (recur (inc i))))))
 
 (defn- add-id [ids :- (Vec Int) id :- Int] :- (Vec Int)
-  (if (includes-id? ids id) ids (vec (concat ids [id]))))
+  (if (includes-id? ids id) ids (conj ids id)))
 
 (defn fresh-id! [ctx :- (Atom t/Store)] :- Int
   (:next-id (swap! ctx update :next-id inc)))
@@ -77,7 +77,7 @@
       (let [id (fresh-id! ctx)]
         (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids id)))
         (swap! ctx update :values (fn [entries :- (Vec t/StoredValue)] :- (Vec t/StoredValue)
-                                    (vec (concat entries [(t/->StoredValue id v)]))))
+                                    (conj entries (t/->StoredValue id v))))
         id))))
 
 (defn value-object? [ctx :- (Atom t/Store) id :- Int] :- Bool
@@ -95,7 +95,7 @@
   (let [tx (fresh-id! ctx) updated :- t/Store (swap! ctx update :next-seq inc)
         seq (:next-seq updated)]
     (swap! ctx update :txs (fn [entries :- (Vec t/StoredTx)] :- (Vec t/StoredTx)
-                             (vec (concat entries [(t/->StoredTx tx seq agent nil nil)]))))
+                             (conj entries (t/->StoredTx tx seq agent nil nil))))
     tx))
 
 (defn tx-seq [ctx :- (Atom t/Store) tx :- Int] :- Int
@@ -139,8 +139,8 @@
   (let [found (loop [i 0] (if (>= i (count buckets)) false (if (= key (t/idbucket-key (nth buckets i))) true (recur (inc i)))))]
     (if found
       (mapv (fn [bucket :- t/IdBucket] :- t/IdBucket
-              (if (= key (t/idbucket-key bucket)) (t/->IdBucket key (vec (concat (t/idbucket-ids bucket) [cid]))) bucket)) buckets)
-      (vec (concat buckets [(t/->IdBucket key [cid])])))))
+              (if (= key (t/idbucket-key bucket)) (t/->IdBucket key (conj (t/idbucket-ids bucket) cid)) bucket)) buckets)
+      (conj buckets (t/->IdBucket key (conj empty-ids cid))))))
 (defn- pair-bucket-ids [buckets :- (Vec t/PairBucket) left :- Int right :- Int] :- (Vec Int)
   (loop [i 0]
     (if (>= i (count buckets)) empty-ids
@@ -154,8 +154,8 @@
     (if found
       (mapv (fn [bucket :- t/PairBucket] :- t/PairBucket
               (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket)))
-                (t/->PairBucket left right (vec (concat (t/pairbucket-ids bucket) [cid]))) bucket)) buckets)
-      (vec (concat buckets [(t/->PairBucket left right [cid])])))))
+                (t/->PairBucket left right (conj (t/pairbucket-ids bucket) cid)) bucket)) buckets)
+      (conj buckets (t/->PairBucket left right (conj empty-ids cid))))))
 
 (defn- index-fact! [ctx :- (Atom t/Store) cid :- Int l :- Int p :- Int r :- Int] :- t/Store
   (swap! ctx update :idx-by-l put-bucket l cid)
@@ -167,17 +167,18 @@
 (defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
   (let [cid (fresh-id! ctx)]
     (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids cid)))
-    (swap! ctx update :facts (fn [facts :- (Vec t/StoredFact)] :- (Vec t/StoredFact) (vec (concat facts [(t/->StoredFact cid l p r)]))))
-    (swap! ctx update :tx-of (fn [entries :- (Vec t/StoredTxOf)] :- (Vec t/StoredTxOf) (vec (concat entries [(t/->StoredTxOf cid tx)]))))
+    (swap! ctx update :facts (fn [facts :- (Vec t/StoredFact)] :- (Vec t/StoredFact) (conj facts (t/->StoredFact cid l p r))))
+    (swap! ctx update :tx-of (fn [entries :- (Vec t/StoredTxOf)] :- (Vec t/StoredTxOf) (conj entries (t/->StoredTxOf cid tx))))
     (index-fact! ctx cid l p r)
     (when (= p (supersedes-pred ctx))
       (swap! ctx update :superseded (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids r))))
     cid))
 
-;; Compatibility boundary: callers retain the historical fact map.
-(defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- (U (Map Keyword Int) Nil)
+;; A record keeps keyword lookup and structural map equality for Clojure callers
+;; without asking the native backend to lower an open map literal.
+(defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- t/FactView?
   (let [entry :- t/StoredFact? (find-fact (:facts (let [s :- t/Store (deref ctx)] s)) cid)]
-    (if (some? entry) {:l (t/storedfact-l entry) :p (t/storedfact-p entry) :r (t/storedfact-r entry)} nil)))
+    (if (some? entry) (t/->FactView (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)) nil)))
 (defn fact-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
   (let [entry :- t/StoredTxOf? (find-tx-of (:tx-of (let [s :- t/Store (deref ctx)] s)) cid)]
     (if (some? entry) (t/storedtxof-tx entry) nil)))
@@ -198,7 +199,9 @@
 (defn by-r [ctx :- (Atom t/Store) r :- Int] :- (Vec Int) (live-only ctx (raw-by-r ctx r)))
 (defn by-lp [ctx :- (Atom t/Store) l :- Int p :- Int] :- (Vec Int) (live-only ctx (raw-by-lp ctx l p)))
 (defn by-pr [ctx :- (Atom t/Store) p :- Int r :- Int] :- (Vec Int) (live-only ctx (raw-by-pr ctx p r)))
-(defn all-facts [ctx :- (Atom t/Store)] :- (Vec Int) (mapv t/storedfact-id (:facts (let [s :- t/Store (deref ctx)] s))))
+(defn all-facts [ctx :- (Atom t/Store)] :- (Vec Int)
+  (mapv (fn [entry :- t/StoredFact] :- Int (t/storedfact-id entry))
+        (:facts (let [s :- t/Store (deref ctx)] s))))
 (defn current-facts [ctx :- (Atom t/Store)] :- (Vec Int) (live-only ctx (all-facts ctx)))
 (defn object-ids [ctx :- (Atom t/Store)] :- (Vec Int) (:objects (let [s :- t/Store (deref ctx)] s)))
 (defn value-entries [ctx :- (Atom t/Store)] :- (Vec t/StoredValue) (:values (let [s :- t/Store (deref ctx)] s)))
@@ -213,6 +216,6 @@
                           (t/storedump-objects data) (t/storedump-values data) (t/storedump-facts data)
                           (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data)
                           empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets))
-  (doseq [fact (t/storedump-facts data)]
-    (index-fact! ctx (t/storedfact-id fact) (t/storedfact-l fact) (t/storedfact-p fact) (t/storedfact-r fact)))
+  (doseq [entry (t/storedump-facts data)]
+    (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
   ctx)

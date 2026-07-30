@@ -14,7 +14,9 @@
         restored :- (Atom types/Store) (store/new-store)]
     (store/load-store! restored image)
     (and (= 1 (types/storedump-version image))
-         (= {:l entity :p predicate :r value} (store/fact-of restored cid))
+         (= entity (store/fact-l restored cid))
+         (= predicate (store/fact-p restored cid))
+         (= value (store/fact-r restored cid))
          (= "ready" (store/literal restored value)))))
 
 (defn main [] :- Nil
