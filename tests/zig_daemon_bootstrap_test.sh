@@ -80,6 +80,10 @@ printf '%s\n' \
   '{:tx 3, :op "assert", :l "@a", :p "depends_on", :r "@b"}' \
   '{:tx 3, :op "assert", :l "@b", :p "depends_on", :r "@c"}' \
   '{:tx 3, :op "assert", :l "@c", :p "depends_on", :r "@d"}' \
+  '{:tx 3, :op "assert", :l "@title", :p "predicate_name", :r "title"}' \
+  '{:tx 3, :op "assert", :l "@title", :p "predicate_alias", :r ":title"}' \
+  '{:tx 3, :op "assert", :l "@title", :p "cardinality", :r "single"}' \
+  '{:tx 3, :op "assert", :l "@title", :p "value_kind", :r "literal"}' \
   >"$log_a"
 : >"$log_b"
 canonical_a="$(realpath "$log_a")"
@@ -116,7 +120,11 @@ assert_response "$facts" \
                 (= #{[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]
                      [\"@a\" \"depends_on\" \"@b\"]
                      [\"@b\" \"depends_on\" \"@c\"]
-                     [\"@c\" \"depends_on\" \"@d\"]}
+                     [\"@c\" \"depends_on\" \"@d\"]
+                     [\"@title\" \"predicate_name\" \"title\"]
+                     [\"@title\" \"predicate_alias\" \":title\"]
+                     [\"@title\" \"cardinality\" \"single\"]
+                     [\"@title\" \"value_kind\" \"literal\"]}
                    (set (:facts r)))))"
 scoped_seed="$(fenced_request "$port" "$canonical_a" \
   '{:op :facts-for-subjects :subjects ["@seed"]}')"
@@ -131,6 +139,25 @@ assert_response "$joined" \
   '(fn [r] (and (= [["@seed" "one" "two"]] (:ok r))
                 (= 3 (:version r))
                 (= "scan" (:engine r))))'
+
+triple_joined="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "seed-row" :rules [{:head {:rel "seed-row" :args [{:var "subject"} {:var "title"} {:var "note"}]} :body [{:rel "triple" :args [{:var "subject"} "title" {:var "title"}]} {:rel "triple" :args [{:var "subject"} "note" {:var "note"}]}]}]}}')"
+FRAM_FACT_QUERY="$joined" FRAM_TRIPLE_QUERY="$triple_joined" bb -e '
+  (require (quote [clojure.edn :as edn]))
+  (let [fact-result (edn/read-string (System/getenv "FRAM_FACT_QUERY"))
+        triple-result (edn/read-string (System/getenv "FRAM_TRIPLE_QUERY"))]
+    (when-not (= (:ok fact-result) (:ok triple-result))
+      (binding [*out* *err*]
+        (println "fact/triple query mismatch:" (pr-str fact-result) (pr-str triple-result)))
+      (System/exit 1)))'
+
+predicate_metadata="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "predicate-meta" :rules [{:head {:rel "predicate-meta" :args [{:var "predicate"} {:var "pid"} {:var "alias"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]} :body [{:rel "fact" :args ["@seed" {:var "predicate"} "one"]} {:rel "predicate" :args [{:var "pid"} {:var "predicate"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]} {:rel "predicate" :args [{:var "pid"} {:var "alias"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]}]} {:head {:rel "predicate-meta" :args [{:var "predicate"} {:var "pid"} {:var "alias"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]} :body [{:rel "fact" :args ["@a" {:var "predicate"} "@b"]} {:rel "predicate" :args [{:var "pid"} {:var "predicate"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]} {:rel "predicate" :args [{:var "pid"} {:var "alias"} {:var "canonical"} {:var "cardinality"} {:var "kind"}]}]}]}}')"
+assert_response "$predicate_metadata" \
+  '(fn [r] (= [["depends_on" "@depends_on" "depends_on" "depends_on" "multi" "ref"]
+               ["title" "@title" ":title" "title" "single" "literal"]
+               ["title" "@title" "title" "title" "single" "literal"]]
+              (:ok r)))'
 
 fact_ids="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find "identified" :rules [{:head {:rel "identified" :args [{:var "cid"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact-id" :args [{:var "cid"} "@seed" {:var "predicate"} {:var "value"}]}]}]}}')"
@@ -336,4 +363,4 @@ daemon_pid=
 [[ $restart_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
 
-printf 'zig-daemon: fenced bootstrap, base fact/fact-id queries, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'
+printf 'zig-daemon: fenced bootstrap, fact/triple/fact-id/predicate queries, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'

@@ -1908,8 +1908,13 @@ fn termVariableBound(body: []const QueryLiteral, name: []const u8) bool {
 }
 
 fn baseQueryArity(relation: []const u8) ?usize {
-    if (std.mem.eql(u8, relation, "fact")) return 3;
+    if (std.mem.eql(u8, relation, "fact") or
+        std.mem.eql(u8, relation, "triple"))
+    {
+        return 3;
+    }
     if (std.mem.eql(u8, relation, "fact-id")) return 4;
+    if (std.mem.eql(u8, relation, "predicate")) return 5;
     return null;
 }
 
@@ -2054,6 +2059,28 @@ const QueryFact = struct {
     r: []const u8,
 };
 
+const QueryPredicateRegistry = struct {
+    by_name: std.StringHashMap([]const u8),
+    canonical: std.StringHashMap([]const u8),
+
+    fn init(allocator: Allocator) QueryPredicateRegistry {
+        return .{
+            .by_name = std.StringHashMap([]const u8).init(allocator),
+            .canonical = std.StringHashMap([]const u8).init(allocator),
+        };
+    }
+
+    fn deinit(registry: *QueryPredicateRegistry) void {
+        registry.canonical.deinit();
+        registry.by_name.deinit();
+        registry.* = undefined;
+    }
+};
+
+const QueryPredicateRow = struct {
+    values: [5][]const u8,
+};
+
 const QueryBinding = struct {
     name: []const u8,
     value: []const u8,
@@ -2126,6 +2153,235 @@ fn buildQueryFacts(
     return facts;
 }
 
+fn buildQueryPredicateRegistry(
+    allocator: Allocator,
+    facts: []const QueryFact,
+) !QueryPredicateRegistry {
+    var registry = QueryPredicateRegistry.init(allocator);
+    errdefer registry.deinit();
+    for (facts) |fact| {
+        if (!std.mem.eql(u8, fact.p, "predicate_name") and
+            !std.mem.eql(u8, fact.p, "predicate_alias"))
+        {
+            continue;
+        }
+        if (std.mem.eql(u8, fact.p, "predicate_name")) {
+            try registry.canonical.put(fact.l, fact.r);
+        }
+        if (registry.by_name.get(fact.r)) |prior| {
+            if (!std.mem.eql(u8, prior, fact.l))
+                return error.PredicateSpellingCollision;
+        } else {
+            try registry.by_name.put(fact.r, fact.l);
+        }
+    }
+    return registry;
+}
+
+fn queryPredicateId(
+    allocator: Allocator,
+    registry: *const QueryPredicateRegistry,
+    spelling: []const u8,
+) ![]const u8 {
+    if (std.mem.startsWith(u8, spelling, "@")) return spelling;
+    if (registry.by_name.get(spelling)) |identity| return identity;
+    return std.fmt.allocPrint(allocator, "@{s}", .{spelling});
+}
+
+fn queryPredicateName(
+    allocator: Allocator,
+    registry: *const QueryPredicateRegistry,
+    spelling: []const u8,
+) ![]const u8 {
+    const identity = try queryPredicateId(allocator, registry, spelling);
+    return registry.canonical.get(identity) orelse stripAt(identity);
+}
+
+fn queryPredicateProperty(
+    allocator: Allocator,
+    registry: *const QueryPredicateRegistry,
+    values: *std.StringHashMap([]const u8),
+    identity: []const u8,
+) !?[]const u8 {
+    var iterator = values.iterator();
+    while (iterator.next()) |entry| {
+        const candidate = try queryPredicateId(
+            allocator,
+            registry,
+            entry.key_ptr.*,
+        );
+        if (std.mem.eql(u8, candidate, identity)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
+fn queryPredicateConfiguredSingle(
+    allocator: Allocator,
+    state: *DaemonState,
+    registry: *const QueryPredicateRegistry,
+    identity: []const u8,
+) !bool {
+    var iterator = state.configured_single.iterator();
+    while (iterator.next()) |entry| {
+        const candidate = try queryPredicateId(
+            allocator,
+            registry,
+            entry.key_ptr.*,
+        );
+        if (std.mem.eql(u8, candidate, identity)) return true;
+    }
+    return std.mem.startsWith(u8, identity, "emoji_");
+}
+
+const query_ref_kind_fallback = [_][]const u8{
+    "depends_on",
+    "part_of",
+    "relates_to",
+    "clarifies",
+    "amends",
+};
+
+fn queryPredicateFallbackRef(
+    allocator: Allocator,
+    registry: *const QueryPredicateRegistry,
+    identity: []const u8,
+) !bool {
+    for (query_ref_kind_fallback) |spelling| {
+        const candidate = try queryPredicateId(allocator, registry, spelling);
+        if (std.mem.eql(u8, candidate, identity)) return true;
+    }
+    return false;
+}
+
+fn queryPredicatePropertyName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "predicate_name") or
+        std.mem.eql(u8, name, "predicate_alias") or
+        std.mem.eql(u8, name, "cardinality") or
+        std.mem.eql(u8, name, "value_kind") or
+        std.mem.eql(u8, name, "acyclic");
+}
+
+fn addQueryPredicateSpelling(
+    spellings: *std.StringHashMap([]const u8),
+    spelling: []const u8,
+    identity: []const u8,
+) !void {
+    if (!spellings.contains(spelling)) try spellings.put(spelling, identity);
+}
+
+fn buildQueryPredicates(
+    allocator: Allocator,
+    state: *DaemonState,
+    facts: []const QueryFact,
+) !std.ArrayList(QueryPredicateRow) {
+    var registry = try buildQueryPredicateRegistry(allocator, facts);
+    defer registry.deinit();
+
+    var spellings = std.StringHashMap([]const u8).init(allocator);
+    defer spellings.deinit();
+    var registry_iterator = registry.by_name.iterator();
+    while (registry_iterator.next()) |entry| {
+        try addQueryPredicateSpelling(
+            &spellings,
+            entry.key_ptr.*,
+            entry.value_ptr.*,
+        );
+    }
+    for (facts) |fact| {
+        const predicate_name = try queryPredicateName(
+            allocator,
+            &registry,
+            fact.p,
+        );
+        try addQueryPredicateSpelling(
+            &spellings,
+            predicate_name,
+            try queryPredicateId(allocator, &registry, fact.p),
+        );
+        if (queryPredicatePropertyName(predicate_name)) {
+            const identity = try queryPredicateId(
+                allocator,
+                &registry,
+                fact.l,
+            );
+            try addQueryPredicateSpelling(
+                &spellings,
+                try queryPredicateName(allocator, &registry, identity),
+                identity,
+            );
+        }
+    }
+
+    const cardinality_id = try queryPredicateId(
+        allocator,
+        &registry,
+        "cardinality",
+    );
+    const value_kind_id = try queryPredicateId(
+        allocator,
+        &registry,
+        "value_kind",
+    );
+    var cardinality = std.StringHashMap([]const u8).init(allocator);
+    defer cardinality.deinit();
+    var value_kind = std.StringHashMap([]const u8).init(allocator);
+    defer value_kind.deinit();
+    for (facts) |fact| {
+        const predicate_id = try queryPredicateId(
+            allocator,
+            &registry,
+            fact.p,
+        );
+        if (std.mem.eql(u8, predicate_id, cardinality_id)) {
+            try cardinality.put(fact.l, fact.r);
+        }
+        if (std.mem.eql(u8, predicate_id, value_kind_id)) {
+            try value_kind.put(fact.l, fact.r);
+        }
+    }
+
+    var rows: std.ArrayList(QueryPredicateRow) = .empty;
+    var spelling_iterator = spellings.iterator();
+    while (spelling_iterator.next()) |entry| {
+        const spelling = entry.key_ptr.*;
+        const identity = entry.value_ptr.*;
+        const canonical = try queryPredicateName(
+            allocator,
+            &registry,
+            identity,
+        );
+        const cardinality_value = try queryPredicateProperty(
+            allocator,
+            &registry,
+            &cardinality,
+            identity,
+        ) orelse if (try queryPredicateConfiguredSingle(
+            allocator,
+            state,
+            &registry,
+            identity,
+        )) "single" else "multi";
+        const value_kind_value = try queryPredicateProperty(
+            allocator,
+            &registry,
+            &value_kind,
+            identity,
+        ) orelse if (try queryPredicateFallbackRef(
+            allocator,
+            &registry,
+            identity,
+        )) "ref" else "literal";
+        try rows.append(allocator, .{ .values = .{
+            identity,
+            spelling,
+            canonical,
+            cardinality_value,
+            value_kind_value,
+        } });
+    }
+    return rows;
+}
+
 const QueryDerivedRow = struct {
     relation: []const u8,
     values: []const []const u8,
@@ -2149,6 +2405,7 @@ fn appendUnifiedQueryRow(
 fn evaluateQueryBody(
     allocator: Allocator,
     facts: []const QueryFact,
+    predicates: []const QueryPredicateRow,
     derived: []const QueryDerivedRow,
     body: []const QueryLiteral,
 ) !std.ArrayList(QuerySubstitution) {
@@ -2158,7 +2415,9 @@ fn evaluateQueryBody(
     for (body) |literal| {
         var next: std.ArrayList(QuerySubstitution) = .empty;
         for (current.items) |substitution| {
-            if (std.mem.eql(u8, literal.relation, "fact")) {
+            if (std.mem.eql(u8, literal.relation, "fact") or
+                std.mem.eql(u8, literal.relation, "triple"))
+            {
                 for (facts) |fact| {
                     const values = [_][]const u8{ fact.l, fact.p, fact.r };
                     try appendUnifiedQueryRow(
@@ -2183,6 +2442,16 @@ fn evaluateQueryBody(
                         substitution,
                         literal.args.items,
                         &values,
+                    );
+                }
+            } else if (std.mem.eql(u8, literal.relation, "predicate")) {
+                for (predicates) |predicate| {
+                    try appendUnifiedQueryRow(
+                        allocator,
+                        &next,
+                        substitution,
+                        literal.args.items,
+                        &predicate.values,
                     );
                 }
             } else {
@@ -2250,6 +2519,7 @@ fn evaluateQueryRows(
     const arena = arena_state.allocator();
 
     const facts = try buildQueryFacts(arena, state);
+    const predicates = try buildQueryPredicates(arena, state, facts.items);
     var derived: std.ArrayList(QueryDerivedRow) = .empty;
     var seen = std.StringHashMap(void).init(arena);
     while (true) {
@@ -2258,6 +2528,7 @@ fn evaluateQueryRows(
             const substitutions = try evaluateQueryBody(
                 arena,
                 facts.items,
+                predicates.items,
                 derived.items,
                 rule.body.items,
             );
@@ -2356,6 +2627,14 @@ fn queryFacts(
 
     var rows = evaluateQueryRows(allocator, state, query) catch |err| switch (err) {
         error.QueryWorkLimit => return renderQueryWorkLimit(allocator, state),
+        error.PredicateSpellingCollision => return renderQueryIssue(
+            allocator,
+            state,
+            .{
+                .code = .invalid_query,
+                .message = "live predicate registry has a spelling collision",
+            },
+        ),
         else => return err,
     };
     defer {
