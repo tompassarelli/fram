@@ -1872,6 +1872,38 @@
    {}
    p))
 
+;; Hoisted form of ck/cardinality-of + ck/value-kind-of, which rebuild the registry and
+;; rescan the corpus per call; index by predicate IDENTITY, the key kernel lookups compare
+;; on. Same precedence: fact > configured > fallback.
+(defn- predicate-property-index [reg facts property]
+  (let [property-id (ck/predicate-id reg property)]
+    (reduce (fn [m c]
+              (if (= property-id (ck/predicate-id reg (:p c)))
+                (assoc m (ck/predicate-id reg (:l c)) (:r c))
+                m))
+            {}
+            facts)))
+
+(defn- identity-keyed-index [reg m]
+  (reduce-kv (fn [acc k v] (assoc acc (ck/predicate-id reg k) v)) {} m))
+
+(defn- cardinality-r [reg explicit-cardinality p]
+  (or (get explicit-cardinality (ck/predicate-id reg p))
+      (if (ck/single-eff-reg? reg {} p) "single" "multi")))
+
+;; legacy-index is legacy-ref-config keyed by identity; it only ever carries "ref",
+;; which is why a structural code predicate can short-circuit to "ref" here.
+(defn- effective-value-kind-r [reg explicit-kind fallback-kind st legacy-index p]
+  (let [pid (ck/predicate-id reg p)
+        stored (store-value-kind st p)]
+    (or (get explicit-kind pid)
+        (cond
+          (some? stored) stored
+          (code-structural-link-pred? p) "ref"
+          :else (get legacy-index pid))
+        (get fallback-kind pid)
+        "literal")))
+
 (defn- normalize-predicate-value [p r]
   (if (and (= "ref" (effective-value-kind p))
            (string? r)
@@ -7853,15 +7885,20 @@
    of an existing ref-shaped value without rescanning the whole corpus for each
    materialized fact."
   [metadata-facts schema-plan legacy-config]
-  (into {}
-        (map (fn [p]
-               (let [value-kind
-                     (effective-value-kind*
-                      metadata-facts nil legacy-config p)]
-                 [p {:cardinality (ck/cardinality-of metadata-facts {} p)
-                     :value-kind value-kind
-                     :link? (= "ref" value-kind)}])))
-        (distinct (concat (:domain schema-plan) (:card-only schema-plan)))))
+  (let [reg (ck/predicate-registry metadata-facts)
+        explicit-cardinality (predicate-property-index reg metadata-facts "cardinality")
+        explicit-kind (predicate-property-index reg metadata-facts "value_kind")
+        fallback-kind (identity-keyed-index reg ck/ref-kind-fallback)
+        legacy-index (identity-keyed-index reg legacy-config)]
+    (into {}
+          (map (fn [p]
+                 (let [value-kind
+                       (effective-value-kind-r
+                        reg explicit-kind fallback-kind nil legacy-index p)]
+                   [p {:cardinality (cardinality-r reg explicit-cardinality p)
+                       :value-kind value-kind
+                       :link? (= "ref" value-kind)}])))
+          (distinct (concat (:domain schema-plan) (:card-only schema-plan))))))
 
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
@@ -8257,11 +8294,14 @@
             (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
             latest (cc/tail-keyed-latest single-preds valid)
             legacy-config (legacy-ref-config valid)
+            explicit-kind (predicate-property-index reg metadata "value_kind")
+            fallback-kind (identity-keyed-index reg ck/ref-kind-fallback)
+            legacy-index (identity-keyed-index reg legacy-config)
             value-kinds
             (into {}
                   (map (fn [p]
-                         [p (effective-value-kind*
-                             metadata st legacy-config p)]))
+                         [p (effective-value-kind-r
+                             reg explicit-kind fallback-kind st legacy-index p)]))
                   domain)
             link-preds
             (into #{} (filter #(= "ref" (get value-kinds %))) domain)
