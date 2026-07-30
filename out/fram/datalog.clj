@@ -210,7 +210,7 @@
   (reduce (fn [acc t] (index-tuple acc rel t)) idx tuples))
 
 (defn- build-index [db]
-  (reduce (fn [acc rel] (index-rel acc rel (vec (get db rel #{})))) {} (vec (keys db))))
+  (reduce (fn [acc rel] (index-rel acc rel (vec (get db rel #{})))) {} (vec (sort (set (keys db))))))
 
 (defn- index-delta [idx delta rels]
   (reduce (fn [acc rel] (index-rel acc rel (vec (get delta rel #{})))) idx rels))
@@ -272,7 +272,7 @@
   (build-index db0))
 
 (defn- index-augment [base-idx db0]
-  (reduce (fn [acc rel] (if (contains? base-idx rel) acc (index-rel acc rel (vec (get db0 rel #{}))))) base-idx (vec (keys db0))))
+  (reduce (fn [acc rel] (if (contains? base-idx rel) acc (index-rel acc rel (vec (get db0 rel #{}))))) base-idx (vec (sort (set (keys db0))))))
 
 (defn fixpoint-bi [db0 base-idx rules]
   (let [rels (rule-head-rels rules)

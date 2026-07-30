@@ -359,7 +359,7 @@
 (defn- build-index [db :- (Map String (Set (Vec Any)))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
   (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
             (index-rel acc rel (vec (get db rel #{}))))
-          {} (vec (keys db))))
+          {} (vec (sort (set (keys db))))))
 
 ;; add a delta (Map rel (Set tuple)) of NEW tuples into an existing index
 (defn- index-delta [idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) delta :- (Map String (Set (Vec Any))) rels :- (Vec String)] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
@@ -470,7 +470,7 @@
 (defn- index-augment [base-idx :- (Map String (Map Int (Map Any (Vec (Vec Any))))) db0 :- (Map String (Set (Vec Any)))] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
   (reduce (fn [acc :- (Map String (Map Int (Map Any (Vec (Vec Any))))) rel :- String] :- (Map String (Map Int (Map Any (Vec (Vec Any)))))
             (if (contains? base-idx rel) acc (index-rel acc rel (vec (get db0 rel #{})))))
-          base-idx (vec (keys db0))))
+          base-idx (vec (sort (set (keys db0))))))
 
 ;; INDEXED fixpoint with a SHARED base index — same least fixpoint as
 ;; fixpoint-oracle. `base-idx` may cover some of db0's relations (their index is

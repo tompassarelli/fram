@@ -25,7 +25,7 @@
   (boolean? value) true
   (string? value) (unicode-scalar-string? value)
   (vector? value) (every? (fn [item] (json-subset-value? item)) value)
-  (map? value) (every? (fn [key] (and (string? key) (unicode-scalar-string? key) (json-subset-value? (get value key)))) (vec (keys value)))
+  (map? value) (every? (fn [key] (and (string? key) (unicode-scalar-string? key) (json-subset-value? (get value key)))) (vec (sort (set (keys value)))))
   :else false))
 
 (defn decode-json-no-number-no-null! [raw]
@@ -58,7 +58,7 @@
   (boolean? value) (if value "true" "false")
   (string? value) (jcs-escape-string value)
   (vector? value) (str "[" (str/join "," (mapv (fn [item] (jcs-json-no-number-no-null-canonical! item)) value)) "]")
-  (map? value) (let [ordered (vec (sort (vec (keys value))))]
+  (map? value) (let [ordered (vec (sort (set (keys value))))]
   (str "{" (str/join "," (mapv (fn [key] (str (jcs-escape-string (str key)) ":" (jcs-json-no-number-no-null-canonical! (get value key)))) ordered)) "}"))
   :else (authority-fail! "json-domain" "$" "value lies outside the JCS no-number/no-null subset")) (authority-fail! "json-domain" "$" "value lies outside the JCS no-number/no-null subset")))
 
@@ -75,7 +75,7 @@
 
 (defn- closed-object! [value required optional ^String path]
   (if (map? value) (let [m value
-   keys0 (vec (keys m))
+   keys0 (vec (sort (set (keys m))))
    allowed (vec (concat required optional))
    missing (filterv (fn [key] (not (contains? m key))) required)
    unknown (filterv (fn [key] (or (not (string? key)) (not (some (fn [allowed-key] (= allowed-key key)) allowed)))) keys0)]
@@ -108,7 +108,7 @@
 
 (defn- string-object! [value ^String path]
   (if (map? value) (let [m value
-   bad (filterv (fn [key] (not (clean-authority-string? key))) (vec (keys m)))]
+   bad (filterv (fn [key] (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
   (do
   (ensure-authority! (empty? bad) "invalid-object-key" path "object keys must be clean NFC strings")
   m)) (authority-fail! "expected-object" path "expected a JSON object")))
@@ -136,7 +136,7 @@
    required (clean-string-vector! (get m "required") (str path ".required"))]
   (do
   (ensure-authority! (= "object" (clean-text! (get m "type") (str path ".type"))) "invalid-schema-type" (str path ".type") "inputSchema type must be object")
-  (doseq [key (vec (keys properties))]
+  (doseq [key (vec (sort (set (keys properties))))]
   (let [schema (validate-property-schema! (get properties key) (str path ".properties." key))]
   (ensure-authority! (= key (get schema "description")) "property-description-mismatch" (str path ".properties." key ".description") "property description must equal its parameter name")))
   (doseq [key required]

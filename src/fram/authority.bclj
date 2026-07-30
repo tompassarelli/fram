@@ -57,7 +57,7 @@
      (every? (fn [item :- Any] :- Bool (json-subset-value? item)) value)]
     [(map? value)
      (every? (fn [key :- Any] :- Bool (and (string? key) (unicode-scalar-string? key) (json-subset-value? (get value key))))
-       (vec (keys value)))]
+       (vec (sort (set (keys value)))))]
     [:else false]))
 
 (defn decode-json-no-number-no-null! [raw :- Any] :- Any
@@ -100,7 +100,7 @@
              value))
          "]")]
       [(map? value)
-       (let [ordered (vec (sort (vec (keys value))))]
+       (let [ordered (vec (sort (set (keys value))))]
          (str "{"
            (str/join ","
              (mapv (fn [key :- Any] :- String (str (jcs-escape-string (str key)) ":" (jcs-json-no-number-no-null-canonical! (get value key))))
@@ -129,7 +129,7 @@
 
 (defn- closed-object! [value :- Any required :- (Vec String) optional :- (Vec String) path :- String] :- (Map String Any)
   (if (map? value)
-    (let [m :- (Map String Any) value keys0 (vec (keys m)) allowed (vec (concat required optional)) missing (filterv (fn [key :- String] :- Bool (not (contains? m key))) required) unknown (filterv (fn [key :- Any] :- Bool (or (not (string? key)) (not (some (fn [allowed-key :- String] :- Bool (= allowed-key key)) allowed)))) keys0)]
+    (let [m :- (Map String Any) value keys0 (vec (sort (set (keys m)))) allowed (vec (concat required optional)) missing (filterv (fn [key :- String] :- Bool (not (contains? m key))) required) unknown (filterv (fn [key :- Any] :- Bool (or (not (string? key)) (not (some (fn [allowed-key :- String] :- Bool (= allowed-key key)) allowed)))) keys0)]
       (do
         (ensure-authority! (empty? missing)
           "missing-key"
@@ -183,7 +183,7 @@
 
 (defn- string-object! [value :- Any path :- String] :- (Map String Any)
   (if (map? value)
-    (let [m :- (Map String Any) value bad (filterv (fn [key :- Any] :- Bool (not (clean-authority-string? key))) (vec (keys m)))]
+    (let [m :- (Map String Any) value bad (filterv (fn [key :- Any] :- Bool (not (clean-authority-string? key))) (vec (sort (set (keys m)))))]
       (do
         (ensure-authority! (empty? bad)
           "invalid-object-key"
@@ -221,7 +221,7 @@
         "invalid-schema-type"
         (str path ".type")
         "inputSchema type must be object")
-      (doseq [key (vec (keys properties))]
+      (doseq [key (vec (sort (set (keys properties))))]
         (let [schema (validate-property-schema! (get properties key) (str path ".properties." key))]
           (ensure-authority! (= key (get schema "description"))
             "property-description-mismatch"
