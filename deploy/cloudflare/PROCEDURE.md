@@ -206,17 +206,21 @@ then drive `framClient({url:'http://127.0.0.1:8799', token:'t'})` from node.
 Comparing this against an **embedded/bespoke nodes-edges SQL DB**:
 
 - **Codec-only local baseline, not Cloudflare performance.** On 2026-07-31,
-  Node 24 ran the exact `worker-client.js` codec on isolated local cores. Each
-  sample encoded and decoded in-process; it did not include the shim, JVM,
-  network, Worker isolate, or application query:
+  Node 24 ran the exact EDN client codec and built-in JSON codec on isolated
+  local cores. Each sample serialized and parsed a coordinator-response shape
+  in-process; it did not include the shim, JVM, network, Worker isolate, or
+  query execution. The producer is
+  `~/code/fram/main/bench/cloudflare-codec/measure.mjs`; its batch samples and
+  environment are preserved in
+  `~/code/fram/main/bench/cloudflare-codec/results/2026-07-31.json`.
 
   | payload | EDN bytes / median | JSON bytes / median |
   |---|---:|---:|
-  | representative single-triple query | 155 B / 0.014102 ms | 170 B / 0.003340 ms |
-  | 1,000-row facts reply | 54,707 B / 1.524087 ms | 54,710 B / 0.444440 ms |
+  | one-row facts reply | 56 B / 0.004607 ms | 60 B / 0.001179 ms |
+  | 1,000-row facts reply | 21,926 B / 0.899271 ms | 21,930 B / 0.305378 ms |
 
-  JSON was about 4.22× faster for the small codec round-trip and 3.43× faster
-  for the large one; the large payload sizes were effectively identical. This
+  JSON was about 3.91× faster for the small codec round-trip and 2.94× faster
+  for the large one; the payload sizes were effectively identical. This
   motivates the example's JSON response mode. It is not an end-to-end latency
   claim and does not show what a real Cloudflare region or Internet path will
   do.
