@@ -82,7 +82,7 @@
   (if (empty? hits) "" (str (:name (nth hits 0))))))
 
 (defn collision-names [by-name]
-  (vec (sort (filterv (fn [nm] (> (count (distinct (mapv (fn [dd] (nth (:key dd) 0)) (get by-name nm)))) 1)) (vec (keys by-name))))))
+  (vec (filterv (fn [nm] (> (count (distinct (mapv (fn [dd] (nth (:key dd) 0)) (get by-name nm)))) 1)) (vec (sort (set (keys by-name)))))))
 
 (defn scored-rows [by-name collisions radj]
   (filterv (fn [r] (pos? (:gn r))) (vec (mapcat (fn [nm] (let [ds (get by-name nm)

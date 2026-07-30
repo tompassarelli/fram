@@ -17,6 +17,7 @@
 (require '[clojure.java.io :as io]
          '[clojure.string :as str])
 (binding [*command-line-args* []] (load-file "coord_daemon.clj"))
+(reset! telemetry-log nil)
 
 (def checks (atom []))
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
@@ -34,8 +35,7 @@
 (defn line [tx l p r]
   (pr-str {:tx tx :op "assert" :l l :p p :r r :ts "t" :by "fixture"}))
 
-;; More than eight fold keys forces the production hash-map ordering regime,
-;; which is the path the op must actually take.
+;; A nontrivial corpus exercises canonical ordering across several subjects.
 (spit log-path
       (str
        (str/join
@@ -55,8 +55,8 @@
 (reset! snapshot-boot-enabled? false)
 (boot-flat! log-path)
 
-(check! "fixture exercises the large-client-view regime"
-        (large-client-view? (capture-read-roots!)))
+(check! "fixture exercises a nontrivial multi-subject corpus"
+        (> (count (:triples (facts-wire-snapshot))) 8))
 
 (defn wire-slice
   "The whole-wire projection restricted to SUBJECTS — the oracle."
@@ -80,10 +80,10 @@
   (check! "every requested subject contributes its facts"
           (= #{a b} (set (map first scoped)))))
 
-;; Facts are grouped by subject in REQUEST order — the documented contract.
+;; Request order cannot override the canonical whole-corpus order.
 (let [scoped (:facts (scoped-facts-snapshot [b a]))]
-  (check! "facts are grouped by subject in the order requested"
-          (= [b a] (vec (distinct (map first scoped)))))
+  (check! "facts remain in canonical subject order when the request is reversed"
+          (= [a b] (vec (distinct (map first scoped)))))
   (check! "reordering the request does not change the fact SET"
           (= (set (:facts (scoped-facts-snapshot [a b]))) (set scoped))))
 

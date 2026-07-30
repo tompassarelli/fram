@@ -13,7 +13,7 @@
 ;; 7977 coordinator):
 ;;   (a) PARITY (load-bearing): after do-assert @title cardinality single, the daemon's
 ;;       :facts-op view INCLUDES that fact AND equals the cold fold of the appended log —
-;;       set-equal always, and VECTOR/byte-identical at real-log scale (>8 keys, hash-order).
+;;       set-equal and VECTOR/byte-identical under the portable canonical key order.
 ;;   (b) name / store-supersedes (hard-reserved) stay HIDDEN from the domain read view.
 ;;   (c) show-path: q-by-l over the warm view for "@title" returns the cardinality fact.
 ;;   (d) acyclic (a plain domain pred) is UNAFFECTED — present, byte-identical to cold.
@@ -22,6 +22,7 @@
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.kernel :as ck] '[fram.rt] '[clojure.string :as str])
 (load-file "coord_daemon.clj")
 (reset! snapshot-boot-enabled? false)          ; force the deterministic cold whole-migrate boot
+(reset! telemetry-log nil)
 
 (def LOG "/tmp/store-schema-read-test.log")
 (defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "test"}))
@@ -35,10 +36,7 @@
 (defn has-fact? [triples l p r] (boolean (some #(= % [l p r]) triples)))
 (defn has-pred?  [triples p]     (boolean (some #(= p (nth % 1)) triples)))
 
-;; a >8-DISTINCT-KEY log so refold-order keys a PersistentHashMap (hash-order, input-order
-;; independent) — the REAL-LOG regime where the warm<->cold byte-identity actually holds.
-;; (A tiny log keys a PersistentArrayMap whose vals are insertion-ordered, so daemon and
-;; cold differ in ORDER even pre-F4 for pure domain facts — an artifact, not our concern.)
+;; A varied corpus exercises ordering across subjects, predicates, and schema facts.
 (def BASE
   (concat (for [i (range 12)] (ln (inc i) "assert" (str "@N" i) "note" (str "v" i)))
           [(ln 100 "assert" "@P1" "title" "Hi")
@@ -56,7 +54,7 @@
     (chk "(a) daemon read view INCLUDES @title cardinality single" (has-fact? d "@title" "cardinality" "single"))
     (chk "(a) cold fold INCLUDES it too (the parity target)"       (has-fact? cf "@title" "cardinality" "single"))
     (chk "(a) daemon read view SET-equals the cold fold"           (= (set d) (set cf)))
-    (chk "(a) daemon read view VECTOR-equals cold (byte-identical, hash-order regime)" (= d cf)))
+    (chk "(a) daemon read view VECTOR-equals cold (portable canonical order)" (= d cf)))
   ;; value_kind is likewise a read-visible fact, parity preserved
   (let [res (do-assert "@title" "value_kind" "literal" nil)
         d   (daemon-triples) cf (cold-triples)]

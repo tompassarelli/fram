@@ -93,7 +93,7 @@
     (if (empty? hits) "" (str (get (nth hits 0) :name)))))
 
 (defn collision-names [by-name :- (Map String (Vec (Map Keyword Any)))] :- (Vec String)
-  (vec (sort (filterv (fn [nm :- String] :- Boolean (> (count (distinct (mapv (fn [dd :- (Map Keyword Any)] :- Any (nth (get dd :key) 0)) (get by-name nm)))) 1)) (vec (keys by-name))))))
+  (vec (filterv (fn [nm :- String] :- Boolean (> (count (distinct (mapv (fn [dd :- (Map Keyword Any)] :- Any (nth (get dd :key) 0)) (get by-name nm)))) 1)) (vec (sort (set (keys by-name)))))))
 
 ;; per target defn D: graph callers = the direct callers of D (all same-file);
 ;; the incumbent (bare symbol N) returns the callers of ANY defn named N.
