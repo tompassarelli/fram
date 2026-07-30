@@ -7822,12 +7822,12 @@
   [metadata-facts schema-plan]
   (into {}
         (map (fn [p]
-               (let [value-kind (ck/value-kind-of metadata-facts {} p)]
+               (let [value-kind (if (code-structural-link-pred? p)
+                                  "ref"
+                                  (ck/value-kind-of metadata-facts {} p))]
                  [p {:cardinality (ck/cardinality-of metadata-facts {} p)
                      :value-kind value-kind
-                     :link? (boolean
-                             (or (code-structural-link-pred? p)
-                                 (= "ref" value-kind)))}])))
+                     :link? (= "ref" value-kind)}])))
         (distinct (concat (:domain schema-plan) (:card-only schema-plan)))))
 
 (defn migrate-flat->co [flat]

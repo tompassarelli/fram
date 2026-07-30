@@ -51,17 +51,19 @@
 (def oracle
   (into {}
         (map (fn [p]
-               [p {:cardinality (ck/cardinality-of facts {} p)
-                   :value-kind (ck/value-kind-of facts {} p)
-                   :link? (boolean
-                           (or (#'coord-daemon/code-structural-link-pred? p)
-                               (= "ref" (ck/value-kind-of facts {} p))))}]))
+               (let [value-kind
+                     (if (#'coord-daemon/code-structural-link-pred? p)
+                       "ref"
+                       (ck/value-kind-of facts {} p))]
+                 [p {:cardinality (ck/cardinality-of facts {} p)
+                     :value-kind value-kind
+                     :link? (= "ref" value-kind)}])))
         representative-preds))
 
 (def classifications
   (#'coord-daemon/migrate-predicate-classifications metadata-facts schema-plan))
 
-(check! "compiled classifications equal the full-fact kernel oracle"
+(check! "compiled classifications equal the effective migration oracle"
         (= oracle classifications))
 (check! "explicit ref applies through canonical name and alias"
         (every? #(= "ref" (get-in classifications [% :value-kind]))
@@ -71,7 +73,9 @@
           (and (= "literal" (:value-kind classification))
                (false? (:link? classification)))))
 (check! "structural code predicates remain links"
-        (every? #(true? (get-in classifications [% :link?]))
+        (every? #(= {:value-kind "ref" :link? true}
+                    (select-keys (get classifications %)
+                                 [:value-kind :link?]))
                 ["f0" "f1.2~7" "child" "tail" "seg3" "comment4"]))
 
 (let [value-kind-calls (atom 0)

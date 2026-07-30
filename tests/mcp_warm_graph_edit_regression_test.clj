@@ -2,8 +2,8 @@
 ;;
 ;; Proves that JSON form/body strings are parsed as EDN datums before :edit-min,
 ;; and that a dotted module id renders to its registered nested `file` path rather
-;; than to FRAM_SRC/<dotted-module>.bclj. Also proves path confinement rejects
-;; before mutation.
+;; than to FRAM_SRC/<dotted-module>.bclj. Also proves same-name add-def replaces
+;; its live wrapper form and path confinement rejects before mutation.
 ;;
 ;; Run from the Fram root:
 ;;   bb -cp out tests/mcp_warm_graph_edit_regression_test.clj
@@ -45,7 +45,9 @@
            ";; @upstream:graph\n"
            "(ns src.plangrep.model)\n"
            "(define-mode strict)\n"
-           "(defn base [] :- Int 1)\n"))
+           "(defn base [] :- Int 1)\n"
+           "(defn semantic-index-accepted? [schema-version :- String] :- Bool\n"
+           "  (= schema-version \"firn-index/v1\"))\n"))
 
 (def checks (atom []))
 (defn check! [label value]
@@ -94,7 +96,9 @@
   (merge base-tool-env
          {"FRAM_FLIP" "1"
           "FRAM_GRAPH_EDIT" "1"
+          "FRAM_PORT" (str port)
           "FRAM_CODE_PORT" (str port)
+          "FRAM_COORD_READ_TIMEOUT_MS" "180000"
           "FRAM_CODE_LOG" code-log
           "FRAM_LOG" code-log
           "FRAM_THREADS" project
@@ -143,6 +147,17 @@
             (str/includes? rendered "defn increment"))
     (check! "add-def creates no root-level dotted-module projection"
             (not (.exists (io/file root-level-artifact)))))
+
+  (let [reply (mcp-call mcp-env 14 "add-def"
+                        {:module "src.plangrep.model"
+                         :form "(defn semantic-index-accepted? [schema-version :- String] :- Bool (= schema-version \"firn-index/v2\"))"})
+        rendered (slurp source-file)]
+    (check! "warm same-name add-def succeeds"
+            (and reply (not (reply-error? reply))))
+    (check! "same-name add-def replaces exactly one ingested wrapper form"
+            (and (= 1 (count (re-seq #"\(defn semantic-index-accepted\?" rendered)))
+                 (str/includes? rendered "firn-index/v2")
+                 (not (str/includes? rendered "firn-index/v1")))))
 
   (let [reply (mcp-call mcp-env 11 "set-body"
                         {:module "src.plangrep.model" :name "base" :body "(+ 40 2)"})
