@@ -46,6 +46,8 @@ jobs:
       - name: Unit + integration suites (babashka, on the committed out/)
         env:
           BEAGLE: ${{ github.workspace }}/.beagle
+          BEAGLE_HOME: ${{ github.workspace }}/.beagle
+          FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
         run: |
           fail=0
           for t in tests/*_test.clj; do

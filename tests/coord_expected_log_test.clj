@@ -117,8 +117,11 @@
       log-a (io/file dir "a.code.log")
       log-b (io/file dir "b.code.log")
       alias-a (io/file dir "alias-a.log")
+      noop-executable (io/file dir "noop-beagle")
       _ (spit log-a "")
       _ (spit log-b "")
+      _ (spit noop-executable "#!/bin/sh\nexit 0\n")
+      _ (.setExecutable noop-executable true false)
       _ (java.nio.file.Files/createSymbolicLink
          (.toPath alias-a) (.toPath (.getCanonicalFile log-a))
          (make-array java.nio.file.attribute.FileAttribute 0))
@@ -197,7 +200,7 @@
           ;; runner with no Beagle toolchain: this bar asserts the LOG FENCE
           ;; rejection, which the daemon issues before any render work.
           (run-command
-           {"FRAM_BEAGLE" "/bin/true"}
+           {"FRAM_BEAGLE" (.getPath noop-executable)}
            "bb" "-cp" "out" "bin/fram-edit-code"
            "set-body" "missing" "--name" "missing"
            "--body-file" (.getPath body-file)
@@ -364,7 +367,11 @@
           strict-daemon
           (proc/process
            {:dir root :out :string :err :string
-            :extra-env {"FRAM_REQUIRE_LOG_FENCE" "1"}}
+            :extra-env {"FRAM_REQUIRE_LOG_FENCE" "1"
+                        ;; This byte-identity proof owns the only intended
+                        ;; mutations. Keep the independent post-boot checkpoint
+                        ;; writer out of its before/after observation window.
+                        "FRAM_SNAPSHOT_BOOT" "0"}}
            "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
            (str strict-port) (.getPath strict-a))
           watch-process (atom nil)]
@@ -450,13 +457,13 @@
               ;; "missing" has no module (render) / the log fence rejects (edit).
               render-helper
               (run-command
-               {"FRAM_BEAGLE" "/bin/true"}
+               {"FRAM_BEAGLE" (.getPath noop-executable)}
                "bb" "-cp" "out" "bin/fram-render-code"
                "missing" "--port" (str strict-port)
                "--log" (.getPath strict-a))
               edit-helper
               (run-command
-               {"FRAM_BEAGLE" "/bin/true"}
+               {"FRAM_BEAGLE" (.getPath noop-executable)}
                "bb" "-cp" "out" "bin/fram-edit-code"
                "set-body" "missing" "--name" "missing"
                "--body-file" (.getPath body-file)

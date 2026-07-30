@@ -43,6 +43,7 @@
                                           "/fram-mcp-profile-" (System/nanoTime)))))
 (def src-dir (str tmp "/srcroot"))                 ; FRAM_SRC (the source binding)
 (def code-log (str src-dir "/.fram/code.log"))     ; inside the binding, like fram-code-on
+(def permissive-log (str src-dir "/.fram/permissive.log"))
 (def other-log (str src-dir "/.fram/other.log"))   ; exists, but the daemon won't serve it
 (def outside-log (str tmp "/outside.log"))         ; exists, but OUTSIDE the binding
 (def facts-log (str tmp "/facts.log"))             ; the KB corpus (irrelevant but pinned)
@@ -69,6 +70,7 @@
           (spit code-log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n")
           (def beagle-ok? false))))
   (spit code-log "{:tx 1 :op \"assert\" :l \"@a\" :p \"title\" :r \"A\" :frame \"test\"}\n"))
+(io/copy (io/file code-log) (io/file permissive-log))
 
 ;; --- throwaway coordinators ---------------------------------------------------
 (defn port-free? [p]
@@ -93,9 +95,13 @@
                       (throw (ex-info (str "daemon on :" port " never came up") {:log outf})))
         :else (do (Thread/sleep 500) (recur (inc i)))))))
 
+(defn stop-daemon! [daemon]
+  (p/destroy-tree daemon)
+  (try @daemon (catch Throwable _ nil)))
+
 (println "booting throwaway coordinators (strict:" strict-port " permissive:" perm-port ") …")
 (def strict-daemon (boot-daemon! strict-port code-log true))
-(def perm-daemon   (boot-daemon! perm-port   code-log false))
+(def perm-daemon   (boot-daemon! perm-port   permissive-log false))
 
 ;; --- spawning the server hermetically ------------------------------------------
 ;; :env REPLACES the environment (bb inherits ambient otherwise): only PATH/HOME
@@ -204,7 +210,10 @@
 (fence-refuses "coordinator serves a DIFFERENT log"
                (assoc good-env "FRAM_CODE_LOG" other-log) "DIFFERENT")
 (fence-refuses "coordinator is PERMISSIVE (no strict log fence)"
-               (assoc good-env "FRAM_CODE_PORT" (str perm-port)) "strict-fenced")
+               (assoc good-env
+                      "FRAM_CODE_PORT" (str perm-port)
+                      "FRAM_CODE_LOG" permissive-log)
+               "strict-fenced")
 
 ;; ============================================================================
 ;; D. RESTRICTED SURFACE — inventory, pre-dispatch denials, ZERO mutation.
@@ -289,8 +298,8 @@
               (str/includes? (slurp rendered) "\"single\"")))))
 
 ;; ---------------------------------------------------------------------------
-(p/destroy-tree strict-daemon)
-(p/destroy-tree perm-daemon)
+(stop-daemon! strict-daemon)
+(stop-daemon! perm-daemon)
 (let [cs @checks fails (filter (fn [[_ ok]] (not ok)) cs)]
   (if (empty? fails)
     (do (println (str "\nfram-mcp-profile: " (count cs) " / " (count cs)
