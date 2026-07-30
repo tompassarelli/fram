@@ -1445,23 +1445,12 @@ const QueryTerm = union(enum) {
     }
 };
 
-const QueryRelation = enum {
-    fact,
-    fact_id,
-
-    fn arity(relation: QueryRelation) usize {
-        return switch (relation) {
-            .fact => 3,
-            .fact_id => 4,
-        };
-    }
-};
-
 const QueryLiteral = struct {
-    relation: QueryRelation,
+    relation: []u8,
     args: std.ArrayList(QueryTerm),
 
     fn deinit(literal: *QueryLiteral, allocator: Allocator) void {
+        allocator.free(literal.relation);
         for (literal.args.items) |*term| term.deinit(allocator);
         literal.args.deinit(allocator);
         literal.* = undefined;
@@ -1469,14 +1458,13 @@ const QueryLiteral = struct {
 };
 
 const ParsedQuery = struct {
-    head_args: std.ArrayList(QueryTerm),
-    body: std.ArrayList(QueryLiteral),
+    find: []u8,
+    rules: std.ArrayList(ParsedQueryRule),
 
     fn deinit(query: *ParsedQuery, allocator: Allocator) void {
-        for (query.head_args.items) |*term| term.deinit(allocator);
-        query.head_args.deinit(allocator);
-        for (query.body.items) |*literal| literal.deinit(allocator);
-        query.body.deinit(allocator);
+        allocator.free(query.find);
+        for (query.rules.items) |*rule| rule.deinit(allocator);
+        query.rules.deinit(allocator);
         query.* = undefined;
     }
 };
@@ -1603,20 +1591,12 @@ fn parseQueryRelation(
     allocator: Allocator,
     raw: []const u8,
     issue: *QueryIssue,
-) QueryParseError!QueryRelation {
-    const relation = try parseQueryString(
+) QueryParseError![]u8 {
+    return parseQueryString(
         allocator,
         raw,
         issue,
         "query literal :rel must be a string",
-    );
-    defer allocator.free(relation);
-    if (std.mem.eql(u8, relation, "fact")) return .fact;
-    if (std.mem.eql(u8, relation, "fact-id")) return .fact_id;
-    return rejectQuery(
-        issue,
-        .unsupported_query,
-        "native query v1 body literals support only the fact and fact-id base relations",
     );
 }
 
@@ -1693,17 +1673,12 @@ fn parseQueryLiteral(
     }
 
     const relation = try parseQueryRelation(allocator, relation_raw.?, issue);
+    errdefer allocator.free(relation);
     var args = try parseQueryTerms(allocator, args_raw.?, issue);
     errdefer {
         for (args.items) |*term| term.deinit(allocator);
         args.deinit(allocator);
     }
-    if (args.items.len != relation.arity())
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query base relation has the wrong argument count",
-        );
     return .{ .relation = relation, .args = args };
 }
 
@@ -1885,39 +1860,39 @@ fn parseQueryRule(
     return .{ .head = head, .body = body };
 }
 
-fn parseSingleQueryRule(
+fn parseQueryRules(
     allocator: Allocator,
     raw: []const u8,
     issue: *QueryIssue,
-) QueryParseError!ParsedQueryRule {
+) QueryParseError!std.ArrayList(ParsedQueryRule) {
     var parser: Parser = .{ .input = raw };
     parser.skipSeparators();
     if (parser.index >= raw.len or raw[parser.index] != '[')
         return rejectQuery(issue, .invalid_query, "query :rules must be a vector");
     parser.index += 1;
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] == ']')
-        return rejectQuery(
-            issue,
-            .unsupported_query,
-            "native query v1 requires exactly one non-recursive rule",
-        );
-    const rule_raw = parser.scanValue() catch
-        return rejectQuery(issue, .invalid_query, "query :rules contains invalid EDN");
-    parser.skipSeparators();
-    if (parser.index >= raw.len)
-        return rejectQuery(issue, .invalid_query, "query :rules vector is incomplete");
-    if (raw[parser.index] != ']')
-        return rejectQuery(
-            issue,
-            .unsupported_query,
-            "native query v1 supports exactly one non-recursive rule",
-        );
-    parser.index += 1;
-    parser.skipSeparators();
-    if (parser.index != raw.len)
-        return rejectQuery(issue, .invalid_query, "query :rules has trailing input");
-    return parseQueryRule(allocator, rule_raw, issue);
+
+    var rules: std.ArrayList(ParsedQueryRule) = .empty;
+    errdefer {
+        for (rules.items) |*rule| rule.deinit(allocator);
+        rules.deinit(allocator);
+    }
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len)
+            return rejectQuery(issue, .invalid_query, "query :rules vector is incomplete");
+        if (raw[parser.index] == ']') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len)
+                return rejectQuery(issue, .invalid_query, "query :rules has trailing input");
+            if (rules.items.len == 0)
+                return rejectQuery(issue, .invalid_query, "query :rules must not be empty");
+            return rules;
+        }
+        const rule_raw = parser.scanValue() catch
+            return rejectQuery(issue, .invalid_query, "query :rules contains invalid EDN");
+        try rules.append(allocator, try parseQueryRule(allocator, rule_raw, issue));
+    }
 }
 
 fn termVariableBound(body: []const QueryLiteral, name: []const u8) bool {
@@ -1930,6 +1905,12 @@ fn termVariableBound(body: []const QueryLiteral, name: []const u8) bool {
         };
     }
     return false;
+}
+
+fn baseQueryArity(relation: []const u8) ?usize {
+    if (std.mem.eql(u8, relation, "fact")) return 3;
+    if (std.mem.eql(u8, relation, "fact-id")) return 4;
+    return null;
 }
 
 fn parseQuery(
@@ -1979,7 +1960,7 @@ fn parseQuery(
         return rejectQuery(
             issue,
             .unsupported_query,
-            "native query v1 does not support stratified or recursive rules",
+            "native query v1 does not support explicit strata",
         );
     if (duplicate or unknown or find_raw == null or rules_raw == null)
         return rejectQuery(
@@ -2000,39 +1981,70 @@ fn parseQuery(
         issue,
         "query :find must be a relation-name string",
     );
-    defer allocator.free(find);
-    var rule = try parseSingleQueryRule(allocator, rules_raw.?, issue);
-    defer rule.deinit(allocator);
+    errdefer allocator.free(find);
+    var rules = try parseQueryRules(allocator, rules_raw.?, issue);
+    errdefer {
+        for (rules.items) |*rule| rule.deinit(allocator);
+        rules.deinit(allocator);
+    }
 
-    if (!std.mem.eql(u8, find, rule.head.relation))
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query :find must name the single rule head relation",
-        );
-    if (std.mem.eql(u8, find, "fact") or std.mem.eql(u8, find, "fact-id"))
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query rule head cannot shadow a base relation",
-        );
-    for (rule.head.args.items) |term| switch (term) {
-        .variable => |name| {
-            if (!termVariableBound(rule.body.items, name))
+    var arities = std.StringHashMap(usize).init(allocator);
+    defer arities.deinit();
+    for (rules.items) |rule| {
+        if (baseQueryArity(rule.head.relation) != null)
+            return rejectQuery(
+                issue,
+                .invalid_query,
+                "query rule head cannot shadow a base relation",
+            );
+        if (arities.get(rule.head.relation)) |arity| {
+            if (arity != rule.head.args.items.len)
                 return rejectQuery(
                     issue,
                     .invalid_query,
-                    "query head variable is not bound by a body literal",
+                    "query rules define one head relation at inconsistent arities",
                 );
-        },
-        .constant => {},
-    };
+        } else {
+            try arities.put(rule.head.relation, rule.head.args.items.len);
+        }
+    }
+    if (!arities.contains(find))
+        return rejectQuery(
+            issue,
+            .invalid_query,
+            "query :find must name a rule head relation",
+        );
 
-    const head_args = rule.head.args;
-    rule.head.args = .empty;
-    const body = rule.body;
-    rule.body = .empty;
-    return .{ .head_args = head_args, .body = body };
+    for (rules.items) |rule| {
+        for (rule.body.items) |literal| {
+            const arity = baseQueryArity(literal.relation) orelse
+                arities.get(literal.relation) orelse
+                return rejectQuery(
+                    issue,
+                    .invalid_query,
+                    "query body references an unknown relation",
+                );
+            if (literal.args.items.len != arity)
+                return rejectQuery(
+                    issue,
+                    .invalid_query,
+                    "query relation has the wrong argument count",
+                );
+        }
+        for (rule.head.args.items) |term| switch (term) {
+            .variable => |name| {
+                if (!termVariableBound(rule.body.items, name))
+                    return rejectQuery(
+                        issue,
+                        .invalid_query,
+                        "query head variable is not bound by a body literal",
+                    );
+            },
+            .constant => {},
+        };
+    }
+
+    return .{ .find = find, .rules = rules };
 }
 
 const QueryFact = struct {
@@ -2090,26 +2102,6 @@ fn unifyQueryTerm(
     };
 }
 
-fn queryFactValue(
-    relation: QueryRelation,
-    fact: QueryFact,
-    index: usize,
-) []const u8 {
-    return switch (relation) {
-        .fact => switch (index) {
-            0 => fact.l,
-            1 => fact.p,
-            else => fact.r,
-        },
-        .fact_id => switch (index) {
-            0 => fact.cid,
-            1 => fact.l,
-            2 => fact.p,
-            else => fact.r,
-        },
-    };
-}
-
 const max_native_query_rows = 100_000;
 
 fn buildQueryFacts(
@@ -2134,6 +2126,120 @@ fn buildQueryFacts(
     return facts;
 }
 
+const QueryDerivedRow = struct {
+    relation: []const u8,
+    values: []const []const u8,
+};
+
+fn appendUnifiedQueryRow(
+    allocator: Allocator,
+    next: *std.ArrayList(QuerySubstitution),
+    substitution: QuerySubstitution,
+    args: []const QueryTerm,
+    values: []const []const u8,
+) !void {
+    var candidate = try cloneQuerySubstitution(allocator, substitution);
+    for (args, values) |term, value| {
+        if (!(try unifyQueryTerm(allocator, &candidate, term, value))) return;
+    }
+    if (next.items.len >= max_native_query_rows) return error.QueryWorkLimit;
+    try next.append(allocator, candidate);
+}
+
+fn evaluateQueryBody(
+    allocator: Allocator,
+    facts: []const QueryFact,
+    derived: []const QueryDerivedRow,
+    body: []const QueryLiteral,
+) !std.ArrayList(QuerySubstitution) {
+    var current: std.ArrayList(QuerySubstitution) = .empty;
+    try current.append(allocator, .{ .bindings = .empty });
+
+    for (body) |literal| {
+        var next: std.ArrayList(QuerySubstitution) = .empty;
+        for (current.items) |substitution| {
+            if (std.mem.eql(u8, literal.relation, "fact")) {
+                for (facts) |fact| {
+                    const values = [_][]const u8{ fact.l, fact.p, fact.r };
+                    try appendUnifiedQueryRow(
+                        allocator,
+                        &next,
+                        substitution,
+                        literal.args.items,
+                        &values,
+                    );
+                }
+            } else if (std.mem.eql(u8, literal.relation, "fact-id")) {
+                for (facts) |fact| {
+                    const values = [_][]const u8{
+                        fact.cid,
+                        fact.l,
+                        fact.p,
+                        fact.r,
+                    };
+                    try appendUnifiedQueryRow(
+                        allocator,
+                        &next,
+                        substitution,
+                        literal.args.items,
+                        &values,
+                    );
+                }
+            } else {
+                for (derived) |row| {
+                    if (!std.mem.eql(u8, literal.relation, row.relation)) continue;
+                    try appendUnifiedQueryRow(
+                        allocator,
+                        &next,
+                        substitution,
+                        literal.args.items,
+                        row.values,
+                    );
+                }
+            }
+        }
+        current = next;
+    }
+    return current;
+}
+
+fn groundQueryHead(
+    allocator: Allocator,
+    head: []const QueryTerm,
+    substitution: QuerySubstitution,
+) ![]const []const u8 {
+    const values = try allocator.alloc([]const u8, head.len);
+    for (head, 0..) |term, index| {
+        values[index] = switch (term) {
+            .constant => |constant| constant,
+            .variable => |name| lookupQueryBinding(substitution, name) orelse
+                return error.InvalidQueryState,
+        };
+    }
+    return values;
+}
+
+fn encodeQueryTuple(
+    allocator: Allocator,
+    relation: ?[]const u8,
+    values: []const []const u8,
+) ![]const u8 {
+    var encoded: Writer.Allocating = .init(allocator);
+    try writeAll(&encoded.writer, "[");
+    var index: usize = 0;
+    if (relation) |name| {
+        try writeEdnString(&encoded.writer, name);
+        index = 1;
+    }
+    for (values) |value| {
+        if (index != 0) try writeAll(&encoded.writer, " ");
+        try writeEdnString(&encoded.writer, value);
+        index += 1;
+    }
+    try writeAll(&encoded.writer, "]");
+    return encoded.toOwnedSlice();
+}
+
 fn evaluateQueryRows(
     allocator: Allocator,
     state: *DaemonState,
@@ -2144,76 +2250,60 @@ fn evaluateQueryRows(
     const arena = arena_state.allocator();
 
     const facts = try buildQueryFacts(arena, state);
-    var current: std.ArrayList(QuerySubstitution) = .empty;
-    try current.append(arena, .{ .bindings = .empty });
-
-    for (query.body.items) |literal| {
-        var next: std.ArrayList(QuerySubstitution) = .empty;
-        for (current.items) |substitution| {
-            for (facts.items) |fact| {
-                var candidate = try cloneQuerySubstitution(arena, substitution);
-                var matches = true;
-                for (literal.args.items, 0..) |term, index| {
-                    if (!(try unifyQueryTerm(
-                        arena,
-                        &candidate,
-                        term,
-                        queryFactValue(literal.relation, fact, index),
-                    ))) {
-                        matches = false;
-                        break;
-                    }
-                }
-                if (!matches) continue;
-                if (next.items.len >= max_native_query_rows)
+    var derived: std.ArrayList(QueryDerivedRow) = .empty;
+    var seen = std.StringHashMap(void).init(arena);
+    while (true) {
+        var changed = false;
+        for (query.rules.items) |rule| {
+            const substitutions = try evaluateQueryBody(
+                arena,
+                facts.items,
+                derived.items,
+                rule.body.items,
+            );
+            for (substitutions.items) |substitution| {
+                const values = try groundQueryHead(
+                    arena,
+                    rule.head.args.items,
+                    substitution,
+                );
+                const key = try encodeQueryTuple(
+                    arena,
+                    rule.head.relation,
+                    values,
+                );
+                if (seen.contains(key)) continue;
+                if (derived.items.len >= max_native_query_rows)
                     return error.QueryWorkLimit;
-                try next.append(arena, candidate);
+                try seen.put(key, {});
+                try derived.append(arena, .{
+                    .relation = rule.head.relation,
+                    .values = values,
+                });
+                changed = true;
             }
         }
-        current = next;
-    }
-
-    var unique = std.StringHashMap(void).init(allocator);
-    defer unique.deinit();
-    for (current.items) |substitution| {
-        var row: Writer.Allocating = .init(arena);
-        try writeAll(&row.writer, "[");
-        for (query.head_args.items, 0..) |term, index| {
-            if (index != 0) try writeAll(&row.writer, " ");
-            const value = switch (term) {
-                .constant => |constant| constant,
-                .variable => |name| lookupQueryBinding(substitution, name) orelse
-                    return error.InvalidQueryState,
-            };
-            try writeEdnString(&row.writer, value);
-        }
-        try writeAll(&row.writer, "]");
-        const encoded = try row.toOwnedSlice();
-        try unique.put(encoded, {});
+        if (!changed) break;
     }
 
     var rows: std.ArrayList([]const u8) = .empty;
-    errdefer rows.deinit(allocator);
-    try rows.ensureTotalCapacity(allocator, unique.count());
-    var iterator = unique.keyIterator();
-    while (iterator.next()) |row| rows.appendAssumeCapacity(row.*);
+    errdefer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
+    for (derived.items) |row| {
+        if (!std.mem.eql(u8, query.find, row.relation)) continue;
+        try rows.append(
+            allocator,
+            try encodeQueryTuple(allocator, null, row.values),
+        );
+    }
     std.mem.sort([]const u8, rows.items, {}, struct {
         fn lessThan(_: void, left: []const u8, right: []const u8) bool {
             return std.mem.order(u8, left, right) == .lt;
         }
     }.lessThan);
-
-    var owned: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (owned.items) |row| allocator.free(row);
-        owned.deinit(allocator);
-    }
-    try owned.ensureTotalCapacity(allocator, rows.items.len);
-    for (rows.items) |row| {
-        owned.appendAssumeCapacity(try allocator.dupe(u8, row));
-    }
-    rows.deinit(allocator);
-    return owned;
+    return rows;
 }
 
 fn renderQueryIssue(

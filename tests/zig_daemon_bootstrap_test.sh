@@ -77,6 +77,9 @@ log_b="$test_dir/b.log"
 printf '%s\n' \
   '{:tx 1, :op "assert", :l "@seed", :p "title", :r "one"}' \
   '{:tx 3, :op "assert", :l "@seed", :p "note", :r "two"}' \
+  '{:tx 3, :op "assert", :l "@a", :p "depends_on", :r "@b"}' \
+  '{:tx 3, :op "assert", :l "@b", :p "depends_on", :r "@c"}' \
+  '{:tx 3, :op "assert", :l "@c", :p "depends_on", :r "@d"}' \
   >"$log_a"
 : >"$log_b"
 canonical_a="$(realpath "$log_a")"
@@ -110,7 +113,10 @@ assert_response "$status" \
 facts="$(fenced_request "$port" "$canonical_a" '{:op :facts}')"
 assert_response "$facts" \
   "(fn [r] (and (= 3 (:version r)) (= \"$canonical_a\" (:log r))
-                (= #{[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]}
+                (= #{[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]
+                     [\"@a\" \"depends_on\" \"@b\"]
+                     [\"@b\" \"depends_on\" \"@c\"]
+                     [\"@c\" \"depends_on\" \"@d\"]}
                    (set (:facts r)))))"
 scoped_seed="$(fenced_request "$port" "$canonical_a" \
   '{:op :facts-for-subjects :subjects ["@seed"]}')"
@@ -127,25 +133,40 @@ assert_response "$joined" \
                 (= "scan" (:engine r))))'
 
 fact_ids="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "identified" :rules [{:head {:rel "identified" :args [{:var "cid"} {:var "subject"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact-id" :args [{:var "cid"} {:var "subject"} {:var "predicate"} {:var "value"}]}]}]}}')"
+  '{:op :query :query {:find "identified" :rules [{:head {:rel "identified" :args [{:var "cid"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact-id" :args [{:var "cid"} "@seed" {:var "predicate"} {:var "value"}]}]}]}}')"
 assert_response "$fact_ids" \
-  '(fn [r] (= [["c0" "@seed" "title" "one"]
-               ["c1" "@seed" "note" "two"]]
+  '(fn [r] (= [["c0" "title" "one"]
+               ["c1" "note" "two"]]
               (:ok r)))'
 
 deterministic="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "all-facts" :rules [{:head {:rel "all-facts" :args [{:var "subject"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact" :args [{:var "subject"} {:var "predicate"} {:var "value"}]}]}]}}')"
+  '{:op :query :query {:find "seed-facts" :rules [{:head {:rel "seed-facts" :args [{:var "predicate"} {:var "value"}]} :body [{:rel "fact" :args ["@seed" {:var "predicate"} {:var "value"}]}]}]}}')"
 assert_response "$deterministic" \
-  '(fn [r] (= [["@seed" "note" "two"] ["@seed" "title" "one"]]
+  '(fn [r] (= [["note" "two"] ["title" "one"]]
               (:ok r)))'
+
+closure="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "reaches" :rules [{:head {:rel "reaches" :args [{:var "from"} {:var "to"}]} :body [{:rel "fact" :args [{:var "from"} "depends_on" {:var "to"}]}]} {:head {:rel "reaches" :args [{:var "from"} {:var "to"}]} :body [{:rel "reaches" :args [{:var "from"} {:var "via"}]} {:rel "fact" :args [{:var "via"} "depends_on" {:var "to"}]}]}]}}')"
+assert_response "$closure" \
+  '(fn [r] (= [["@a" "@b"] ["@a" "@c"] ["@a" "@d"]
+               ["@b" "@c"] ["@b" "@d"] ["@c" "@d"]]
+              (:ok r)))'
+
+mutual="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "right" :rules [{:head {:rel "left" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]} {:head {:rel "right" :args [{:var "subject"}]} :body [{:rel "left" :args [{:var "subject"}]}]} {:head {:rel "left" :args [{:var "subject"}]} :body [{:rel "right" :args [{:var "subject"}]}]}]}}')"
+assert_response "$mutual" '(fn [r] (= [["@seed"]] (:ok r)))'
+
+unbound_recursive_head="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "bad" :rules [{:head {:rel "bad" :args [{:var "unbound"}]} :body [{:rel "bad" :args [{:var "bound"}]}]}]}}')"
+assert_response "$unbound_recursive_head" '(fn [r] (= :invalid-query (:code r)))'
 
 negation="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find "missing" :rules [{:head {:rel "missing" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}] :neg true}]}]}}')"
 assert_response "$negation" '(fn [r] (= :unsupported-query (:code r)))'
 
-multiple_rules="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "many" :rules [{:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]} {:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "note" {:var "note"}]}]}]}}')"
-assert_response "$multiple_rules" '(fn [r] (= :unsupported-query (:code r)))'
+strata="$(fenced_request "$port" "$canonical_a" \
+  '{:op :query :query {:find "many" :strata [[{:head {:rel "many" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]]}}')"
+assert_response "$strata" '(fn [r] (= :unsupported-query (:code r)))'
 
 aggregate="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find {:rel "values" :group [0] :agg [{:op :count}]} :rules [{:head {:rel "values" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]}}')"
