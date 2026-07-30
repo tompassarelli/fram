@@ -55,8 +55,32 @@
 ;; --- part E prerequisites (real graph edit) ----------------------------------
 (def beagle-bin (or (System/getenv "FRAM_BEAGLE") (str beagle-home "/bin/beagle")))
 (def check-emit (str beagle-home "/beagle-lib/private/facts-check-emit.rkt"))
+(def world-check (str beagle-home "/beagle-lib/private/facts-check-world.rkt"))
+(def edit-verifier (str root "/bin/fram-edit-verifier"))
+(def verifier-racket
+  (or (System/getenv "FRAM_EDIT_VERIFIER_RACKET")
+      (System/getenv "FRAM_RACKET")))
 (def schema-module (str root "/src/fram/schema.bclj"))
-(def beagle-ok? (every? #(.exists (io/file %)) [beagle-bin check-emit schema-module]))
+(def beagle-ok?
+  (and (not (str/blank? verifier-racket))
+       (every? #(.exists (io/file %))
+               [beagle-bin check-emit world-check edit-verifier
+                verifier-racket schema-module])))
+
+;; Daemon children get a replacement environment too: the profile test must not
+;; inherit a canonical North/Fram log or telemetry selector from its caller.
+;; Seal the same production verifier identity that fram-code-on supplies.
+(def daemon-env
+  (cond-> {"PATH" (System/getenv "PATH")
+           "HOME" home
+           "BEAGLE_HOME" beagle-home
+           "FRAM_EDIT_VERIFIER" edit-verifier
+           "FRAM_EDIT_VERIFIER_ARGS" "[]"
+           "FRAM_EDIT_VERIFIER_WORLD_CHECK" world-check}
+    (not (str/blank? verifier-racket))
+    (assoc "FRAM_EDIT_VERIFIER_RACKET" verifier-racket)
+    (System/getenv "JAVA_HOME")
+    (assoc "JAVA_HOME" (System/getenv "JAVA_HOME"))))
 
 ;; the code log the daemons serve: a REAL ingested module when beagle is present
 ;; (so part E can edit it), else a tiny synthetic log (parts A-D need no module).
@@ -85,7 +109,9 @@
 (defn boot-daemon! [port log fence?]
   (let [outf (str tmp "/daemon-" port ".log")
         proc (p/process {:out (io/file outf) :err (io/file outf)
-                         :extra-env {"FRAM_REQUIRE_LOG_FENCE" (if fence? "1" "0")}}
+                         :env (assoc daemon-env
+                                     "FRAM_REQUIRE_LOG_FENCE"
+                                     (if fence? "1" "0"))}
                         "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
     (loop [i 0]
       (cond
