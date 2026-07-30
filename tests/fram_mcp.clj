@@ -716,6 +716,25 @@
              :candidate candidate
              :retryable true}))))))
 
+(def ^:private candidate-verification-wait-ms 180000)
+(def ^:private candidate-verification-poll-ms 100)
+
+(defn- await-candidate-verification [port candidate]
+  (let [deadline (+ (System/currentTimeMillis) candidate-verification-wait-ms)]
+    (loop []
+      (let [verification (verify-candidate-exactly port candidate)]
+        (if (and (= :verification-in-progress (:code verification))
+                 (< (System/currentTimeMillis) deadline))
+          (do (Thread/sleep candidate-verification-poll-ms)
+              (recur))
+          (if (= :verification-in-progress (:code verification))
+            {:reject [(str "candidate verification did not finish within "
+                           candidate-verification-wait-ms "ms")]
+             :code :verification-timeout
+             :candidate candidate
+             :retryable true}
+            verification))))))
+
 (defn- coordinator-commit-warning [commit]
   (when (or (:repair-needed commit) (seq (:warnings commit)))
     (str " (WARNING: coordinator reports "
@@ -933,7 +952,7 @@
                 (if (:err checked)
                   {:isError true :text (str "REJECTED — " (:err checked))}
                   (let [verification
-                        (verify-candidate-exactly port (:candidate prep))
+                        (await-candidate-verification port (:candidate prep))
                         _ (when-not (:ok verification)
                             (throw
                              (ex-info
