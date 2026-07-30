@@ -40,22 +40,30 @@
 ;; edit verb works from then on. (Observed 2026-07-26 consolidating
 ;; codegraph.src.codegraph into the live :32915 store.)
 ;;
-;; Env (overridable for CI/tests; defaults match the live tree):
-;;   BEAGLE_HOME   (default ~/code/beagle/main)
-;;   FRAM_BEAGLE    (default $BEAGLE_HOME/bin/beagle)
+;; Beagle CLI discovery (first match wins):
+;;   FRAM_BEAGLE   explicit executable path or command name
+;;   BEAGLE_HOME   toolchain root containing bin/beagle
+;;   PATH          executable named beagle
 ;; ============================================================================
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[clojure.edn :as edn]
+         '[babashka.fs :as fs]
          '[babashka.process :as proc])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
-(def ^:private home (System/getProperty "user.home"))
-(def ^:private beagle-home   (or (System/getenv "BEAGLE_HOME") (str home "/code/beagle")))
-(def ^:private beagle-bin (or (System/getenv "FRAM_BEAGLE")
-                              (str beagle-home "/bin/beagle")))
+(defn- nonblank-env [name]
+  (let [value (System/getenv name)]
+    (when-not (str/blank? value) value)))
+
+(def ^:private beagle-home (nonblank-env "BEAGLE_HOME"))
+(def ^:private beagle-command
+  (or (nonblank-env "FRAM_BEAGLE")
+      (when beagle-home (str beagle-home "/bin/beagle"))
+      "beagle"))
+(def ^:private beagle-bin (some-> (fs/which beagle-command) str))
 
 ;; --- args --------------------------------------------------------------------
 (defn- parse-args [args]
@@ -148,8 +156,9 @@
 (let [{:keys [srcs out module append root]} (parse-args *command-line-args*)
       out-path (or out (str (System/getProperty "user.dir") "/.fram/code.log"))]
   (when (empty? srcs) (die "usage: bin/fram-ingest-code <src> [<src>...] [--out <log>] [--module <name>] [--append] [--root <dir>]"))
-  (when-not (.canExecute (io/file beagle-bin))
-    (die "missing executable Beagle CLI at" beagle-bin "(set FRAM_BEAGLE / BEAGLE_HOME)"))
+  (when-not beagle-bin
+    (die "missing executable Beagle CLI" (pr-str beagle-command)
+         "(set FRAM_BEAGLE / BEAGLE_HOME or add beagle to PATH)"))
   (let [files (->> srcs (mapcat beagle-files) distinct sort
                    (filter (fn [p] (or (nil? module) (str/includes? p module)))))]
     (when (empty? files) (die "no Beagle modules matched" (pr-str srcs) (when module (str "(module filter: " module ")"))))
