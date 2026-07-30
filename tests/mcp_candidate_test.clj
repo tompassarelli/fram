@@ -431,6 +431,9 @@
       status (transaction-coord
               {:op :edit-candidate-status :candidate (:candidate prep)})
       diagnostic (:diagnostic status)]
+  (chk "V0: candidate EDN keeps structural edges as node references"
+       (not (re-find #"(?m)\\[\\d+ \\\"(?:child|tail|f\\d+(?:\\.\\d+)*~?\\d*|seg\\d+|comment\\d+)\\\" \\\"@[^\\\"]+#\\d+\\\"\\]"
+                     (:edn prep))))
   (chk "V0: rejected candidate status retains a bounded checker diagnostic"
        (and (= :candidate-check-failed (:code rejected))
             (= (:candidate prep) (:candidate rejected))

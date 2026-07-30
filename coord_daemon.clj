@@ -1833,6 +1833,12 @@
 (defn- effective-value-kind [p]
   (ck/value-kind-of (predicate-metadata-facts) {} p))
 
+(defn- code-structural-link-pred? [p]
+  (or (#{"child" "tail"} p)
+      (boolean (and (string? p)
+                    (or (re-matches #"f\d+(?:\.\d+)*~(?:\d+|PENDING)" p)
+                        (re-matches #"(?:f|seg|comment)\d+" p))))))
+
 (defn- normalize-predicate-value [p r]
   (if (and (= "ref" (effective-value-kind p))
            (string? r)
@@ -3912,7 +3918,11 @@
             {:reject [(str "candidate op " i " is outside the sealed AST vocabulary: " (pr-str op))]
              :at i :op op :code :sealed-vocabulary}
             (let [res (case verb
-                        :assert  (commit! co2 "coord" te p (kind-of p r) r base)
+                        :assert  (commit! co2 "coord" te p
+                                          (if (code-structural-link-pred? p)
+                                            :link
+                                            (kind-of p r))
+                                          r base)
                         :retract (retract! co2 "coord" te p r base))]
               (cond
                 (:reject res) {:reject (:reject res) :at i :op op :code :op-rejected}
@@ -7743,7 +7753,8 @@
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
       (doseq [cl facts :when (not (schema-preds (:p cl)))]
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
-          (if (= "ref" (ck/value-kind-of facts {} p))
+          (if (or (code-structural-link-pred? p)
+                  (= "ref" (ck/value-kind-of facts {} p)))
             (s/link! st su p (ent! r) tx)
             (s/assert! st su p r tx)))))
     ;; Seed the seq-space to the flat log's max :tx so (a) :version == the flat
@@ -8065,7 +8076,8 @@
             (into #{} (filter #(ck/single-eff? ecmap %)) (keys by-pred))
             latest (cc/tail-keyed-latest single-preds valid)
             link-preds
-            (into #{} (filter #(= "ref" (ck/value-kind-of metadata {} %))) domain)
+            (into #{} (filter #(or (code-structural-link-pred? %)
+                                    (= "ref" (ck/value-kind-of metadata {} %))) domain))
             predicate-plan
             (cc/tail-predicate-plan domain card-only single-preds
                                     declared-preds current-cardinality link-preds)
@@ -8089,7 +8101,8 @@
                 su (sub! (:l a)) pid (s/resolve-predicate st p)
                 live (c/by-lp st su pid)       ; already live-only
                 retract? (= "retract" (:op a))
-                link? (= "ref" (ck/value-kind-of metadata {} p))
+                link? (or (code-structural-link-pred? p)
+                          (= "ref" (ck/value-kind-of metadata {} p)))
                 value-present?
                 (if (and retract? single?)
                   false
