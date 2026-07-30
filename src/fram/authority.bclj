@@ -389,7 +389,7 @@
         "binding-version"
         "binding.bindingVersion"
         "unsupported bindingVersion")
-      (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "binding.candidateProtocol"))
+      (ensure-authority! (= "graph-edit-candidate-v2" (clean-text! (get m "candidateProtocol") "binding.candidateProtocol"))
         "candidate-protocol"
         "binding.candidateProtocol"
         "unsupported candidate protocol")
@@ -557,7 +557,7 @@
         "descriptor-version"
         "descriptor.descriptorVersion"
         "unsupported descriptorVersion")
-      (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol"))
+      (ensure-authority! (= "graph-edit-candidate-v2" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol"))
         "candidate-protocol"
         "descriptor.candidateProtocol"
         "unsupported candidate protocol")

@@ -252,7 +252,7 @@
   (select-keys manifest ["manifestVersion" "mappingDigest" "snapshotDigest" "entries"]))
 (defn unsigned-descriptor [manifest]
   {"descriptorVersion" "fram.graph-edit-authority/v1"
-   "candidateProtocol" "graph-edit-candidate-v1"
+   "candidateProtocol" "graph-edit-candidate-v2"
    "coordinator"
    {"instanceId" "instance-1"
     "endpoint" {"transport" "mtls-tcp" "host" "127.0.0.1" "port" "41454"

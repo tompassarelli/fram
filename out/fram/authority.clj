@@ -253,7 +253,7 @@
    tools (closed-object! (get m "tools") ["catalogDigest"] [] "binding.tools")]
   (do
   (ensure-authority! (= "fram.graph-edit-authority-binding/v1" (clean-text! (get m "bindingVersion") "binding.bindingVersion")) "binding-version" "binding.bindingVersion" "unsupported bindingVersion")
-  (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "binding.candidateProtocol")) "candidate-protocol" "binding.candidateProtocol" "unsupported candidate protocol")
+  (ensure-authority! (= "graph-edit-candidate-v2" (clean-text! (get m "candidateProtocol") "binding.candidateProtocol")) "candidate-protocol" "binding.candidateProtocol" "unsupported candidate protocol")
   (clean-text! (get coordinator "instanceId") "binding.coordinator.instanceId")
   (clean-text! (get endpoint "transport") "binding.coordinator.endpoint.transport")
   (clean-text! (get endpoint "host") "binding.coordinator.endpoint.host")
@@ -359,7 +359,7 @@
    binding (authority-binding-from-descriptor m)]
   (do
   (ensure-authority! (= "fram.graph-edit-authority/v1" (clean-text! (get m "descriptorVersion") "descriptor.descriptorVersion")) "descriptor-version" "descriptor.descriptorVersion" "unsupported descriptorVersion")
-  (ensure-authority! (= "graph-edit-candidate-v1" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol")) "candidate-protocol" "descriptor.candidateProtocol" "unsupported candidate protocol")
+  (ensure-authority! (= "graph-edit-candidate-v2" (clean-text! (get m "candidateProtocol") "descriptor.candidateProtocol")) "candidate-protocol" "descriptor.candidateProtocol" "unsupported candidate protocol")
   (validate-descriptor-coordinator! (get m "coordinator"))
   (validate-descriptor-runtime! (get m "runtime"))
   (validate-descriptor-corpus! (get m "corpus"))
