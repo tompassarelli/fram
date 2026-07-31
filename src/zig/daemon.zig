@@ -397,6 +397,12 @@ const DaemonState = struct {
             std.mem.startsWith(u8, predicate, "emoji_");
     }
 
+    /// Declared cardinality only — the fallback/emoji conventions of `isSingle`
+    /// are not a schema fact and must never stand in for one.
+    fn schemaSingle(state: *const DaemonState, predicate: []const u8) bool {
+        return state.cardinality.get(predicate) orelse false;
+    }
+
     fn eventKey(state: *DaemonState, event: StoredEvent) ![]const u8 {
         return if (state.isSingle(event.p))
             groupKeyAlloc(state.arena.allocator(), event.l, event.p)
@@ -500,7 +506,7 @@ const fallback_single_predicates = [_][]const u8{
 };
 
 const meta_single_predicates = [_][]const u8{
-    "cardinality", "value_kind", "name", "acyclic", "lease",
+    "cardinality", "value_kind", "name", "acyclic", "predicate_name",
 };
 
 const Lease = struct {
@@ -1220,17 +1226,55 @@ fn appendLeaseEvent(
     defer allocator.free(subject);
     const timestamp = try timestampUtc(allocator, io);
     defer allocator.free(timestamp);
-    const payload = try flat_log.encodeLine(allocator, .{
+
+    var payload: Writer.Allocating = .init(allocator);
+    defer payload.deinit();
+    var stored: std.ArrayList(StoredEvent) = .empty;
+    defer stored.deinit(allocator);
+    try stored.ensureTotalCapacity(allocator, 3);
+
+    // `lease` is schema-declared, not an intrinsic single: a log carrying lease
+    // events without these two facts replays wrong on the JVM/portable path, so
+    // the first acquisition emits them in the same transaction (coord_daemon.clj:882).
+    if (operation == .assert_fact and !state.schemaSingle("lease")) {
+        for ([_][2][]const u8{
+            .{ "cardinality", "single" },
+            .{ "value_kind", "literal" },
+        }) |declaration| {
+            const schema_line = try flat_log.encodeLine(allocator, .{
+                .tx = tx,
+                .op = EventOperation.assert_fact.wireName(),
+                .l = "@lease",
+                .p = declaration[0],
+                .r = declaration[1],
+            }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
+            defer allocator.free(schema_line);
+            try writeAll(&payload.writer, schema_line);
+            stored.appendAssumeCapacity(try state.copyEvent(
+                tx,
+                .assert_fact,
+                "@lease",
+                declaration[0],
+                declaration[1],
+            ));
+        }
+    }
+
+    const lease_line = try flat_log.encodeLine(allocator, .{
         .tx = tx,
         .op = operation.wireName(),
         .l = subject,
         .p = "lease",
         .r = value,
     }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
-    defer allocator.free(payload);
-    const stored = try state.copyEvent(tx, operation, subject, "lease", value);
-    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload);
-    try state.appendCommitted(stored);
+    defer allocator.free(lease_line);
+    try writeAll(&payload.writer, lease_line);
+    stored.appendAssumeCapacity(
+        try state.copyEvent(tx, operation, subject, "lease", value),
+    );
+
+    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload.written());
+    try state.appendCommittedBatch(stored.items);
     return tx;
 }
 
