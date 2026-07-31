@@ -26,7 +26,7 @@ if [[ -z "$daemon_bin" ]]; then
     '}' \
     >"$standalone_dir/fram_kernel_classify.zig"
 
-  zig=(direnv exec /home/tom/code/beagle/main zig)
+  zig=(direnv exec "${BEAGLE_HOME:-$HOME/code/beagle/main}" zig) # world:allow
   daemon_bin="$test_dir/fram-daemon-zig"
   "${zig[@]}" build-exe "$standalone_dir/daemon.zig" \
     -OReleaseSafe \

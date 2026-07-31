@@ -3,8 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 fixture="$repo_root/tests/fixtures/kernel_classify_native_parity"
-beagle_home="${BEAGLE_HOME:-$HOME/code/beagle/main}"
-toolchain_home="${BEAGLE_TOOLCHAIN_HOME:-$HOME/code/beagle/main}"
+beagle_home="${BEAGLE_HOME:-$HOME/code/beagle/main}" # world:allow
+toolchain_home="${BEAGLE_TOOLCHAIN_HOME:-$HOME/code/beagle/main}" # world:allow
 
 die() {
   echo "kernel_classify_native_parity: $*" >&2
