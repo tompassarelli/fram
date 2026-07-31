@@ -6,64 +6,46 @@
   (c/by-lp ctx te pid))
 
 (defn seq-of [ctx cid]
-  (let [m (deref ctx)
-   txid (get (:tx-of m) cid)
-   tx (get (:txs m) txid)
-   sq (if (nil? tx) nil (:seq tx))]
-  (if (int? sq) sq 0)))
+  (let [txid (c/fact-tx ctx cid)]
+  (if (nil? txid) 0 (c/tx-seq ctx txid))))
 
 (defn base-version [ctx te pid]
   (reduce max 0 (map (fn [cid] (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
 (defn current-seq [ctx]
-  (let [m (deref ctx)]
-  (:next-seq m)))
+  (c/current-seq ctx))
 
 (defn agent-of [ctx cid]
-  (let [m (deref ctx)
-   txid (get (:tx-of m) cid)
-   tx (get (:txs m) txid)]
-  (if (nil? tx) nil (:agent tx))))
+  (let [txid (c/fact-tx ctx cid)]
+  (if (nil? txid) nil (c/tx-agent ctx txid))))
 
 (defn observed-of [ctx cid]
-  (let [m (deref ctx)
-   txid (get (:tx-of m) cid)
-   tx (get (:txs m) txid)
-   obs (if (nil? tx) nil (:observed tx))]
-  (if (int? obs) obs nil)))
+  (let [txid (c/fact-tx ctx cid)]
+  (if (nil? txid) nil (c/tx-observed ctx txid))))
 
 (defn ts-of [ctx cid]
-  (let [m (deref ctx)
-   txid (get (:tx-of m) cid)
-   tx (get (:txs m) txid)
-   ts (if (nil? tx) nil (:ts tx))]
-  (if (string? ts) ts nil)))
+  (let [txid (c/fact-tx ctx cid)]
+  (if (nil? txid) nil (c/tx-ts ctx txid))))
 
 (defn causal-key [ctx cid]
   (let [obs (observed-of ctx cid)]
   [(if (nil? obs) (seq-of ctx cid) obs) cid (str (agent-of ctx cid))]))
 
 (defn superseded-as-of [ctx s]
-  (let [m (deref ctx)
-   sup (:supersedes-pred m)]
-  (reduce (fn [acc cid] (let [f (get (:facts m) cid)
-   p (if (nil? f) nil (:p f))
-   r (if (nil? f) nil (:r f))]
-  (if (and (= p sup) (<= (seq-of ctx cid) s) (int? r)) (conj acc r) acc))) #{} (vec (keys (:facts m))))))
+  (let [sup (c/supersedes-pred ctx)]
+  (reduce (fn [acc cid] (let [p (c/fact-p ctx cid)
+   r (c/fact-r ctx cid)]
+  (if (and (= p sup) (<= (seq-of ctx cid) s) (int? r)) (conj acc r) acc))) #{} (c/all-facts ctx))))
 
 (defn live-as-of [ctx s]
-  (let [m (deref ctx)
-   sup (:supersedes-pred m)
+  (let [sup (c/supersedes-pred ctx)
    gone (superseded-as-of ctx s)]
-  (reduce (fn [acc cid] (let [f (get (:facts m) cid)
-   p (if (nil? f) nil (:p f))]
-  (if (and (some? f) (<= (seq-of ctx cid) s) (not= p sup) (not (contains? gone cid))) (conj acc cid) acc))) #{} (vec (keys (:facts m))))))
+  (reduce (fn [acc cid] (let [p (c/fact-p ctx cid)]
+  (if (and (<= (seq-of ctx cid) s) (not= p sup) (not (contains? gone cid))) (conj acc cid) acc))) #{} (c/all-facts ctx))))
 
 (defn live-as-of-lp [ctx s te pid]
-  (let [m (deref ctx)
-   all (live-as-of ctx s)]
-  (filterv (fn [cid] (let [f (get (:facts m) cid)]
-  (and (some? f) (= (:l f) te) (= (:p f) pid)))) all)))
+  (let [all (live-as-of ctx s)]
+  (filterv (fn [cid] (and (= (c/fact-l ctx cid) te) (= (c/fact-p ctx cid) pid))) all)))
 
 (defn live-r-on [ctx cid pid]
   (if (nil? pid) nil (let [fcid (first (c/by-lp ctx cid pid))
@@ -72,25 +54,24 @@
   (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx cid]
-  (let [wb (c/value-id ctx "withdrawn_by")
+  (let [wb (s/resolve-predicate ctx "withdrawn_by")
    by-id (live-r-on ctx cid wb)]
-  (if (nil? by-id) nil (let [at-id (live-r-on ctx cid (c/value-id ctx "withdrawn_at"))
-   reason-id (live-r-on ctx cid (c/value-id ctx "withdrawn_reason"))]
+  (if (nil? by-id) nil (let [at-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_at"))
+   reason-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_reason"))]
   {:by (c/literal ctx by-id) :at (if (nil? at-id) nil (c/literal ctx at-id)) :reason (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
 (defn ^Boolean withdrawn? [ctx cid]
   (boolean (withdrawal-of ctx cid)))
 
 (defn live-members [ctx te pid policy]
-  (let [m (deref ctx)
-   live (live-cids-lp ctx te pid)]
-  (if (= policy :add-wins) (let [all (get (:idx-by-lp m) [te pid] [])
-   resurrected (filterv (fn [cid] (and (contains? (:superseded m) cid) (withdrawn? ctx cid))) all)]
+  (let [live (live-cids-lp ctx te pid)]
+  (if (= policy :add-wins) (let [all (c/raw-by-lp ctx te pid)
+   resurrected (filterv (fn [cid] (and (not (c/live? ctx cid)) (withdrawn? ctx cid))) all)]
   (vec (distinct (concat live resurrected)))) live)))
 
 (defn view-selects [ctx ^String view]
   (let [ve (s/resolve-name ctx view)
-   sel (c/value-id ctx "selects")]
+   sel (s/resolve-predicate ctx "selects")]
   (if (or (nil? ve) (nil? sel)) nil (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
    r (if (nil? f) nil (:r f))]
   (if (int? r) (conj acc r) acc))) #{} (c/by-lp ctx ve sel)))))
