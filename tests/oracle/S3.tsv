@@ -1,0 +1,7 @@
+version
+assert	@p_single_cas	cardinality	single
+assert	@s3	p_single_cas	v1	0
+assert	@s3	p_single_cas	v2	0
+assert	@s3	p_single_cas	v2	2
+assert	@s3	p_single_cas	v3	1
+version

@@ -1,0 +1,8 @@
+version
+assert	@p_single_batch	cardinality	single
+assert	@s6	p_single_batch	v1
+assert-batch	@s6_happy	p_batch_a=v1|p_batch_b=v2
+assert-batch	@s6	p_batch_c=v3|p_single_batch=v2@0
+assert-batch	@s6_happy	p_batch_a=v1|p_batch_b=v2
+assert-batch	@s6_empty
+version

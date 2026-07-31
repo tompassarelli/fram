@@ -1,0 +1,200 @@
+version
+assert	@p_fuzz_single_a	cardinality	single
+assert	@p_fuzz_single_b	cardinality	single
+assert	@fuzz_c	p_fuzz_multi_c	v1	2
+assert-batch	@fuzz_d	p_fuzz_single_b=v3|p_fuzz_multi_c=v3
+assert	@fuzz_b	p_fuzz_single_a	v4
+assert	@fuzz_c	p_fuzz_multi_d	v7
+assert	@fuzz_a	p_fuzz_single_a	v6
+assert	@fuzz_c	p_fuzz_multi_a	v1	7
+assert	@fuzz_b	p_fuzz_multi_d	v5
+assert-batch	@fuzz_d	p_fuzz_multi_b=v6|p_fuzz_single_b=v2@9
+assert	@fuzz_b	p_fuzz_multi_c	v1	10
+assert-at-version	@fuzz_b	p_fuzz_multi_a	v2	0
+assert	@fuzz_c	p_fuzz_single_b	v0
+assert	@fuzz_b	p_fuzz_single_a	v6	13
+assert	@fuzz_c	p_fuzz_multi_c	v2
+assert	@fuzz_c	p_fuzz_single_b	v4
+retract	@fuzz_d	p_fuzz_multi_a	v2
+assert-at-version	@fuzz_a	p_fuzz_multi_b	v0	17
+assert	@fuzz_b	p_fuzz_multi_a	v3	18
+retract	@fuzz_d	p_fuzz_multi_b	v7
+assert-batch	@fuzz_a	p_fuzz_multi_b=v4|p_fuzz_multi_a=v0
+assert	@fuzz_d	p_fuzz_single_b	v6	21
+assert	@fuzz_c	p_fuzz_multi_d	v0	22
+assert	@fuzz_d	p_fuzz_single_b	v3
+assert-batch	@fuzz_b	p_fuzz_multi_d=v0|p_fuzz_single_a=v0
+version
+assert-at-version	@fuzz_c	p_fuzz_single_b	v3	25
+version
+retract	@fuzz_b	p_fuzz_multi_c	v2
+assert-batch	@fuzz_c	p_fuzz_multi_a=v7|p_fuzz_multi_d=v3@27
+version
+assert	@fuzz_a	p_fuzz_multi_d	v0
+assert	@fuzz_a	p_fuzz_single_a	v7
+assert	@fuzz_c	p_fuzz_multi_b	v5	30
+assert-batch	@fuzz_d	p_fuzz_multi_d=v3|p_fuzz_single_b=v6
+retract	@fuzz_d	p_fuzz_multi_c	v4
+assert	@fuzz_c	p_fuzz_multi_b	v6	33
+assert	@fuzz_b	p_fuzz_multi_b	v6	34
+assert-batch	@fuzz_d	p_fuzz_multi_b=v1|p_fuzz_single_b=v4@35
+assert-batch	@fuzz_b	p_fuzz_multi_d=v1|p_fuzz_multi_a=v5@36
+assert	@fuzz_a	p_fuzz_single_a	v3
+assert	@fuzz_b	p_fuzz_multi_d	v7
+assert	@fuzz_d	p_fuzz_multi_c	v3
+assert-batch-at-version	@fuzz_a	40	p_fuzz_multi_d=v0|p_fuzz_multi_d=v0
+retract	@fuzz_c	p_fuzz_multi_b	v4
+assert-batch	@fuzz_a	p_fuzz_multi_c=v0|p_fuzz_multi_b=v0
+retract	@fuzz_a	p_fuzz_single_a	v3	43
+assert-batch	@fuzz_b	p_fuzz_single_a=v6|p_fuzz_multi_c=v5@44
+assert	@fuzz_d	p_fuzz_single_a	v3
+assert	@fuzz_c	p_fuzz_multi_b	v1
+assert	@fuzz_d	p_fuzz_multi_c	v4
+retract	@fuzz_c	p_fuzz_multi_d	v7	48
+assert	@fuzz_c	p_fuzz_single_a	v6	49
+retract	@fuzz_c	p_fuzz_single_a	v3
+version
+assert-at-version	@fuzz_d	p_fuzz_multi_d	v7	0
+assert-batch-at-version	@fuzz_a	52	p_fuzz_multi_c=v5|p_fuzz_single_b=v4
+assert-at-version	@fuzz_c	p_fuzz_multi_d	v7	53
+assert	@fuzz_d	p_fuzz_single_b	v5	54
+assert-batch	@fuzz_d	p_fuzz_single_a=v6|p_fuzz_multi_b=v0@55
+assert-at-version	@fuzz_a	p_fuzz_multi_b	v6	56
+assert-at-version	@fuzz_d	p_fuzz_multi_a	v3	0
+assert-batch-at-version	@fuzz_c	0	p_fuzz_multi_a=v7|p_fuzz_single_a=v2
+assert	@fuzz_b	p_fuzz_single_b	v5
+assert-at-version	@fuzz_d	p_fuzz_single_a	v5	0
+assert	@fuzz_c	p_fuzz_multi_a	v0	61
+version
+assert-at-version	@fuzz_d	p_fuzz_multi_b	v4	62
+assert	@fuzz_a	p_fuzz_single_b	v3
+assert	@fuzz_c	p_fuzz_multi_d	v7	64
+assert	@fuzz_a	p_fuzz_single_b	v1	65
+assert-batch	@fuzz_c	p_fuzz_single_a=v3|p_fuzz_single_b=v3@0
+version
+assert	@fuzz_c	p_fuzz_multi_c	v1	67
+assert	@fuzz_d	p_fuzz_single_a	v6
+assert	@fuzz_a	p_fuzz_single_a	v4
+retract	@fuzz_b	p_fuzz_multi_c	v4	70
+retract	@fuzz_b	p_fuzz_single_a	v2
+assert-batch-at-version	@fuzz_d	0	p_fuzz_multi_d=v5|p_fuzz_multi_b=v7
+assert-batch	@fuzz_c	p_fuzz_multi_d=v1|p_fuzz_multi_c=v2@73
+assert	@fuzz_a	p_fuzz_multi_a	v6
+retract	@fuzz_a	p_fuzz_single_b	v2
+assert	@fuzz_b	p_fuzz_multi_d	v6
+assert-batch-at-version	@fuzz_d	77	p_fuzz_multi_d=v7|p_fuzz_multi_c=v2
+assert-batch	@fuzz_b	p_fuzz_multi_d=v4|p_fuzz_multi_a=v4
+assert-at-version	@fuzz_a	p_fuzz_multi_d	v6	79
+version
+assert	@fuzz_c	p_fuzz_single_a	v1
+assert	@fuzz_b	p_fuzz_multi_b	v2
+assert	@fuzz_d	p_fuzz_single_a	v5
+assert-batch	@fuzz_c	p_fuzz_single_a=v2|p_fuzz_multi_c=v6@83
+assert	@fuzz_d	p_fuzz_multi_a	v7	84
+version
+assert-batch-at-version	@fuzz_d	85	p_fuzz_multi_b=v2|p_fuzz_multi_a=v7
+assert	@fuzz_c	p_fuzz_multi_a	v6	86
+assert-batch-at-version	@fuzz_d	87	p_fuzz_multi_d=v4|p_fuzz_multi_d=v5
+assert	@fuzz_c	p_fuzz_single_b	v5
+version
+assert	@fuzz_c	p_fuzz_multi_b	v6	89
+assert	@fuzz_a	p_fuzz_multi_c	v1
+assert	@fuzz_b	p_fuzz_multi_b	v1
+assert	@fuzz_d	p_fuzz_multi_c	v2	92
+assert-at-version	@fuzz_d	p_fuzz_single_a	v7	0
+assert-batch	@fuzz_d	p_fuzz_multi_b=v6|p_fuzz_multi_a=v0@94
+retract	@fuzz_a	p_fuzz_single_a	v3	95
+assert	@fuzz_d	p_fuzz_multi_d	v4
+version
+assert	@fuzz_b	p_fuzz_multi_d	v7
+assert-batch-at-version	@fuzz_a	0	p_fuzz_multi_c=v6|p_fuzz_single_a=v3
+assert	@fuzz_b	p_fuzz_multi_c	v1
+assert-batch-at-version	@fuzz_c	100	p_fuzz_multi_d=v3|p_fuzz_multi_d=v6
+assert	@fuzz_b	p_fuzz_single_b	v5
+assert-batch-at-version	@fuzz_c	102	p_fuzz_multi_b=v4|p_fuzz_single_b=v2
+retract	@fuzz_c	p_fuzz_multi_a	v2
+assert	@fuzz_d	p_fuzz_multi_b	v7	104
+assert-batch	@fuzz_a	p_fuzz_multi_c=v7|p_fuzz_multi_b=v0@105
+assert	@fuzz_c	p_fuzz_multi_d	v5	106
+assert	@fuzz_d	p_fuzz_multi_d	v1
+assert	@fuzz_a	p_fuzz_multi_b	v2	108
+assert-batch-at-version	@fuzz_c	109	p_fuzz_multi_c=v6|p_fuzz_multi_a=v3
+assert	@fuzz_d	p_fuzz_multi_b	v4	110
+assert-batch	@fuzz_c	p_fuzz_single_a=v7|p_fuzz_multi_a=v3@111
+assert	@fuzz_a	p_fuzz_single_b	v3
+assert	@fuzz_b	p_fuzz_multi_b	v6
+assert	@fuzz_a	p_fuzz_multi_d	v2
+assert-batch	@fuzz_b	p_fuzz_multi_d=v6|p_fuzz_multi_b=v7
+assert	@fuzz_c	p_fuzz_multi_b	v2	116
+assert	@fuzz_d	p_fuzz_multi_a	v5
+assert	@fuzz_d	p_fuzz_multi_a	v1
+assert-batch-at-version	@fuzz_d	0	p_fuzz_multi_d=v6|p_fuzz_single_a=v7
+assert	@fuzz_a	p_fuzz_multi_d	v1	120
+assert-batch	@fuzz_d	p_fuzz_multi_c=v5|p_fuzz_multi_c=v0
+assert	@fuzz_d	p_fuzz_multi_d	v3
+assert	@fuzz_d	p_fuzz_multi_c	v7
+assert-at-version	@fuzz_a	p_fuzz_multi_d	v7	124
+assert-batch-at-version	@fuzz_d	125	p_fuzz_multi_c=v1|p_fuzz_multi_c=v5
+assert-at-version	@fuzz_b	p_fuzz_single_b	v1	126
+assert	@fuzz_c	p_fuzz_single_a	v1	127
+assert	@fuzz_c	p_fuzz_multi_d	v5	128
+assert	@fuzz_a	p_fuzz_multi_d	v0	129
+assert-batch-at-version	@fuzz_d	0	p_fuzz_multi_c=v3|p_fuzz_multi_d=v7
+assert	@fuzz_d	p_fuzz_multi_b	v0	131
+assert-at-version	@fuzz_b	p_fuzz_multi_b	v1	132
+assert	@fuzz_d	p_fuzz_multi_d	v1	133
+assert	@fuzz_a	p_fuzz_multi_d	v4	134
+assert	@fuzz_b	p_fuzz_multi_c	v6
+assert	@fuzz_b	p_fuzz_single_a	v3
+assert	@fuzz_b	p_fuzz_multi_c	v4	137
+assert	@fuzz_d	p_fuzz_single_b	v5	0
+assert	@fuzz_a	p_fuzz_multi_a	v2
+retract	@fuzz_b	p_fuzz_multi_c	v4
+retract	@fuzz_a	p_fuzz_multi_d	v5
+assert	@fuzz_a	p_fuzz_multi_a	v7
+assert-batch	@fuzz_d	p_fuzz_multi_a=v2|p_fuzz_multi_b=v3@143
+retract	@fuzz_b	p_fuzz_multi_c	v7	144
+retract	@fuzz_b	p_fuzz_multi_b	v4	145
+assert	@fuzz_d	p_fuzz_single_a	v7
+assert	@fuzz_d	p_fuzz_multi_b	v3
+retract	@fuzz_a	p_fuzz_multi_b	v2	148
+assert	@fuzz_d	p_fuzz_multi_a	v4	149
+retract	@fuzz_d	p_fuzz_single_a	v1	150
+assert-batch-at-version	@fuzz_a	151	p_fuzz_multi_d=v5|p_fuzz_single_b=v2
+retract	@fuzz_d	p_fuzz_multi_d	v3	152
+assert	@fuzz_a	p_fuzz_multi_c	v0	153
+assert	@fuzz_a	p_fuzz_multi_d	v5
+retract	@fuzz_a	p_fuzz_multi_d	v2
+assert	@fuzz_b	p_fuzz_multi_d	v7
+assert	@fuzz_c	p_fuzz_single_a	v3
+assert	@fuzz_c	p_fuzz_single_a	v3	158
+assert	@fuzz_a	p_fuzz_single_b	v4	159
+assert-at-version	@fuzz_d	p_fuzz_multi_b	v5	160
+assert-batch-at-version	@fuzz_a	161	p_fuzz_multi_a=v3|p_fuzz_single_b=v0
+assert-batch	@fuzz_a	p_fuzz_multi_b=v1|p_fuzz_multi_b=v3@162
+assert-batch-at-version	@fuzz_b	0	p_fuzz_multi_d=v0|p_fuzz_multi_d=v3
+version
+assert-batch-at-version	@fuzz_a	0	p_fuzz_multi_b=v6|p_fuzz_single_b=v7
+assert	@fuzz_c	p_fuzz_single_b	v2
+retract	@fuzz_a	p_fuzz_multi_b	v3	166
+assert-batch-at-version	@fuzz_d	0	p_fuzz_single_b=v7|p_fuzz_multi_b=v2
+assert	@fuzz_a	p_fuzz_single_b	v0
+retract	@fuzz_b	p_fuzz_single_a	v5	0
+retract	@fuzz_b	p_fuzz_multi_b	v7
+assert	@fuzz_b	p_fuzz_multi_a	v6
+assert	@fuzz_c	p_fuzz_multi_d	v2
+assert	@fuzz_a	p_fuzz_single_b	v7
+assert	@fuzz_c	p_fuzz_multi_b	v4
+assert-at-version	@fuzz_a	p_fuzz_multi_c	v1	175
+assert	@fuzz_b	p_fuzz_multi_d	v5
+assert-batch-at-version	@fuzz_b	0	p_fuzz_multi_d=v5|p_fuzz_multi_c=v5
+retract	@fuzz_a	p_fuzz_multi_a	v4	178
+assert-at-version	@fuzz_b	p_fuzz_multi_c	v6	179
+assert	@fuzz_b	p_fuzz_single_a	v6	180
+retract	@fuzz_a	p_fuzz_multi_b	v7
+assert	@fuzz_d	p_fuzz_multi_b	v7
+assert-batch	@fuzz_c	p_fuzz_single_b=v6|p_fuzz_multi_b=v0
+assert	@fuzz_a	p_fuzz_single_b	v6	184
+assert	@fuzz_a	p_fuzz_multi_a	v7
+assert-at-version	@fuzz_d	p_fuzz_single_b	v4	0
+version

@@ -1,0 +1,5 @@
+version
+assert-batch-at-version	@s7	0	p_batch_a=v1|p_batch_b=v2
+assert-batch-at-version	@s7_stale	0	p_batch_c=v3|p_batch_d=v4
+assert-batch-at-version	@s7_local	1	p_batch_e=v5@0|p_batch_f=v6
+version
