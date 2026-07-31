@@ -74,10 +74,15 @@ paths. They are not write/OCC semantics and the Zig core never emits them.
 Recorded 2026-07-31 after the determinism bar caught `@snapshot:0
 image_path <run-dir>` varying across runs.
 
-## A3 falsified (pinned as observed)
+## A3 restored (oracle runs with snapshots disabled)
 
-The plan assumed an empty-log daemon boots at version 0 minting no txs.
-Observed: boot mints 6 bookkeeping txs (S0 pins `0	version	6`). The oracle
-bar is JVM/Zig agreement, so the Zig core must replicate boot bookkeeping
-or the corpus comparison starts after boot settling; pinned outputs carry
-the observed values.
+The plan assumed an empty-log daemon boots at version 0 minting no txs, and
+the observed JVM version 6 read as a falsification. It was not core-store
+bootstrap: it was six optional post-boot `@snapshot:*` appends. Version is
+the maximum PERSISTED transaction on both sides, so the oracle boots the JVM
+with `FRAM_SNAPSHOT_BOOT=0` and an empty log is version 0 for both — the
+same isolation the excluded-facts record above already assumes.
+
+The oracle therefore does not test Zig snapshot feature parity; that belongs
+to a separate host-feature contract. Production snapshot transactions remain
+authoritative persisted history and replay normally.

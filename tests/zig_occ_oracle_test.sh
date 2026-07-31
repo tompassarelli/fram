@@ -107,7 +107,9 @@ run_jvm_once() {
 
   # clojure -M, not bb: coord_daemon's serve loop never binds under bb
   # (repo praxis: tests/coord_admission_deadline_test.clj:172)
+  # snapshots off: @snapshot:* appends are a JVM host acceleration, not OCC
   env -u FRAM_REQUIRE_LOG_FENCE FRAM_TELEMETRY_LOG="$log.telemetry" \
+    FRAM_SNAPSHOT_BOOT=0 \
     clojure -M coord_daemon.clj serve-flat "$port" "$log" \
     >"$daemon_out" 2>&1 &
   daemon_pid=$!
