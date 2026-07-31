@@ -30,22 +30,45 @@
    i 0]
   (if (>= i width) acc (recur (conj acc (t/->IdBucket i empty-ids)) (inc i)))))
 
+(defn- slot-add [slots i pos]
+  (assoc slots i (t/->IdBucket i (conj (t/idbucket-ids (nth slots i)) pos))))
+
 (defn- slot-put [slots v pos]
-  (let [i (slot-of v (count slots))
-   bucket (nth slots i)]
-  (assoc slots i (t/->IdBucket i (conj (t/idbucket-ids bucket) pos)))))
+  (slot-add slots (slot-of v (count slots)) pos))
+
+(defn- key-slot [key width]
+  (mod (hash key) width))
+
+(defn- pair-slot [left right width]
+  (mod (+ (* 31 (hash left)) (hash right)) width))
 
 (defn- build-slots [values width]
   (loop [slots (fresh-slots width)
    i 0]
   (if (>= i (count values)) slots (recur (slot-put slots (t/storedvalue-value (nth values i)) i) (inc i)))))
 
+(defn- build-fact-slots [facts width]
+  (loop [slots (fresh-slots width)
+   i 0]
+  (if (>= i (count facts)) slots (recur (slot-add slots (key-slot (t/storedfact-id (nth facts i)) width) i) (inc i)))))
+
+(defn- build-key-slots [buckets width]
+  (loop [slots (fresh-slots width)
+   i 0]
+  (if (>= i (count buckets)) slots (recur (slot-add slots (key-slot (t/idbucket-key (nth buckets i)) width) i) (inc i)))))
+
+(defn- build-pair-slots [buckets width]
+  (loop [slots (fresh-slots width)
+   i 0]
+  (if (>= i (count buckets)) slots (let [bucket (nth buckets i)]
+  (recur (slot-add slots (pair-slot (t/pairbucket-left bucket) (t/pairbucket-right bucket) width) i) (inc i))))))
+
 (defn- slots-width-for [n]
   (loop [width initial-slots]
   (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
 (defn new-store []
-  (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (fresh-slots initial-slots))))
+  (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots))))
 
 (defn- ^Boolean includes-id? [ids id]
   (loop [i 0]
@@ -78,10 +101,13 @@
   (if (>= i (count values)) nil (let [entry (nth values i)]
   (if (= id (t/storedvalue-id entry)) entry (recur (inc i)))))))
 
-(defn- find-fact [facts cid]
+(defn- find-fact [s cid]
+  (let [facts (:facts s)
+   slots (:fact-slots s)
+   ids (t/idbucket-ids (nth slots (key-slot cid (count slots))))]
   (loop [i 0]
-  (if (>= i (count facts)) nil (let [entry (nth facts i)]
-  (if (= cid (t/storedfact-id entry)) entry (recur (inc i)))))))
+  (if (>= i (count ids)) nil (let [entry (nth facts (nth ids i))]
+  (if (= cid (t/storedfact-id entry)) entry (recur (inc i))))))))
 
 (defn- find-tx-of [entries cid]
   (loop [i 0]
@@ -96,6 +122,10 @@
 (defn- index-value! [ctx v pos]
   (let [s (swap! ctx update :value-slots (fn [slots] (slot-put slots v pos)))]
   (if (> (count (:values s)) (* slot-load (count (:value-slots s)))) (swap! ctx assoc :value-slots (build-slots (:values s) (* 2 (count (:value-slots s))))) s)))
+
+(defn- index-fact-slot! [ctx cid pos]
+  (let [s (swap! ctx update :fact-slots (fn [slots] (slot-add slots (key-slot cid (count slots)) pos)))]
+  (if (> (count (:facts s)) (* slot-load (count (:fact-slots s)))) (swap! ctx assoc :fact-slots (build-fact-slots (:facts s) (* 2 (count (:fact-slots s))))) s)))
 
 (defn value! [ctx v]
   (let [s (deref ctx)
@@ -174,47 +204,107 @@
 (defn set-supersedes-pred! [ctx pid]
   (swap! ctx assoc :supersedes-pred pid))
 
-(defn- bucket-ids [buckets key]
+(defn- bucket-pos [buckets slots key]
+  (let [ids (t/idbucket-ids (nth slots (key-slot key (count slots))))]
   (loop [i 0]
-  (if (>= i (count buckets)) empty-ids (let [bucket (nth buckets i)]
-  (if (= key (t/idbucket-key bucket)) (t/idbucket-ids bucket) (recur (inc i)))))))
+  (if (>= i (count ids)) -1 (let [pos (nth ids i)]
+  (if (= key (t/idbucket-key (nth buckets pos))) pos (recur (inc i))))))))
 
-(defn- put-bucket [buckets key cid]
-  (let [found (loop [i 0]
-  (if (>= i (count buckets)) false (if (= key (t/idbucket-key (nth buckets i))) true (recur (inc i)))))]
-  (if found (mapv (fn [bucket] (if (= key (t/idbucket-key bucket)) (t/->IdBucket key (conj (t/idbucket-ids bucket) cid)) bucket)) buckets) (conj buckets (t/->IdBucket key (conj empty-ids cid))))))
-
-(defn- pair-bucket-ids [buckets left right]
+(defn- pair-bucket-pos [buckets slots left right]
+  (let [ids (t/idbucket-ids (nth slots (pair-slot left right (count slots))))]
   (loop [i 0]
-  (if (>= i (count buckets)) empty-ids (let [bucket (nth buckets i)]
-  (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket))) (t/pairbucket-ids bucket) (recur (inc i)))))))
+  (if (>= i (count ids)) -1 (let [pos (nth ids i)
+   bucket (nth buckets pos)]
+  (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket))) pos (recur (inc i))))))))
 
-(defn- put-pair-bucket [buckets left right cid]
-  (let [found (loop [i 0]
-  (if (>= i (count buckets)) false (let [bucket (nth buckets i)]
-  (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket))) true (recur (inc i))))))]
-  (if found (mapv (fn [bucket] (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket))) (t/->PairBucket left right (conj (t/pairbucket-ids bucket) cid)) bucket)) buckets) (conj buckets (t/->PairBucket left right (conj empty-ids cid))))))
+(defn- bucket-ids [buckets slots key]
+  (let [pos (bucket-pos buckets slots key)]
+  (if (< pos 0) empty-ids (t/idbucket-ids (nth buckets pos)))))
+
+(defn- pair-bucket-ids [buckets slots left right]
+  (let [pos (pair-bucket-pos buckets slots left right)]
+  (if (< pos 0) empty-ids (t/pairbucket-ids (nth buckets pos)))))
+
+(defn- put-bucket [buckets pos key cid]
+  (if (< pos 0) (conj buckets (t/->IdBucket key (conj empty-ids cid))) (assoc buckets pos (t/->IdBucket key (conj (t/idbucket-ids (nth buckets pos)) cid)))))
+
+(defn- put-pair-bucket [buckets pos left right cid]
+  (if (< pos 0) (conj buckets (t/->PairBucket left right (conj empty-ids cid))) (assoc buckets pos (t/->PairBucket left right (conj (t/pairbucket-ids (nth buckets pos)) cid)))))
+
+(defn- grow-key-slots [slots buckets key]
+  (if (> (count buckets) (* slot-load (count slots))) (build-key-slots buckets (* 2 (count slots))) (slot-add slots (key-slot key (count slots)) (dec (count buckets)))))
+
+(defn- grow-pair-slots [slots buckets left right]
+  (if (> (count buckets) (* slot-load (count slots))) (build-pair-slots buckets (* 2 (count slots))) (slot-add slots (pair-slot left right (count slots)) (dec (count buckets)))))
+
+(defn- index-by-l! [ctx key cid]
+  (let [s (deref ctx)
+   buckets (:idx-by-l s)
+   slots (:l-slots s)
+   pos (bucket-pos buckets slots key)
+   put (put-bucket buckets pos key cid)]
+  (swap! ctx assoc :idx-by-l put)
+  (if (< pos 0) (swap! ctx assoc :l-slots (grow-key-slots slots put key)) (deref ctx))))
+
+(defn- index-by-p! [ctx key cid]
+  (let [s (deref ctx)
+   buckets (:idx-by-p s)
+   slots (:p-slots s)
+   pos (bucket-pos buckets slots key)
+   put (put-bucket buckets pos key cid)]
+  (swap! ctx assoc :idx-by-p put)
+  (if (< pos 0) (swap! ctx assoc :p-slots (grow-key-slots slots put key)) (deref ctx))))
+
+(defn- index-by-r! [ctx key cid]
+  (let [s (deref ctx)
+   buckets (:idx-by-r s)
+   slots (:r-slots s)
+   pos (bucket-pos buckets slots key)
+   put (put-bucket buckets pos key cid)]
+  (swap! ctx assoc :idx-by-r put)
+  (if (< pos 0) (swap! ctx assoc :r-slots (grow-key-slots slots put key)) (deref ctx))))
+
+(defn- index-by-lp! [ctx left right cid]
+  (let [s (deref ctx)
+   buckets (:idx-by-lp s)
+   slots (:lp-slots s)
+   pos (pair-bucket-pos buckets slots left right)
+   put (put-pair-bucket buckets pos left right cid)]
+  (swap! ctx assoc :idx-by-lp put)
+  (if (< pos 0) (swap! ctx assoc :lp-slots (grow-pair-slots slots put left right)) (deref ctx))))
+
+(defn- index-by-pr! [ctx left right cid]
+  (let [s (deref ctx)
+   buckets (:idx-by-pr s)
+   slots (:pr-slots s)
+   pos (pair-bucket-pos buckets slots left right)
+   put (put-pair-bucket buckets pos left right cid)]
+  (swap! ctx assoc :idx-by-pr put)
+  (if (< pos 0) (swap! ctx assoc :pr-slots (grow-pair-slots slots put left right)) (deref ctx))))
 
 (defn- index-fact! [ctx cid l p r]
-  (swap! ctx update :idx-by-l put-bucket l cid)
-  (swap! ctx update :idx-by-p put-bucket p cid)
-  (swap! ctx update :idx-by-r put-bucket r cid)
-  (swap! ctx update :idx-by-lp put-pair-bucket l p cid)
-  (swap! ctx update :idx-by-pr put-pair-bucket p r cid))
+  (index-by-l! ctx l cid)
+  (index-by-p! ctx p cid)
+  (index-by-r! ctx r cid)
+  (index-by-lp! ctx l p cid)
+  (index-by-pr! ctx p r cid))
 
 (defn fact! [ctx l p r tx]
-  (let [cid (fresh-id! ctx)]
+  (let [cid (fresh-id! ctx)
+   pos (count (:facts (let [s (deref ctx)]
+  s)))]
   (swap! ctx update :objects (fn [ids] (conj ids cid)))
   (swap! ctx update :facts (fn [facts] (conj facts (t/->StoredFact cid l p r))))
   (swap! ctx update :tx-of (fn [entries] (conj entries (t/->StoredTxOf cid tx))))
+  (index-fact-slot! ctx cid pos)
   (index-fact! ctx cid l p r)
   (if (= p (supersedes-pred ctx)) (do
   (swap! ctx update :superseded (fn [ids] (add-id ids r)))))
   cid))
 
 (defn fact-of [ctx cid]
-  (let [entry (find-fact (:facts (let [s (deref ctx)]
-  s)) cid)]
+  (let [entry (find-fact (let [s (deref ctx)]
+  s) cid)]
   (if (some? entry) (t/->FactView (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)) nil)))
 
 (defn fact-tx [ctx cid]
@@ -242,24 +332,24 @@
   (filterv (fn [id] (live? ctx id)) ids))
 
 (defn raw-by-l [ctx l]
-  (bucket-ids (:idx-by-l (let [s (deref ctx)]
-  s)) l))
+  (let [s (deref ctx)]
+  (bucket-ids (:idx-by-l s) (:l-slots s) l)))
 
 (defn raw-by-p [ctx p]
-  (bucket-ids (:idx-by-p (let [s (deref ctx)]
-  s)) p))
+  (let [s (deref ctx)]
+  (bucket-ids (:idx-by-p s) (:p-slots s) p)))
 
 (defn raw-by-r [ctx r]
-  (bucket-ids (:idx-by-r (let [s (deref ctx)]
-  s)) r))
+  (let [s (deref ctx)]
+  (bucket-ids (:idx-by-r s) (:r-slots s) r)))
 
 (defn raw-by-lp [ctx l p]
-  (pair-bucket-ids (:idx-by-lp (let [s (deref ctx)]
-  s)) l p))
+  (let [s (deref ctx)]
+  (pair-bucket-ids (:idx-by-lp s) (:lp-slots s) l p)))
 
 (defn raw-by-pr [ctx p r]
-  (pair-bucket-ids (:idx-by-pr (let [s (deref ctx)]
-  s)) p r))
+  (let [s (deref ctx)]
+  (pair-bucket-ids (:idx-by-pr s) (:pr-slots s) p r)))
 
 (defn by-l [ctx l]
   (live-only ctx (raw-by-l ctx l)))
@@ -304,8 +394,9 @@
   (t/->StoreDump 1 (:next-id s) (:next-seq s) (:supersedes-pred s) (:objects s) (:values s) (:facts s) (:tx-of s) (:txs s) (:superseded s))))
 
 (defn load-store! [ctx data]
-  (let [values (t/storedump-values data)]
-  (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data) (t/storedump-objects data) values (t/storedump-facts data) (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data) empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (build-slots values (slots-width-for (count values)))))
-  (doseq [entry (t/storedump-facts data)]
+  (let [values (t/storedump-values data)
+   facts (t/storedump-facts data)]
+  (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data) (t/storedump-objects data) values facts (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data) empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (build-slots values (slots-width-for (count values))) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (build-fact-slots facts (slots-width-for (count facts)))))
+  (doseq [entry facts]
   (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
   ctx))

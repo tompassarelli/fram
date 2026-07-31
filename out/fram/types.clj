@@ -78,7 +78,7 @@
 
 (defn storedump-superseded [r] (:superseded r))
 
-(defrecord Store [next-id next-seq supersedes-pred objects values facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr value-slots])
+(defrecord Store [next-id next-seq supersedes-pred objects values facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr value-slots l-slots p-slots r-slots lp-slots pr-slots fact-slots])
 
 (defn store-next-id [r] (:next-id r))
 
@@ -109,3 +109,15 @@
 (defn store-idx-by-pr [r] (:idx-by-pr r))
 
 (defn store-value-slots [r] (:value-slots r))
+
+(defn store-l-slots [r] (:l-slots r))
+
+(defn store-p-slots [r] (:p-slots r))
+
+(defn store-r-slots [r] (:r-slots r))
+
+(defn store-lp-slots [r] (:lp-slots r))
+
+(defn store-pr-slots [r] (:pr-slots r))
+
+(defn store-fact-slots [r] (:fact-slots r))

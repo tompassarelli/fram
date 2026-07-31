@@ -28,4 +28,10 @@
    idx-by-l :- (Vec IdBucket) idx-by-p :- (Vec IdBucket) idx-by-r :- (Vec IdBucket)
    idx-by-lp :- (Vec PairBucket) idx-by-pr :- (Vec PairBucket)
    ;; hash-slot index over :values, keyed by slot, holding POSITIONS in :values
-   value-slots :- (Vec IdBucket)])
+   value-slots :- (Vec IdBucket)
+   ;; the same slot table over each fact index and over :facts.  The bucket
+   ;; vectors above keep their shape — readers outside fram.store walk them — so
+   ;; every slot here holds POSITIONS in the vector it indexes, never its entries.
+   l-slots :- (Vec IdBucket) p-slots :- (Vec IdBucket) r-slots :- (Vec IdBucket)
+   lp-slots :- (Vec IdBucket) pr-slots :- (Vec IdBucket)
+   fact-slots :- (Vec IdBucket)])
