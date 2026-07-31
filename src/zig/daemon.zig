@@ -3392,6 +3392,9 @@ fn timestampUtc(allocator: Allocator, io: Io) ![]u8 {
     );
 }
 
+/// Authority: `key-sep` in fram/kernel_classify.bclj; a clean value never contains U+0001.
+const key_sep = "\x01";
+
 fn groupKeyAlloc(
     allocator: Allocator,
     l: []const u8,
@@ -3399,8 +3402,8 @@ fn groupKeyAlloc(
 ) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "{d}:{s}{d}:{s}",
-        .{ l.len, l, p.len, p },
+        "{s}" ++ key_sep ++ "{s}",
+        .{ l, p },
     );
 }
 
@@ -3412,8 +3415,8 @@ fn tripleKeyAlloc(
 ) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "{d}:{s}{d}:{s}{d}:{s}",
-        .{ l.len, l, p.len, p, r.len, r },
+        "{s}" ++ key_sep ++ "{s}" ++ key_sep ++ "{s}",
+        .{ l, p, r },
     );
 }
 
