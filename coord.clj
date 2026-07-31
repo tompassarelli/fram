@@ -65,7 +65,19 @@
 ;; replay and the flat fold's keyed-latest already tolerate a torn tail.
 (def ^:dynamic *durable-tickets* nil)   ; nil => inline await; atom => deferred collect
 (def group-io-lock (Object.))           ; batch write+fsync+callbacks vs external stat checks
-(def ^:private group-q (java.util.concurrent.LinkedBlockingQueue.))
+(def ^:private group-queue-capacity
+  (let [raw (System/getenv "FRAM_GROUP_QUEUE")
+        n (some-> raw parse-long)]
+    (cond
+      (nil? raw) 4096
+      (or (nil? n) (not (pos? n)) (> n 262144))
+      (throw (ex-info "FRAM_GROUP_QUEUE must be an integer in [1,262144]"
+                      {:variable "FRAM_GROUP_QUEUE" :value raw :ceiling 262144}))
+      :else (int n))))
+(def ^:private group-q
+  (java.util.concurrent.LinkedBlockingQueue. (int group-queue-capacity)))
+(def ^:private group-queue-max-depth (atom 0))
+(def ^:private group-queue-saturations (atom 0))
 (def ^:private group-appender-started (atom false))
 (def ^:private group-appender-thread (atom nil))
 (def ^:private group-appender-failure (atom nil))
@@ -231,6 +243,24 @@
       (reset! group-appender-thread thread)
       (.start thread))))
 
+(defn- put-group! [item]
+  (if (.offer group-q item)
+    (swap! group-queue-max-depth max (.size group-q))
+    (do
+      (swap! group-queue-saturations inc)
+      (let [interrupted? (volatile! (boolean (Thread/interrupted)))]
+        (loop []
+          (let [result (try
+                         (.offer group-q item 100 java.util.concurrent.TimeUnit/MILLISECONDS)
+                         (catch InterruptedException _ ::interrupted))]
+            (cond
+              (= ::interrupted result) (do (vreset! interrupted? true) (recur))
+              result (do
+                       (swap! group-queue-max-depth max (.size group-q))
+                       (when @interrupted?
+                         (.interrupt (Thread/currentThread))))
+              :else (recur))))))))
+
 (defn await-durable! [ticket]
   (let [r (deref ticket)]
     (when (instance? Throwable r) (throw r))
@@ -260,7 +290,7 @@
   (let [t (promise)]
     (locking group-appender-lifecycle-lock
       (ensure-group-appender!)
-      (.put group-q {:path path :lines lines :ticket t :on-flushed on-flushed}))
+      (put-group! {:path path :lines lines :ticket t :on-flushed on-flushed}))
     ;; Close the narrow failure-before-put race: if the appender exited after
     ;; ensure but before this item became visible to its failure drain, wake this
     ;; waiter with the same terminal error instead of parking forever.
@@ -283,7 +313,7 @@
          (when @group-appender-stopping?
            (throw (ex-info "durable appender is stopping"
                            {:type :durable-appender-stopping})))
-         (.put group-q {:path nil :lines [] :ticket t}))
+         (put-group! {:path nil :lines [] :ticket t}))
        (when-let [failure @group-appender-failure]
          (deliver t failure))
        (await-durable! t))))
@@ -297,7 +327,7 @@
          (when @group-appender-stopping?
            (throw (ex-info "durable appender is stopping"
                            {:type :durable-appender-stopping})))
-         (.put group-q {:path nil :lines [] :ticket t}))
+         (put-group! {:path nil :lines [] :ticket t}))
        (when-let [failure @group-appender-failure]
          (deliver t failure))
        (await-durable-bounded! t timeout-ms)))))
@@ -308,6 +338,15 @@
      :stopping @group-appender-stopping?
      :alive (boolean (and thread (.isAlive thread)))
      :failure (some-> @group-appender-failure class .getName)}))
+
+(defn durable-queue-status []
+  {:capacity group-queue-capacity
+   :depth (.size group-q)
+   :max-depth @group-queue-max-depth
+   :saturations @group-queue-saturations})
+
+(defn durable-queue-depth []
+  (.size group-q))
 
 (defn stop-group-appender!
   "Retire the one durable appender after its FIFO has drained.  Returns a status
@@ -329,7 +368,7 @@
           (reset! group-appender-stopping? true)
           (let [^Thread thread @group-appender-thread]
             (when (and thread (.isAlive thread))
-              (.put group-q {:path nil :lines [] :ticket ticket :stop true}))
+              (put-group! {:path nil :lines [] :ticket ticket :stop true}))
             thread))]
     (when (and thread (.isAlive ^Thread thread))
       (deref ticket (remaining-ms) ::timeout)

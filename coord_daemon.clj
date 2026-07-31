@@ -79,6 +79,7 @@
 ;; the rotation-segment layer (thread 019f9e66) lives at the bottom of this file,
 ;; next to the checkpoint writer; :status reaches back for its ops surface.
 (declare rotation-index-status start-rotation-compactor! rotation-stats
+         start-telemetry-retention-sweeper! envelope-status
          snapshot-if-dirty!)
 (def projection-build-lock (Object.))
 ;; Whole-corpus query-cache construction is also single-flight.  A split-log
@@ -478,6 +479,38 @@
   (bounded-positive-env-int "FRAM_CONNECTION_WORKERS" 32 512))
 (def connection-pending-limit
   (bounded-positive-env-int "FRAM_CONNECTION_QUEUE" 128 65536))
+(def notify-queue-limit
+  (bounded-positive-env-int "FRAM_NOTIFY_QUEUE" 1024 65536))
+(def telemetry-shed-depth
+  (let [name "FRAM_TELEMETRY_SHED_DEPTH"
+        raw (System/getenv name)
+        n (some-> raw parse-long)
+        capacity (:capacity (durable-queue-status))]
+    (cond
+      (nil? raw) capacity
+      (or (nil? n) (neg? n) (> n capacity))
+      (throw (ex-info (str name " must be an integer in [0," capacity "]")
+                      {:variable name :value raw :ceiling capacity}))
+      :else (int n))))
+(def telemetry-retention-max-bytes
+  (positive-env-long "FRAM_TELEMETRY_RETENTION_MAX_BYTES" 0))
+(def telemetry-retention-target-bytes
+  (let [target (positive-env-long "FRAM_TELEMETRY_RETENTION_TARGET_BYTES"
+                                  (quot telemetry-retention-max-bytes 2))]
+    (when (and (pos? telemetry-retention-max-bytes)
+               (>= target telemetry-retention-max-bytes))
+      (throw (ex-info
+              "telemetry retention target bytes must be less than max bytes"
+              {:target-bytes target
+               :max-bytes telemetry-retention-max-bytes})))
+    target))
+(def telemetry-retention-sweep-ms
+  (max 1000
+       (or (some-> (System/getenv "FRAM_TELEMETRY_RETENTION_SWEEP_MS") parse-long)
+           300000)))
+(def notify-drops (atom 0))
+(def notify-max-depth (atom 0))
+(def telemetry-sheds (atom 0))
 ;; One accepted-at deadline spans queue wait, request read, dispatch, execution,
 ;; and response. Query-specific ceilings may shorten it. A canonical append that
 ;; has already crossed its irreversible boundary still completes its durability
@@ -719,6 +752,26 @@
                       (seq (s/lookup-all st wid "telemetry_kind")))]
       (when-let [ks (or canonical legacy)]
         (reset! telemetry-kinds (set (map str ks)))))))
+
+(defn telemetry-shed-decision [depth threshold telemetry?]
+  (when (and (pos? threshold) (>= depth threshold) telemetry?)
+    {:reject [(str "telemetry ingress shed: durable queue at " depth "/" threshold
+                   "; telemetry writes are load-shed while coordination writes continue")]
+     :code :telemetry-backpressure
+     :depth depth
+     :threshold threshold}))
+
+(defn- telemetry-shed-rejection [req]
+  (when (contains? #{:assert :assert-existing :assert-batch
+                     :assert-batch-at-version :assert-with-fence :retract}
+                   (:op req))
+    (when-let [rejection
+               (telemetry-shed-decision
+                (durable-queue-depth)
+                telemetry-shed-depth
+                (= :telemetry (log-for (:store @co) (:te req))))]
+      (swap! telemetry-sheds inc)
+      (assoc rejection :version (current-seq @co)))))
 
 (defn- write-flat-lines! [lines]
   (when (and @flat-log (seq lines))
@@ -1848,14 +1901,24 @@
 ;; Subscriber delivery is BEST-EFFORT and OFF the write path (finding #3): a slow
 ;; or stuck subscriber (TCP send buffer full) must NOT stall commits, which run
 ;; under dlock. We hand the event to a single-threaded executor so the committing
-;; thread returns immediately; delivery happens later and a wedged subscriber only
-;; backs up the (unbounded, but commit-independent) notify queue, never dlock.
+;; thread returns immediately; its bounded queue drops newest and counts overflow.
 ;; A subscriber whose .write/.flush throws (or whose socket SO_TIMEOUT trips) is
 ;; dropped. Single thread = events stay ordered.
 (def ^:private notify-exec
-  (java.util.concurrent.Executors/newSingleThreadExecutor
-   (reify java.util.concurrent.ThreadFactory
-     (newThread [_ r] (doto (Thread. r "store-notify") (.setDaemon true))))))
+  (doto
+   (ThreadPoolExecutor.
+    1 1 0 TimeUnit/MILLISECONDS
+    (ArrayBlockingQueue. notify-queue-limit)
+    (reify java.util.concurrent.ThreadFactory
+      (newThread [_ r] (doto (Thread. r "store-notify") (.setDaemon true))))
+    (java.util.concurrent.ThreadPoolExecutor$DiscardPolicy.))
+    (.prestartCoreThread)))
+
+(defn- notify-execute! [task]
+  (let [queue (.getQueue ^ThreadPoolExecutor notify-exec)]
+    (if (.offer queue ^Runnable task)
+      (swap! notify-max-depth max (.size queue))
+      (swap! notify-drops inc))))
 
 ;; P5 — scoped subscribe. A subscriber MAY register a filter so the daemon pushes only
 ;; relevant commits instead of the firehose (efficiency at scale). Backward-compatible:
@@ -1874,15 +1937,15 @@
 
 (defn- notify-subs! [event]
   (let [line (str (pr-str event) "\n")]
-    (.execute notify-exec
-      (fn []
-        (reset! subscribers
-                (vec (filter (fn [{:keys [^BufferedWriter w flt]}]
-                               (if (sub-match? flt event)
-                                 (try (.write w line) (.flush w) true   ; push; drop on disconnect
-                                      (catch Throwable _ false))
-                                 true))                                 ; no match -> keep subscriber, don't push
-                             @subscribers)))))))
+    (notify-execute!
+     (fn []
+       (reset! subscribers
+               (vec (filter (fn [{:keys [^BufferedWriter w flt]}]
+                              (if (sub-match? flt event)
+                                (try (.write w line) (.flush w) true   ; push; drop on disconnect
+                                     (catch Throwable _ false))
+                                true))                                 ; no match -> keep subscriber, don't push
+                            @subscribers)))))))
 
 ;; ref-shape? — is a STRING value a node reference (a link), vs a literal that
 ;; merely starts with '@'? The convention is "@-prefixed => ref", but a bare "@"
@@ -6575,6 +6638,7 @@
      :admission (:admission roots)
      :snapshots (:snapshots roots)
      :reloads (:reloads roots)
+     :envelope (envelope-status)
      :index (:index roots)
      :writer-authority (writer-authority-status)
      :rollback_floor fram.rt/rollback-floor}))
@@ -6890,6 +6954,7 @@
          (when (and (canonical-mutation-request? req)
                     (not (write-authorized?)))
            (writer-authority-rejection))
+         (telemetry-shed-rejection req)
          (do
            (when *request-mutation?*
              (request-admit-durable!))
@@ -10399,7 +10464,162 @@
                                           -1))))
                          (compact-rotations-quietly! "interval"))
                        (recur))))
-      (.setName "fram-rotation-compactor") (.setDaemon true) (.start))))
+      (.setName "fram-rotation-compactor") (.setDaemon true) (.start)))
+  (start-telemetry-retention-sweeper!))
+
+(def telemetry-retention-stats
+  (atom {:sweeps 0 :last-ms nil :last-watermark-tx nil
+         :last-dropped-lines 0 :last-dropped-bytes 0
+         :target-missed 0 :skipped 0 :last-error nil}))
+(def ^:private telemetry-retention-sweeper-started? (atom false))
+
+(defn- telemetry-retention-plan [path]
+  (let [rows
+        (with-open [reader (clojure.java.io/reader path)]
+          (loop [planned []]
+            (if-let [line (.readLine ^BufferedReader reader)]
+              (let [record (try (edn/read-string line) (catch Throwable _ nil))
+                    subject (when (map? record) (:l record))
+                    tx (when (and (map? record) (int? (:tx record)))
+                         (long (:tx record)))
+                    bytes (alength
+                           (.getBytes ^String (str line "\n")
+                                      java.nio.charset.StandardCharsets/UTF_8))]
+                (recur (conj planned
+                             {:line line :tx tx :bytes bytes
+                              :telemetry? (and (string? subject)
+                                               (= :telemetry
+                                                  (log-for (:store @co) subject)))})))
+              planned)))
+        total-bytes (reduce + 0 (map :bytes rows))
+        tx-groups (->> rows
+                       (filter #(and (:telemetry? %) (integer? (:tx %))))
+                       (group-by :tx)
+                       (map (fn [[tx group]]
+                              [tx (reduce + 0 (map :bytes group))]))
+                       (sort-by first))
+        required-drop (max 0 (- total-bytes telemetry-retention-target-bytes))
+        watermark
+        (loop [groups tx-groups dropped 0 last-tx nil]
+          (if-let [[tx bytes] (first groups)]
+            (let [dropped' (+ dropped bytes)]
+              (if (>= dropped' required-drop)
+                tx
+                (recur (next groups) dropped' tx)))
+            last-tx))
+        drop? (fn [{:keys [telemetry? tx]}]
+                (and telemetry? (integer? tx) (some? watermark)
+                     (<= (long tx) (long watermark))))
+        retained (vec (remove drop? rows))
+        dropped (filterv drop? rows)
+        retained-bytes (reduce + 0 (map :bytes retained))]
+    {:rows retained
+     :watermark watermark
+     :retained-bytes retained-bytes
+     :dropped-lines (count dropped)
+     :dropped-bytes (reduce + 0 (map :bytes dropped))
+     :target-missed? (> retained-bytes telemetry-retention-target-bytes)}))
+
+(defn sweep-telemetry-retention! []
+  (when-let [path @telemetry-log]
+    (locking group-io-lock
+      (if-let [gate (fram.rt/acquire-rewrite-lock! (str path) false false)]
+        (try
+          (if (.exists (clojure.java.io/file (fram.rt/rewrite-intent-path path)))
+            (swap! telemetry-retention-stats update :skipped inc)
+            (let [{:keys [rows watermark retained-bytes dropped-lines
+                          dropped-bytes target-missed?]}
+                  (telemetry-retention-plan path)
+                  target (clojure.java.io/file (str path))
+                  tmp (clojure.java.io/file (str path ".retention.tmp"))
+                  dir (.getParentFile (.getAbsoluteFile target))]
+              (java.nio.file.Files/deleteIfExists (.toPath tmp))
+              (with-open [output (java.io.FileOutputStream. tmp)]
+                (doseq [{:keys [line]} rows]
+                  (.write output
+                          (.getBytes ^String (str line "\n")
+                                     java.nio.charset.StandardCharsets/UTF_8)))
+                (.force (.getChannel output) true))
+              (java.nio.file.Files/move
+               (.toPath tmp) (.toPath target)
+               (into-array
+                java.nio.file.CopyOption
+                [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                 java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+              (fsync-dir! dir)
+              (let [actual-bytes (.length target)
+                    terminal-lf?
+                    (or (zero? actual-bytes)
+                        (with-open [raf (java.io.RandomAccessFile. target "r")]
+                          (.seek raf (dec actual-bytes))
+                          (= 10 (.read raf))))]
+                (when-not (and (= retained-bytes actual-bytes) terminal-lf?)
+                  (throw (ex-info "telemetry retention rewrite verification failed"
+                                  {:planned-bytes retained-bytes
+                                   :actual-bytes actual-bytes
+                                   :terminal-lf terminal-lf?}))))
+              (swap! telemetry-retention-stats
+                     (fn [stats]
+                       (cond->
+                        (-> stats
+                            (update :sweeps inc)
+                            (assoc :last-ms (System/currentTimeMillis)
+                                   :last-watermark-tx watermark
+                                   :last-dropped-lines dropped-lines
+                                   :last-dropped-bytes dropped-bytes
+                                   :last-error nil))
+                         target-missed? (update :target-missed inc))))
+              (binding [*out* *err*]
+                (println
+                 (str "[fram] telemetry retention: dropped " dropped-lines
+                      " lines (" dropped-bytes " bytes) ≤ tx " watermark
+                      " from " path)))))
+          (finally
+            (fram.rt/close-rewrite-lock! gate)))
+        (swap! telemetry-retention-stats update :skipped inc)))))
+
+(defn start-telemetry-retention-sweeper! []
+  (when (and (pos? telemetry-retention-max-bytes)
+             @telemetry-log
+             (seq @telemetry-kinds)
+             (not (standby?))
+             (compare-and-set! telemetry-retention-sweeper-started? false true))
+    (doto
+     (Thread.
+      (fn []
+        (loop []
+          (Thread/sleep (long telemetry-retention-sweep-ms))
+          (when (> (.length (clojure.java.io/file (str @telemetry-log)))
+                   telemetry-retention-max-bytes)
+            (try
+              (sweep-telemetry-retention!)
+              (catch Throwable t
+                (swap! telemetry-retention-stats assoc
+                       :last-error (.getMessage t)))))
+          (recur))))
+      (.setName "fram-telemetry-retention")
+      (.setDaemon true)
+      (.start))))
+
+(defn envelope-status []
+  {:durable-queue (assoc (durable-queue-status)
+                         :appender (group-appender-status))
+   :notify {:capacity notify-queue-limit
+            :depth (.size (.getQueue ^ThreadPoolExecutor notify-exec))
+            :max-depth @notify-max-depth
+            :drops @notify-drops
+            :subscribers (count @subscribers)}
+   :telemetry-shed {:threshold telemetry-shed-depth
+                    :sheds @telemetry-sheds}
+   :telemetry-retention
+   (merge {:max-bytes telemetry-retention-max-bytes
+           :target-bytes telemetry-retention-target-bytes
+           :sweep-ms telemetry-retention-sweep-ms
+           :log (some-> @telemetry-log str)
+           :bytes (if-let [path @telemetry-log]
+                    (.length (clojure.java.io/file (str path)))
+                    0)}
+          @telemetry-retention-stats)})
 
 (defn serve-flat-daemon [port flat]
   ;; Boot owns the corpus EXCLUSIVELY across intent healing, torn-tail repair,
