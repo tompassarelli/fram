@@ -10,10 +10,12 @@
   (if (str/starts-with? s "@") (subs s 1) s))
 
 (defn has-whitespace? [s :- String] :- Bool
-  (or (str/includes? s " ")
-    (str/includes? s "\t")
+  (or (str/includes? s "\t")
     (str/includes? s "\n")
-    (str/includes? s "\r")))
+    (str/includes? s "\u000b")
+    (str/includes? s "\u000c")
+    (str/includes? s "\r")
+    (str/includes? s " ")))
 
 (defn ref-shape? [s :- String] :- Bool
   (and (> (count s) 1) (str/starts-with? s "@") (not (has-whitespace? s))))

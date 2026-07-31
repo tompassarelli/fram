@@ -5,7 +5,7 @@
   (if (str/starts-with? s "@") (subs s 1) s))
 
 (defn ^Boolean has-whitespace? [^String s]
-  (or (str/includes? s " ") (str/includes? s "\t") (str/includes? s "\n") (str/includes? s "\r")))
+  (or (str/includes? s "\t") (str/includes? s "\n") (str/includes? s "\u000b") (str/includes? s "\f") (str/includes? s "\r") (str/includes? s " ")))
 
 (defn ^Boolean ref-shape? [^String s]
   (and (> (count s) 1) (str/starts-with? s "@") (not (has-whitespace? s))))

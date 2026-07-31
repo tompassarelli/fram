@@ -33,12 +33,14 @@
 (check "has-whitespace? is false for a clean ref" (false? (kc/has-whitespace? "@a-b_c")))
 (check "has-whitespace? sees a space" (true? (kc/has-whitespace? "a b")))
 (check "has-whitespace? sees a newline" (true? (kc/has-whitespace? "a\nb")))
-;; Deliberate: VT/FF are in Java's \s but spellable in no lowering target's
-;; string literal, so the authority is defined over the other four.
-(check "has-whitespace? stops at the expressible whitespace set (VT)"
-       (false? (kc/has-whitespace? (str "a" (char 11) "b"))))
-(check "has-whitespace? stops at the expressible whitespace set (FF)"
-       (false? (kc/has-whitespace? (str "a" (char 12) "b"))))
+;; Whitespace is the six ASCII bytes {9,10,11,12,13,32}, the set coord_daemon's
+;; #"\s" and Zig's std.ascii.isWhitespace both already recognized. VT/FF spell
+;; as \uNNNN in the lowerable subset, the same form key-sep uses.
+(doseq [[label code] [["TAB" 9] ["LF" 10] ["VT" 11] ["FF" 12] ["CR" 13] ["space" 32]]]
+  (check (str "has-whitespace? sees " label)
+         (true? (kc/has-whitespace? (str "a" (char code) "b")))))
+(check "has-whitespace? ignores a non-whitespace control byte"
+       (false? (kc/has-whitespace? (str "a" (char 0) "b"))))
 
 ;; --- emoji-single? (kernel.bclj:120) ----------------------------------------
 (check "emoji-single? on the emoji_ prefix" (true? (kc/emoji-single? "emoji_blocked")))
