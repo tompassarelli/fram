@@ -3,11 +3,24 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const standalone = b.addWriteFiles();
+    const daemon = standalone.addCopyFile(
+        b.path("src/zig/daemon.zig"),
+        "daemon.zig",
+    );
+    _ = standalone.addCopyFile(b.path("src/zig/log.zig"), "log.zig");
+    _ = standalone.add(
+        "fram_kernel_classify.zig",
+        \\pub fn stripAt(s: []const u8) []const u8 {
+        \\    return if (s.len != 0 and s[0] == '@') s[1..] else s;
+        \\}
+        \\
+    );
 
     const executable = b.addExecutable(.{
         .name = "fram-daemon-zig",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zig/daemon.zig"),
+            .root_source_file = daemon,
             .target = target,
             .optimize = optimize,
         }),
@@ -16,7 +29,7 @@ pub fn build(b: *std.Build) void {
 
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zig/daemon.zig"),
+            .root_source_file = daemon,
             .target = target,
             .optimize = optimize,
         }),

@@ -135,6 +135,46 @@ run_jvm_once() {
   stop_daemon
 }
 
+run_zig_daemon_once() {
+  local corpus=$1
+  local name=$2
+  local attempt=$3
+  local port log daemon_out raw_output normalized_unsorted
+  port="$(free_port)"
+  log="$run_dir/zig/$name.attempt-$attempt.log"
+  daemon_out="$run_dir/zig/$name.daemon-$attempt.out"
+  raw_output="$run_dir/zig/$name.raw"
+  normalized_unsorted="$test_dir/$name.zig.unsorted"
+  : >"$log"
+
+  env -u FRAM_REQUIRE_LOG_FENCE \
+    "$FRAM_ZIG_DAEMON" serve-flat "$port" "$log" \
+    >"$daemon_out" 2>&1 &
+  daemon_pid=$!
+
+  local ready=
+  for _ in $(seq 1 120); do
+    if response="$(request "$port" '{:op :version}' 2>/dev/null)"; then
+      ready=$response
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ -z "$ready" ]]; then
+    stop_daemon
+    return 1
+  fi
+
+  if ! FRAM_ORACLE_RAW_PATH="$raw_output" \
+      bb tests/zig_occ_oracle_driver.clj "$corpus" "$port" \
+      >"$normalized_unsorted"; then
+    stop_daemon
+    return 1
+  fi
+  sort_fingerprint "$normalized_unsorted" "$run_dir/zig/$name.out"
+  stop_daemon
+}
+
 for corpus in "${corpora[@]}"; do
   if [[ "$corpus" != /* ]]; then
     corpus="$repo/$corpus"
@@ -154,23 +194,43 @@ if [[ "$mode" == "jvm-only" ]]; then
   exit 0
 fi
 
-zig_replay="${FRAM_ZIG_OCC_REPLAY:-$cache_root/zig-occ-replay}"
-if [[ ! -x "$zig_replay" ]]; then
-  echo "missing Zig replay executable: $zig_replay" >&2
-  exit 1
-fi
-
 agreed=0
-for corpus in "${corpora[@]}"; do
-  if [[ "$corpus" != /* ]]; then
-    corpus="$repo/$corpus"
+if [[ -n "${FRAM_ZIG_DAEMON:-}" ]]; then
+  if [[ ! -x "$FRAM_ZIG_DAEMON" ]]; then
+    echo "FRAM_ZIG_DAEMON is not executable: $FRAM_ZIG_DAEMON" >&2
+    exit 1
   fi
-  name="$(basename "$corpus" .tsv)"
-  "$zig_replay" "$corpus" >"$test_dir/$name.zig.unsorted"
-  sort_fingerprint "$test_dir/$name.zig.unsorted" "$run_dir/zig/$name.out"
-  diff -u "$run_dir/jvm/$name.out" "$run_dir/zig/$name.out"
-  agreed=$((agreed + 1))
-done
+  for corpus in "${corpora[@]}"; do
+    if [[ "$corpus" != /* ]]; then
+      corpus="$repo/$corpus"
+    fi
+    name="$(basename "$corpus" .tsv)"
+    if ! run_zig_daemon_once "$corpus" "$name" 1; then
+      if ! run_zig_daemon_once "$corpus" "$name" 2; then
+        echo "Zig daemon failed twice for $name; see $run_dir/zig/$name.daemon-2.out" >&2
+        exit 1
+      fi
+    fi
+    diff -u "$run_dir/jvm/$name.out" "$run_dir/zig/$name.out"
+    agreed=$((agreed + 1))
+  done
+else
+  zig_replay="${FRAM_ZIG_OCC_REPLAY:-$cache_root/zig-occ-replay}"
+  if [[ ! -x "$zig_replay" ]]; then
+    echo "missing Zig replay executable: $zig_replay" >&2
+    exit 1
+  fi
+  for corpus in "${corpora[@]}"; do
+    if [[ "$corpus" != /* ]]; then
+      corpus="$repo/$corpus"
+    fi
+    name="$(basename "$corpus" .tsv)"
+    "$zig_replay" "$corpus" >"$test_dir/$name.zig.unsorted"
+    sort_fingerprint "$test_dir/$name.zig.unsorted" "$run_dir/zig/$name.out"
+    diff -u "$run_dir/jvm/$name.out" "$run_dir/zig/$name.out"
+    agreed=$((agreed + 1))
+  done
+fi
 
 echo "oracle: $agreed/${#corpora[@]} corpora agree"
 echo "run-dir: $run_dir"

@@ -14,12 +14,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
-zig=(direnv exec /home/tom/code/beagle/main zig)
-"${zig[@]}" build-exe "$repo/src/zig/daemon.zig" \
-  -OReleaseSafe \
-  "-femit-bin=$test_dir/fram-daemon-zig" \
-  --cache-dir "$test_dir/cache" \
-  --global-cache-dir "$test_dir/global-cache"
+daemon_bin="${FRAM_ZIG_DAEMON:-}"
+if [[ -z "$daemon_bin" ]]; then
+  standalone_dir="$test_dir/standalone"
+  mkdir -p "$standalone_dir"
+  cp "$repo/src/zig/daemon.zig" "$standalone_dir/daemon.zig"
+  cp "$repo/src/zig/log.zig" "$standalone_dir/log.zig"
+  printf '%s\n' \
+    'pub fn stripAt(s: []const u8) []const u8 {' \
+    "    return if (s.len != 0 and s[0] == '@') s[1..] else s;" \
+    '}' \
+    >"$standalone_dir/fram_kernel_classify.zig"
+
+  zig=(direnv exec /home/tom/code/beagle/main zig)
+  daemon_bin="$test_dir/fram-daemon-zig"
+  "${zig[@]}" build-exe "$standalone_dir/daemon.zig" \
+    -OReleaseSafe \
+    "-femit-bin=$daemon_bin" \
+    --cache-dir "$test_dir/cache" \
+    --global-cache-dir "$test_dir/global-cache"
+elif [[ ! -x "$daemon_bin" ]]; then
+  echo "FRAM_ZIG_DAEMON is not executable: $daemon_bin" >&2
+  exit 1
+fi
 
 free_port() {
   bb -e '(with-open [socket (java.net.ServerSocket. 0)]
@@ -92,7 +109,7 @@ initial_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 
 port="$(free_port)"
 FRAM_REQUIRE_LOG_FENCE=1 \
-  "$test_dir/fram-daemon-zig" serve-flat "$port" "$log_a" \
+  "$daemon_bin" serve-flat "$port" "$log_a" \
   >"$test_dir/daemon.out" 2>&1 &
 daemon_pid=$!
 
@@ -309,7 +326,7 @@ assert_response "$successor_release" '(fn [r] (= 13 (:ok r)))'
 duplicate_port="$(free_port)"
 set +e
 FRAM_REQUIRE_LOG_FENCE=1 timeout 5 \
-  "$test_dir/fram-daemon-zig" serve-flat "$duplicate_port" "$log_a" \
+  "$daemon_bin" serve-flat "$duplicate_port" "$log_a" \
   >"$test_dir/duplicate.out" 2>&1
 duplicate_status=$?
 set -e
@@ -330,7 +347,7 @@ grep -q "\\[fram\\] shutdown complete" "$test_dir/daemon.out"
 
 restart_port="$(free_port)"
 FRAM_REQUIRE_LOG_FENCE=1 \
-  "$test_dir/fram-daemon-zig" serve-flat "$restart_port" "$log_a" \
+  "$daemon_bin" serve-flat "$restart_port" "$log_a" \
   >"$test_dir/restart.out" 2>&1 &
 daemon_pid=$!
 

@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const flat_log = @import("log.zig");
+const kernel_classify = @import("fram_kernel_classify.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -307,7 +308,7 @@ const DaemonState = struct {
         defer declarations.deinit();
         for (state.events.items) |event| {
             if (!std.mem.eql(u8, event.p, "cardinality")) continue;
-            const predicate = stripAt(event.l);
+            const predicate = kernel_classify.stripAt(event.l);
             const declaration: LatestDeclaration = .{
                 .tx = event.tx,
                 .operation = event.operation,
@@ -2305,7 +2306,8 @@ fn queryPredicateName(
     spelling: []const u8,
 ) ![]const u8 {
     const identity = try queryPredicateId(allocator, registry, spelling);
-    return registry.canonical.get(identity) orelse stripAt(identity);
+    return registry.canonical.get(identity) orelse
+        kernel_classify.stripAt(identity);
 }
 
 fn queryPredicateProperty(
@@ -3413,10 +3415,6 @@ fn tripleKeyAlloc(
         "{d}:{s}{d}:{s}{d}:{s}",
         .{ l.len, l, p.len, p, r.len, r },
     );
-}
-
-fn stripAt(value: []const u8) []const u8 {
-    return if (value.len != 0 and value[0] == '@') value[1..] else value;
 }
 
 fn isMetaSingle(predicate: []const u8) bool {
