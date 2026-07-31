@@ -99,6 +99,53 @@
   (atom {:builds 0 :last nil :max-ms 0 :max-allocated-bytes 0}))
 (def query-execution-stats
   (atom {:slow 0 :last nil :max-ms 0 :max-allocated-bytes 0}))
+;; Paged drains pin one immutable query snapshot by coordinator version.  The
+;; cache is daemon-wide because existing clients use one socket per page; all
+;; readers at a version share the same persistent facts/index objects.  Capacity
+;; bounds retained roots, not readers, so reader count never multiplies corpus
+;; memory.
+(def query-page-snapshot-limit
+  (max 1 (or (some-> (System/getenv "FRAM_QUERY_PAGE_SNAPSHOTS") parse-long) 4)))
+(def query-page-snapshots (atom {:order [] :by-version {}}))
+(def query-page-snapshot-stats
+  (atom {:pins 0 :hits 0 :expired 0 :evictions 0}))
+
+(defn- reset-query-page-snapshots! []
+  (reset! query-page-snapshots {:order [] :by-version {}})
+  (reset! query-page-snapshot-stats
+          {:pins 0 :hits 0 :expired 0 :evictions 0}))
+
+(defn- retain-query-page-snapshot! [snapshot]
+  (let [snapshot (select-keys snapshot [:facts :idx :version])
+        version (:version snapshot)]
+    (locking query-page-snapshots
+      (let [{:keys [order by-version]} @query-page-snapshots
+            new? (not (contains? by-version version))
+            order' (if new? (conj order version) order)
+            by-version' (assoc by-version version snapshot)
+            excess (max 0 (- (count order') query-page-snapshot-limit))
+            evicted (take excess order')
+            retained-order (vec (drop excess order'))
+            retained (apply dissoc by-version' evicted)]
+        (reset! query-page-snapshots
+                {:order retained-order :by-version retained})
+        (swap! query-page-snapshot-stats
+               (fn [stats]
+                 (cond-> (update stats :pins inc)
+                   (seq evicted) (update :evictions + (count evicted)))))))
+    snapshot))
+
+(defn- retained-query-page-snapshot [version]
+  (locking query-page-snapshots
+    (if-let [snapshot (get-in @query-page-snapshots [:by-version version])]
+      (do (swap! query-page-snapshot-stats update :hits inc)
+          snapshot)
+      nil)))
+
+(defn- query-page-snapshot-status []
+  (let [retained (count (:by-version @query-page-snapshots))]
+    (merge {:capacity query-page-snapshot-limit :retained retained}
+           @query-page-snapshot-stats)))
 (def ^:private query-allocation-bean
   (delay
     (try
@@ -1575,6 +1622,35 @@
      :history-co {:store history-store}
      :history-store history-store}))
 
+(defn- query-snapshot-for-request [req roots]
+  (if (and (= :query-page (:op req)) (contains? req :at-version))
+    (let [pin (:at-version req)]
+      (cond
+        (or (not (integer? pin)) (neg? pin))
+        {:rejection {:error [":at-version must be a non-negative integer"]
+                     :code :invalid-request
+                     :at-version pin
+                     :version (:version roots)}}
+
+        :else
+        (if-let [snapshot (retained-query-page-snapshot pin)]
+          {:snapshot snapshot}
+          ;; A current version can be reconstructed exactly even if no earlier
+          ;; first page retained it. Once the head advances, absence is expiry.
+          (if (= pin (:version roots))
+            {:snapshot (retain-query-page-snapshot!
+                        (materialize-query-snapshot roots))}
+            (do
+              (swap! query-page-snapshot-stats update :expired inc)
+              {:rejection {:reject ["query-page snapshot is no longer retained"]
+                           :code :snapshot-expired
+                           :at-version pin
+                           :version (:version roots)}})))))
+    (let [snapshot (materialize-query-snapshot roots)]
+      (when (= :query-page (:op req))
+        (retain-query-page-snapshot! snapshot))
+      {:snapshot snapshot})))
+
 ;; The shared Datalog projection (EDB + base index) a scan :query / :query-page
 ;; runs over.
 ;;
@@ -1752,7 +1828,11 @@
                      (string? (:find (:query req)))
                      (simple-query? (:query req)))
         engine (if use-idx "index" "scan")
-        version (:version roots)]
+        version (if (and (= :query-page (:op req))
+                         (integer? (:at-version req))
+                         (not (neg? (:at-version req))))
+                  (:at-version req)
+                  (:version roots))]
     (swap! active-queries inc)
     (try
       (binding [d/*query-control* control
@@ -1764,63 +1844,71 @@
         (query-check)
         (let [t0 (System/nanoTime)
               a0 (thread-allocated-bytes)
-              snapshot (materialize-query-snapshot roots)
+              snapshot-choice (query-snapshot-for-request req roots)
+              snapshot (:snapshot snapshot-choice)
               t1 (System/nanoTime)
               a1 (thread-allocated-bytes)
-              _ (query-check)
-              res (case (:op req)
-                    :query (if use-idx
-                             (idx-run (:idx snapshot) (:query req))
-                             (q/run-projected (snapshot-projection snapshot (:query req))
-                                              (:query req)))
-                    :query-page (q/run-page-projected (snapshot-projection snapshot (:query req))
-                                                      (:query req) (:limit req) (:after req))
-                    :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
-                            (if (seq errs)
-                              {:error errs}
-                              (pull/run (:history-store snapshot) (:root req) (:pattern req) req)))
-                    :as-of (let [s (:seq req)]
-                             (if (nil? s)
-                               {:error [":as-of needs :seq"]}
-                               (let [co0 (:history-co snapshot)
-                                     st (:history-store snapshot)
-                                     cids (live-as-of co0 s)
-                                     facts (vec (keep (fn [cid]
-                                                        (query-check)
-                                                        (when-let [t (fact->triple st cid)]
-                                                          (ck/->Fact (nth t 0) (nth t 1) (nth t 2))))
-                                                      cids))]
-                                 (assoc (q/run facts (:query req)) :as-of s)))))
-              bounded (enforce-result-row-limit res control)
-              stamped (assoc bounded :version version :engine engine)
-              t2 (System/nanoTime)
-              a2 (thread-allocated-bytes)
-              utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
-              edn-bytes (utf8-size (pr-str stamped))
-              json-bytes (utf8-size (fram.rt/to-json stamped))
-              max-bytes (if (= :query-page (:op req))
-                          q/max-page-wire-bytes
-                          (:max-response-bytes control))
-              response
-              (if (and (<= edn-bytes max-bytes)
-                       (<= json-bytes max-bytes))
-                stamped
-                (if (= :query-page (:op req))
-                  {:error ["query page response exceeded its final wire bound"]
-                   :code :query-page-response-too-large
-                   :max-bytes max-bytes
-                   :version version :engine engine}
-                  {:error ["query response exceeded its final wire bound"]
-                   :code :query-response-too-large
-                   :max-bytes max-bytes
-                   :edn-bytes edn-bytes :json-bytes json-bytes
-                   :version version :engine engine}))
-              t3 (System/nanoTime)
-              a3 (thread-allocated-bytes)]
-          (report-query-execution!
-           req engine (count (:facts snapshot))
-           t0 a0 t1 a1 t2 a2 t3 a3)
-          response))
+              _ (query-check)]
+          (if-let [rejection (:rejection snapshot-choice)]
+            rejection
+            (let [snapshot-version (:version snapshot)
+                  res (case (:op req)
+                        :query (if use-idx
+                                 (idx-run (:idx snapshot) (:query req))
+                                 (q/run-projected (snapshot-projection snapshot (:query req))
+                                                  (:query req)))
+                        :query-page (q/run-page-projected
+                                     (snapshot-projection snapshot (:query req))
+                                     (:query req) (:limit req) (:after req))
+                        :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
+                                (if (seq errs)
+                                  {:error errs}
+                                  (pull/run (:history-store snapshot) (:root req)
+                                            (:pattern req) req)))
+                        :as-of (let [s (:seq req)]
+                                 (if (nil? s)
+                                   {:error [":as-of needs :seq"]}
+                                   (let [co0 (:history-co snapshot)
+                                         st (:history-store snapshot)
+                                         cids (live-as-of co0 s)
+                                         facts (vec (keep (fn [cid]
+                                                            (query-check)
+                                                            (when-let [t (fact->triple st cid)]
+                                                              (ck/->Fact (nth t 0)
+                                                                         (nth t 1)
+                                                                         (nth t 2))))
+                                                          cids))]
+                                     (assoc (q/run facts (:query req)) :as-of s)))))
+                  bounded (enforce-result-row-limit res control)
+                  stamped (assoc bounded :version snapshot-version :engine engine)
+                  t2 (System/nanoTime)
+                  a2 (thread-allocated-bytes)
+                  utf8-size (fn [s] (count (.getBytes ^String s "UTF-8")))
+                  edn-bytes (utf8-size (pr-str stamped))
+                  json-bytes (utf8-size (fram.rt/to-json stamped))
+                  max-bytes (if (= :query-page (:op req))
+                              q/max-page-wire-bytes
+                              (:max-response-bytes control))
+                  response
+                  (if (and (<= edn-bytes max-bytes)
+                           (<= json-bytes max-bytes))
+                    stamped
+                    (if (= :query-page (:op req))
+                      {:error ["query page response exceeded its final wire bound"]
+                       :code :query-page-response-too-large
+                       :max-bytes max-bytes
+                       :version snapshot-version :engine engine}
+                      {:error ["query response exceeded its final wire bound"]
+                       :code :query-response-too-large
+                       :max-bytes max-bytes
+                       :edn-bytes edn-bytes :json-bytes json-bytes
+                       :version snapshot-version :engine engine}))
+                  t3 (System/nanoTime)
+                  a3 (thread-allocated-bytes)]
+              (report-query-execution!
+               req engine (count (:facts snapshot))
+               t0 a0 t1 a1 t2 a2 t3 a3)
+              response))))
       (catch clojure.lang.ExceptionInfo t
         (if (= :fram-query-abort (:type (ex-data t)))
           (query-abort-response t version engine)
@@ -8116,6 +8204,7 @@
          flat (when flat (canonical-path flat))]
     (when-let [tlog @telemetry-log]
       (reset! telemetry-log (canonical-path tlog)))
+    (reset-query-page-snapshots!)
     (reset! flat-log flat)
     (let [f (java.io.File. log)]
      (reset! co (if (and (.exists f) (pos? (.length f)))
@@ -8850,6 +8939,7 @@
       true)))
 
 (defn- boot-flat-canonical! [flat]
+  (reset-query-page-snapshots!)
   (reset! flat-canonical? true)
   (let [t0   (System/nanoTime)
         snap (read-sidecar flat)
@@ -10611,6 +10701,7 @@
             :subscribers (count @subscribers)}
    :telemetry-shed {:threshold telemetry-shed-depth
                     :sheds @telemetry-sheds}
+   :query-page-snapshots (query-page-snapshot-status)
    :telemetry-retention
    (merge {:max-bytes telemetry-retention-max-bytes
            :target-bytes telemetry-retention-target-bytes

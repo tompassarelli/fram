@@ -94,8 +94,10 @@
                          (pos? (get-in envelope [:notify :drops] 0))
                          (= 1 (get-in envelope [:notify :capacity]))
                          (= 4096 (get-in envelope [:durable-queue :capacity]))
+                         (= 4 (get-in envelope [:query-page-snapshots :capacity]))
+                         (zero? (get-in envelope [:query-page-snapshots :retained]))
                          (= #{:durable-queue :notify :telemetry-shed
-                              :telemetry-retention}
+                              :telemetry-retention :query-page-snapshots}
                             (set (keys envelope))))]
           (if pass?
             (println "coord-notify-bound: all checks passed"
