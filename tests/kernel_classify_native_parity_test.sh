@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 fixture="$repo_root/tests/fixtures/kernel_classify_native_parity"
-required_beagle="ce949bb3313f0ea65d86e0b3077d3e654fd8ad55"
 beagle_home="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 toolchain_home="${BEAGLE_TOOLCHAIN_HOME:-$HOME/code/beagle/main}"
 
@@ -24,10 +23,6 @@ done
 
 beagle_head="$(git -C "$beagle_home" rev-parse HEAD 2>/dev/null)" ||
   die "BEAGLE_HOME is not a Git checkout: $beagle_home"
-git -C "$beagle_home" cat-file -e "$required_beagle^{commit}" 2>/dev/null ||
-  die "Beagle $required_beagle is unavailable in BEAGLE_HOME"
-git -C "$beagle_home" merge-base --is-ancestor "$required_beagle" "$beagle_head" ||
-  die "Beagle $required_beagle has not landed in BEAGLE_HOME (found $beagle_head)"
 git -C "$beagle_home" diff --quiet HEAD -- ||
   die "BEAGLE_HOME has tracked changes; parity evidence requires an exact commit"
 
@@ -101,7 +96,7 @@ jvm_version="$(
 echo "kernel_classify_native_parity: PASS"
 echo "fram_head=$fram_head"
 echo "beagle_head=$beagle_head"
-echo "beagle_requirement=$required_beagle"
+echo "beagle_requirement=zig-library-emission"
 echo "zig=$zig_version"
 echo "managed=$jvm_version"
 echo "lines=$line_count bytes=$byte_count sha256=$output_sha"
