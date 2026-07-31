@@ -13,6 +13,8 @@
 #
 #   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
 #   names its split telemetry half. Reads expose the pair as one logical store.
+#   FRAM_GRAPH_OPS_LOG selects the separate graph-op JSONL telemetry file;
+#   set it to off, false, 0, or disabled for a zero-overhead disabled path.
 #   FRAM_MCP_PROFILE (optional; unset = "full", the exact twelve-tool surface):
 #   "graph-edit-v1" exposes AND server-authorizes ONLY the seven graph-edit verbs
 #   (denials pre-alias, pre-dispatch, zero mutation) and refuses to start unless

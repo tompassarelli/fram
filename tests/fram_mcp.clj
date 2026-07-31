@@ -22,6 +22,7 @@
 ;; Diagnostics go to STDERR; stdout is the JSON-RPC channel only.
 ;; ============================================================================
 (require '[cheshire.core :as json]
+         '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc]
@@ -1423,6 +1424,118 @@
     "edit-transaction"})
 (defn- edit-tool? [nm] (contains? edit-tools nm))
 
+;; Graph-op telemetry stays outside both Fram logs. This text-upstream stdio
+;; boundary sees profile denials, validation failures, reads, and the final edit
+;; result without changing any graph-upstream source or coordinator protocol.
+(def ^:private graph-op-read-tools #{"show" "ask" "query" "validate"})
+(def ^:private graph-op-tools (into edit-tools graph-op-read-tools))
+(def ^:private graph-ops-disabled-values #{"0" "off" "false" "disabled"})
+(def ^:private graph-ops-log
+  (let [configured (System/getenv "FRAM_GRAPH_OPS_LOG")]
+    (cond
+      (and configured
+           (contains? graph-ops-disabled-values (str/lower-case configured))) nil
+      (and configured (not (str/blank? configured))) configured
+      :else (str (or (System/getenv "XDG_STATE_HOME")
+                     (str (or (System/getenv "HOME")
+                              (System/getProperty "user.home"))
+                          "/.local/state"))
+                 "/fram/graph-ops.jsonl"))))
+(def ^:private graph-ops-warning-sent? (atom false))
+(def ^:private graph-op-attempts (atom {}))
+
+(defn- form-def-name [form]
+  (try
+    (let [parsed (edn/read-string form)]
+      (when (and (seq? parsed) (symbol? (second parsed)))
+        (str (second parsed))))
+    (catch Throwable _ nil)))
+
+(defn- graph-op-def [op args]
+  (or (:name args)
+      (case op
+        "add-def" (form-def-name (:form args))
+        "insert-after" (or (form-def-name (:form args)) (:after args))
+        "insert-before" (or (form-def-name (:form args)) (:before args))
+        "edit-transaction"
+        (let [names (keep (fn [edit]
+                            (or (:name edit) (form-def-name (:form edit))))
+                          (:edits args))]
+          (when (seq names) (str/join "," names)))
+        "show" (:subject args)
+        "ask" (let [find (get-in args [:query :find])]
+                (if (map? find) (:rel find) find))
+        "query" (let [find (get-in args [:query :find])]
+                  (if (map? find) (:rel find) find))
+        "validate" "__graph__"
+        nil)))
+
+(defn- module-bytes [module]
+  (when (string? module)
+    (let [f (io/file fram-src (str module ".bclj"))]
+      (when (.isFile f) (.length f)))))
+
+(defn- retry-seq! [op module definition]
+  (let [k [op module definition]
+        attempts (swap! graph-op-attempts update k (fnil inc 0))]
+    (dec (get attempts k))))
+
+(defn- wall-ms [started]
+  (/ (Math/round (/ (- (System/nanoTime) started) 1000.0)) 1000.0))
+
+(defn- first-line [s]
+  (let [line (some-> s str str/split-lines first str/trim)]
+    (if (str/blank? line) "unknown rejection" line)))
+
+(defn- append-graph-op! [record]
+  (try
+    (let [file (io/file graph-ops-log)
+          parent (.getParentFile file)
+          bytes (.getBytes (str (json/generate-string record) "\n") "UTF-8")]
+      (when parent (.mkdirs parent))
+      (java.nio.file.Files/write
+       (.toPath file) bytes
+       (into-array java.nio.file.OpenOption
+                   [java.nio.file.StandardOpenOption/CREATE
+                    java.nio.file.StandardOpenOption/WRITE
+                    java.nio.file.StandardOpenOption/APPEND])))
+    (catch Throwable t
+      (when (compare-and-set! graph-ops-warning-sent? false true)
+        (log! "fram-mcp: graph-op telemetry append failed (operations remain enabled):"
+              (.getMessage t))))))
+
+(defn- with-graph-op-telemetry [op args thunk]
+  (if (or (nil? graph-ops-log) (not (contains? graph-op-tools op)))
+    (thunk)
+    (let [started (System/nanoTime)
+          module (:module args)
+          definition (graph-op-def op args)
+          payload-bytes (alength (.getBytes (json/generate-string (or args {})) "UTF-8"))
+          retry-seq (retry-seq! op module definition)
+          base {:ts (str (java.time.Instant/now))
+                :op op
+                :module module
+                :def definition
+                :payload_bytes payload-bytes
+                :module_bytes (module-bytes module)
+                :recompile_ms nil
+                :retry_seq retry-seq}]
+      (try
+        (let [result (thunk)]
+          (append-graph-op!
+           (assoc base
+                  :wall_ms (wall-ms started)
+                  :accepted (not (boolean (:isError result)))
+                  :reject_reason (when (:isError result) (first-line (:text result)))))
+          result)
+        (catch Throwable t
+          (append-graph-op!
+           (assoc base
+                  :wall_ms (wall-ms started)
+                  :accepted false
+                  :reject_reason (str "handler exception: " (first-line (.getMessage t)))))
+          (throw t))))))
+
 ;; ============================================================================
 ;; PROFILES — opt-in restricted tool surfaces (FRAM_MCP_PROFILE; unset = full).
 ;; ============================================================================
@@ -1616,20 +1729,26 @@
       ;; PROFILE GATE FIRST: under a restricted profile an unauthorized or
       ;; unconfined call is denied HERE — before alias normalization
       ;; (handle-call / tl-call), before load-state, before any coordinator or
-      ;; subprocess contact. Zero mutation on the denial path.
+      ;; subprocess contact. The denial mutates no graph/store state; the outer
+      ;; telemetry wrapper may append its rejected observation to a separate file.
       ;;
       ;; Then: graph-AST edits run a multi-process recompile-gated transaction that
       ;; far exceeds the 10s QUERY budget (and is bounded by its own subprocesses,
       ;; not a CPU-pegged datalog fixpoint), so they BYPASS with-timeout.
       ;; Reads/queries keep the budget. Classify by tool name against the catalog's
       ;; edit ops.
-      (let [nm (:name params)]
-        (if-let [denial (profile-gate nm (:arguments params))]
-          (reply id {:content [{:type "text" :text (:text denial)}] :isError true})
-          (let [r (if (edit-tool? nm)
-                    (handle-call nm (:arguments params))
-                    (with-timeout 10000 (fn [] (handle-call nm (:arguments params)))))]
-            (reply id {:content [{:type "text" :text (:text r)}] :isError (boolean (:isError r))}))))
+      (let [nm (:name params)
+            args (:arguments params)
+            r (with-graph-op-telemetry
+                nm args
+                (fn []
+                  (if-let [denial (profile-gate nm args)]
+                    {:isError true :text (:text denial)}
+                    (if (edit-tool? nm)
+                      (handle-call nm args)
+                      (with-timeout 10000 (fn [] (handle-call nm args)))))))]
+        (reply id {:content [{:type "text" :text (:text r)}]
+                   :isError (boolean (:isError r))}))
 
       :else (reply-err id -32601 (str "method not found: " method)))))
 
