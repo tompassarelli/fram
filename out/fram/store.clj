@@ -52,6 +52,11 @@
    i 0]
   (if (>= i (count facts)) slots (recur (slot-add slots (key-slot (t/storedfact-id (nth facts i)) width) i) (inc i)))))
 
+(defn- build-tx-slots [entries width]
+  (loop [slots (fresh-slots width)
+   i 0]
+  (if (>= i (count entries)) slots (recur (slot-add slots (key-slot (t/storedtx-id (nth entries i)) width) i) (inc i)))))
+
 (defn- build-key-slots [buckets width]
   (loop [slots (fresh-slots width)
    i 0]
@@ -68,7 +73,7 @@
   (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
 (defn new-store []
-  (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots))))
+  (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots))))
 
 (defn- ^Boolean includes-id? [ids id]
   (loop [i 0]
@@ -97,9 +102,12 @@
   (if (value=? (t/storedvalue-value entry) v) entry (recur (inc i))))))))
 
 (defn- find-value-by-id [values id]
-  (loop [i 0]
-  (if (>= i (count values)) nil (let [entry (nth values i)]
-  (if (= id (t/storedvalue-id entry)) entry (recur (inc i)))))))
+  (loop [lo 0
+   hi (dec (count values))]
+  (if (> lo hi) nil (let [mid (quot (+ lo hi) 2)
+   entry (nth values mid)
+   k (t/storedvalue-id entry)]
+  (if (= k id) entry (if (< k id) (recur (inc mid) hi) (recur lo (dec mid))))))))
 
 (defn- find-fact [s cid]
   (let [facts (:facts s)
@@ -110,14 +118,20 @@
   (if (= cid (t/storedfact-id entry)) entry (recur (inc i))))))))
 
 (defn- find-tx-of [entries cid]
-  (loop [i 0]
-  (if (>= i (count entries)) nil (let [entry (nth entries i)]
-  (if (= cid (t/storedtxof-cid entry)) entry (recur (inc i)))))))
+  (loop [lo 0
+   hi (dec (count entries))]
+  (if (> lo hi) nil (let [mid (quot (+ lo hi) 2)
+   entry (nth entries mid)
+   k (t/storedtxof-cid entry)]
+  (if (= k cid) entry (if (< k cid) (recur (inc mid) hi) (recur lo (dec mid))))))))
 
-(defn- find-tx [entries id]
+(defn- find-tx [s id]
+  (let [entries (:txs s)
+   slots (:tx-slots s)
+   ids (t/idbucket-ids (nth slots (key-slot id (count slots))))]
   (loop [i 0]
-  (if (>= i (count entries)) nil (let [entry (nth entries i)]
-  (if (= id (t/storedtx-id entry)) entry (recur (inc i)))))))
+  (if (>= i (count ids)) nil (let [entry (nth entries (nth ids i))]
+  (if (= id (t/storedtx-id entry)) entry (recur (inc i))))))))
 
 (defn- index-value! [ctx v pos]
   (let [s (swap! ctx update :value-slots (fn [slots] (slot-put slots v pos)))]
@@ -154,28 +168,32 @@
 (defn begin-tx! [ctx agent]
   (let [tx (fresh-id! ctx)
    updated (swap! ctx update :next-seq inc)
-   seq (:next-seq updated)]
-  (swap! ctx update :txs (fn [entries] (conj entries (t/->StoredTx tx seq agent nil nil))))
+   seq (:next-seq updated)
+   after (swap! ctx update :txs (fn [entries] (conj entries (t/->StoredTx tx seq agent nil nil))))
+   pos (dec (count (:txs after)))
+   s (swap! ctx update :tx-slots (fn [slots] (slot-add slots (key-slot tx (count slots)) pos)))]
+  (if (> (count (:txs s)) (* slot-load (count (:tx-slots s)))) (do
+  (swap! ctx assoc :tx-slots (build-tx-slots (:txs s) (* 2 (count (:tx-slots s)))))))
   tx))
 
 (defn tx-seq [ctx tx]
-  (let [entry (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [entry (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? entry) (t/storedtx-seq entry) 0)))
 
 (defn tx-agent [ctx tx]
-  (let [entry (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [entry (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? entry) (t/storedtx-agent entry) nil)))
 
 (defn tx-observed [ctx tx]
-  (let [entry (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [entry (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? entry) (t/storedtx-observed entry) nil)))
 
 (defn tx-ts [ctx tx]
-  (let [entry (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [entry (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? entry) (t/storedtx-ts entry) nil)))
 
 (defn current-seq [ctx]
@@ -190,14 +208,14 @@
   (mapv (fn [entry] (if (= id (t/storedtx-id entry)) (t/->StoredTx id (t/storedtx-seq entry) (t/storedtx-agent entry) observed ts) entry)) entries))
 
 (defn set-tx-observed! [ctx tx observed]
-  (let [old (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [old (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? old) (swap! ctx update :txs replace-tx tx observed (t/storedtx-ts old)) (let [s (deref ctx)]
   s))))
 
 (defn set-tx-ts! [ctx tx ^String ts]
-  (let [old (find-tx (:txs (let [s (deref ctx)]
-  s)) tx)]
+  (let [old (find-tx (let [s (deref ctx)]
+  s) tx)]
   (if (some? old) (swap! ctx update :txs replace-tx tx (t/storedtx-observed old) ts) (let [s (deref ctx)]
   s))))
 
@@ -395,8 +413,9 @@
 
 (defn load-store! [ctx data]
   (let [values (t/storedump-values data)
-   facts (t/storedump-facts data)]
-  (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data) (t/storedump-objects data) values facts (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data) empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (build-slots values (slots-width-for (count values))) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (build-fact-slots facts (slots-width-for (count facts)))))
+   facts (t/storedump-facts data)
+   txs (t/storedump-txs data)]
+  (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data) (t/storedump-objects data) values facts (t/storedump-tx-of data) txs (t/storedump-superseded data) empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets (build-slots values (slots-width-for (count values))) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots) (build-fact-slots facts (slots-width-for (count facts))) (build-tx-slots txs (slots-width-for (count txs)))))
   (doseq [entry facts]
   (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
   ctx))

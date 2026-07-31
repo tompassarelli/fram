@@ -2,8 +2,9 @@
 ;; Reified Store kernel.  Its native representation is record/vector only;
 ;; linear scans are intentional until the native index layer owns this concern —
 ;; except the probes that are linear in the whole store, which made loading one
-;; impossible: find-value, the fact-index bucket family, and find-fact.  Each is
-;; addressed through a hash-slot table instead.
+;; impossible.  find-value, the fact-index bucket family, find-fact and find-tx
+;; are addressed through a hash-slot table; find-value-by-id and find-tx-of binary
+;; search, because :values and :tx-of are ordered by construction (see fresh-id!).
 (ns fram.store)
 (define-mode strict)
 (require fram.types :as t)
@@ -63,6 +64,11 @@
     (if (>= i (count facts)) slots
       (recur (slot-add slots (key-slot (t/storedfact-id (nth facts i)) width) i) (inc i)))))
 
+(defn- build-tx-slots [entries :- (Vec t/StoredTx) width :- Int] :- (Vec t/IdBucket)
+  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
+    (if (>= i (count entries)) slots
+      (recur (slot-add slots (key-slot (t/storedtx-id (nth entries i)) width) i) (inc i)))))
+
 (defn- build-key-slots [buckets :- (Vec t/IdBucket) width :- Int] :- (Vec t/IdBucket)
   (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
     (if (>= i (count buckets)) slots
@@ -85,7 +91,7 @@
                    (fresh-slots initial-slots)
                    (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots)
                    (fresh-slots initial-slots) (fresh-slots initial-slots)
-                   (fresh-slots initial-slots))))
+                   (fresh-slots initial-slots) (fresh-slots initial-slots))))
 
 (defn- includes-id? [ids :- (Vec Int) id :- Int] :- Bool
   (loop [i 0]
@@ -126,11 +132,17 @@
         (let [entry :- t/StoredValue (nth values (nth ids i))]
           (if (value=? (t/storedvalue-value entry) v) entry (recur (inc i))))))))
 
+;; value-object?/literal run once per fact on a boot, so a scan here was quadratic
+;; in the corpus.  fresh-id! is the sole, strictly increasing minter and value!
+;; appends at mint time, so :values is ordered by id and a probe can halve it.
 (defn- find-value-by-id [values :- (Vec t/StoredValue) id :- Int] :- t/StoredValue?
-  (loop [i 0]
-    (if (>= i (count values)) nil
-      (let [entry :- t/StoredValue (nth values i)]
-        (if (= id (t/storedvalue-id entry)) entry (recur (inc i)))))))
+  (loop [lo 0 hi (dec (count values))]
+    (if (> lo hi) nil
+      (let [mid (quot (+ lo hi) 2)
+            entry :- t/StoredValue (nth values mid)
+            k (t/storedvalue-id entry)]
+        (if (= k id) entry
+          (if (< k id) (recur (inc mid) hi) (recur lo (dec mid))))))))
 
 ;; fact-of is on the supersede path, so this ran once per assert against the whole
 ;; of :facts.  The probe walks one hash slot of positions instead.
@@ -143,17 +155,28 @@
         (let [entry :- t/StoredFact (nth facts (nth ids i))]
           (if (= cid (t/storedfact-id entry)) entry (recur (inc i))))))))
 
+;; fact! conj's the tx-of row under the cid it just minted, so :tx-of carries the
+;; same ascending-cid order as :facts and halves the same way.
 (defn- find-tx-of [entries :- (Vec t/StoredTxOf) cid :- Int] :- t/StoredTxOf?
-  (loop [i 0]
-    (if (>= i (count entries)) nil
-      (let [entry :- t/StoredTxOf (nth entries i)]
-        (if (= cid (t/storedtxof-cid entry)) entry (recur (inc i)))))))
+  (loop [lo 0 hi (dec (count entries))]
+    (if (> lo hi) nil
+      (let [mid (quot (+ lo hi) 2)
+            entry :- t/StoredTxOf (nth entries mid)
+            k (t/storedtxof-cid entry)]
+        (if (= k cid) entry
+          (if (< k cid) (recur (inc mid) hi) (recur lo (dec mid))))))))
 
-(defn- find-tx [entries :- (Vec t/StoredTx) id :- Int] :- t/StoredTx?
-  (loop [i 0]
-    (if (>= i (count entries)) nil
-      (let [entry :- t/StoredTx (nth entries i)]
-        (if (= id (t/storedtx-id entry)) entry (recur (inc i)))))))
+;; The one by-id vector that is NOT ordered: coord_daemon's migrate/tail seam
+;; assoc's a raw map into :txs behind begin-tx!'s back, so a mid-vector key can be
+;; nil and a binary search would read it.  Slotted like :facts instead.
+(defn- find-tx [s :- t/Store id :- Int] :- t/StoredTx?
+  (let [entries :- (Vec t/StoredTx) (:txs s)
+        slots :- (Vec t/IdBucket) (:tx-slots s)
+        ids :- (Vec Int) (t/idbucket-ids (nth slots (key-slot id (count slots))))]
+    (loop [i 0]
+      (if (>= i (count ids)) nil
+        (let [entry :- t/StoredTx (nth entries (nth ids i))]
+          (if (= id (t/storedtx-id entry)) entry (recur (inc i))))))))
 
 ;; pos is the position the new entry took in :values, so the probe reaches it by
 ;; nth rather than by another scan.  Doubling keeps the chain at slot-load.
@@ -194,24 +217,32 @@
   (let [entry :- t/StoredValue? (find-value (let [s :- t/Store (deref ctx)] s) v)]
     (if (some? entry) (t/storedvalue-id entry) nil)))
 
+;; pos is read back off the appended vector, not predicted: a foreign append into
+;; :txs must shift this row's position rather than silently mis-slot it.
 (defn begin-tx! [ctx :- (Atom t/Store) agent :- t/StoreValue] :- Int
   (let [tx (fresh-id! ctx) updated :- t/Store (swap! ctx update :next-seq inc)
-        seq (:next-seq updated)]
-    (swap! ctx update :txs (fn [entries :- (Vec t/StoredTx)] :- (Vec t/StoredTx)
-                             (conj entries (t/->StoredTx tx seq agent nil nil))))
+        seq (:next-seq updated)
+        after :- t/Store (swap! ctx update :txs (fn [entries :- (Vec t/StoredTx)] :- (Vec t/StoredTx)
+                                                  (conj entries (t/->StoredTx tx seq agent nil nil))))
+        pos (dec (count (:txs after)))
+        s :- t/Store (swap! ctx update :tx-slots
+                            (fn [slots :- (Vec t/IdBucket)] :- (Vec t/IdBucket)
+                              (slot-add slots (key-slot tx (count slots)) pos)))]
+    (when (> (count (:txs s)) (* slot-load (count (:tx-slots s))))
+      (swap! ctx assoc :tx-slots (build-tx-slots (:txs s) (* 2 (count (:tx-slots s))))))
     tx))
 
 (defn tx-seq [ctx :- (Atom t/Store) tx :- Int] :- Int
-  (let [entry :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? entry) (t/storedtx-seq entry) 0)))
 (defn tx-agent [ctx :- (Atom t/Store) tx :- Int] :- t/StoreValue?
-  (let [entry :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? entry) (t/storedtx-agent entry) nil)))
 (defn tx-observed [ctx :- (Atom t/Store) tx :- Int] :- Int?
-  (let [entry :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? entry) (t/storedtx-observed entry) nil)))
 (defn tx-ts [ctx :- (Atom t/Store) tx :- Int] :- String?
-  (let [entry :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? entry) (t/storedtx-ts entry) nil)))
 (defn current-seq [ctx :- (Atom t/Store)] :- Int (:next-seq (let [s :- t/Store (deref ctx)] s)))
 (defn supersedes-pred [ctx :- (Atom t/Store)] :- Int? (:supersedes-pred (let [s :- t/Store (deref ctx)] s)))
@@ -222,12 +253,12 @@
             (t/->StoredTx id (t/storedtx-seq entry) (t/storedtx-agent entry) observed ts)
             entry)) entries))
 (defn set-tx-observed! [ctx :- (Atom t/Store) tx :- Int observed :- Int] :- t/Store
-  (let [old :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [old :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? old)
       (swap! ctx update :txs replace-tx tx observed (t/storedtx-ts old))
       (let [s :- t/Store (deref ctx)] s))))
 (defn set-tx-ts! [ctx :- (Atom t/Store) tx :- Int ts :- String] :- t/Store
-  (let [old :- t/StoredTx? (find-tx (:txs (let [s :- t/Store (deref ctx)] s)) tx)]
+  (let [old :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
     (if (some? old)
       (swap! ctx update :txs replace-tx tx (t/storedtx-observed old) ts)
       (let [s :- t/Store (deref ctx)] s))))
@@ -363,15 +394,17 @@
 ;; fact below and their tables double along with them.
 (defn load-store! [ctx :- (Atom t/Store) data :- t/StoreDump] :- (Atom t/Store)
   (let [values :- (Vec t/StoredValue) (t/storedump-values data)
-        facts :- (Vec t/StoredFact) (t/storedump-facts data)]
+        facts :- (Vec t/StoredFact) (t/storedump-facts data)
+        txs :- (Vec t/StoredTx) (t/storedump-txs data)]
     (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data)
                             (t/storedump-objects data) values facts
-                            (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data)
+                            (t/storedump-tx-of data) txs (t/storedump-superseded data)
                             empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets
                             (build-slots values (slots-width-for (count values)))
                             (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots)
                             (fresh-slots initial-slots) (fresh-slots initial-slots)
-                            (build-fact-slots facts (slots-width-for (count facts)))))
+                            (build-fact-slots facts (slots-width-for (count facts)))
+                            (build-tx-slots txs (slots-width-for (count txs)))))
     (doseq [entry facts]
       (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
     ctx))

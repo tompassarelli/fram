@@ -34,4 +34,7 @@
    ;; every slot here holds POSITIONS in the vector it indexes, never its entries.
    l-slots :- (Vec IdBucket) p-slots :- (Vec IdBucket) r-slots :- (Vec IdBucket)
    lp-slots :- (Vec IdBucket) pr-slots :- (Vec IdBucket)
-   fact-slots :- (Vec IdBucket)])
+   fact-slots :- (Vec IdBucket)
+   ;; :txs is the one vector NOT ordered by id: coord_daemon's migrate/tail seam
+   ;; appends a raw map behind the store's back, so it is slotted, not searched.
+   tx-slots :- (Vec IdBucket)])
