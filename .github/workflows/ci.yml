@@ -76,10 +76,13 @@ jobs:
           for t in tests/*_test.clj; do
             [ "$t" = tests/tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
             echo "== $t =="
-            if [ "$t" = tests/mcp_candidate_test.clj ]; then
-              FRAM_COORD_READ_TIMEOUT_MS=180000 bb -cp out "$t" || fail=1
+            if [ "$t" = tests/coord_addressable_forms_test.clj ]; then
+              timeout --signal=TERM --kill-after=10s 180s clojure -M "$t" || fail=1
+            elif [ "$t" = tests/mcp_candidate_test.clj ]; then
+              FRAM_COORD_READ_TIMEOUT_MS=180000 \
+                timeout --signal=TERM --kill-after=10s 180s bb -cp out "$t" || fail=1
             else
-              bb -cp out "$t" || fail=1
+              timeout --signal=TERM --kill-after=10s 180s bb -cp out "$t" || fail=1
             fi
           done
           exit $fail
