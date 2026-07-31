@@ -69,7 +69,10 @@
 
 (defn cardinality [ctx :- (Atom t/Store) pname :- String] :- String
   (let [pid (resolve-predicate ctx pname) card-pid (resolve-predicate ctx "cardinality") cs (if (and (some? pid) (some? card-pid)) (c/by-lp ctx pid card-pid) [])]
-    (if (empty? cs) "multi" (c/literal ctx (:r (c/fact-of ctx (first cs)))))))
+    (if (empty? cs)
+      "multi"
+      (let [v :- Any (c/literal ctx (:r (c/fact-of ctx (first cs))))]
+        (if (string? v) v "multi")))))
 
 ;; supersede prior live (subj,pid) facts other than new-cid (single-valued write)
 (defn- replace! [ctx :- (Atom t/Store) subj :- Int pid :- Int new-cid :- Int tx :- Int] :- Any

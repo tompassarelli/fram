@@ -40,7 +40,8 @@
   (let [pid (resolve-predicate ctx pname)
    card-pid (resolve-predicate ctx "cardinality")
    cs (if (and (some? pid) (some? card-pid)) (c/by-lp ctx pid card-pid) [])]
-  (if (empty? cs) "multi" (c/literal ctx (:r (c/fact-of ctx (first cs)))))))
+  (if (empty? cs) "multi" (let [v (c/literal ctx (:r (c/fact-of ctx (first cs))))]
+  (if (string? v) v "multi")))))
 
 (defn- replace! [ctx subj pid new-cid tx]
   (let [sup (c/value! ctx "store-supersedes")]
