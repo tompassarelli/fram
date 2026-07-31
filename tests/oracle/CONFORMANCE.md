@@ -65,3 +65,19 @@ oracle: 12/12 corpora agree
 Until the Zig replay executable exists, `bash tests/zig_occ_oracle_test.sh
 --jvm-only` runs and retains the JVM side alone for deterministic-oracle checks.
 
+
+## Excluded incidental daemon facts (C3 record)
+
+Fingerprints exclude facts whose subject matches `@snapshot:*` or `@log:*`:
+daemon snapshot/rotation bookkeeping whose values embed per-run absolute
+paths. They are not write/OCC semantics and the Zig core never emits them.
+Recorded 2026-07-31 after the determinism bar caught `@snapshot:0
+image_path <run-dir>` varying across runs.
+
+## A3 falsified (pinned as observed)
+
+The plan assumed an empty-log daemon boots at version 0 minting no txs.
+Observed: boot mints 6 bookkeeping txs (S0 pins `0	version	6`). The oracle
+bar is JVM/Zig agreement, so the Zig core must replicate boot bookkeeping
+or the corpus comparison starts after boot settling; pinned outputs carry
+the observed values.

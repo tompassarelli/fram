@@ -179,7 +179,10 @@
       (swap! raw conj {:request {:op :facts} :response facts-response})
       (println (str "final-version\t" (:version facts-response)))
       (doseq [[l p r] (:facts facts-response)
-              :when (not (contains? schema-predicates p))]
+              ;; daemon bookkeeping subjects (@snapshot:*, @log:*) carry
+              ;; per-run absolute paths — never oracle semantics (C3)
+              :when (and (not (contains? schema-predicates p))
+                         (not (re-find #"^@(?:snapshot|log):" (str l))))]
         (println (str "fact\t" l "\t" p "\t" r))))
     (when-let [raw-path (System/getenv "FRAM_ORACLE_RAW_PATH")]
       (spit raw-path (str (str/join "\n" (map pr-str @raw)) "\n")))))

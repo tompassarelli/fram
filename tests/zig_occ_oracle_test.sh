@@ -101,19 +101,24 @@ run_jvm_once() {
   raw_output="$run_dir/jvm/$name.raw"
   normalized_unsorted="$test_dir/$name.jvm.unsorted"
   : >"$log"
+  # hermetic telemetry sibling: without this the daemon folds the LIVE
+  # telemetry log into its view (contaminates fingerprints, 19s boots)
+  : >"$log.telemetry"
 
-  env -u FRAM_REQUIRE_LOG_FENCE \
-    bb -cp out coord_daemon.clj serve-flat "$port" "$log" \
+  # clojure -M, not bb: coord_daemon's serve loop never binds under bb
+  # (repo praxis: tests/coord_admission_deadline_test.clj:172)
+  env -u FRAM_REQUIRE_LOG_FENCE FRAM_TELEMETRY_LOG="$log.telemetry" \
+    clojure -M coord_daemon.clj serve-flat "$port" "$log" \
     >"$daemon_out" 2>&1 &
   daemon_pid=$!
 
   local ready=
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 120); do
     if response="$(request "$port" '{:op :version}' 2>/dev/null)"; then
       ready=$response
       break
     fi
-    sleep 0.025
+    sleep 0.5
   done
   if [[ -z "$ready" ]]; then
     stop_daemon
