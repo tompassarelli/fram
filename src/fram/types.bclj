@@ -26,4 +26,6 @@
    objects :- (Vec Int) values :- (Vec StoredValue) facts :- (Vec StoredFact)
    tx-of :- (Vec StoredTxOf) txs :- (Vec StoredTx) superseded :- (Vec Int)
    idx-by-l :- (Vec IdBucket) idx-by-p :- (Vec IdBucket) idx-by-r :- (Vec IdBucket)
-   idx-by-lp :- (Vec PairBucket) idx-by-pr :- (Vec PairBucket)])
+   idx-by-lp :- (Vec PairBucket) idx-by-pr :- (Vec PairBucket)
+   ;; hash-slot index over :values, keyed by slot, holding POSITIONS in :values
+   value-slots :- (Vec IdBucket)])

@@ -1,12 +1,12 @@
 (ns fram.types)
 
-^{:line 10 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord StoredValue [id value])
+(defrecord StoredValue [id value])
 
 (defn storedvalue-id [r] (:id r))
 
 (defn storedvalue-value [r] (:value r))
 
-^{:line 11 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord StoredFact [id l p r])
+(defrecord StoredFact [id l p r])
 
 (defn storedfact-id [r] (:id r))
 
@@ -16,7 +16,7 @@
 
 (defn storedfact-r [r] (:r r))
 
-^{:line 12 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord FactView [l p r])
+(defrecord FactView [l p r])
 
 (defn factview-l [r] (:l r))
 
@@ -24,13 +24,13 @@
 
 (defn factview-r [r] (:r r))
 
-^{:line 13 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord StoredTxOf [cid tx])
+(defrecord StoredTxOf [cid tx])
 
 (defn storedtxof-cid [r] (:cid r))
 
 (defn storedtxof-tx [r] (:tx r))
 
-^{:line 14 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord StoredTx [id seq agent observed ts])
+(defrecord StoredTx [id seq agent observed ts])
 
 (defn storedtx-id [r] (:id r))
 
@@ -42,13 +42,13 @@
 
 (defn storedtx-ts [r] (:ts r))
 
-^{:line 15 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord IdBucket [key ids])
+(defrecord IdBucket [key ids])
 
 (defn idbucket-key [r] (:key r))
 
 (defn idbucket-ids [r] (:ids r))
 
-^{:line 16 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord PairBucket [left right ids])
+(defrecord PairBucket [left right ids])
 
 (defn pairbucket-left [r] (:left r))
 
@@ -56,7 +56,7 @@
 
 (defn pairbucket-ids [r] (:ids r))
 
-^{:line 18 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord StoreDump [version next-id next-seq supersedes-pred objects values facts tx-of txs superseded])
+(defrecord StoreDump [version next-id next-seq supersedes-pred objects values facts tx-of txs superseded])
 
 (defn storedump-version [r] (:version r))
 
@@ -78,7 +78,7 @@
 
 (defn storedump-superseded [r] (:superseded r))
 
-^{:line 24 :file "/home/tom/code/fram/wt-zig-store-engine-native-e8b5/src/fram/types.bclj"} (defrecord Store [next-id next-seq supersedes-pred objects values facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr])
+(defrecord Store [next-id next-seq supersedes-pred objects values facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr value-slots])
 
 (defn store-next-id [r] (:next-id r))
 
@@ -107,3 +107,5 @@
 (defn store-idx-by-lp [r] (:idx-by-lp r))
 
 (defn store-idx-by-pr [r] (:idx-by-pr r))
+
+(defn store-value-slots [r] (:value-slots r))

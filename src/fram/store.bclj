@@ -1,6 +1,7 @@
 #lang beagle/clj
 ;; Reified Store kernel.  Its native representation is record/vector only;
-;; linear scans are intentional until the native index layer owns this concern.
+;; linear scans are intentional until the native index layer owns this concern —
+;; except value interning, whose scan made loading a store impossible (find-value).
 (ns fram.store)
 (define-mode strict)
 (require fram.types :as t)
@@ -13,9 +14,48 @@
 (def empty-id-buckets :- (Vec t/IdBucket) [])
 (def empty-pair-buckets :- (Vec t/PairBucket) [])
 
+;; :value-slots sizing.  The table doubles once :values holds more than slot-load
+;; entries per slot, so a probe walks slot-load positions amortized while a fresh
+;; store pays for initial-slots buckets, not for a corpus it may never see.
+(def initial-slots :- Int 64)
+(def slot-load :- Int 4)
+
+(defn- value-hash [v :- t/StoreValue] :- Int
+  (if (string? v) (hash v)
+    (if (integer? v) (hash v)
+      (if (boolean? v) (hash v)
+        (if (keyword? v) (hash v)
+          (if (vector? v) (hash v) 0))))))
+
+;; Agrees with value=?: it narrows on the same five alternatives, so two values
+;; that intern as one always land in the same slot.
+(defn- slot-of [v :- t/StoreValue width :- Int] :- Int
+  (mod (value-hash v) width))
+
+(defn- fresh-slots [width :- Int] :- (Vec t/IdBucket)
+  (loop [acc :- (Vec t/IdBucket) empty-id-buckets i 0]
+    (if (>= i width) acc
+      (recur (conj acc (t/->IdBucket i empty-ids)) (inc i)))))
+
+;; Slot-addressed update: assoc rewrites one path of the persistent vector, where
+;; the put-bucket idiom would rebuild every bucket per insert (linear in width).
+(defn- slot-put [slots :- (Vec t/IdBucket) v :- t/StoreValue pos :- Int] :- (Vec t/IdBucket)
+  (let [i (slot-of v (count slots)) bucket :- t/IdBucket (nth slots i)]
+    (assoc slots i (t/->IdBucket i (conj (t/idbucket-ids bucket) pos)))))
+
+(defn- build-slots [values :- (Vec t/StoredValue) width :- Int] :- (Vec t/IdBucket)
+  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
+    (if (>= i (count values)) slots
+      (recur (slot-put slots (t/storedvalue-value (nth values i)) i) (inc i)))))
+
+(defn- slots-width-for [n :- Int] :- Int
+  (loop [width initial-slots]
+    (if (>= (* slot-load width) n) width (recur (* 2 width)))))
+
 (defn new-store [] :- (Atom t/Store)
   (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids
-                   empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets)))
+                   empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets
+                   (fresh-slots initial-slots))))
 
 (defn- includes-id? [ids :- (Vec Int) id :- Int] :- Bool
   (loop [i 0]
@@ -44,11 +84,17 @@
         (if (keyword? a) (and (keyword? b) (= a b))
           (and (vector? b) (= a b)))))))
 
-(defn- find-value [values :- (Vec t/StoredValue) v :- t/StoreValue] :- t/StoredValue?
-  (loop [i 0]
-    (if (>= i (count values)) nil
-      (let [entry :- t/StoredValue (nth values i)]
-        (if (value=? (t/storedvalue-value entry) v) entry (recur (inc i)))))))
+;; The one site the file-header position does NOT cover: value! probes for an
+;; existing intern on every write, so a scan of :values here made loading a store
+;; quadratic in its distinct values.  The probe walks one hash slot instead.
+(defn- find-value [s :- t/Store v :- t/StoreValue] :- t/StoredValue?
+  (let [values :- (Vec t/StoredValue) (:values s)
+        slots :- (Vec t/IdBucket) (:value-slots s)
+        ids :- (Vec Int) (t/idbucket-ids (nth slots (slot-of v (count slots))))]
+    (loop [i 0]
+      (if (>= i (count ids)) nil
+        (let [entry :- t/StoredValue (nth values (nth ids i))]
+          (if (value=? (t/storedvalue-value entry) v) entry (recur (inc i))))))))
 
 (defn- find-value-by-id [values :- (Vec t/StoredValue) id :- Int] :- t/StoredValue?
   (loop [i 0]
@@ -74,14 +120,24 @@
       (let [entry :- t/StoredTx (nth entries i)]
         (if (= id (t/storedtx-id entry)) entry (recur (inc i)))))))
 
+;; pos is the position the new entry took in :values, so the probe reaches it by
+;; nth rather than by another scan.  Doubling keeps the chain at slot-load.
+(defn- index-value! [ctx :- (Atom t/Store) v :- t/StoreValue pos :- Int] :- t/Store
+  (let [s :- t/Store (swap! ctx update :value-slots
+                            (fn [slots :- (Vec t/IdBucket)] :- (Vec t/IdBucket) (slot-put slots v pos)))]
+    (if (> (count (:values s)) (* slot-load (count (:value-slots s))))
+      (swap! ctx assoc :value-slots (build-slots (:values s) (* 2 (count (:value-slots s)))))
+      s)))
+
 (defn value! [ctx :- (Atom t/Store) v :- t/StoreValue] :- Int
-  (let [s :- t/Store (deref ctx) known :- t/StoredValue? (find-value (:values s) v)]
+  (let [s :- t/Store (deref ctx) known :- t/StoredValue? (find-value s v)]
     (if (some? known)
       (t/storedvalue-id known)
-      (let [id (fresh-id! ctx)]
+      (let [id (fresh-id! ctx) pos (count (:values s))]
         (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids id)))
         (swap! ctx update :values (fn [entries :- (Vec t/StoredValue)] :- (Vec t/StoredValue)
                                     (conj entries (t/->StoredValue id v))))
+        (index-value! ctx v pos)
         id))))
 
 (defn value-object? [ctx :- (Atom t/Store) id :- Int] :- Bool
@@ -92,7 +148,7 @@
     (if (some? entry) (t/storedvalue-value entry) nil)))
 
 (defn value-id [ctx :- (Atom t/Store) v :- t/StoreValue] :- Int?
-  (let [entry :- t/StoredValue? (find-value (:values (let [s :- t/Store (deref ctx)] s)) v)]
+  (let [entry :- t/StoredValue? (find-value (let [s :- t/Store (deref ctx)] s) v)]
     (if (some? entry) (t/storedvalue-id entry) nil)))
 
 (defn begin-tx! [ctx :- (Atom t/Store) agent :- t/StoreValue] :- Int
@@ -215,11 +271,15 @@
 (defn dump-store [ctx :- (Atom t/Store)] :- t/StoreDump
   (let [s :- t/Store (deref ctx)]
     (t/->StoreDump 1 (:next-id s) (:next-seq s) (:supersedes-pred s) (:objects s) (:values s) (:facts s) (:tx-of s) (:txs s) (:superseded s))))
+;; :value-slots is derived, never dumped: a loaded store rebuilds it from :values
+;; sized to the corpus, exactly as the fact indexes are rebuilt below.
 (defn load-store! [ctx :- (Atom t/Store) data :- t/StoreDump] :- (Atom t/Store)
-  (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data)
-                          (t/storedump-objects data) (t/storedump-values data) (t/storedump-facts data)
-                          (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data)
-                          empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets))
-  (doseq [entry (t/storedump-facts data)]
-    (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
-  ctx)
+  (let [values :- (Vec t/StoredValue) (t/storedump-values data)]
+    (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data)
+                            (t/storedump-objects data) values (t/storedump-facts data)
+                            (t/storedump-tx-of data) (t/storedump-txs data) (t/storedump-superseded data)
+                            empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets
+                            (build-slots values (slots-width-for (count values)))))
+    (doseq [entry (t/storedump-facts data)]
+      (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
+    ctx))
