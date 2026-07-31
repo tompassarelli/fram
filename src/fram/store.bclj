@@ -22,15 +22,19 @@
     (if (>= i (count ids)) false
       (if (= id (nth ids i)) true (recur (inc i))))))
 
+;; Dedup for caller-supplied ids (:superseded). :objects never needs it — see fresh-id!.
 (defn- add-id [ids :- (Vec Int) id :- Int] :- (Vec Int)
   (if (includes-id? ids id) ids (conj ids id)))
 
+;; Sole minter of object ids, strictly increasing and never reissued, so every id
+;; it returns is provably absent from :objects: the three :objects inserts conj
+;; directly instead of paying add-id's O(n) membership scan per insert.
 (defn fresh-id! [ctx :- (Atom t/Store)] :- Int
   (:next-id (swap! ctx update :next-id inc)))
 
 (defn entity! [ctx :- (Atom t/Store)] :- Int
   (let [id (fresh-id! ctx)]
-    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids id)))
+    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids id)))
     id))
 
 (defn- value=? [a :- t/StoreValue b :- t/StoreValue] :- Bool
@@ -75,7 +79,7 @@
     (if (some? known)
       (t/storedvalue-id known)
       (let [id (fresh-id! ctx)]
-        (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids id)))
+        (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids id)))
         (swap! ctx update :values (fn [entries :- (Vec t/StoredValue)] :- (Vec t/StoredValue)
                                     (conj entries (t/->StoredValue id v))))
         id))))
@@ -166,7 +170,7 @@
 
 (defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
   (let [cid (fresh-id! ctx)]
-    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids cid)))
+    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids cid)))
     (swap! ctx update :facts (fn [facts :- (Vec t/StoredFact)] :- (Vec t/StoredFact) (conj facts (t/->StoredFact cid l p r))))
     (swap! ctx update :tx-of (fn [entries :- (Vec t/StoredTxOf)] :- (Vec t/StoredTxOf) (conj entries (t/->StoredTxOf cid tx))))
     (index-fact! ctx cid l p r)
