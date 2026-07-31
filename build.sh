@@ -7,94 +7,47 @@
 # Clojure) at $BEAGLE_HOME (default ~/code/beagle/main), entered via direnv.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/src"; OUT="$HERE/out"
+OUT="$HERE/out"
 BEAGLE="${BEAGLE_HOME:-$HOME/code/beagle/main}"
+MANIFEST_DIR="$HERE/build/generated-targets.d"
 
-mkdir -p "$OUT/fram"
-BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
-  "$SRC/fram/rt_core.bclj" "$OUT/fram/rt_core.clj" >/dev/null
-echo "  built fram/rt_core"
-cp "$SRC/fram/rt.clj" "$OUT/fram/rt.clj"     # hand-written runtime ships as-is
-cp "$SRC/fram/json.clj" "$OUT/fram/json.clj" # JSON runtime for the clockify module
-cp "$SRC/fram/authority_json.clj" "$OUT/fram/authority_json.clj" # strict raw JSON host boundary
-for m in types store schema datalog kernel kernel_classify fold import export query tools authority world claims main; do
-  BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
-    "$SRC/fram/$m.bclj" "$OUT/fram/$m.clj" >/dev/null
-  echo "  built fram/$m"
-done
+shopt -s nullglob
+fragments=("$MANIFEST_DIR"/*.tsv)
+shopt -u nullglob
+if ((${#fragments[@]} == 0)); then
+  echo "build.sh: no generation manifests in $MANIFEST_DIR" >&2
+  exit 1
+fi
 
-# Coordinator-layer modules being migrated off hand-written Clojure (engine core
-# port, north thread 019f9f0e-de2a-7759-bb10-db8b14be6fad). They live in src/
-# rather than src/fram/ because their namespaces are bare (`pull`, `resolve-core`)
-# — coord_daemon.clj load-file's the coordinator layer instead of requiring it.
-#   pull         M0, ADOPTED: src/pull.bclj is a RENDERED VIEW of the fact graph
-#                (`;; @upstream:graph`) — edit it with the graph-edit verbs, never
-#                as text, then rerun this script. out/pull.clj is what
-#                coord_daemon.clj `(require 'pull)`s; the hand-written pull.clj is
-#                gone (byte-identical golden parity, tests/goldens/pull).
-#   resolve_core M1 Cut A: the CRDT order-key algebra + form vocabulary that
-#                resolve.clj now aliases (rc/*), and which coord_daemon.clj and
-#                tests/coord_crdt_*.clj read through it.
-#   resolve_read M1 Cut B: the view-relative read layer (election, node reads,
-#                ordered-tree navigation) that resolve.clj now wraps as rr/*.
-#                The ^:dynamic state stays in resolve.clj and is passed in.
-#   resolve_binds M1 Cut C: the binding extractor — what a destructuring
-#                pattern, param vector, let/for binding vector or match pattern
-#                binds, and in what order (rb/*).
-#   resolve_modules M1 Cut D: one module's frame (top-level defs, types,
-#                synthesized accessors) and its import/export surface (rm/*).
-#   resolve_render M1 Cut E: render a node back to source (render-sym,
-#                node->str, node->canon) and the O(N) anchor search over a def
-#                subtree that replace-in-body addresses (rv/*).
-#   resolve_walk  M1 Cut G: the lexical walk itself — descend the ordered AST,
-#                carry the scope stack, and write each reference's refers_to
-#                (plus the comment resolver and the per-src walk driver) (rw/*).
-#   resolve_query M1 Cut F: the code queries that run ON the resolved graph
-#                — call-edges, blast-closure, binding-privacy and the
-#                stratified-Datalog dead-private query (rq/*).
-#   resolve_verbs M1 Cut H: the authoring verbs themselves — rename,
-#                upsert/insert/set-body/replace-in-body/delete/reorder and the
-#                graph-path op dispatch (rvb/*). The dynamic state + the host
-#                helpers they call are passed in as one Verb record.
-#   resolve_mint  M1 Cut I: the mint/author layer — a datum enters the store as
-#                FACTS (register!/mint-leaf!/mint-datum!), the live fN edge
-#                reader, fact retirement, the no-capture scan and the
-#                projection writer (rmi/*). The dynamic state is passed in as
-#                one Mint record.
-#   resolve_corpus M1 Cut L: the corpus/store frame — install fresh or warm
-#                resolver state, derive frames/exports, and drive whole/scoped
-#                resolution (rco/*). Dynamic vars stay in resolve.clj.
-#   fri_port     M3: typed implementation of the mmap image writer/reader.
-#   fri          M3: public facade preserving the original `fri` namespace and
-#                its dynamic cache-cap test seam.
-#   coord_daemon_wire M6 Cut 1: pure wire request/response parsing, formatting,
-#                classification, and error-envelope construction. The root
-#                coord_daemon.clj retains sockets, dispatch, state, and lifecycle.
-#   coord_read   M5 Cut A: pure coordinator reads over an explicit store handle;
-#                coord.clj retains state, dynamic vars, writers, and concurrency.
-#   coord_commit M5 Cut B: pure OCC conflict detection and commit-plan construction
-#                over explicit snapshots; coord.clj retains mutation and durability.
-#   defcheck_gate M2: typed and untyped incremental check logic over an explicit
-#                DefcheckState; the coordinator owns runtime state and sockets.
-for m in pull resolve_core resolve_read resolve_binds resolve_modules resolve_render resolve_query resolve_walk resolve_corpus resolve_mint resolve_verbs fri_port fri coord_daemon_wire coord_read coord_commit defcheck_gate; do
-  BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
-    "$SRC/$m.bclj" "$OUT/$m.clj" >/dev/null
-  echo "  built $m"
-done
-# codegraph — the code-as-facts analysis driver. Lives outside src/fram (it is a
-# TENANT of the engine, renting only fram.store + fram.datalog; see
-# tests/codegraph_seam_test.clj) and emits to out/codegraph.clj, so
-# `bb -cp out:codegraph/src:. -m codegraph <corpus.facts>` runs it. Its upstream
-# is the FACT GRAPH (`;; @upstream:graph`): the .bclj is a regenerated view, so
-# edit it with the graph-edit verbs, never as text — then rerun this script.
-# The analysis modules alongside it (callgraph, rep_jurisdiction, roundtrip_fram,
-# supersession_check, rename) are graph-upstream too; each emits to
-# out/<module>.clj, so `bb -cp out:. -m <ns> ...` runs it. callgraph must build
-# BEFORE nothing in particular (Beagle resolves the require from the .bclj), but
-# codegraph rents its parse-corpus/build-graph at runtime from out/callgraph.clj.
-for m in codegraph callgraph rep_jurisdiction roundtrip_fram supersession_check rename; do
-  BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
-    "$HERE/codegraph/src/$m.bclj" "$OUT/$m.clj" >/dev/null
-  echo "  built $m"
+for fragment in "${fragments[@]}"; do
+  line_number=0
+  while IFS=$'\t' read -r kind source destination extra ||
+        [[ -n "$kind$source$destination$extra" ]]; do
+    ((line_number += 1))
+    [[ -z "$kind" || "$kind" == \#* ]] && continue
+    if [[ -n "$extra" || -z "$source" || -z "$destination" ]]; then
+      echo "build.sh: invalid manifest row at $fragment:$line_number" >&2
+      exit 1
+    fi
+
+    source_path="$HERE/$source"
+    destination_path="$HERE/$destination"
+    mkdir -p "$(dirname "$destination_path")"
+    case "$kind" in
+      beagle)
+        BEAGLE_EMIT_SRCLOC=0 direnv exec "$BEAGLE" "$BEAGLE/bin/beagle-build" \
+          "$source_path" "$destination_path" >/dev/null
+        label="${destination#out/}"
+        echo "  built ${label%.clj}"
+        ;;
+      copy)
+        cp "$source_path" "$destination_path"
+        ;;
+      *)
+        echo "build.sh: unknown generation kind '$kind' at $fragment:$line_number" >&2
+        exit 1
+        ;;
+    esac
+  done < "$fragment"
 done
 echo "fram built -> $OUT"
