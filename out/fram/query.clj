@@ -3,13 +3,13 @@
             [fram.types :as t]
             [clojure.string :as str]))
 
-^{:line 10 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord AggregateSpec [operator argument])
+(defrecord AggregateSpec [operator argument])
 
 (defn aggregatespec-operator [r] (:operator r))
 
 (defn aggregatespec-argument [r] (:argument r))
 
-^{:line 11 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord HavingClause [operator aggregate-index value])
+(defrecord HavingClause [operator aggregate-index value])
 
 (defn havingclause-operator [r] (:operator r))
 
@@ -17,7 +17,7 @@
 
 (defn havingclause-value [r] (:value r))
 
-^{:line 12 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord FindSpec [relation grouping aggregates having])
+(defrecord FindSpec [relation grouping aggregates having])
 
 (defn findspec-relation [r] (:relation r))
 
@@ -27,29 +27,29 @@
 
 (defn findspec-having [r] (:having r))
 
-^{:line 15 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord QueryPlan [find strata])
+(defrecord QueryPlan [find strata])
 
 (defn queryplan-find [r] (:find r))
 
 (defn queryplan-strata [r] (:strata r))
 
-^{:line 16 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord Projection [edb])
+(defrecord Projection [edb])
 
 (defn projection-edb [r] (:edb r))
 
-^{:line 17 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord QueryError [code message])
+(defrecord QueryError [code message])
 
 (defn queryerror-code [r] (:code r))
 
 (defn queryerror-message [r] (:message r))
 
-^{:line 18 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord CompileResult [plan errors])
+(defrecord CompileResult [plan errors])
 
 (defn compileresult-plan [r] (:plan r))
 
 (defn compileresult-errors [r] (:errors r))
 
-^{:line 19 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord QueryResult [rows errors over-limit maximum])
+(defrecord QueryResult [rows errors over-limit maximum])
 
 (defn queryresult-rows [r] (:rows r))
 
@@ -59,7 +59,7 @@
 
 (defn queryresult-maximum [r] (:maximum r))
 
-^{:line 22 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord QueryPage [rows next more errors max-bytes])
+(defrecord QueryPage [rows next more errors max-bytes])
 
 (defn querypage-rows [r] (:rows r))
 
@@ -71,534 +71,534 @@
 
 (defn querypage-max-bytes [r] (:max-bytes r))
 
-^{:line 25 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defrecord CursorResult [key error])
+(defrecord CursorResult [key error])
 
 (defn cursorresult-key [r] (:key r))
 
 (defn cursorresult-error [r] (:error r))
 
-^{:line 27 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def ^:dynamic *query-control* nil)
+(def ^:dynamic *query-control* nil)
 
-^{:line 29 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def base-rel-arities ^{:line 30 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} {d/triple-relation 3 d/occurrence-relation 3})
+(def base-rel-arities {d/triple-relation 3 d/occurrence-relation 3})
 
-^{:line 31 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def base-relations ^{:line 31 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{d/triple-relation d/occurrence-relation})
+(def base-relations #{d/triple-relation d/occurrence-relation})
 
-^{:line 32 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def aggregate-operators ^{:line 33 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{:count :count-distinct :sum :avg :min :max})
+(def aggregate-operators #{:count :count-distinct :sum :avg :min :max})
 
-^{:line 34 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def aggregate-argument-operators ^{:line 35 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{:count-distinct :sum :avg :min :max})
+(def aggregate-argument-operators #{:count-distinct :sum :avg :min :max})
 
-^{:line 37 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryError query-error [code ^String message]
-  ^{:line 38 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryError code message))
+(defn ^QueryError query-error [code ^String message]
+  (->QueryError code message))
 
-^{:line 40 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^FindSpec relation-find [^String relation]
-  ^{:line 41 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->FindSpec relation ^{:line 41 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 41 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 41 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []))
+(defn ^FindSpec relation-find [^String relation]
+  (->FindSpec relation [] [] []))
 
-^{:line 43 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^AggregateSpec aggregate-spec [operator argument]
-  ^{:line 44 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->AggregateSpec operator argument))
+(defn ^AggregateSpec aggregate-spec [operator argument]
+  (->AggregateSpec operator argument))
 
-^{:line 46 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^HavingClause having-clause [operator aggregate-index value]
-  ^{:line 48 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->HavingClause operator aggregate-index value))
+(defn ^HavingClause having-clause [operator aggregate-index value]
+  (->HavingClause operator aggregate-index value))
 
-^{:line 50 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^FindSpec aggregate-find [^String relation grouping aggregates having]
-  ^{:line 53 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->FindSpec relation grouping aggregates having))
+(defn ^FindSpec aggregate-find [^String relation grouping aggregates having]
+  (->FindSpec relation grouping aggregates having))
 
-^{:line 55 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPlan query-plan [^FindSpec find strata]
-  ^{:line 56 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryPlan find strata))
+(defn ^QueryPlan query-plan [^FindSpec find strata]
+  (->QueryPlan find strata))
 
-^{:line 58 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean query-plan? [value]
-  ^{:line 58 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (instance? QueryPlan value))
+(defn ^Boolean query-plan? [value]
+  (instance? QueryPlan value))
 
-^{:line 59 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean projection? [value]
-  ^{:line 59 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (instance? Projection value))
+(defn ^Boolean projection? [value]
+  (instance? Projection value))
 
-^{:line 60 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean aggregate-find? [^FindSpec find]
-  ^{:line 61 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 61 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 61 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-aggregates find))))
+(defn ^Boolean aggregate-find? [^FindSpec find]
+  (not (empty? (findspec-aggregates find))))
 
-^{:line 63 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean compile-ok? [^CompileResult result]
-  ^{:line 64 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 64 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-errors result)))
+(defn ^Boolean compile-ok? [^CompileResult result]
+  (empty? (compileresult-errors result)))
 
-^{:line 65 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn compiled-plan [^CompileResult result]
-  ^{:line 66 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-plan result))
+(defn compiled-plan [^CompileResult result]
+  (compileresult-plan result))
 
-^{:line 67 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn compile-errors [^CompileResult result]
-  ^{:line 68 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-errors result))
+(defn compile-errors [^CompileResult result]
+  (compileresult-errors result))
 
-^{:line 70 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean result-ok? [^QueryResult result]
-  ^{:line 71 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 71 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryresult-errors result)))
+(defn ^Boolean result-ok? [^QueryResult result]
+  (empty? (queryresult-errors result)))
 
-^{:line 72 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn result-rows [^QueryResult result]
-  ^{:line 73 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryresult-rows result))
+(defn result-rows [^QueryResult result]
+  (queryresult-rows result))
 
-^{:line 74 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn result-errors [^QueryResult result]
-  ^{:line 75 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryresult-errors result))
+(defn result-errors [^QueryResult result]
+  (queryresult-errors result))
 
-^{:line 76 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn result-over-limit [^QueryResult result]
-  ^{:line 77 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryresult-over-limit result))
+(defn result-over-limit [^QueryResult result]
+  (queryresult-over-limit result))
 
-^{:line 78 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn result-maximum [^QueryResult result]
-  ^{:line 79 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryresult-maximum result))
+(defn result-maximum [^QueryResult result]
+  (queryresult-maximum result))
 
-^{:line 81 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean page-ok? [^QueryPage page]
-  ^{:line 81 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 81 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (querypage-errors page)))
+(defn ^Boolean page-ok? [^QueryPage page]
+  (empty? (querypage-errors page)))
 
-^{:line 82 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn page-rows [^QueryPage page]
-  ^{:line 82 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (querypage-rows page))
+(defn page-rows [^QueryPage page]
+  (querypage-rows page))
 
-^{:line 83 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn page-next [^QueryPage page]
-  ^{:line 83 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (querypage-next page))
+(defn page-next [^QueryPage page]
+  (querypage-next page))
 
-^{:line 84 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Boolean page-more? [^QueryPage page]
-  ^{:line 84 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (querypage-more page))
+(defn ^Boolean page-more? [^QueryPage page]
+  (querypage-more page))
 
-^{:line 85 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn page-errors [^QueryPage page]
-  ^{:line 85 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (querypage-errors page))
+(defn page-errors [^QueryPage page]
+  (querypage-errors page))
 
-^{:line 87 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn error-code [^QueryError error-value]
-  ^{:line 88 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryerror-code error-value))
+(defn error-code [^QueryError error-value]
+  (queryerror-code error-value))
 
-^{:line 89 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^String error-message [^QueryError error-value]
-  ^{:line 90 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryerror-message error-value))
+(defn ^String error-message [^QueryError error-value]
+  (queryerror-message error-value))
 
-^{:line 92 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult success-result [rows]
-  ^{:line 93 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryResult rows ^{:line 93 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] nil nil))
+(defn- ^QueryResult success-result [rows]
+  (->QueryResult rows [] nil nil))
 
-^{:line 94 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult failure-result [errors]
-  ^{:line 95 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryResult ^{:line 95 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] errors nil nil))
+(defn- ^QueryResult failure-result [errors]
+  (->QueryResult [] errors nil nil))
 
-^{:line 96 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult limited-result [^QueryError error-value count-value maximum]
-  ^{:line 97 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryResult ^{:line 97 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 97 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [error-value] count-value maximum))
+(defn- ^QueryResult limited-result [^QueryError error-value count-value maximum]
+  (->QueryResult [] [error-value] count-value maximum))
 
-^{:line 98 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryPage success-page [rows next ^Boolean more]
-  ^{:line 100 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryPage rows next more ^{:line 100 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] nil))
+(defn- ^QueryPage success-page [rows next ^Boolean more]
+  (->QueryPage rows next more [] nil))
 
-^{:line 101 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryPage failure-page [errors]
-  ^{:line 102 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryPage ^{:line 102 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] nil false errors nil))
+(defn- ^QueryPage failure-page [errors]
+  (->QueryPage [] nil false errors nil))
 
-^{:line 103 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryPage wire-failure-page [^QueryError error-value maximum]
-  ^{:line 104 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->QueryPage ^{:line 104 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] nil false ^{:line 104 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [error-value] maximum))
+(defn- ^QueryPage wire-failure-page [^QueryError error-value maximum]
+  (->QueryPage [] nil false [error-value] maximum))
 
-^{:line 106 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Projection project [propositions]
-  ^{:line 107 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->Projection ^{:line 107 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/edb propositions)))
+(defn ^Projection project [propositions]
+  (->Projection (d/edb propositions)))
 
-^{:line 109 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^Projection project-with-occurrences [propositions occurrences]
-  ^{:line 111 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->Projection ^{:line 111 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/edb-with-occurrences propositions occurrences)))
+(defn ^Projection project-with-occurrences [propositions occurrences]
+  (->Projection (d/edb-with-occurrences propositions occurrences)))
 
-^{:line 113 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- set-union [left right]
-  ^{:line 114 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 114 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc value] ^{:line 114 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc value)) left right))
+(defn- set-union [left right]
+  (reduce (fn [acc value] (conj acc value)) left right))
 
-^{:line 117 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- term-vars [terms]
-  ^{:line 118 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 118 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc term] ^{:line 119 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [name ^{:line 119 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/queryterm-variable term)]
-  ^{:line 120 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 120 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? name) ^{:line 120 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc name) acc))) ^{:line 121 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{} terms))
+(defn- term-vars [terms]
+  (reduce (fn [acc term] (let [name (d/queryterm-variable term)]
+  (if (some? name) (conj acc name) acc))) #{} terms))
 
-^{:line 123 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- term-errors [terms ^String context]
-  ^{:line 124 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 124 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc term] ^{:line 125 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 125 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/query-term? term) acc ^{:line 127 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 127 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-term ^{:line 128 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str context " contains an invalid QueryTerm"))))) ^{:line 129 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] terms))
+(defn- term-errors [terms ^String context]
+  (reduce (fn [acc term] (if (d/query-term? term) acc (conj acc (query-error :query-invalid-term (str context " contains an invalid QueryTerm"))))) [] terms))
 
-^{:line 131 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- unbound-errors [terms bound ^String context]
-  ^{:line 133 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 133 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc name] ^{:line 134 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 134 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? bound name) acc ^{:line 136 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 136 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-unbound-variable ^{:line 137 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str context " variable '" name "' is not bound"))))) ^{:line 138 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 138 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-vars terms)))
+(defn- unbound-errors [terms bound ^String context]
+  (reduce (fn [acc name] (if (contains? bound name) acc (conj acc (query-error :query-unbound-variable (str context " variable '" name "' is not bound"))))) [] (term-vars terms)))
 
-^{:line 140 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- head-arities [rules]
-  ^{:line 141 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 141 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 142 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [relation ^{:line 142 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 143 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 143 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? acc relation) acc ^{:line 145 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (assoc acc relation ^{:line 145 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 145 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-arguments rule)))))) ^{:line 146 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} {} rules))
+(defn- head-arities [rules]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)]
+  (if (contains? acc relation) acc (assoc acc relation (count (d/rule-head-arguments rule)))))) {} rules))
 
-^{:line 148 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- derived-relations [rules]
-  ^{:line 149 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 149 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 150 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 150 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule))) ^{:line 151 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{} rules))
+(defn- derived-relations [rules]
+  (reduce (fn [acc rule] (conj acc (d/rule-head-relation rule))) #{} rules))
 
-^{:line 153 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- relation-arity [^String relation arities]
-  ^{:line 155 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 155 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? base-rel-arities relation) ^{:line 156 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get base-rel-arities relation) ^{:line 157 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get arities relation)))
+(defn- relation-arity [^String relation arities]
+  (if (contains? base-rel-arities relation) (get base-rel-arities relation) (get arities relation)))
 
-^{:line 159 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- literal-errors [literal known arities bound]
-  ^{:line 162 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [kind ^{:line 162 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-kind literal)
-   arguments ^{:line 163 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-arguments literal)
-   base-errors ^{:line 164 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-errors arguments "literal")]
-  ^{:line 165 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 166 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= kind :relation) ^{:line 167 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [relation ^{:line 167 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-relation literal)
-   arity ^{:line 168 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (relation-arity relation arities)
-   relation-errors ^{:line 170 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 171 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 171 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? known relation)) ^{:line 172 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 172 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-unknown-relation ^{:line 173 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "unknown relation '" relation "'"))]
-  ^{:line 174 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 174 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? arity) ^{:line 174 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 174 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= arity ^{:line 174 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count arguments)))) ^{:line 175 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 175 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-arity ^{:line 176 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "relation '" relation "' takes " arity " arguments"))]
-  :else ^{:line 177 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])
-   range-errors ^{:line 179 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 179 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-negated literal) ^{:line 180 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (unbound-errors arguments bound "negated literal") ^{:line 181 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])]
-  ^{:line 182 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 182 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat base-errors ^{:line 182 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat relation-errors range-errors))))
-  ^{:line 183 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= kind :comparison) ^{:line 184 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [operator-errors ^{:line 185 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 185 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? d/comparison-operators ^{:line 185 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-operator literal)) ^{:line 186 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 186 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 186 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-comparison "comparison operator is not supported")])
-   arity-errors ^{:line 189 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 189 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= 2 ^{:line 189 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count arguments)) ^{:line 190 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 190 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 190 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-arity "comparison literal takes two arguments")])]
-  ^{:line 192 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 192 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat base-errors ^{:line 193 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat operator-errors ^{:line 194 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat arity-errors ^{:line 195 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (unbound-errors arguments bound "comparison"))))))
-  ^{:line 196 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= kind :builtin) ^{:line 197 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [operator-errors ^{:line 198 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 198 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? d/builtin-operators ^{:line 198 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-operator literal)) ^{:line 199 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 199 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 199 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-builtin "builtin operator is not supported")])
-   arity-errors ^{:line 202 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 202 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= 2 ^{:line 202 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count arguments)) ^{:line 203 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 203 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 203 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-arity "builtin literal takes two arguments")])
-   binding ^{:line 204 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-binding literal)
-   binding-errors ^{:line 206 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 207 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 207 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pos? ^{:line 207 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count binding))) ^{:line 208 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 208 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-builtin "builtin binding must be non-empty")]
-  ^{:line 210 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? bound binding) ^{:line 211 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 211 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-unbound-variable ^{:line 212 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "builtin binding '" binding "' is already bound"))]
-  :else ^{:line 213 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])]
-  ^{:line 214 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 214 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat base-errors ^{:line 215 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat operator-errors ^{:line 216 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat arity-errors ^{:line 217 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat binding-errors ^{:line 218 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (unbound-errors arguments bound "builtin")))))))
-  :else ^{:line 219 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 219 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-literal "literal kind is not supported")])))
+(defn- literal-errors [literal known arities bound]
+  (let [kind (d/literal-kind literal)
+   arguments (d/literal-arguments literal)
+   base-errors (term-errors arguments "literal")]
+  (cond
+  (= kind :relation) (let [relation (d/literal-relation literal)
+   arity (relation-arity relation arities)
+   relation-errors (cond
+  (not (contains? known relation)) [(query-error :query-unknown-relation (str "unknown relation '" relation "'"))]
+  (and (some? arity) (not (= arity (count arguments)))) [(query-error :query-arity (str "relation '" relation "' takes " arity " arguments"))]
+  :else [])
+   range-errors (if (d/literal-negated literal) (unbound-errors arguments bound "negated literal") [])]
+  (vec (concat base-errors (concat relation-errors range-errors))))
+  (= kind :comparison) (let [operator-errors (if (contains? d/comparison-operators (d/literal-operator literal)) [] [(query-error :query-invalid-comparison "comparison operator is not supported")])
+   arity-errors (if (= 2 (count arguments)) [] [(query-error :query-arity "comparison literal takes two arguments")])]
+  (vec (concat base-errors (concat operator-errors (concat arity-errors (unbound-errors arguments bound "comparison"))))))
+  (= kind :builtin) (let [operator-errors (if (contains? d/builtin-operators (d/literal-operator literal)) [] [(query-error :query-invalid-builtin "builtin operator is not supported")])
+   arity-errors (if (= 2 (count arguments)) [] [(query-error :query-arity "builtin literal takes two arguments")])
+   binding (d/literal-binding literal)
+   binding-errors (cond
+  (not (pos? (count binding))) [(query-error :query-invalid-builtin "builtin binding must be non-empty")]
+  (contains? bound binding) [(query-error :query-unbound-variable (str "builtin binding '" binding "' is already bound"))]
+  :else [])]
+  (vec (concat base-errors (concat operator-errors (concat arity-errors (concat binding-errors (unbound-errors arguments bound "builtin")))))))
+  :else [(query-error :query-invalid-literal "literal kind is not supported")])))
 
-^{:line 221 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- literal-bindings [literal]
-  ^{:line 222 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 223 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 223 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :relation ^{:line 223 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 224 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 224 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-negated literal))) ^{:line 225 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-vars ^{:line 225 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-arguments literal))
-  ^{:line 226 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :builtin ^{:line 226 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 226 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{^{:line 226 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-binding literal)}
-  :else ^{:line 227 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}))
+(defn- literal-bindings [literal]
+  (cond
+  (and (= :relation (d/literal-kind literal)) (not (d/literal-negated literal))) (term-vars (d/literal-arguments literal))
+  (= :builtin (d/literal-kind literal)) #{(d/literal-binding literal)}
+  :else #{}))
 
-^{:line 229 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- rule-errors [rule known arities]
-  ^{:line 231 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [head-relation ^{:line 231 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)
-   head-arguments ^{:line 232 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-arguments rule)
-   head-errors ^{:line 234 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 234 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 235 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 235 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pos? ^{:line 235 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count head-relation)) ^{:line 236 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 236 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 236 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-rule "rule head relation is empty")]) ^{:line 237 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 238 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 238 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? base-relations head-relation) ^{:line 239 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 239 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-base-shadow ^{:line 240 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "rule head cannot redefine base relation '" head-relation "'"))] ^{:line 242 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []) ^{:line 243 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-errors head-arguments "rule head"))))]
-  ^{:line 244 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [remaining ^{:line 244 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-body rule)
-   bound ^{:line 245 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}
+(defn- rule-errors [rule known arities]
+  (let [head-relation (d/rule-head-relation rule)
+   head-arguments (d/rule-head-arguments rule)
+   head-errors (vec (concat (if (pos? (count head-relation)) [] [(query-error :query-invalid-rule "rule head relation is empty")]) (concat (if (contains? base-relations head-relation) [(query-error :query-base-shadow (str "rule head cannot redefine base relation '" head-relation "'"))] []) (term-errors head-arguments "rule head"))))]
+  (loop [remaining (d/rule-body rule)
+   bound #{}
    errors head-errors]
-  ^{:line 247 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 247 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? remaining) ^{:line 248 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 248 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat errors ^{:line 248 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (unbound-errors head-arguments bound "rule head"))) ^{:line 249 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [literal ^{:line 249 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (first remaining)]
-  ^{:line 250 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 250 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest remaining) ^{:line 251 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set-union bound ^{:line 251 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (literal-bindings literal)) ^{:line 252 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 252 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat errors ^{:line 252 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (literal-errors literal known arities bound)))))))))
+  (if (empty? remaining) (vec (concat errors (unbound-errors head-arguments bound "rule head"))) (let [literal (first remaining)]
+  (recur (rest remaining) (set-union bound (literal-bindings literal)) (vec (concat errors (literal-errors literal known arities bound)))))))))
 
-^{:line 254 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- arity-errors [rules]
-  ^{:line 255 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [arities ^{:line 255 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (head-arities rules)]
-  ^{:line 256 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 256 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 257 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [relation ^{:line 257 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)
-   expected ^{:line 258 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get arities relation)
-   actual ^{:line 259 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 259 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-arguments rule))]
-  ^{:line 260 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 260 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= expected actual) acc ^{:line 262 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 262 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-arity ^{:line 263 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "relation '" relation "' has inconsistent arity")))))) ^{:line 265 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] rules)))
+(defn- arity-errors [rules]
+  (let [arities (head-arities rules)]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)
+   expected (get arities relation)
+   actual (count (d/rule-head-arguments rule))]
+  (if (= expected actual) acc (conj acc (query-error :query-arity (str "relation '" relation "' has inconsistent arity")))))) [] rules)))
 
-^{:line 267 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- positive-relations [rule]
-  ^{:line 268 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 268 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc literal] ^{:line 269 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 269 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 269 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :relation ^{:line 269 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-kind literal)) ^{:line 270 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 270 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-negated literal))) ^{:line 271 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 271 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-relation literal)) acc)) ^{:line 273 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{} ^{:line 273 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-body rule)))
+(defn- positive-relations [rule]
+  (reduce (fn [acc literal] (if (and (= :relation (d/literal-kind literal)) (not (d/literal-negated literal))) (conj acc (d/literal-relation literal)) acc)) #{} (d/rule-body rule)))
 
-^{:line 275 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- dependency-edges [rules]
-  ^{:line 276 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 276 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 277 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [head ^{:line 277 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 278 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (update acc head ^{:line 279 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [current] ^{:line 280 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set-union ^{:line 280 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or current ^{:line 280 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}) ^{:line 280 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (positive-relations rule)))))) ^{:line 281 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} {} rules))
+(defn- dependency-edges [rules]
+  (reduce (fn [acc rule] (let [head (d/rule-head-relation rule)]
+  (update acc head (fn [current] (set-union (or current #{}) (positive-relations rule)))))) {} rules))
 
-^{:line 283 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean reaches? [^String start ^String target edges]
-  ^{:line 284 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [frontier ^{:line 284 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 284 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get edges start ^{:line 284 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}))
-   seen ^{:line 284 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}]
-  ^{:line 285 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 285 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? frontier) false ^{:line 287 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [current ^{:line 287 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (first frontier)]
-  ^{:line 288 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 289 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= current target) true
-  ^{:line 290 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? seen current) ^{:line 290 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 290 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest frontier) seen)
-  :else ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest frontier) ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get edges current ^{:line 292 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{})))) ^{:line 293 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj seen current)))))))
+(defn- ^Boolean reaches? [^String start ^String target edges]
+  (loop [frontier (vec (get edges start #{}))
+   seen #{}]
+  (if (empty? frontier) false (let [current (first frontier)]
+  (cond
+  (= current target) true
+  (contains? seen current) (recur (rest frontier) seen)
+  :else (recur (vec (concat (rest frontier) (vec (get edges current #{})))) (conj seen current)))))))
 
-^{:line 295 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- recursive-relations [rules]
-  ^{:line 296 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [edges ^{:line 296 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (dependency-edges rules)]
-  ^{:line 297 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 297 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 298 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [relation ^{:line 298 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)]
-  ^{:line 299 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 299 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reaches? relation relation edges) ^{:line 299 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc relation) acc))) ^{:line 300 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{} rules)))
+(defn- recursive-relations [rules]
+  (let [edges (dependency-edges rules)]
+  (reduce (fn [acc rule] (let [relation (d/rule-head-relation rule)]
+  (if (reaches? relation relation edges) (conj acc relation) acc))) #{} rules)))
 
-^{:line 302 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- recursive-builtin-errors [rules]
-  ^{:line 303 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [recursive ^{:line 303 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recursive-relations rules)]
-  ^{:line 304 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 305 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 306 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 306 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 306 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? recursive ^{:line 306 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule)) ^{:line 307 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some ^{:line 307 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [literal] ^{:line 308 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :builtin ^{:line 308 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/literal-kind literal))) ^{:line 309 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-body rule))) ^{:line 310 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 310 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-recursive-builtin ^{:line 311 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "recursive relation '" ^{:line 311 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule-head-relation rule) "' cannot contain a builtin binding"))) acc)) ^{:line 314 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] rules)))
+(defn- recursive-builtin-errors [rules]
+  (let [recursive (recursive-relations rules)]
+  (reduce (fn [acc rule] (if (and (contains? recursive (d/rule-head-relation rule)) (some (fn [literal] (= :builtin (d/literal-kind literal))) (d/rule-body rule))) (conj acc (query-error :query-recursive-builtin (str "recursive relation '" (d/rule-head-relation rule) "' cannot contain a builtin binding"))) acc)) [] rules)))
 
-^{:line 316 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- forward-errors [strata all-derived]
-  ^{:line 318 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [remaining strata
+(defn- forward-errors [strata all-derived]
+  (loop [remaining strata
    lower base-relations
-   errors ^{:line 318 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []]
-  ^{:line 319 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 319 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? remaining) errors ^{:line 321 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [stratum ^{:line 321 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (first remaining)
-   current ^{:line 322 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (derived-relations stratum)
-   available ^{:line 323 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set-union lower current)
-   errors2 ^{:line 325 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 326 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 327 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 328 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [inner relation] ^{:line 329 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 329 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 329 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? all-derived relation) ^{:line 330 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 330 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? available relation))) ^{:line 331 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj inner ^{:line 331 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-forward-reference ^{:line 332 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc ^{:line 335 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (positive-relations rule))) errors stratum)]
-  ^{:line 337 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 337 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest remaining) ^{:line 337 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set-union lower current) errors2)))))
+   errors []]
+  (if (empty? remaining) errors (let [stratum (first remaining)
+   current (derived-relations stratum)
+   available (set-union lower current)
+   errors2 (reduce (fn [acc rule] (reduce (fn [inner relation] (if (and (contains? all-derived relation) (not (contains? available relation))) (conj inner (query-error :query-forward-reference (str "relation '" relation "' is defined only in a later stratum"))) inner)) acc (positive-relations rule))) errors stratum)]
+  (recur (rest remaining) (set-union lower current) errors2)))))
 
-^{:line 339 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- find-errors [^FindSpec find derived arities]
-  ^{:line 341 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [relation ^{:line 341 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation find)
-   arity ^{:line 342 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get arities relation)
-   relation-errors ^{:line 344 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 345 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? base-relations relation) ^{:line 346 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 346 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-find "find cannot name a base relation")]
-  ^{:line 347 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 347 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? derived relation)) ^{:line 348 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 348 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-find ^{:line 349 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "find relation '" relation "' is not derived"))]
-  :else ^{:line 350 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])
-   aggregate-errors ^{:line 352 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 352 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-find? find) ^{:line 353 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [group-errors ^{:line 354 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 354 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc position] ^{:line 355 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 355 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 355 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (>= position 0) ^{:line 356 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 356 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? arity) ^{:line 356 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< position arity))) acc ^{:line 358 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 358 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate group position is out of range")))) ^{:line 360 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 360 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-grouping find))
-   spec-errors ^{:line 362 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 363 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc spec] ^{:line 364 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [operator ^{:line 364 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-operator spec)
-   argument ^{:line 365 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-argument spec)]
-  ^{:line 366 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 367 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 367 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? aggregate-operators operator)) ^{:line 368 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 368 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate operator is not supported"))
-  ^{:line 370 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 370 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? aggregate-argument-operators operator) ^{:line 371 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? argument)) ^{:line 372 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 372 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate operator requires an argument position"))
-  ^{:line 374 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 374 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? argument) ^{:line 375 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 375 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 375 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (>= argument 0) ^{:line 376 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 376 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? arity) ^{:line 376 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< argument arity))))) ^{:line 377 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 377 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-aggregate "aggregate argument position is out of range"))
-  :else acc))) ^{:line 380 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 380 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-aggregates find))
-   having-errors ^{:line 382 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 383 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc clause] ^{:line 384 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 385 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 385 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? d/comparison-operators ^{:line 386 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-operator clause))) ^{:line 387 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 387 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-having "having operator is not supported"))
-  ^{:line 389 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 389 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 389 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (>= ^{:line 389 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-aggregate-index clause) 0) ^{:line 390 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< ^{:line 390 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-aggregate-index clause) ^{:line 391 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 391 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-aggregates find))))) ^{:line 392 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 392 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-having "having aggregate index is out of range"))
-  ^{:line 394 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 394 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number? ^{:line 394 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-value clause))) ^{:line 395 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 395 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-having "having comparison value must be numeric"))
-  :else acc)) ^{:line 398 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 398 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-having find))]
-  ^{:line 399 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 399 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat group-errors ^{:line 399 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat spec-errors having-errors)))) ^{:line 400 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 400 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 400 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 400 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 400 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-grouping find))) ^{:line 401 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 401 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 401 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-having find)))) ^{:line 402 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 402 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-find "plain find cannot contain grouping or having clauses")] ^{:line 404 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []))]
-  ^{:line 405 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 405 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat relation-errors aggregate-errors))))
+(defn- find-errors [^FindSpec find derived arities]
+  (let [relation (findspec-relation find)
+   arity (get arities relation)
+   relation-errors (cond
+  (contains? base-relations relation) [(query-error :query-invalid-find "find cannot name a base relation")]
+  (not (contains? derived relation)) [(query-error :query-invalid-find (str "find relation '" relation "' is not derived"))]
+  :else [])
+   aggregate-errors (if (aggregate-find? find) (let [group-errors (reduce (fn [acc position] (if (and (>= position 0) (and (some? arity) (< position arity))) acc (conj acc (query-error :query-invalid-aggregate "aggregate group position is out of range")))) [] (findspec-grouping find))
+   spec-errors (reduce (fn [acc spec] (let [operator (aggregatespec-operator spec)
+   argument (aggregatespec-argument spec)]
+  (cond
+  (not (contains? aggregate-operators operator)) (conj acc (query-error :query-invalid-aggregate "aggregate operator is not supported"))
+  (and (contains? aggregate-argument-operators operator) (nil? argument)) (conj acc (query-error :query-invalid-aggregate "aggregate operator requires an argument position"))
+  (and (some? argument) (not (and (>= argument 0) (and (some? arity) (< argument arity))))) (conj acc (query-error :query-invalid-aggregate "aggregate argument position is out of range"))
+  :else acc))) [] (findspec-aggregates find))
+   having-errors (reduce (fn [acc clause] (cond
+  (not (contains? d/comparison-operators (havingclause-operator clause))) (conj acc (query-error :query-invalid-having "having operator is not supported"))
+  (not (and (>= (havingclause-aggregate-index clause) 0) (< (havingclause-aggregate-index clause) (count (findspec-aggregates find))))) (conj acc (query-error :query-invalid-having "having aggregate index is out of range"))
+  (not (number? (havingclause-value clause))) (conj acc (query-error :query-invalid-having "having comparison value must be numeric"))
+  :else acc)) [] (findspec-having find))]
+  (vec (concat group-errors (concat spec-errors having-errors)))) (if (or (not (empty? (findspec-grouping find))) (not (empty? (findspec-having find)))) [(query-error :query-invalid-find "plain find cannot contain grouping or having clauses")] []))]
+  (vec (concat relation-errors aggregate-errors))))
 
-^{:line 407 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn validate-plan [^QueryPlan plan]
-  ^{:line 408 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [strata ^{:line 408 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-strata plan)
-   rules ^{:line 409 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 409 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc stratum] ^{:line 410 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 410 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat acc stratum))) ^{:line 411 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] strata)
-   derived ^{:line 412 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (derived-relations rules)
-   known ^{:line 413 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set-union base-relations derived)
-   arities ^{:line 414 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (head-arities rules)
-   empty-errors ^{:line 416 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 416 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? rules) ^{:line 417 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 417 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-plan "query plan must contain at least one rule")] ^{:line 418 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])
-   rules-errors ^{:line 420 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 420 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 421 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 421 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat acc ^{:line 421 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rule-errors rule known arities)))) ^{:line 422 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] rules)
-   strata-errors ^{:line 424 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 424 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [message] ^{:line 425 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-stratification message)) ^{:line 426 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/strata-violations strata))]
-  ^{:line 427 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 427 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat empty-errors ^{:line 428 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat rules-errors ^{:line 429 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 429 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (arity-errors rules) ^{:line 430 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 430 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recursive-builtin-errors rules) ^{:line 431 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 431 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (forward-errors strata derived) ^{:line 432 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat strata-errors ^{:line 433 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (find-errors ^{:line 433 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan) derived arities))))))))))
+(defn validate-plan [^QueryPlan plan]
+  (let [strata (queryplan-strata plan)
+   rules (reduce (fn [acc stratum] (vec (concat acc stratum))) [] strata)
+   derived (derived-relations rules)
+   known (set-union base-relations derived)
+   arities (head-arities rules)
+   empty-errors (if (empty? rules) [(query-error :query-invalid-plan "query plan must contain at least one rule")] [])
+   rules-errors (reduce (fn [acc rule] (vec (concat acc (rule-errors rule known arities)))) [] rules)
+   strata-errors (mapv (fn [message] (query-error :query-stratification message)) (d/strata-violations strata))]
+  (vec (concat empty-errors (concat rules-errors (concat (arity-errors rules) (concat (recursive-builtin-errors rules) (concat (forward-errors strata derived) (concat strata-errors (find-errors (queryplan-find plan) derived arities))))))))))
 
-^{:line 437 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean variable-form? [value]
-  ^{:line 438 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 438 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? value) ^{:line 439 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 439 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= 1 ^{:line 439 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count value)) ^{:line 440 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 440 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? value :var) ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:var value)) ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pos? ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 441 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:var value))))))))
+(defn- ^Boolean variable-form? [value]
+  (and (map? value) (and (= 1 (count value)) (and (contains? value :var) (and (string? (:var value)) (pos? (count (:var value))))))))
 
-^{:line 443 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean query-term-form? [value]
-  ^{:line 444 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 444 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (variable-form? value) ^{:line 444 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/term? value)))
+(defn- ^Boolean query-term-form? [value]
+  (or (variable-form? value) (t/term? value)))
 
-^{:line 446 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean all-vectors? [values]
-  ^{:line 447 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [remaining values]
-  ^{:line 448 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 448 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? remaining) true ^{:line 450 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 450 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 450 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (first remaining)) ^{:line 450 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 450 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest remaining)) false))))
+(defn- ^Boolean all-vectors? [values]
+  (loop [remaining values]
+  (if (empty? remaining) true (if (vector? (first remaining)) (recur (rest remaining)) false))))
 
-^{:line 452 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- raw-strata [form]
-  ^{:line 453 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 454 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 454 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? form)) nil
-  ^{:line 455 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 455 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :rules) ^{:line 455 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 455 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :strata))) ^{:line 456 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 456 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 456 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rules form)) ^{:line 456 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 456 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rules form)] nil)
-  ^{:line 457 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 457 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :strata) ^{:line 457 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 457 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :rules))) ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:strata form)) ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (all-vectors? ^{:line 458 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:strata form))) ^{:line 459 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:strata form) nil)
+(defn- raw-strata [form]
+  (cond
+  (not (map? form)) nil
+  (and (contains? form :rules) (not (contains? form :strata))) (if (vector? (:rules form)) [(:rules form)] nil)
+  (and (contains? form :strata) (not (contains? form :rules))) (if (and (vector? (:strata form)) (all-vectors? (:strata form))) (:strata form) nil)
   :else nil))
 
-^{:line 462 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- syntax-term-errors [values ^String context]
-  ^{:line 463 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 463 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 463 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? values)) ^{:line 464 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 464 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax ^{:line 464 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str context " arguments must be a vector"))] ^{:line 465 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 465 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc value] ^{:line 466 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 466 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-term-form? value) acc ^{:line 468 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 468 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax ^{:line 469 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str context " contains an invalid term"))))) ^{:line 470 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] values)))
+(defn- syntax-term-errors [values ^String context]
+  (if (not (vector? values)) [(query-error :query-invalid-syntax (str context " arguments must be a vector"))] (reduce (fn [acc value] (if (query-term-form? value) acc (conj acc (query-error :query-invalid-syntax (str context " contains an invalid term"))))) [] values)))
 
-^{:line 472 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- syntax-literal-errors [literal]
-  ^{:line 473 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 473 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 473 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? literal)) ^{:line 474 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 474 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "literal must be a map")] ^{:line 475 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 476 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? literal :pred) ^{:line 477 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 477 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 478 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 478 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (keyword? ^{:line 478 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:pred literal)) ^{:line 479 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 479 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 479 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "comparison operator must be a keyword")]) ^{:line 481 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-term-errors ^{:line 481 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal) "comparison")))
-  ^{:line 482 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? literal :fn) ^{:line 483 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 483 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (keyword? ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:fn literal)) ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? ^{:line 484 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:bind literal))) ^{:line 485 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 485 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 485 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "builtin requires keyword :fn and string :bind")]) ^{:line 487 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-term-errors ^{:line 487 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal) "builtin")))
-  :else ^{:line 489 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 489 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 490 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 490 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? ^{:line 490 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel literal)) ^{:line 491 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 491 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 491 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "relation literal requires string :rel")]) ^{:line 493 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 494 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 494 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 494 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? ^{:line 494 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:neg literal)) ^{:line 495 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 495 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= true ^{:line 495 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:neg literal)) ^{:line 495 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= false ^{:line 495 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:neg literal)))) ^{:line 496 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 496 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 496 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "literal :neg must be boolean")]) ^{:line 498 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-term-errors ^{:line 498 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal) "literal")))))))
+(defn- syntax-literal-errors [literal]
+  (if (not (map? literal)) [(query-error :query-invalid-syntax "literal must be a map")] (cond
+  (contains? literal :pred) (vec (concat (if (keyword? (:pred literal)) [] [(query-error :query-invalid-syntax "comparison operator must be a keyword")]) (syntax-term-errors (:args literal) "comparison")))
+  (contains? literal :fn) (vec (concat (if (and (keyword? (:fn literal)) (string? (:bind literal))) [] [(query-error :query-invalid-syntax "builtin requires keyword :fn and string :bind")]) (syntax-term-errors (:args literal) "builtin")))
+  :else (vec (concat (if (string? (:rel literal)) [] [(query-error :query-invalid-syntax "relation literal requires string :rel")]) (concat (if (or (nil? (:neg literal)) (or (= true (:neg literal)) (= false (:neg literal)))) [] [(query-error :query-invalid-syntax "literal :neg must be boolean")]) (syntax-term-errors (:args literal) "literal")))))))
 
-^{:line 500 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- syntax-rule-errors [rule]
-  ^{:line 501 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 501 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 501 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? rule)) ^{:line 502 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 502 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule must be a map")] ^{:line 503 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [head ^{:line 503 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:head rule)
-   body ^{:line 504 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:body rule)
-   head-errors ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? head) ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel head)) ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 506 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args head)))) ^{:line 507 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-term-errors ^{:line 507 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args head) "rule head") ^{:line 508 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 508 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule head must contain string :rel and vector :args")])
-   body-errors ^{:line 511 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 511 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? body) ^{:line 512 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 512 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc literal] ^{:line 513 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 513 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat acc ^{:line 513 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-literal-errors literal)))) ^{:line 514 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] body) ^{:line 515 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 515 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "rule body must be a vector")])]
-  ^{:line 516 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 516 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat head-errors body-errors)))))
+(defn- syntax-rule-errors [rule]
+  (if (not (map? rule)) [(query-error :query-invalid-syntax "rule must be a map")] (let [head (:head rule)
+   body (:body rule)
+   head-errors (if (and (map? head) (and (string? (:rel head)) (vector? (:args head)))) (syntax-term-errors (:args head) "rule head") [(query-error :query-invalid-syntax "rule head must contain string :rel and vector :args")])
+   body-errors (if (vector? body) (reduce (fn [acc literal] (vec (concat acc (syntax-literal-errors literal)))) [] body) [(query-error :query-invalid-syntax "rule body must be a vector")])]
+  (vec (concat head-errors body-errors)))))
 
-^{:line 518 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- syntax-find-errors [find]
-  ^{:line 519 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 520 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? find) ^{:line 520 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []
-  ^{:line 521 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 521 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? find)) ^{:line 522 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 522 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "find must be a relation string or aggregate map")]
-  :else ^{:line 524 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [base-errors ^{:line 525 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 525 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 526 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 526 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? ^{:line 526 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel find)) ^{:line 527 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 527 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 527 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate find requires string :rel")]) ^{:line 529 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 530 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 530 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 530 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 530 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:group find)) ^{:line 531 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (every? integer? ^{:line 531 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:group find))) ^{:line 532 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 532 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 532 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :group must contain integer positions")]) ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg find)) ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? ^{:line 534 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg find)))) ^{:line 535 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 535 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 535 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :agg must be a non-empty vector")]))))
-   spec-errors ^{:line 538 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 538 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 538 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg find)) ^{:line 539 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 540 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc spec] ^{:line 541 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 541 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 541 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? spec) ^{:line 542 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 542 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (keyword? ^{:line 542 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:op spec)) ^{:line 543 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 543 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? ^{:line 543 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:arg spec)) ^{:line 543 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? ^{:line 543 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:arg spec))))) acc ^{:line 545 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 545 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate spec requires keyword :op and optional integer :arg")))) ^{:line 547 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 547 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg find)) ^{:line 548 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])
-   having-errors ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:having find)) ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vector? ^{:line 550 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:having find))) ^{:line 551 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 552 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc clause] ^{:line 553 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 553 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 553 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? clause) ^{:line 554 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 554 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (keyword? ^{:line 554 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:op clause)) ^{:line 555 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 555 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? ^{:line 555 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg clause)) ^{:line 556 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number? ^{:line 556 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:val clause))))) acc ^{:line 558 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 558 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "having clause requires :op, integer :agg, and numeric :val")))) ^{:line 560 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] ^{:line 560 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 560 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:having find) ^{:line 560 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])) ^{:line 561 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 561 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "aggregate :having must be a vector")])]
-  ^{:line 562 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 562 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat base-errors ^{:line 562 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat spec-errors having-errors))))))
+(defn- syntax-find-errors [find]
+  (cond
+  (string? find) []
+  (not (map? find)) [(query-error :query-invalid-syntax "find must be a relation string or aggregate map")]
+  :else (let [base-errors (vec (concat (if (string? (:rel find)) [] [(query-error :query-invalid-syntax "aggregate find requires string :rel")]) (concat (if (and (vector? (:group find)) (every? integer? (:group find))) [] [(query-error :query-invalid-syntax "aggregate :group must contain integer positions")]) (if (and (vector? (:agg find)) (not (empty? (:agg find)))) [] [(query-error :query-invalid-syntax "aggregate :agg must be a non-empty vector")]))))
+   spec-errors (if (vector? (:agg find)) (reduce (fn [acc spec] (if (and (map? spec) (and (keyword? (:op spec)) (or (nil? (:arg spec)) (integer? (:arg spec))))) acc (conj acc (query-error :query-invalid-syntax "aggregate spec requires keyword :op and optional integer :arg")))) [] (:agg find)) [])
+   having-errors (if (or (nil? (:having find)) (vector? (:having find))) (reduce (fn [acc clause] (if (and (map? clause) (and (keyword? (:op clause)) (and (integer? (:agg clause)) (number? (:val clause))))) acc (conj acc (query-error :query-invalid-syntax "having clause requires :op, integer :agg, and numeric :val")))) [] (or (:having find) [])) [(query-error :query-invalid-syntax "aggregate :having must be a vector")])]
+  (vec (concat base-errors (concat spec-errors having-errors))))))
 
-^{:line 564 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- syntax-errors [form]
-  ^{:line 565 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 566 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 566 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (map? form)) ^{:line 566 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 566 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "query must be a map")]
-  ^{:line 567 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= ^{:line 567 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :rules) ^{:line 567 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? form :strata)) ^{:line 568 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 568 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "query must provide exactly one of :rules or :strata")]
-  ^{:line 570 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? ^{:line 570 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (raw-strata form)) ^{:line 571 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 571 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-invalid-syntax "rules or strata have an invalid shape")]
-  :else ^{:line 573 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [strata ^{:line 573 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (raw-strata form)
-   rules ^{:line 574 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 574 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc stratum] ^{:line 575 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 575 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat acc stratum))) ^{:line 576 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] strata)
-   rule-errors ^{:line 578 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 578 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc rule] ^{:line 579 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 579 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat acc ^{:line 579 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-rule-errors rule)))) ^{:line 580 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] rules)]
-  ^{:line 581 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 581 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat ^{:line 581 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-find-errors ^{:line 581 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:find form)) rule-errors)))))
+(defn- syntax-errors [form]
+  (cond
+  (not (map? form)) [(query-error :query-invalid-syntax "query must be a map")]
+  (= (contains? form :rules) (contains? form :strata)) [(query-error :query-invalid-syntax "query must provide exactly one of :rules or :strata")]
+  (nil? (raw-strata form)) [(query-error :query-invalid-syntax "rules or strata have an invalid shape")]
+  :else (let [strata (raw-strata form)
+   rules (reduce (fn [acc stratum] (vec (concat acc stratum))) [] strata)
+   rule-errors (reduce (fn [acc rule] (vec (concat acc (syntax-rule-errors rule)))) [] rules)]
+  (vec (concat (syntax-find-errors (:find form)) rule-errors)))))
 
-^{:line 583 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- compile-term-form [value]
-  ^{:line 584 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 584 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (variable-form? value) ^{:line 584 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/variable ^{:line 584 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:var value)) ^{:line 584 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/constant value)))
+(defn- compile-term-form [value]
+  (if (variable-form? value) (d/variable (:var value)) (d/constant value)))
 
-^{:line 586 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- compile-term-forms [values]
-  ^{:line 587 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 587 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [value] ^{:line 587 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-form value)) values))
+(defn- compile-term-forms [values]
+  (mapv (fn [value] (compile-term-form value)) values))
 
-^{:line 589 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- compile-literal-form [literal]
-  ^{:line 590 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 591 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? literal :pred) ^{:line 592 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/comparison-literal ^{:line 592 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:pred literal) ^{:line 592 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-forms ^{:line 592 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal)))
-  ^{:line 593 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? literal :fn) ^{:line 594 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/builtin-literal ^{:line 594 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:fn literal) ^{:line 594 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-forms ^{:line 594 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal)) ^{:line 595 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:bind literal))
-  ^{:line 596 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= true ^{:line 596 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:neg literal)) ^{:line 597 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/negated-literal ^{:line 597 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel literal) ^{:line 597 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-forms ^{:line 597 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal)))
-  :else ^{:line 599 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/relation-literal ^{:line 599 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel literal) ^{:line 599 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-forms ^{:line 599 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args literal)))))
+(defn- compile-literal-form [literal]
+  (cond
+  (contains? literal :pred) (d/comparison-literal (:pred literal) (compile-term-forms (:args literal)))
+  (contains? literal :fn) (d/builtin-literal (:fn literal) (compile-term-forms (:args literal)) (:bind literal))
+  (= true (:neg literal)) (d/negated-literal (:rel literal) (compile-term-forms (:args literal)))
+  :else (d/relation-literal (:rel literal) (compile-term-forms (:args literal)))))
 
-^{:line 601 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- compile-rule-form [rule]
-  ^{:line 602 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/rule ^{:line 602 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel ^{:line 602 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:head rule)) ^{:line 603 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-term-forms ^{:line 603 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:args ^{:line 603 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:head rule))) ^{:line 604 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 604 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [literal] ^{:line 604 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-literal-form literal)) ^{:line 605 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:body rule))))
+(defn- compile-rule-form [rule]
+  (d/rule (:rel (:head rule)) (compile-term-forms (:args (:head rule))) (mapv (fn [literal] (compile-literal-form literal)) (:body rule))))
 
-^{:line 607 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^FindSpec compile-find-form [find]
-  ^{:line 608 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 608 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? find) ^{:line 609 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (relation-find find) ^{:line 610 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-find ^{:line 611 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:rel find) ^{:line 612 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:group find) ^{:line 613 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 613 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [spec] ^{:line 614 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-spec ^{:line 614 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:op spec) ^{:line 614 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:arg spec))) ^{:line 615 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg find)) ^{:line 616 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 616 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [clause] ^{:line 617 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (having-clause ^{:line 617 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:op clause) ^{:line 617 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:agg clause) ^{:line 617 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:val clause))) ^{:line 618 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 618 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:having find) ^{:line 618 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [])))))
+(defn- ^FindSpec compile-find-form [find]
+  (if (string? find) (relation-find find) (aggregate-find (:rel find) (:group find) (mapv (fn [spec] (aggregate-spec (:op spec) (:arg spec))) (:agg find)) (mapv (fn [clause] (having-clause (:op clause) (:agg clause) (:val clause))) (or (:having find) [])))))
 
-^{:line 620 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^CompileResult compile-query [form]
-  ^{:line 621 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 621 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-plan? form) ^{:line 622 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [errors ^{:line 622 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan form)]
-  ^{:line 623 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 623 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? errors) ^{:line 623 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CompileResult form ^{:line 623 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []) ^{:line 623 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CompileResult nil errors))) ^{:line 624 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [errors ^{:line 624 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (syntax-errors form)]
-  ^{:line 625 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 625 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 625 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? errors)) ^{:line 626 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CompileResult nil errors) ^{:line 627 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [strata ^{:line 628 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 628 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [stratum] ^{:line 629 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 629 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [rule] ^{:line 629 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-rule-form rule)) stratum)) ^{:line 630 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (raw-strata form))
-   plan ^{:line 631 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-plan ^{:line 631 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-find-form ^{:line 631 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:find form)) strata)
-   validation-errors ^{:line 632 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 633 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 633 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? validation-errors) ^{:line 634 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CompileResult plan ^{:line 634 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []) ^{:line 635 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CompileResult nil validation-errors)))))))
+(defn ^CompileResult compile-query [form]
+  (if (query-plan? form) (let [errors (validate-plan form)]
+  (if (empty? errors) (->CompileResult form []) (->CompileResult nil errors))) (let [errors (syntax-errors form)]
+  (if (not (empty? errors)) (->CompileResult nil errors) (let [strata (mapv (fn [stratum] (mapv (fn [rule] (compile-rule-form rule)) stratum)) (raw-strata form))
+   plan (query-plan (compile-find-form (:find form)) strata)
+   validation-errors (validate-plan plan)]
+  (if (empty? validation-errors) (->CompileResult plan []) (->CompileResult nil validation-errors)))))))
 
-^{:line 638 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^String length-key [^String tag ^String value]
-  ^{:line 639 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str tag ^{:line 639 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count value) ":" value))
+(defn- ^String length-key [^String tag ^String value]
+  (str tag (count value) ":" value))
 
-^{:line 641 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^String term-key [value]
-  ^{:line 642 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 643 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? value) ^{:line 643 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (length-key "s" value)
-  ^{:line 644 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? value) ^{:line 644 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "i" value ";")
-  ^{:line 645 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number? value) ^{:line 645 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "f" value ";")
-  ^{:line 646 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (boolean? value) ^{:line 646 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if value "b1;" "b0;")
-  ^{:line 647 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (keyword? value) ^{:line 647 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (length-key "k" ^{:line 647 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str value))
-  ^{:line 648 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/instant? value) ^{:line 649 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "m" ^{:line 649 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/instant-epoch-seconds value) ":" ^{:line 649 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/instant-nanos value) ";")
-  ^{:line 650 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/triple? value) ^{:line 651 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [slot0 ^{:line 651 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-key ^{:line 651 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/triple-slot0 value))
-   slot1 ^{:line 652 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-key ^{:line 652 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/triple-slot1 value))
-   slot2 ^{:line 653 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-key ^{:line 653 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (t/triple-slot2 value))]
-  ^{:line 654 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "t" ^{:line 654 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count slot0) ":" slot0 ^{:line 655 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count slot1) ":" slot1 ^{:line 656 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count slot2) ":" slot2))
-  :else ^{:line 657 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (length-key "x" ^{:line 657 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pr-str value))))
+(defn ^String term-key [value]
+  (cond
+  (string? value) (length-key "s" value)
+  (integer? value) (str "i" value ";")
+  (number? value) (str "f" value ";")
+  (boolean? value) (if value "b1;" "b0;")
+  (keyword? value) (length-key "k" (str value))
+  (t/instant? value) (str "m" (t/instant-epoch-seconds value) ":" (t/instant-nanos value) ";")
+  (t/triple? value) (let [slot0 (term-key (t/triple-slot0 value))
+   slot1 (term-key (t/triple-slot1 value))
+   slot2 (term-key (t/triple-slot2 value))]
+  (str "t" (count slot0) ":" slot0 (count slot1) ":" slot1 (count slot2) ":" slot2))
+  :else (length-key "x" (pr-str value))))
 
-^{:line 659 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^String row-key [row]
-  ^{:line 660 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 660 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc value] ^{:line 661 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [key ^{:line 661 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (term-key value)]
-  ^{:line 661 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str acc ^{:line 661 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count key) ":" key))) "r" row))
+(defn ^String row-key [row]
+  (reduce (fn [acc value] (let [key (term-key value)]
+  (str acc (count key) ":" key))) "r" row))
 
-^{:line 664 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ordered-rows [rows]
-  ^{:line 665 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 665 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (sort-by row-key ^{:line 665 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec rows))))
+(defn- ordered-rows [rows]
+  (vec (sort-by row-key (vec rows))))
 
-^{:line 667 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-results ^{:line 668 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [raw ^{:line 668 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (System/getenv "FRAM_MAX_RESULTS")
-   parsed ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? raw) ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= raw ""))) ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (parse-long raw) nil)]
-  ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? parsed) ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> parsed 0)) parsed 100000)))
+(def max-results (let [raw (System/getenv "FRAM_MAX_RESULTS")
+   parsed (if (and (some? raw) (not (= raw ""))) (parse-long raw) nil)]
+  (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
-^{:line 673 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- evaluate-plan! [^Projection projection ^QueryPlan plan]
-  ^{:line 674 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (binding [d/*query-control* *query-control*]
-  ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/run-strata-db! ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (projection-edb projection) ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-strata plan))))
+(defn- evaluate-plan! [^Projection projection ^QueryPlan plan]
+  (binding [d/*query-control* *query-control*]
+  (d/run-strata-db! (projection-edb projection) (queryplan-strata plan))))
 
-^{:line 677 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult abort-result [problem]
-  ^{:line 678 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [data ^{:line 678 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ex-data problem)]
-  ^{:line 679 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 679 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :fram-query-abort ^{:line 679 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:type data)) ^{:line 680 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result ^{:line 680 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 680 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error ^{:line 680 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:code data) ^{:line 680 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (.getMessage problem))]) ^{:line 681 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (throw problem))))
+(defn- ^QueryResult abort-result [problem]
+  (let [data (ex-data problem)]
+  (if (= :fram-query-abort (:type data)) (failure-result [(query-error (:code data) (.getMessage problem))]) (throw problem))))
 
-^{:line 684 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def numeric-aggregate-operators ^{:line 684 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{:sum :avg :min :max})
+(def numeric-aggregate-operators #{:sum :avg :min :max})
 
-^{:line 686 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- number-atom [value]
-  ^{:line 687 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 688 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? value) value
-  ^{:line 689 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number? value) ^{:line 689 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double value)
-  ^{:line 690 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? value) ^{:line 691 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [integer-result ^{:line 691 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (parse-long value)]
-  ^{:line 692 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 692 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? integer-result) integer-result ^{:line 692 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (parse-double value)))
+(defn- number-atom [value]
+  (cond
+  (integer? value) value
+  (number? value) (double value)
+  (string? value) (let [integer-result (parse-long value)]
+  (if (some? integer-result) integer-result (parse-double value)))
   :else nil))
 
-^{:line 695 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- numeric-column-error [rows ^FindSpec find]
-  ^{:line 697 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [specs ^{:line 697 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-aggregates find)]
-  ^{:line 698 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 698 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? specs) nil ^{:line 700 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [spec ^{:line 700 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (first specs)]
-  ^{:line 701 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 701 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (contains? numeric-aggregate-operators ^{:line 701 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-operator spec)) ^{:line 702 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [position ^{:line 702 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-argument spec)
-   bad ^{:line 703 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some ^{:line 703 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [row] ^{:line 704 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? ^{:line 704 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number-atom ^{:line 704 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position)))) rows)]
-  ^{:line 706 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if bad ^{:line 707 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-nonnumeric-aggregate ^{:line 708 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "aggregate position " position " contains a non-numeric Term")) ^{:line 710 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 710 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest specs)))) ^{:line 711 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur ^{:line 711 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (rest specs)))))))
+(defn- numeric-column-error [rows ^FindSpec find]
+  (loop [specs (findspec-aggregates find)]
+  (if (empty? specs) nil (let [spec (first specs)]
+  (if (contains? numeric-aggregate-operators (aggregatespec-operator spec)) (let [position (aggregatespec-argument spec)
+   bad (some (fn [row] (nil? (number-atom (nth row position)))) rows)]
+  (if bad (query-error :query-nonnumeric-aggregate (str "aggregate position " position " contains a non-numeric Term")) (recur (rest specs)))) (recur (rest specs)))))))
 
-^{:line 713 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- group-rows [rows grouping]
-  ^{:line 715 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 715 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc row] ^{:line 716 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [key ^{:line 716 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 716 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [position] ^{:line 716 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position)) grouping)]
-  ^{:line 717 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (update acc key ^{:line 718 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [current] ^{:line 719 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj ^{:line 719 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or current ^{:line 719 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []) row))))) ^{:line 720 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} {} rows))
+(defn- group-rows [rows grouping]
+  (reduce (fn [acc row] (let [key (mapv (fn [position] (nth row position)) grouping)]
+  (update acc key (fn [current] (conj (or current []) row))))) {} rows))
 
-^{:line 722 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean all-integers? [rows position]
-  ^{:line 723 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (every? ^{:line 723 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [row] ^{:line 724 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? ^{:line 724 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number-atom ^{:line 724 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position)))) rows))
+(defn- ^Boolean all-integers? [rows position]
+  (every? (fn [row] (integer? (number-atom (nth row position)))) rows))
 
-^{:line 727 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- sum-values [rows position]
-  ^{:line 728 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 728 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (all-integers? rows position) ^{:line 729 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 729 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc row] ^{:line 730 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ acc ^{:line 730 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number-atom ^{:line 730 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position)))) 0 rows) ^{:line 732 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 732 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc row] ^{:line 733 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ acc ^{:line 733 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double ^{:line 733 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number-atom ^{:line 733 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position))))) 0.0 rows)))
+(defn- sum-values [rows position]
+  (if (all-integers? rows position) (reduce (fn [acc row] (+ acc (number-atom (nth row position)))) 0 rows) (reduce (fn [acc row] (+ acc (double (number-atom (nth row position))))) 0.0 rows)))
 
-^{:line 736 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- extreme-value [rows position ^Boolean maximum?]
-  ^{:line 737 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 737 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [best row] ^{:line 738 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [candidate ^{:line 738 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (number-atom ^{:line 738 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position))]
-  ^{:line 739 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 739 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? best) candidate ^{:line 741 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 741 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if maximum? ^{:line 742 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> ^{:line 742 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double candidate) ^{:line 742 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double best)) ^{:line 743 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< ^{:line 743 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double candidate) ^{:line 743 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double best))) candidate best)))) nil rows))
+(defn- extreme-value [rows position ^Boolean maximum?]
+  (reduce (fn [best row] (let [candidate (number-atom (nth row position))]
+  (if (nil? best) candidate (if (if maximum? (> (double candidate) (double best)) (< (double candidate) (double best))) candidate best)))) nil rows))
 
-^{:line 747 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- aggregate-value [rows ^AggregateSpec spec]
-  ^{:line 748 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [operator ^{:line 748 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-operator spec)
-   position ^{:line 749 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 749 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregatespec-argument spec) 0)]
-  ^{:line 750 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 751 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :count) ^{:line 751 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count rows)
-  ^{:line 752 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :count-distinct) ^{:line 753 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 753 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (set ^{:line 753 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 753 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [row] ^{:line 753 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row position)) rows)))
-  ^{:line 754 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :sum) ^{:line 754 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (sum-values rows position)
-  ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :avg) ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (/ ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (sum-values rows position)) ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double ^{:line 755 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count rows)))
-  ^{:line 756 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :min) ^{:line 756 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (extreme-value rows position false)
-  ^{:line 757 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :max) ^{:line 757 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (extreme-value rows position true)
+(defn- aggregate-value [rows ^AggregateSpec spec]
+  (let [operator (aggregatespec-operator spec)
+   position (or (aggregatespec-argument spec) 0)]
+  (cond
+  (= operator :count) (count rows)
+  (= operator :count-distinct) (count (set (mapv (fn [row] (nth row position)) rows)))
+  (= operator :sum) (sum-values rows position)
+  (= operator :avg) (/ (double (sum-values rows position)) (double (count rows)))
+  (= operator :min) (extreme-value rows position false)
+  (= operator :max) (extreme-value rows position true)
   :else nil)))
 
-^{:line 760 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean comparison-number [operator left right]
-  ^{:line 761 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [left-number ^{:line 761 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double left)
-   right-number ^{:line 761 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (double right)]
-  ^{:line 762 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 763 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :eq) ^{:line 763 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= left-number right-number)
-  ^{:line 764 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :ne) ^{:line 764 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 764 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= left-number right-number))
-  ^{:line 765 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :lt) ^{:line 765 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< left-number right-number)
-  ^{:line 766 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :le) ^{:line 766 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (<= left-number right-number)
-  ^{:line 767 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :gt) ^{:line 767 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> left-number right-number)
-  ^{:line 768 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= operator :ge) ^{:line 768 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (>= left-number right-number)
+(defn- ^Boolean comparison-number [operator left right]
+  (let [left-number (double left)
+   right-number (double right)]
+  (cond
+  (= operator :eq) (= left-number right-number)
+  (= operator :ne) (not (= left-number right-number))
+  (= operator :lt) (< left-number right-number)
+  (= operator :le) (<= left-number right-number)
+  (= operator :gt) (> left-number right-number)
+  (= operator :ge) (>= left-number right-number)
   :else false)))
 
-^{:line 771 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^Boolean having-passes? [row grouping-count clauses]
-  ^{:line 772 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (every? ^{:line 773 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [clause] ^{:line 774 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (comparison-number ^{:line 775 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-operator clause) ^{:line 776 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth row ^{:line 776 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ grouping-count ^{:line 776 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-aggregate-index clause))) ^{:line 777 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (havingclause-value clause))) clauses))
+(defn- ^Boolean having-passes? [row grouping-count clauses]
+  (every? (fn [clause] (comparison-number (havingclause-operator clause) (nth row (+ grouping-count (havingclause-aggregate-index clause))) (havingclause-value clause))) clauses))
 
-^{:line 780 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult aggregate-result [db ^FindSpec find]
-  ^{:line 781 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [rows ^{:line 781 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 781 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get db ^{:line 781 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation find) ^{:line 781 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{}))]
-  ^{:line 782 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 782 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? rows) ^{:line 783 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (success-result ^{:line 783 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} []) ^{:line 784 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [numeric-error ^{:line 784 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (numeric-column-error rows find)]
-  ^{:line 785 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 785 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? numeric-error) ^{:line 786 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result ^{:line 786 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [numeric-error]) ^{:line 787 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [groups ^{:line 787 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (group-rows rows ^{:line 787 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-grouping find))
-   aggregated ^{:line 789 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (reduce ^{:line 790 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [acc entry] ^{:line 791 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [key ^{:line 791 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth entry 0)
-   members ^{:line 792 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth entry 1)
-   values ^{:line 794 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (mapv ^{:line 794 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [spec] ^{:line 795 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-value members spec)) ^{:line 796 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-aggregates find))]
-  ^{:line 797 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (conj acc ^{:line 797 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 797 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (concat key values))))) ^{:line 798 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [] groups)
-   survivors ^{:line 800 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (filterv ^{:line 800 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [row] ^{:line 801 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (having-passes? row ^{:line 801 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 801 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-grouping find)) ^{:line 802 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-having find))) aggregated)
-   count-value ^{:line 804 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count survivors)]
-  ^{:line 805 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 805 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> count-value max-results) ^{:line 806 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (limited-result ^{:line 807 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-result-limit ^{:line 808 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (success-result ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (sort-by row-key survivors))))))))))
+(defn- ^QueryResult aggregate-result [db ^FindSpec find]
+  (let [rows (vec (get db (findspec-relation find) #{}))]
+  (if (empty? rows) (success-result []) (let [numeric-error (numeric-column-error rows find)]
+  (if (some? numeric-error) (failure-result [numeric-error]) (let [groups (group-rows rows (findspec-grouping find))
+   aggregated (reduce (fn [acc entry] (let [key (nth entry 0)
+   members (nth entry 1)
+   values (mapv (fn [spec] (aggregate-value members spec)) (findspec-aggregates find))]
+  (conj acc (vec (concat key values))))) [] groups)
+   survivors (filterv (fn [row] (having-passes? row (count (findspec-grouping find)) (findspec-having find))) aggregated)
+   count-value (count survivors)]
+  (if (> count-value max-results) (limited-result (query-error :query-result-limit (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) (success-result (vec (sort-by row-key survivors))))))))))
 
-^{:line 813 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-plan-projected! [^Projection projection ^QueryPlan plan]
-  ^{:line 814 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [errors ^{:line 814 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? errors)) ^{:line 816 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result errors) ^{:line 817 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (try
-  ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan! projection plan)
-   find ^{:line 819 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan)]
-  ^{:line 820 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 820 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-find? find) ^{:line 821 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-result db find) ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [rows ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get db ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation find) ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{})
-   count-value ^{:line 823 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count rows)]
-  ^{:line 824 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 824 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> count-value max-results) ^{:line 825 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (limited-result ^{:line 826 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-result-limit ^{:line 827 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "result has " count-value " rows, over limit " max-results)) count-value max-results) ^{:line 830 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (success-result ^{:line 830 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ordered-rows rows))))))
+(defn ^QueryResult run-plan-projected! [^Projection projection ^QueryPlan plan]
+  (let [errors (validate-plan plan)]
+  (if (not (empty? errors)) (failure-result errors) (try
+  (let [db (evaluate-plan! projection plan)
+   find (queryplan-find plan)]
+  (if (aggregate-find? find) (aggregate-result db find) (let [rows (get db (findspec-relation find) #{})
+   count-value (count rows)]
+  (if (> count-value max-results) (limited-result (query-error :query-result-limit (str "result has " count-value " rows, over limit " max-results)) count-value max-results) (success-result (ordered-rows rows))))))
   (catch Exception problem
-    ^{:line 831 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (abort-result problem))))))
+    (abort-result problem))))))
 
-^{:line 833 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-projected! [^Projection projection ^QueryPlan plan]
-  ^{:line 834 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected! projection plan))
+(defn ^QueryResult run-projected! [^Projection projection ^QueryPlan plan]
+  (run-plan-projected! projection plan))
 
-^{:line 836 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run! [propositions ^QueryPlan plan]
-  ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected! ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan))
+(defn ^QueryResult run! [propositions ^QueryPlan plan]
+  (run-plan-projected! (project propositions) plan))
 
-^{:line 839 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-syntax! [propositions form]
-  ^{:line 840 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [compiled ^{:line 840 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-query form)
-   plan ^{:line 841 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-plan compiled)]
-  ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? plan) ^{:line 843 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run! propositions plan) ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-errors compiled)))))
+(defn ^QueryResult run-syntax! [propositions form]
+  (let [compiled (compile-query form)
+   plan (compileresult-plan compiled)]
+  (if (some? plan) (run! propositions plan) (failure-result (compileresult-errors compiled)))))
 
-^{:line 847 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-page-limit 4096)
+(def max-page-limit 4096)
 
-^{:line 848 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-page-wire-bytes 1048576)
+(def max-page-wire-bytes 1048576)
 
-^{:line 849 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-page-payload-bytes ^{:line 849 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (- max-page-wire-bytes 512))
+(def max-page-payload-bytes (- max-page-wire-bytes 512))
 
-^{:line 850 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-page-cursor-bytes 524288)
+(def max-page-cursor-bytes 524288)
 
-^{:line 851 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def ^String page-cursor-prefix "fram-query-term-page-v1.")
+(def ^String page-cursor-prefix "fram-query-term-page-v1.")
 
-^{:line 853 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- utf8-size [^String value]
-  ^{:line 853 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count ^{:line 853 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (.getBytes value "UTF-8")))
+(defn- utf8-size [^String value]
+  (count (.getBytes value "UTF-8")))
 
-^{:line 855 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^String page-cursor [row]
-  ^{:line 856 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str page-cursor-prefix ^{:line 856 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (row-key row)))
+(defn ^String page-cursor [row]
+  (str page-cursor-prefix (row-key row)))
 
-^{:line 858 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^CursorResult decode-page-cursor [cursor]
-  ^{:line 859 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 859 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 859 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? cursor)) ^{:line 860 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CursorResult nil ^{:line 861 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor must be a string")) ^{:line 863 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 863 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 863 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> ^{:line 863 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size cursor) max-page-cursor-bytes) ^{:line 864 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 864 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 864 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str/starts-with? cursor page-cursor-prefix)) ^{:line 865 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= cursor page-cursor-prefix))) ^{:line 866 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CursorResult nil ^{:line 867 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor is not canonical")) ^{:line 869 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CursorResult ^{:line 869 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (subs cursor ^{:line 869 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count page-cursor-prefix)) nil))))
+(defn ^CursorResult decode-page-cursor [cursor]
+  (if (not (string? cursor)) (->CursorResult nil (query-error :query-page-cursor "page cursor must be a string")) (if (or (> (utf8-size cursor) max-page-cursor-bytes) (or (not (str/starts-with? cursor page-cursor-prefix)) (= cursor page-cursor-prefix))) (->CursorResult nil (query-error :query-page-cursor "page cursor is not canonical")) (->CursorResult (subs cursor (count page-cursor-prefix)) nil))))
 
-^{:line 871 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryPage page-envelope [window count-value]
-  ^{:line 872 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [rows ^{:line 872 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (subvec window 0 count-value)
-   more ^{:line 873 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> ^{:line 873 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count window) count-value)
-   next ^{:line 874 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 874 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and more ^{:line 874 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> count-value 0)) ^{:line 875 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (page-cursor ^{:line 875 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth rows ^{:line 875 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (- count-value 1))) nil)]
-  ^{:line 876 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (success-page rows next more)))
+(defn- ^QueryPage page-envelope [window count-value]
+  (let [rows (subvec window 0 count-value)
+   more (> (count window) count-value)
+   next (if (and more (> count-value 0)) (page-cursor (nth rows (- count-value 1))) nil)]
+  (success-page rows next more)))
 
-^{:line 878 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- envelope-size [rows-size next ^Boolean more]
-  ^{:line 879 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ ^{:line 879 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size "rows:") rows-size ^{:line 879 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size "|next:") ^{:line 880 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size ^{:line 880 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pr-str next)) ^{:line 880 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size "|more:") ^{:line 881 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size ^{:line 881 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pr-str more))))
+(defn- envelope-size [rows-size next ^Boolean more]
+  (+ (utf8-size "rows:") rows-size (utf8-size "|next:") (utf8-size (pr-str next)) (utf8-size "|more:") (utf8-size (pr-str more))))
 
-^{:line 883 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- fitting-prefix [window wanted]
-  ^{:line 884 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (loop [index 0
+(defn- fitting-prefix [window wanted]
+  (loop [index 0
    rows-size 2
    best 0]
-  ^{:line 885 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 885 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (>= index wanted) best ^{:line 887 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [row ^{:line 887 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nth window index)
-   count-value ^{:line 888 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ index 1)
-   rows-size2 ^{:line 889 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ rows-size ^{:line 889 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 889 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= index 0) 0 1) ^{:line 890 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size ^{:line 890 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pr-str row)))
-   more ^{:line 891 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> ^{:line 891 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count window) count-value)
-   next ^{:line 892 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if more ^{:line 892 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (page-cursor row) nil)
-   fits ^{:line 893 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 893 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 893 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (nil? next) ^{:line 894 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (<= ^{:line 894 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (utf8-size next) max-page-cursor-bytes)) ^{:line 895 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (<= ^{:line 895 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (envelope-size rows-size2 next more) max-page-payload-bytes))]
-  ^{:line 897 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (recur count-value rows-size2 ^{:line 897 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if fits count-value best))))))
+  (if (>= index wanted) best (let [row (nth window index)
+   count-value (+ index 1)
+   rows-size2 (+ rows-size (if (= index 0) 0 1) (utf8-size (pr-str row)))
+   more (> (count window) count-value)
+   next (if more (page-cursor row) nil)
+   fits (and (or (nil? next) (<= (utf8-size next) max-page-cursor-bytes)) (<= (envelope-size rows-size2 next more) max-page-payload-bytes))]
+  (recur count-value rows-size2 (if fits count-value best))))))
 
-^{:line 899 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryPage abort-page [problem]
-  ^{:line 900 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [data ^{:line 900 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ex-data problem)]
-  ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :fram-query-abort ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:type data)) ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:code data) ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (.getMessage problem))]) ^{:line 903 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (throw problem))))
+(defn- ^QueryPage abort-page [problem]
+  (let [data (ex-data problem)]
+  (if (= :fram-query-abort (:type data)) (failure-page [(query-error (:code data) (.getMessage problem))]) (throw problem))))
 
-^{:line 905 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
-  ^{:line 907 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [validation-errors ^{:line 907 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan plan)]
-  ^{:line 908 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
-  ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? validation-errors)) ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page validation-errors)
-  ^{:line 910 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-find? ^{:line 910 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan)) ^{:line 911 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 911 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 911 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-aggregate-not-pageable "aggregate results are not pageable")])
-  ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (integer? limit)) ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (or ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (< limit 1) ^{:line 913 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> limit max-page-limit))) ^{:line 914 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 914 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 914 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-page-limit ^{:line 915 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "page limit must be from 1 through " max-page-limit))])
-  ^{:line 916 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 916 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? after) ^{:line 916 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 916 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (string? after))) ^{:line 917 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 917 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 917 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-page-cursor "page cursor must be a string or nil")])
-  :else ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [decoded ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? after) ^{:line 921 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (decode-page-cursor after) ^{:line 922 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CursorResult nil nil))
-   cursor-error ^{:line 923 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cursorresult-error decoded)]
-  ^{:line 924 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 924 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? cursor-error) ^{:line 925 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 925 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [cursor-error]) ^{:line 926 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (try
-  ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan! projection plan)
-   relation ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get db ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan)) ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{})
-   ordered ^{:line 929 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ordered-rows relation)
-   after-key ^{:line 930 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cursorresult-key decoded)
-   eligible ^{:line 932 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 932 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? after-key) ^{:line 933 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (filterv ^{:line 933 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fn [row] ^{:line 934 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (pos? ^{:line 934 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compare ^{:line 934 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (row-key row) after-key))) ordered) ordered)
-   window ^{:line 937 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 937 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (take ^{:line 937 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (+ limit 1) eligible))
-   wanted ^{:line 938 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (min limit ^{:line 938 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count window))]
-  ^{:line 939 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 939 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= wanted 0) ^{:line 940 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (page-envelope window 0) ^{:line 941 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [count-value ^{:line 941 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (fitting-prefix window wanted)]
-  ^{:line 942 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 942 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= count-value 0) ^{:line 943 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (wire-failure-page ^{:line 944 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-page-row-too-large "page contains a row too large for the bounded response") max-page-wire-bytes) ^{:line 947 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (page-envelope window count-value)))))
+(defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
+  (let [validation-errors (validate-plan plan)]
+  (cond
+  (not (empty? validation-errors)) (failure-page validation-errors)
+  (aggregate-find? (queryplan-find plan)) (failure-page [(query-error :query-aggregate-not-pageable "aggregate results are not pageable")])
+  (or (not (integer? limit)) (or (< limit 1) (> limit max-page-limit))) (failure-page [(query-error :query-page-limit (str "page limit must be from 1 through " max-page-limit))])
+  (and (some? after) (not (string? after))) (failure-page [(query-error :query-page-cursor "page cursor must be a string or nil")])
+  :else (let [decoded (if (some? after) (decode-page-cursor after) (->CursorResult nil nil))
+   cursor-error (cursorresult-error decoded)]
+  (if (some? cursor-error) (failure-page [cursor-error]) (try
+  (let [db (evaluate-plan! projection plan)
+   relation (get db (findspec-relation (queryplan-find plan)) #{})
+   ordered (ordered-rows relation)
+   after-key (cursorresult-key decoded)
+   eligible (if (some? after-key) (filterv (fn [row] (pos? (compare (row-key row) after-key))) ordered) ordered)
+   window (vec (take (+ limit 1) eligible))
+   wanted (min limit (count window))]
+  (if (= wanted 0) (page-envelope window 0) (let [count-value (fitting-prefix window wanted)]
+  (if (= count-value 0) (wire-failure-page (query-error :query-page-row-too-large "page contains a row too large for the bounded response") max-page-wire-bytes) (page-envelope window count-value)))))
   (catch Exception problem
-    ^{:line 948 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (abort-page problem))))))))
+    (abort-page problem))))))))
 
-^{:line 950 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-projected! [^Projection projection ^QueryPlan plan limit after]
-  ^{:line 952 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected! projection plan limit after))
+(defn ^QueryPage run-page-projected! [^Projection projection ^QueryPlan plan limit after]
+  (run-page-plan-projected! projection plan limit after))
 
-^{:line 954 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
-  ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected! ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan limit after))
+(defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
+  (run-page-plan-projected! (project propositions) plan limit after))
