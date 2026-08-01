@@ -34,6 +34,7 @@ run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 baseline-bb	catalog-drift	tests/catalog_current_test.clj	tests/catalog_current_test.clj#catalog_current_test:.*FAIL.*DRIFTED
 
 run-shell	current-boundary	tests/fram_up_readiness_test.sh	-
+run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-

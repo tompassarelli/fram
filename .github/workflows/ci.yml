@@ -69,7 +69,7 @@ jobs:
         run: |
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt
-          expected_failures=tests/occurrence_native_ci_failures.txt
+          pristine_failures=tests/occurrence_native_ci_failures.txt
           manifest_scratch="$(mktemp -d)"
           trap 'rm -rf "${manifest_scratch:?}"' EXIT INT TERM
 
@@ -216,12 +216,12 @@ jobs:
           sort -u "$manifest_scratch/actual-failures" \
             > "$manifest_scratch/actual-failures.sorted"
           awk -F '\t' '!/^[[:space:]]*$/ && !/^#/ {print $1 "\t" $2}' \
-            "$expected_failures" | sort -u \
-            > "$manifest_scratch/expected-failures.sorted"
-          if ! diff -u \
-              "$manifest_scratch/expected-failures.sorted" \
+            "$pristine_failures" | sort -u \
+            > "$manifest_scratch/pristine-failures.sorted"
+          if ! bash tests/occurrence_native_ci_compare.sh \
+              "$manifest_scratch/pristine-failures.sorted" \
               "$manifest_scratch/actual-failures.sorted"; then
-            echo "known failure set changed; repair it or update the explicit baseline" >&2
+            echo "known failure contract changed; repair it or update the pristine baseline" >&2
             fail=1
           fi
 

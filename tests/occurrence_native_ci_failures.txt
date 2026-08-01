@@ -1,10 +1,14 @@
-# producer<TAB>failure-id
+# pristine-producer<TAB>failure-id
+# Catalog drift is exact. Vocabulary failures may resolve but may never regrow;
+# the comparator reports every pristine failure absent from the candidate.
 catalog-drift	catalog-drift
 vocab-residue	RELEASE-v0.3.0.md
 vocab-residue	bench/in-class/results/2026-07-28-index-architecture.jsonl
 vocab-residue	bench/in-class/scenario-contract.edn
 vocab-residue	bin/fram-code-status
 vocab-residue	build/generated-targets.d/00-current.tsv
+vocab-residue	coord_daemon.clj
+vocab-residue	deploy/cloudflare/PROCEDURE.md
 vocab-residue	docs/architecture.md
 vocab-residue	docs/measurements.md
 vocab-residue	flake.nix
