@@ -7,6 +7,135 @@
 
 (defalias StoreValue (Dyn String Int Bool Keyword (Vec Int)))
 
+;; Atom is the closed grounding vocabulary for the recursive term model.  An
+;; Instant is canonical epoch seconds plus nanoseconds; civil-time context is
+;; expressed by ordinary triples rather than folded into this scalar.
+(defrecord Instant [epoch-seconds: Int nanos: Int])
+(defn instant? [v: Any] -> Bool (instance? Instant v))
+(defn instant [epoch-seconds: Int nanos: Int] -> Instant
+  (if (and (>= nanos 0) (< nanos 1000000000))
+    (->Instant epoch-seconds nanos)
+    (throw (ex-info "fram: instant nanoseconds must be in [0, 1000000000)"
+                    {:type :invalid-instant}))))
+
+;; Triple fields are Any only because the portable record ABI cannot spell a
+;; recursive union in-place; term? enforces Term = Atom | Triple at the boundary.
+(defalias Atom (Dyn String Int Float Bool Keyword Instant))
+(defrecord Triple [slot0: Any slot1: Any slot2: Any])
+(defalias Term (Dyn String Int Float Bool Keyword Instant Triple))
+
+(defn triple? [v: Any] -> Bool (instance? Triple v))
+
+;; Term handles are private tagged integers.  Only these three structural slots
+;; cross the store/native boundary; no handle is part of Triple semantics.
+(defrecord AtomRow
+  [kind: Keyword string-value: String? int-value: Int? float-value: Float?
+   bool-value: Bool? keyword-value: Keyword? instant-value: Instant?])
+(defrecord TripleRow [slot0: Int slot1: Int slot2: Int])
+(defrecord TermBucket [key: Int positions: (Vec Int)])
+(defrecord TermStore
+  [atoms: (Vec AtomRow) triples: (Vec TripleRow)
+   atom-slots: (Vec TermBucket) triple-slots: (Vec TermBucket)])
+(defrecord TermStoreDump [version: Int atoms: (Vec AtomRow) triples: (Vec TripleRow)])
+
+(def tx-sequence: Keyword :kernel/tx-sequence)
+(def op-ordinal: Keyword :kernel/op-ordinal)
+(def asserts: Keyword :kernel/asserts)
+(def retracts: Keyword :kernel/retracts)
+(def withdraws: Keyword :kernel/withdraws)
+(def recorded-at-predicate: Keyword :kernel/recorded-at)
+
+(defn atom? [v: Any] -> Bool
+  (or (string? v)
+      (or (integer? v)
+          (or (and (number? v) (not (integer? v)))
+              (or (boolean? v) (or (keyword? v) (instant? v)))))))
+
+(defn term? [v: Any] -> Bool
+  (if (triple? v)
+    (and (term? (triple-slot0 v))
+         (and (term? (triple-slot1 v))
+              (term? (triple-slot2 v))))
+    (atom? v)))
+
+(defn triple [slot0: Any slot1: Any slot2: Any] -> Triple
+  (let [value (->Triple slot0 slot1 slot2)]
+    (if (term? value)
+      value
+      (throw (ex-info "fram: triple contains a value outside Term" {:type :invalid-term})))))
+
+(defn transaction-coordinate [space-id: String sequence: Int] -> Triple
+  (if (and (pos? (count space-id)) (>= sequence 0))
+    (triple space-id tx-sequence sequence)
+    (throw (ex-info "fram: transaction coordinate requires a non-empty space and non-negative sequence"
+                    {:type :invalid-transaction-coordinate}))))
+
+(defn transaction-coordinate? [v: Any] -> Bool
+  (and (triple? v)
+       (and (string? (triple-slot0 v))
+            (and (pos? (count (triple-slot0 v)))
+                 (and (= tx-sequence (triple-slot1 v))
+                      (and (integer? (triple-slot2 v))
+                           (>= (triple-slot2 v) 0)))))))
+
+(defn occurrence-coordinate [tx: Triple ordinal: Int] -> Triple
+  (if (and (transaction-coordinate? tx) (>= ordinal 0))
+    (triple tx op-ordinal ordinal)
+    (throw (ex-info "fram: occurrence coordinate requires a transaction coordinate and non-negative ordinal"
+                    {:type :invalid-occurrence-coordinate}))))
+
+(defn occurrence-coordinate? [v: Any] -> Bool
+  (and (triple? v)
+       (and (transaction-coordinate? (triple-slot0 v))
+            (and (= op-ordinal (triple-slot1 v))
+                 (and (integer? (triple-slot2 v))
+                      (>= (triple-slot2 v) 0))))))
+
+(defn assertion-occurrence [occurrence: Triple proposition: Triple] -> Triple
+  (if (and (occurrence-coordinate? occurrence) (triple? proposition))
+    (triple occurrence asserts proposition)
+    (throw (ex-info "fram: assertion requires an occurrence coordinate"
+                    {:type :invalid-assertion-occurrence}))))
+
+(defn retraction-occurrence [occurrence: Triple proposition: Triple] -> Triple
+  (if (and (occurrence-coordinate? occurrence) (triple? proposition))
+    (triple occurrence retracts proposition)
+    (throw (ex-info "fram: retraction requires an occurrence coordinate"
+                    {:type :invalid-retraction-occurrence}))))
+
+(defn withdrawal [retraction: Triple target: Triple] -> Triple
+  (if (and (occurrence-coordinate? retraction) (occurrence-coordinate? target))
+    (triple retraction withdraws target)
+    (throw (ex-info "fram: withdrawal requires retraction and target occurrence coordinates"
+                    {:type :invalid-withdrawal}))))
+
+(defn recorded-at [source: Triple at: Instant] -> Triple
+  (if (and (triple? source) (instant? at))
+    (triple source recorded-at-predicate at)
+    (throw (ex-info "fram: recorded-at requires a triple source and Instant"
+                    {:type :invalid-recorded-at}))))
+
+(defn occurrence-before? [left: Triple right: Triple] -> Bool
+  (if (and (occurrence-coordinate? left) (occurrence-coordinate? right))
+    (let [left-tx: Triple (triple-slot0 left)
+          right-tx: Triple (triple-slot0 right)
+          left-space: String (triple-slot0 left-tx)
+          right-space: String (triple-slot0 right-tx)
+          left-seq: Int (triple-slot2 left-tx)
+          right-seq: Int (triple-slot2 right-tx)
+          left-ordinal: Int (triple-slot2 left)
+          right-ordinal: Int (triple-slot2 right)]
+      (if (= left-space right-space)
+        (or (< left-seq right-seq)
+            (and (= left-seq right-seq) (< left-ordinal right-ordinal)))
+        (throw (ex-info "fram: occurrences from different spaces have no shared order"
+                        {:type :incomparable-occurrence-spaces}))))
+    (throw (ex-info "fram: occurrence ordering requires occurrence coordinates"
+                    {:type :invalid-occurrence-order}))))
+
+;; The records below are the legacy cid runtime boundary.  New representation
+;; code must use TermStore/TripleRow; the one-shot migration removes this shape.
+
 (defrecord StoredValue [id :- Int value :- StoreValue])
 (defrecord StoredFact [id :- Int l :- Int p :- Int r :- Int])
 (defrecord FactView [l :- Int p :- Int r :- Int])

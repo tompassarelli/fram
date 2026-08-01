@@ -19,6 +19,162 @@
 
 (def slot-load 4)
 
+(def empty-atoms [])
+
+(def empty-triple-rows [])
+
+(def empty-term-buckets [])
+
+(defn- fresh-term-slots [width]
+  (loop [slots empty-term-buckets
+   position 0]
+  (if (>= position width) slots (recur (conj slots (t/->TermBucket position empty-ids)) (inc position)))))
+
+(defn- term-slot [value width]
+  (mod (hash value) width))
+
+(defn- term-slot-add [slots slot position]
+  (assoc slots slot (t/->TermBucket slot (conj (t/termbucket-positions (nth slots slot)) position))))
+
+(defn- term-slots-width-for [n]
+  (loop [width initial-slots]
+  (if (>= (* slot-load width) n) width (recur (* 2 width)))))
+
+(defn- build-atom-term-slots [atoms width]
+  (loop [slots (fresh-term-slots width)
+   position 0]
+  (if (>= position (count atoms)) slots (recur (term-slot-add slots (term-slot (nth atoms position) width) position) (inc position)))))
+
+(defn- build-triple-term-slots [rows width]
+  (loop [slots (fresh-term-slots width)
+   position 0]
+  (if (>= position (count rows)) slots (recur (term-slot-add slots (term-slot (nth rows position) width) position) (inc position)))))
+
+(defn new-term-store []
+  (atom (t/->TermStore empty-atoms empty-triple-rows (fresh-term-slots initial-slots) (fresh-term-slots initial-slots))))
+
+(defn- atom-row [value]
+  (cond
+  (string? value) (t/->AtomRow :string value nil nil nil nil nil)
+  (integer? value) (t/->AtomRow :int nil value nil nil nil nil)
+  (number? value) (t/->AtomRow :float nil nil value nil nil nil)
+  (boolean? value) (t/->AtomRow :bool nil nil nil value nil nil)
+  (keyword? value) (t/->AtomRow :keyword nil nil nil nil value nil)
+  (t/instant? value) (t/->AtomRow :instant nil nil nil nil nil value)
+  :else (throw (ex-info "fram: value outside Atom" {:type :invalid-atom}))))
+
+(defn- atom-row-value [row]
+  (cond
+  (= :string (t/atomrow-kind row)) (t/atomrow-string-value row)
+  (= :int (t/atomrow-kind row)) (t/atomrow-int-value row)
+  (= :float (t/atomrow-kind row)) (t/atomrow-float-value row)
+  (= :bool (t/atomrow-kind row)) (t/atomrow-bool-value row)
+  (= :keyword (t/atomrow-kind row)) (t/atomrow-keyword-value row)
+  (= :instant (t/atomrow-kind row)) (t/atomrow-instant-value row)
+  :else nil))
+
+(defn- ^Boolean valid-atom-row? [row]
+  (let [value (atom-row-value row)]
+  (and (some? value) (= row (atom-row value)))))
+
+(defn- find-atom-position [atoms slots value]
+  (let [positions (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+  (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
+  (if (= (nth atoms position) value) position (recur (inc offset))))))))
+
+(defn- find-triple-position [rows slots value]
+  (let [positions (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+  (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
+  (if (= (nth rows position) value) position (recur (inc offset))))))))
+
+(defn- index-atom-term! [ctx value position]
+  (let [store (swap! ctx update :atom-slots (fn [slots] (term-slot-add slots (term-slot value (count slots)) position)))]
+  (if (> (count (t/termstore-atoms store)) (* slot-load (count (t/termstore-atom-slots store)))) (swap! ctx assoc :atom-slots (build-atom-term-slots (t/termstore-atoms store) (* 2 (count (t/termstore-atom-slots store))))) store)))
+
+(defn- index-triple-term! [ctx value position]
+  (let [store (swap! ctx update :triple-slots (fn [slots] (term-slot-add slots (term-slot value (count slots)) position)))]
+  (if (> (count (t/termstore-triples store)) (* slot-load (count (t/termstore-triple-slots store)))) (swap! ctx assoc :triple-slots (build-triple-term-slots (t/termstore-triples store) (* 2 (count (t/termstore-triple-slots store))))) store)))
+
+(defn- atom-handle [position]
+  (* 2 position))
+
+(defn- triple-handle [position]
+  (inc (* 2 position)))
+
+(defn- ^Boolean atom-handle? [handle]
+  (= 0 (mod handle 2)))
+
+(defn- handle-position [handle]
+  (quot handle 2))
+
+(defn- intern-handle! [ctx term]
+  (if (not (t/term? term)) (throw (ex-info "fram: cannot intern a value outside Term" {:type :invalid-term})) (if (t/triple? term) (let [slot0 (intern-handle! ctx (t/triple-slot0 term))
+   slot1 (intern-handle! ctx (t/triple-slot1 term))
+   slot2 (intern-handle! ctx (t/triple-slot2 term))
+   store (deref ctx)
+   rows (t/termstore-triples store)
+   value (t/->TripleRow slot0 slot1 slot2)
+   known (find-triple-position rows (t/termstore-triple-slots store) value)]
+  (if (>= known 0) (triple-handle known) (let [position (count rows)]
+  (swap! ctx update :triples (fn [current] (conj current value)))
+  (index-triple-term! ctx value position)
+  (triple-handle position)))) (let [value (atom-row term)
+   store (deref ctx)
+   atoms (t/termstore-atoms store)
+   known (find-atom-position atoms (t/termstore-atom-slots store) value)]
+  (if (>= known 0) (atom-handle known) (let [position (count atoms)]
+  (swap! ctx update :atoms (fn [current] (conj current value)))
+  (index-atom-term! ctx value position)
+  (atom-handle position)))))))
+
+(defn- ^Boolean valid-handle? [store handle]
+  (and (>= handle 0) (if (atom-handle? handle) (< (handle-position handle) (count (t/termstore-atoms store))) (< (handle-position handle) (count (t/termstore-triples store))))))
+
+(defn- resolve-handle [store handle]
+  (if (not (valid-handle? store handle)) (throw (ex-info "fram: term handle does not resolve" {:type :invalid-term-handle})) (let [position (handle-position handle)]
+  (if (atom-handle? handle) (atom-row-value (nth (t/termstore-atoms store) position)) (let [row (nth (t/termstore-triples store) position)]
+  (t/triple (resolve-handle store (t/triplerow-slot0 row)) (resolve-handle store (t/triplerow-slot1 row)) (resolve-handle store (t/triplerow-slot2 row))))))))
+
+(defn intern-term! [ctx term]
+  (let [handle (intern-handle! ctx term)]
+  (resolve-handle (deref ctx) handle)))
+
+(defn replay-terms! [ctx terms]
+  (do
+  (doseq [term terms]
+  (intern-term! ctx term))
+  ctx))
+
+(defn atom-term-count [ctx]
+  (count (t/termstore-atoms (deref ctx))))
+
+(defn triple-term-count [ctx]
+  (count (t/termstore-triples (deref ctx))))
+
+(defn term-count [ctx]
+  (+ (atom-term-count ctx) (triple-term-count ctx)))
+
+(defn dump-term-store [ctx]
+  (let [store (deref ctx)]
+  (t/->TermStoreDump 1 (t/termstore-atoms store) (t/termstore-triples store))))
+
+(defn- ^Boolean valid-prior-handle? [atom-count triple-position handle]
+  (and (>= handle 0) (if (atom-handle? handle) (< (handle-position handle) atom-count) (< (handle-position handle) triple-position))))
+
+(defn- ^Boolean valid-triple-rows? [atom-count rows]
+  (loop [position 0]
+  (if (>= position (count rows)) true (let [row (nth rows position)]
+  (if (and (valid-prior-handle? atom-count position (t/triplerow-slot0 row)) (and (valid-prior-handle? atom-count position (t/triplerow-slot1 row)) (valid-prior-handle? atom-count position (t/triplerow-slot2 row)))) (recur (inc position)) false)))))
+
+(defn load-term-store! [ctx data]
+  (let [atoms (t/termstoredump-atoms data)
+   rows (t/termstoredump-triples data)]
+  (if (and (= 1 (t/termstoredump-version data)) (and (every? (fn [row] (valid-atom-row? row)) atoms) (valid-triple-rows? (count atoms) rows))) (do
+  (reset! ctx (t/->TermStore atoms rows (build-atom-term-slots atoms (term-slots-width-for (count atoms))) (build-triple-term-slots rows (term-slots-width-for (count rows)))))
+  ctx) (throw (ex-info "fram: invalid recursive term-store dump" {:type :invalid-term-store-dump})))))
+
 (defn- value-hash [v]
   (if (string? v) (hash v) (if (integer? v) (hash v) (if (boolean? v) (hash v) (if (keyword? v) (hash v) (if (vector? v) (hash v) 0))))))
 

@@ -116,6 +116,40 @@ verdict, not a permanent namespace, and the only places the old name survives ar
 records that would be lies without it — ADR 0001, the benchmark `RESULTS.md`, and this
 entry.
 
+## Turtle — an architecture prior, never a primitive — chosen 2026-08-01
+
+When a Fram document says **Turtle**, the intended prior is the phrase **“turtles all
+the way down.”** It names a design philosophy: prefer uniform ordinary recursive
+triples wherever the model permits, so metadata and higher-order structure use the same
+machinery as the statements they describe. It does not name a record, identifier, log
+format, or second kind of stored thing.
+
+The semantic vocabulary is deliberately literal:
+
+```text
+Atom   := String | Int | Float | Bool | Keyword | Instant
+Term   := Atom | Triple
+Triple := (Term, Term, Term)
+```
+
+The three positions are `slot0`, `slot1`, and `slot2`. The kernel gives none of them a
+subject, predicate, or object role; an ontology may assign roles through ordinary
+triple shapes. A transaction coordinate such as `(space, kernel/tx-sequence, 1842)` is
+therefore a Triple, not a transaction primitive. A Triple can occupy any slot of
+another Triple.
+
+Atoms honestly terminate the recursion. Namespaced atoms such as `plangrep/page` are
+grounding vocabulary; `/` carries no kernel semantics and does not privilege the
+middle slot. Use an atom when a value is genuinely atomic. When its components need to
+be queried or described, represent that structure with more Triples rather than hiding
+it in an opaque compound string.
+
+Physical implementations may use tagged term handles, atom tables, and `TripleRow`
+records for finite storage. Those are private representations of the one recursive
+model, not semantic identity. Accordingly, code uses `Term`, `Triple`, `TripleRow`, and
+`slot0`/`slot1`/`slot2`; names such as `TurtleRow`, `turtle-id`, and “turtle log” are
+category errors.
+
 ## Appending an entry
 
 When a name fight happens, record: what the thing *is* (its actual semantics, including
