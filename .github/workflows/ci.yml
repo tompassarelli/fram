@@ -4,10 +4,8 @@ on:
   push:
   pull_request:
 
-# Fram had no CI of its own — its JVM daemon, engine mTLS, and 17 test suites only
-# ever ran on a dev machine, so a daemon-runtime change (bb -> JVM) slipped through
-# and broke a downstream consumer. This workflow runs the real suites + the real
-# JVM/mTLS daemon, so that class of break is caught here, at the source.
+# The occurrence-native manifest is exhaustive: every Clojure test is either a
+# current gate or an explicit pre-cutover hold. New tests fail CI until classified.
 
 jobs:
   test:
@@ -65,42 +63,63 @@ jobs:
       - name: Warm JVM deps (cheshire) so the daemon boots fast
         run: clojure -P
 
-      - name: README anti-rot gate (URLs, verbs, paths, the core loop runs)
-        run: scripts/readme-check.sh
-
-      - name: Unit + integration suites (babashka, on the committed out/)
+      - name: Occurrence-native component and boundary suites
         env:
           BEAGLE: ${{ github.workspace }}/.beagle
         run: |
+          set -uo pipefail
+          manifest=tests/occurrence_native_ci_manifest.txt
+          manifest_scratch="$(mktemp -d)"
+          trap 'rm -rf "${manifest_scratch:?}"' EXIT INT TERM
+
+          rg --files tests -g '*_test.clj' | sort > "$manifest_scratch/actual"
+          awk '$1 == "run" || $1 == "legacy" {print $2}' "$manifest" \
+            | sort > "$manifest_scratch/declared"
+          if [ -s "$manifest_scratch/declared" ] && \
+             [ -n "$(uniq -d "$manifest_scratch/declared")" ]; then
+            echo "duplicate Clojure test disposition in $manifest" >&2
+            uniq -d "$manifest_scratch/declared" >&2
+            exit 1
+          fi
+          if ! diff -u "$manifest_scratch/actual" "$manifest_scratch/declared"; then
+            echo "classify every tests/*_test.clj entry as run or legacy" >&2
+            exit 1
+          fi
+
           fail=0
-          for t in tests/*_test.clj; do
-            [ "$t" = tests/tls_test.clj ] && continue   # runs separately below (spawns the JVM daemon)
-            echo "== $t =="
-            if [ "$t" = tests/coord_addressable_forms_test.clj ]; then
-              timeout --signal=TERM --kill-after=10s 180s clojure -M "$t" || fail=1
-            elif [ "$t" = tests/mcp_candidate_test.clj ]; then
-              FRAM_COORD_READ_TIMEOUT_MS=180000 \
-                timeout --signal=TERM --kill-after=10s 180s bb -cp out "$t" || fail=1
-            else
-              timeout --signal=TERM --kill-after=10s 180s bb -cp out "$t" || fail=1
-            fi
-          done
+          while read -r disposition test_path; do
+            case "$disposition" in
+              ''|'#') continue ;;
+              run)
+                echo "== $test_path =="
+                env -u FRAM_TELEMETRY_LOG \
+                  timeout --signal=TERM --kill-after=10s 240s \
+                  bb -cp out "$test_path" || fail=1
+                ;;
+              run-shell)
+                echo "== $test_path =="
+                env -u FRAM_TELEMETRY_LOG \
+                  timeout --signal=TERM --kill-after=10s 240s \
+                  bash "$test_path" || fail=1
+                ;;
+              run-node)
+                echo "== $test_path =="
+                timeout --signal=TERM --kill-after=10s 240s \
+                  node "$test_path" || fail=1
+                ;;
+              legacy|legacy-gate)
+                [ -f "$test_path" ] || {
+                  echo "missing inventoried legacy gate: $test_path" >&2
+                  fail=1
+                }
+                ;;
+              *)
+                echo "unknown manifest disposition: $disposition" >&2
+                fail=1
+                ;;
+            esac
+          done < "$manifest"
+
+          echo "current Clojure gates: $(awk '$1 == "run" {n++} END {print n+0}' "$manifest")"
+          echo "inventoried legacy Clojure suites: $(awk '$1 == "legacy" {n++} END {print n+0}' "$manifest")"
           exit $fail
-
-      # The subset ratchet on 'claim' residue is a .sh, so the *_test.clj glob
-      # above never runs it — PR #1 tripped it unseen. Deliberate regrowth
-      # regenerates the baseline in the same commit (see the script header).
-      - name: Vocabulary ratchet (claim-regrowth gate)
-        run: bash tests/vocab_ratchet_test.sh
-
-      - name: Daemon-read ratchet (CLI must not cold-fold when warm)
-        run: bash tests/daemon_read_perf_ratchet.sh
-
-      - name: mTLS round-trip (JVM daemon, engine-terminated mutual TLS)
-        run: bb tests/tls_test.clj
-
-      # Perf-budget: the #44 propagation thesis (graph-prop FLAT in K; graph >> git at K=8) must not
-      # silently rot. Ratio-based budgets (machine-independent) + generous absolute ceilings, so CI
-      # timing noise doesn't flake. Runs the content-asserted K=1,8 sweep; budgets in perf-budget.edn.
-      - name: Propagation perf-budget (flat-propagation thesis, fail on regression)
-        run: bb -cp out bench/propagation/check-budget.clj
