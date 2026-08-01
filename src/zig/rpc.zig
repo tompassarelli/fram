@@ -1,5 +1,4 @@
-//! Frozen FRAMRPC v1 conformance codec. The live daemon does not import this
-//! module until socket and cancellation scheduling are authorized separately.
+//! Frozen FRAMRPC v1 codec shared by the live daemon and native test peer.
 
 const std = @import("std");
 const log = @import("log.zig");

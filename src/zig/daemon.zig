@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const flat_log = @import("log.zig");
+const rpc = @import("rpc.zig");
 const kernel_classify = @import("fram_kernel_classify.zig");
 
 const Allocator = std.mem.Allocator;
@@ -9,209 +10,46 @@ const File = std.Io.File;
 const Io = std.Io;
 const Writer = std.Io.Writer;
 
-const max_request_bytes = 64 * 1024;
-const authority_format = "fram-coordinator-writer-authority/v1";
-
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
 const Operation = enum {
-    for_log,
     version,
     status,
-    assert_fact,
-    assert_existing,
-    assert_batch,
-    assert_batch_at_version,
-    assert_at_version,
-    assert_with_fence,
-    assert_at_version_with_fence,
-    assert_triple,
-    retract_fact,
-    retract_existing,
-    retract_with_fence,
-    retract_triple,
-    acquire_lease,
-    renew_lease,
-    release_lease,
-    fence_ok,
-    facts,
-    facts_for_subjects,
-    triples,
+    assert,
+    retract,
+    batch,
+    scan,
     occurrences,
     query,
+    lease_acquire,
+    lease_renew,
+    lease_release,
+    lease_check,
+    validate,
     unknown,
+
+    fn parse(term: flat_log.Term) Operation {
+        const name = keywordValue(term) orelse return .unknown;
+        if (std.mem.eql(u8, name, "rpc/version")) return .version;
+        if (std.mem.eql(u8, name, "rpc/status")) return .status;
+        if (std.mem.eql(u8, name, "rpc/assert")) return .assert;
+        if (std.mem.eql(u8, name, "rpc/retract")) return .retract;
+        if (std.mem.eql(u8, name, "rpc/batch")) return .batch;
+        if (std.mem.eql(u8, name, "rpc/scan")) return .scan;
+        if (std.mem.eql(u8, name, "rpc/occurrences")) return .occurrences;
+        if (std.mem.eql(u8, name, "rpc/query")) return .query;
+        if (std.mem.eql(u8, name, "rpc/lease-acquire")) return .lease_acquire;
+        if (std.mem.eql(u8, name, "rpc/lease-renew")) return .lease_renew;
+        if (std.mem.eql(u8, name, "rpc/lease-release")) return .lease_release;
+        if (std.mem.eql(u8, name, "rpc/lease-check")) return .lease_check;
+        if (std.mem.eql(u8, name, "rpc/validate")) return .validate;
+        return .unknown;
+    }
 };
 
 const EventOperation = enum {
-    assert_fact,
-    retract_fact,
-};
-
-const StringField = union(enum) {
-    missing,
-    invalid,
-    value: []u8,
-
-    fn deinit(field: *StringField, allocator: Allocator) void {
-        switch (field.*) {
-            .value => |value| allocator.free(value),
-            else => {},
-        }
-        field.* = .missing;
-    }
-};
-
-const IntField = union(enum) {
-    missing,
-    nil,
-    invalid,
-    value: i64,
-};
-
-const field_op: u16 = 1 << 0;
-const field_expected_log: u16 = 1 << 1;
-const field_request: u16 = 1 << 2;
-const field_te: u16 = 1 << 3;
-const field_p: u16 = 1 << 4;
-const field_r: u16 = 1 << 5;
-const field_base: u16 = 1 << 6;
-const field_facts: u16 = 1 << 7;
-const field_res: u16 = 1 << 8;
-const field_holder: u16 = 1 << 9;
-const field_epoch: u16 = 1 << 10;
-const field_ttl_ms: u16 = 1 << 11;
-const field_subjects: u16 = 1 << 12;
-const field_query: u16 = 1 << 13;
-const field_triple: u16 = 1 << 14;
-
-const MapFields = struct {
-    op: Operation = .unknown,
-    expected_log: StringField = .missing,
-    request: ?[]const u8 = null,
-    te: StringField = .missing,
-    p: StringField = .missing,
-    r: StringField = .missing,
-    base: IntField = .missing,
-    facts: ?[]const u8 = null,
-    res: StringField = .missing,
-    holder: StringField = .missing,
-    epoch: IntField = .missing,
-    ttl_ms: IntField = .missing,
-    subjects: ?[]const u8 = null,
-    query: ?[]const u8 = null,
-    triple: ?[]const u8 = null,
-    present: u16 = 0,
-    duplicate: bool = false,
-    unknown_field: bool = false,
-
-    fn deinit(fields: *MapFields, allocator: Allocator) void {
-        fields.expected_log.deinit(allocator);
-        fields.te.deinit(allocator);
-        fields.p.deinit(allocator);
-        fields.r.deinit(allocator);
-        fields.res.deinit(allocator);
-        fields.holder.deinit(allocator);
-    }
-
-    fn noteField(fields: *MapFields, field: u16) void {
-        if ((fields.present & field) != 0) fields.duplicate = true;
-        fields.present |= field;
-    }
-};
-
-const Parser = struct {
-    input: []const u8,
-    index: usize = 0,
-
-    fn skipSeparators(parser: *Parser) void {
-        while (parser.index < parser.input.len) : (parser.index += 1) {
-            switch (parser.input[parser.index]) {
-                ' ', '\t', '\r', '\n', ',' => {},
-                else => return,
-            }
-        }
-    }
-
-    fn scanValue(parser: *Parser) error{InvalidEdn}![]const u8 {
-        parser.skipSeparators();
-        if (parser.index >= parser.input.len) return error.InvalidEdn;
-        const start = parser.index;
-
-        switch (parser.input[parser.index]) {
-            '"' => {
-                parser.index += 1;
-                var escaped = false;
-                while (parser.index < parser.input.len) : (parser.index += 1) {
-                    const byte = parser.input[parser.index];
-                    if (escaped) {
-                        escaped = false;
-                        continue;
-                    }
-                    if (byte == '\\') {
-                        escaped = true;
-                        continue;
-                    }
-                    if (byte == '"') {
-                        parser.index += 1;
-                        return parser.input[start..parser.index];
-                    }
-                }
-                return error.InvalidEdn;
-            },
-            '{', '[', '(' => {
-                var closes: [64]u8 = undefined;
-                var depth: usize = 1;
-                closes[0] = closingDelimiter(parser.input[parser.index]).?;
-                parser.index += 1;
-                var in_string = false;
-                var escaped = false;
-
-                while (parser.index < parser.input.len) : (parser.index += 1) {
-                    const byte = parser.input[parser.index];
-                    if (in_string) {
-                        if (escaped) {
-                            escaped = false;
-                        } else if (byte == '\\') {
-                            escaped = true;
-                        } else if (byte == '"') {
-                            in_string = false;
-                        }
-                        continue;
-                    }
-                    if (byte == '"') {
-                        in_string = true;
-                        continue;
-                    }
-                    if (closingDelimiter(byte)) |close| {
-                        if (depth == closes.len) return error.InvalidEdn;
-                        closes[depth] = close;
-                        depth += 1;
-                        continue;
-                    }
-                    if (byte == '}' or byte == ']' or byte == ')') {
-                        if (depth == 0 or closes[depth - 1] != byte)
-                            return error.InvalidEdn;
-                        depth -= 1;
-                        if (depth == 0) {
-                            parser.index += 1;
-                            return parser.input[start..parser.index];
-                        }
-                    }
-                }
-                return error.InvalidEdn;
-            },
-            '}', ']', ')' => return error.InvalidEdn,
-            else => {
-                while (parser.index < parser.input.len and
-                    !isValueDelimiter(parser.input[parser.index]))
-                {
-                    parser.index += 1;
-                }
-                if (parser.index == start) return error.InvalidEdn;
-                return parser.input[start..parser.index];
-            },
-        }
-    }
+    assert,
+    retract,
 };
 
 const TripleRow = struct {
@@ -258,6 +96,180 @@ fn stringTriple(slot0: []const u8, slot1: []const u8, slot2: []const u8) flat_lo
         .slot1 = .{ .atom = .{ .string = slot1 } },
         .slot2 = .{ .atom = .{ .string = slot2 } },
     };
+}
+
+fn stringTerm(value: []const u8) flat_log.Term {
+    return .{ .atom = .{ .string = value } };
+}
+
+fn integerTerm(value: i64) flat_log.Term {
+    return .{ .atom = .{ .integer = value } };
+}
+
+fn booleanTerm(value: bool) flat_log.Term {
+    return .{ .atom = .{ .boolean = value } };
+}
+
+fn keywordTerm(value: []const u8) flat_log.Term {
+    return .{ .atom = .{ .keyword = value } };
+}
+
+fn stringValue(term: flat_log.Term) ?[]const u8 {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .string => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
+}
+
+fn integerValue(term: flat_log.Term) ?i64 {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .integer => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
+}
+
+fn booleanValue(term: flat_log.Term) ?bool {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .boolean => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
+}
+
+fn keywordValue(term: flat_log.Term) ?[]const u8 {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .keyword => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
+}
+
+fn isKeyword(term: flat_log.Term, expected: []const u8) bool {
+    const actual = keywordValue(term) orelse return false;
+    return std.mem.eql(u8, actual, expected);
+}
+
+fn tripleValue(term: flat_log.Term) ?flat_log.Triple {
+    return switch (term) {
+        .triple => |value| value.*,
+        .atom => null,
+    };
+}
+
+fn tripleTerm(
+    arena: Allocator,
+    slot0: flat_log.Term,
+    slot1: flat_log.Term,
+    slot2: flat_log.Term,
+) !flat_log.Term {
+    const value = try arena.create(flat_log.Triple);
+    value.* = .{ .slot0 = slot0, .slot1 = slot1, .slot2 = slot2 };
+    return .{ .triple = value };
+}
+
+fn list(arena: Allocator, items: []const flat_log.Term) !flat_log.Term {
+    var tail = keywordTerm("rpc/list-end");
+    var index = items.len;
+    while (index != 0) {
+        index -= 1;
+        tail = try tripleTerm(
+            arena,
+            keywordTerm("rpc/list"),
+            items[index],
+            tail,
+        );
+    }
+    return tail;
+}
+
+fn collectList(arena: Allocator, root: flat_log.Term) ![]const flat_log.Term {
+    var items: std.ArrayList(flat_log.Term) = .empty;
+    var cursor = root;
+    while (!isKeyword(cursor, "rpc/list-end")) {
+        const cell = tripleValue(cursor) orelse return error.InvalidPayload;
+        if (!isKeyword(cell.slot0, "rpc/list")) return error.InvalidPayload;
+        if (items.items.len >= rpc.term_limits.max_nodes)
+            return error.InvalidPayload;
+        try items.append(arena, cell.slot1);
+        cursor = cell.slot2;
+    }
+    return items.toOwnedSlice(arena);
+}
+
+fn record(
+    arena: Allocator,
+    tag: []const u8,
+    fields: []const flat_log.Term,
+) !flat_log.Term {
+    return tripleTerm(
+        arena,
+        keywordTerm(tag),
+        try list(arena, fields),
+        keywordTerm("rpc/record"),
+    );
+}
+
+fn recordFields(
+    arena: Allocator,
+    value: flat_log.Term,
+    tag: []const u8,
+    expected: usize,
+) ![]const flat_log.Term {
+    const triple = tripleValue(value) orelse return error.InvalidPayload;
+    if (!isKeyword(triple.slot0, tag) or
+        !isKeyword(triple.slot2, "rpc/record")) return error.InvalidPayload;
+    const fields = try collectList(arena, triple.slot1);
+    if (fields.len != expected) return error.InvalidPayload;
+    return fields;
+}
+
+const OptionTerm = union(enum) {
+    none,
+    some: flat_log.Term,
+};
+
+fn optionValue(value: flat_log.Term) !OptionTerm {
+    if (isKeyword(value, "rpc/none")) return .none;
+    const triple = tripleValue(value) orelse return error.InvalidPayload;
+    if (!isKeyword(triple.slot0, "rpc/some") or
+        !isKeyword(triple.slot2, "rpc/option")) return error.InvalidPayload;
+    return .{ .some = triple.slot1 };
+}
+
+fn option(arena: Allocator, value: ?flat_log.Term) !flat_log.Term {
+    if (value) |present| return tripleTerm(
+        arena,
+        keywordTerm("rpc/some"),
+        present,
+        keywordTerm("rpc/option"),
+    );
+    return keywordTerm("rpc/none");
+}
+
+fn failure(
+    arena: Allocator,
+    code: []const u8,
+    retryable: bool,
+    message: []const u8,
+    detail: ?flat_log.Term,
+) !DispatchResult {
+    _ = arena;
+    return .{ .@"error" = .{
+        .code = keywordTerm(code),
+        .retryable = retryable,
+        .message = stringTerm(message),
+        .detail = detail,
+    } };
 }
 
 fn laterPosition(left: TripleRow, right: TripleRow) bool {
@@ -370,7 +382,7 @@ const DaemonState = struct {
         var declaration_iterator = declarations.iterator();
         while (declaration_iterator.next()) |entry| {
             const declaration = entry.value_ptr.*;
-            if (declaration.operation == .assert_fact) {
+            if (declaration.operation == .assert) {
                 try state.cardinality.put(
                     entry.key_ptr.*,
                     declaration.single,
@@ -476,40 +488,6 @@ const DaemonState = struct {
         return flat_log.encodeTripleKey(allocator, triple);
     }
 
-    fn liveEvent(
-        state: *DaemonState,
-        scratch: Allocator,
-        l: []const u8,
-        p: []const u8,
-        r: []const u8,
-    ) !?TripleRow {
-        const key = try state.eventKeyAlloc(scratch, stringTriple(l, p, r));
-        defer scratch.free(key);
-        const index = state.latest.get(key) orelse return null;
-        const event = state.events.items[index];
-        if (event.operation != .assert_fact) return null;
-        const view = stringTripleView(event.triple) orelse return null;
-        if (state.isSingle(p) and !std.mem.eql(u8, view.slot2, r)) return null;
-        return event;
-    }
-
-    fn liveTriple(
-        state: *DaemonState,
-        scratch: Allocator,
-        triple: flat_log.Triple,
-    ) !?TripleRow {
-        const key = try state.eventKeyAlloc(scratch, triple);
-        defer scratch.free(key);
-        const index = state.latest.get(key) orelse return null;
-        const event = state.events.items[index];
-        if (event.operation != .assert_fact) return null;
-        if (stringTripleView(triple)) |view| {
-            if (state.isSingle(view.slot1) and
-                !flat_log.tripleEql(event.triple, triple)) return null;
-        }
-        return event;
-    }
-
     fn liveGroup(
         state: *DaemonState,
         scratch: Allocator,
@@ -521,13 +499,13 @@ const DaemonState = struct {
             defer scratch.free(key);
             const index = state.latest.get(key) orelse return null;
             const event = state.events.items[index];
-            return if (event.operation == .assert_fact) event else null;
+            return if (event.operation == .assert) event else null;
         }
         var latest = state.latest.iterator();
         while (latest.next()) |entry| {
             const event = state.events.items[entry.value_ptr.*];
             const triple = stringTripleView(event.triple) orelse continue;
-            if (event.operation == .assert_fact and
+            if (event.operation == .assert and
                 std.mem.eql(u8, triple.slot0, l) and
                 std.mem.eql(u8, triple.slot1, p))
             {
@@ -535,16 +513,6 @@ const DaemonState = struct {
             }
         }
         return null;
-    }
-
-    fn baseVersion(
-        state: *DaemonState,
-        scratch: Allocator,
-        l: []const u8,
-        p: []const u8,
-    ) !i64 {
-        const live = try state.liveGroup(scratch, l, p);
-        return if (live) |event| event.tx_seq else 0;
     }
 
     fn allLivePredicateValuesRef(
@@ -556,7 +524,7 @@ const DaemonState = struct {
         while (latest.next()) |entry| {
             const event = state.events.items[entry.value_ptr.*];
             const triple = stringTripleView(event.triple) orelse continue;
-            if (event.operation != .assert_fact or
+            if (event.operation != .assert or
                 !std.mem.eql(u8, triple.slot1, predicate))
             {
                 continue;
@@ -704,11 +672,6 @@ fn run(init: std.process.Init) !void {
         space_id,
     );
     defer state.deinit();
-    const strict_fence = if (init.environ_map.get("FRAM_REQUIRE_LOG_FENCE")) |value|
-        std.mem.eql(u8, value, "1")
-    else
-        false;
-
     try installSignalHandlers();
     try serve(
         init.gpa,
@@ -717,7 +680,6 @@ fn run(init: std.process.Init) !void {
         canonical_log,
         authority.path,
         &state,
-        strict_fence,
     );
 }
 
@@ -787,8 +749,8 @@ fn replayState(
                 state.version = @max(state.version, transaction.tx_seq);
                 for (transaction.ops) |op| {
                     const operation: EventOperation = switch (op.action) {
-                        .assert => .assert_fact,
-                        .retract => .retract_fact,
+                        .assert => .assert,
+                        .retract => .retract,
                     };
                     const event = try state.copyEvent(
                         transaction.tx_seq,
@@ -875,6 +837,12 @@ fn signalHandler(_: std.posix.SIG) callconv(.c) void {
     shutdown_requested.store(true, .release);
 }
 
+const DispatchResult = struct {
+    payload: ?flat_log.Term = null,
+    page: ?rpc.PageResponse = null,
+    @"error": ?rpc.Error = null,
+};
+
 fn serve(
     allocator: Allocator,
     io: Io,
@@ -882,7 +850,6 @@ fn serve(
     canonical_log: []const u8,
     authority_path: []const u8,
     state: *DaemonState,
-    strict_fence: bool,
 ) !void {
     var address: std.Io.net.IpAddress = .{
         .ip4 = std.Io.net.Ip4Address.loopback(port),
@@ -891,8 +858,8 @@ fn serve(
     defer server.deinit(io);
 
     std.debug.print(
-        "fram zig coordinator bootstrap: version {d}, canonical={s}, listening=127.0.0.1:{d}\n",
-        .{ state.version, canonical_log, port },
+        "fram zig coordinator: FRAMRPC/1.0 version={d}, space={s}, listening=127.0.0.1:{d}\n",
+        .{ state.version, state.space_id, port },
     );
 
     while (!shutdown_requested.load(.acquire)) {
@@ -917,16 +884,39 @@ fn serve(
             canonical_log,
             authority_path,
             state,
-            strict_fence,
         ) catch |err| {
-            std.debug.print(
-                "fram: request failed: {s}\n",
-                .{@errorName(err)},
-            );
+            std.debug.print("fram: FRAMRPC connection failed: {s}\n", .{@errorName(err)});
         };
     }
 
     std.debug.print("[fram] shutdown complete\n", .{});
+}
+
+fn readFrame(
+    allocator: Allocator,
+    reader: *std.Io.Reader,
+) !?[]u8 {
+    var header: [rpc.fixed_header_bytes]u8 = undefined;
+    reader.readSliceAll(&header) catch |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    };
+    const length_offset = rpc.format_magic.len +
+        @sizeOf(u16) + @sizeOf(u16) + @sizeOf(u8) + @sizeOf(u8);
+    const body_len: usize = std.mem.readInt(
+        u32,
+        header[length_offset..][0..@sizeOf(u32)],
+        .little,
+    );
+    if (body_len > rpc.max_body_bytes) return error.BodyTooLarge;
+    const bytes = try allocator.alloc(u8, rpc.fixed_header_bytes + body_len);
+    errdefer allocator.free(bytes);
+    @memcpy(bytes[0..rpc.fixed_header_bytes], &header);
+    reader.readSliceAll(bytes[rpc.fixed_header_bytes..]) catch |err| switch (err) {
+        error.EndOfStream => return error.TruncatedFrame,
+        else => return err,
+    };
+    return bytes;
 }
 
 fn handleConnection(
@@ -936,401 +926,202 @@ fn handleConnection(
     canonical_log: []const u8,
     authority_path: []const u8,
     state: *DaemonState,
-    strict_fence: bool,
 ) !void {
     defer stream.close(io);
-    var read_buffer: [max_request_bytes]u8 = undefined;
+    var read_buffer: [8192]u8 = undefined;
     var stream_reader = stream.reader(io, &read_buffer);
-    const line = (try stream_reader.interface.takeDelimiter('\n')) orelse return;
-
-    const response = try handleRequest(
+    const frame_bytes = (try readFrame(
         allocator,
-        io,
-        line,
-        canonical_log,
-        authority_path,
-        state,
-        strict_fence,
-    );
-    defer allocator.free(response);
+        &stream_reader.interface,
+    )) orelse return;
+    defer allocator.free(frame_bytes);
 
-    var write_buffer: [4096]u8 = undefined;
+    var decoded = rpc.decodeFrame(allocator, frame_bytes) catch return;
+    defer decoded.deinit();
+    const request = switch (decoded.message) {
+        .request => |value| value,
+        .cancel => return,
+        else => return,
+    };
+
+    var response_arena = std.heap.ArenaAllocator.init(allocator);
+    defer response_arena.deinit();
+    const arena = response_arena.allocator();
+
+    const result = if (!std.mem.eql(
+        u8,
+        stringValue(request.space) orelse "",
+        state.space_id,
+    ))
+        try failure(
+            arena,
+            "rpc/space-mismatch",
+            false,
+            "request space does not match this daemon",
+            try record(
+                arena,
+                "rpc/space-mismatch",
+                &.{ request.space, stringTerm(state.space_id) },
+            ),
+        )
+    else
+        try dispatchRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            authority_path,
+            state,
+            request,
+        );
+
+    const response_bytes = try rpc.encodeFrame(allocator, .{
+        .request_id = decoded.request_id,
+        .message = .{ .response = .{
+            .space = stringTerm(state.space_id),
+            .op = request.op,
+            .served_version = state.version,
+            .page = result.page,
+            .@"error" = result.@"error",
+            .payload = result.payload,
+        } },
+    });
+    defer allocator.free(response_bytes);
+
+    var write_buffer: [8192]u8 = undefined;
     var stream_writer = stream.writer(io, &write_buffer);
-    try stream_writer.interface.writeAll(response);
-    try stream_writer.interface.writeByte('\n');
-    try stream_writer.interface.flush();
+    stream_writer.interface.writeAll(response_bytes) catch return;
+    stream_writer.interface.flush() catch return;
 }
 
-fn handleRequest(
+fn dispatchRequest(
+    arena: Allocator,
     allocator: Allocator,
     io: Io,
-    line: []const u8,
     canonical_log: []const u8,
     authority_path: []const u8,
     state: *DaemonState,
-    strict_fence: bool,
-) ![]u8 {
-    var outer = parseMap(allocator, line) catch
-        return allocator.dupe(u8, "{:error \"invalid request\"}");
-    defer outer.deinit(allocator);
-
-    if (strict_fence and outer.op != .for_log) {
-        return renderStrictFenceRequired(allocator, canonical_log);
-    }
-
-    if (outer.op != .for_log) {
-        return dispatchOperation(
-            allocator,
-            io,
-            outer.op,
-            &outer,
-            canonical_log,
-            authority_path,
-            state,
+    request: rpc.Request,
+) !DispatchResult {
+    const operation = Operation.parse(request.op);
+    if (request.expected_version) |expected| {
+        if (expected < 0) return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "expected_version must be non-negative",
+            null,
+        );
+        if (expected != state.version) return failure(
+            arena,
+            "rpc/conflict",
+            true,
+            "version moved",
+            try record(
+                arena,
+                "rpc/conflict",
+                &.{
+                    integerTerm(expected),
+                    integerTerm(state.version),
+                },
+            ),
         );
     }
-
-    if (try requestFieldError(
-        allocator,
-        &outer,
-        field_op | field_expected_log | field_request,
-        field_expected_log | field_request,
-    )) |response| return response;
-
-    const expected = switch (outer.expected_log) {
-        .value => |value| value,
-        else => return allocator.dupe(
-            u8,
-            "{:reject [\"log fence requires a non-blank :expected-log path\"] :code :invalid-log-fence}",
-        ),
-    };
-    if (std.mem.trim(u8, expected, " \t\r\n").len == 0) {
-        return allocator.dupe(
-            u8,
-            "{:reject [\"log fence requires a non-blank :expected-log path\"] :code :invalid-log-fence}",
-        );
-    }
-
-    const canonical_expected = Dir.cwd().realPathFileAlloc(
-        io,
-        expected,
-        allocator,
-    ) catch {
-        return allocator.dupe(
-            u8,
-            "{:reject [\"invalid expected log path\"] :code :invalid-log-fence}",
-        );
-    };
-    defer allocator.free(canonical_expected);
-
-    if (!std.mem.eql(u8, canonical_expected, canonical_log)) {
-        return renderLogMismatch(
-            allocator,
-            canonical_expected,
-            canonical_log,
-        );
-    }
-
-    const nested_raw = outer.request orelse return allocator.dupe(
-        u8,
-        "{:reject [\"log fence requires a nested request map\"] :code :invalid-log-fence}",
-    );
-    var nested = parseMap(allocator, nested_raw) catch return allocator.dupe(
-        u8,
-        "{:reject [\"log fence requires a nested request map\"] :code :invalid-log-fence}",
-    );
-    defer nested.deinit(allocator);
-    if (nested.op == .for_log) {
-        return allocator.dupe(
-            u8,
-            "{:reject [\"nested log-fence envelopes are not supported\"] :code :invalid-log-fence}",
-        );
-    }
-    return dispatchOperation(
-        allocator,
-        io,
-        nested.op,
-        &nested,
-        canonical_log,
-        authority_path,
-        state,
-    );
-}
-
-fn dispatchOperation(
-    allocator: Allocator,
-    io: Io,
-    operation: Operation,
-    request: *MapFields,
-    canonical_log: []const u8,
-    authority_path: []const u8,
-    state: *DaemonState,
-) ![]u8 {
-    return switch (operation) {
-        .version => if (try requestFieldError(
-            allocator,
-            request,
-            field_op,
-            0,
-        )) |response| response else std.fmt.allocPrint(
-            allocator,
-            "{{:version {d}}}",
-            .{state.version},
-        ),
-        .status => if (try requestFieldError(
-            allocator,
-            request,
-            field_op,
-            0,
-        )) |response| response else renderStatus(
-            allocator,
-            canonical_log,
-            authority_path,
-            state.*,
-        ),
-        .assert_fact => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-            false,
-            false,
-            false,
-        ),
-        .assert_existing => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-            true,
-            false,
-            false,
-        ),
-        .assert_batch => assertBatch(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            false,
-        ),
-        .assert_batch_at_version => assertBatch(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            true,
-        ),
-        .assert_at_version => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-            false,
-            false,
-            true,
-        ),
-        .assert_with_fence => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-            false,
-            true,
-            false,
-        ),
-        .assert_at_version_with_fence => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-            false,
-            true,
-            true,
-        ),
-        .assert_triple => mutateTriple(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .assert_fact,
-        ),
-        .retract_fact => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .retract_fact,
-            false,
-            false,
-            false,
-        ),
-        .retract_existing => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .retract_fact,
-            true,
-            false,
-            false,
-        ),
-        .retract_with_fence => mutateOne(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .retract_fact,
-            false,
-            true,
-            false,
-        ),
-        .retract_triple => mutateTriple(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-            .retract_fact,
-        ),
-        .acquire_lease => acquireLease(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-        ),
-        .renew_lease => renewLease(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-        ),
-        .release_lease => releaseLease(
-            allocator,
-            io,
-            canonical_log,
-            state,
-            request,
-        ),
-        .fence_ok => fenceOk(allocator, io, state, request),
-        .facts => renderFacts(allocator, state, canonical_log, null),
-        .facts_for_subjects => factsForSubjects(allocator, state, canonical_log, request),
-        .triples => renderTriples(allocator, state, canonical_log),
-        .occurrences => renderOccurrences(allocator, state),
-        .query => queryFacts(allocator, state, request),
-        else => if (try requestFieldError(
-            allocator,
-            request,
-            field_op | field_expected_log | field_request | field_te |
-                field_p | field_r | field_base | field_facts |
-                field_subjects | field_query | field_triple,
-            0,
-        )) |response| response else allocator.dupe(
-            u8,
-            "{:error \"unknown op\"}",
-        ),
-    };
-}
-
-const BatchFact = struct {
-    p: []u8,
-    r: []u8,
-    base: IntField,
-
-    fn deinit(fact: *BatchFact, allocator: Allocator) void {
-        allocator.free(fact.p);
-        allocator.free(fact.r);
-        fact.* = undefined;
-    }
-};
-
-const ParsedBatch = struct {
-    facts: std.ArrayList(BatchFact),
-
-    fn deinit(batch: *ParsedBatch, allocator: Allocator) void {
-        for (batch.facts.items) |*fact| fact.deinit(allocator);
-        batch.facts.deinit(allocator);
-        batch.* = undefined;
-    }
-};
-
-fn requestFieldError(
-    allocator: Allocator,
-    request: *const MapFields,
-    allowed: u16,
-    required: u16,
-) !?[]u8 {
-    if (request.duplicate or request.unknown_field or
-        (request.present & ~allowed) != 0)
+    if (request.page != null and
+        operation != .scan and operation != .query and operation != .occurrences)
     {
-        return try renderInvalidRequest(
-            allocator,
-            &.{"invalid, duplicate, or unknown request field"},
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "paging is not valid for this operation",
+            null,
         );
     }
 
-    const missing = (required | field_op) & ~request.present;
-    if (missing == 0) return null;
-
-    var messages: [16][]const u8 = undefined;
-    var count: usize = 0;
-    const candidates = [_]struct { mask: u16, message: []const u8 }{
-        .{ .mask = field_op, .message = "op is required" },
-        .{ .mask = field_expected_log, .message = "expected-log is required" },
-        .{ .mask = field_request, .message = "request is required" },
-        .{ .mask = field_te, .message = "te is required" },
-        .{ .mask = field_p, .message = "p is required" },
-        .{ .mask = field_r, .message = "r is required" },
-        .{ .mask = field_base, .message = "base is required" },
-        .{ .mask = field_facts, .message = "facts is required" },
-        .{ .mask = field_res, .message = "res is required" },
-        .{ .mask = field_holder, .message = "holder is required" },
-        .{ .mask = field_epoch, .message = "epoch is required" },
-        .{ .mask = field_ttl_ms, .message = "ttl-ms is required" },
-        .{ .mask = field_subjects, .message = "subjects is required" },
-        .{ .mask = field_query, .message = "query is required" },
-        .{ .mask = field_triple, .message = "triple is required" },
+    return switch (operation) {
+        .version => unitRequest(arena, request.payload),
+        .status => statusRequest(arena, request.payload, authority_path, state),
+        .assert => writeRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+            .assert,
+        ),
+        .retract => writeRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+            .retract,
+        ),
+        .batch => batchRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+        ),
+        .scan => scanRequest(arena, allocator, state, request),
+        .occurrences => occurrencesRequest(arena, allocator, state, request),
+        .query => queryRequest(arena, allocator, state, request),
+        .lease_acquire => leaseAcquireRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+        ),
+        .lease_renew => leaseRenewRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+        ),
+        .lease_release => leaseReleaseRequest(
+            arena,
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request.payload,
+        ),
+        .lease_check => leaseCheckRequest(
+            arena,
+            allocator,
+            io,
+            state,
+            request.payload,
+        ),
+        .validate => validateRequest(arena, allocator, state, request.payload),
+        .unknown => failure(
+            arena,
+            "rpc/unsupported-operation",
+            false,
+            "operation is outside the FRAMRPC core",
+            try record(arena, "rpc/unsupported-operation", &.{request.op}),
+        ),
     };
-    for (candidates) |candidate| {
-        if ((missing & candidate.mask) != 0) {
-            messages[count] = candidate.message;
-            count += 1;
-        }
-    }
-    return try renderInvalidRequest(allocator, messages[0..count]);
 }
 
-fn renderInvalidRequest(
-    allocator: Allocator,
-    messages: []const []const u8,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:error [");
-    for (messages, 0..) |message, index| {
-        if (index != 0) try writeAll(writer, " ");
-        try writeEdnString(writer, message);
-    }
-    try writeAll(writer, "], :code :invalid-request}");
-    return output.toOwnedSlice();
+fn unitRequest(arena: Allocator, payload: flat_log.Term) !DispatchResult {
+    if (!isKeyword(payload, "rpc/unit")) return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "payload must be rpc/unit",
+        null,
+    );
+    return .{ .payload = keywordTerm("rpc/unit") };
 }
 
 fn nowMs(io: Io) i64 {
@@ -1352,39 +1143,37 @@ fn parseLease(value: []const u8) ?Lease {
     return .{ .holder = holder, .exp = exp, .epoch = epoch };
 }
 
-fn leaseFields(request: *const MapFields) ?struct { res: []const u8, holder: []const u8 } {
-    const res = switch (request.res) {
-        .value => |value| value,
-        else => return null,
-    };
-    const holder = switch (request.holder) {
-        .value => |value| value,
-        else => return null,
-    };
-    if (!validLeaseText(res) or !validLeaseText(holder) or std.mem.indexOfScalar(u8, holder, '|') != null)
-        return null;
-    return .{ .res = res, .holder = holder };
+const Fence = struct {
+    resource: []const u8,
+    holder: []const u8,
+    epoch: i64,
+};
+
+fn parseFence(arena: Allocator, value: flat_log.Term) !Fence {
+    const fields = try recordFields(arena, value, "rpc/fence", 3);
+    const resource = stringValue(fields[0]) orelse return error.InvalidPayload;
+    const holder = stringValue(fields[1]) orelse return error.InvalidPayload;
+    const epoch = integerValue(fields[2]) orelse return error.InvalidPayload;
+    if (!validLeaseText(resource) or !validLeaseText(holder) or
+        std.mem.indexOfScalar(u8, holder, '|') != null or epoch <= 0)
+        return error.InvalidPayload;
+    return .{ .resource = resource, .holder = holder, .epoch = epoch };
 }
 
 fn validTtl(ttl: i64, now: i64) bool {
     return ttl > 0 and now >= 0 and ttl <= std.math.maxInt(i64) - now;
 }
 
-fn requestHasCurrentFence(
+fn fenceCurrent(
     allocator: Allocator,
     io: Io,
     state: *DaemonState,
-    request: *const MapFields,
+    fence: Fence,
 ) !bool {
-    const fields = leaseFields(request) orelse return false;
-    const epoch = switch (request.epoch) {
-        .value => |value| value,
-        else => return false,
-    };
-    if (epoch <= 0) return false;
-    const lease = try state.currentLease(allocator, fields.res) orelse return false;
-    return lease.exp > nowMs(io) and lease.epoch == epoch and
-        std.mem.eql(u8, lease.holder, fields.holder);
+    const lease = try state.currentLease(allocator, fence.resource) orelse
+        return false;
+    return lease.exp > nowMs(io) and lease.epoch == fence.epoch and
+        std.mem.eql(u8, lease.holder, fence.holder);
 }
 
 const PendingOperation = struct {
@@ -1400,17 +1189,42 @@ fn occurrenceCoordinate(
 ) !flat_log.Term {
     const tx_coord = try allocator.create(flat_log.Triple);
     tx_coord.* = .{
-        .slot0 = .{ .atom = .{ .string = space_id } },
-        .slot1 = .{ .atom = .{ .keyword = "kernel/tx-sequence" } },
-        .slot2 = .{ .atom = .{ .integer = tx_seq } },
+        .slot0 = stringTerm(space_id),
+        .slot1 = keywordTerm("kernel/tx-sequence"),
+        .slot2 = integerTerm(tx_seq),
     };
-    const occurrence = try allocator.create(flat_log.Triple);
-    occurrence.* = .{
-        .slot0 = .{ .triple = tx_coord },
-        .slot1 = .{ .atom = .{ .keyword = "kernel/op-ordinal" } },
-        .slot2 = .{ .atom = .{ .integer = ordinal } },
-    };
-    return .{ .triple = occurrence };
+    return tripleTerm(
+        allocator,
+        .{ .triple = tx_coord },
+        keywordTerm("kernel/op-ordinal"),
+        integerTerm(@intCast(ordinal)),
+    );
+}
+
+fn occurrenceTerm(
+    allocator: Allocator,
+    state: *const DaemonState,
+    event: TripleRow,
+) !flat_log.Term {
+    return tripleTerm(
+        allocator,
+        try occurrenceCoordinate(
+            allocator,
+            state.space_id,
+            event.tx_seq,
+            event.ordinal,
+        ),
+        keywordTerm(if (event.operation == .assert)
+            "kernel/asserts"
+        else
+            "kernel/retracts"),
+        try tripleTerm(
+            allocator,
+            event.triple.slot0,
+            event.triple.slot1,
+            event.triple.slot2,
+        ),
+    );
 }
 
 fn realInstant(io: Io) !flat_log.Instant {
@@ -1439,46 +1253,43 @@ fn commitTransaction(
     const recorded_at = try realInstant(io);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const transaction_allocator = arena.allocator();
-    const operations = try transaction_allocator.alloc(
-        flat_log.Op,
-        pending.len * 3,
-    );
+    const tx_allocator = arena.allocator();
+    const operations = try tx_allocator.alloc(flat_log.Op, pending.len * 3);
 
     for (pending, 0..) |item, index| {
         operations[index] = .{
             .ordinal = @intCast(index),
             .action = switch (item.operation) {
-                .assert_fact => .assert,
-                .retract_fact => .retract,
+                .assert => .assert,
+                .retract => .retract,
             },
             .triple = item.triple,
         };
     }
     for (pending, 0..) |_, index| {
         const occurrence = try occurrenceCoordinate(
-            transaction_allocator,
+            tx_allocator,
             state.space_id,
             tx_seq,
             @intCast(index),
         );
-        const metadata_offset = pending.len + index * 2;
-        operations[metadata_offset] = .{
-            .ordinal = @intCast(metadata_offset),
+        const offset = pending.len + index * 2;
+        operations[offset] = .{
+            .ordinal = @intCast(offset),
             .action = .assert,
             .triple = .{
                 .slot0 = occurrence,
-                .slot1 = .{ .atom = .{ .keyword = "kernel/recorded-at" } },
+                .slot1 = keywordTerm("kernel/recorded-at"),
                 .slot2 = .{ .atom = .{ .instant = recorded_at } },
             },
         };
-        operations[metadata_offset + 1] = .{
-            .ordinal = @intCast(metadata_offset + 1),
+        operations[offset + 1] = .{
+            .ordinal = @intCast(offset + 1),
             .action = .assert,
             .triple = .{
                 .slot0 = occurrence,
-                .slot1 = .{ .atom = .{ .keyword = "kernel/asserted-by" } },
-                .slot2 = .{ .atom = .{ .string = "coord" } },
+                .slot1 = keywordTerm("kernel/asserted-by"),
+                .slot2 = stringTerm("coord"),
             },
         };
     }
@@ -1491,8 +1302,8 @@ fn commitTransaction(
             tx_seq,
             op.ordinal,
             switch (op.action) {
-                .assert => .assert_fact,
-                .retract => .retract_fact,
+                .assert => .assert,
+                .retract => .retract,
             },
             op.triple,
         ));
@@ -1520,1696 +1331,1206 @@ fn appendLeaseEvent(
     resource: []const u8,
     value: []const u8,
 ) !i64 {
-    if (state.version == std.math.maxInt(i64)) return error.VersionExhausted;
-    const tx = state.version + 1;
     const subject = try std.fmt.allocPrint(allocator, "@lease:{s}", .{resource});
     defer allocator.free(subject);
-
     var pending: std.ArrayList(PendingOperation) = .empty;
     defer pending.deinit(allocator);
     try pending.ensureTotalCapacity(allocator, 3);
 
-    // `lease` is schema-declared, not an intrinsic single: a log carrying lease
-    // events without these two facts replays wrong on the JVM/portable path, so
-    // the first acquisition emits them in the same transaction (coord_daemon.clj:882).
-    if (operation == .assert_fact and !state.schemaSingle("lease")) {
+    if (operation == .assert and !state.schemaSingle("lease")) {
         for ([_][2][]const u8{
             .{ "cardinality", "single" },
             .{ "value_kind", "literal" },
         }) |declaration| {
             pending.appendAssumeCapacity(.{
-                .operation = .assert_fact,
+                .operation = .assert,
                 .triple = stringTriple("@lease", declaration[0], declaration[1]),
             });
         }
     }
-
     pending.appendAssumeCapacity(.{
         .operation = operation,
         .triple = stringTriple(subject, "lease", value),
     });
-    const committed_tx = try commitTransaction(
+    return commitTransaction(
         allocator,
         io,
         canonical_log,
         state,
         pending.items,
     );
-    std.debug.assert(committed_tx == tx);
-    return committed_tx;
 }
 
-fn renderLease(allocator: Allocator, epoch: i64, holder: []const u8, exp: i64) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try output.writer.print("{{:ok {d}, :holder ", .{epoch});
-    try writeEdnString(&output.writer, holder);
-    try output.writer.print(", :exp {d}, :epoch {d}}}", .{ exp, epoch });
-    return output.toOwnedSlice();
-}
-
-fn renderLeaseReject(allocator: Allocator, reject: []const u8, version: i64) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{{:reject :{s}, :version {d}}}", .{ reject, version });
-}
-
-fn renderHeld(allocator: Allocator, lease: Lease, version: i64) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try writeAll(&output.writer, "{:reject :held, :holder ");
-    try writeEdnString(&output.writer, lease.holder);
-    try output.writer.print(" :exp {d}, :version {d}}}", .{ lease.exp, version });
-    return output.toOwnedSlice();
-}
-
-fn renderFenceLost(allocator: Allocator, version: i64) ![]u8 {
-    return renderLeaseReject(allocator, "fence-lost", version);
-}
-
-const MultiValuedGroups = struct {
-    count: usize,
-    subjects: [3][]const u8,
-    subject_count: usize,
-};
-
-fn multiValuedGroups(
-    allocator: Allocator,
-    state: *const DaemonState,
-    predicate: []const u8,
-) !MultiValuedGroups {
-    var values_per_subject = std.StringHashMap(usize).init(allocator);
-    defer values_per_subject.deinit();
-    var latest = state.latest.iterator();
-    while (latest.next()) |entry| {
-        const event = state.events.items[entry.value_ptr.*];
-        if (event.operation != .assert_fact) continue;
-        const triple = stringTripleView(event.triple) orelse continue;
-        if (!std.mem.eql(u8, triple.slot1, predicate)) continue;
-        const result = try values_per_subject.getOrPut(triple.slot0);
-        if (!result.found_existing) result.value_ptr.* = 0;
-        result.value_ptr.* += 1;
-    }
-
-    var result: MultiValuedGroups = .{
-        .count = 0,
-        .subjects = undefined,
-        .subject_count = 0,
-    };
-    var groups = values_per_subject.iterator();
-    while (groups.next()) |entry| {
-        if (entry.value_ptr.* <= 1) continue;
-        result.count += 1;
-        if (result.subject_count < result.subjects.len) {
-            result.subjects[result.subject_count] = entry.key_ptr.*;
-            result.subject_count += 1;
-        }
-    }
-    return result;
-}
-
-fn renderCardinalityCollapse(
-    allocator: Allocator,
-    predicate: []const u8,
-    groups: MultiValuedGroups,
-    version: i64,
-) ![]u8 {
-    var message: Writer.Allocating = .init(allocator);
-    defer message.deinit();
-    try message.writer.print(
-        "cardinality multi->single on '{s}' would collapse {d} live multi-valued group(s) to latest-tx (data loss); first: ",
-        .{ predicate, groups.count },
-    );
-    for (groups.subjects[0..groups.subject_count], 0..) |subject, index| {
-        if (index != 0) try writeAll(&message.writer, ", ");
-        try writeAll(&message.writer, subject);
-    }
-    try writeAll(&message.writer, " — retract extra values first");
-
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try writeAll(&output.writer, "{:reject [");
-    try writeEdnString(&output.writer, message.written());
-    try output.writer.print("], :version {d}}}", .{version});
-    return output.toOwnedSlice();
-}
-
-fn acquireLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
-    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_ttl_ms, field_res | field_holder | field_ttl_ms)) |response| return response;
-    const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    const ttl = switch (request.ttl_ms) {
-        .value => |value| value,
-        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
-    };
-    const now = nowMs(io);
-    if (!validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    if (try state.currentLease(allocator, fields.res)) |lease| {
-        if (lease.exp > now and !std.mem.eql(u8, lease.holder, fields.holder)) return renderHeld(allocator, lease, state.version);
-    }
-    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ fields.holder, now + ttl, state.version + 1 });
-    defer allocator.free(value);
-    const epoch = try appendLeaseEvent(allocator, io, canonical_log, state, .assert_fact, fields.res, value);
-    const lease = try state.currentLease(allocator, fields.res) orelse unreachable;
-    return renderLease(allocator, epoch, lease.holder, lease.exp);
-}
-
-fn renewLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
-    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch | field_ttl_ms, field_res | field_holder | field_epoch | field_ttl_ms)) |response| return response;
-    const fields = leaseFields(request) orelse return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    const epoch = switch (request.epoch) {
-        .value => |value| value,
-        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
-    };
-    const ttl = switch (request.ttl_ms) {
-        .value => |value| value,
-        else => return renderLeaseReject(allocator, "invalid-lease-request", state.version),
-    };
-    const now = nowMs(io);
-    if (epoch <= 0 or !validTtl(ttl, now)) return renderLeaseReject(allocator, "invalid-lease-request", state.version);
-    const current = try state.currentLease(allocator, fields.res) orelse return renderFenceLost(allocator, state.version);
-    if (current.exp <= now or current.epoch != epoch or !std.mem.eql(u8, current.holder, fields.holder)) return renderFenceLost(allocator, state.version);
-    const next_epoch = state.version + 1;
-    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ fields.holder, now + ttl, next_epoch });
-    defer allocator.free(value);
-    _ = try appendLeaseEvent(allocator, io, canonical_log, state, .assert_fact, fields.res, value);
-    return renderLease(allocator, next_epoch, fields.holder, now + ttl);
-}
-
-fn releaseLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
-    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder)) |response| return response;
-    const fields = leaseFields(request) orelse return renderOk(allocator, state.version);
-    const current = try state.currentLease(allocator, fields.res) orelse return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
-    const epoch_matches = switch (request.epoch) {
-        .missing => true,
-        .value => |value| value == current.epoch,
-        else => false,
-    };
-    if (!std.mem.eql(u8, current.holder, fields.holder) or !epoch_matches) return std.fmt.allocPrint(allocator, "{{:ok {d}, :noop true}}", .{state.version});
-    const value = try std.fmt.allocPrint(allocator, "{s}|{d}|{d}", .{ current.holder, current.exp, current.epoch });
-    defer allocator.free(value);
-    const version = try appendLeaseEvent(allocator, io, canonical_log, state, .retract_fact, fields.res, value);
-    return renderOk(allocator, version);
-}
-
-fn fenceOk(allocator: Allocator, io: Io, state: *DaemonState, request: *MapFields) ![]u8 {
-    if (try requestFieldError(allocator, request, field_op | field_res | field_holder | field_epoch, field_res | field_holder | field_epoch)) |response| return response;
-    return std.fmt.allocPrint(allocator, "{{:fence-ok {}}}", .{try requestHasCurrentFence(allocator, io, state, request)});
-}
-
-const ParsedSubjects = struct {
-    items: std.ArrayList([]u8),
-
-    fn deinit(subjects: *ParsedSubjects, allocator: Allocator) void {
-        for (subjects.items.items) |item| allocator.free(item);
-        subjects.items.deinit(allocator);
-    }
-};
-
-fn parseSubjects(allocator: Allocator, raw: []const u8) !ParsedSubjects {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[') return error.InvalidSubjects;
-    parser.index += 1;
-    var subjects: ParsedSubjects = .{ .items = .empty };
-    errdefer subjects.deinit(allocator);
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len) return error.InvalidSubjects;
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len) return error.InvalidSubjects;
-            return subjects;
-        }
-        const token = parser.scanValue() catch return error.InvalidSubjects;
-        const field = parseStringField(allocator, token) catch return error.InvalidSubjects;
-        const subject = switch (field) {
-            .value => |value| value,
-            else => return error.InvalidSubjects,
-        };
-        try subjects.items.append(allocator, subject);
-    }
-}
-
-fn subjectWanted(subjects: []const []u8, subject: []const u8) bool {
-    for (subjects) |candidate| {
-        if (std.mem.eql(u8, candidate, subject)) return true;
-    }
-    return false;
-}
-
-fn currentEvent(state: *DaemonState, scratch: Allocator, event: TripleRow) !bool {
+fn currentEvent(
+    state: *DaemonState,
+    scratch: Allocator,
+    event: TripleRow,
+) !bool {
     const key = try state.eventKeyAlloc(scratch, event.triple);
     defer scratch.free(key);
     const index = state.latest.get(key) orelse return false;
     const live = state.events.items[index];
     return live.tx_seq == event.tx_seq and live.ordinal == event.ordinal and
-        live.operation == .assert_fact;
+        live.operation == .assert;
 }
 
-fn renderFacts(allocator: Allocator, state: *DaemonState, canonical_log: []const u8, subjects: ?[]const []u8) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try output.writer.print("{{:version {d}, :log ", .{state.version});
-    try writeEdnString(&output.writer, canonical_log);
-    try writeAll(&output.writer, " :facts [");
-    var first = true;
+fn liveCount(allocator: Allocator, state: *DaemonState) !i64 {
+    var count: i64 = 0;
     for (state.events.items) |event| {
-        if (event.operation != .assert_fact or !(try currentEvent(state, allocator, event))) continue;
-        const triple = stringTripleView(event.triple) orelse continue;
-        if (subjects) |wanted| {
-            if (!subjectWanted(wanted, triple.slot0)) continue;
-        }
-        if (!first) try writeAll(&output.writer, " ");
-        first = false;
-        try writeAll(&output.writer, "[");
-        try writeEdnString(&output.writer, triple.slot0);
-        try writeAll(&output.writer, " ");
-        try writeEdnString(&output.writer, triple.slot1);
-        try writeAll(&output.writer, " ");
-        try writeEdnString(&output.writer, triple.slot2);
-        try writeAll(&output.writer, "]");
+        if (event.operation == .assert and
+            try currentEvent(state, allocator, event)) count += 1;
     }
-    try writeAll(&output.writer, "]}");
-    return output.toOwnedSlice();
+    return count;
 }
 
-fn writeTermEdn(writer: *Writer, term: flat_log.Term) Allocator.Error!void {
-    switch (term) {
-        .atom => |atom| switch (atom) {
-            .string => |value| try writeEdnString(writer, value),
-            .integer => |value| writer.print("{d}", .{value}) catch
-                return error.OutOfMemory,
-            .float => |value| {
-                const bits: u64 = @bitCast(value);
-                try writeAll(writer, "{:fram/type :float :bits \"");
-                writer.print("{x:0>16}", .{bits}) catch return error.OutOfMemory;
-                try writeAll(writer, "\"}");
-            },
-            .boolean => |value| try writeAll(
-                writer,
-                if (value) "true" else "false",
-            ),
-            .keyword => |value| {
-                try writeAll(writer, ":");
-                try writeAll(writer, value);
-            },
-            .instant => |value| {
-                try writeAll(writer, "{:fram/type :instant :epoch-seconds ");
-                writer.print("{d}", .{value.epoch_seconds}) catch
-                    return error.OutOfMemory;
-                try writeAll(writer, " :nanosecond ");
-                writer.print("{d}", .{value.nanosecond}) catch
-                    return error.OutOfMemory;
-                try writeAll(writer, "}");
-            },
-        },
-        .triple => |triple| {
-            try writeAll(writer, "[");
-            try writeTermEdn(writer, triple.slot0);
-            try writeAll(writer, " ");
-            try writeTermEdn(writer, triple.slot1);
-            try writeAll(writer, " ");
-            try writeTermEdn(writer, triple.slot2);
-            try writeAll(writer, "]");
-        },
-    }
-}
-
-fn writeTripleEdn(writer: *Writer, triple: flat_log.Triple) Allocator.Error!void {
-    try writeTermEdn(writer, .{ .triple = &triple });
-}
-
-fn writeOccurrenceCoordinateEdn(
-    writer: *Writer,
-    state: *const DaemonState,
-    event: TripleRow,
-) Allocator.Error!void {
-    try writeAll(writer, "[[");
-    try writeEdnString(writer, state.space_id);
-    try writeAll(writer, " :kernel/tx-sequence ");
-    writer.print("{d}", .{event.tx_seq}) catch return error.OutOfMemory;
-    try writeAll(writer, "] :kernel/op-ordinal ");
-    writer.print("{d}", .{event.ordinal}) catch return error.OutOfMemory;
-    try writeAll(writer, "]");
-}
-
-fn renderTriples(
-    allocator: Allocator,
+fn statusRequest(
+    arena: Allocator,
+    payload: flat_log.Term,
+    authority_path: []const u8,
     state: *DaemonState,
-    canonical_log: []const u8,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try output.writer.print("{{:version {d}, :log ", .{state.version});
-    try writeEdnString(&output.writer, canonical_log);
-    try writeAll(&output.writer, " :triples [");
-    var first = true;
-    for (state.events.items) |event| {
-        if (event.operation != .assert_fact or
-            !(try currentEvent(state, allocator, event))) continue;
-        if (!first) try writeAll(&output.writer, " ");
-        first = false;
-        try writeTripleEdn(&output.writer, event.triple);
-    }
-    try writeAll(&output.writer, "]}");
-    return output.toOwnedSlice();
-}
-
-fn renderOccurrences(allocator: Allocator, state: *const DaemonState) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try output.writer.print("{{:version {d} :space-id ", .{state.version});
-    try writeEdnString(&output.writer, state.space_id);
-    try writeAll(&output.writer, " :occurrences [");
-    for (state.events.items, 0..) |event, index| {
-        if (index != 0) try writeAll(&output.writer, " ");
-        try writeAll(&output.writer, "[");
-        try writeOccurrenceCoordinateEdn(&output.writer, state, event);
-        try writeAll(
-            &output.writer,
-            if (event.operation == .assert_fact)
-                " :kernel/asserts "
-            else
-                " :kernel/retracts ",
-        );
-        try writeTripleEdn(&output.writer, event.triple);
-        try writeAll(&output.writer, "]");
-    }
-    try writeAll(&output.writer, "]}");
-    return output.toOwnedSlice();
-}
-
-fn factsForSubjects(allocator: Allocator, state: *DaemonState, canonical_log: []const u8, request: *MapFields) ![]u8 {
-    if (try requestFieldError(allocator, request, field_op | field_subjects, field_subjects)) |response| return response;
-    const raw = request.subjects orelse unreachable;
-    var subjects = parseSubjects(allocator, raw) catch return allocator.dupe(
-        u8,
-        "{:error \"facts-for-subjects requires a :subjects sequence\", :code :invalid-scoped-subjects}",
+) !DispatchResult {
+    _ = authority_path;
+    if (!isKeyword(payload, "rpc/unit")) return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "payload must be rpc/unit",
+        null,
     );
-    defer subjects.deinit(allocator);
-    return renderFacts(allocator, state, canonical_log, subjects.items.items);
-}
-
-const QueryIssueCode = enum {
-    invalid_query,
-    unsupported_query,
-
-    fn wireName(code: QueryIssueCode) []const u8 {
-        return switch (code) {
-            .invalid_query => "invalid-query",
-            .unsupported_query => "unsupported-query",
-        };
-    }
-};
-
-const QueryIssue = struct {
-    code: QueryIssueCode = .invalid_query,
-    message: []const u8 = "invalid query",
-};
-
-const QueryParseError = Allocator.Error || error{InvalidQuery};
-
-fn rejectQuery(
-    issue: *QueryIssue,
-    code: QueryIssueCode,
-    message: []const u8,
-) error{InvalidQuery} {
-    issue.* = .{ .code = code, .message = message };
-    return error.InvalidQuery;
-}
-
-const QueryTerm = union(enum) {
-    variable: []u8,
-    constant: []u8,
-
-    fn deinit(term: *QueryTerm, allocator: Allocator) void {
-        switch (term.*) {
-            .variable, .constant => |value| allocator.free(value),
-        }
-        term.* = undefined;
-    }
-};
-
-const QueryLiteral = struct {
-    relation: []u8,
-    args: std.ArrayList(QueryTerm),
-    negated: bool,
-
-    fn deinit(literal: *QueryLiteral, allocator: Allocator) void {
-        allocator.free(literal.relation);
-        for (literal.args.items) |*term| term.deinit(allocator);
-        literal.args.deinit(allocator);
-        literal.* = undefined;
-    }
-};
-
-const ParsedQueryStratum = struct {
-    rules: std.ArrayList(ParsedQueryRule),
-
-    fn deinit(stratum: *ParsedQueryStratum, allocator: Allocator) void {
-        for (stratum.rules.items) |*rule| rule.deinit(allocator);
-        stratum.rules.deinit(allocator);
-        stratum.* = undefined;
-    }
-};
-
-const ParsedQuery = struct {
-    find: []u8,
-    strata: std.ArrayList(ParsedQueryStratum),
-
-    fn deinit(query: *ParsedQuery, allocator: Allocator) void {
-        allocator.free(query.find);
-        for (query.strata.items) |*stratum| stratum.deinit(allocator);
-        query.strata.deinit(allocator);
-        query.* = undefined;
-    }
-};
-
-fn parseQueryString(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-    description: []const u8,
-) QueryParseError![]u8 {
-    const field = parseStringField(allocator, raw) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidEdn => return rejectQuery(issue, .invalid_query, description),
-    };
-    return switch (field) {
-        .value => |value| value,
-        else => rejectQuery(issue, .invalid_query, description),
-    };
-}
-
-fn parseVariableTerm(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!QueryTerm {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return rejectQuery(issue, .invalid_query, "query variable must be {:var \"name\"}");
-    parser.index += 1;
-
-    var variable_raw: ?[]const u8 = null;
-    var duplicate = false;
-    var unknown = false;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query variable map is incomplete");
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query variable has trailing input");
-            break;
-        }
-        const key = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query variable map is invalid EDN");
-        const value = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query variable map is invalid EDN");
-        if (std.mem.eql(u8, key, ":var")) {
-            duplicate = variable_raw != null;
-            variable_raw = value;
-        } else {
-            unknown = true;
-        }
-    }
-    if (duplicate or unknown or variable_raw == null)
-        return rejectQuery(issue, .invalid_query, "query variable must contain exactly :var");
-    return .{ .variable = try parseQueryString(
-        allocator,
-        variable_raw.?,
-        issue,
-        "query :var must be a string",
+    return .{ .payload = try record(
+        arena,
+        "rpc/status",
+        &.{
+            keywordTerm("rpc/ready"),
+            integerTerm(try liveCount(arena, state)),
+            keywordTerm("rpc/zig"),
+        },
     ) };
 }
 
-fn parseQueryTerm(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!QueryTerm {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len != 0 and trimmed[0] == '{')
-        return parseVariableTerm(allocator, trimmed, issue);
-    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return .{ .constant = try parseQueryString(
-            allocator,
-            trimmed,
-            issue,
-            "query constant must be a valid EDN string",
-        ) };
-    }
-    return rejectQuery(
-        issue,
-        .unsupported_query,
-        "native query v1 supports string constants and {:var \"name\"} terms",
+fn validateRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    if (!isKeyword(payload, "rpc/unit")) return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "payload must be rpc/unit",
+        null,
     );
+    var valid = state.version >= 0;
+    var previous_tx: i64 = -1;
+    var previous_ordinal: u32 = 0;
+    for (state.events.items, 0..) |event, index| {
+        if (event.tx_seq < previous_tx or
+            (event.tx_seq == previous_tx and
+                (index != 0 and event.ordinal <= previous_ordinal)))
+            valid = false;
+        previous_tx = event.tx_seq;
+        previous_ordinal = event.ordinal;
+    }
+    var latest = state.latest.iterator();
+    while (latest.next()) |entry| {
+        if (entry.value_ptr.* >= state.events.items.len) valid = false;
+    }
+    _ = scratch;
+    return .{ .payload = try record(
+        arena,
+        "rpc/validation",
+        &.{ booleanTerm(valid), try list(arena, &.{}) },
+    ) };
 }
 
-fn parseQueryTerms(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!std.ArrayList(QueryTerm) {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[')
-        return rejectQuery(issue, .invalid_query, "query :args must be a vector");
-    parser.index += 1;
-
-    var terms: std.ArrayList(QueryTerm) = .empty;
-    errdefer {
-        for (terms.items) |*term| term.deinit(allocator);
-        terms.deinit(allocator);
-    }
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query :args vector is incomplete");
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query :args has trailing input");
-            return terms;
-        }
-        const term_raw = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query :args contains invalid EDN");
-        try terms.append(allocator, try parseQueryTerm(allocator, term_raw, issue));
-    }
-}
-
-fn parseQueryRelation(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError![]u8 {
-    return parseQueryString(
-        allocator,
-        raw,
-        issue,
-        "query literal :rel must be a string",
-    );
-}
-
-fn parseQueryLiteral(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!QueryLiteral {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return rejectQuery(issue, .invalid_query, "query body literal must be a map");
-    parser.index += 1;
-
-    var relation_raw: ?[]const u8 = null;
-    var args_raw: ?[]const u8 = null;
-    var neg_raw: ?[]const u8 = null;
-    var duplicate = false;
-    var unknown = false;
-    var unsupported_clause = false;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query body literal is incomplete");
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query body literal has trailing input");
-            break;
-        }
-        const key = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query body literal is invalid EDN");
-        const value = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query body literal is invalid EDN");
-        if (std.mem.eql(u8, key, ":rel")) {
-            duplicate = duplicate or relation_raw != null;
-            relation_raw = value;
-        } else if (std.mem.eql(u8, key, ":args")) {
-            duplicate = duplicate or args_raw != null;
-            args_raw = value;
-        } else if (std.mem.eql(u8, key, ":neg")) {
-            duplicate = duplicate or neg_raw != null;
-            neg_raw = value;
-        } else if (std.mem.eql(u8, key, ":pred") or
-            std.mem.eql(u8, key, ":fn"))
-        {
-            unsupported_clause = true;
-        } else {
-            unknown = true;
-        }
-    }
-    if (unsupported_clause)
-        return rejectQuery(
-            issue,
-            .unsupported_query,
-            "native query v1 does not support comparison or arithmetic clauses",
-        );
-    if (duplicate or unknown or relation_raw == null or args_raw == null)
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query body literal needs unique :rel and :args fields",
-        );
-    var negated = false;
-    if (neg_raw) |neg| {
-        if (std.mem.eql(u8, neg, "true")) {
-            negated = true;
-        } else if (!std.mem.eql(u8, neg, "false")) {
-            return rejectQuery(issue, .invalid_query, "query literal :neg must be true or false");
-        }
-    }
-
-    const relation = try parseQueryRelation(allocator, relation_raw.?, issue);
-    errdefer allocator.free(relation);
-    var args = try parseQueryTerms(allocator, args_raw.?, issue);
-    errdefer {
-        for (args.items) |*term| term.deinit(allocator);
-        args.deinit(allocator);
-    }
-    return .{ .relation = relation, .args = args, .negated = negated };
-}
-
-fn parseQueryBody(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!std.ArrayList(QueryLiteral) {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[')
-        return rejectQuery(issue, .invalid_query, "query rule :body must be a vector");
-    parser.index += 1;
-
-    var body: std.ArrayList(QueryLiteral) = .empty;
-    errdefer {
-        for (body.items) |*literal| literal.deinit(allocator);
-        body.deinit(allocator);
-    }
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query rule :body vector is incomplete");
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query rule :body has trailing input");
-            if (body.items.len == 0)
-                return rejectQuery(issue, .invalid_query, "query rule :body must not be empty");
-            return body;
-        }
-        const literal_raw = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query rule :body contains invalid EDN");
-        try body.append(allocator, try parseQueryLiteral(allocator, literal_raw, issue));
-    }
-}
-
-const ParsedQueryHead = struct {
-    relation: []u8,
-    args: std.ArrayList(QueryTerm),
-
-    fn deinit(head: *ParsedQueryHead, allocator: Allocator) void {
-        allocator.free(head.relation);
-        for (head.args.items) |*term| term.deinit(allocator);
-        head.args.deinit(allocator);
-        head.* = undefined;
-    }
+const PageCursor = struct {
+    version: i64,
+    index: usize,
+    ordinal: u32,
 };
 
-fn parseQueryHead(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!ParsedQueryHead {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return rejectQuery(issue, .invalid_query, "query rule :head must be a map");
-    parser.index += 1;
-
-    var relation_raw: ?[]const u8 = null;
-    var args_raw: ?[]const u8 = null;
-    var duplicate = false;
-    var unknown = false;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query rule :head is incomplete");
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query rule :head has trailing input");
-            break;
-        }
-        const key = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query rule :head is invalid EDN");
-        const value = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query rule :head is invalid EDN");
-        if (std.mem.eql(u8, key, ":rel")) {
-            duplicate = duplicate or relation_raw != null;
-            relation_raw = value;
-        } else if (std.mem.eql(u8, key, ":args")) {
-            duplicate = duplicate or args_raw != null;
-            args_raw = value;
-        } else {
-            unknown = true;
-        }
-    }
-    if (duplicate or unknown or relation_raw == null or args_raw == null)
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query rule :head needs unique :rel and :args fields",
-        );
-
-    const relation = try parseQueryString(
-        allocator,
-        relation_raw.?,
-        issue,
-        "query head :rel must be a string",
-    );
-    errdefer allocator.free(relation);
-    var args = try parseQueryTerms(allocator, args_raw.?, issue);
-    errdefer {
-        for (args.items) |*term| term.deinit(allocator);
-        args.deinit(allocator);
-    }
-    return .{ .relation = relation, .args = args };
-}
-
-const ParsedQueryRule = struct {
-    head: ParsedQueryHead,
-    body: std.ArrayList(QueryLiteral),
-
-    fn deinit(rule: *ParsedQueryRule, allocator: Allocator) void {
-        rule.head.deinit(allocator);
-        for (rule.body.items) |*literal| literal.deinit(allocator);
-        rule.body.deinit(allocator);
-        rule.* = undefined;
-    }
-};
-
-fn parseQueryRule(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!ParsedQueryRule {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return rejectQuery(issue, .invalid_query, "query rule must be a map");
-    parser.index += 1;
-
-    var head_raw: ?[]const u8 = null;
-    var body_raw: ?[]const u8 = null;
-    var duplicate = false;
-    var unknown = false;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query rule is incomplete");
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query rule has trailing input");
-            break;
-        }
-        const key = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query rule is invalid EDN");
-        const value = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query rule is invalid EDN");
-        if (std.mem.eql(u8, key, ":head")) {
-            duplicate = duplicate or head_raw != null;
-            head_raw = value;
-        } else if (std.mem.eql(u8, key, ":body")) {
-            duplicate = duplicate or body_raw != null;
-            body_raw = value;
-        } else {
-            unknown = true;
-        }
-    }
-    if (duplicate or unknown or head_raw == null or body_raw == null)
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query rule needs unique :head and :body fields",
-        );
-
-    var head = try parseQueryHead(allocator, head_raw.?, issue);
-    errdefer head.deinit(allocator);
-    var body = try parseQueryBody(allocator, body_raw.?, issue);
-    errdefer {
-        for (body.items) |*literal| literal.deinit(allocator);
-        body.deinit(allocator);
-    }
-    return .{ .head = head, .body = body };
-}
-
-fn parseQueryRules(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!std.ArrayList(ParsedQueryRule) {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[')
-        return rejectQuery(issue, .invalid_query, "query :rules must be a vector");
-    parser.index += 1;
-
-    var rules: std.ArrayList(ParsedQueryRule) = .empty;
-    errdefer {
-        for (rules.items) |*rule| rule.deinit(allocator);
-        rules.deinit(allocator);
-    }
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query :rules vector is incomplete");
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query :rules has trailing input");
-            if (rules.items.len == 0)
-                return rejectQuery(issue, .invalid_query, "query :rules must not be empty");
-            return rules;
-        }
-        const rule_raw = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query :rules contains invalid EDN");
-        try rules.append(allocator, try parseQueryRule(allocator, rule_raw, issue));
-    }
-}
-
-fn parseQueryStrata(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!std.ArrayList(ParsedQueryStratum) {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[')
-        return rejectQuery(issue, .invalid_query, "query :strata must be a vector");
-    parser.index += 1;
-
-    var strata: std.ArrayList(ParsedQueryStratum) = .empty;
-    errdefer {
-        for (strata.items) |*stratum| stratum.deinit(allocator);
-        strata.deinit(allocator);
-    }
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query :strata vector is incomplete");
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query :strata has trailing input");
-            if (strata.items.len == 0)
-                return rejectQuery(issue, .invalid_query, "query :strata must not be empty");
-            return strata;
-        }
-        const stratum_raw = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query :strata contains invalid EDN");
-        try strata.append(allocator, .{
-            .rules = try parseQueryRules(allocator, stratum_raw, issue),
-        });
-    }
-}
-
-fn baseQueryArity(relation: []const u8) ?usize {
-    if (std.mem.eql(u8, relation, "fact") or
-        std.mem.eql(u8, relation, "triple"))
-    {
-        return 3;
-    }
-    if (std.mem.eql(u8, relation, "predicate")) return 5;
-    return null;
-}
-
-fn parseQuery(
-    allocator: Allocator,
-    raw: []const u8,
-    issue: *QueryIssue,
-) QueryParseError!ParsedQuery {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return rejectQuery(issue, .invalid_query, "query must be a map");
-    parser.index += 1;
-
-    var find_raw: ?[]const u8 = null;
-    var rules_raw: ?[]const u8 = null;
-    var strata_raw: ?[]const u8 = null;
-    var duplicate = false;
-    var unknown = false;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len)
-            return rejectQuery(issue, .invalid_query, "query map is incomplete");
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len)
-                return rejectQuery(issue, .invalid_query, "query map has trailing input");
-            break;
-        }
-        const key = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query map is invalid EDN");
-        const value = parser.scanValue() catch
-            return rejectQuery(issue, .invalid_query, "query map is invalid EDN");
-        if (std.mem.eql(u8, key, ":find")) {
-            duplicate = duplicate or find_raw != null;
-            find_raw = value;
-        } else if (std.mem.eql(u8, key, ":rules")) {
-            duplicate = duplicate or rules_raw != null;
-            rules_raw = value;
-        } else if (std.mem.eql(u8, key, ":strata")) {
-            duplicate = duplicate or strata_raw != null;
-            strata_raw = value;
-        } else {
-            unknown = true;
-        }
-    }
-    if (duplicate or
-        unknown or
-        find_raw == null or
-        (rules_raw == null) == (strata_raw == null))
-    {
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query needs unique :find and exactly one of :rules or :strata",
-        );
-    }
-    if (find_raw.?[0] == '{')
-        return rejectQuery(
-            issue,
-            .unsupported_query,
-            "native query v1 does not support aggregate :find maps",
-        );
-
-    const find = try parseQueryString(
-        allocator,
-        find_raw.?,
-        issue,
-        "query :find must be a relation-name string",
-    );
-    errdefer allocator.free(find);
-
-    var strata: std.ArrayList(ParsedQueryStratum) = if (strata_raw) |strata_value|
-        try parseQueryStrata(allocator, strata_value, issue)
-    else blk: {
-        var one: std.ArrayList(ParsedQueryStratum) = .empty;
-        const rules = try parseQueryRules(allocator, rules_raw.?, issue);
-        one.append(allocator, .{ .rules = rules }) catch |err| {
-            var owned_rules = rules;
-            for (owned_rules.items) |*rule| rule.deinit(allocator);
-            owned_rules.deinit(allocator);
-            return err;
-        };
-        break :blk one;
+fn parsePageCursor(
+    arena: Allocator,
+    value: ?flat_log.Term,
+    tag: []const u8,
+    version: i64,
+) !PageCursor {
+    const term = value orelse return .{ .version = version, .index = 0, .ordinal = 0 };
+    const fields = try recordFields(arena, term, tag, 3);
+    const cursor_version = integerValue(fields[0]) orelse return error.InvalidPayload;
+    const index_value = integerValue(fields[1]) orelse return error.InvalidPayload;
+    const ordinal_value = integerValue(fields[2]) orelse return error.InvalidPayload;
+    if (cursor_version != version or index_value < 0 or ordinal_value < 0 or
+        ordinal_value > std.math.maxInt(u32))
+        return error.InvalidPayload;
+    return .{
+        .version = cursor_version,
+        .index = @intCast(index_value),
+        .ordinal = @intCast(ordinal_value),
     };
-    errdefer {
-        for (strata.items) |*stratum| stratum.deinit(allocator);
-        strata.deinit(allocator);
-    }
-
-    var arities = std.StringHashMap(usize).init(allocator);
-    defer arities.deinit();
-    for (strata.items) |stratum| {
-        for (stratum.rules.items) |rule| {
-            if (baseQueryArity(rule.head.relation) != null)
-                return rejectQuery(
-                    issue,
-                    .invalid_query,
-                    "query rule head cannot shadow a base relation",
-                );
-            if (arities.get(rule.head.relation)) |arity| {
-                if (arity != rule.head.args.items.len)
-                    return rejectQuery(
-                        issue,
-                        .invalid_query,
-                        "query rules define one head relation at inconsistent arities",
-                    );
-            } else {
-                try arities.put(rule.head.relation, rule.head.args.items.len);
-            }
-        }
-    }
-    if (!arities.contains(find))
-        return rejectQuery(
-            issue,
-            .invalid_query,
-            "query :find must name a rule head relation",
-        );
-
-    var lower_relations = std.StringHashMap(void).init(allocator);
-    defer lower_relations.deinit();
-    for (strata.items) |stratum| {
-        var current_relations = std.StringHashMap(void).init(allocator);
-        defer current_relations.deinit();
-        for (stratum.rules.items) |rule| {
-            try current_relations.put(rule.head.relation, {});
-        }
-
-        for (stratum.rules.items) |rule| {
-            var bound = std.StringHashMap(void).init(allocator);
-            defer bound.deinit();
-            for (rule.body.items) |literal| {
-                const base_arity = baseQueryArity(literal.relation);
-                const arity = base_arity orelse
-                    arities.get(literal.relation) orelse
-                    return rejectQuery(
-                        issue,
-                        .invalid_query,
-                        "query body references an unknown relation",
-                    );
-                if (literal.args.items.len != arity)
-                    return rejectQuery(
-                        issue,
-                        .invalid_query,
-                        "query relation has the wrong argument count",
-                    );
-
-                if (literal.negated) {
-                    if (current_relations.contains(literal.relation))
-                        return rejectQuery(
-                            issue,
-                            .invalid_query,
-                            "query has recursion through negation in one stratum",
-                        );
-                    if (base_arity == null and
-                        !lower_relations.contains(literal.relation))
-                    {
-                        return rejectQuery(
-                            issue,
-                            .invalid_query,
-                            "negated relation must be a base relation or a completed lower stratum",
-                        );
-                    }
-                    for (literal.args.items) |term| switch (term) {
-                        .variable => |name| {
-                            if (!bound.contains(name))
-                                return rejectQuery(
-                                    issue,
-                                    .invalid_query,
-                                    "negated query variable must be bound by an earlier positive literal",
-                                );
-                        },
-                        .constant => {},
-                    };
-                } else {
-                    if (base_arity == null and
-                        !lower_relations.contains(literal.relation) and
-                        !current_relations.contains(literal.relation))
-                    {
-                        return rejectQuery(
-                            issue,
-                            .invalid_query,
-                            "positive query relation is defined only in a later stratum",
-                        );
-                    }
-                    for (literal.args.items) |term| switch (term) {
-                        .variable => |name| try bound.put(name, {}),
-                        .constant => {},
-                    };
-                }
-            }
-            for (rule.head.args.items) |term| switch (term) {
-                .variable => |name| {
-                    if (!bound.contains(name))
-                        return rejectQuery(
-                            issue,
-                            .invalid_query,
-                            "query head variable is not bound by a positive body literal",
-                        );
-                },
-                .constant => {},
-            };
-        }
-
-        var current_iterator = current_relations.iterator();
-        while (current_iterator.next()) |entry| {
-            try lower_relations.put(entry.key_ptr.*, {});
-        }
-    }
-
-    return .{ .find = find, .strata = strata };
 }
 
-const QueryFact = struct {
-    l: []const u8,
-    p: []const u8,
-    r: []const u8,
-};
+fn makePageCursor(
+    arena: Allocator,
+    tag: []const u8,
+    version: i64,
+    index: usize,
+    ordinal: u32,
+) !flat_log.Term {
+    return record(
+        arena,
+        tag,
+        &.{
+            integerTerm(version),
+            integerTerm(@intCast(index)),
+            integerTerm(@intCast(ordinal)),
+        },
+    );
+}
 
-const QueryPredicateRegistry = struct {
-    by_name: std.StringHashMap([]const u8),
-    canonical: std.StringHashMap([]const u8),
+fn pageLimit(request: rpc.Request) !u32 {
+    const limit = if (request.page) |page| page.limit else 4096;
+    if (limit == 0 or limit > 4096) return error.InvalidPayload;
+    return limit;
+}
 
-    fn init(allocator: Allocator) QueryPredicateRegistry {
-        return .{
-            .by_name = std.StringHashMap([]const u8).init(allocator),
-            .canonical = std.StringHashMap([]const u8).init(allocator),
-        };
+fn parsePattern(
+    arena: Allocator,
+    payload: flat_log.Term,
+) ![3]OptionTerm {
+    const fields = try recordFields(arena, payload, "rpc/triple-pattern", 3);
+    return .{
+        try optionValue(fields[0]),
+        try optionValue(fields[1]),
+        try optionValue(fields[2]),
+    };
+}
+
+fn patternMatches(pattern: [3]OptionTerm, triple: flat_log.Triple) bool {
+    const values = [_]flat_log.Term{ triple.slot0, triple.slot1, triple.slot2 };
+    for (pattern, values) |slot, value| switch (slot) {
+        .none => {},
+        .some => |wanted| if (!flat_log.termEql(wanted, value)) return false,
+    };
+    return true;
+}
+
+fn scanRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    request: rpc.Request,
+) !DispatchResult {
+    const pattern = parsePattern(arena, request.payload) catch return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "scan payload must be rpc/triple-pattern",
+        null,
+    );
+    const limit = pageLimit(request) catch return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "page limit must be 1 through 4096",
+        null,
+    );
+    const cursor = parsePageCursor(
+        arena,
+        if (request.page) |page| page.cursor else null,
+        "rpc/scan-cursor",
+        state.version,
+    ) catch return failure(
+        arena,
+        "rpc/invalid-cursor",
+        false,
+        "scan cursor does not match this snapshot",
+        null,
+    );
+
+    var rows: std.ArrayList(flat_log.Term) = .empty;
+    var index = cursor.index;
+    while (index < state.events.items.len and rows.items.len < limit) : (index += 1) {
+        const event = state.events.items[index];
+        if (event.operation != .assert or
+            !(try currentEvent(state, scratch, event)) or
+            !patternMatches(pattern, event.triple)) continue;
+        try rows.append(
+            arena,
+            try tripleTerm(
+                arena,
+                event.triple.slot0,
+                event.triple.slot1,
+                event.triple.slot2,
+            ),
+        );
     }
+    const done = index >= state.events.items.len;
+    const ordinal = cursor.ordinal;
+    return .{
+        .payload = try record(
+            arena,
+            "rpc/triples",
+            &.{try list(arena, rows.items)},
+        ),
+        .page = .{
+            .ordinal = ordinal,
+            .next = if (done) null else try makePageCursor(
+                arena,
+                "rpc/scan-cursor",
+                state.version,
+                index,
+                ordinal + 1,
+            ),
+            .done = done,
+        },
+    };
+}
 
-    fn deinit(registry: *QueryPredicateRegistry) void {
-        registry.canonical.deinit();
-        registry.by_name.deinit();
-        registry.* = undefined;
+fn occurrencesRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    request: rpc.Request,
+) !DispatchResult {
+    if (!isKeyword(request.payload, "rpc/unit")) return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "payload must be rpc/unit",
+        null,
+    );
+    const limit = pageLimit(request) catch return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "page limit must be 1 through 4096",
+        null,
+    );
+    const cursor = parsePageCursor(
+        arena,
+        if (request.page) |page| page.cursor else null,
+        "rpc/occurrence-cursor",
+        state.version,
+    ) catch return failure(
+        arena,
+        "rpc/invalid-cursor",
+        false,
+        "occurrence cursor does not match this snapshot",
+        null,
+    );
+    _ = scratch;
+
+    const end = @min(state.events.items.len, cursor.index + limit);
+    const rows = try arena.alloc(flat_log.Term, end - cursor.index);
+    for (state.events.items[cursor.index..end], 0..) |event, index| {
+        rows[index] = try occurrenceTerm(arena, state, event);
+    }
+    const done = end == state.events.items.len;
+    return .{
+        .payload = try record(
+            arena,
+            "rpc/occurrences",
+            &.{try list(arena, rows)},
+        ),
+        .page = .{
+            .ordinal = cursor.ordinal,
+            .next = if (done) null else try makePageCursor(
+                arena,
+                "rpc/occurrence-cursor",
+                state.version,
+                end,
+                cursor.ordinal + 1,
+            ),
+            .done = done,
+        },
+    };
+}
+
+fn leaseGrantTerm(
+    arena: Allocator,
+    resource: []const u8,
+    holder: []const u8,
+    epoch: i64,
+    exp_ms: i64,
+) !flat_log.Term {
+    const fence = try record(
+        arena,
+        "rpc/fence",
+        &.{ stringTerm(resource), stringTerm(holder), integerTerm(epoch) },
+    );
+    const seconds = @divFloor(exp_ms, 1000);
+    const millis = exp_ms - seconds * 1000;
+    return record(
+        arena,
+        "lease/grant",
+        &.{
+            fence,
+            .{ .atom = .{ .instant = .{
+                .epoch_seconds = seconds,
+                .nanosecond = @intCast(millis * std.time.ns_per_ms),
+            } } },
+        },
+    );
+}
+
+fn leaseStateFailure(
+    arena: Allocator,
+    resource: []const u8,
+    lease: ?Lease,
+    message: []const u8,
+) !DispatchResult {
+    return failure(
+        arena,
+        "rpc/lease-state",
+        true,
+        message,
+        try record(
+            arena,
+            "rpc/lease-state",
+            &.{
+                stringTerm(resource),
+                try option(arena, if (lease) |v| stringTerm(v.holder) else null),
+                try option(arena, if (lease) |v| integerTerm(v.epoch) else null),
+                try option(arena, if (lease) |v| integerTerm(v.exp) else null),
+            },
+        ),
+    );
+}
+
+fn leaseAcquireRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    const fields = recordFields(arena, payload, "lease/acquire", 3) catch
+        return failure(arena, "rpc/invalid-request", false, "invalid lease/acquire payload", null);
+    const resource = stringValue(fields[0]) orelse
+        return failure(arena, "rpc/invalid-request", false, "lease resource must be a string", null);
+    const holder = stringValue(fields[1]) orelse
+        return failure(arena, "rpc/invalid-request", false, "lease holder must be a string", null);
+    const ttl = integerValue(fields[2]) orelse
+        return failure(arena, "rpc/invalid-request", false, "lease ttl must be an integer", null);
+    const now = nowMs(io);
+    if (!validLeaseText(resource) or !validLeaseText(holder) or
+        std.mem.indexOfScalar(u8, holder, '|') != null or !validTtl(ttl, now))
+        return failure(arena, "rpc/invalid-request", false, "invalid lease acquisition", null);
+    if (try state.currentLease(scratch, resource)) |current| {
+        if (current.exp > now and !std.mem.eql(u8, current.holder, holder))
+            return leaseStateFailure(arena, resource, current, "lease is held");
+    }
+    const epoch = state.version + 1;
+    const value = try std.fmt.allocPrint(
+        scratch,
+        "{s}|{d}|{d}",
+        .{ holder, now + ttl, epoch },
+    );
+    defer scratch.free(value);
+    _ = try appendLeaseEvent(scratch, io, canonical_log, state, .assert, resource, value);
+    const current = (try state.currentLease(scratch, resource)).?;
+    return .{ .payload = try leaseGrantTerm(
+        arena,
+        resource,
+        current.holder,
+        current.epoch,
+        current.exp,
+    ) };
+}
+
+fn leaseRenewRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    const fields = recordFields(arena, payload, "lease/renew", 2) catch
+        return failure(arena, "rpc/invalid-request", false, "invalid lease/renew payload", null);
+    const fence = parseFence(arena, fields[0]) catch
+        return failure(arena, "rpc/invalid-request", false, "invalid lease fence", null);
+    const ttl = integerValue(fields[1]) orelse
+        return failure(arena, "rpc/invalid-request", false, "lease ttl must be an integer", null);
+    const now = nowMs(io);
+    const current = try state.currentLease(scratch, fence.resource);
+    if (!validTtl(ttl, now) or current == null or current.?.exp <= now or
+        current.?.epoch != fence.epoch or
+        !std.mem.eql(u8, current.?.holder, fence.holder))
+        return leaseStateFailure(arena, fence.resource, current, "lease fence is no longer current");
+    const epoch = state.version + 1;
+    const value = try std.fmt.allocPrint(
+        scratch,
+        "{s}|{d}|{d}",
+        .{ fence.holder, now + ttl, epoch },
+    );
+    defer scratch.free(value);
+    _ = try appendLeaseEvent(scratch, io, canonical_log, state, .assert, fence.resource, value);
+    return .{ .payload = try leaseGrantTerm(
+        arena,
+        fence.resource,
+        fence.holder,
+        epoch,
+        now + ttl,
+    ) };
+}
+
+fn leaseReleaseRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    const fence = parseFence(arena, payload) catch
+        return failure(arena, "rpc/invalid-request", false, "invalid lease fence", null);
+    const current = try state.currentLease(scratch, fence.resource);
+    if (current == null or current.?.epoch != fence.epoch or
+        !std.mem.eql(u8, current.?.holder, fence.holder))
+        return .{ .payload = try record(arena, "lease/released", &.{booleanTerm(false)}) };
+    const value = try std.fmt.allocPrint(
+        scratch,
+        "{s}|{d}|{d}",
+        .{ current.?.holder, current.?.exp, current.?.epoch },
+    );
+    defer scratch.free(value);
+    _ = try appendLeaseEvent(
+        scratch,
+        io,
+        canonical_log,
+        state,
+        .retract,
+        fence.resource,
+        value,
+    );
+    return .{ .payload = try record(arena, "lease/released", &.{booleanTerm(true)}) };
+}
+
+fn leaseCheckRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    const fence = parseFence(arena, payload) catch
+        return failure(arena, "rpc/invalid-request", false, "invalid lease fence", null);
+    const current = try state.currentLease(scratch, fence.resource);
+    const ok = try fenceCurrent(scratch, io, state, fence);
+    const expiry = if (current) |lease| blk: {
+        const seconds = @divFloor(lease.exp, 1000);
+        const millis = lease.exp - seconds * 1000;
+        break :blk flat_log.Term{ .atom = .{ .instant = .{
+            .epoch_seconds = seconds,
+            .nanosecond = @intCast(millis * std.time.ns_per_ms),
+        } } };
+    } else null;
+    return .{ .payload = try record(
+        arena,
+        "lease/check",
+        &.{ booleanTerm(ok), try option(arena, expiry) },
+    ) };
+}
+
+const max_native_query_rows: usize = 65_536;
+
+const QueryTerm = union(enum) {
+    variable: []const u8,
+    constant: flat_log.Term,
+};
+
+const PredicateOperator = enum {
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+
+    fn parse(term: flat_log.Term) ?PredicateOperator {
+        const name = keywordValue(term) orelse return null;
+        if (std.mem.eql(u8, name, "eq")) return .eq;
+        if (std.mem.eql(u8, name, "ne")) return .ne;
+        if (std.mem.eql(u8, name, "lt")) return .lt;
+        if (std.mem.eql(u8, name, "le")) return .le;
+        if (std.mem.eql(u8, name, "gt")) return .gt;
+        if (std.mem.eql(u8, name, "ge")) return .ge;
+        return null;
     }
 };
 
-const QueryPredicateRow = struct {
-    values: [5][]const u8,
+const FunctionOperator = enum {
+    add,
+    subtract,
+    multiply,
+    divide,
+    modulo,
+
+    fn parse(term: flat_log.Term) ?FunctionOperator {
+        const name = keywordValue(term) orelse return null;
+        if (std.mem.eql(u8, name, "+")) return .add;
+        if (std.mem.eql(u8, name, "-")) return .subtract;
+        if (std.mem.eql(u8, name, "*")) return .multiply;
+        if (std.mem.eql(u8, name, "/")) return .divide;
+        if (std.mem.eql(u8, name, "mod")) return .modulo;
+        return null;
+    }
 };
+
+const QueryRelationClause = struct {
+    relation: []const u8,
+    args: []const QueryTerm,
+    negated: bool,
+};
+
+const QueryPredicateClause = struct {
+    operator: PredicateOperator,
+    left: QueryTerm,
+    right: QueryTerm,
+};
+
+const QueryFunctionClause = struct {
+    operator: FunctionOperator,
+    args: []const QueryTerm,
+    bind: []const u8,
+};
+
+const QueryClause = union(enum) {
+    relation: QueryRelationClause,
+    predicate: QueryPredicateClause,
+    function: QueryFunctionClause,
+};
+
+const QueryHead = struct {
+    relation: []const u8,
+    args: []const QueryTerm,
+};
+
+const QueryRule = struct {
+    head: QueryHead,
+    body: []const QueryClause,
+};
+
+const QueryStratum = struct {
+    rules: []const QueryRule,
+};
+
+const AggregateSpec = struct {
+    operator: []const u8,
+    argument: ?usize,
+};
+
+const HavingSpec = struct {
+    operator: PredicateOperator,
+    aggregate_index: usize,
+    value: flat_log.Term,
+};
+
+const AggregateFind = struct {
+    relation: []const u8,
+    grouping: []const usize,
+    aggregates: []const AggregateSpec,
+    having: []const HavingSpec,
+};
+
+const QueryFind = union(enum) {
+    relation: []const u8,
+    aggregate: AggregateFind,
+};
+
+const ParsedQuery = struct {
+    find: QueryFind,
+    strata: []const QueryStratum,
+    snapshot: i64,
+};
+
+fn parseQueryTerm(arena: Allocator, value: flat_log.Term) !QueryTerm {
+    const triple = tripleValue(value) orelse return error.InvalidPayload;
+    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
+    if (!isKeyword(triple.slot2, "rpc/record")) return error.InvalidPayload;
+    if (std.mem.eql(u8, tag, "query/var")) {
+        const fields = try recordFields(arena, value, "query/var", 1);
+        const name = stringValue(fields[0]) orelse return error.InvalidPayload;
+        if (name.len == 0) return error.InvalidPayload;
+        return .{ .variable = name };
+    }
+    if (std.mem.eql(u8, tag, "query/const")) {
+        const fields = try recordFields(arena, value, "query/const", 1);
+        return .{ .constant = fields[0] };
+    }
+    return error.InvalidPayload;
+}
+
+fn parseQueryTermList(
+    arena: Allocator,
+    value: flat_log.Term,
+) ![]const QueryTerm {
+    const raw = try collectList(arena, value);
+    const terms = try arena.alloc(QueryTerm, raw.len);
+    for (raw, 0..) |term, index| terms[index] = try parseQueryTerm(arena, term);
+    return terms;
+}
+
+fn parseQueryHead(arena: Allocator, value: flat_log.Term) !QueryHead {
+    const fields = try recordFields(arena, value, "query/head", 2);
+    const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
+    if (relation.len == 0) return error.InvalidPayload;
+    return .{
+        .relation = relation,
+        .args = try parseQueryTermList(arena, fields[1]),
+    };
+}
+
+fn parseQueryClause(arena: Allocator, value: flat_log.Term) !QueryClause {
+    const triple = tripleValue(value) orelse return error.InvalidPayload;
+    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
+    if (std.mem.eql(u8, tag, "query/relation")) {
+        const fields = try recordFields(arena, value, "query/relation", 3);
+        const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
+        const negated = booleanValue(fields[2]) orelse return error.InvalidPayload;
+        if (relation.len == 0) return error.InvalidPayload;
+        return .{ .relation = .{
+            .relation = relation,
+            .args = try parseQueryTermList(arena, fields[1]),
+            .negated = negated,
+        } };
+    }
+    if (std.mem.eql(u8, tag, "query/predicate")) {
+        const fields = try recordFields(arena, value, "query/predicate", 3);
+        return .{ .predicate = .{
+            .operator = PredicateOperator.parse(fields[0]) orelse
+                return error.InvalidPayload,
+            .left = try parseQueryTerm(arena, fields[1]),
+            .right = try parseQueryTerm(arena, fields[2]),
+        } };
+    }
+    if (std.mem.eql(u8, tag, "query/function")) {
+        const fields = try recordFields(arena, value, "query/function", 3);
+        const bind = stringValue(fields[2]) orelse return error.InvalidPayload;
+        if (bind.len == 0) return error.InvalidPayload;
+        return .{ .function = .{
+            .operator = FunctionOperator.parse(fields[0]) orelse
+                return error.InvalidPayload,
+            .args = try parseQueryTermList(arena, fields[1]),
+            .bind = bind,
+        } };
+    }
+    return error.InvalidPayload;
+}
+
+fn parseQueryRule(arena: Allocator, value: flat_log.Term) !QueryRule {
+    const fields = try recordFields(arena, value, "query/rule", 2);
+    const body_raw = try collectList(arena, fields[1]);
+    const body = try arena.alloc(QueryClause, body_raw.len);
+    for (body_raw, 0..) |clause, index|
+        body[index] = try parseQueryClause(arena, clause);
+    return .{
+        .head = try parseQueryHead(arena, fields[0]),
+        .body = body,
+    };
+}
+
+fn parseQueryStratum(arena: Allocator, value: flat_log.Term) !QueryStratum {
+    const fields = try recordFields(arena, value, "query/stratum", 1);
+    const raw = try collectList(arena, fields[0]);
+    if (raw.len == 0) return error.InvalidPayload;
+    const rules = try arena.alloc(QueryRule, raw.len);
+    for (raw, 0..) |rule, index| rules[index] = try parseQueryRule(arena, rule);
+    return .{ .rules = rules };
+}
+
+fn parseIndexList(arena: Allocator, value: flat_log.Term) ![]const usize {
+    const raw = try collectList(arena, value);
+    const indexes = try arena.alloc(usize, raw.len);
+    for (raw, 0..) |term, index| {
+        const item = integerValue(term) orelse return error.InvalidPayload;
+        if (item < 0) return error.InvalidPayload;
+        indexes[index] = @intCast(item);
+    }
+    return indexes;
+}
+
+fn parseAggregateSpec(arena: Allocator, value: flat_log.Term) !AggregateSpec {
+    const fields = try recordFields(arena, value, "query/aggregate", 2);
+    const operator = keywordValue(fields[0]) orelse return error.InvalidPayload;
+    if (!(std.mem.eql(u8, operator, "count") or
+        std.mem.eql(u8, operator, "count-distinct") or
+        std.mem.eql(u8, operator, "sum") or
+        std.mem.eql(u8, operator, "avg") or
+        std.mem.eql(u8, operator, "min") or
+        std.mem.eql(u8, operator, "max"))) return error.InvalidPayload;
+    const argument = switch (try optionValue(fields[1])) {
+        .none => null,
+        .some => |term| blk: {
+            const item = integerValue(term) orelse return error.InvalidPayload;
+            if (item < 0) return error.InvalidPayload;
+            break :blk @as(usize, @intCast(item));
+        },
+    };
+    if (!std.mem.eql(u8, operator, "count") and argument == null)
+        return error.InvalidPayload;
+    return .{ .operator = operator, .argument = argument };
+}
+
+fn parseHaving(arena: Allocator, value: flat_log.Term) !HavingSpec {
+    const fields = try recordFields(arena, value, "query/having", 3);
+    const aggregate_index = integerValue(fields[1]) orelse
+        return error.InvalidPayload;
+    if (aggregate_index < 0) return error.InvalidPayload;
+    return .{
+        .operator = PredicateOperator.parse(fields[0]) orelse
+            return error.InvalidPayload,
+        .aggregate_index = @intCast(aggregate_index),
+        .value = fields[2],
+    };
+}
+
+fn parseQueryFind(arena: Allocator, value: flat_log.Term) !QueryFind {
+    const triple = tripleValue(value) orelse return error.InvalidPayload;
+    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
+    if (std.mem.eql(u8, tag, "query/find-relation")) {
+        const fields = try recordFields(arena, value, "query/find-relation", 1);
+        const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
+        if (relation.len == 0) return error.InvalidPayload;
+        return .{ .relation = relation };
+    }
+    if (!std.mem.eql(u8, tag, "query/find-aggregate"))
+        return error.InvalidPayload;
+    const fields = try recordFields(arena, value, "query/find-aggregate", 4);
+    const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
+    const aggregate_raw = try collectList(arena, fields[2]);
+    if (relation.len == 0 or aggregate_raw.len == 0)
+        return error.InvalidPayload;
+    const aggregates = try arena.alloc(AggregateSpec, aggregate_raw.len);
+    for (aggregate_raw, 0..) |spec, index|
+        aggregates[index] = try parseAggregateSpec(arena, spec);
+    const having_raw = try collectList(arena, fields[3]);
+    const having = try arena.alloc(HavingSpec, having_raw.len);
+    for (having_raw, 0..) |spec, index| {
+        having[index] = try parseHaving(arena, spec);
+        if (having[index].aggregate_index >= aggregates.len)
+            return error.InvalidPayload;
+    }
+    return .{ .aggregate = .{
+        .relation = relation,
+        .grouping = try parseIndexList(arena, fields[1]),
+        .aggregates = aggregates,
+        .having = having,
+    } };
+}
+
+fn parseQueryRequest(
+    arena: Allocator,
+    payload: flat_log.Term,
+    current_version: i64,
+) !ParsedQuery {
+    const request_fields = try recordFields(
+        arena,
+        payload,
+        "query/request",
+        2,
+    );
+    const snapshot = if (isKeyword(request_fields[1], "query/current"))
+        current_version
+    else snapshot: {
+        const fields = try recordFields(
+            arena,
+            request_fields[1],
+            "query/as-of",
+            1,
+        );
+        break :snapshot integerValue(fields[0]) orelse
+            return error.InvalidPayload;
+    };
+    if (snapshot < 0 or snapshot > current_version)
+        return error.HistoryUnavailable;
+
+    const plan_fields = try recordFields(
+        arena,
+        request_fields[0],
+        "query/plan",
+        2,
+    );
+    const strata_raw = try collectList(arena, plan_fields[1]);
+    if (strata_raw.len == 0) return error.InvalidPayload;
+    const strata = try arena.alloc(QueryStratum, strata_raw.len);
+    for (strata_raw, 0..) |stratum, index|
+        strata[index] = try parseQueryStratum(arena, stratum);
+    return .{
+        .find = try parseQueryFind(arena, plan_fields[0]),
+        .strata = strata,
+        .snapshot = snapshot,
+    };
+}
 
 const QueryBinding = struct {
     name: []const u8,
-    value: []const u8,
+    value: flat_log.Term,
 };
 
 const QuerySubstitution = struct {
-    bindings: std.ArrayList(QueryBinding),
+    bindings: []const QueryBinding,
 };
 
-fn lookupQueryBinding(
+const QueryRow = struct {
+    relation: []const u8,
+    values: []const flat_log.Term,
+};
+
+const KeyedRow = struct {
+    values: []const flat_log.Term,
+    key: []const u8,
+};
+
+fn lookupBinding(
     substitution: QuerySubstitution,
     name: []const u8,
-) ?[]const u8 {
-    for (substitution.bindings.items) |binding| {
+) ?flat_log.Term {
+    for (substitution.bindings) |binding| {
         if (std.mem.eql(u8, binding.name, name)) return binding.value;
     }
     return null;
 }
 
-fn cloneQuerySubstitution(
-    allocator: Allocator,
+fn bindTerm(
+    arena: Allocator,
     substitution: QuerySubstitution,
-) Allocator.Error!QuerySubstitution {
-    var bindings: std.ArrayList(QueryBinding) = .empty;
-    try bindings.appendSlice(allocator, substitution.bindings.items);
-    return .{ .bindings = bindings };
-}
-
-fn unifyQueryTerm(
-    allocator: Allocator,
-    substitution: *QuerySubstitution,
     term: QueryTerm,
-    value: []const u8,
-) Allocator.Error!bool {
+    value: flat_log.Term,
+) !?QuerySubstitution {
     return switch (term) {
-        .constant => |constant| std.mem.eql(u8, constant, value),
-        .variable => |name| if (lookupQueryBinding(substitution.*, name)) |bound|
-            std.mem.eql(u8, bound, value)
+        .constant => |constant| if (flat_log.termEql(constant, value))
+            substitution
+        else
+            null,
+        .variable => |name| if (lookupBinding(substitution, name)) |bound|
+            if (flat_log.termEql(bound, value)) substitution else null
         else blk: {
-            try substitution.bindings.append(
-                allocator,
-                .{ .name = name, .value = value },
+            const bindings = try arena.alloc(
+                QueryBinding,
+                substitution.bindings.len + 1,
             );
-            break :blk true;
+            @memcpy(bindings[0..substitution.bindings.len], substitution.bindings);
+            bindings[bindings.len - 1] = .{ .name = name, .value = value };
+            break :blk .{ .bindings = bindings };
         },
     };
 }
 
-const max_native_query_rows = 100_000;
+fn resolveQueryTerm(
+    substitution: QuerySubstitution,
+    term: QueryTerm,
+) ?flat_log.Term {
+    return switch (term) {
+        .constant => |value| value,
+        .variable => |name| lookupBinding(substitution, name),
+    };
+}
 
-fn buildQueryFacts(
-    allocator: Allocator,
+fn encodeRowKey(
+    arena: Allocator,
+    relation: ?[]const u8,
+    values: []const flat_log.Term,
+) ![]const u8 {
+    var writer: Writer.Allocating = .init(arena);
+    if (relation) |name| try flat_log.TermCodecV1.append(
+        &writer.writer,
+        stringTerm(name),
+    );
+    for (values) |value| try flat_log.TermCodecV1.append(&writer.writer, value);
+    return writer.toOwnedSlice();
+}
+
+fn buildBaseRows(
+    arena: Allocator,
     state: *DaemonState,
-) !std.ArrayList(QueryFact) {
-    var facts: std.ArrayList(QueryFact) = .empty;
-    for (state.events.items) |event| {
-        if (event.operation != .assert_fact or
-            !(try currentEvent(state, allocator, event)))
-        {
-            continue;
-        }
-        const triple = stringTripleView(event.triple) orelse continue;
-        try facts.append(allocator, .{
-            .l = triple.slot0,
-            .p = triple.slot1,
-            .r = triple.slot2,
+    snapshot: i64,
+) ![]const QueryRow {
+    var latest = std.StringHashMap(usize).init(arena);
+    for (state.events.items, 0..) |event, index| {
+        if (event.tx_seq > snapshot) continue;
+        const key = try state.eventKeyAlloc(arena, event.triple);
+        try latest.put(key, index);
+    }
+
+    var rows: std.ArrayList(QueryRow) = .empty;
+    var predicates = std.StringHashMap(void).init(arena);
+    for (state.events.items, 0..) |event, index| {
+        if (event.tx_seq > snapshot) continue;
+
+        const occurrence_values = try arena.alloc(flat_log.Term, 3);
+        const occurrence = try occurrenceTerm(arena, state, event);
+        const occurrence_triple = tripleValue(occurrence).?;
+        occurrence_values[0] = occurrence_triple.slot0;
+        occurrence_values[1] = occurrence_triple.slot1;
+        occurrence_values[2] = occurrence_triple.slot2;
+        try rows.append(arena, .{
+            .relation = "occurrence",
+            .values = occurrence_values,
         });
+
+        const key = try state.eventKeyAlloc(arena, event.triple);
+        const live_index = latest.get(key) orelse continue;
+        if (live_index != index or event.operation != .assert) continue;
+        const values = try arena.alloc(flat_log.Term, 3);
+        values[0] = event.triple.slot0;
+        values[1] = event.triple.slot1;
+        values[2] = event.triple.slot2;
+        try rows.append(arena, .{ .relation = "triple", .values = values });
+        if (stringTripleView(event.triple)) |view|
+            try predicates.put(view.slot1, {});
     }
-    return facts;
-}
 
-fn buildQueryPredicateRegistry(
-    allocator: Allocator,
-    facts: []const QueryFact,
-) !QueryPredicateRegistry {
-    var registry = QueryPredicateRegistry.init(allocator);
-    errdefer registry.deinit();
-    for (facts) |fact| {
-        if (!std.mem.eql(u8, fact.p, "predicate_name") and
-            !std.mem.eql(u8, fact.p, "predicate_alias"))
-        {
-            continue;
-        }
-        if (std.mem.eql(u8, fact.p, "predicate_name")) {
-            try registry.canonical.put(fact.l, fact.r);
-        }
-        if (registry.by_name.get(fact.r)) |prior| {
-            if (!std.mem.eql(u8, prior, fact.l))
-                return error.PredicateSpellingCollision;
-        } else {
-            try registry.by_name.put(fact.r, fact.l);
-        }
+    var predicate_iterator = predicates.iterator();
+    while (predicate_iterator.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const identity = try std.fmt.allocPrint(arena, "@{s}", .{name});
+        const values = try arena.alloc(flat_log.Term, 5);
+        values[0] = stringTerm(identity);
+        values[1] = stringTerm(name);
+        values[2] = stringTerm(name);
+        values[3] = stringTerm(if (state.isSingle(name)) "single" else "multi");
+        values[4] = stringTerm(if (state.allLivePredicateValuesRef(name)) "ref" else "literal");
+        try rows.append(arena, .{ .relation = "predicate", .values = values });
     }
-    return registry;
+    return rows.toOwnedSlice(arena);
 }
 
-fn queryPredicateId(
-    allocator: Allocator,
-    registry: *const QueryPredicateRegistry,
-    spelling: []const u8,
-) ![]const u8 {
-    if (std.mem.startsWith(u8, spelling, "@")) return spelling;
-    if (registry.by_name.get(spelling)) |identity| return identity;
-    return std.fmt.allocPrint(allocator, "@{s}", .{spelling});
-}
-
-fn queryPredicateName(
-    allocator: Allocator,
-    registry: *const QueryPredicateRegistry,
-    spelling: []const u8,
-) ![]const u8 {
-    const identity = try queryPredicateId(allocator, registry, spelling);
-    return registry.canonical.get(identity) orelse
-        kernel_classify.stripAt(identity);
-}
-
-fn queryPredicateProperty(
-    allocator: Allocator,
-    registry: *const QueryPredicateRegistry,
-    values: *std.StringHashMap([]const u8),
-    identity: []const u8,
-) !?[]const u8 {
-    var iterator = values.iterator();
-    while (iterator.next()) |entry| {
-        const candidate = try queryPredicateId(
-            allocator,
-            registry,
-            entry.key_ptr.*,
-        );
-        if (std.mem.eql(u8, candidate, identity)) return entry.value_ptr.*;
-    }
+fn relationArity(relation: []const u8, rows: []const QueryRow) ?usize {
+    if (std.mem.eql(u8, relation, "triple") or
+        std.mem.eql(u8, relation, "occurrence")) return 3;
+    if (std.mem.eql(u8, relation, "predicate")) return 5;
+    for (rows) |row| if (std.mem.eql(u8, row.relation, relation))
+        return row.values.len;
     return null;
 }
 
-fn queryPredicateConfiguredSingle(
-    allocator: Allocator,
-    state: *DaemonState,
-    registry: *const QueryPredicateRegistry,
-    identity: []const u8,
-) !bool {
-    var iterator = state.configured_single.iterator();
-    while (iterator.next()) |entry| {
-        const candidate = try queryPredicateId(
-            allocator,
-            registry,
-            entry.key_ptr.*,
-        );
-        if (std.mem.eql(u8, candidate, identity)) return true;
-    }
-    return std.mem.startsWith(u8, identity, "emoji_");
-}
-
-const query_ref_kind_fallback = [_][]const u8{
-    "depends_on",
-    "part_of",
-    "relates_to",
-    "clarifies",
-    "amends",
-};
-
-fn queryPredicateFallbackRef(
-    allocator: Allocator,
-    registry: *const QueryPredicateRegistry,
-    identity: []const u8,
-) !bool {
-    for (query_ref_kind_fallback) |spelling| {
-        const candidate = try queryPredicateId(allocator, registry, spelling);
-        if (std.mem.eql(u8, candidate, identity)) return true;
-    }
-    return false;
-}
-
-fn queryPredicatePropertyName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "predicate_name") or
-        std.mem.eql(u8, name, "predicate_alias") or
-        std.mem.eql(u8, name, "cardinality") or
-        std.mem.eql(u8, name, "value_kind") or
-        std.mem.eql(u8, name, "acyclic");
-}
-
-fn addQueryPredicateSpelling(
-    spellings: *std.StringHashMap([]const u8),
-    spelling: []const u8,
-    identity: []const u8,
-) !void {
-    if (!spellings.contains(spelling)) try spellings.put(spelling, identity);
-}
-
-fn buildQueryPredicates(
-    allocator: Allocator,
-    state: *DaemonState,
-    facts: []const QueryFact,
-) !std.ArrayList(QueryPredicateRow) {
-    var registry = try buildQueryPredicateRegistry(allocator, facts);
-    defer registry.deinit();
-
-    var spellings = std.StringHashMap([]const u8).init(allocator);
-    defer spellings.deinit();
-    var registry_iterator = registry.by_name.iterator();
-    while (registry_iterator.next()) |entry| {
-        try addQueryPredicateSpelling(
-            &spellings,
-            entry.key_ptr.*,
-            entry.value_ptr.*,
-        );
-    }
-    for (facts) |fact| {
-        const predicate_name = try queryPredicateName(
-            allocator,
-            &registry,
-            fact.p,
-        );
-        try addQueryPredicateSpelling(
-            &spellings,
-            predicate_name,
-            try queryPredicateId(allocator, &registry, fact.p),
-        );
-        if (queryPredicatePropertyName(predicate_name)) {
-            const identity = try queryPredicateId(
-                allocator,
-                &registry,
-                fact.l,
-            );
-            try addQueryPredicateSpelling(
-                &spellings,
-                try queryPredicateName(allocator, &registry, identity),
-                identity,
-            );
-        }
-    }
-
-    const cardinality_id = try queryPredicateId(
-        allocator,
-        &registry,
-        "cardinality",
-    );
-    const value_kind_id = try queryPredicateId(
-        allocator,
-        &registry,
-        "value_kind",
-    );
-    var cardinality = std.StringHashMap([]const u8).init(allocator);
-    defer cardinality.deinit();
-    var value_kind = std.StringHashMap([]const u8).init(allocator);
-    defer value_kind.deinit();
-    for (facts) |fact| {
-        const predicate_id = try queryPredicateId(
-            allocator,
-            &registry,
-            fact.p,
-        );
-        if (std.mem.eql(u8, predicate_id, cardinality_id)) {
-            try cardinality.put(fact.l, fact.r);
-        }
-        if (std.mem.eql(u8, predicate_id, value_kind_id)) {
-            try value_kind.put(fact.l, fact.r);
-        }
-    }
-
-    var rows: std.ArrayList(QueryPredicateRow) = .empty;
-    var spelling_iterator = spellings.iterator();
-    while (spelling_iterator.next()) |entry| {
-        const spelling = entry.key_ptr.*;
-        const identity = entry.value_ptr.*;
-        const canonical = try queryPredicateName(
-            allocator,
-            &registry,
-            identity,
-        );
-        const cardinality_value = try queryPredicateProperty(
-            allocator,
-            &registry,
-            &cardinality,
-            identity,
-        ) orelse if (try queryPredicateConfiguredSingle(
-            allocator,
-            state,
-            &registry,
-            identity,
-        )) "single" else "multi";
-        const value_kind_value = try queryPredicateProperty(
-            allocator,
-            &registry,
-            &value_kind,
-            identity,
-        ) orelse if (try queryPredicateFallbackRef(
-            allocator,
-            &registry,
-            identity,
-        )) "ref" else "literal";
-        try rows.append(allocator, .{ .values = .{
-            identity,
-            spelling,
-            canonical,
-            cardinality_value,
-            value_kind_value,
-        } });
-    }
-    return rows;
-}
-
-const QueryDerivedRow = struct {
-    relation: []const u8,
-    values: []const []const u8,
-};
-
-fn appendUnifiedQueryRow(
-    allocator: Allocator,
-    next: *std.ArrayList(QuerySubstitution),
+fn relationMatches(
     substitution: QuerySubstitution,
-    args: []const QueryTerm,
-    values: []const []const u8,
-) !void {
-    var candidate = try cloneQuerySubstitution(allocator, substitution);
-    for (args, values) |term, value| {
-        if (!(try unifyQueryTerm(allocator, &candidate, term, value))) return;
-    }
-    if (next.items.len >= max_native_query_rows) return error.QueryWorkLimit;
-    try next.append(allocator, candidate);
-}
-
-fn queryTermsMatch(
-    substitution: QuerySubstitution,
-    args: []const QueryTerm,
-    values: []const []const u8,
+    clause: QueryRelationClause,
+    row: QueryRow,
 ) bool {
-    for (args, values) |term, value| switch (term) {
-        .constant => |constant| {
-            if (!std.mem.eql(u8, constant, value)) return false;
-        },
-        .variable => |name| {
-            const bound = lookupQueryBinding(substitution, name) orelse
-                return false;
-            if (!std.mem.eql(u8, bound, value)) return false;
+    if (!std.mem.eql(u8, clause.relation, row.relation) or
+        clause.args.len != row.values.len) return false;
+    for (clause.args, row.values) |term, value| switch (term) {
+        .constant => |constant| if (!flat_log.termEql(constant, value))
+            return false,
+        .variable => |name| if (lookupBinding(substitution, name)) |bound| {
+            if (!flat_log.termEql(bound, value)) return false;
         },
     };
     return true;
 }
 
-fn negativeQueryLiteralMatches(
-    facts: []const QueryFact,
-    predicates: []const QueryPredicateRow,
-    completed: []const QueryDerivedRow,
-    literal: QueryLiteral,
+fn unifyRelation(
+    arena: Allocator,
     substitution: QuerySubstitution,
+    clause: QueryRelationClause,
+    row: QueryRow,
+) !?QuerySubstitution {
+    if (!std.mem.eql(u8, clause.relation, row.relation) or
+        clause.args.len != row.values.len) return null;
+    var result = substitution;
+    for (clause.args, row.values) |term, value|
+        result = (try bindTerm(arena, result, term, value)) orelse return null;
+    return result;
+}
+
+fn termOrder(left: flat_log.Term, right: flat_log.Term) ?std.math.Order {
+    const left_number = numericValue(left);
+    const right_number = numericValue(right);
+    if (left_number != null and right_number != null)
+        return std.math.order(left_number.?, right_number.?);
+    if (stringValue(left)) |a| if (stringValue(right)) |b|
+        return std.mem.order(u8, a, b);
+    if (keywordValue(left)) |a| if (keywordValue(right)) |b|
+        return std.mem.order(u8, a, b);
+    return null;
+}
+
+fn predicateMatches(
+    operator: PredicateOperator,
+    left: flat_log.Term,
+    right: flat_log.Term,
 ) bool {
-    if (std.mem.eql(u8, literal.relation, "fact") or
-        std.mem.eql(u8, literal.relation, "triple"))
-    {
-        for (facts) |fact| {
-            const values = [_][]const u8{ fact.l, fact.p, fact.r };
-            if (queryTermsMatch(substitution, literal.args.items, &values))
-                return true;
-        }
-        return false;
-    }
-    if (std.mem.eql(u8, literal.relation, "predicate")) {
-        for (predicates) |predicate| {
-            if (queryTermsMatch(
-                substitution,
-                literal.args.items,
-                &predicate.values,
-            )) return true;
-        }
-        return false;
-    }
-    for (completed) |row| {
-        if (!std.mem.eql(u8, literal.relation, row.relation)) continue;
-        if (queryTermsMatch(substitution, literal.args.items, row.values))
-            return true;
-    }
-    return false;
+    return switch (operator) {
+        .eq => flat_log.termEql(left, right),
+        .ne => !flat_log.termEql(left, right),
+        .lt => if (termOrder(left, right)) |order| order == .lt else false,
+        .le => if (termOrder(left, right)) |order| order != .gt else false,
+        .gt => if (termOrder(left, right)) |order| order == .gt else false,
+        .ge => if (termOrder(left, right)) |order| order != .lt else false,
+    };
 }
 
-fn evaluateQueryBody(
-    allocator: Allocator,
-    facts: []const QueryFact,
-    predicates: []const QueryPredicateRow,
-    completed: []const QueryDerivedRow,
-    derived: []const QueryDerivedRow,
-    body: []const QueryLiteral,
-) !std.ArrayList(QuerySubstitution) {
-    var current: std.ArrayList(QuerySubstitution) = .empty;
-    try current.append(allocator, .{ .bindings = .empty });
-
-    for (body) |literal| {
-        var next: std.ArrayList(QuerySubstitution) = .empty;
-        for (current.items) |substitution| {
-            if (literal.negated) {
-                if (!negativeQueryLiteralMatches(
-                    facts,
-                    predicates,
-                    completed,
-                    literal,
-                    substitution,
-                )) {
-                    if (next.items.len >= max_native_query_rows)
-                        return error.QueryWorkLimit;
-                    try next.append(
-                        allocator,
-                        try cloneQuerySubstitution(allocator, substitution),
-                    );
-                }
-                continue;
-            }
-            if (std.mem.eql(u8, literal.relation, "fact") or
-                std.mem.eql(u8, literal.relation, "triple"))
-            {
-                for (facts) |fact| {
-                    const values = [_][]const u8{ fact.l, fact.p, fact.r };
-                    try appendUnifiedQueryRow(
-                        allocator,
-                        &next,
-                        substitution,
-                        literal.args.items,
-                        &values,
-                    );
-                }
-            } else if (std.mem.eql(u8, literal.relation, "predicate")) {
-                for (predicates) |predicate| {
-                    try appendUnifiedQueryRow(
-                        allocator,
-                        &next,
-                        substitution,
-                        literal.args.items,
-                        &predicate.values,
-                    );
-                }
-            } else {
-                for (derived) |row| {
-                    if (!std.mem.eql(u8, literal.relation, row.relation)) continue;
-                    try appendUnifiedQueryRow(
-                        allocator,
-                        &next,
-                        substitution,
-                        literal.args.items,
-                        row.values,
-                    );
-                }
-            }
-        }
-        current = next;
-    }
-    return current;
+fn numericValue(term: flat_log.Term) ?f64 {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .integer => |value| @floatFromInt(value),
+            .float => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
 }
 
-fn groundQueryHead(
-    allocator: Allocator,
-    head: []const QueryTerm,
-    substitution: QuerySubstitution,
-) ![]const []const u8 {
-    const values = try allocator.alloc([]const u8, head.len);
-    for (head, 0..) |term, index| {
-        values[index] = switch (term) {
-            .constant => |constant| constant,
-            .variable => |name| lookupQueryBinding(substitution, name) orelse
-                return error.InvalidQueryState,
+fn applyFunction(
+    operator: FunctionOperator,
+    args: []const flat_log.Term,
+) ?flat_log.Term {
+    if (args.len == 0) return null;
+    var result = numericValue(args[0]) orelse return null;
+    var all_integer = integerValue(args[0]) != null;
+    for (args[1..]) |arg| {
+        const value = numericValue(arg) orelse return null;
+        all_integer = all_integer and integerValue(arg) != null;
+        result = switch (operator) {
+            .add => result + value,
+            .subtract => result - value,
+            .multiply => result * value,
+            .divide => if (value == 0) return null else result / value,
+            .modulo => if (value == 0) return null else @mod(result, value),
         };
     }
+    if (operator == .add and args.len == 1) return args[0];
+    if (all_integer and std.math.isFinite(result) and
+        result >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
+        result <= @as(f64, @floatFromInt(std.math.maxInt(i64))) and
+        @trunc(result) == result)
+        return integerTerm(@intFromFloat(result));
+    return .{ .atom = .{ .float = result } };
+}
+
+fn evaluateBody(
+    arena: Allocator,
+    base: []const QueryRow,
+    derived: []const QueryRow,
+    body: []const QueryClause,
+) ![]const QuerySubstitution {
+    var current: std.ArrayList(QuerySubstitution) = .empty;
+    try current.append(arena, .{ .bindings = &.{} });
+
+    for (body) |clause| {
+        var next: std.ArrayList(QuerySubstitution) = .empty;
+        for (current.items) |substitution| switch (clause) {
+            .relation => |relation| {
+                if (relation.negated) {
+                    var matched = false;
+                    for (base) |row| if (relationMatches(
+                        substitution,
+                        relation,
+                        row,
+                    )) {
+                        matched = true;
+                        break;
+                    };
+                    if (!matched) for (derived) |row| if (relationMatches(
+                        substitution,
+                        relation,
+                        row,
+                    )) {
+                        matched = true;
+                        break;
+                    };
+                    if (!matched) try next.append(arena, substitution);
+                } else {
+                    for (base) |row| if (try unifyRelation(
+                        arena,
+                        substitution,
+                        relation,
+                        row,
+                    )) |unified| {
+                        if (next.items.len >= max_native_query_rows)
+                            return error.QueryWorkLimit;
+                        try next.append(arena, unified);
+                    };
+                    for (derived) |row| if (try unifyRelation(
+                        arena,
+                        substitution,
+                        relation,
+                        row,
+                    )) |unified| {
+                        if (next.items.len >= max_native_query_rows)
+                            return error.QueryWorkLimit;
+                        try next.append(arena, unified);
+                    };
+                }
+            },
+            .predicate => |predicate| {
+                const left = resolveQueryTerm(substitution, predicate.left) orelse
+                    continue;
+                const right = resolveQueryTerm(substitution, predicate.right) orelse
+                    continue;
+                if (predicateMatches(predicate.operator, left, right))
+                    try next.append(arena, substitution);
+            },
+            .function => |function| {
+                const args = try arena.alloc(flat_log.Term, function.args.len);
+                var complete = true;
+                for (function.args, 0..) |term, index| {
+                    args[index] = resolveQueryTerm(substitution, term) orelse {
+                        complete = false;
+                        break;
+                    };
+                }
+                if (!complete) continue;
+                const value = applyFunction(function.operator, args) orelse
+                    continue;
+                const unified = try bindTerm(
+                    arena,
+                    substitution,
+                    .{ .variable = function.bind },
+                    value,
+                );
+                if (unified) |result| try next.append(arena, result);
+            },
+        };
+        current = next;
+    }
+    return current.toOwnedSlice(arena);
+}
+
+fn groundHead(
+    arena: Allocator,
+    head: QueryHead,
+    substitution: QuerySubstitution,
+) ![]const flat_log.Term {
+    const values = try arena.alloc(flat_log.Term, head.args.len);
+    for (head.args, 0..) |term, index|
+        values[index] = resolveQueryTerm(substitution, term) orelse
+            return error.InvalidQueryState;
     return values;
 }
 
-fn encodeQueryTuple(
-    allocator: Allocator,
-    relation: ?[]const u8,
-    values: []const []const u8,
-) ![]const u8 {
-    var encoded: Writer.Allocating = .init(allocator);
-    try writeAll(&encoded.writer, "[");
-    var index: usize = 0;
-    if (relation) |name| {
-        try writeEdnString(&encoded.writer, name);
-        index = 1;
-    }
-    for (values) |value| {
-        if (index != 0) try writeAll(&encoded.writer, " ");
-        try writeEdnString(&encoded.writer, value);
-        index += 1;
-    }
-    try writeAll(&encoded.writer, "]");
-    return encoded.toOwnedSlice();
-}
-
-fn evaluateQueryRows(
-    allocator: Allocator,
+fn evaluateQuery(
+    arena: Allocator,
     state: *DaemonState,
     query: ParsedQuery,
-) !std.ArrayList([]const u8) {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const facts = try buildQueryFacts(arena, state);
-    const predicates = try buildQueryPredicates(arena, state, facts.items);
-    var derived: std.ArrayList(QueryDerivedRow) = .empty;
+) ![]const QueryRow {
+    const base = try buildBaseRows(arena, state, query.snapshot);
+    var derived: std.ArrayList(QueryRow) = .empty;
     var seen = std.StringHashMap(void).init(arena);
-    for (query.strata.items) |stratum| {
-        const completed_count = derived.items.len;
+
+    for (query.strata) |stratum| {
         while (true) {
             var changed = false;
-            for (stratum.rules.items) |rule| {
-                const substitutions = try evaluateQueryBody(
+            for (stratum.rules) |rule| {
+                if (relationArity(rule.head.relation, derived.items)) |arity| {
+                    if (arity != rule.head.args.len) return error.InvalidQuery;
+                }
+                const substitutions = try evaluateBody(
                     arena,
-                    facts.items,
-                    predicates.items,
-                    derived.items[0..completed_count],
+                    base,
                     derived.items,
-                    rule.body.items,
+                    rule.body,
                 );
-                for (substitutions.items) |substitution| {
-                    const values = try groundQueryHead(
-                        arena,
-                        rule.head.args.items,
-                        substitution,
-                    );
-                    const key = try encodeQueryTuple(
+                for (substitutions) |substitution| {
+                    const values = try groundHead(arena, rule.head, substitution);
+                    const key = try encodeRowKey(
                         arena,
                         rule.head.relation,
                         values,
@@ -3228,713 +2549,869 @@ fn evaluateQueryRows(
             if (!changed) break;
         }
     }
+    return derived.toOwnedSlice(arena);
+}
 
-    var rows: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (rows.items) |row| allocator.free(row);
-        rows.deinit(allocator);
+fn aggregateValue(
+    arena: Allocator,
+    spec: AggregateSpec,
+    rows: []const QueryRow,
+) !flat_log.Term {
+    if (std.mem.eql(u8, spec.operator, "count"))
+        return integerTerm(@intCast(rows.len));
+    const argument = spec.argument orelse return error.InvalidAggregate;
+    if (rows.len == 0) return error.InvalidAggregate;
+    for (rows) |row| if (argument >= row.values.len)
+        return error.InvalidAggregate;
+
+    if (std.mem.eql(u8, spec.operator, "count-distinct")) {
+        var seen = std.StringHashMap(void).init(arena);
+        for (rows) |row| {
+            const key = try encodeRowKey(arena, null, &.{row.values[argument]});
+            try seen.put(key, {});
+        }
+        return integerTerm(@intCast(seen.count()));
     }
-    for (derived.items) |row| {
-        if (!std.mem.eql(u8, query.find, row.relation)) continue;
-        try rows.append(
-            allocator,
-            try encodeQueryTuple(allocator, null, row.values),
+    if (std.mem.eql(u8, spec.operator, "min") or
+        std.mem.eql(u8, spec.operator, "max"))
+    {
+        var best = rows[0].values[argument];
+        for (rows[1..]) |row| {
+            const order = termOrder(row.values[argument], best) orelse
+                return error.InvalidAggregate;
+            if ((std.mem.eql(u8, spec.operator, "min") and order == .lt) or
+                (std.mem.eql(u8, spec.operator, "max") and order == .gt))
+                best = row.values[argument];
+        }
+        return best;
+    }
+
+    var total: f64 = 0;
+    var all_integer = true;
+    for (rows) |row| {
+        total += numericValue(row.values[argument]) orelse
+            return error.InvalidAggregate;
+        all_integer = all_integer and integerValue(row.values[argument]) != null;
+    }
+    if (std.mem.eql(u8, spec.operator, "avg"))
+        return .{ .atom = .{ .float = total / @as(f64, @floatFromInt(rows.len)) } };
+    if (!std.mem.eql(u8, spec.operator, "sum"))
+        return error.InvalidAggregate;
+    if (all_integer and total >= @as(f64, @floatFromInt(std.math.minInt(i64))) and
+        total <= @as(f64, @floatFromInt(std.math.maxInt(i64))) and
+        @trunc(total) == total)
+        return integerTerm(@intFromFloat(total));
+    return .{ .atom = .{ .float = total } };
+}
+
+const AggregateGroup = struct {
+    key: []const u8,
+    values: []const flat_log.Term,
+    rows: std.ArrayList(QueryRow),
+};
+
+fn aggregateRows(
+    arena: Allocator,
+    find: AggregateFind,
+    derived: []const QueryRow,
+) ![]const QueryRow {
+    var groups: std.ArrayList(AggregateGroup) = .empty;
+    for (derived) |row| {
+        if (!std.mem.eql(u8, row.relation, find.relation)) continue;
+        const grouping = try arena.alloc(flat_log.Term, find.grouping.len);
+        for (find.grouping, 0..) |source_index, index| {
+            if (source_index >= row.values.len) return error.InvalidAggregate;
+            grouping[index] = row.values[source_index];
+        }
+        const key = try encodeRowKey(arena, null, grouping);
+        var group_index: ?usize = null;
+        for (groups.items, 0..) |group, index| {
+            if (std.mem.eql(u8, group.key, key)) {
+                group_index = index;
+                break;
+            }
+        }
+        if (group_index == null) {
+            const rows: std.ArrayList(QueryRow) = .empty;
+            try groups.append(arena, .{
+                .key = key,
+                .values = grouping,
+                .rows = rows,
+            });
+            group_index = groups.items.len - 1;
+        }
+        try groups.items[group_index.?].rows.append(arena, row);
+    }
+
+    var result: std.ArrayList(QueryRow) = .empty;
+    for (groups.items) |group| {
+        const values = try arena.alloc(
+            flat_log.Term,
+            group.values.len + find.aggregates.len,
         );
+        @memcpy(values[0..group.values.len], group.values);
+        for (find.aggregates, 0..) |spec, index|
+            values[group.values.len + index] = try aggregateValue(
+                arena,
+                spec,
+                group.rows.items,
+            );
+
+        var admitted = true;
+        for (find.having) |having| {
+            const aggregate = values[group.values.len + having.aggregate_index];
+            if (!predicateMatches(having.operator, aggregate, having.value)) {
+                admitted = false;
+                break;
+            }
+        }
+        if (admitted) try result.append(arena, .{
+            .relation = find.relation,
+            .values = values,
+        });
     }
-    std.mem.sort([]const u8, rows.items, {}, struct {
-        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
-            return std.mem.order(u8, left, right) == .lt;
+    return result.toOwnedSlice(arena);
+}
+
+fn queryDigest(
+    arena: Allocator,
+    scratch: Allocator,
+    payload: flat_log.Term,
+) ![]const u8 {
+    const encoded = try flat_log.TermCodecV1.encode(scratch, payload);
+    defer scratch.free(encoded);
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(encoded, &digest, .{});
+    const hex = try arena.alloc(u8, digest.len * 2);
+    _ = std.fmt.bufPrint(hex, "{x}", .{digest}) catch
+        return error.OutOfMemory;
+    return hex;
+}
+
+fn parseQueryCursor(
+    arena: Allocator,
+    cursor: ?flat_log.Term,
+    snapshot: i64,
+    digest: []const u8,
+) !struct { ordinal: u32, after: ?[]const flat_log.Term } {
+    const value = cursor orelse return .{ .ordinal = 0, .after = null };
+    const fields = try recordFields(arena, value, "query/cursor", 4);
+    const cursor_snapshot = integerValue(fields[0]) orelse
+        return error.InvalidPayload;
+    const cursor_digest = stringValue(fields[1]) orelse
+        return error.InvalidPayload;
+    const ordinal = integerValue(fields[2]) orelse return error.InvalidPayload;
+    const row_fields = try recordFields(arena, fields[3], "query/row", 1);
+    if (cursor_snapshot != snapshot or !std.mem.eql(u8, cursor_digest, digest) or
+        ordinal < 0 or ordinal > std.math.maxInt(u32))
+        return error.InvalidPayload;
+    return .{
+        .ordinal = @intCast(ordinal),
+        .after = try collectList(arena, row_fields[0]),
+    };
+}
+
+fn queryRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    request: rpc.Request,
+) !DispatchResult {
+    const query = parseQueryRequest(
+        arena,
+        request.payload,
+        state.version,
+    ) catch |err| return switch (err) {
+        error.HistoryUnavailable => failure(
+            arena,
+            "rpc/history",
+            false,
+            "requested snapshot is unavailable",
+            try record(
+                arena,
+                "rpc/history",
+                &.{ integerTerm(-1), integerTerm(0) },
+            ),
+        ),
+        else => failure(
+            arena,
+            "rpc/invalid-query",
+            false,
+            "query payload does not match the closed typed IR",
+            null,
+        ),
+    };
+    const digest = try queryDigest(arena, scratch, request.payload);
+    const cursor = parseQueryCursor(
+        arena,
+        if (request.page) |page| page.cursor else null,
+        query.snapshot,
+        digest,
+    ) catch return failure(
+        arena,
+        "rpc/invalid-cursor",
+        false,
+        "query cursor does not match query or snapshot",
+        null,
+    );
+    const limit = pageLimit(request) catch return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "page limit must be 1 through 4096",
+        null,
+    );
+
+    const derived = evaluateQuery(arena, state, query) catch |err| return switch (err) {
+        error.QueryWorkLimit => failure(
+            arena,
+            "rpc/limit",
+            true,
+            "query exceeded the intermediate row limit",
+            try record(
+                arena,
+                "rpc/limit",
+                &.{
+                    keywordTerm("query/rows"),
+                    integerTerm(max_native_query_rows),
+                    integerTerm(max_native_query_rows),
+                },
+            ),
+        ),
+        else => failure(
+            arena,
+            "rpc/invalid-query",
+            false,
+            "query could not be evaluated",
+            null,
+        ),
+    };
+    const found = switch (query.find) {
+        .relation => |relation| blk: {
+            var rows: std.ArrayList(QueryRow) = .empty;
+            for (derived) |row| if (std.mem.eql(u8, row.relation, relation))
+                try rows.append(arena, row);
+            break :blk try rows.toOwnedSlice(arena);
+        },
+        .aggregate => |aggregate| aggregateRows(
+            arena,
+            aggregate,
+            derived,
+        ) catch return failure(
+            arena,
+            "rpc/invalid-query",
+            false,
+            "aggregate input or operator is invalid",
+            null,
+        ),
+    };
+
+    var keyed: std.ArrayList(KeyedRow) = .empty;
+    for (found) |row| try keyed.append(arena, .{
+        .values = row.values,
+        .key = try encodeRowKey(arena, null, row.values),
+    });
+    std.mem.sort(KeyedRow, keyed.items, {}, struct {
+        fn lessThan(_: void, left: KeyedRow, right: KeyedRow) bool {
+            return std.mem.order(u8, left.key, right.key) == .lt;
         }
     }.lessThan);
-    return rows;
-}
 
-fn renderQueryIssue(
-    allocator: Allocator,
-    state: *const DaemonState,
-    issue: QueryIssue,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try writeAll(&output.writer, "{:error [");
-    try writeEdnString(&output.writer, issue.message);
-    try writeAll(&output.writer, "] :code :");
-    try writeAll(&output.writer, issue.code.wireName());
-    try output.writer.print(
-        " :version {d} :engine \"scan\"}}",
-        .{state.version},
+    const after_key = if (cursor.after) |after|
+        try encodeRowKey(arena, null, after)
+    else
+        null;
+    var eligible: std.ArrayList(KeyedRow) = .empty;
+    for (keyed.items) |row| {
+        if (after_key) |after| {
+            if (std.mem.order(u8, row.key, after) != .gt) continue;
+        }
+        if (eligible.items.len >= limit) break;
+        try eligible.append(arena, row);
+    }
+
+    const row_terms = try arena.alloc(flat_log.Term, eligible.items.len);
+    for (eligible.items, 0..) |row, index| row_terms[index] = try record(
+        arena,
+        "query/row",
+        &.{try list(arena, row.values)},
     );
-    return output.toOwnedSlice();
+    const consumed = if (eligible.items.len == 0)
+        keyed.items.len
+    else blk: {
+        const last = eligible.items[eligible.items.len - 1].key;
+        var position: usize = 0;
+        for (keyed.items, 0..) |row, index| if (std.mem.eql(u8, row.key, last)) {
+            position = index + 1;
+            break;
+        };
+        break :blk position;
+    };
+    const done = consumed >= keyed.items.len;
+    const next = if (done or eligible.items.len == 0)
+        null
+    else
+        try record(
+            arena,
+            "query/cursor",
+            &.{
+                integerTerm(query.snapshot),
+                stringTerm(digest),
+                integerTerm(@intCast(cursor.ordinal + 1)),
+                row_terms[row_terms.len - 1],
+            },
+        );
+    return .{
+        .payload = try record(
+            arena,
+            "query/rows",
+            &.{try list(arena, row_terms)},
+        ),
+        .page = .{
+            .ordinal = cursor.ordinal,
+            .next = next,
+            .done = done,
+        },
+    };
 }
 
-fn renderQueryWorkLimit(
-    allocator: Allocator,
-    state: *const DaemonState,
-) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{{:error [\"native query exceeded its {d}-row intermediate limit\"] :code :query-work-limit :max-rows {d} :version {d} :engine \"scan\"}}",
-        .{ max_native_query_rows, max_native_query_rows, state.version },
-    );
+const SubjectPolicy = enum {
+    any,
+    existing,
+};
+
+const WriteAction = struct {
+    operation: EventOperation,
+    triple: flat_log.Triple,
+    subject_policy: SubjectPolicy,
+};
+
+const PreparedAction = struct {
+    changed: bool,
+    pending_index: ?usize,
+};
+
+const EffectiveEvent = struct {
+    operation: EventOperation,
+    triple: flat_log.Triple,
+};
+
+fn parseSubjectPolicy(value: flat_log.Term) !SubjectPolicy {
+    if (isKeyword(value, "rpc/subject-any")) return .any;
+    if (isKeyword(value, "rpc/subject-existing")) return .existing;
+    return error.InvalidPayload;
 }
 
-fn queryFacts(
+fn parseOptionalFence(arena: Allocator, value: flat_log.Term) !?Fence {
+    return switch (try optionValue(value)) {
+        .none => null,
+        .some => |present| try parseFence(arena, present),
+    };
+}
+
+fn parseWriteAction(
+    arena: Allocator,
+    value: flat_log.Term,
+    operation: EventOperation,
+) !WriteAction {
+    const fields = try recordFields(arena, value, "rpc/write", 3);
+    return .{
+        .operation = operation,
+        .triple = tripleValue(fields[0]) orelse return error.InvalidPayload,
+        .subject_policy = try parseSubjectPolicy(fields[1]),
+    };
+}
+
+fn parseBatchAction(arena: Allocator, value: flat_log.Term) !WriteAction {
+    const fields = try recordFields(arena, value, "rpc/action", 3);
+    const operation = if (isKeyword(fields[0], "rpc/assert"))
+        EventOperation.assert
+    else if (isKeyword(fields[0], "rpc/retract"))
+        EventOperation.retract
+    else
+        return error.InvalidPayload;
+    return .{
+        .operation = operation,
+        .triple = tripleValue(fields[1]) orelse return error.InvalidPayload,
+        .subject_policy = try parseSubjectPolicy(fields[2]),
+    };
+}
+
+fn sameEffectiveKey(
     allocator: Allocator,
     state: *DaemonState,
-    request: *MapFields,
-) ![]u8 {
-    if (try requestFieldError(
-        allocator,
-        request,
-        field_op | field_query,
-        field_query,
-    )) |response| return response;
-    const raw = request.query orelse unreachable;
-    var issue: QueryIssue = .{};
-    var query = parseQuery(allocator, raw, &issue) catch |err| switch (err) {
-        error.InvalidQuery => return renderQueryIssue(allocator, state, issue),
-        else => return err,
-    };
-    defer query.deinit(allocator);
+    left: flat_log.Triple,
+    right: flat_log.Triple,
+) !bool {
+    const left_key = try state.eventKeyAlloc(allocator, left);
+    defer allocator.free(left_key);
+    const right_key = try state.eventKeyAlloc(allocator, right);
+    defer allocator.free(right_key);
+    return std.mem.eql(u8, left_key, right_key);
+}
 
-    var rows = evaluateQueryRows(allocator, state, query) catch |err| switch (err) {
-        error.QueryWorkLimit => return renderQueryWorkLimit(allocator, state),
-        error.PredicateSpellingCollision => return renderQueryIssue(
+fn effectiveEvent(
+    allocator: Allocator,
+    state: *DaemonState,
+    pending: []const PendingOperation,
+    triple: flat_log.Triple,
+) !?EffectiveEvent {
+    var index = pending.len;
+    while (index != 0) {
+        index -= 1;
+        const candidate = pending[index];
+        if (try sameEffectiveKey(
             allocator,
             state,
-            .{
-                .code = .invalid_query,
-                .message = "live predicate registry has a spelling collision",
-            },
-        ),
-        else => return err,
-    };
-    defer {
-        for (rows.items) |row| allocator.free(row);
-        rows.deinit(allocator);
-    }
-
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    try writeAll(&output.writer, "{:ok [");
-    for (rows.items, 0..) |row, index| {
-        if (index != 0) try writeAll(&output.writer, " ");
-        try writeAll(&output.writer, row);
-    }
-    try output.writer.print(
-        "] :version {d} :engine \"scan\"}}",
-        .{state.version},
-    );
-    return output.toOwnedSlice();
-}
-
-fn mutateTriple(
-    allocator: Allocator,
-    io: Io,
-    canonical_log: []const u8,
-    state: *DaemonState,
-    request: *MapFields,
-    operation: EventOperation,
-) ![]u8 {
-    if (try requestFieldError(
-        allocator,
-        request,
-        field_op | field_triple | field_base,
-        field_triple,
-    )) |response| return response;
-
-    const base: ?i64 = switch (request.base) {
-        .missing, .nil => null,
-        .value => |value| value,
-        .invalid => return renderInvalidRequest(
-            allocator,
-            &.{"base must be an integer or nil"},
-        ),
-    };
-    if (base) |expected| {
-        if (expected < 0) return renderInvalidBase(allocator, state.version);
-        if (expected != state.version) return renderConflict(allocator, state.version);
-    }
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const triple = parseTripleTerm(
-        arena.allocator(),
-        request.triple orelse unreachable,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidTerm => return renderInvalidRequest(
-            allocator,
-            &.{"triple must contain exactly three recursive typed terms"},
-        ),
-    };
-    const live = try state.liveTriple(allocator, triple);
-    if ((operation == .assert_fact and live != null) or
-        (operation == .retract_fact and live == null))
-    {
-        return renderOk(allocator, state.version);
-    }
-    if (state.version == std.math.maxInt(i64)) {
-        return allocator.dupe(
-            u8,
-            "{:reject :version-exhausted, :code :version-exhausted}",
-        );
-    }
-    const tx_seq = try commitTransaction(
-        allocator,
-        io,
-        canonical_log,
-        state,
-        &.{.{ .operation = operation, .triple = triple }},
-    );
-    return renderOk(allocator, tx_seq);
-}
-
-fn mutateOne(
-    allocator: Allocator,
-    io: Io,
-    canonical_log: []const u8,
-    state: *DaemonState,
-    request: *MapFields,
-    operation: EventOperation,
-    existing_only: bool,
-    fenced: bool,
-    global_version: bool,
-) ![]u8 {
-    if (try requestFieldError(
-        allocator,
-        request,
-        field_op | field_te | field_p | field_r | field_base |
-            field_res | field_holder | field_epoch,
-        field_te | field_p | field_r,
-    )) |response| return response;
-
-    if (fenced) {
-        if (!try requestHasCurrentFence(allocator, io, state, request))
-            return renderFenceLost(allocator, state.version);
-    }
-
-    const te = switch (request.te) {
-        .value => |value| value,
-        else => return renderInvalidRequest(
-            allocator,
-            &.{"te must be a string"},
-        ),
-    };
-    const predicate = switch (request.p) {
-        .value => |value| value,
-        else => return renderInvalidRequest(
-            allocator,
-            &.{"p must be a string"},
-        ),
-    };
-    const requested_value = switch (request.r) {
-        .value => |value| value,
-        else => return renderInvalidRequest(
-            allocator,
-            &.{"r must be a string"},
-        ),
-    };
-    if (te.len == 0 or predicate.len == 0) {
-        return renderInvalidRequest(
-            allocator,
-            &.{"te and p must be non-blank strings"},
-        );
-    }
-
-    const base: ?i64 = switch (request.base) {
-        .missing, .nil => null,
-        .value => |value| value,
-        .invalid => return renderInvalidRequest(
-            allocator,
-            &.{"base must be an integer or nil"},
-        ),
-    };
-
-    if (existing_only and !state.subjects.contains(te)) {
-        return renderMissingSubject(allocator, te, state.version);
-    }
-
-    var normalized_owned: ?[]u8 = null;
-    defer if (normalized_owned) |value| allocator.free(value);
-    const value = if (existing_only and
-        requested_value.len != 0 and
-        requested_value[0] != '@' and
-        !containsWhitespace(requested_value) and
-        state.allLivePredicateValuesRef(predicate))
-    normalize: {
-        normalized_owned = try std.fmt.allocPrint(
-            allocator,
-            "@{s}",
-            .{requested_value},
-        );
-        break :normalize normalized_owned.?;
-    } else requested_value;
-
-    if (global_version) {
-        const expected = base orelse return renderInvalidBase(
-            allocator,
-            state.version,
-        );
-        if (expected < 0) return renderInvalidBase(allocator, state.version);
-        if (expected != state.version) {
-            return renderConflict(allocator, state.version);
-        }
-    } else if (state.isSingle(predicate) and base != null and
-        try state.baseVersion(allocator, te, predicate) > base.?)
-    {
-        return renderConflict(allocator, state.version);
-    }
-
-    if (operation == .assert_fact and
-        std.mem.eql(u8, predicate, "cardinality") and
-        std.mem.eql(u8, value, "single"))
-    {
-        const declared_predicate = kernel_classify.stripAt(te);
-        if (!state.isSingle(declared_predicate)) {
-            const groups = try multiValuedGroups(
-                allocator,
-                state,
-                declared_predicate,
-            );
-            if (groups.count != 0) {
-                return renderCardinalityCollapse(
-                    allocator,
-                    declared_predicate,
-                    groups,
-                    state.version,
-                );
-            }
-        }
-    }
-
-    const live = if (operation == .assert_fact)
-        try state.liveEvent(allocator, te, predicate, value)
-    else if (state.isSingle(predicate))
-        try state.liveGroup(allocator, te, predicate)
-    else
-        try state.liveEvent(allocator, te, predicate, value);
-
-    if (operation == .assert_fact and
-        !state.isSingle(predicate) and live != null)
-    {
-        return renderOk(allocator, state.version);
-    }
-    if (operation == .retract_fact and live == null) {
-        return renderOk(allocator, state.version);
-    }
-    if (state.version == std.math.maxInt(i64)) {
-        return allocator.dupe(
-            u8,
-            "{:reject :version-exhausted, :code :version-exhausted}",
-        );
-    }
-
-    const tx = try commitTransaction(
-        allocator,
-        io,
-        canonical_log,
-        state,
-        &.{.{
-            .operation = operation,
-            .triple = stringTriple(te, predicate, value),
-        }},
-    );
-    if (operation == .assert_fact and
-        std.mem.eql(u8, predicate, "cardinality"))
-    {
-        return allocator.dupe(u8, "{:ok nil}");
-    }
-    return renderOk(allocator, tx);
-}
-
-fn assertBatch(
-    allocator: Allocator,
-    io: Io,
-    canonical_log: []const u8,
-    state: *DaemonState,
-    request: *MapFields,
-    global_version: bool,
-) ![]u8 {
-    if (try requestFieldError(
-        allocator,
-        request,
-        field_op | field_te | field_facts | field_base,
-        field_te | field_facts | if (global_version) field_base else 0,
-    )) |response| return response;
-
-    const te = switch (request.te) {
-        .value => |value| value,
-        else => return renderInvalidBatch(
-            allocator,
-            "assert-batch requires a subject :te",
-            state.version,
-        ),
-    };
-    if (std.mem.trim(u8, te, " \t\r\n").len == 0) {
-        return renderInvalidBatch(
-            allocator,
-            "assert-batch requires a subject :te",
-            state.version,
-        );
-    }
-    const top_base: ?i64 = switch (request.base) {
-        .missing, .nil => null,
-        .value => |value| value,
-        .invalid => return renderInvalidRequest(
-            allocator,
-            &.{"base must be an integer or nil"},
-        ),
-    };
-    const facts_raw = request.facts orelse return renderInvalidBatch(
-        allocator,
-        "assert-batch requires a non-empty :facts vector",
-        state.version,
-    );
-    var batch = parseBatchFacts(allocator, facts_raw) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidBatch => return renderInvalidBatch(
-            allocator,
-            "each :facts entry needs a string :p and a :r",
-            state.version,
-        ),
-    };
-    defer batch.deinit(allocator);
-    if (batch.facts.items.len == 0) {
-        return renderInvalidBatch(
-            allocator,
-            "assert-batch requires a non-empty :facts vector",
-            state.version,
-        );
-    }
-    if (global_version) {
-        for (batch.facts.items) |fact| {
-            if (fact.base != .missing) {
-                return renderFactLocalBaseReject(allocator, state.version);
-            }
-        }
-        const expected = top_base orelse return renderInvalidBase(
-            allocator,
-            state.version,
-        );
-        if (expected < 0) return renderInvalidBase(allocator, state.version);
-        if (expected != state.version)
-            return renderConflict(allocator, state.version);
-    }
-
-    var ordered: std.ArrayList(usize) = .empty;
-    defer ordered.deinit(allocator);
-    try ordered.ensureTotalCapacity(allocator, batch.facts.items.len);
-    for (batch.facts.items, 0..) |fact, index| {
-        if (!deliveryTrigger(fact.p)) ordered.appendAssumeCapacity(index);
-    }
-    for (batch.facts.items, 0..) |fact, index| {
-        if (deliveryTrigger(fact.p)) ordered.appendAssumeCapacity(index);
-    }
-
-    var writes: std.ArrayList(usize) = .empty;
-    defer writes.deinit(allocator);
-    var idempotent: std.ArrayList(usize) = .empty;
-    defer idempotent.deinit(allocator);
-    try writes.ensureTotalCapacity(allocator, ordered.items.len);
-    try idempotent.ensureTotalCapacity(allocator, ordered.items.len);
-
-    for (ordered.items, 0..) |fact_index, ordered_index| {
-        const fact = batch.facts.items[fact_index];
-        if (fact.p.len == 0) {
-            return renderInvalidBatch(
-                allocator,
-                "each :facts entry needs a string :p and a :r",
-                state.version,
-            );
-        }
-        const fact_base: ?i64 = if (global_version) null else switch (fact.base) {
-            .missing => top_base,
-            .nil => null,
-            .value => |value| value,
-            .invalid => return renderInvalidBatch(
-                allocator,
-                "each fact :base must be an integer or nil",
-                state.version,
-            ),
+            candidate.triple,
+            triple,
+        )) return .{
+            .operation = candidate.operation,
+            .triple = candidate.triple,
         };
-        if (state.isSingle(fact.p) and fact_base != null and
-            try state.baseVersion(allocator, te, fact.p) > fact_base.?)
-        {
-            return renderBatchConflict(
-                allocator,
-                state.version,
-                ordered_index,
-                fact.p,
-            );
+    }
+    const key = try state.eventKeyAlloc(allocator, triple);
+    defer allocator.free(key);
+    const state_index = state.latest.get(key) orelse return null;
+    const event = state.events.items[state_index];
+    return .{ .operation = event.operation, .triple = event.triple };
+}
+
+fn subjectExists(
+    allocator: Allocator,
+    state: *DaemonState,
+    pending: []const PendingOperation,
+    subject: flat_log.Term,
+) !bool {
+    for (pending) |item| {
+        if (item.operation == .assert and
+            flat_log.termEql(item.triple.slot0, subject)) return true;
+    }
+    for (state.events.items) |event| {
+        if (event.operation != .assert or
+            !flat_log.termEql(event.triple.slot0, subject)) continue;
+        if (try currentEvent(state, allocator, event)) return true;
+    }
+    return false;
+}
+
+fn cardinalityDeclaration(triple: flat_log.Triple) ?[]const u8 {
+    const view = stringTripleView(triple) orelse return null;
+    if (!std.mem.eql(u8, view.slot1, "cardinality") or
+        !std.mem.eql(u8, view.slot2, "single")) return null;
+    return kernel_classify.stripAt(view.slot0);
+}
+
+fn projectedCardinalityCollapse(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    pending: []const PendingOperation,
+    predicate: []const u8,
+) !bool {
+    var live: std.ArrayList(flat_log.Triple) = .empty;
+    for (state.events.items) |event| {
+        if (event.operation != .assert or
+            !(try currentEvent(state, scratch, event))) continue;
+        try live.append(arena, event.triple);
+    }
+    for (pending) |item| {
+        var found: ?usize = null;
+        for (live.items, 0..) |candidate, index| {
+            if (flat_log.tripleEql(candidate, item.triple)) {
+                found = index;
+                break;
+            }
         }
-        if (!state.isSingle(fact.p) and
-            try state.liveEvent(allocator, te, fact.p, fact.r) != null)
-        {
-            idempotent.appendAssumeCapacity(fact_index);
-        } else {
-            writes.appendAssumeCapacity(fact_index);
+        if (item.operation == .retract) {
+            if (found) |index| _ = live.orderedRemove(index);
+        } else if (found == null) {
+            try live.append(arena, item.triple);
         }
     }
 
-    if (writes.items.len == 0) {
-        return renderBatchSuccess(
-            allocator,
-            state.version,
-            batch.facts.items,
-            writes.items,
-            idempotent.items,
+    var counts = std.StringHashMap(usize).init(scratch);
+    defer counts.deinit();
+    for (live.items) |triple| {
+        const view = stringTripleView(triple) orelse continue;
+        if (!std.mem.eql(u8, view.slot1, predicate)) continue;
+        const result = try counts.getOrPut(view.slot0);
+        if (!result.found_existing) result.value_ptr.* = 0;
+        result.value_ptr.* += 1;
+        if (result.value_ptr.* > 1) return true;
+    }
+    return false;
+}
+
+fn prepareAction(
+    arena: Allocator,
+    scratch: Allocator,
+    state: *DaemonState,
+    pending: *std.ArrayList(PendingOperation),
+    action: WriteAction,
+) !PreparedAction {
+    if (action.subject_policy == .existing and
+        !(try subjectExists(
+            scratch,
+            state,
+            pending.items,
+            action.triple.slot0,
+        ))) return error.MissingSubject;
+
+    const effective = try effectiveEvent(
+        scratch,
+        state,
+        pending.items,
+        action.triple,
+    );
+    if (action.operation == .assert) {
+        if (effective) |present| {
+            if (present.operation == .assert and
+                flat_log.tripleEql(present.triple, action.triple))
+                return .{ .changed = false, .pending_index = null };
+        }
+        const pending_index = pending.items.len;
+        try pending.append(arena, .{
+            .operation = .assert,
+            .triple = action.triple,
+        });
+        if (cardinalityDeclaration(action.triple)) |predicate| {
+            if (try projectedCardinalityCollapse(
+                arena,
+                scratch,
+                state,
+                pending.items,
+                predicate,
+            )) return error.CardinalityCollapse;
+        }
+        return .{ .changed = true, .pending_index = pending_index };
+    }
+
+    const present = effective orelse
+        return .{ .changed = false, .pending_index = null };
+    if (present.operation != .assert)
+        return .{ .changed = false, .pending_index = null };
+    const pending_index = pending.items.len;
+    try pending.append(arena, .{
+        .operation = .retract,
+        .triple = present.triple,
+    });
+    return .{ .changed = true, .pending_index = pending_index };
+}
+
+fn actionOccurrences(
+    arena: Allocator,
+    state: *DaemonState,
+    tx_seq: i64,
+    pending_index: usize,
+    pending_count: usize,
+) !flat_log.Term {
+    const ordinals = [_]usize{
+        pending_index,
+        pending_count + pending_index * 2,
+        pending_count + pending_index * 2 + 1,
+    };
+    var occurrences: [3]flat_log.Term = undefined;
+    for (ordinals, 0..) |ordinal, index| {
+        var found: ?TripleRow = null;
+        for (state.events.items) |event| {
+            if (event.tx_seq == tx_seq and event.ordinal == ordinal) {
+                found = event;
+                break;
+            }
+        }
+        occurrences[index] = try occurrenceTerm(
+            arena,
+            state,
+            found orelse return error.CommittedEventMissing,
         );
     }
-    if (state.version == std.math.maxInt(i64)) {
-        return allocator.dupe(
-            u8,
-            "{:reject :version-exhausted, :code :version-exhausted}",
+    return list(arena, &occurrences);
+}
+
+fn mutationResult(
+    arena: Allocator,
+    state: *DaemonState,
+    prepared: []const PreparedAction,
+    pending_count: usize,
+    tx_seq: ?i64,
+) !DispatchResult {
+    const results = try arena.alloc(flat_log.Term, prepared.len);
+    for (prepared, 0..) |item, index| {
+        const occurrences = if (item.pending_index) |pending_index|
+            try actionOccurrences(
+                arena,
+                state,
+                tx_seq orelse return error.CommittedEventMissing,
+                pending_index,
+                pending_count,
+            )
+        else
+            try list(arena, &.{});
+        results[index] = try record(
+            arena,
+            "rpc/action-result",
+            &.{
+                integerTerm(@intCast(index)),
+                booleanTerm(item.changed),
+                occurrences,
+            },
+        );
+    }
+    return .{ .payload = try record(
+        arena,
+        "rpc/mutation-result",
+        &.{try list(arena, results)},
+    ) };
+}
+
+fn executeActions(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    actions: []const WriteAction,
+    fence: ?Fence,
+) !DispatchResult {
+    if (actions.len == 0) return failure(
+        arena,
+        "rpc/invalid-request",
+        false,
+        "mutation requires at least one action",
+        null,
+    );
+    if (fence) |value| {
+        if (!(try fenceCurrent(scratch, io, state, value))) return failure(
+            arena,
+            "rpc/fence-lost",
+            true,
+            "lease fence is not current",
+            try record(
+                arena,
+                "rpc/fence-lost",
+                &.{
+                    stringTerm(value.resource),
+                    stringTerm(value.holder),
+                    integerTerm(value.epoch),
+                },
+            ),
         );
     }
 
     var pending: std.ArrayList(PendingOperation) = .empty;
-    defer pending.deinit(allocator);
-    try pending.ensureTotalCapacity(allocator, writes.items.len);
-    for (writes.items) |fact_index| {
-        const fact = batch.facts.items[fact_index];
-        pending.appendAssumeCapacity(.{
-            .operation = .assert_fact,
-            .triple = stringTriple(te, fact.p, fact.r),
-        });
+    var prepared: std.ArrayList(PreparedAction) = .empty;
+    try prepared.ensureTotalCapacity(arena, actions.len);
+    for (actions) |action| {
+        const result = prepareAction(
+            arena,
+            scratch,
+            state,
+            &pending,
+            action,
+        ) catch |err| return switch (err) {
+            error.MissingSubject => failure(
+                arena,
+                "rpc/missing-subject",
+                false,
+                "subject-existing requires a live subject",
+                action.triple.slot0,
+            ),
+            error.CardinalityCollapse => failure(
+                arena,
+                "rpc/cardinality-collapse",
+                false,
+                "single cardinality would collapse live values",
+                try tripleTerm(
+                    arena,
+                    action.triple.slot0,
+                    action.triple.slot1,
+                    action.triple.slot2,
+                ),
+            ),
+            else => return err,
+        };
+        prepared.appendAssumeCapacity(result);
     }
 
-    const tx = try commitTransaction(
-        allocator,
+    // A declaration can precede its values inside one atomic batch. Recheck
+    // the projected final set so that ordering cannot smuggle a collapse past
+    // the declaration-local check.
+    for (pending.items) |item| {
+        const predicate = cardinalityDeclaration(item.triple) orelse continue;
+        const declaration = try effectiveEvent(
+            scratch,
+            state,
+            pending.items,
+            item.triple,
+        );
+        if (declaration == null or declaration.?.operation != .assert or
+            !flat_log.tripleEql(declaration.?.triple, item.triple)) continue;
+        if (try projectedCardinalityCollapse(
+            arena,
+            scratch,
+            state,
+            pending.items,
+            predicate,
+        )) return failure(
+            arena,
+            "rpc/cardinality-collapse",
+            false,
+            "single cardinality would collapse live values",
+            try tripleTerm(
+                arena,
+                item.triple.slot0,
+                item.triple.slot1,
+                item.triple.slot2,
+            ),
+        );
+    }
+
+    if (pending.items.len == 0)
+        return mutationResult(arena, state, prepared.items, 0, null);
+    if (state.version == std.math.maxInt(i64)) return failure(
+        arena,
+        "rpc/version-exhausted",
+        false,
+        "transaction sequence is exhausted",
+        null,
+    );
+    const tx_seq = commitTransaction(
+        scratch,
         io,
         canonical_log,
         state,
         pending.items,
-    );
-    return renderBatchSuccess(
-        allocator,
-        tx,
-        batch.facts.items,
-        writes.items,
-        idempotent.items,
+    ) catch |err| switch (err) {
+        error.VersionExhausted => return failure(
+            arena,
+            "rpc/version-exhausted",
+            false,
+            "transaction sequence is exhausted",
+            null,
+        ),
+        else => return err,
+    };
+    return mutationResult(
+        arena,
+        state,
+        prepared.items,
+        pending.items.len,
+        tx_seq,
     );
 }
 
-fn parseBatchFacts(
-    allocator: Allocator,
-    raw: []const u8,
-) (Allocator.Error || error{InvalidBatch})!ParsedBatch {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '[')
-        return error.InvalidBatch;
-    parser.index += 1;
+fn writeRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    payload: flat_log.Term,
+    operation: EventOperation,
+) !DispatchResult {
+    const fields = recordFields(arena, payload, "rpc/write", 3) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "write payload must be rpc/write",
+            null,
+        );
+    const action = parseWriteAction(arena, payload, operation) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "write fields must be Triple, subject policy, and optional fence",
+            null,
+        );
+    const fence = parseOptionalFence(arena, fields[2]) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "write fence must be rpc/none or rpc/some(rpc/fence)",
+            null,
+        );
+    return executeActions(
+        arena,
+        scratch,
+        io,
+        canonical_log,
+        state,
+        &.{action},
+        fence,
+    );
+}
 
-    var batch: ParsedBatch = .{ .facts = .empty };
-    errdefer batch.deinit(allocator);
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len) return error.InvalidBatch;
-        if (raw[parser.index] == ']') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len) return error.InvalidBatch;
-            return batch;
-        }
-        const fact_raw = parser.scanValue() catch return error.InvalidBatch;
-        const fact = try parseBatchFact(allocator, fact_raw);
-        try batch.facts.append(allocator, fact);
+fn batchRequest(
+    arena: Allocator,
+    scratch: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    payload: flat_log.Term,
+) !DispatchResult {
+    const fields = recordFields(arena, payload, "rpc/batch", 2) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "batch payload must be rpc/batch",
+            null,
+        );
+    const action_terms = collectList(arena, fields[0]) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "batch actions must be a closed rpc/list",
+            null,
+        );
+    const actions = try arena.alloc(WriteAction, action_terms.len);
+    for (action_terms, 0..) |value, index| {
+        actions[index] = parseBatchAction(arena, value) catch
+            return failure(
+                arena,
+                "rpc/invalid-request",
+                false,
+                "batch action must be rpc/action",
+                integerTerm(@intCast(index)),
+            );
     }
-}
-
-fn parseBatchFact(
-    allocator: Allocator,
-    raw: []const u8,
-) (Allocator.Error || error{InvalidBatch})!BatchFact {
-    var parser: Parser = .{ .input = raw };
-    parser.skipSeparators();
-    if (parser.index >= raw.len or raw[parser.index] != '{')
-        return error.InvalidBatch;
-    parser.index += 1;
-
-    var predicate: ?[]u8 = null;
-    errdefer if (predicate) |value| allocator.free(value);
-    var value: ?[]u8 = null;
-    errdefer if (value) |item| allocator.free(item);
-    var base: IntField = .missing;
-    var seen: u8 = 0;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len) return error.InvalidBatch;
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len or predicate == null or value == null)
-                return error.InvalidBatch;
-            return .{ .p = predicate.?, .r = value.?, .base = base };
-        }
-        const key = parser.scanValue() catch return error.InvalidBatch;
-        if (key.len < 2 or key[0] != ':') return error.InvalidBatch;
-        const item = parser.scanValue() catch return error.InvalidBatch;
-        const name = key[1..];
-        if (std.mem.eql(u8, name, "p")) {
-            if ((seen & 1) != 0) return error.InvalidBatch;
-            seen |= 1;
-            const parsed = parseStringField(allocator, item) catch |err|
-                switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.InvalidBatch,
-                };
-            predicate = switch (parsed) {
-                .value => |decoded| decoded,
-                else => return error.InvalidBatch,
-            };
-        } else if (std.mem.eql(u8, name, "r")) {
-            if ((seen & 2) != 0) return error.InvalidBatch;
-            seen |= 2;
-            const parsed = parseStringField(allocator, item) catch |err|
-                switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.InvalidBatch,
-                };
-            value = switch (parsed) {
-                .value => |decoded| decoded,
-                else => return error.InvalidBatch,
-            };
-        } else if (std.mem.eql(u8, name, "base")) {
-            if ((seen & 4) != 0) return error.InvalidBatch;
-            seen |= 4;
-            base = parseIntField(item);
-            switch (base) {
-                .invalid => return error.InvalidBatch,
-                else => {},
-            }
-        } else {
-            return error.InvalidBatch;
-        }
-    }
-}
-
-fn renderOk(allocator: Allocator, version: i64) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{{:ok {d}}}", .{version});
-}
-
-fn renderConflict(allocator: Allocator, version: i64) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{{:reject :conflict, :version {d}}}",
-        .{version},
+    const fence = parseOptionalFence(arena, fields[1]) catch
+        return failure(
+            arena,
+            "rpc/invalid-request",
+            false,
+            "batch fence must be rpc/none or rpc/some(rpc/fence)",
+            null,
+        );
+    return executeActions(
+        arena,
+        scratch,
+        io,
+        canonical_log,
+        state,
+        actions,
+        fence,
     );
 }
 
-fn renderInvalidBase(allocator: Allocator, version: i64) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{{:reject :invalid-base, :version {d}}}",
-        .{version},
-    );
-}
-
-fn renderFactLocalBaseReject(allocator: Allocator, version: i64) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{{:reject [\"assert-batch-at-version rejects fact-local :base; use only the top-level :base\"], :code :fact-local-base, :version {d}}}",
-        .{version},
-    );
-}
-
-fn renderMissingSubject(
-    allocator: Allocator,
-    subject: []const u8,
-    version: i64,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(
-        writer,
-        "{:reject :missing-subject, :code :missing-subject, :subject ",
-    );
-    try writeEdnString(writer, subject);
-    try writeAll(writer, ", :version ");
-    writer.print("{d}", .{version}) catch return error.OutOfMemory;
-    try writeAll(writer, "}");
-    return output.toOwnedSlice();
-}
-
-fn renderInvalidBatch(
-    allocator: Allocator,
-    message: []const u8,
-    version: i64,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:reject [");
-    try writeEdnString(writer, message);
-    try writeAll(writer, "], :code :invalid-batch, :version ");
-    writer.print("{d}", .{version}) catch return error.OutOfMemory;
-    try writeAll(writer, "}");
-    return output.toOwnedSlice();
-}
-
-fn renderBatchConflict(
-    allocator: Allocator,
-    version: i64,
-    index: usize,
-    predicate: []const u8,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:reject :conflict, :version ");
-    writer.print("{d}", .{version}) catch return error.OutOfMemory;
-    try writeAll(writer, ", :at ");
-    writer.print("{d}", .{index}) catch return error.OutOfMemory;
-    try writeAll(writer, ", :pred ");
-    try writeEdnString(writer, predicate);
-    try writeAll(writer, "}");
-    return output.toOwnedSlice();
-}
-
-fn renderBatchSuccess(
-    allocator: Allocator,
-    version: i64,
-    facts: []const BatchFact,
-    writes: []const usize,
-    idempotent: []const usize,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:ok ");
-    writer.print("{d}", .{version}) catch return error.OutOfMemory;
-    try writeAll(writer, ", :written [");
-    for (writes, 0..) |index, offset| {
-        if (offset != 0) try writeAll(writer, " ");
-        try writeEdnString(writer, facts[index].p);
-    }
-    try writeAll(writer, "], :idempotent [");
-    for (idempotent, 0..) |index, offset| {
-        if (offset != 0) try writeAll(writer, " ");
-        try writeEdnString(writer, facts[index].p);
-    }
-    try writeAll(writer, "], :batch true}");
-    return output.toOwnedSlice();
-}
-
-/// Authority: `key-sep` in fram/kernel_classify.bclj; a clean value never contains U+0001.
+/// Authority: key-sep in fram/kernel_classify.bclj; a clean value never
+/// contains U+0001.
 const key_sep = "\x01";
 
 fn groupKeyAlloc(
     allocator: Allocator,
-    l: []const u8,
-    p: []const u8,
+    slot0: []const u8,
+    slot1: []const u8,
 ) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
         "\x00{s}" ++ key_sep ++ "{s}",
-        .{ l, p },
+        .{ slot0, slot1 },
     );
 }
 
@@ -3956,533 +3433,73 @@ fn containsWhitespace(value: []const u8) bool {
     return false;
 }
 
-fn deliveryTrigger(predicate: []const u8) bool {
-    return std.mem.eql(u8, predicate, "to") or
-        std.mem.eql(u8, predicate, "target");
-}
+test "closed list option and record shapes round trip" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
-    var parser: Parser = .{ .input = input };
-    parser.skipSeparators();
-    if (parser.index >= input.len or input[parser.index] != '{')
-        return error.InvalidEdn;
-    parser.index += 1;
-
-    var fields: MapFields = .{};
-    errdefer fields.deinit(allocator);
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= input.len) return error.InvalidEdn;
-        if (input[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != input.len) return error.InvalidEdn;
-            return fields;
-        }
-
-        const key = try parser.scanValue();
-        if (key.len < 2 or key[0] != ':') return error.InvalidEdn;
-        const value = try parser.scanValue();
-        const name = key[1..];
-
-        if (std.mem.eql(u8, name, "op")) {
-            fields.noteField(field_op);
-            fields.op = parseOperation(value);
-        } else if (std.mem.eql(u8, name, "expected-log")) {
-            fields.noteField(field_expected_log);
-            fields.expected_log.deinit(allocator);
-            fields.expected_log = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "request")) {
-            fields.noteField(field_request);
-            fields.request = value;
-        } else if (std.mem.eql(u8, name, "te")) {
-            fields.noteField(field_te);
-            fields.te.deinit(allocator);
-            fields.te = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "p")) {
-            fields.noteField(field_p);
-            fields.p.deinit(allocator);
-            fields.p = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "r")) {
-            fields.noteField(field_r);
-            fields.r.deinit(allocator);
-            fields.r = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "base")) {
-            fields.noteField(field_base);
-            fields.base = parseIntField(value);
-        } else if (std.mem.eql(u8, name, "facts")) {
-            fields.noteField(field_facts);
-            fields.facts = value;
-        } else if (std.mem.eql(u8, name, "res")) {
-            fields.noteField(field_res);
-            fields.res.deinit(allocator);
-            fields.res = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "holder")) {
-            fields.noteField(field_holder);
-            fields.holder.deinit(allocator);
-            fields.holder = try parseStringField(allocator, value);
-        } else if (std.mem.eql(u8, name, "epoch")) {
-            fields.noteField(field_epoch);
-            fields.epoch = parseIntField(value);
-        } else if (std.mem.eql(u8, name, "ttl-ms")) {
-            fields.noteField(field_ttl_ms);
-            fields.ttl_ms = parseIntField(value);
-        } else if (std.mem.eql(u8, name, "subjects")) {
-            fields.noteField(field_subjects);
-            fields.subjects = value;
-        } else if (std.mem.eql(u8, name, "query")) {
-            fields.noteField(field_query);
-            fields.query = value;
-        } else if (std.mem.eql(u8, name, "triple")) {
-            fields.noteField(field_triple);
-            fields.triple = value;
-        } else {
-            fields.unknown_field = true;
-        }
-    }
-}
-
-fn parseOperation(raw: []const u8) Operation {
-    if (std.mem.eql(u8, raw, ":for-log")) return .for_log;
-    if (std.mem.eql(u8, raw, ":version")) return .version;
-    if (std.mem.eql(u8, raw, ":status")) return .status;
-    if (std.mem.eql(u8, raw, ":assert")) return .assert_fact;
-    if (std.mem.eql(u8, raw, ":assert-existing")) return .assert_existing;
-    if (std.mem.eql(u8, raw, ":assert-batch")) return .assert_batch;
-    if (std.mem.eql(u8, raw, ":assert-batch-at-version"))
-        return .assert_batch_at_version;
-    if (std.mem.eql(u8, raw, ":assert-at-version"))
-        return .assert_at_version;
-    if (std.mem.eql(u8, raw, ":assert-with-fence"))
-        return .assert_with_fence;
-    if (std.mem.eql(u8, raw, ":assert-at-version-with-fence"))
-        return .assert_at_version_with_fence;
-    if (std.mem.eql(u8, raw, ":assert-triple")) return .assert_triple;
-    if (std.mem.eql(u8, raw, ":retract")) return .retract_fact;
-    if (std.mem.eql(u8, raw, ":retract-existing"))
-        return .retract_existing;
-    if (std.mem.eql(u8, raw, ":retract-with-fence"))
-        return .retract_with_fence;
-    if (std.mem.eql(u8, raw, ":retract-triple")) return .retract_triple;
-    if (std.mem.eql(u8, raw, ":acquire-lease")) return .acquire_lease;
-    if (std.mem.eql(u8, raw, ":renew-lease")) return .renew_lease;
-    if (std.mem.eql(u8, raw, ":release-lease")) return .release_lease;
-    if (std.mem.eql(u8, raw, ":fence-ok")) return .fence_ok;
-    if (std.mem.eql(u8, raw, ":facts")) return .facts;
-    if (std.mem.eql(u8, raw, ":facts-for-subjects")) return .facts_for_subjects;
-    if (std.mem.eql(u8, raw, ":triples")) return .triples;
-    if (std.mem.eql(u8, raw, ":occurrences")) return .occurrences;
-    if (std.mem.eql(u8, raw, ":query")) return .query;
-    return .unknown;
-}
-
-fn parseStringField(
-    allocator: Allocator,
-    raw: []const u8,
-) !StringField {
-    return if (raw.len >= 2 and
-        raw[0] == '"' and raw[raw.len - 1] == '"')
-        .{ .value = try decodeEdnString(allocator, raw) }
-    else
-        .invalid;
-}
-
-fn parseIntField(raw: []const u8) IntField {
-    if (std.mem.eql(u8, raw, "nil")) return .nil;
-    const value = std.fmt.parseInt(i64, raw, 10) catch return .invalid;
-    return .{ .value = value };
-}
-
-const TermParseError = Allocator.Error || error{InvalidTerm};
-
-fn parseTripleTerm(
-    allocator: Allocator,
-    raw: []const u8,
-) TermParseError!flat_log.Triple {
-    const term = try parseTerm(allocator, raw, 0);
-    return switch (term) {
-        .triple => |triple| triple.*,
-        .atom => error.InvalidTerm,
+    const fields = [_]flat_log.Term{
+        stringTerm("left"),
+        try option(arena, integerTerm(7)),
+        keywordTerm("rpc/right"),
     };
-}
-
-fn parseTerm(
-    allocator: Allocator,
-    raw_untrimmed: []const u8,
-    depth: usize,
-) TermParseError!flat_log.Term {
-    if (depth > flat_log.max_term_depth) return error.InvalidTerm;
-    const raw = std.mem.trim(u8, raw_untrimmed, " \t\r\n,");
-    if (raw.len == 0) return error.InvalidTerm;
-    if (raw[0] == '"') {
-        return .{ .atom = .{ .string = decodeEdnString(allocator, raw) catch |err|
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.InvalidTerm,
-            } } };
-    }
-    if (raw[0] == ':') {
-        if (raw.len == 1) return error.InvalidTerm;
-        return .{ .atom = .{ .keyword = raw[1..] } };
-    }
-    if (raw[0] == '[') {
-        var parser: Parser = .{ .input = raw };
-        parser.index = 1;
-        var terms: [3]flat_log.Term = undefined;
-        for (&terms) |*term| {
-            const item = parser.scanValue() catch return error.InvalidTerm;
-            term.* = try parseTerm(allocator, item, depth + 1);
-        }
-        parser.skipSeparators();
-        if (parser.index >= raw.len or raw[parser.index] != ']')
-            return error.InvalidTerm;
-        parser.index += 1;
-        parser.skipSeparators();
-        if (parser.index != raw.len) return error.InvalidTerm;
-        const triple = try allocator.create(flat_log.Triple);
-        triple.* = .{ .slot0 = terms[0], .slot1 = terms[1], .slot2 = terms[2] };
-        return .{ .triple = triple };
-    }
-    if (raw[0] == '{') return parseTypedAtomTerm(raw);
-    if (std.mem.eql(u8, raw, "true"))
-        return .{ .atom = .{ .boolean = true } };
-    if (std.mem.eql(u8, raw, "false"))
-        return .{ .atom = .{ .boolean = false } };
-
-    var float_token = false;
-    for (raw) |byte| {
-        if (byte == '.' or byte == 'e' or byte == 'E') {
-            float_token = true;
-            break;
-        }
-    }
-    if (float_token) {
-        const value = std.fmt.parseFloat(f64, raw) catch return error.InvalidTerm;
-        return .{ .atom = .{ .float = value } };
-    }
-    const integer = std.fmt.parseInt(i64, raw, 10) catch return error.InvalidTerm;
-    return .{ .atom = .{ .integer = integer } };
-}
-
-fn parseTypedAtomTerm(raw: []const u8) TermParseError!flat_log.Term {
-    var parser: Parser = .{ .input = raw };
-    parser.index = 1;
-    const AtomType = enum { instant, float };
-    var atom_type: ?AtomType = null;
-    var epoch_seconds: ?i64 = null;
-    var nanosecond: ?u32 = null;
-    var float_bits: ?u64 = null;
-    var seen: u8 = 0;
-    while (true) {
-        parser.skipSeparators();
-        if (parser.index >= raw.len) return error.InvalidTerm;
-        if (raw[parser.index] == '}') {
-            parser.index += 1;
-            parser.skipSeparators();
-            if (parser.index != raw.len) return error.InvalidTerm;
-            return switch (atom_type orelse return error.InvalidTerm) {
-                .instant => if (seen == 0b0111)
-                    .{ .atom = .{ .instant = .{
-                        .epoch_seconds = epoch_seconds.?,
-                        .nanosecond = nanosecond.?,
-                    } } }
-                else
-                    error.InvalidTerm,
-                .float => if (seen == 0b1001)
-                    .{ .atom = .{ .float = @bitCast(float_bits.?) } }
-                else
-                    error.InvalidTerm,
-            };
-        }
-        const key = parser.scanValue() catch return error.InvalidTerm;
-        const value = parser.scanValue() catch return error.InvalidTerm;
-        if (std.mem.eql(u8, key, ":fram/type")) {
-            if ((seen & 1) != 0) return error.InvalidTerm;
-            seen |= 1;
-            atom_type = if (std.mem.eql(u8, value, ":instant"))
-                .instant
-            else if (std.mem.eql(u8, value, ":float"))
-                .float
-            else
-                return error.InvalidTerm;
-        } else if (std.mem.eql(u8, key, ":epoch-seconds")) {
-            if ((seen & 2) != 0) return error.InvalidTerm;
-            seen |= 2;
-            epoch_seconds = std.fmt.parseInt(i64, value, 10) catch
-                return error.InvalidTerm;
-        } else if (std.mem.eql(u8, key, ":nanosecond")) {
-            if ((seen & 4) != 0) return error.InvalidTerm;
-            seen |= 4;
-            nanosecond = std.fmt.parseInt(u32, value, 10) catch
-                return error.InvalidTerm;
-            if (nanosecond.? > 999_999_999) return error.InvalidTerm;
-        } else if (std.mem.eql(u8, key, ":bits")) {
-            if ((seen & 8) != 0 or value.len != 18 or
-                value[0] != '"' or value[17] != '"') return error.InvalidTerm;
-            seen |= 8;
-            float_bits = std.fmt.parseInt(u64, value[1..17], 16) catch
-                return error.InvalidTerm;
-        } else {
-            return error.InvalidTerm;
-        }
-    }
-}
-
-fn decodeEdnString(allocator: Allocator, raw: []const u8) ![]u8 {
-    if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"')
-        return error.InvalidEdn;
-    const output = try allocator.alloc(u8, raw.len - 2);
-    errdefer allocator.free(output);
-    var input_index: usize = 1;
-    var output_index: usize = 0;
-    while (input_index < raw.len - 1) {
-        const byte = raw[input_index];
-        input_index += 1;
-        if (byte != '\\') {
-            output[output_index] = byte;
-            output_index += 1;
-            continue;
-        }
-        if (input_index >= raw.len - 1) return error.InvalidEdn;
-        const escaped = raw[input_index];
-        input_index += 1;
-        switch (escaped) {
-            '"' => output[output_index] = '"',
-            '\\' => output[output_index] = '\\',
-            'n' => output[output_index] = '\n',
-            'r' => output[output_index] = '\r',
-            't' => output[output_index] = '\t',
-            'b' => output[output_index] = 0x08,
-            'f' => output[output_index] = 0x0c,
-            'u' => {
-                if (input_index + 4 > raw.len - 1) return error.InvalidEdn;
-                const codepoint = std.fmt.parseInt(
-                    u21,
-                    raw[input_index .. input_index + 4],
-                    16,
-                ) catch return error.InvalidEdn;
-                input_index += 4;
-                const encoded = std.unicode.utf8Encode(
-                    codepoint,
-                    output[output_index..],
-                ) catch return error.InvalidEdn;
-                output_index += encoded;
-                continue;
-            },
-            else => return error.InvalidEdn,
-        }
-        output_index += 1;
-    }
-    return allocator.realloc(output, output_index);
-}
-
-fn closingDelimiter(byte: u8) ?u8 {
-    return switch (byte) {
-        '{' => '}',
-        '[' => ']',
-        '(' => ')',
-        else => null,
-    };
-}
-
-fn isValueDelimiter(byte: u8) bool {
-    return switch (byte) {
-        ' ', '\t', '\r', '\n', ',', '{', '}', '[', ']', '(', ')' => true,
-        else => false,
-    };
-}
-
-fn renderStrictFenceRequired(
-    allocator: Allocator,
-    canonical_log: []const u8,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:reject [\"this coordinator requires a :for-log envelope\"] :code :log-fence-required :served-log ");
-    try writeEdnString(writer, canonical_log);
-    try writeAll(writer, "}");
-    return output.toOwnedSlice();
-}
-
-fn renderLogMismatch(
-    allocator: Allocator,
-    expected: []const u8,
-    served: []const u8,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:reject [");
-    var message: Writer.Allocating = .init(allocator);
-    defer message.deinit();
-    try writeAll(&message.writer, "log mismatch: client expects ");
-    try writeAll(&message.writer, expected);
-    try writeAll(&message.writer, " but coordinator serves ");
-    try writeAll(&message.writer, served);
-    try writeEdnString(writer, message.written());
-    try writeAll(writer, "] :code :log-mismatch :expected-log ");
-    try writeEdnString(writer, expected);
-    try writeAll(writer, " :served-log ");
-    try writeEdnString(writer, served);
-    try writeAll(writer, "}");
-    return output.toOwnedSlice();
-}
-
-fn renderStatus(
-    allocator: Allocator,
-    canonical_log: []const u8,
-    authority_path: []const u8,
-    state: DaemonState,
-) ![]u8 {
-    var output: Writer.Allocating = .init(allocator);
-    defer output.deinit();
-    const writer = &output.writer;
-    try writeAll(writer, "{:version ");
-    writer.print("{d}", .{state.version}) catch return error.OutOfMemory;
-    try writeAll(writer, " :log ");
-    try writeEdnString(writer, canonical_log);
-    try writeAll(writer, " :space-id ");
-    try writeEdnString(writer, state.space_id);
-    try writeAll(writer, " :valid-bytes ");
-    writer.print("{d}", .{state.log_valid_bytes}) catch return error.OutOfMemory;
-    try writeAll(writer, " :writer-authority {:format ");
-    try writeEdnString(writer, authority_format);
-    try writeAll(writer, " :role :active :write-authorized true :log ");
-    try writeEdnString(writer, canonical_log);
-    try writeAll(writer, " :lock ");
-    try writeEdnString(writer, authority_path);
-    try writeAll(writer, "}}");
-    return output.toOwnedSlice();
-}
-
-fn writeAll(writer: *Writer, bytes: []const u8) Allocator.Error!void {
-    writer.writeAll(bytes) catch return error.OutOfMemory;
-}
-
-fn writeEdnString(writer: *Writer, value: []const u8) Allocator.Error!void {
-    writer.writeByte('"') catch return error.OutOfMemory;
-    for (value) |byte| switch (byte) {
-        '"' => writer.writeAll("\\\"") catch return error.OutOfMemory,
-        '\\' => writer.writeAll("\\\\") catch return error.OutOfMemory,
-        '\n' => writer.writeAll("\\n") catch return error.OutOfMemory,
-        '\r' => writer.writeAll("\\r") catch return error.OutOfMemory,
-        '\t' => writer.writeAll("\\t") catch return error.OutOfMemory,
-        0x08 => writer.writeAll("\\b") catch return error.OutOfMemory,
-        0x0c => writer.writeAll("\\f") catch return error.OutOfMemory,
-        else => writer.writeByte(byte) catch return error.OutOfMemory,
-    };
-    writer.writeByte('"') catch return error.OutOfMemory;
-}
-
-test "parse ordinary and fenced bootstrap requests" {
-    var ordinary = try parseMap(std.testing.allocator, "{:op :version}");
-    defer ordinary.deinit(std.testing.allocator);
-    try std.testing.expectEqual(Operation.version, ordinary.op);
-
-    var fenced = try parseMap(
-        std.testing.allocator,
-        "{:op :for-log, :expected-log \"/tmp/a\\\\b.log\", :request {:op :status}}",
-    );
-    defer fenced.deinit(std.testing.allocator);
-    try std.testing.expectEqual(Operation.for_log, fenced.op);
-    try std.testing.expectEqualStrings(
-        "/tmp/a\\b.log",
-        switch (fenced.expected_log) {
-            .value => |value| value,
-            else => return error.TestUnexpectedResult,
-        },
-    );
-    var nested = try parseMap(std.testing.allocator, fenced.request.?);
-    defer nested.deinit(std.testing.allocator);
-    try std.testing.expectEqual(Operation.status, nested.op);
-}
-
-test "recursive request terms preserve typed float bits and instants" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const triple = try parseTripleTerm(
-        arena.allocator(),
-        "[{:fram/type :float :bits \"8000000000000000\"} [true :kind -7] {:fram/type :instant :epoch-seconds -1 :nanosecond 999999999}]",
-    );
-    const float_value = switch (triple.slot0) {
-        .atom => |atom| switch (atom) {
-            .float => |value| value,
-            else => return error.TestUnexpectedResult,
-        },
-        .triple => return error.TestUnexpectedResult,
-    };
+    const value = try record(arena, "rpc/example", &fields);
+    const decoded = try recordFields(arena, value, "rpc/example", 3);
+    try std.testing.expectEqualStrings("left", stringValue(decoded[0]).?);
+    const present = try optionValue(decoded[1]);
     try std.testing.expectEqual(
-        @as(u64, 0x8000000000000000),
-        @as(u64, @bitCast(float_value)),
+        @as(i64, 7),
+        integerValue(switch (present) {
+            .some => |term| term,
+            .none => return error.TestUnexpectedResult,
+        }).?,
     );
-    try std.testing.expect(triple.slot1 == .triple);
-    const instant = switch (triple.slot2) {
-        .atom => |atom| switch (atom) {
-            .instant => |value| value,
-            else => return error.TestUnexpectedResult,
-        },
-        .triple => return error.TestUnexpectedResult,
+    try std.testing.expect(isKeyword(decoded[2], "rpc/right"));
+}
+
+test "occurrence is a direct coordinate operation proposition triple" {
+    var environ = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ.deinit();
+    var state = try DaemonState.init(
+        std.testing.allocator,
+        &environ,
+        "test-space",
+    );
+    defer state.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const event: TripleRow = .{
+        .tx_seq = 9,
+        .ordinal = 4,
+        .operation = .assert,
+        .triple = stringTriple("Alice", "email", "alice@example.com"),
     };
-    try std.testing.expectEqual(@as(i64, -1), instant.epoch_seconds);
-    try std.testing.expectEqual(@as(u32, 999_999_999), instant.nanosecond);
-}
-
-test "strict bootstrap response rejects an unwrapped request" {
-    var environ = std.process.Environ.Map.init(std.testing.allocator);
-    defer environ.deinit();
-    var state = try DaemonState.init(std.testing.allocator, &environ, "test-space");
-    defer state.deinit();
-    state.version = 7;
-    const response = try handleRequest(
-        std.testing.allocator,
-        std.testing.io,
-        "{:op :version}",
-        "/tmp/facts.log",
-        "/tmp/facts.log.writer-authority.lock",
+    const occurrence = tripleValue(try occurrenceTerm(
+        arena,
         &state,
-        true,
+        event,
+    )).?;
+    try std.testing.expect(isKeyword(occurrence.slot1, "kernel/asserts"));
+    const coordinate = tripleValue(occurrence.slot0).?;
+    try std.testing.expect(isKeyword(
+        coordinate.slot1,
+        "kernel/op-ordinal",
+    ));
+    const transaction = tripleValue(coordinate.slot0).?;
+    try std.testing.expectEqualStrings(
+        "test-space",
+        stringValue(transaction.slot0).?,
     );
-    defer std.testing.allocator.free(response);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        response,
-        ":code :log-fence-required",
-    ) != null);
-}
-
-test "version and status expose replayed version and authority" {
-    var environ = std.process.Environ.Map.init(std.testing.allocator);
-    defer environ.deinit();
-    var state = try DaemonState.init(std.testing.allocator, &environ, "test-space");
-    defer state.deinit();
-    state.version = 9;
-
-    const version = try handleRequest(
-        std.testing.allocator,
-        std.testing.io,
-        "{:op :version}",
-        "/tmp/facts.log",
-        "/tmp/facts.log.writer-authority.lock",
-        &state,
-        false,
-    );
-    defer std.testing.allocator.free(version);
-    try std.testing.expectEqualStrings("{:version 9}", version);
-
-    const status = try handleRequest(
-        std.testing.allocator,
-        std.testing.io,
-        "{:op :status}",
-        "/tmp/facts.log",
-        "/tmp/facts.log.writer-authority.lock",
-        &state,
-        false,
-    );
-    defer std.testing.allocator.free(status);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        status,
-        ":write-authorized true",
-    ) != null);
+    try std.testing.expect(isKeyword(
+        transaction.slot1,
+        "kernel/tx-sequence",
+    ));
+    try std.testing.expectEqual(@as(i64, 9), integerValue(transaction.slot2).?);
+    try std.testing.expectEqual(@as(i64, 4), integerValue(coordinate.slot2).?);
+    try std.testing.expect(flat_log.tripleEql(
+        event.triple,
+        tripleValue(occurrence.slot2).?,
+    ));
 }

@@ -9,6 +9,7 @@ pub fn build(b: *std.Build) void {
         "daemon.zig",
     );
     _ = standalone.addCopyFile(b.path("src/zig/log.zig"), "log.zig");
+    _ = standalone.addCopyFile(b.path("src/zig/rpc.zig"), "rpc.zig");
     _ = standalone.add("fram_kernel_classify.zig",
         \\pub fn stripAt(s: []const u8) []const u8 {
         \\    return if (s.len != 0 and s[0] == '@') s[1..] else s;
@@ -25,6 +26,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(executable);
+
+    const client = b.addExecutable(.{
+        .name = "fram-rpc-client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zig/client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(client);
 
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
