@@ -223,6 +223,27 @@
 (def cutover-state
   (atom {:protocol cutover-protocol :phase :uninitialized}))
 
+;; Long whole-corpus stages opt into one request-scoped cancellation contract.
+;; The default is inert; cutover synchronization binds the exact request/deadline
+;; check that every nested reload and cache stage must honor.
+(def ^:dynamic *cooperative-work-check* nil)
+
+(defn- cooperative-check! [phase]
+  (when *cooperative-work-check*
+    (*cooperative-work-check* phase)))
+
+(defn- cooperative-sleep! [millis phase]
+  (loop [remaining (long millis)]
+    (cooperative-check! phase)
+    (when (pos? remaining)
+      (let [slice (min 10 remaining)]
+        (try
+          (Thread/sleep (long slice))
+          (catch InterruptedException error
+            (cooperative-check! phase)
+            (throw error)))
+        (recur (- remaining slice))))))
+
 (defn- current-coordinator-role []
   (or @coordinator-phase coordinator-role))
 
@@ -392,6 +413,8 @@
 ;; boot, snapshot all unchanged). Set => the coordinator partitions each written flat
 ;; line to a per-log file by log-for(subject); boot merge-replays both by :tx into
 ;; the ONE unified store, so every warm read/query/subscribe still sees all facts.
+(def single-origin?
+  (= "1" (System/getenv "NORTH_COORD_SINGLE_ORIGIN")))
 (def telemetry-log (atom (System/getenv "FRAM_TELEMETRY_LOG")))
 ;; telemetry allow-list of KIND names — an allow-list, never a deny-list: everything
 ;; NOT here (thread/concern/@agent/@lease/@cmd/@swarm/un-kinded legacy/unknown) is
@@ -944,7 +967,10 @@
 (defn reified->facts [c0]
   (let [st (:store c0)]
     (->> (c/current-facts st)
-         (keep (fn [cid] (when-let [t (fact->triple st cid)] (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))))
+         (keep (fn [cid]
+                 (query-check)
+                 (when-let [t (fact->triple st cid)]
+                   (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))))
          vec)))
 
 ;; ---- schema-as-facts READ view (F4) ---------------------------------------
@@ -970,10 +996,21 @@
 ;; fold the cold path uses, so the facts are byte-identical to the cold projection). Called
 ;; at boot + on external reload, when the log file is quiescent (safe to re-read).
 (defn- schema-view-from-flat [flat]
-  (->> (fram.rt/read-log flat)
-       (filter #(schema-writable (:p %)))
-       vec fold/fold :facts
-       (reduce (fn [m cl] (assoc m (schema-view-key cl) cl)) {})))
+  (query-check)
+  (let [records (fram.rt/read-log flat)
+        _ (query-check)
+        facts (:facts
+               (fold/fold
+                (filterv (fn [record]
+                           (query-check)
+                           (schema-writable (:p record)))
+                         records)))]
+    (query-check)
+    (reduce (fn [m cl]
+              (query-check)
+              (assoc m (schema-view-key cl) cl))
+            {}
+            facts)))
 
 (defn- seed-schema-view! [flat]
   (reset! schema-view (schema-view-from-flat flat)))
@@ -983,7 +1020,11 @@
 ;; reconcile/materialization view (that stays domain-pure, reified->facts). Every schema
 ;; fact here is hidden from the store projection, so there is no double-count.
 (defn- client-view-facts-from [c0 schema-root]
-  (into (reified->facts c0) (vals schema-root)))
+  (reduce (fn [facts cl]
+            (query-check)
+            (conj facts cl))
+          (reified->facts c0)
+          (vals schema-root)))
 
 (defn client-view-facts [c0]
   (client-view-facts-from c0 @schema-view))
@@ -1110,6 +1151,7 @@
                          :rows (count acc) :max-rows max-rows})))
       (conj acc row))))
 (defn- query-check []
+  (cooperative-check! :cache-work)
   (let [control d/*query-control*]
     (when control
       (let [steps (.incrementAndGet (:steps control))
@@ -1127,6 +1169,14 @@
                            :timeout-ms (if (= :request-timeout code)
                                          (:request-timeout-ms control)
                                          (:timeout-ms control))})))))))
+
+(defn- checked-set [values]
+  (persistent!
+   (reduce (fn [acc value]
+             (query-check)
+             (conj! acc value))
+           (transient #{})
+           values)))
 (defn- eval-body-idx [idx body]
   (reduce (fn [substs litt]
             (reduce (fn [acc s]
@@ -1162,7 +1212,7 @@
   (let [store-root @(:store co-root)
         version (current-seq co-root)
         facts (client-view-facts-from co-root schema-root)]
-    {:facts (set facts) :idx (idx-build facts) :index nil :version version
+    {:facts (checked-set facts) :idx (idx-build facts) :index nil :version version
      :store-root store-root :schema-root schema-root}))
 
 (defn warm! []
@@ -1414,6 +1464,40 @@
                 :phase phase
                 :timeout-ms (:request-timeout-ms control)})))))
 
+(defn- cutover-request-check! [control deadline-ns phase]
+  (request-check! control phase)
+  (when-let [reason (some-> control :cancelled deref)]
+    (if (= :request-timeout reason)
+      (do
+        (request-timeout-wins! control)
+        (request-check! control phase))
+      (do
+        (swap! control-stops update reason (fnil inc 0))
+        (throw
+         (ex-info
+          "cutover request cancelled before preparation completed"
+          {:type :cutover-request-cancelled
+           :code (case reason
+                   :client-disconnected :cutover-client-disconnected
+                   :unexpected-client-input :cutover-unexpected-client-input
+                   :cutover-request-cancelled)
+           :reason reason
+           :phase phase})))))
+  (when (>= (System/nanoTime) deadline-ns)
+    (throw
+     (ex-info
+      "cutover source could not converge before the synchronization bound"
+      {:code :cutover-sync-timeout
+       :timeout-ms cutover-sync-timeout-ms
+       :phase phase}))))
+
+(defn- cutover-publication-check! [phase]
+  (cutover-request-check!
+   *request-control*
+   (or (some-> *request-control* :request-deadline-ns)
+       Long/MAX_VALUE)
+   phase))
+
 (defn- request-timeout-ex? [t]
   (= :fram-request-timeout (:type (ex-data t))))
 
@@ -1439,7 +1523,9 @@
             :max-response-bytes (:max-response-bytes plan)))))
 
 (defn- cancel-query! [control reason]
-  (compare-and-set! (:cancelled control) nil reason))
+  (locking (:cancelled control)
+    (when-not (contains? #{:durable :complete} @(:outcome control))
+      (compare-and-set! (:cancelled control) nil reason))))
 
 ;; Capture ONLY immutable roots while reload/write exclusion is held.  A hot cache
 ;; is already immutable and can be reused directly.  A miss is merely described
@@ -1506,7 +1592,7 @@
                  (:store-root roots) (:schema-root roots))
           t1 (System/nanoTime)
           a1 (thread-allocated-bytes)
-          facts-set (set facts)
+          facts-set (checked-set facts)
           t2 (System/nanoTime)
           a2 (thread-allocated-bytes)
           idx (idx-build facts)
@@ -6604,7 +6690,7 @@
       {:ok true :module module :path (first paths) :version (current-seq @co)})))
 
 (defn- control-request? [req]
-  (contains? #{:status :validate} (:op req)))
+  (contains? #{:status :validate :cutover-prepare} (:op req)))
 
 (defn- connection-admission-status []
   (let [^ThreadPoolExecutor executor @connection-executor]
@@ -8226,7 +8312,11 @@
 ;; strips the leading @ from a `cardinality` fact's subject to recover the pred name.
 ;; (pred-name is defined up at the F3 schema-write gate — the write path needs it too.)
 (defn- log-card-map [lines]
-  (fold/card-map (filterv #(and (:l %) (:p %) (:r %) (int? (:tx %))) (vec lines))))
+  (fold/card-map
+   (filterv (fn [line]
+              (query-check)
+              (and (:l line) (:p line) (:r line) (int? (:tx line))))
+            (vec lines))))
 ;; predicates the given lines LIVE-declare a cardinality for (subjects of `cardinality`
 ;; asserts that survive as a live declaration in cmap) — the ones to also materialize as
 ;; a store cardinality fact if they carry no domain facts, so s/cardinality (the write-
@@ -8245,9 +8335,14 @@
 ;; stable sort makes the merge deterministic. telemetry-log nil => returns the coordination
 ;; log verbatim (byte-identical to pre-split boot).
 (defn- read-logs-merged [flat]
-  (let [coord (fram.rt/read-log flat)]
+  (query-check)
+  (let [coord (fram.rt/read-log flat)
+        _ (query-check)]
     (if-let [tlog @telemetry-log]
-      (vec (sort-by #(or (:tx %) 0) (into coord (fram.rt/read-log tlog))))
+      (let [telemetry (fram.rt/read-log tlog)
+            _ (query-check)]
+        (vec (sort-by #(do (query-check) (or (:tx %) 0))
+                      (into coord telemetry))))
       coord)))
 
 (defn- source-line-key [single-preds line]
@@ -8261,6 +8356,7 @@
   [latest single-preds lines]
   (reduce
    (fn [m line]
+     (query-check)
      (if (and (:l line) (:p line) (:r line) (int? (:tx line))
               (not (schema-preds (:p line))))
        (let [k (source-line-key single-preds line)
@@ -8312,6 +8408,7 @@
         legacy-index (identity-keyed-index reg legacy-config)]
     (into {}
           (map (fn [p]
+                 (query-check)
                  (let [value-kind
                        (effective-value-kind-r
                         reg explicit-kind fallback-kind nil legacy-index p)]
@@ -8334,12 +8431,14 @@
              (mapv #(if (= tx (:id %)) (assoc % :seq seq) %) entries)))))
 
 (defn migrate-flat->co [flat]
+  (query-check)
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
         ;; without fsync, so a copy/read caught mid-write can yield an assertion
         ;; missing a field — and fold itself calls single? on :p, so the incomplete
         ;; line must be dropped pre-fold. A torn line is an incomplete write that
         ;; must NOT apply (the writer retries).
         raw (read-logs-merged flat)
+        _ (query-check)
         input-plan (cc/migrate-input-plan (vec raw))
         ;; max :tx over ALL parsed lines — same set fold/max-tx (doctor's log-v)
         ;; counts, INCLUDING a torn tail (EDN-valid but missing :r). Seeding over
@@ -8351,6 +8450,7 @@
         ;; (CLI-parity map). Authoritative over ck/single? at every classification below.
         cmap (log-card-map asserts)
         facts (:facts (fold/fold (vec asserts)))
+        _ (query-check)
         metadata-facts (filterv #(schema-writable (:p %)) facts)
         by-pred (group-by :p facts)
         schema-plan (cc/migrate-schema-plan
@@ -8370,15 +8470,18 @@
     ;; legacy implicit predicate object value!("x"); predicate_name/alias then
     ;; bridge every public spelling to that same object.
     (doseq [cl metadata-facts]
+      (query-check)
       (let [pid (c/value! st (pred-name (:l cl)))]
         (s/assert! st pid (:p cl) (:r cl) tx)))
     (doseq [p (:domain schema-plan)]   ; skip reserved engine preds (defensive)
+      (query-check)
       (let [{:keys [cardinality value-kind]} (get predicate-classifications p)]
         (s/def-predicate! st p cardinality value-kind tx)))
     ;; cardinality-only preds: declared in the log via `@<pred> cardinality X` but with
     ;; NO domain facts (absent from by-pred). Materialize the fact so s/cardinality (the
     ;; write-path authority) matches the CLI map; no value facts ⇒ value_kind "literal".
     (doseq [p (:card-only schema-plan)]
+      (query-check)
       (let [{:keys [cardinality value-kind]} (get predicate-classifications p)]
         (s/def-predicate! st p cardinality value-kind tx)))
     ;; complete the bootstrap SEED (move-B keystone): kernel single-valued preds NOT
@@ -8396,12 +8499,14 @@
           (cc/migrate-kernel-seed-plan
            (vec ck/single-valued) schema-preds cmap current-single)]
       (doseq [p kernel-seeds]
+        (query-check)
         (let [pid (s/register-predicate! st p tx)]
           (s/assert! st pid "cardinality" "single" tx))))
     (let [memo (atom {})
           ent! (fn [sid] (or (get @memo sid)
                              (let [id (c/entity! st)] (swap! memo assoc sid id) (s/name! st id sid tx) id)))]
       (doseq [cl facts :when (not (schema-preds (:p cl)))]
+        (query-check)
         (let [su (ent! (:l cl)) p (:p cl) r (:r cl)]
           (if (:link? (get predicate-classifications p))
             (s/link! st su p (ent! r) tx)
@@ -8553,7 +8658,12 @@
     (catch Exception _ nil)))
 
 (defn- skip-fully! [^java.io.InputStream is ^long n]
-  (loop [left n] (when (pos? left) (let [s (.skip is left)] (if (pos? s) (recur (- left s)) nil)))))
+  (loop [left n]
+    (query-check)
+    (when (pos? left)
+      (let [s (.skip is left)]
+        (when (pos? s)
+          (recur (- left s)))))))
 
 (def ^:private prefix-fence-window-bytes 65536)
 
@@ -8573,6 +8683,7 @@
     (with-open [in (java.io.FileInputStream. (str path))]
       (skip-fully! in (long start))
       (loop [remaining (long n)]
+        (query-check)
         (when (pos? remaining)
           (let [want (int (min remaining (long (alength buf))))
                 got (.read in buf 0 want)]
@@ -8627,19 +8738,26 @@
 ;;   * parses -> unchanged :tx filter (an EDN-valid-incomplete torn tail still counts
 ;;     toward :max-tx but is not applied).
 (defn- read-log-tail* [path from-byte from-tx]
+  (query-check)
   (let [f (java.io.File. (str path))]
     (if-not (and (.exists f) (pos? (.length f)))
       {:lines [] :max-tx (long from-tx)}
       (let [len (.length f) start (long (max 0 (min (long (or from-byte 0)) len)))]
         (with-open [is (java.io.FileInputStream. f)]
           (skip-fully! is start)
-          (let [bs (.readAllBytes is) blen (alength bs)]
+          (let [bs (.readAllBytes is)
+                _ (query-check)
+                blen (alength bs)]
             (loop [i 0 first? true acc (transient []) mx (long from-tx)]
+              (query-check)
               (if (>= i blen)
                 {:lines (persistent! acc) :max-tx mx}
-                (let [nl (loop [j i] (cond (>= j blen) -1
-                                           (== (aget bs j) 10) j
-                                           :else (recur (inc j))))
+                (let [nl (loop [j i]
+                           (when (zero? (bit-and j 4095))
+                             (query-check))
+                           (cond (>= j blen) -1
+                                 (== (aget bs j) 10) j
+                                 :else (recur (inc j))))
                       terminated? (>= nl 0)
                       end (if terminated? nl blen)
                       seg (String. bs i (- end i) java.nio.charset.StandardCharsets/UTF_8)
@@ -8687,11 +8805,13 @@
 ;; Mutates (:store co) in place — callers that need atomicity vs lock-free readers
 ;; clone the store first (see maybe-reload!). Returns co.
 (defn- apply-tail! [co lines]
+  (query-check)
   (let [st (:store co)
         tail-plan (cc/tail-input-plan (vec lines) schema-preds)
         metadata (predicate-metadata-facts)
         reg (ck/predicate-registry metadata)
         valid (mapv (fn [line]
+                      (query-check)
                       (assoc line :p (ck/predicate-name reg (:p line))))
                     (:valid tail-plan))]
     (when (seq valid)
@@ -8748,6 +8868,7 @@
                                  (swap! memo assoc sid id) id)))]
         ;; Execute the pure predicate plan; store mutation remains host-side.
         (doseq [item predicate-plan]
+          (query-check)
           (case (:action item)
             :define
             (s/def-predicate! st (:pred item) (:cardinality item)
@@ -8757,6 +8878,7 @@
                        "cardinality" (:cardinality item) tx)
             nil))
         (doseq [[_ a] latest]
+          (query-check)
           (let [p (:p a) r (:r a) single? (ck/single-eff? ecmap p)
                 su (sub! (:l a)) pid (s/resolve-predicate st p)
                 live (c/by-lp st su pid)       ; already live-only
@@ -8776,7 +8898,9 @@
                     victims (if (= :all (:selection decision))
                               live
                               (filter #(= rid (:r (c/fact-of st %))) live))]
-                (doseq [old victims] (c/fact! st old sup old tx)))
+                (doseq [old victims]
+                  (query-check)
+                  (c/fact! st old sup old tx)))
               :assert
               (if link? (s/link! st su p (sub! r) tx) (s/assert! st su p r tx))
               nil)))
@@ -9038,8 +9162,11 @@
 (def ^:private reload-max-attempts 8)
 
 (defn- capture-reload-roots! [force?]
+  (query-check)
   (locking dlock
+    (query-check)
     (locking group-io-lock
+      (query-check)
       (when (and @flat-canonical? @flat-log)
         (let [path @flat-log
               telemetry-path @telemetry-log
@@ -9093,6 +9220,7 @@
    must use the whole-corpus oracle rather than applying a partial tail."
   [path known-stamp target-stamp from-byte target-bytes from-tx
    known-prefix-fence observed-prefix-fence]
+  (query-check)
   (if (and (= known-stamp target-stamp)
            (= known-prefix-fence observed-prefix-fence))
     {:lines [] :max-tx -1 :min-tx nil :append-safe? true}
@@ -9104,7 +9232,10 @@
           tail (when append-safe?
                  (read-log-tail* path from-byte -1))
           lines (vec (or (:lines tail) []))
-          txs (keep #(when (int? (:tx %)) (long (:tx %))) lines)]
+          txs (keep (fn [line]
+                      (query-check)
+                      (when (int? (:tx line)) (long (:tx line))))
+                    lines)]
       {:lines lines
        :max-tx (long (or (:max-tx tail)
                          (when (seq txs) (reduce max txs))
@@ -9116,6 +9247,7 @@
   "Read the coordination and telemetry deltas from independent byte cursors,
    then restore their shared logical order by :tx."
   [roots]
+  (query-check)
   (let [from-tx (long (:from-tx roots))
         coordination
         (reload-log-tail (:path roots)
@@ -9135,17 +9267,24 @@
         halves (cond-> [coordination] telemetry (conj telemetry))]
     (let [lines (->> halves
                      (mapcat :lines)
-                     (sort-by #(long (or (:tx %) 0)))
+                     (sort-by #(do (query-check)
+                                   (long (or (:tx %) 0))))
                      vec)
-          txs (keep #(when (int? (:tx %)) (long (:tx %))) lines)]
+          txs (keep (fn [line]
+                      (query-check)
+                      (when (int? (:tx line)) (long (:tx line))))
+                    lines)]
       {:lines lines
        :max-tx (reduce max -1 (map :max-tx halves))
        :min-tx (when (seq txs) (reduce min txs))
        :append-safe? (every? :append-safe? halves)})))
 
 (defn- whole-corpus-max-tx [roots]
+  (query-check)
   (reduce max -1
-          (map (fn [path] (:max-tx (read-log-tail* path 0 -1)))
+          (map (fn [path]
+                 (query-check)
+                 (:max-tx (read-log-tail* path 0 -1)))
                (cond-> [(:path roots)]
                  (:telemetry-path roots) (conj (:telemetry-path roots))))))
 
@@ -9154,6 +9293,7 @@
    (subject,predicate) groups named in the tail. Falls back to one whole cache
    build unless every pre-state identity is proven current."
   [roots candidate-co schema-root through lines]
+  (query-check)
   (let [prior (:cache-root roots)
         reusable?
         (and (:facts prior) (:idx prior)
@@ -9165,12 +9305,17 @@
       (locking query-cache-build-lock
         (build-warm-cache candidate-co schema-root))
       (let [groups (->> lines
-                        (filter #(and (:l %) (:p %) (:r %)))
-                        (map (juxt :l :p))
+                        (filter (fn [line]
+                                  (query-check)
+                                  (and (:l line) (:p line) (:r line))))
+                        (map (fn [line]
+                               (query-check)
+                               [(:l line) (:p line)]))
                         distinct)
             [idx' facts']
             (reduce
              (fn [[ix facts] [te p]]
+               (query-check)
                (let [old-group (get-in ix [:sp [te p]] #{})
                      new-group (lp-live-triples candidate-co te p)
                      to-del (clojure.set/difference old-group new-group)
@@ -9198,6 +9343,7 @@
 (defn- build-reload-candidate [roots]
   (swap! active-reloads inc)
   (try
+    (query-check)
     (let [path (:path roots)
           telemetry-path (:telemetry-path roots)
           cursor-ready?
@@ -9207,7 +9353,11 @@
                    (and (integer? (:from-telemetry-byte roots))
                         (integer? (:target-telemetry-bytes roots)))))
           tail (split-reload-tail roots)
-          schema-tail? (some #(schema-writable (:p %)) (:lines tail))
+          _ (query-check)
+          schema-tail? (some (fn [line]
+                               (query-check)
+                               (schema-writable (:p line)))
+                             (:lines tail))
           append-tail? (and (:append-safe? tail)
                             (or (seq (:lines tail))
                                 (not (neg? (long (:max-tx tail))))))
@@ -9215,7 +9365,8 @@
           st-for-cardinality (atom (:store-root roots))
           single-preds
           (into #{} (filter #(= "single"
-                                (s/cardinality st-for-cardinality %)))
+                                (do (query-check)
+                                    (s/cardinality st-for-cardinality %))))
                 (keep :p (:lines tail)))
           reconciled-source
           (when source-index?
@@ -9225,6 +9376,7 @@
           (if source-index?
             (filterv
              (fn [line]
+               (query-check)
                (= line
                   (get reconciled-source
                        (source-line-key single-preds line))))
@@ -9235,7 +9387,8 @@
                (not schema-tail?)
                (or source-index?
                    (every? #(> (long (:tx %))
-                               (long (:co-version roots)))
+                               (do (query-check)
+                                   (long (:co-version roots))))
                            (:lines tail))))
           candidate
           (cond
@@ -9263,6 +9416,7 @@
                          :source-latest
                          (when source-index? (atom reconciled-source))}]
               (apply-tail! clone accepted-lines)
+              (query-check)
               ;; An EDN-valid incomplete row is excluded from :lines but retained
               ;; in :max-tx. Match the cold fold's version without applying it.
               (swap! (:store clone) assoc :next-seq through)
@@ -9298,6 +9452,7 @@
                          (build-warm-cache
                           (:co candidate) (:schema-root candidate)))))
               candidate)]
+      (query-check)
       ;; External writers do not participate in group-io-lock.  A final stamp check
       ;; plus prefix-fence check is therefore mandatory after every byte of
       ;; candidate construction.
@@ -9317,8 +9472,11 @@
       (swap! active-reloads dec))))
 
 (defn- install-reload-candidate! [roots candidate]
+  (query-check)
   (locking dlock
+    (query-check)
     (locking group-io-lock
+      (query-check)
       (let [same-target? (and (= (:path roots) @flat-log)
                               (= (:target-stamp roots) (stamp (:path roots)))
                               (= (:target-prefix-fence roots)
@@ -9375,6 +9533,7 @@
 
           :installed
           (do
+            (query-check)
             (reset! co (:co candidate))
             (reset! built-through (:through candidate))
             (reset! flat-mtime (:target-stamp roots))
@@ -9402,7 +9561,9 @@
    ;; via prepare-request-reload!) forces the lazy heap fold FIRST — reload cloning,
    ;; tail apply, and whole-log fallback all assume a materialized heap Store. Deferred
    ;; ops (:status/:version/lease) never reach here, so they stay mmap-cold.
+   (query-check)
    (ensure-materialized!)
+   (query-check)
    ;; A fact mutation arriving after another request has already
    ;; observed and started rebuilding an external tail must not duplicate that
    ;; O(corpus) work before it can acquire a lease or commit.  It may safely mutate
@@ -9413,8 +9574,11 @@
           (cc/reload-entry-decision nonblocking-if-active? @active-reloads))
      :in-progress
      (loop [attempt 0 force? false]
+       (query-check)
        (if-let [roots (capture-reload-roots! force?)]
-         (let [candidate (build-reload-candidate roots)
+         (let [_ (query-check)
+               candidate (build-reload-candidate roots)
+               _ (query-check)
                result (install-reload-candidate! roots candidate)]
            (case (cc/reload-result-decision
                   result attempt reload-max-attempts)
@@ -9607,69 +9771,90 @@
   [cutover-id prewarm?]
   (let [started-ns (System/nanoTime)
         deadline-ns (+ started-ns
-                       (* (long cutover-sync-timeout-ms) 1000000))]
-    (loop [attempt 0 delayed? false last-proof nil]
-      (when (or (>= attempt reload-max-attempts)
-                (>= (System/nanoTime) deadline-ns))
-        (throw
-         (ex-info
-          "cutover source could not converge before the synchronization bound"
-          {:code :cutover-sync-timeout
-           :timeout-ms cutover-sync-timeout-ms
-           :attempts attempt
-           :last-proof last-proof})))
-      (let [_ (cutover-stage! :cutover-materialize-failed
-                              :materialize
-                              ensure-materialized!)
-            reload-result (cutover-stage! :cutover-reload-failed
-                                          :reload
-                                          maybe-reload!)
-            _ (when (= :refused reload-result)
-                (throw
-                 (ex-info
-                  "cutover source reload refused a regressed log"
-                  {:code :cutover-reload-refused})))
-            _ (when (= :in-progress reload-result)
-                (throw
-                 (ex-info
-                  "cutover source reload did not join the active reload"
-                  {:code :cutover-reload-in-progress})))
-            prewarm (when prewarm?
-                      (cutover-stage!
-                       :cutover-prewarm-failed
-                       :prewarm
-                       (fn []
-                         (when (and (not delayed?)
-                                    (pos? cutover-prepare-cache-delay-ms))
-                           (Thread/sleep (long cutover-prepare-cache-delay-ms)))
-                         (let [roots (locking dlock (capture-query-roots!))]
-                           {:roots roots
-                            :built (query-cache-for-roots roots)}))))
-            roots (:roots prewarm)
-            built (:built prewarm)
-            proof (cutover-stage! :cutover-marker-failed
-                                  :marker
-                                  #(capture-installed-cutover-marker cutover-id))
-            cache-current?
-            (or
-             (not prewarm?)
-             (locking dlock
-               (let [current-roots (capture-query-roots!)]
-                 (and
-                  (query-cache-matches-roots? built current-roots)
-                  (query-cache-matches-roots? @cache current-roots)))))]
-        (if (and (:installed? proof) cache-current?)
-          {:marker (:marker proof)
-           :reload reload-result
-           :attempts (inc attempt)
-           :prewarmed prewarm?
-           :elapsed-ms
-           (quot (- (System/nanoTime) started-ns) 1000000)}
-          (recur (inc attempt)
-                 (or delayed?
-                     (and prewarm?
-                          (pos? cutover-prepare-cache-delay-ms)))
-                 proof))))))
+                       (* (long cutover-sync-timeout-ms) 1000000))
+        check! (fn [phase]
+                 (cutover-request-check!
+                  *request-control* deadline-ns phase))]
+    (binding [*cooperative-work-check* check!]
+      (loop [attempt 0 delayed? false last-proof nil]
+        (cooperative-check! :cutover-sync-attempt)
+        (when (>= attempt reload-max-attempts)
+          (throw
+           (ex-info
+            "cutover source could not converge before the synchronization bound"
+            {:code :cutover-sync-timeout
+             :timeout-ms cutover-sync-timeout-ms
+             :attempts attempt
+             :last-proof last-proof})))
+        (let [_ (cutover-stage! :cutover-materialize-failed
+                                :materialize
+                                ensure-materialized!)
+              _ (cooperative-check! :cutover-post-materialize)
+              reload-result (cutover-stage! :cutover-reload-failed
+                                            :reload
+                                            maybe-reload!)
+              _ (cooperative-check! :cutover-post-reload)
+              _ (when (= :refused reload-result)
+                  (throw
+                   (ex-info
+                    "cutover source reload refused a regressed log"
+                    {:code :cutover-reload-refused})))
+              _ (when (= :in-progress reload-result)
+                  (throw
+                   (ex-info
+                    "cutover source reload did not join the active reload"
+                    {:code :cutover-reload-in-progress})))
+              prewarm (when prewarm?
+                        (cutover-stage!
+                         :cutover-prewarm-failed
+                         :prewarm
+                         (fn []
+                           (when (and (not delayed?)
+                                      (pos? cutover-prepare-cache-delay-ms))
+                             (cooperative-sleep!
+                              cutover-prepare-cache-delay-ms
+                              :cutover-prewarm-delay))
+                           (cooperative-check! :cutover-cache-capture)
+                           (let [roots (locking dlock
+                                         (cooperative-check!
+                                          :cutover-cache-capture)
+                                         (capture-query-roots!))]
+                             {:roots roots
+                              :built (query-cache-for-roots roots)}))))
+              _ (cooperative-check! :cutover-post-prewarm)
+              roots (:roots prewarm)
+              built (:built prewarm)
+              proof (cutover-stage! :cutover-marker-failed
+                                    :marker
+                                    #(do
+                                       (cooperative-check!
+                                        :cutover-marker-capture)
+                                       (capture-installed-cutover-marker
+                                        cutover-id)))
+              _ (cooperative-check! :cutover-post-marker)
+              cache-current?
+              (or
+               (not prewarm?)
+               (locking dlock
+                 (cooperative-check! :cutover-cache-proof)
+                 (let [current-roots (capture-query-roots!)]
+                   (and
+                    (query-cache-matches-roots? built current-roots)
+                    (query-cache-matches-roots? @cache current-roots)))))]
+          (if (and (:installed? proof) cache-current?)
+            (do
+              (cooperative-check! :cutover-sync-complete)
+              {:marker (:marker proof)
+               :reload reload-result
+               :attempts (inc attempt)
+               :prewarmed prewarm?
+               :elapsed-ms
+               (quot (- (System/nanoTime) started-ns) 1000000)})
+            (recur (inc attempt)
+                   (or delayed?
+                       (and prewarm?
+                            (pos? cutover-prepare-cache-delay-ms)))
+                   proof)))))))
 
 (defn- comparable-cutover-marker [marker]
   (select-keys marker [:format :cutover-id :version :logs]))
@@ -9766,6 +9951,18 @@
         (assoc (cutover-base-response)
                :drain (assoc drain :complete (cutover-drained? drain))))))
 
+(defn- publish-cutover-prepare! [response state]
+  (if-let [control *request-control*]
+    (locking (:cancelled control)
+      (cutover-publication-check! :cutover-prepare-publication)
+      (request-admit-durable! control)
+      (cutover-publication-check! :cutover-prepare-publication)
+      (reset! cutover-state state)
+      response)
+    (do
+      (reset! cutover-state state)
+      response)))
+
 (defn cutover-prepare-response [req]
   (locking cutover-control-lock
     (or
@@ -9784,39 +9981,51 @@
         :cutover-invalid-phase
         "cutover prepare requires a standby or retired generation"))
      (let [cutover-id (:cutover-id req)
-           role (current-coordinator-role)]
-       (try
-         (let [prepared (synchronize-cutover-source! cutover-id true)]
-           (when (or (write-authorized?)
-                     (not= role (current-coordinator-role)))
-             (throw
-              (ex-info
-               "cutover prepare changed writer authority or coordinator role"
-               {:code :cutover-prepare-authority-raced})))
-           (reset! cutover-state
-                   {:protocol cutover-protocol
-                    :phase :prepared
+           role (current-coordinator-role)
+           prior @cutover-state]
+       (if (and (= :prepared (:phase prior))
+                (= cutover-id (:cutover-id prior))
+                (map? (:response prior)))
+         (do
+           (cutover-publication-check! :cutover-prepare-replay)
+           (:response prior))
+         (try
+           (let [prepared (synchronize-cutover-source! cutover-id true)]
+             (cutover-publication-check! :cutover-prepare-publication)
+             (when (or (write-authorized?)
+                       (not= role (current-coordinator-role)))
+               (throw
+                (ex-info
+                 "cutover prepare changed writer authority or coordinator role"
+                 {:code :cutover-prepare-authority-raced})))
+             (cutover-publication-check! :cutover-prepare-publication)
+             (let [response
+                   {:ok true
+                    :protocol cutover-protocol
+                    :phase role
+                    :prepared true
                     :cutover-id cutover-id
-                    :role role
+                    :instance @authority-instance
+                    :version (get-in prepared [:marker :version])
                     :marker (:marker prepared)
-                    :completed-at-ms (System/currentTimeMillis)})
-           {:ok true
-            :protocol cutover-protocol
-            :phase role
-            :prepared true
-            :cutover-id cutover-id
-            :instance @authority-instance
-            :version (get-in prepared [:marker :version])
-            :marker (:marker prepared)
-            :sync (dissoc prepared :marker)
-            :writer-authority (writer-authority-status)})
-         (catch Throwable t
-           (cutover-rejection
-            (or (:code (ex-data t))
-                :cutover-prepare-failed)
-            (throwable-summary t)
-            (select-keys (ex-data t)
-                         [:timeout-ms :attempts :stage]))))))))
+                    :sync (dissoc prepared :marker)
+                    :writer-authority (writer-authority-status)}]
+               (publish-cutover-prepare!
+                response
+                {:protocol cutover-protocol
+                 :phase :prepared
+                 :cutover-id cutover-id
+                 :role role
+                 :marker (:marker prepared)
+                 :response response
+                 :completed-at-ms (System/currentTimeMillis)})))
+           (catch Throwable t
+             (cutover-rejection
+              (or (:code (ex-data t))
+                  :cutover-prepare-failed)
+              (throwable-summary t)
+              (select-keys (ex-data t)
+                           [:timeout-ms :attempts :stage :reason])))))))))
 
 (defn cutover-demote-response [req]
   (locking cutover-control-lock
@@ -10234,11 +10443,14 @@
 ;; materialized (cold-image nil) or flag-off. Under dlock: readers/writers capture
 ;; roots under the same lock, so the atomic :store swap is a clean generation flip.
 (defn ensure-materialized! []
+  (query-check)
   (when @cold-image
     (locking dlock
+      (query-check)
       (when-let [img @cold-image]
         (let [st (c/new-store)]
           (c/load-store! st (fri/cold->dump img))
+          (query-check)
           (reset! co (assoc @co :store st))
           (seed-name-seq! st)
           (reset! cache {:index nil :version -1})
@@ -10912,15 +11124,33 @@
 (defn- activate-split! [coord]
   (let [coord-file (.getAbsoluteFile (java.io.File. (str coord)))
         expected   (canonical-path (java.io.File. (.getParentFile coord-file) "telemetry.log"))]
-    (if-let [configured @telemetry-log]
-      (when-not (= expected (canonical-path configured))
-        (throw (ex-info "FRAM_TELEMETRY_LOG must be telemetry.log beside coordination.log"
-                        {:coordination (canonical-path coord-file)
-                         :telemetry (canonical-path configured)
-                         :expected expected})))
-      (reset! telemetry-log expected))))
+    (if single-origin?
+      (if-let [configured @telemetry-log]
+        (throw
+         (ex-info
+          "FRAM_TELEMETRY_LOG must be unset when NORTH_COORD_SINGLE_ORIGIN=1"
+          {:code :single-origin-peer-config
+           :coordination (canonical-path coord-file)
+           :telemetry (canonical-path configured)}))
+        (reset! telemetry-log nil))
+      (if-let [configured @telemetry-log]
+        (when-not (= expected (canonical-path configured))
+          (throw (ex-info "FRAM_TELEMETRY_LOG must be telemetry.log beside coordination.log"
+                          {:coordination (canonical-path coord-file)
+                           :telemetry (canonical-path configured)
+                           :expected expected})))
+        (reset! telemetry-log expected)))))
+
+(defn- validate-single-origin-config! []
+  (when (and single-origin? @telemetry-log)
+    (throw
+     (ex-info
+      "FRAM_TELEMETRY_LOG must be unset when NORTH_COORD_SINGLE_ORIGIN=1"
+      {:code :single-origin-peer-config
+       :telemetry (canonical-path @telemetry-log)}))))
 
 (defn- reaim-split [path]
+  (validate-single-origin-config!)
   (let [f  (.getAbsoluteFile (java.io.File. (str path)))
         cl (java.io.File. (.getParentFile f) "coordination.log")]
     (cond
