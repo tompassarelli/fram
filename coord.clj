@@ -33,6 +33,7 @@
 (ns coord
   (:require [fram.store :as c] [fram.types :as ft]
             [fram.schema :as s] [fram.kernel :as ck]
+            [fram.fold :as fold]
             [fram.rt :as rt]     ; vGUARD writer admission (shared rewrite flock)
             [fram.world :as w]   ; the PURE world kernel (graph-upstream); durability lives below
             [coord-read :as cr]
@@ -1077,6 +1078,637 @@
 (defn live-triples [st]
   (set (for [cid (c/current-facts st)]
          (let [cl (c/fact-of st cid)] [(:l cl) (:p cl) (:r cl)]))))
+
+;; ==========================================================================
+;; ONE-SHOT FLAT-LOG -> RECURSIVE-TRIPLE LOG MIGRATION
+;; ==========================================================================
+;; "Turtles all the way down" is the architecture prior. At this boundary it
+;; requires tx/ordinal/action frame fields to remain physical: semantic identity,
+;; history, and metadata re-enter the model as ordinary Triple(slot0/1/2) values,
+;; never as a second primitive or a public frame-id type.
+;;
+;; This is deliberately a sealed converter, not a legacy runtime reader. It
+;; accepts one frozen flat-log generation, writes FRAMLOG v1 once, and emits a
+;; manifest binding the input identity and hashes. A runtime handed the old bytes
+;; must return :migration-required rather than silently dual-accepting them.
+
+(def ^:private triple-log-magic
+  (.getBytes "FRAMLOG\u0000" java.nio.charset.StandardCharsets/UTF_8))
+(def ^:private legacy-fri-magic
+  (.getBytes "FRAMFRI1" java.nio.charset.StandardCharsets/UTF_8))
+(def ^:private triple-log-version 1)
+(def ^:private triple-log-flags 0)
+(def ^:private triple-log-manifest-version
+  "fram-triple-log-migration-manifest/v1")
+
+;; Private writer staging only. Core owns Term/Triple; this map merely keeps the
+;; encoder boundary named by slot while the migration lane is rebased onto it.
+(defn- triple-term [slot0 slot1 slot2]
+  {::term :triple :slot0 slot0 :slot1 slot1 :slot2 slot2})
+
+(defn- triple-term? [x]
+  (and (map? x) (= :triple (::term x))
+       (contains? x :slot0) (contains? x :slot1) (contains? x :slot2)))
+
+(defn- tx-coordinate [space-id tx-seq]
+  (triple-term space-id :kernel/tx-sequence tx-seq))
+
+(defn- occurrence-coordinate [space-id tx-seq ordinal]
+  (triple-term (tx-coordinate space-id tx-seq) :kernel/op-ordinal ordinal))
+
+(defn- migration-fail! [code message data]
+  (throw (ex-info message (assoc data :fram/code code))))
+
+(defn- require-u32! [n label]
+  (when-not (and (integer? n) (<= 0 n 4294967295))
+    (migration-fail! :migration-invalid-integer
+                     (str label " is outside unsigned 32-bit range")
+                     {:label label :value n}))
+  (long n))
+
+(defn- require-i64! [n label]
+  (when-not (and (integer? n)
+                 (<= Long/MIN_VALUE n Long/MAX_VALUE))
+    (migration-fail! :migration-invalid-integer
+                     (str label " is outside signed 64-bit range")
+                     {:label label :value n}))
+  (long n))
+
+(defn- write-u8! [^java.io.OutputStream out n]
+  (.write out (int (bit-and 255 (long n)))))
+
+(defn- write-u16-le! [^java.io.OutputStream out n]
+  (let [v (long n)]
+    (dotimes [i 2]
+      (write-u8! out (unsigned-bit-shift-right v (* i 8))))))
+
+(defn- write-u32-le! [^java.io.OutputStream out n]
+  (let [v (require-u32! n "u32")]
+    (dotimes [i 4]
+      (write-u8! out (unsigned-bit-shift-right v (* i 8))))))
+
+(defn- write-i64-le! [^java.io.OutputStream out n]
+  (let [v (require-i64! n "i64")]
+    (dotimes [i 8]
+      (write-u8! out (unsigned-bit-shift-right v (* i 8))))))
+
+(defn- strict-utf8-bytes [s label]
+  (when-not (string? s)
+    (migration-fail! :migration-invalid-text
+                     (str label " must be a string")
+                     {:label label :value s}))
+  (try
+    (let [decoder-probe (doto (.newEncoder java.nio.charset.StandardCharsets/UTF_8)
+                          (.onMalformedInput java.nio.charset.CodingErrorAction/REPORT)
+                          (.onUnmappableCharacter java.nio.charset.CodingErrorAction/REPORT))
+          buf (.encode decoder-probe (java.nio.CharBuffer/wrap ^String s))
+          bytes (byte-array (.remaining buf))]
+      (.get buf bytes)
+      bytes)
+    (catch java.nio.charset.CharacterCodingException e
+      (migration-fail! :migration-invalid-utf8
+                       (str label " is not valid UTF-8 text")
+                       {:label label :cause (.getMessage e)}))))
+
+(defn- write-sized-text! [^java.io.OutputStream out s label]
+  (let [bytes (strict-utf8-bytes s label)]
+    (write-u32-le! out (alength ^bytes bytes))
+    (.write out ^bytes bytes)))
+
+(declare write-term!)
+
+(defn- write-triple! [^java.io.OutputStream out triple]
+  (when-not (triple-term? triple)
+    (migration-fail! :migration-invalid-triple
+                     "recursive triple encoder received a non-Triple value"
+                     {:value triple}))
+  (write-u8! out 7)
+  (write-term! out (:slot0 triple))
+  (write-term! out (:slot1 triple))
+  (write-term! out (:slot2 triple)))
+
+(defn- write-term! [^java.io.OutputStream out term]
+  (cond
+    (triple-term? term)
+    (write-triple! out term)
+
+    (string? term)
+    (do (write-u8! out 1) (write-sized-text! out term "String atom"))
+
+    (integer? term)
+    (do (write-u8! out 2) (write-i64-le! out term))
+
+    (or (float? term) (double? term))
+    (do (write-u8! out 3)
+        (write-i64-le! out (Double/doubleToLongBits (double term))))
+
+    (false? term)
+    (write-u8! out 4)
+
+    (true? term)
+    (write-u8! out 5)
+
+    (keyword? term)
+    (let [spelling (subs (str term) 1)]
+      (when (empty? spelling)
+        (migration-fail! :migration-invalid-keyword
+                         "Keyword atom spelling must be nonempty"
+                         {:value term}))
+      (write-u8! out 6)
+      (write-sized-text! out spelling "Keyword atom"))
+
+    (instance? java.time.Instant term)
+    (do (write-u8! out 8)
+        (write-i64-le! out (.getEpochSecond ^java.time.Instant term))
+        (write-u32-le! out (.getNano ^java.time.Instant term)))
+
+    :else
+    (migration-fail! :migration-unsupported-term
+                     "migration encountered a value outside Atom v1"
+                     {:value term :class (some-> term class str)})))
+
+(defn- sha256-bytes [^bytes bytes]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")]
+    (.update md bytes)
+    (apply str (map #(format "%02x" (bit-and (int %) 255)) (.digest md)))))
+
+(defn- migration-sha256-file [path]
+  (with-open [in (java.io.BufferedInputStream.
+                  (java.io.FileInputStream. (str path)))]
+    (let [md (java.security.MessageDigest/getInstance "SHA-256")
+          buf (byte-array 65536)]
+      (loop []
+        (let [n (.read in buf)]
+          (when (pos? n)
+            (.update md buf 0 n)
+            (recur))))
+      (apply str (map #(format "%02x" (bit-and (int %) 255)) (.digest md))))))
+
+(defn- strict-utf8-string [^bytes bytes label]
+  (try
+    (let [decoder (doto (.newDecoder java.nio.charset.StandardCharsets/UTF_8)
+                    (.onMalformedInput java.nio.charset.CodingErrorAction/REPORT)
+                    (.onUnmappableCharacter java.nio.charset.CodingErrorAction/REPORT))]
+      (str (.decode decoder (java.nio.ByteBuffer/wrap bytes))))
+    (catch java.nio.charset.CharacterCodingException e
+      (migration-fail! :migration-invalid-utf8
+                       (str label " is not valid UTF-8")
+                       {:label label :cause (.getMessage e)}))))
+
+(defn- file-stamp [^java.io.File file]
+  (let [attrs (java.nio.file.Files/readAttributes
+               (.toPath file)
+               java.nio.file.attribute.BasicFileAttributes
+               (make-array java.nio.file.LinkOption 0))]
+    {:file-key (str (.fileKey attrs))
+     :bytes (.size attrs)
+     :modified-ms (.toMillis (.lastModifiedTime attrs))}))
+
+(defn- frozen-source! [source]
+  (let [input (java.io.File. (str source))
+        canonical (.getCanonicalFile input)]
+    (when-not (and (.isAbsolute input)
+                   (= (.getPath input) (.getPath canonical))
+                   (.isFile canonical))
+      (migration-fail! :migration-source-invalid
+                       "migration source must be an absolute canonical regular file"
+                       {:source (str source)
+                        :canonical (.getPath canonical)}))
+    (let [before (file-stamp canonical)
+          bytes (java.nio.file.Files/readAllBytes (.toPath canonical))
+          after (file-stamp canonical)]
+      (when-not (and (= before after) (= (:bytes after) (alength ^bytes bytes)))
+        (migration-fail! :migration-source-changed
+                         "migration source changed while it was being frozen"
+                         {:source (.getPath canonical)
+                          :before before :after after
+                          :read-bytes (alength ^bytes bytes)}))
+      {:path (.getPath canonical)
+       :file-key (:file-key after)
+       :bytes bytes
+       :byte-count (alength ^bytes bytes)
+       :sha256 (sha256-bytes bytes)})))
+
+(defn- legacy-line! [line-number byte-offset text]
+  (let [row (try
+              (edn/read-string text)
+              (catch Exception e
+                (migration-fail! :migration-malformed-interior
+                                 "legacy flat log contains malformed completed EDN"
+                                 {:line line-number :byte-offset byte-offset
+                                  :cause (.getMessage e)})))]
+    (when (or (not (map? row))
+              (not (integer? (:tx row)))
+              (neg? (:tx row))
+              (not (contains? #{"assert" "retract"} (:op row)))
+              (not (string? (:l row)))
+              (not (string? (:p row)))
+              (not (string? (:r row))))
+      (migration-fail! (if (and (map? row) (contains? row :k))
+                         :migration-v2-cache-not-source
+                         :migration-malformed-interior)
+                       "legacy migration requires completed flat fact-operation rows"
+                       {:line line-number :byte-offset byte-offset :row row}))
+    (when-not (<= (:tx row) Long/MAX_VALUE)
+      (migration-fail! :migration-invalid-integer
+                       "legacy transaction sequence exceeds signed 64-bit range"
+                       {:line line-number :tx (:tx row)}))
+    (assoc row :source-line line-number :source-byte-offset byte-offset)))
+
+(defn- parse-legacy-flat [^bytes bytes]
+  (when (and (>= (alength bytes) (alength ^bytes legacy-fri-magic))
+             (java.util.Arrays/equals
+              ^bytes legacy-fri-magic
+              ^bytes (java.util.Arrays/copyOfRange
+                      bytes 0 (alength ^bytes legacy-fri-magic))))
+    (migration-fail! :migration-v2-cache-not-source
+                     "FRI cache is not an authoritative migration source"
+                     {}))
+  (when (and (>= (alength bytes) (alength ^bytes triple-log-magic))
+             (java.util.Arrays/equals
+              ^bytes triple-log-magic
+              ^bytes (java.util.Arrays/copyOfRange
+                      bytes 0 (alength ^bytes triple-log-magic))))
+    (migration-fail! :migration-already-complete
+                     "source already has the FRAMLOG header"
+                     {}))
+  (let [text (strict-utf8-string bytes "legacy flat log")
+        terminal-lf? (or (zero? (alength bytes))
+                         (= 10 (bit-and 255 (aget bytes (dec (alength bytes))))))
+        pieces (str/split text #"\n" -1)
+        complete (if terminal-lf? (butlast pieces) (butlast pieces))
+        tail (when-not terminal-lf? (last pieces))]
+    (loop [remaining (seq complete)
+           line-number 1
+           byte-offset 0
+           rows []]
+      (if (nil? remaining)
+        {:rows rows
+         :torn-tail (when tail
+                      {:line line-number
+                       :byte-offset byte-offset
+                       :bytes (alength ^bytes (strict-utf8-bytes tail "torn tail"))})}
+        (let [line (first remaining)
+              line-bytes (alength ^bytes (strict-utf8-bytes line "legacy line"))]
+          (when (str/blank? line)
+            (migration-fail! :migration-malformed-interior
+                             "legacy flat log contains a blank completed row"
+                             {:line line-number :byte-offset byte-offset}))
+          (recur (next remaining)
+                 (inc line-number)
+                 (+ byte-offset line-bytes 1)
+                 (conj rows (legacy-line! line-number byte-offset line))))))))
+
+(defn- final-cardinality [rows]
+  (let [reg (fold/predicate-registry-of (vec rows))
+        cmap (fold/card-map (vec rows))]
+    {:registry reg :cardinality cmap}))
+
+(defn- active-key [{:keys [registry cardinality]} row]
+  (let [pred-key (ck/predicate-key registry (:p row))]
+    (if (ck/single-eff-reg? registry cardinality (:p row))
+      [(:l row) pred-key]
+      [(:l row) pred-key (:r row)])))
+
+(defn- parsed-recorded-at [row diagnostics]
+  (if-not (contains? row :ts)
+    [nil diagnostics]
+    (let [value (:ts row)]
+      (if-not (string? value)
+        [value diagnostics]
+        (try
+          [(java.time.Instant/parse value) diagnostics]
+          (catch java.time.format.DateTimeParseException _
+            [value (conj diagnostics
+                         {:code :unparseable-recorded-at
+                          :line (:source-line row)
+                          :value value})]))))))
+
+(def ^:private occurrence-metadata-order
+  [:kernel/recorded-at :kernel/asserted-by :kernel/source-frame
+   :kernel/withdraws :kernel/supersedes])
+
+(defn- source-operation [space-id ordinal row relation-target]
+  {:ordinal ordinal
+   :action (if (= "assert" (:op row)) 1 2)
+   :triple (triple-term (:l row) (:p row) (:r row))
+   :source-line (:source-line row)
+   :source-byte-offset (:source-byte-offset row)
+   :relation-target relation-target
+   :source row})
+
+(defn- transaction-plan [space-id tx-seq rows active classification diagnostics]
+  (let [[sources active-after diagnostics-after]
+        (loop [remaining rows ordinal 0 ops [] active-now active diags diagnostics]
+          (if (empty? remaining)
+            [ops active-now diags]
+            (let [row (first remaining)
+                  key (active-key classification row)
+                  prior (get active-now key)
+                  occ (occurrence-coordinate space-id tx-seq ordinal)
+                  assert? (= "assert" (:op row))
+                  relation-target (when prior
+                                    [(if assert?
+                                       :kernel/supersedes
+                                       :kernel/withdraws)
+                                     prior])
+                  active-next (if assert?
+                                (assoc active-now key occ)
+                                (dissoc active-now key))]
+              (recur (rest remaining) (inc ordinal)
+                     (conj ops (source-operation space-id ordinal row relation-target))
+                     active-next diags))))
+        source-count (count sources)
+        [synthetic diagnostics-final]
+        (loop [remaining sources ordinal source-count ops [] diags diagnostics-after]
+          (if (empty? remaining)
+            [ops diags]
+            (let [source (first remaining)
+                  row (:source source)
+                  source-occ (occurrence-coordinate space-id tx-seq (:ordinal source))
+                  [recorded-at next-diags] (parsed-recorded-at row diags)
+                  relation (:relation-target source)
+                  values {:kernel/recorded-at recorded-at
+                          :kernel/asserted-by (when (contains? row :by) (:by row))
+                          :kernel/source-frame (when (contains? row :frame) (:frame row))
+                          :kernel/withdraws (when (= :kernel/withdraws (first relation))
+                                              (second relation))
+                          :kernel/supersedes (when (= :kernel/supersedes (first relation))
+                                               (second relation))}
+                  additions
+                  (reduce (fn [acc predicate]
+                            (if-some [value (get values predicate)]
+                              (conj acc
+                                    {:ordinal (+ ordinal (count acc))
+                                     :action 1
+                                     :triple (triple-term source-occ predicate value)
+                                     :synthetic-for (:ordinal source)
+                                     :predicate predicate})
+                              acc))
+                          []
+                          occurrence-metadata-order)]
+              (recur (rest remaining) (+ ordinal (count additions))
+                     (into ops additions) next-diags))))]
+    [{:tx-seq tx-seq :source-count source-count
+      :operations (into sources synthetic)}
+     active-after diagnostics-final]))
+
+(defn- write-transaction-frame! [^java.io.OutputStream out tx]
+  (let [payload (java.io.ByteArrayOutputStream.)
+        operations (:operations tx)]
+    (write-i64-le! payload (:tx-seq tx))
+    (write-u32-le! payload (count operations))
+    (doseq [[expected op] (map-indexed vector operations)]
+      (when-not (= expected (:ordinal op))
+        (migration-fail! :migration-noncontiguous-ordinal
+                         "transaction operation ordinals are not contiguous"
+                         {:tx-seq (:tx-seq tx)
+                          :expected expected :actual (:ordinal op)}))
+      (write-u32-le! payload (:ordinal op))
+      (write-u8! payload (:action op))
+      (write-triple! payload (:triple op)))
+    (let [bytes (.toByteArray payload)
+          crc (doto (java.util.zip.CRC32.) (.update bytes))]
+      (write-u32-le! out (alength ^bytes bytes))
+      (.write out ^bytes bytes)
+      (write-u32-le! out (.getValue crc)))))
+
+(defn- write-triple-log-temp! [parent space-id transactions]
+  (let [tmp (java.nio.file.Files/createTempFile
+             parent ".fram-triple-log-" ".tmp"
+             (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (with-open [fos (java.io.FileOutputStream. (.toFile tmp))
+                  out (java.io.BufferedOutputStream. fos)]
+        (.write out ^bytes triple-log-magic)
+        (write-u16-le! out triple-log-version)
+        (write-u16-le! out triple-log-flags)
+        (write-sized-text! out space-id "SpaceId")
+        (doseq [tx transactions]
+          (write-transaction-frame! out tx))
+        (.flush out)
+        (.force (.getChannel fos) true))
+      {:path tmp
+       :bytes (java.nio.file.Files/size tmp)
+       :sha256 (migration-sha256-file tmp)}
+      (catch Throwable t
+        (java.nio.file.Files/deleteIfExists tmp)
+        (throw t)))))
+
+(defn- write-bytes-temp! [parent prefix ^bytes bytes]
+  (let [tmp (java.nio.file.Files/createTempFile
+             parent prefix ".tmp"
+             (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (with-open [fos (java.io.FileOutputStream. (.toFile tmp))]
+        (.write fos bytes)
+        (.force (.getChannel fos) true))
+      tmp
+      (catch Throwable t
+        (java.nio.file.Files/deleteIfExists tmp)
+        (throw t)))))
+
+(defn- atomic-install! [tmp destination]
+  (java.nio.file.Files/move
+   tmp destination
+   (into-array java.nio.file.CopyOption
+               [java.nio.file.StandardCopyOption/ATOMIC_MOVE])))
+
+(defn- migration-counts [transactions diagnostics]
+  (let [operations (mapcat :operations transactions)
+        sources (filter :source operations)
+        synthetic (remove :source operations)]
+    (sorted-map
+     :assertions (count (filter #(= 1 (:action %)) sources))
+     :diagnostic-count (count diagnostics)
+     :legacy-cid-count 0
+     :noop-retractions (count (filter #(and (= 2 (:action %))
+                                            (nil? (:relation-target %)))
+                                      sources))
+     :retractions (count (filter #(= 2 (:action %)) sources))
+     :source-operations (count sources)
+     :synthetic-operations (count synthetic)
+     :targeted-retractions (count (filter #(and (= 2 (:action %))
+                                                (= :kernel/withdraws
+                                                   (first (:relation-target %))))
+                                          sources))
+     :transactions (count transactions)
+     :unparseable-recorded-at (count (filter #(= :unparseable-recorded-at (:code %))
+                                             diagnostics)))))
+
+(defn- write-migration-temp! [parent space-id rows]
+  (let [classification (final-cardinality rows)
+        zero-counts (migration-counts [] [])
+        tmp (java.nio.file.Files/createTempFile
+             parent ".fram-triple-log-" ".tmp"
+             (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (let [migration
+            (with-open [fos (java.io.FileOutputStream. (.toFile tmp))
+                        out (java.io.BufferedOutputStream. fos)]
+              (.write out ^bytes triple-log-magic)
+              (write-u16-le! out triple-log-version)
+              (write-u16-le! out triple-log-flags)
+              (write-sized-text! out space-id "SpaceId")
+              (let [result
+                    (loop [remaining (seq rows)
+                           previous-tx nil
+                           first-tx nil
+                           active {}
+                           counts zero-counts
+                           diagnostic-sample []]
+                      (if (nil? remaining)
+                        {:diagnostics diagnostic-sample
+                         :summary counts
+                         :transaction-range (when first-tx
+                                              [first-tx previous-tx])}
+                        (let [tx-seq (:tx (first remaining))]
+                          (when (and previous-tx (< tx-seq previous-tx))
+                            (migration-fail! :migration-nonmonotonic-transaction
+                                             "legacy flat log transaction sequence moved backward"
+                                             {:previous previous-tx :current tx-seq
+                                              :line (:source-line (first remaining))}))
+                          (let [[same later] (split-with #(= tx-seq (:tx %)) remaining)
+                                [tx active-next tx-diagnostics]
+                                (transaction-plan space-id tx-seq (vec same) active
+                                                  classification [])
+                                tx-counts (migration-counts [tx] tx-diagnostics)
+                                sample-room (- 32 (count diagnostic-sample))]
+                            (write-transaction-frame! out tx)
+                            (recur (seq later)
+                                   tx-seq
+                                   (or first-tx tx-seq)
+                                   active-next
+                                   (merge-with + counts tx-counts)
+                                   (if (pos? sample-room)
+                                     (into diagnostic-sample
+                                           (take sample-room tx-diagnostics))
+                                     diagnostic-sample))))))]
+                (.flush out)
+                (.force (.getChannel fos) true)
+                result))]
+        (merge migration
+               {:path tmp
+                :bytes (java.nio.file.Files/size tmp)
+                :sha256 (migration-sha256-file tmp)}))
+      (catch Throwable t
+        (java.nio.file.Files/deleteIfExists tmp)
+        (throw t)))))
+
+(defn migrate-legacy-flat-log!
+  "Seal one frozen legacy flat log into FRAMLOG v1. SOURCE and TARGET must be
+   absolute canonical paths; TARGET and TARGET.migration.edn must not exist."
+  [source space-id target]
+  (let [space-bytes (strict-utf8-bytes space-id "SpaceId")]
+    (when (zero? (alength ^bytes space-bytes))
+      (migration-fail! :migration-space-id-required
+                       "SpaceId must be a nonempty UTF-8 String"
+                       {})))
+  (let [frozen (frozen-source! source)
+        parsed (parse-legacy-flat (:bytes frozen))
+        target-file (java.io.File. (str target))
+        canonical-target (.getCanonicalFile target-file)
+        manifest-file (java.io.File. (str (.getPath canonical-target) ".migration.edn"))
+        parent (.toPath (.getParentFile canonical-target))]
+    (when-not (and (.isAbsolute target-file)
+                   (= (.getPath target-file) (.getPath canonical-target))
+                   (.isDirectory (.getParentFile canonical-target))
+                   (not= (:path frozen) (.getPath canonical-target)))
+      (migration-fail! :migration-target-invalid
+                       "migration target must be a distinct absolute canonical path in an existing directory"
+                       {:target (str target)
+                        :canonical (.getPath canonical-target)}))
+    (when (or (.exists canonical-target) (.exists manifest-file))
+      (migration-fail! :migration-target-exists
+                       "sealed migration refuses to overwrite an existing target or manifest"
+                       {:target (.getPath canonical-target)
+                        :manifest (.getPath manifest-file)}))
+    (let [written (write-migration-temp! parent space-id (:rows parsed))
+          counts (:summary written)
+          manifest
+          (sorted-map
+           :diagnostics (:diagnostics written)
+           :format triple-log-manifest-version
+           :output (sorted-map :bytes (:bytes written)
+                               :sha256 (:sha256 written))
+           :source (sorted-map :bytes (:byte-count frozen)
+                               :file-key (:file-key frozen)
+                               :path (:path frozen)
+                               :sha256 (:sha256 frozen))
+           :space-id space-id
+           :summary counts
+           :torn-tail (:torn-tail parsed)
+           :transaction-range (:transaction-range written)
+           :unresolved-classes
+           [{:class :cid-addressed-v2-only-data
+             :disposition :not-migrated
+             :reason "flat sources contain no cid field; v2/FRI caches are rejected as non-authoritative"}])
+          manifest-bytes (.getBytes (str (pr-str manifest) "\n")
+                                    java.nio.charset.StandardCharsets/UTF_8)
+          manifest-tmp (write-bytes-temp! parent ".fram-migration-manifest-"
+                                          manifest-bytes)
+          target-path (.toPath canonical-target)
+          manifest-path (.toPath manifest-file)]
+      (try
+        (atomic-install! (:path written) target-path)
+        (try
+          (atomic-install! manifest-tmp manifest-path)
+          (catch Throwable t
+            (java.nio.file.Files/deleteIfExists target-path)
+            (throw t)))
+        {:target (.getPath canonical-target)
+         :manifest (.getPath manifest-file)
+         :summary counts
+         :sha256 (:sha256 written)
+         :torn-tail (:torn-tail parsed)}
+        (finally
+          (java.nio.file.Files/deleteIfExists (:path written))
+          (java.nio.file.Files/deleteIfExists manifest-tmp))))))
+
+(defn require-triple-log-header!
+  "Return the immutable SpaceId of a FRAMLOG v1 file. Legacy/missing headers
+   fail with the typed one-shot migration requirement; no runtime dual reader."
+  [path]
+  (let [file (java.io.File. (str path))]
+    (when-not (.isFile file)
+      (migration-fail! :migration-log-missing
+                       "triple log is missing"
+                       {:path (str path)}))
+    (with-open [in (java.io.DataInputStream.
+                    (java.io.BufferedInputStream.
+                     (java.io.FileInputStream. file)))]
+      (let [magic (byte-array (alength ^bytes triple-log-magic))]
+        (try
+          (.readFully in magic)
+          (catch java.io.EOFException _
+            (migration-fail! :migration-required
+                             "legacy or empty log requires one-shot migration"
+                             {:path (.getPath file)})))
+        (when-not (java.util.Arrays/equals ^bytes triple-log-magic magic)
+          (migration-fail! :migration-required
+                           "legacy log requires one-shot migration"
+                           {:path (.getPath file)}))
+        (let [read-u16 (fn [] (+ (.readUnsignedByte in)
+                                 (bit-shift-left (.readUnsignedByte in) 8)))
+              read-u32 (fn [] (reduce (fn [acc i]
+                                       (+ acc (bit-shift-left (long (.readUnsignedByte in))
+                                                              (* i 8))))
+                                     0 (range 4)))
+              version (read-u16)
+              flags (read-u16)
+              n (read-u32)]
+          (when-not (and (= triple-log-version version)
+                         (= triple-log-flags flags))
+            (migration-fail! :migration-unsupported-log-version
+                             "triple log version or flags are unsupported"
+                             {:path (.getPath file) :version version :flags flags}))
+          (when (or (zero? n) (> n Integer/MAX_VALUE))
+            (migration-fail! :migration-corrupt-header
+                             "triple log SpaceId length is invalid"
+                             {:path (.getPath file) :length n}))
+          (let [bytes (byte-array (int n))]
+            (.readFully in bytes)
+            (strict-utf8-string bytes "SpaceId")))))))
 
 ;; ============================================================================
 ;; WORLDS — the durability layer (thread 019f93bb / authority design 019f9358)

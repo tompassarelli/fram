@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+  echo "usage: fram-migrate-triple-log SOURCE SPACE_ID TARGET" >&2
+  exit 2
+fi
+
+HERE="${BASH_SOURCE[0]%/*}/.."
+cd "$HERE"
+exec clojure -M "$HERE/coord_daemon.clj" migrate-triple-log "$1" "$2" "$3"

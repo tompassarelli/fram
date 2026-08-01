@@ -11,6 +11,7 @@
 ;;
 ;;   bb -cp out coord_daemon.clj serve [port] [v2-log]
 ;;   bb -cp out coord_daemon.clj test  [port]
+;;   bin/fram-migrate-triple-log SOURCE SPACE_ID TARGET
 ;; ============================================================================
 ;; NAMESPACE. This file used to have no `ns` form, so its ~385 defs landed in the
 ;; loader's namespace — `user`, shared with coord.clj and ~80 loading tests. It now
@@ -11291,5 +11292,8 @@
     ;; reversible swap for coord.clj: `serve-flat 7977 <facts.log>`
     "serve-flat" (serve-flat-daemon (Integer/parseInt (or p "7977"))
                                     (reaim-split (or log (str (System/getProperty "user.dir") "/data/facts.log"))))
+    ;; Sealed one-shot converter: SOURCE SPACE_ID TARGET. It is intentionally
+    ;; not part of serve/serve-flat; legacy bytes never become a runtime reader.
+    "migrate-triple-log" (println (pr-str (migrate-legacy-flat-log! p log flat)))
     "test"       (run-test (Integer/parseInt (or p "7988")))
     nil))
