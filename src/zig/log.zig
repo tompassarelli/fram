@@ -6,120 +6,93 @@ const File = std.Io.File;
 const Io = std.Io;
 const Writer = std.Io.Writer;
 
-pub const FactOp = struct {
-    tx: i64,
-    op: []const u8,
-    l: []const u8,
-    p: []const u8,
-    r: []const u8,
+pub const format_magic: []const u8 = "FRAMLOG\x00";
+pub const format_version: u16 = 1;
+pub const format_flags: u16 = 0;
+pub const max_space_id_bytes: usize = 4096;
+pub const max_frame_payload_bytes: usize = 64 * 1024 * 1024;
+pub const max_term_depth: usize = 256;
+
+const fixed_header_bytes = format_magic.len + @sizeOf(u16) + @sizeOf(u16) + @sizeOf(u32);
+
+pub const Instant = struct {
+    epoch_seconds: i64,
+    nanosecond: u32,
 };
 
-pub const Provenance = union(enum) {
-    none,
-    cold: struct {
-        frame: []const u8,
-        ts: []const u8,
-    },
-    coordinator: struct {
-        ts: []const u8,
-        by: []const u8,
-    },
+pub const Atom = union(enum) {
+    string: []const u8,
+    integer: i64,
+    float: f64,
+    boolean: bool,
+    /// Canonical keyword spelling without the leading `:` sigil.
+    keyword: []const u8,
+    instant: Instant,
 };
 
-/// Emit the byte contract shared by fram.rt/append-fact-op and the coordinator's
-/// flat-line: one Clojure `pr-str` EDN map followed by exactly one LF.
-pub fn encodeLine(
-    allocator: Allocator,
-    fact: FactOp,
-    provenance: Provenance,
-) Allocator.Error![]u8 {
-    var out: Writer.Allocating = .init(allocator);
-    defer out.deinit();
-    const writer = &out.writer;
-
-    writeBytes(writer, "{:tx ") catch return error.OutOfMemory;
-    writer.print("{d}", .{fact.tx}) catch return error.OutOfMemory;
-    writeBytes(writer, ", :op ") catch return error.OutOfMemory;
-    writeEdnString(writer, fact.op) catch return error.OutOfMemory;
-    writeBytes(writer, ", :l ") catch return error.OutOfMemory;
-    writeEdnString(writer, fact.l) catch return error.OutOfMemory;
-    writeBytes(writer, ", :p ") catch return error.OutOfMemory;
-    writeEdnString(writer, fact.p) catch return error.OutOfMemory;
-    writeBytes(writer, ", :r ") catch return error.OutOfMemory;
-    writeEdnString(writer, fact.r) catch return error.OutOfMemory;
-
-    switch (provenance) {
-        .none => {},
-        .cold => |cold| {
-            writeBytes(writer, ", :frame ") catch return error.OutOfMemory;
-            writeEdnString(writer, cold.frame) catch return error.OutOfMemory;
-            writeBytes(writer, ", :ts ") catch return error.OutOfMemory;
-            writeEdnString(writer, cold.ts) catch return error.OutOfMemory;
-        },
-        .coordinator => |coordinator| {
-            writeBytes(writer, ", :ts ") catch return error.OutOfMemory;
-            writeEdnString(writer, coordinator.ts) catch return error.OutOfMemory;
-            writeBytes(writer, ", :by ") catch return error.OutOfMemory;
-            writeEdnString(writer, coordinator.by) catch return error.OutOfMemory;
-        },
-    }
-    writeBytes(writer, "}\n") catch return error.OutOfMemory;
-    return out.toOwnedSlice();
-}
-
-fn writeBytes(writer: *Writer, bytes: []const u8) Writer.Error!void {
-    try writer.writeAll(bytes);
-}
-
-fn writeEdnString(writer: *Writer, value: []const u8) Writer.Error!void {
-    try writer.writeByte('"');
-    for (value) |byte| switch (byte) {
-        '"' => try writer.writeAll("\\\""),
-        '\\' => try writer.writeAll("\\\\"),
-        '\n' => try writer.writeAll("\\n"),
-        '\r' => try writer.writeAll("\\r"),
-        '\t' => try writer.writeAll("\\t"),
-        0x08 => try writer.writeAll("\\b"),
-        0x0c => try writer.writeAll("\\f"),
-        else => try writer.writeByte(byte),
-    };
-    try writer.writeByte('"');
-}
-
-pub const PartialFactOp = struct {
-    tx: ?i64 = null,
-    op: ?[]const u8 = null,
-    l: ?[]const u8 = null,
-    p: ?[]const u8 = null,
-    r: ?[]const u8 = null,
-    frame: ?[]const u8 = null,
-    by: ?[]const u8 = null,
-    ts: ?[]const u8 = null,
-
-    pub fn complete(self: PartialFactOp) bool {
-        const operation = self.op orelse return false;
-        return self.tx != null and
-            self.l != null and
-            self.p != null and
-            self.r != null and
-            (std.mem.eql(u8, operation, "assert") or
-                std.mem.eql(u8, operation, "retract"));
-    }
+pub const Term = union(enum) {
+    atom: Atom,
+    triple: *const Triple,
 };
 
-pub const ParsedLine = struct {
+/// The one semantic aggregate stored by Fram. Slot meaning belongs to the
+/// ontology; the physical codec treats all three positions uniformly.
+pub const Triple = struct {
+    slot0: Term,
+    slot1: Term,
+    slot2: Term,
+};
+
+pub const Action = enum(u8) {
+    assert = 1,
+    retract = 2,
+};
+
+pub const Op = struct {
+    ordinal: u32,
+    action: Action,
+    triple: Triple,
+};
+
+pub const Transaction = struct {
+    tx_seq: i64,
+    ops: []const Op,
+};
+
+const TermTag = enum(u8) {
+    string = 1,
+    integer = 2,
+    float = 3,
+    bool_false = 4,
+    bool_true = 5,
+    keyword = 6,
+    triple = 7,
+    instant = 8,
+};
+
+pub const CorruptionReason = enum {
+    invalid_header,
+    frame_too_large,
+    checksum_mismatch,
+    invalid_transaction,
+    non_monotonic_transaction,
+};
+
+pub const Corruption = struct {
     byte_offset: usize,
-    fact: PartialFactOp,
+    reason: CorruptionReason,
 };
 
 pub const TornTail = struct {
     byte_offset: usize,
-    recovered_records: usize,
+    recovered_transactions: usize,
 };
 
 pub const Replay = struct {
     arena: std.heap.ArenaAllocator,
-    records: []ParsedLine,
+    space_id: []const u8,
+    transactions: []Transaction,
+    valid_bytes: usize,
     torn_tail: ?TornTail,
 
     pub fn deinit(self: *Replay) void {
@@ -128,67 +101,244 @@ pub const Replay = struct {
     }
 };
 
-pub const Corruption = struct {
-    byte_offset: usize,
-};
-
 pub const ReadOutcome = union(enum) {
     replay: Replay,
     corrupt: Corruption,
 };
 
-/// Split the raw file on LF bytes so diagnostics remain byte offsets even when
-/// earlier values contain multibyte UTF-8. An unparseable unterminated final
-/// segment is recoverable; an unparseable completed line is corruption.
-pub fn replayBytes(allocator: Allocator, bytes: []const u8) Allocator.Error!ReadOutcome {
+pub const EncodeError = Allocator.Error || error{
+    InvalidSpaceId,
+    InvalidAtom,
+    InvalidAtomUtf8,
+    InvalidInstant,
+    EmptyTransaction,
+    TooManyOperations,
+    NonCanonicalOrdinal,
+    NonMonotonicTransaction,
+    TermTooDeep,
+    FrameTooLarge,
+};
+
+pub const ReplayError = Allocator.Error || error{
+    MigrationRequired,
+    InvalidSpaceId,
+    SpaceMismatch,
+};
+
+/// Encode the immutable identity fence at the front of every v1 log.
+pub fn encodeHeader(allocator: Allocator, space_id: []const u8) EncodeError![]u8 {
+    try validateSpaceId(space_id);
+    var out: Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try writeBytes(&out.writer, format_magic);
+    try writeInt(&out.writer, u16, format_version);
+    try writeInt(&out.writer, u16, format_flags);
+    try writeLength(&out.writer, space_id.len);
+    try writeBytes(&out.writer, space_id);
+    return out.toOwnedSlice();
+}
+
+/// Encode one atomic transaction frame. CRC-32/ISO-HDLC is the standard
+/// reflected IEEE CRC-32; the checksum covers the payload and nothing else.
+pub fn encodeTransactionFrame(
+    allocator: Allocator,
+    transaction: Transaction,
+) EncodeError![]u8 {
+    try validateTransaction(transaction);
+
+    var payload_out: Writer.Allocating = .init(allocator);
+    defer payload_out.deinit();
+    const payload = &payload_out.writer;
+    try writeInt(payload, i64, transaction.tx_seq);
+    try writeInt(payload, u32, @intCast(transaction.ops.len));
+    for (transaction.ops) |op| {
+        try writeInt(payload, u32, op.ordinal);
+        try writeByte(payload, @intFromEnum(op.action));
+        try writeTerm(payload, .{ .triple = &op.triple }, 0);
+    }
+
+    const payload_bytes = payload_out.written();
+    if (payload_bytes.len > max_frame_payload_bytes or
+        payload_bytes.len > std.math.maxInt(u32))
+    {
+        return error.FrameTooLarge;
+    }
+
+    var frame_out: Writer.Allocating = .init(allocator);
+    defer frame_out.deinit();
+    const frame = &frame_out.writer;
+    try writeInt(frame, u32, @intCast(payload_bytes.len));
+    try writeBytes(frame, payload_bytes);
+    try writeInt(frame, u32, std.hash.Crc32.hash(payload_bytes));
+    return frame_out.toOwnedSlice();
+}
+
+/// Encode a complete canonical image. Transactions must be ordered strictly by
+/// their logical sequence; equal content in different operations stays distinct.
+pub fn encodeLog(
+    allocator: Allocator,
+    space_id: []const u8,
+    transactions: []const Transaction,
+) EncodeError![]u8 {
+    const header = try encodeHeader(allocator, space_id);
+    defer allocator.free(header);
+
+    var out: Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try writeBytes(&out.writer, header);
+
+    var previous_tx: ?i64 = null;
+    for (transactions) |transaction| {
+        if (previous_tx) |previous| {
+            if (transaction.tx_seq <= previous)
+                return error.NonMonotonicTransaction;
+        }
+        const frame = try encodeTransactionFrame(allocator, transaction);
+        defer allocator.free(frame);
+        try writeBytes(&out.writer, frame);
+        previous_tx = transaction.tx_seq;
+    }
+    return out.toOwnedSlice();
+}
+
+pub fn replayBytes(allocator: Allocator, bytes: []const u8) ReplayError!ReadOutcome {
+    return replayBytesExpected(allocator, bytes, null);
+}
+
+pub fn replayBytesForSpace(
+    allocator: Allocator,
+    bytes: []const u8,
+    expected_space_id: []const u8,
+) ReplayError!ReadOutcome {
+    try validateExpectedSpaceId(expected_space_id);
+    return replayBytesExpected(allocator, bytes, expected_space_id);
+}
+
+fn replayBytesExpected(
+    allocator: Allocator,
+    bytes: []const u8,
+    expected_space_id: ?[]const u8,
+) ReplayError!ReadOutcome {
+    const header = parseHeader(bytes) catch |err| switch (err) {
+        error.MigrationRequired => return error.MigrationRequired,
+        error.InvalidHeader => return .{ .corrupt = .{
+            .byte_offset = 0,
+            .reason = .invalid_header,
+        } },
+    };
+    if (expected_space_id) |expected| {
+        if (!std.mem.eql(u8, expected, header.space_id))
+            return error.SpaceMismatch;
+    }
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     var arena_moved = false;
     defer if (!arena_moved) arena.deinit();
     const arena_allocator = arena.allocator();
-    var records: std.ArrayList(ParsedLine) = .empty;
-    defer records.deinit(arena_allocator);
+    const owned_space_id = try arena_allocator.dupe(u8, header.space_id);
+    var transactions: std.ArrayList(Transaction) = .empty;
+    defer transactions.deinit(arena_allocator);
 
-    var offset: usize = 0;
+    var offset = header.end_offset;
+    var previous_tx: ?i64 = null;
     while (offset < bytes.len) {
-        const relative_lf = std.mem.indexOfScalar(u8, bytes[offset..], '\n');
-        const terminated = relative_lf != null;
-        const end = if (relative_lf) |index| offset + index else bytes.len;
-        const segment = bytes[offset..end];
-        const next_offset = if (terminated) end + 1 else bytes.len;
-
-        if (!blank(segment)) {
-            const fact = parseRecord(arena_allocator, segment) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.InvalidEdn => {
-                    if (!terminated) {
-                        const owned = try records.toOwnedSlice(arena_allocator);
-                        arena_moved = true;
-                        return .{ .replay = .{
-                            .arena = arena,
-                            .records = owned,
-                            .torn_tail = .{
-                                .byte_offset = offset,
-                                .recovered_records = owned.len,
-                            },
-                        } };
-                    }
-                    return .{ .corrupt = .{ .byte_offset = offset } };
+        const frame_offset = offset;
+        if (bytes.len - offset < @sizeOf(u32)) {
+            return finishReplay(
+                &arena,
+                &arena_moved,
+                arena_allocator,
+                &transactions,
+                owned_space_id,
+                frame_offset,
+                .{
+                    .byte_offset = frame_offset,
+                    .recovered_transactions = transactions.items.len,
                 },
-            };
-            try records.append(arena_allocator, .{
-                .byte_offset = offset,
-                .fact = fact,
-            });
+            );
         }
-        offset = next_offset;
+
+        const payload_len: usize = readIntAt(u32, bytes, offset);
+        offset += @sizeOf(u32);
+        if (bytes.len - offset < payload_len + @sizeOf(u32)) {
+            return finishReplay(
+                &arena,
+                &arena_moved,
+                arena_allocator,
+                &transactions,
+                owned_space_id,
+                frame_offset,
+                .{
+                    .byte_offset = frame_offset,
+                    .recovered_transactions = transactions.items.len,
+                },
+            );
+        }
+        if (payload_len > max_frame_payload_bytes) {
+            return .{ .corrupt = .{
+                .byte_offset = frame_offset,
+                .reason = .frame_too_large,
+            } };
+        }
+
+        const payload = bytes[offset .. offset + payload_len];
+        offset += payload_len;
+        const stored_crc = readIntAt(u32, bytes, offset);
+        offset += @sizeOf(u32);
+        if (stored_crc != std.hash.Crc32.hash(payload)) {
+            return .{ .corrupt = .{
+                .byte_offset = frame_offset,
+                .reason = .checksum_mismatch,
+            } };
+        }
+
+        const transaction = parseTransaction(arena_allocator, payload) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFrame, error.TermTooDeep => return .{ .corrupt = .{
+                .byte_offset = frame_offset,
+                .reason = .invalid_transaction,
+            } },
+        };
+        if (previous_tx) |previous| {
+            if (transaction.tx_seq <= previous) {
+                return .{ .corrupt = .{
+                    .byte_offset = frame_offset,
+                    .reason = .non_monotonic_transaction,
+                } };
+            }
+        }
+        try transactions.append(arena_allocator, transaction);
+        previous_tx = transaction.tx_seq;
     }
 
-    const owned = try records.toOwnedSlice(arena_allocator);
-    arena_moved = true;
+    return finishReplay(
+        &arena,
+        &arena_moved,
+        arena_allocator,
+        &transactions,
+        owned_space_id,
+        bytes.len,
+        null,
+    );
+}
+
+fn finishReplay(
+    arena: *std.heap.ArenaAllocator,
+    arena_moved: *bool,
+    arena_allocator: Allocator,
+    transactions: *std.ArrayList(Transaction),
+    space_id: []const u8,
+    valid_bytes: usize,
+    torn_tail: ?TornTail,
+) Allocator.Error!ReadOutcome {
+    const owned_transactions = try transactions.toOwnedSlice(arena_allocator);
+    arena_moved.* = true;
     return .{ .replay = .{
-        .arena = arena,
-        .records = owned,
-        .torn_tail = null,
+        .arena = arena.*,
+        .space_id = space_id,
+        .transactions = owned_transactions,
+        .valid_bytes = valid_bytes,
+        .torn_tail = torn_tail,
     } };
 }
 
@@ -205,57 +355,81 @@ pub fn replayFile(
         allocator,
         .limited(max_bytes),
     ) catch |err| switch (err) {
-        error.FileNotFound => return replayBytes(allocator, ""),
+        error.FileNotFound => return error.MigrationRequired,
         else => |other| return other,
     };
     defer allocator.free(bytes);
     return replayBytes(allocator, bytes);
 }
 
-/// Append a complete batch and make it durable before returning. The caller
-/// owns Fram's sole-writer and rewrite-admission policy; this primitive owns
-/// only the file boundary and fsync contract.
-pub fn appendDurable(
+/// Append against the byte boundary returned by replay. The immutable SpaceId
+/// and exact file size are both fenced before bytes are written and synced.
+pub fn appendTransactionDurable(
+    allocator: Allocator,
     io: Io,
     dir: Dir,
     sub_path: []const u8,
-    payload: []const u8,
-) !void {
-    try requireFramedPayload(payload);
-    if (payload.len == 0) return;
+    expected_space_id: []const u8,
+    expected_size: u64,
+    transaction: Transaction,
+) !u64 {
+    try validateExpectedSpaceId(expected_space_id);
+    const frame = try encodeTransactionFrame(allocator, transaction);
+    defer allocator.free(frame);
 
-    var file = try dir.createFile(io, sub_path, .{
-        .read = true,
-        .truncate = false,
-    });
+    var file = dir.openFile(io, sub_path, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.FileNotFound => return error.MigrationRequired,
+        else => |other| return other,
+    };
     defer file.close(io);
     const stat = try file.stat(io);
+    if (stat.size != expected_size) return error.LogAdvanced;
 
-    if (stat.size != 0) {
-        var reader = file.reader(io, &.{});
-        reader.pos = stat.size - 1;
-        var final_byte: [1]u8 = undefined;
-        try reader.interface.readSliceAll(&final_byte);
-        if (final_byte[0] != '\n') return error.UnterminatedLog;
-    }
+    const probe_len_u64 = @min(
+        stat.size,
+        @as(u64, fixed_header_bytes + max_space_id_bytes),
+    );
+    const probe_len: usize = @intCast(probe_len_u64);
+    const probe = try allocator.alloc(u8, probe_len);
+    defer allocator.free(probe);
+    var reader = file.reader(io, &.{});
+    reader.pos = 0;
+    try reader.interface.readSliceAll(probe);
+    const header = parseHeader(probe) catch |err| switch (err) {
+        error.MigrationRequired => return error.MigrationRequired,
+        error.InvalidHeader => return error.CorruptLog,
+    };
+    if (!std.mem.eql(u8, expected_space_id, header.space_id))
+        return error.SpaceMismatch;
+    if (expected_size < header.end_offset) return error.CorruptLog;
 
     var writer = file.writer(io, &.{});
     writer.pos = stat.size;
-    try writer.interface.writeAll(payload);
+    try writer.interface.writeAll(frame);
     try writer.interface.flush();
     try file.sync(io);
+    return std.math.add(u64, stat.size, frame.len) catch error.FileTooBig;
 }
 
-/// Replace a complete log without exposing a truncated destination: write and
-/// sync a same-directory temporary file, atomically rename it, then sync the
-/// directory entry. Existing permissions survive the inode replacement.
+/// Atomically install a complete canonical image, preserving existing file
+/// permissions and syncing the containing directory after rename.
 pub fn rewriteDurableAtomic(
+    allocator: Allocator,
     io: Io,
     dir: Dir,
     sub_path: []const u8,
+    expected_space_id: []const u8,
     payload: []const u8,
 ) !void {
-    try requireFramedPayload(payload);
+    var outcome = try replayBytesForSpace(allocator, payload, expected_space_id);
+    switch (outcome) {
+        .corrupt => return error.CorruptLog,
+        .replay => |*replay| {
+            defer replay.deinit();
+            if (replay.torn_tail != null) return error.TornTail;
+        },
+    }
+
     const permissions = permissions: {
         const stat = dir.statFile(io, sub_path, .{}) catch |err| switch (err) {
             error.FileNotFound => break :permissions File.Permissions.default_file,
@@ -282,441 +456,609 @@ pub fn rewriteDurableAtomic(
     try dir_file.sync(io);
 }
 
-fn requireFramedPayload(payload: []const u8) !void {
-    if (payload.len != 0 and payload[payload.len - 1] != '\n')
-        return error.UnterminatedPayload;
+pub fn tripleEql(left: Triple, right: Triple) bool {
+    return termEql(left.slot0, right.slot0) and
+        termEql(left.slot1, right.slot1) and
+        termEql(left.slot2, right.slot2);
 }
 
-const ParseError = error{
-    InvalidEdn,
+pub fn termEql(left: Term, right: Term) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .atom => |left_atom| atomEql(left_atom, right.atom),
+        .triple => |left_triple| tripleEql(left_triple.*, right.triple.*),
+    };
+}
+
+fn atomEql(left: Atom, right: Atom) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .string => |value| std.mem.eql(u8, value, right.string),
+        .integer => |value| value == right.integer,
+        .float => |value| @as(u64, @bitCast(value)) == @as(u64, @bitCast(right.float)),
+        .boolean => |value| value == right.boolean,
+        .keyword => |value| std.mem.eql(u8, value, right.keyword),
+        .instant => |value| value.epoch_seconds == right.instant.epoch_seconds and
+            value.nanosecond == right.instant.nanosecond,
+    };
+}
+
+fn validateSpaceId(space_id: []const u8) EncodeError!void {
+    if (space_id.len == 0 or space_id.len > max_space_id_bytes or
+        !std.unicode.utf8ValidateSlice(space_id))
+    {
+        return error.InvalidSpaceId;
+    }
+}
+
+fn validateExpectedSpaceId(space_id: []const u8) error{InvalidSpaceId}!void {
+    if (space_id.len == 0 or space_id.len > max_space_id_bytes or
+        !std.unicode.utf8ValidateSlice(space_id))
+    {
+        return error.InvalidSpaceId;
+    }
+}
+
+fn validateTransaction(transaction: Transaction) EncodeError!void {
+    if (transaction.ops.len == 0) return error.EmptyTransaction;
+    if (transaction.ops.len > std.math.maxInt(u32)) return error.TooManyOperations;
+    for (transaction.ops, 0..) |op, index| {
+        if (op.ordinal != index) return error.NonCanonicalOrdinal;
+        try validateTerm(.{ .triple = &op.triple }, 0);
+    }
+}
+
+fn validateTerm(term: Term, depth: usize) EncodeError!void {
+    if (depth > max_term_depth) return error.TermTooDeep;
+    switch (term) {
+        .atom => |atom| switch (atom) {
+            .string => |value| if (!std.unicode.utf8ValidateSlice(value))
+                return error.InvalidAtomUtf8,
+            .keyword => |value| {
+                if (value.len == 0 or value[0] == ':' or
+                    !std.unicode.utf8ValidateSlice(value))
+                {
+                    return error.InvalidAtom;
+                }
+            },
+            .instant => |value| if (value.nanosecond > 999_999_999)
+                return error.InvalidInstant,
+            else => {},
+        },
+        .triple => |triple| {
+            try validateTerm(triple.slot0, depth + 1);
+            try validateTerm(triple.slot1, depth + 1);
+            try validateTerm(triple.slot2, depth + 1);
+        },
+    }
+}
+
+fn writeTerm(writer: *Writer, term: Term, depth: usize) EncodeError!void {
+    if (depth > max_term_depth) return error.TermTooDeep;
+    switch (term) {
+        .atom => |atom| switch (atom) {
+            .string => |value| {
+                if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidAtomUtf8;
+                try writeByte(writer, @intFromEnum(TermTag.string));
+                try writeLength(writer, value.len);
+                try writeBytes(writer, value);
+            },
+            .integer => |value| {
+                try writeByte(writer, @intFromEnum(TermTag.integer));
+                try writeInt(writer, i64, value);
+            },
+            .float => |value| {
+                try writeByte(writer, @intFromEnum(TermTag.float));
+                try writeInt(writer, u64, @bitCast(value));
+            },
+            .boolean => |value| try writeByte(writer, @intFromEnum(
+                if (value) TermTag.bool_true else TermTag.bool_false,
+            )),
+            .keyword => |value| {
+                if (value.len == 0 or value[0] == ':' or
+                    !std.unicode.utf8ValidateSlice(value))
+                {
+                    return error.InvalidAtom;
+                }
+                try writeByte(writer, @intFromEnum(TermTag.keyword));
+                try writeLength(writer, value.len);
+                try writeBytes(writer, value);
+            },
+            .instant => |value| {
+                if (value.nanosecond > 999_999_999) return error.InvalidInstant;
+                try writeByte(writer, @intFromEnum(TermTag.instant));
+                try writeInt(writer, i64, value.epoch_seconds);
+                try writeInt(writer, u32, value.nanosecond);
+            },
+        },
+        .triple => |triple| {
+            try writeByte(writer, @intFromEnum(TermTag.triple));
+            try writeTerm(writer, triple.slot0, depth + 1);
+            try writeTerm(writer, triple.slot1, depth + 1);
+            try writeTerm(writer, triple.slot2, depth + 1);
+        },
+    }
+}
+
+fn writeLength(writer: *Writer, length: usize) EncodeError!void {
+    if (length > std.math.maxInt(u32)) return error.FrameTooLarge;
+    try writeInt(writer, u32, @intCast(length));
+}
+
+fn writeBytes(writer: *Writer, bytes: []const u8) Allocator.Error!void {
+    writer.writeAll(bytes) catch return error.OutOfMemory;
+}
+
+fn writeByte(writer: *Writer, byte: u8) Allocator.Error!void {
+    writer.writeByte(byte) catch return error.OutOfMemory;
+}
+
+fn writeInt(writer: *Writer, comptime T: type, value: T) Allocator.Error!void {
+    var bytes: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &bytes, value, .little);
+    try writeBytes(writer, &bytes);
+}
+
+const HeaderView = struct {
+    space_id: []const u8,
+    end_offset: usize,
+};
+
+const HeaderError = error{
+    MigrationRequired,
+    InvalidHeader,
+};
+
+fn parseHeader(bytes: []const u8) HeaderError!HeaderView {
+    if (bytes.len < format_magic.len or
+        !std.mem.eql(u8, bytes[0..format_magic.len], format_magic))
+    {
+        return error.MigrationRequired;
+    }
+    if (bytes.len < fixed_header_bytes) return error.InvalidHeader;
+    const version = readIntAt(u16, bytes, format_magic.len);
+    const flags = readIntAt(u16, bytes, format_magic.len + @sizeOf(u16));
+    if (version != format_version or flags != format_flags)
+        return error.MigrationRequired;
+
+    const length_offset = format_magic.len + @sizeOf(u16) + @sizeOf(u16);
+    const space_len: usize = readIntAt(u32, bytes, length_offset);
+    if (space_len == 0 or space_len > max_space_id_bytes or
+        bytes.len - fixed_header_bytes < space_len)
+    {
+        return error.InvalidHeader;
+    }
+    const space_id = bytes[fixed_header_bytes .. fixed_header_bytes + space_len];
+    if (!std.unicode.utf8ValidateSlice(space_id)) return error.InvalidHeader;
+    return .{
+        .space_id = space_id,
+        .end_offset = fixed_header_bytes + space_len,
+    };
+}
+
+const DecodeError = error{
+    InvalidFrame,
+    TermTooDeep,
     OutOfMemory,
 };
 
-const Span = struct {
-    start: usize,
-    end: usize,
-};
-
-const Parser = struct {
-    allocator: Allocator,
+const Cursor = struct {
     input: []const u8,
     pos: usize = 0,
 
-    fn parseTop(self: *Parser) ParseError!PartialFactOp {
-        self.skipSeparators();
-        if (self.pos >= self.input.len) return error.InvalidEdn;
-        if (self.input[self.pos] != '{') {
-            _ = try self.skipValue();
-            self.skipSeparators();
-            if (self.pos != self.input.len) return error.InvalidEdn;
-            return .{};
-        }
-
+    fn readByte(self: *Cursor) DecodeError!u8 {
+        if (self.pos >= self.input.len) return error.InvalidFrame;
+        const result = self.input[self.pos];
         self.pos += 1;
-        var fact: PartialFactOp = .{};
-        while (true) {
-            self.skipSeparators();
-            if (self.pos >= self.input.len) return error.InvalidEdn;
-            if (self.input[self.pos] == '}') {
-                self.pos += 1;
-                break;
-            }
-            const key = try self.skipValue();
-            self.skipSeparators();
-            if (self.pos >= self.input.len or self.input[self.pos] == '}')
-                return error.InvalidEdn;
-            const value = try self.skipValue();
-            try self.captureField(&fact, key, value);
-        }
-        self.skipSeparators();
-        if (self.pos != self.input.len) return error.InvalidEdn;
-        return fact;
+        return result;
     }
 
-    fn captureField(
-        self: *Parser,
-        fact: *PartialFactOp,
-        key: Span,
-        value: Span,
-    ) ParseError!void {
-        const key_bytes = self.input[key.start..key.end];
-        const value_bytes = self.input[value.start..value.end];
-        if (std.mem.eql(u8, key_bytes, ":tx")) {
-            fact.tx = std.fmt.parseInt(i64, value_bytes, 10) catch null;
-        } else if (std.mem.eql(u8, key_bytes, ":op")) {
-            fact.op = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":l")) {
-            fact.l = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":p")) {
-            fact.p = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":r")) {
-            fact.r = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":frame")) {
-            fact.frame = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":by")) {
-            fact.by = try self.decodeString(value_bytes);
-        } else if (std.mem.eql(u8, key_bytes, ":ts")) {
-            fact.ts = try self.decodeString(value_bytes);
-        }
+    fn readInt(self: *Cursor, comptime T: type) DecodeError!T {
+        if (self.input.len - self.pos < @sizeOf(T)) return error.InvalidFrame;
+        const result = readIntAt(T, self.input, self.pos);
+        self.pos += @sizeOf(T);
+        return result;
     }
 
-    fn skipValue(self: *Parser) ParseError!Span {
-        self.skipSeparators();
-        if (self.pos >= self.input.len) return error.InvalidEdn;
-        const start = self.pos;
-        switch (self.input[self.pos]) {
-            '"' => try self.skipString(),
-            '{' => try self.skipMap(),
-            '[' => try self.skipCollection('[', ']'),
-            '(' => try self.skipCollection('(', ')'),
-            '#' => try self.skipDispatch(),
-            '}', ']', ')' => return error.InvalidEdn,
-            else => try self.skipToken(),
-        }
-        return .{ .start = start, .end = self.pos };
-    }
-
-    fn skipString(self: *Parser) ParseError!void {
-        self.pos += 1;
-        while (self.pos < self.input.len) {
-            const byte = self.input[self.pos];
-            self.pos += 1;
-            if (byte == '"') return;
-            if (byte == '\\') {
-                if (self.pos >= self.input.len) return error.InvalidEdn;
-                const escaped = self.input[self.pos];
-                self.pos += 1;
-                if (escaped == 'u') {
-                    if (self.input.len - self.pos < 4) return error.InvalidEdn;
-                    for (self.input[self.pos .. self.pos + 4]) |hex| {
-                        if (!std.ascii.isHex(hex)) return error.InvalidEdn;
-                    }
-                    self.pos += 4;
-                } else if (std.mem.indexOfScalar(
-                    u8,
-                    "\\\"nrtbf",
-                    escaped,
-                ) == null) {
-                    return error.InvalidEdn;
-                }
-            }
-        }
-        return error.InvalidEdn;
-    }
-
-    fn skipMap(self: *Parser) ParseError!void {
-        self.pos += 1;
-        while (true) {
-            self.skipSeparators();
-            if (self.pos >= self.input.len) return error.InvalidEdn;
-            if (self.input[self.pos] == '}') {
-                self.pos += 1;
-                return;
-            }
-            _ = try self.skipValue();
-            self.skipSeparators();
-            if (self.pos >= self.input.len or self.input[self.pos] == '}')
-                return error.InvalidEdn;
-            _ = try self.skipValue();
-        }
-    }
-
-    fn skipCollection(self: *Parser, open: u8, close: u8) ParseError!void {
-        std.debug.assert(self.input[self.pos] == open);
-        self.pos += 1;
-        while (true) {
-            self.skipSeparators();
-            if (self.pos >= self.input.len) return error.InvalidEdn;
-            if (self.input[self.pos] == close) {
-                self.pos += 1;
-                return;
-            }
-            _ = try self.skipValue();
-        }
-    }
-
-    fn skipDispatch(self: *Parser) ParseError!void {
-        self.pos += 1;
-        if (self.pos >= self.input.len) return error.InvalidEdn;
-        if (self.input[self.pos] == '{') {
-            try self.skipCollection('{', '}');
-            return;
-        }
-        if (self.input[self.pos] == '"') {
-            try self.skipString();
-            return;
-        }
-        if (self.input[self.pos] == '#') {
-            try self.skipToken();
-            return;
-        }
-        try self.skipToken();
-        self.skipSeparators();
-        _ = try self.skipValue();
-    }
-
-    fn skipToken(self: *Parser) ParseError!void {
-        const start = self.pos;
-        while (self.pos < self.input.len and !delimiter(self.input[self.pos])) {
-            self.pos += 1;
-        }
-        if (self.pos == start) return error.InvalidEdn;
-    }
-
-    fn skipSeparators(self: *Parser) void {
-        while (self.pos < self.input.len) {
-            switch (self.input[self.pos]) {
-                ' ', '\t', '\r', '\n', ',' => self.pos += 1,
-                else => return,
-            }
-        }
-    }
-
-    fn decodeString(self: *Parser, raw: []const u8) ParseError!?[]const u8 {
-        if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"')
-            return null;
-        var out: Writer.Allocating = .init(self.allocator);
-        defer out.deinit();
-        const writer = &out.writer;
-        var index: usize = 1;
-        while (index < raw.len - 1) {
-            const byte = raw[index];
-            index += 1;
-            if (byte != '\\') {
-                writer.writeByte(byte) catch return error.OutOfMemory;
-                continue;
-            }
-            if (index >= raw.len - 1) return error.InvalidEdn;
-            const escaped = raw[index];
-            index += 1;
-            switch (escaped) {
-                '\\' => writer.writeByte('\\') catch return error.OutOfMemory,
-                '"' => writer.writeByte('"') catch return error.OutOfMemory,
-                'n' => writer.writeByte('\n') catch return error.OutOfMemory,
-                'r' => writer.writeByte('\r') catch return error.OutOfMemory,
-                't' => writer.writeByte('\t') catch return error.OutOfMemory,
-                'b' => writer.writeByte(0x08) catch return error.OutOfMemory,
-                'f' => writer.writeByte(0x0c) catch return error.OutOfMemory,
-                'u' => {
-                    if (raw.len - 1 - index < 4) return error.InvalidEdn;
-                    const codepoint = std.fmt.parseInt(
-                        u21,
-                        raw[index .. index + 4],
-                        16,
-                    ) catch return error.InvalidEdn;
-                    index += 4;
-                    var encoded: [4]u8 = undefined;
-                    const count = std.unicode.utf8Encode(
-                        codepoint,
-                        &encoded,
-                    ) catch return error.InvalidEdn;
-                    writer.writeAll(encoded[0..count]) catch
-                        return error.OutOfMemory;
-                },
-                else => return error.InvalidEdn,
-            }
-        }
-        const decoded = out.written();
-        if (!std.unicode.utf8ValidateSlice(decoded)) return error.InvalidEdn;
-        return try self.allocator.dupe(u8, decoded);
+    fn readSlice(self: *Cursor, length: usize) DecodeError![]const u8 {
+        if (self.input.len - self.pos < length) return error.InvalidFrame;
+        const result = self.input[self.pos .. self.pos + length];
+        self.pos += length;
+        return result;
     }
 };
 
-fn parseRecord(allocator: Allocator, segment: []const u8) ParseError!PartialFactOp {
-    if (!std.unicode.utf8ValidateSlice(segment)) return error.InvalidEdn;
-    var parser: Parser = .{ .allocator = allocator, .input = segment };
-    return parser.parseTop();
+fn readIntAt(comptime T: type, bytes: []const u8, offset: usize) T {
+    return std.mem.readInt(T, bytes[offset..][0..@sizeOf(T)], .little);
 }
 
-fn delimiter(byte: u8) bool {
-    return switch (byte) {
-        ' ', '\t', '\r', '\n', ',', '{', '}', '[', ']', '(', ')' => true,
-        else => false,
+fn parseTransaction(allocator: Allocator, payload: []const u8) DecodeError!Transaction {
+    var cursor: Cursor = .{ .input = payload };
+    const tx_seq = try cursor.readInt(i64);
+    const op_count = try cursor.readInt(u32);
+    if (op_count == 0) return error.InvalidFrame;
+
+    var ops: std.ArrayList(Op) = .empty;
+    defer ops.deinit(allocator);
+    try ops.ensureTotalCapacity(allocator, op_count);
+    for (0..op_count) |index| {
+        const ordinal = try cursor.readInt(u32);
+        if (ordinal != index) return error.InvalidFrame;
+        const action = std.enums.fromInt(Action, try cursor.readByte()) orelse
+            return error.InvalidFrame;
+        const root_tag = std.enums.fromInt(TermTag, try cursor.readByte()) orelse
+            return error.InvalidFrame;
+        if (root_tag != .triple) return error.InvalidFrame;
+        const triple = try parseTripleAfterTag(allocator, &cursor, 0);
+        try ops.append(allocator, .{
+            .ordinal = ordinal,
+            .action = action,
+            .triple = triple,
+        });
+    }
+    if (cursor.pos != payload.len) return error.InvalidFrame;
+    return .{
+        .tx_seq = tx_seq,
+        .ops = try ops.toOwnedSlice(allocator),
     };
 }
 
-fn blank(bytes: []const u8) bool {
-    for (bytes) |byte| switch (byte) {
-        ' ', '\t', '\r', '\n' => {},
-        else => return false,
+fn parseTerm(allocator: Allocator, cursor: *Cursor, depth: usize) DecodeError!Term {
+    if (depth > max_term_depth) return error.TermTooDeep;
+    const tag = std.enums.fromInt(TermTag, try cursor.readByte()) orelse
+        return error.InvalidFrame;
+    return switch (tag) {
+        .string => .{ .atom = .{ .string = try parseText(allocator, cursor, false) } },
+        .integer => .{ .atom = .{ .integer = try cursor.readInt(i64) } },
+        .float => .{ .atom = .{ .float = @bitCast(try cursor.readInt(u64)) } },
+        .bool_false => .{ .atom = .{ .boolean = false } },
+        .bool_true => .{ .atom = .{ .boolean = true } },
+        .keyword => .{ .atom = .{ .keyword = try parseText(allocator, cursor, true) } },
+        .instant => instant: {
+            const value: Instant = .{
+                .epoch_seconds = try cursor.readInt(i64),
+                .nanosecond = try cursor.readInt(u32),
+            };
+            if (value.nanosecond > 999_999_999) return error.InvalidFrame;
+            break :instant .{ .atom = .{ .instant = value } };
+        },
+        .triple => triple: {
+            const value = try allocator.create(Triple);
+            value.* = try parseTripleAfterTag(allocator, cursor, depth);
+            break :triple .{ .triple = value };
+        },
     };
-    return true;
 }
 
-test "flat line bytes match the Clojure producers" {
-    const allocator = std.testing.allocator;
-    const unicode_line = try encodeLine(allocator, .{
-        .tx = 1,
-        .op = "assert",
-        .l = "@café",
-        .p = "title",
-        .r = "Café ☕ time",
-    }, .none);
-    defer allocator.free(unicode_line);
-    try std.testing.expectEqualStrings(
-        "{:tx 1, :op \"assert\", :l \"@café\", :p \"title\", :r \"Café ☕ time\"}\n",
-        unicode_line,
-    );
-
-    const cold_line = try encodeLine(allocator, .{
-        .tx = 7,
-        .op = "assert",
-        .l = "@s",
-        .p = "body",
-        .r = "line\nquote \" slash \\",
-    }, .{ .cold = .{
-        .frame = "cli",
-        .ts = "2026-07-30T00:00:00Z",
-    } });
-    defer allocator.free(cold_line);
-    try std.testing.expectEqualStrings(
-        "{:tx 7, :op \"assert\", :l \"@s\", :p \"body\", :r \"line\\nquote \\\" slash \\\\\", :frame \"cli\", :ts \"2026-07-30T00:00:00Z\"}\n",
-        cold_line,
-    );
-
-    const coordinator_line = try encodeLine(allocator, .{
-        .tx = 8,
-        .op = "retract",
-        .l = "@s",
-        .p = "owner",
-        .r = "alice",
-    }, .{ .coordinator = .{
-        .ts = "2026-07-30T00:00:01Z",
-        .by = "coord",
-    } });
-    defer allocator.free(coordinator_line);
-    try std.testing.expectEqualStrings(
-        "{:tx 8, :op \"retract\", :l \"@s\", :p \"owner\", :r \"alice\", :ts \"2026-07-30T00:00:01Z\", :by \"coord\"}\n",
-        coordinator_line,
-    );
+fn parseTripleAfterTag(
+    allocator: Allocator,
+    cursor: *Cursor,
+    depth: usize,
+) DecodeError!Triple {
+    if (depth > max_term_depth) return error.TermTooDeep;
+    return .{
+        .slot0 = try parseTerm(allocator, cursor, depth + 1),
+        .slot1 = try parseTerm(allocator, cursor, depth + 1),
+        .slot2 = try parseTerm(allocator, cursor, depth + 1),
+    };
 }
 
-test "replay distinguishes torn tail, completed corruption, and valid incomplete EDN" {
-    const allocator = std.testing.allocator;
-    const line1 =
-        "{:tx 1, :op \"assert\", :l \"@café\", :p \"title\", :r \"Café ☕ time\"}\n";
-    const line2 =
-        "{:tx 2, :op \"assert\", :l \"@b\", :p \"note\", :r \"ok\"}\n";
-    const torn = "{:tx 3, :op \"assert\", :l \"@c\", :p \"tit";
-    const torn_bytes = line1 ++ line2 ++ torn;
+fn parseText(
+    allocator: Allocator,
+    cursor: *Cursor,
+    keyword: bool,
+) DecodeError![]const u8 {
+    const length = try cursor.readInt(u32);
+    const value = try cursor.readSlice(length);
+    if (!std.unicode.utf8ValidateSlice(value) or
+        (keyword and (value.len == 0 or value[0] == ':')))
+    {
+        return error.InvalidFrame;
+    }
+    return allocator.dupe(u8, value);
+}
 
-    var torn_outcome = try replayBytes(allocator, torn_bytes);
-    switch (torn_outcome) {
-        .corrupt => return error.TestExpectedEqual,
+fn stringTerm(value: []const u8) Term {
+    return .{ .atom = .{ .string = value } };
+}
+
+fn keywordTerm(value: []const u8) Term {
+    return .{ .atom = .{ .keyword = value } };
+}
+
+test "recursive triples and typed atoms roundtrip deterministically" {
+    const allocator = std.testing.allocator;
+
+    const in_slot0: Triple = .{
+        .slot0 = stringTerm("Alice"),
+        .slot1 = keywordTerm("contact/email"),
+        .slot2 = .{ .atom = .{ .boolean = true } },
+    };
+    const in_slot1: Triple = .{
+        .slot0 = .{ .atom = .{ .integer = -42 } },
+        .slot1 = .{ .atom = .{ .float = -0.0 } },
+        .slot2 = .{ .atom = .{ .instant = .{
+            .epoch_seconds = 1_775_000_000,
+            .nanosecond = 123_456_789,
+        } } },
+    };
+    const in_slot2: Triple = .{
+        .slot0 = keywordTerm("kernel/tx-sequence"),
+        .slot1 = stringTerm("same bytes, different atom type"),
+        .slot2 = .{ .atom = .{ .integer = 7 } },
+    };
+    const root: Triple = .{
+        .slot0 = .{ .triple = &in_slot0 },
+        .slot1 = .{ .triple = &in_slot1 },
+        .slot2 = .{ .triple = &in_slot2 },
+    };
+    const ops = [_]Op{
+        .{ .ordinal = 0, .action = .assert, .triple = root },
+        .{ .ordinal = 1, .action = .retract, .triple = in_slot0 },
+    };
+    const transactions = [_]Transaction{.{
+        .tx_seq = 1842,
+        .ops = &ops,
+    }};
+
+    const first = try encodeLog(allocator, "msa-space", &transactions);
+    defer allocator.free(first);
+    const second = try encodeLog(allocator, "msa-space", &transactions);
+    defer allocator.free(second);
+    try std.testing.expectEqualSlices(u8, first, second);
+    try std.testing.expectEqualSlices(
+        u8,
+        "FRAMLOG\x00\x01\x00\x00\x00\x09\x00\x00\x00msa-space",
+        first[0 .. fixed_header_bytes + "msa-space".len],
+    );
+
+    var outcome = try replayBytesForSpace(allocator, first, "msa-space");
+    switch (outcome) {
+        .corrupt => return error.TestUnexpectedResult,
         .replay => |*replay| {
             defer replay.deinit();
-            try std.testing.expectEqual(@as(usize, 2), replay.records.len);
-            try std.testing.expectEqual(
-                @as(usize, line1.len + line2.len),
-                replay.torn_tail.?.byte_offset,
-            );
-            try std.testing.expectEqualStrings(
-                "Café ☕ time",
-                replay.records[0].fact.r.?,
-            );
+            try std.testing.expectEqualStrings("msa-space", replay.space_id);
+            try std.testing.expectEqual(@as(usize, first.len), replay.valid_bytes);
+            try std.testing.expect(replay.torn_tail == null);
+            try std.testing.expectEqual(@as(usize, 1), replay.transactions.len);
+            try std.testing.expectEqual(@as(i64, 1842), replay.transactions[0].tx_seq);
+            try std.testing.expectEqual(@as(usize, 2), replay.transactions[0].ops.len);
+            try std.testing.expectEqual(@as(u32, 1), replay.transactions[0].ops[1].ordinal);
+            try std.testing.expectEqual(Action.retract, replay.transactions[0].ops[1].action);
+            try std.testing.expect(tripleEql(root, replay.transactions[0].ops[0].triple));
+            try std.testing.expect(!termEql(
+                keywordTerm("contact/email"),
+                stringTerm("contact/email"),
+            ));
+
+            const reencoded = try encodeLog(allocator, replay.space_id, replay.transactions);
+            defer allocator.free(reencoded);
+            try std.testing.expectEqualSlices(u8, first, reencoded);
+        },
+    }
+}
+
+test "missing legacy and incompatible headers require migration" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.MigrationRequired, replayBytes(allocator, ""));
+    try std.testing.expectError(
+        error.MigrationRequired,
+        replayBytes(allocator, "{:tx 1, :op \"assert\", :l \"@a\", :p \"title\", :r \"A\"}\n"),
+    );
+
+    const image = try encodeLog(allocator, "coordination", &.{});
+    defer allocator.free(image);
+    const wrong_version = try allocator.dupe(u8, image);
+    defer allocator.free(wrong_version);
+    wrong_version[format_magic.len] = 2;
+    try std.testing.expectError(
+        error.MigrationRequired,
+        replayBytes(allocator, wrong_version),
+    );
+    try std.testing.expectError(
+        error.SpaceMismatch,
+        replayBytesForSpace(allocator, image, "telemetry"),
+    );
+}
+
+test "v1 byte fixture locks the cross-runtime ABI" {
+    const allocator = std.testing.allocator;
+    const triple: Triple = .{
+        .slot0 = stringTerm("Alice"),
+        .slot1 = keywordTerm("email"),
+        .slot2 = stringTerm("alice@example.com"),
+    };
+    const ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
+    const transactions = [_]Transaction{.{ .tx_seq = 1842, .ops = &ops }};
+    const image = try encodeLog(allocator, "msa-space", &transactions);
+    defer allocator.free(image);
+
+    const expected_hex =
+        "4652414d4c4f470001000000090000006d73612d7370616365" ++
+        "3c0000003207000000000000010000000000000001070105000000416c696365" ++
+        "0605000000656d61696c0111000000616c696365406578616d706c652e636f6d" ++
+        "d42d3294";
+    var expected: [expected_hex.len / 2]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&expected, expected_hex);
+    try std.testing.expectEqualSlices(u8, &expected, image);
+    try std.testing.expectEqual(@as(u32, 0x94322dd4), std.hash.Crc32.hash(
+        image[fixed_header_bytes + "msa-space".len + @sizeOf(u32) .. image.len - @sizeOf(u32)],
+    ));
+}
+
+test "a torn final frame drops its whole transaction and completed damage corrupts" {
+    const allocator = std.testing.allocator;
+    const triple: Triple = .{
+        .slot0 = stringTerm("Alice"),
+        .slot1 = keywordTerm("email"),
+        .slot2 = stringTerm("alice@example.com"),
+    };
+    const first_ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
+    const second_ops = [_]Op{
+        .{ .ordinal = 0, .action = .retract, .triple = triple },
+        .{ .ordinal = 1, .action = .assert, .triple = triple },
+    };
+    const first_tx: Transaction = .{ .tx_seq = 10, .ops = &first_ops };
+    const second_tx: Transaction = .{ .tx_seq = 11, .ops = &second_ops };
+
+    const header = try encodeHeader(allocator, "coordination");
+    defer allocator.free(header);
+    const frame1 = try encodeTransactionFrame(allocator, first_tx);
+    defer allocator.free(frame1);
+    const frame2 = try encodeTransactionFrame(allocator, second_tx);
+    defer allocator.free(frame2);
+    const complete = try std.mem.concat(allocator, u8, &.{ header, frame1, frame2 });
+    defer allocator.free(complete);
+    const frame2_offset = header.len + frame1.len;
+
+    var torn_outcome = try replayBytes(allocator, complete[0 .. complete.len - 3]);
+    switch (torn_outcome) {
+        .corrupt => return error.TestUnexpectedResult,
+        .replay => |*replay| {
+            defer replay.deinit();
+            try std.testing.expectEqual(@as(usize, 1), replay.transactions.len);
+            try std.testing.expectEqual(frame2_offset, replay.valid_bytes);
+            try std.testing.expectEqual(frame2_offset, replay.torn_tail.?.byte_offset);
+            try std.testing.expectEqual(@as(usize, 1), replay.torn_tail.?.recovered_transactions);
         },
     }
 
-    const bad = "{:tx 2, :op broken not-edn (((\n";
-    const corruption_bytes = line1 ++ bad ++ line2;
-    var corrupt_outcome = try replayBytes(allocator, corruption_bytes);
-    switch (corrupt_outcome) {
+    const damaged = try allocator.dupe(u8, complete);
+    defer allocator.free(damaged);
+    damaged[frame2_offset + @sizeOf(u32) + 1] ^= 0x01;
+    var damaged_outcome = try replayBytes(allocator, damaged);
+    switch (damaged_outcome) {
         .replay => |*replay| {
             replay.deinit();
-            return error.TestExpectedEqual;
+            return error.TestUnexpectedResult;
         },
-        .corrupt => |corruption| try std.testing.expectEqual(
-            @as(usize, line1.len),
-            corruption.byte_offset,
-        ),
-    }
-
-    const incomplete =
-        "{:tx 5, :op \"assert\", :l \"@x\", :p \"title\"}";
-    const incomplete_bytes = line1 ++ line2 ++ incomplete;
-    var incomplete_outcome = try replayBytes(allocator, incomplete_bytes);
-    switch (incomplete_outcome) {
-        .corrupt => return error.TestExpectedEqual,
-        .replay => |*replay| {
-            defer replay.deinit();
-            try std.testing.expectEqual(@as(usize, 3), replay.records.len);
-            try std.testing.expect(replay.torn_tail == null);
-            try std.testing.expectEqual(@as(?i64, 5), replay.records[2].fact.tx);
-            try std.testing.expect(replay.records[2].fact.r == null);
-            try std.testing.expect(!replay.records[2].fact.complete());
+        .corrupt => |corruption| {
+            try std.testing.expectEqual(frame2_offset, corruption.byte_offset);
+            try std.testing.expectEqual(CorruptionReason.checksum_mismatch, corruption.reason);
         },
     }
 }
 
-test "durable append and atomic rewrite preserve framing" {
+test "transaction canonicality and instant bounds are enforced" {
+    const allocator = std.testing.allocator;
+    const triple: Triple = .{
+        .slot0 = stringTerm("s"),
+        .slot1 = keywordTerm("p"),
+        .slot2 = stringTerm("o"),
+    };
+    try std.testing.expectError(
+        error.EmptyTransaction,
+        encodeTransactionFrame(allocator, .{ .tx_seq = 1, .ops = &.{} }),
+    );
+    const bad_ordinal = [_]Op{.{ .ordinal = 1, .action = .assert, .triple = triple }};
+    try std.testing.expectError(
+        error.NonCanonicalOrdinal,
+        encodeTransactionFrame(allocator, .{ .tx_seq = 1, .ops = &bad_ordinal }),
+    );
+    const bad_instant: Triple = .{
+        .slot0 = .{ .atom = .{ .instant = .{
+            .epoch_seconds = 0,
+            .nanosecond = 1_000_000_000,
+        } } },
+        .slot1 = keywordTerm("recorded-at"),
+        .slot2 = stringTerm("invalid"),
+    };
+    const bad_instant_ops = [_]Op{.{
+        .ordinal = 0,
+        .action = .assert,
+        .triple = bad_instant,
+    }};
+    try std.testing.expectError(
+        error.InvalidInstant,
+        encodeTransactionFrame(allocator, .{ .tx_seq = 1, .ops = &bad_instant_ops }),
+    );
+
+    var invalid_instant_wire: [1 + @sizeOf(i64) + @sizeOf(u32)]u8 = undefined;
+    invalid_instant_wire[0] = @intFromEnum(TermTag.instant);
+    std.mem.writeInt(i64, invalid_instant_wire[1..9], 0, .little);
+    std.mem.writeInt(u32, invalid_instant_wire[9..13], 1_000_000_000, .little);
+    var cursor: Cursor = .{ .input = &invalid_instant_wire };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.InvalidFrame,
+        parseTerm(arena.allocator(), &cursor, 0),
+    );
+}
+
+test "durable append fences space and size and atomic rewrite stays replayable" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const first = try encodeLine(allocator, .{
-        .tx = 1,
-        .op = "assert",
-        .l = "@a",
-        .p = "title",
-        .r = "A",
-    }, .none);
-    defer allocator.free(first);
-    const second = try encodeLine(allocator, .{
-        .tx = 2,
-        .op = "assert",
-        .l = "@b",
-        .p = "title",
-        .r = "B",
-    }, .none);
-    defer allocator.free(second);
-
-    try appendDurable(io, tmp.dir, "facts.log", first);
-    try appendDurable(io, tmp.dir, "facts.log", second);
-    const appended = try tmp.dir.readFileAlloc(
-        io,
-        "facts.log",
+    const empty = try encodeLog(allocator, "coordination", &.{});
+    defer allocator.free(empty);
+    try rewriteDurableAtomic(
         allocator,
-        .unlimited,
+        io,
+        tmp.dir,
+        "facts.log",
+        "coordination",
+        empty,
     );
-    defer allocator.free(appended);
-    const expected = try std.mem.concat(allocator, u8, &.{ first, second });
-    defer allocator.free(expected);
-    try std.testing.expectEqualStrings(expected, appended);
 
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "broken.log",
-        .data = "unterminated",
-    });
+    const triple: Triple = .{
+        .slot0 = stringTerm("Alice"),
+        .slot1 = keywordTerm("email"),
+        .slot2 = stringTerm("alice@example.com"),
+    };
+    const ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
+    const transaction: Transaction = .{ .tx_seq = 1, .ops = &ops };
+    const new_size = try appendTransactionDurable(
+        allocator,
+        io,
+        tmp.dir,
+        "facts.log",
+        "coordination",
+        empty.len,
+        transaction,
+    );
+    try std.testing.expect(new_size > empty.len);
     try std.testing.expectError(
-        error.UnterminatedLog,
-        appendDurable(io, tmp.dir, "broken.log", first),
+        error.LogAdvanced,
+        appendTransactionDurable(
+            allocator,
+            io,
+            tmp.dir,
+            "facts.log",
+            "coordination",
+            empty.len,
+            transaction,
+        ),
     );
-
-    try rewriteDurableAtomic(io, tmp.dir, "facts.log", second);
-    const rewritten = try tmp.dir.readFileAlloc(
-        io,
-        "facts.log",
-        allocator,
-        .unlimited,
+    try std.testing.expectError(
+        error.SpaceMismatch,
+        appendTransactionDurable(
+            allocator,
+            io,
+            tmp.dir,
+            "facts.log",
+            "telemetry",
+            new_size,
+            transaction,
+        ),
     );
-    defer allocator.free(rewritten);
-    try std.testing.expectEqualStrings(second, rewritten);
 
     var replay_outcome = try replayFile(
         allocator,
         io,
         tmp.dir,
         "facts.log",
-        1024,
+        4096,
     );
     switch (replay_outcome) {
-        .corrupt => return error.TestExpectedEqual,
+        .corrupt => return error.TestUnexpectedResult,
         .replay => |*replay| {
             defer replay.deinit();
-            try std.testing.expectEqual(@as(usize, 1), replay.records.len);
-            try std.testing.expect(replay.records[0].fact.complete());
-            try std.testing.expectEqual(@as(?i64, 2), replay.records[0].fact.tx);
+            try std.testing.expectEqualStrings("coordination", replay.space_id);
+            try std.testing.expectEqual(@as(usize, 1), replay.transactions.len);
+            try std.testing.expectEqual(@as(usize, new_size), replay.valid_bytes);
         },
     }
 }
