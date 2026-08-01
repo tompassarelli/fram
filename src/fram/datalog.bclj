@@ -1,22 +1,23 @@
 #lang beagle/clj
-;; A query tuple is a homogeneous vector of recursive Terms.  Relation names
-;; belong to the query program; none of the three kernel slots has a fixed role.
+;; Typed Datalog over homogeneous rows of recursive Fram Terms. Relation names
+;; are query-local; the kernel assigns no role to slot0, slot1, or slot2.
 (ns fram.datalog)
 (define-mode strict)
 (require fram.kernel :as kernel)
 (require fram.types :as t)
 
-;; The typed IR is independent of EDN, JSON, or RPC syntax.  Any adapter that
-;; accepts maps or wire data must compile that input to these records first.
+;; Query syntax adapters compile to this IR. QueryTerm.value stays Any because
+;; Beagle cannot consume a recursive Dyn through generic equality; constant and
+;; edb enforce Term at the boundary, so there is still one semantic value model.
 (defrecord QueryTerm [variable: String? value: Any])
 (defrecord Literal
-  [relation: String arguments: (Vec QueryTerm) negated: Bool])
+  [kind: Keyword relation: String arguments: (Vec QueryTerm)
+   negated: Bool operator: Keyword binding: String])
 (defrecord Rule
   [head-relation: String head-arguments: (Vec QueryTerm) body: (Vec Literal)])
+(defrecord QueryControl
+  [steps: Any cancelled: Any max-steps: Int deadline-ns: Int timeout-ms: Int])
 
-;; Recursive Dyn alternatives cannot currently be consumed by generic equality
-;; in Beagle. Tuple cells stay Any internally; edb/constant enforce Term once at
-;; the boundary, so this is an ABI spelling limitation rather than a second model.
 (defalias Tuple (Vec Any))
 (defalias Db (Map String (Set Tuple)))
 (defalias Substitution (Map String Any))
@@ -24,29 +25,48 @@
 (def triple-relation: String "triple")
 (def occurrence-relation: String "occurrence")
 (def base-relations: (Set String) #{triple-relation occurrence-relation})
+(def comparison-operators: (Set Keyword) #{:eq :ne :lt :le :gt :ge})
+(def subtract-operator: Keyword (keyword "-"))
+(def builtin-operators: (Set Keyword)
+  #{:+ subtract-operator :* :/ :mod})
 
 (def ^:dynamic *query-control*: Any nil)
 
-(defn- query-check [] -> Any
-  (if (nil? *query-control*)
-    nil
-    (let [steps (.incrementAndGet (:steps *query-control*))
-          now (System/nanoTime)
-          cancelled (deref (:cancelled *query-control*))
-          code (cond
-                 [(some? cancelled) :query-cancelled]
-                 [(> steps (:max-steps *query-control*)) :query-work-limit]
-                 [(>= now (:deadline-ns *query-control*)) :query-time-limit]
-                 [:else nil])]
-      (if (nil? code)
-        nil
-        (throw (ex-info (str "query evaluation stopped: " (name code))
-                        {:type :fram-query-abort
-                         :code code
-                         :reason cancelled
-                         :steps steps
-                         :max-steps (:max-steps *query-control*)
-                         :timeout-ms (:timeout-ms *query-control*)}))))))
+(defn query-control [max-steps: Int timeout-ms: Int] -> QueryControl
+  (if (and (> max-steps 0) (>= timeout-ms 0))
+    (->QueryControl (atom 0) (atom nil) max-steps
+                    (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms)
+    (throw (ex-info "fram: query limits must be positive steps and non-negative milliseconds"
+                    {:type :invalid-query-control}))))
+
+(defn cancel-query! [control: QueryControl reason: Keyword] -> Nil
+  (reset! (querycontrol-cancelled control) reason)
+  nil)
+
+(defn query-steps [control: QueryControl] -> Int
+  (deref (querycontrol-steps control)))
+
+(defn- query-check! [] -> Any
+  (let [control *query-control*]
+    (if (nil? control)
+      nil
+      (let [steps (swap! (querycontrol-steps control) inc)
+            now (System/nanoTime)
+            cancelled (deref (querycontrol-cancelled control))
+            code (cond
+                   [(some? cancelled) :query-cancelled]
+                   [(> steps (querycontrol-max-steps control)) :query-work-limit]
+                   [(>= now (querycontrol-deadline-ns control)) :query-time-limit]
+                   [:else nil])]
+        (if (nil? code)
+          nil
+          (throw (ex-info (str "query evaluation stopped: " (name code))
+                          {:type :fram-query-abort
+                           :code code
+                           :reason cancelled
+                           :steps steps
+                           :max-steps (querycontrol-max-steps control)
+                           :timeout-ms (querycontrol-timeout-ms control)})))))))
 
 (defn variable [name: String] -> QueryTerm
   (if (pos? (count name))
@@ -63,16 +83,25 @@
 (defn query-term? [value: Any] -> Bool
   (and (instance? QueryTerm value)
        (if (some? (queryterm-variable value))
-         (nil? (queryterm-value value))
+         (and (pos? (count (queryterm-variable value)))
+              (nil? (queryterm-value value)))
          (t/term? (queryterm-value value)))))
 
 (defn relation-literal
   [relation: String arguments: (Vec QueryTerm)] -> Literal
-  (->Literal relation arguments false))
+  (->Literal :relation relation arguments false :none ""))
 
 (defn negated-literal
   [relation: String arguments: (Vec QueryTerm)] -> Literal
-  (->Literal relation arguments true))
+  (->Literal :relation relation arguments true :none ""))
+
+(defn comparison-literal
+  [operator: Keyword arguments: (Vec QueryTerm)] -> Literal
+  (->Literal :comparison "" arguments false operator ""))
+
+(defn builtin-literal
+  [operator: Keyword arguments: (Vec QueryTerm) binding: String] -> Literal
+  (->Literal :builtin "" arguments false operator binding))
 
 (defn rule
   [head-relation: String head-arguments: (Vec QueryTerm) body: (Vec Literal)] -> Rule
@@ -86,8 +115,8 @@
             (conj acc (triple-row value)))
           #{} triples))
 
-;; The default EDB is the live proposition set only.  Exact assertion history is
-;; opt-in so ordinary queries do not accidentally couple themselves to identity.
+;; Ordinary queries see live propositions only. History is a separate explicit
+;; relation of (occurrence-coordinate, action, proposition) rows.
 (defn edb [propositions: (Vec t/Triple)] -> Db
   {triple-relation (rows propositions)})
 
@@ -105,9 +134,7 @@
 
 (defn- term-value [term: QueryTerm subst: Substitution] -> Any
   (let [name (queryterm-variable term)]
-    (if (some? name)
-      (get subst name)
-      (queryterm-value term))))
+    (if (some? name) (get subst name) (queryterm-value term))))
 
 (defn- unify
   [term: QueryTerm value: Any subst: Substitution] -> (U Substitution Nil)
@@ -120,7 +147,7 @@
 
 (defn- unify-arguments
   [arguments: (Vec QueryTerm) tuple: Tuple subst: Substitution] -> (U Substitution Nil)
-  (query-check)
+  (query-check!)
   (if (not (= (count arguments) (count tuple)))
     nil
     (loop [position 0 current: (U Substitution Nil) subst]
@@ -136,9 +163,88 @@
           (let [value (term-value term subst)]
             (if (some? value)
               value
-              (throw (ex-info "fram: unbound query variable reached projection"
+              (throw (ex-info "fram: unbound query variable reached evaluation"
                               {:type :unbound-query-variable})))))
         arguments))
+
+(defn- integer-value [value: Any] -> (U Int Nil)
+  (cond
+    [(integer? value) value]
+    [(string? value) (parse-long value)]
+    [:else nil]))
+
+(defn- numeric-value [value: Any] -> (U Double Nil)
+  (cond
+    [(integer? value) (double value)]
+    [(number? value) (double value)]
+    [(string? value)
+     (let [integer-result (parse-long value)]
+       (if (some? integer-result)
+         (double integer-result)
+         (parse-double value)))]
+    [:else nil]))
+
+(defn- comparison-result [literal: Literal subst: Substitution] -> Bool
+  (let [arguments (literal-arguments literal)
+        left (term-value (nth arguments 0) subst)
+        right (term-value (nth arguments 1) subst)
+        operator (literal-operator literal)]
+    (if (or (nil? left) (nil? right))
+      false
+      (cond
+        [(= operator :eq) (= left right)]
+        [(= operator :ne) (not (= left right))]
+        [:else
+         (let [left-number (numeric-value left)
+               right-number (numeric-value right)]
+           (if (or (nil? left-number) (nil? right-number))
+             false
+             (cond
+               [(= operator :lt) (< left-number right-number)]
+               [(= operator :le) (<= left-number right-number)]
+               [(= operator :gt) (> left-number right-number)]
+               [(= operator :ge) (>= left-number right-number)]
+               [:else false])))]))))
+
+(defn- builtin-value [operator: Keyword left: Any right: Any] -> Any
+  (let [left-int (integer-value left)
+        right-int (integer-value right)
+        left-number (numeric-value left)
+        right-number (numeric-value right)]
+    (cond
+      [(= operator :mod)
+       (if (or (nil? left-int) (nil? right-int) (= right-int 0))
+         nil
+         (mod left-int right-int))]
+      [(= operator :/)
+       (if (or (nil? left-number) (nil? right-number) (= right-number 0.0))
+         nil
+         (/ left-number right-number))]
+      [(or (= operator :+) (or (= operator subtract-operator) (= operator :*)))
+       (if (and (some? left-int) (some? right-int))
+         (cond
+           [(= operator :+) (+ left-int right-int)]
+           [(= operator subtract-operator) (- left-int right-int)]
+           [:else (* left-int right-int)])
+         (if (or (nil? left-number) (nil? right-number))
+           nil
+           (cond
+             [(= operator :+) (+ left-number right-number)]
+             [(= operator subtract-operator) (- left-number right-number)]
+             [:else (* left-number right-number)])))]
+      [:else nil])))
+
+(defn- builtin-results
+  [literal: Literal subst: Substitution] -> (Vec Substitution)
+  (let [arguments (literal-arguments literal)
+        left (term-value (nth arguments 0) subst)
+        right (term-value (nth arguments 1) subst)]
+    (if (or (nil? left) (nil? right))
+      []
+      (let [result (builtin-value (literal-operator literal) left right)]
+        (if (nil? result)
+          []
+          [(assoc subst (literal-binding literal) result)])))))
 
 (defn- relation-results
   [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
@@ -153,7 +259,13 @@
 
 (defn- literal-results
   [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
-  (relation-results db literal subst))
+  (query-check!)
+  (cond
+    [(= :relation (literal-kind literal)) (relation-results db literal subst)]
+    [(= :comparison (literal-kind literal))
+     (if (comparison-result literal subst) [subst] [])]
+    [(= :builtin (literal-kind literal)) (builtin-results literal subst)]
+    [:else []]))
 
 (defn- body-results
   [db: Db body: (Vec Literal) seed: Substitution] -> (Vec Substitution)
@@ -181,8 +293,8 @@
            derived (derive-rule db value)]
        (update acc relation
                (fn [current: (U (Set Tuple) Nil)] -> (Set Tuple)
-                 (reduce (fn [rows: (Set Tuple) row: Tuple] -> (Set Tuple)
-                           (conj rows row))
+                 (reduce (fn [rows-value: (Set Tuple) row: Tuple] -> (Set Tuple)
+                           (conj rows-value row))
                          (or current #{}) derived)))))
    db rules))
 
@@ -195,8 +307,6 @@
           (recur (rest remaining))
           false)))))
 
-;; Least-fixpoint evaluation is intentionally simple here.  Positional indexing
-;; remains a projection concern; recursive Term equality is structural equality.
 (defn fixpoint [db0: Db rules: (Vec Rule)] -> Db
   (let [relations (rule-head-relations rules)]
     (loop [db db0]
@@ -205,13 +315,11 @@
           next
           (recur next))))))
 
-(defn run-rules
-  [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
+(defn run-rules [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
   (fixpoint (edb propositions) rules))
 
 (defn run-strata-db [db0: Db strata: (Vec (Vec Rule))] -> Db
-  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db
-            (fixpoint db stratum))
+  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db (fixpoint db stratum))
           db0 strata))
 
 (defn run-strata
@@ -221,10 +329,11 @@
 (defn- negated-relations [stratum: (Vec Rule)] -> (Vec String)
   (reduce
    (fn [acc: (Vec String) value: Rule] -> (Vec String)
-     (reduce (fn [rels: (Vec String) literal: Literal] -> (Vec String)
-               (if (literal-negated literal)
-                 (conj rels (literal-relation literal))
-                 rels))
+     (reduce (fn [relations: (Vec String) literal: Literal] -> (Vec String)
+               (if (and (= :relation (literal-kind literal))
+                        (literal-negated literal))
+                 (conj relations (literal-relation literal))
+                 relations))
              acc (rule-body value)))
    [] stratum))
 

@@ -1,5 +1,5 @@
-;; Recursive Term query core: typed plans, slot-neutral matching, occurrence
-;; history, stratified negation, recursion, and bounded paging.
+;; Recursive Term query core: typed plans, slot-neutral matching, explicit
+;; occurrence history, stratified negation, recursion, and stable paging.
 (require '[fram.datalog :as d]
          '[fram.query :as q]
          '[fram.store :as store]
@@ -7,6 +7,13 @@
 
 (def checks (atom []))
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
+(defn v [name] (d/variable name))
+(defn c [value] (d/constant value))
+(defn rel [name arguments] (d/relation-literal name arguments))
+(defn neg [name arguments] (d/negated-literal name arguments))
+(defn rule [name head body] (d/rule name head body))
+(defn plan [name strata] (q/query-plan (q/relation-find name) strata))
+(defn rows [result] (set (q/result-rows result)))
 
 (def node-a (t/triple :node :key "a"))
 (def node-b (t/triple :node :key "b"))
@@ -29,98 +36,96 @@
 (def live (store/live-propositions term-store))
 (def history (store/operation-occurrences term-store))
 
-(def slot-query
-  {:find "slot-matches"
-   :rules
-   [{:head {:rel "slot-matches" :args [node-a {:var "s1"} {:var "s2"}]}
-     :body [{:rel "triple" :args [node-a {:var "s1"} {:var "s2"}]}]}
-    {:head {:rel "slot-matches" :args [{:var "s0"} nested-slot1 {:var "s2"}]}
-     :body [{:rel "triple" :args [{:var "s0"} nested-slot1 {:var "s2"}]}]}
-    {:head {:rel "slot-matches" :args [{:var "s0"} {:var "s1"} node-a]}
-     :body [{:rel "triple" :args [{:var "s0"} {:var "s1"} node-a]}]}]})
+(def slot-rules
+  [(rule "slot-matches" [(c node-a) (v "s1") (v "s2")]
+         [(rel "triple" [(c node-a) (v "s1") (v "s2")])])
+   (rule "slot-matches" [(v "s0") (c nested-slot1) (v "s2")]
+         [(rel "triple" [(v "s0") (c nested-slot1) (v "s2")])])
+   (rule "slot-matches" [(v "s0") (v "s1") (c node-a)]
+         [(rel "triple" [(v "s0") (v "s1") (c node-a)])])])
+(def slot-plan (plan "slot-matches" [slot-rules]))
 
-(let [compiled (q/compile-query slot-query)
-      result (q/run (conj live nested-middle) slot-query)
-      rows (set (:ok result))]
-  (check! "boundary compiles to typed QueryPlan" (q/query-plan? (:ok compiled)))
-  (check! "recursive constant matches slot0" (contains? rows [node-a :edge node-b]))
-  (check! "recursive constant matches slot1" (contains? rows ["left" nested-slot1 "right"]))
-  (check! "recursive constant matches slot2" (contains? rows ["container" :contains node-a])))
+(let [compiled (q/compile-query slot-plan)
+      result (q/run (conj live nested-middle) slot-plan)
+      found (rows result)]
+  (check! "typed plan compiles" (and (q/compile-ok? compiled)
+                                      (q/query-plan? (q/compiled-plan compiled))))
+  (check! "recursive constant matches slot0" (contains? found [node-a :edge node-b]))
+  (check! "recursive constant matches slot1" (contains? found ["left" nested-slot1 "right"]))
+  (check! "recursive constant matches slot2" (contains? found ["container" :contains node-a])))
 
-(def closure-query
-  {:find "reaches"
-   :rules
-   [{:head {:rel "reaches" :args [{:var "from"} {:var "to"}]}
-     :body [{:rel "triple" :args [{:var "from"} :edge {:var "to"}]}]}
-    {:head {:rel "reaches" :args [{:var "from"} {:var "to"}]}
-     :body [{:rel "triple" :args [{:var "from"} :edge {:var "via"}]}
-            {:rel "reaches" :args [{:var "via"} {:var "to"}]}]}]})
+(def closure-rules
+  [(rule "reaches" [(v "from") (v "to")]
+         [(rel "triple" [(v "from") (c :edge) (v "to")])])
+   (rule "reaches" [(v "from") (v "to")]
+         [(rel "triple" [(v "from") (c :edge) (v "via")])
+          (rel "reaches" [(v "via") (v "to")])])])
+(def closure-plan (plan "reaches" [closure-rules]))
 
-(let [rows (set (:ok (q/run live closure-query)))]
-  (check! "recursive rule keeps recursive terms as values"
-          (contains? rows [node-a node-c])))
+(check! "recursive rule keeps recursive terms as values"
+        (contains? (rows (q/run live closure-plan)) [node-a node-c]))
 
-(def negation-query
-  {:find "terminal"
-   :strata
-   [[{:head {:rel "outgoing" :args [{:var "node"}]}
-      :body [{:rel "triple" :args [{:var "node"} :edge {:var "next"}]}]}]
-    [{:head {:rel "terminal" :args [{:var "node"}]}
-      :body [{:rel "triple" :args [{:var "prior"} :edge {:var "node"}]}
-             {:rel "outgoing" :args [{:var "node"}] :neg true}]}]]})
+(def negation-plan
+  (plan "terminal"
+        [[(rule "outgoing" [(v "node")]
+                [(rel "triple" [(v "node") (c :edge) (v "next")])])]
+         [(rule "terminal" [(v "node")]
+                [(rel "triple" [(v "prior") (c :edge) (v "node")])
+                 (neg "outgoing" [(v "node")])])]]))
 
-(check! "stratified negation keeps recursive-term equality"
-        (= #{[node-c]} (set (:ok (q/run live negation-query)))))
+(check! "stratified negation keeps recursive Term equality"
+        (= #{[node-c]} (rows (q/run live negation-plan))))
 
-(def occurrence-query
-  {:find "events"
-   :rules
-   [{:head {:rel "events" :args [{:var "where"} {:var "action"} {:var "value"}]}
-     :body [{:rel "occurrence"
-             :args [{:var "where"} {:var "action"} {:var "value"}]}]}]})
+(def occurrence-plan
+  (plan "events"
+        [[(rule "events" [(v "where") (v "action") (v "value")]
+                [(rel "occurrence" [(v "where") (v "action") (v "value")])])]]))
 
-(let [without-history (q/run live occurrence-query)
+(let [without-history (q/run live occurrence-plan)
       with-history (q/run-plan-projected
                     (q/project-with-occurrences live history)
-                    (:ok (q/compile-query occurrence-query)))
-      rows (set (:ok with-history))
+                    occurrence-plan)
+      found (rows with-history)
       tx1 (t/transaction-coordinate "msa-space" 1)
       tx2 (t/transaction-coordinate "msa-space" 2)]
   (check! "ordinary projection does not expose occurrence history"
-          (empty? (:ok without-history)))
-  (check! "assert occurrence has exact transaction and ordinal coordinate"
-          (contains? rows [(t/occurrence-coordinate tx1 0) t/asserts edge-ab]))
-  (check! "retract occurrence has exact transaction and ordinal coordinate"
-          (contains? rows [(t/occurrence-coordinate tx2 0) t/retracts nested-middle]))
+          (and (q/result-ok? without-history)
+               (empty? (q/result-rows without-history))))
+  (check! "assert occurrence has exact coordinate"
+          (contains? found [(t/occurrence-coordinate tx1 0) t/asserts edge-ab]))
+  (check! "retract occurrence has exact coordinate"
+          (contains? found [(t/occurrence-coordinate tx2 0) t/retracts nested-middle]))
   (check! "history relation contains every operation occurrence"
-          (= (count history) (count rows))))
+          (= (count history) (count found))))
 
-(let [legacy-relation (str "fact" "-id")
-      invalid (q/compile-query
-               {:find "x"
-                :rules [{:head {:rel "x" :args [{:var "v"}]}
-                         :body [{:rel legacy-relation :args [{:var "v"}]}]}]})]
-  (check! "four-cell identity relation has no compatibility alias"
-          (contains? invalid :error)))
+(let [legacy-relation (str "fac" "t-id")
+      invalid-plan
+      (plan "x" [[(rule "x" [(v "value")]
+                              [(rel legacy-relation [(v "value")])])]])
+      invalid (q/compile-query invalid-plan)]
+  (check! "legacy four-cell relation has no compatibility alias"
+          (and (not (q/compile-ok? invalid))
+               (= :query-unknown-relation
+                  (q/error-code (first (q/compile-errors invalid)))))))
 
-(def all-live-query
-  {:find "all-live"
-   :rules
-   [{:head {:rel "all-live" :args [{:var "a"} {:var "b"} {:var "c"}]}
-     :body [{:rel "triple" :args [{:var "a"} {:var "b"} {:var "c"}]}]}]})
+(def all-live-plan
+  (plan "all-live"
+        [[(rule "all-live" [(v "a") (v "b") (v "c")]
+                [(rel "triple" [(v "a") (v "b") (v "c")])])]]))
 
 (loop [after nil collected []]
-  (let [page (q/run-page live all-live-query 1 after)
-        collected2 (vec (concat collected (:ok page)))]
-    (if (:more page)
-      (recur (:next page) collected2)
+  (let [page (q/run-page live all-live-plan 1 after)
+        collected2 (vec (concat collected (q/page-rows page)))]
+    (if (q/page-more? page)
+      (recur (q/page-next page) collected2)
       (check! "paging drains recursive Term rows without loss or duplication"
-              (= (set collected2)
-                 (set (map (fn [value]
-                             [(t/triple-slot0 value)
-                              (t/triple-slot1 value)
-                              (t/triple-slot2 value)])
-                           live)))))))
+              (and (q/page-ok? page)
+                   (= (set collected2)
+                      (set (map (fn [value]
+                                  [(t/triple-slot0 value)
+                                   (t/triple-slot1 value)
+                                   (t/triple-slot2 value)])
+                                live))))))))
 
 (doseq [[label passed] @checks]
   (println (if passed "PASS" "FAIL") "-" label))

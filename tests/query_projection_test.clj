@@ -1,113 +1,217 @@
-;; query_projection_test.clj — the shared-PROJECTION query surface (q/project +
-;; q/run-projected + q/run-page-projected) that the coordinator threads per version
-;; so a scan query / page drain reuses one EDB+index instead of rebuilding it every
-;; call. Proves projected == one-shot on the exact PRODUCTION shape: the stratified
-;; pending-message program (direct + broadcast candidate, minus durable ack and
-;; rejection settlement — negation over frozen lower strata), the query whose
-;; per-page rebuild was hitting the coordinator query-time-limit.
-;;   bb -cp out tests/query_projection_test.clj
-(require '[fram.kernel :as k]
-         '[fram.query :as q])
+;; Shared projections, deterministic row order, canonical cursors, typed page
+;; errors, and bounded evaluation over recursive-Term data.
+(require '[fram.datalog :as d]
+         '[fram.query :as q]
+         '[fram.types :as t])
 
 (def checks (atom []))
-(defn chk [nm ok] (swap! checks conj [nm ok]))
+(defn check! [label value] (swap! checks conj [label (boolean value)]))
+(defn v [name] (d/variable name))
+(defn c [value] (d/constant value))
+(defn rel [name arguments] (d/relation-literal name arguments))
+(defn neg [name arguments] (d/negated-literal name arguments))
+(defn rule [name head body] (d/rule name head body))
+(defn plan [name strata] (q/query-plan (q/relation-find name) strata))
+(defn result-codes [result]
+  (set (map q/error-code (q/result-errors result))))
+(defn page-codes [page]
+  (set (map q/error-code (q/page-errors page))))
 
-;; A corpus of many messages to @me: some acked, some rejected, some broadcast,
-;; plus unrelated noise — exactly the mixed inbox the production query pages.
-(def recipient "@me")
-(def facts
+(def recipient (t/triple :person :key "me"))
+(defn message [prefix index] (t/triple :message :key (str prefix index)))
+(def propositions
   (vec
    (concat
-    ;; 60 direct messages to @me (m0..m59)
-    (mapcat (fn [i]
-              (let [e (str "@msg" i)]
-                [(k/->Fact e "to" recipient)
-                 (k/->Fact e "from" (str "@sender" (mod i 7)))
-                 (k/->Fact e "body" (str "hello " i))]))
-            (range 60))
-    ;; ack the first 10, reject the next 5 → 45 direct remain pending
-    (map (fn [i] (k/->Fact (str "@msg" i) "acked_by" recipient)) (range 10))
-    (map (fn [i] (k/->Fact (str "@msg" i) "rejected_by" recipient)) (range 10 15))
-    ;; 8 broadcast messages visible to @me (b0..b7), reject one
-    (mapcat (fn [i]
-              (let [e (str "@bc" i)]
-                [(k/->Fact e "to" "@all")
-                 (k/->Fact e "broadcast_to" recipient)]))
-            (range 8))
-    [(k/->Fact "@bc3" "rejected_by" recipient)]
-    ;; noise: messages to someone else, and unrelated facts
-    (mapcat (fn [i]
-              [(k/->Fact (str "@other" i) "to" "@notme")
-               (k/->Fact (str "@th" i) "kind" "thread")])
-            (range 40)))))
+    (mapcat (fn [index]
+              (let [value (message "direct-" index)]
+                [(t/triple value :to recipient)
+                 (t/triple value :from (t/triple :person :key (str "sender-" (mod index 5))))
+                 (t/triple value :body (str "hello " index))]))
+            (range 30))
+    (map (fn [index] (t/triple (message "direct-" index) :acked-by recipient))
+         (range 5))
+    (map (fn [index] (t/triple (message "direct-" index) :rejected-by recipient))
+         (range 5 8))
+    (mapcat (fn [index]
+              (let [value (message "broadcast-" index)]
+                [(t/triple value :to :everyone)
+                 (t/triple value :broadcast-to recipient)]))
+            (range 6))
+    [(t/triple (message "broadcast-" 2) :rejected-by recipient)]
+    (mapcat (fn [index]
+              [(t/triple (message "noise-" index) :to (t/triple :person :key "other"))
+               (t/triple (t/triple :thread :key index) :kind :thread)])
+            (range 20)))))
 
-;; the production pending program (message-audience/pending-query, inlined).
-(def pending-q
-  {:find "pending_message"
-   :strata
-   [[{:head {:rel "message_candidate" :args [{:var "e"}]}
-      :body [{:rel "fact" :args [{:var "e"} "to" recipient]}]}
-     {:head {:rel "message_candidate" :args [{:var "e"}]}
-      :body [{:rel "fact" :args [{:var "e"} "broadcast_to" recipient]}
-             {:rel "fact" :args [{:var "e"} "to" "@all"]}]}
-     {:head {:rel "message_acknowledged" :args [{:var "e"}]}
-      :body [{:rel "fact" :args [{:var "e"} "acked_by" recipient]}]}
-     {:head {:rel "message_rejected" :args [{:var "e"}]}
-      :body [{:rel "fact" :args [{:var "e"} "rejected_by" recipient]}]}]
-    [{:head {:rel "pending_message" :args [{:var "e"}]}
-      :body [{:rel "message_candidate" :args [{:var "e"}]}
-             {:rel "message_acknowledged" :args [{:var "e"}] :neg true}
-             {:rel "message_rejected" :args [{:var "e"}] :neg true}]}]]})
+(def pending-plan
+  (plan
+   "pending"
+   [[(rule "candidate" [(v "message")]
+           [(rel "triple" [(v "message") (c :to) (c recipient)])])
+     (rule "candidate" [(v "message")]
+           [(rel "triple" [(v "message") (c :broadcast-to) (c recipient)])
+            (rel "triple" [(v "message") (c :to) (c :everyone)])])
+     (rule "acknowledged" [(v "message")]
+           [(rel "triple" [(v "message") (c :acked-by) (c recipient)])])
+     (rule "rejected" [(v "message")]
+           [(rel "triple" [(v "message") (c :rejected-by) (c recipient)])])]
+    [(rule "pending" [(v "message")]
+           [(rel "candidate" [(v "message")])
+            (neg "acknowledged" [(v "message")])
+            (neg "rejected" [(v "message")])])]]))
 
-;; expected pending set: 45 direct (msg15..msg59) + 7 broadcast (bc0..7 minus bc3)
-(def expected-pending
-  (set (concat (map (fn [i] [(str "@msg" i)]) (range 15 60))
-               (map (fn [i] [(str "@bc" i)]) (remove #{3} (range 8))))))
+(def expected
+  (set (concat (map (fn [index] [(message "direct-" index)]) (range 8 30))
+               (map (fn [index] [(message "broadcast-" index)])
+                    (remove #{2} (range 6))))))
 
-;; --- (1) run-projected parity with run ---------------------------------------
-(def proj (q/project facts))
-(let [one-shot (q/run facts pending-q)
-      projected (q/run-projected proj pending-q)]
-  (chk "run-projected == run (identical :ok set)"
-       (= (set (:ok one-shot)) (set (:ok projected))))
-  (chk "run-projected returns the exact expected pending set"
-       (= expected-pending (set (:ok projected)))))
+(def projection (q/project propositions))
+(let [one-shot (q/run propositions pending-plan)
+      projected (q/run-projected projection pending-plan)]
+  (check! "shared projection equals one-shot evaluation"
+          (= (q/result-rows one-shot) (q/result-rows projected)))
+  (check! "projection returns the expected recursive Term rows"
+          (= expected (set (q/result-rows projected))))
+  (check! "result order is deterministic across input order"
+          (= (q/result-rows one-shot)
+             (q/result-rows (q/run (vec (reverse propositions)) pending-plan)))))
 
-;; --- (2) run-page-projected parity with run-page (single page) ---------------
-(let [a (q/run-page facts pending-q 10 nil)
-      b (q/run-page-projected proj pending-q 10 nil)]
-  (chk "run-page-projected == run-page (first page rows)" (= (:ok a) (:ok b)))
-  (chk "run-page-projected == run-page (cursor)" (= (:next a) (:next b))))
+(let [before (q/projection-edb projection)
+      _ (q/run-projected projection pending-plan)
+      _ (q/run-page-projected projection pending-plan 4 nil)]
+  (check! "projection is immutable across reuse"
+          (= before (q/projection-edb projection))))
 
-;; --- (3) a full page drain reusing ONE projection loses/duplicates nothing ---
-(defn drain [limit]
-  (loop [after nil acc []]
-    (let [page (q/run-page-projected proj pending-q limit after)]
-      (when (:error page)
-        (throw (ex-info "page error" {:page page})))
-      (let [acc2 (into acc (:ok page))]
-        (if (:next page) (recur (:next page) acc2) acc2)))))
+(defn drain [projection-value limit]
+  (loop [after nil accumulated []]
+    (let [page (q/run-page-projected projection-value pending-plan limit after)]
+      (when-not (q/page-ok? page)
+        (throw (ex-info "page drain failed" {:errors (q/page-errors page)})))
+      (let [next-rows (into accumulated (q/page-rows page))]
+        (if (q/page-more? page)
+          (recur (q/page-next page) next-rows)
+          next-rows)))))
 
-(let [drained (drain 7)]
-  (chk "shared-projection drain yields every pending row exactly once"
-       (= expected-pending (set drained)))
-  (chk "shared-projection drain has no duplicate rows"
-       (= (count drained) (count (set drained))))
-  (chk "shared-projection drain count == expected cardinality"
-       (= (count expected-pending) (count drained))))
+(let [small-pages (drain projection 3)
+      large-pages (drain projection 50)
+      reversed-pages (drain (q/project (vec (reverse propositions))) 7)]
+  (check! "page drains lose and duplicate no rows"
+          (and (= expected (set small-pages))
+               (= (count small-pages) (count (set small-pages)))))
+  (check! "page-size changes preserve the exact ordered result"
+          (= small-pages large-pages))
+  (check! "input order changes preserve the exact paged result"
+          (= small-pages reversed-pages)))
 
-;; drain at a different page size reaches the identical set (order-stable cursor).
-(chk "drain is page-size invariant (limit 3 == limit 50)"
-     (= (set (drain 3)) (set (drain 50))))
+(let [one-shot (q/run-page propositions pending-plan 5 nil)
+      projected (q/run-page-projected projection pending-plan 5 nil)
+      reversed (q/run-page (vec (reverse propositions)) pending-plan 5 nil)]
+  (check! "one-shot and projected page rows agree"
+          (= (q/page-rows one-shot) (q/page-rows projected)))
+  (check! "canonical first-page cursor is projection independent"
+          (= (q/page-next one-shot)
+             (q/page-next projected)
+             (q/page-next reversed))))
 
-;; --- (4) reusing the projection object never mutates it ----------------------
-(let [before (:edb proj)
-      _ (q/run-page-projected proj pending-q 5 nil)
-      _ (q/run-projected proj pending-q)
-      after (:edb proj)]
-  (chk "projection EDB is immutable across reuse" (= before after)))
+(doseq [[label page expected-code]
+        [["zero page limit is a typed error"
+          (q/run-page propositions pending-plan 0 nil) :query-page-limit]
+         ["oversized page limit is a typed error"
+          (q/run-page propositions pending-plan (inc q/max-page-limit) nil) :query-page-limit]
+         ["nonnumeric cursor is a typed error"
+          (q/run-page propositions pending-plan 5 7) :query-page-cursor]
+         ["noncanonical cursor is a typed error"
+          (q/run-page propositions pending-plan 5 "not-a-fram-cursor") :query-page-cursor]]]
+  (check! label (contains? (page-codes page) expected-code)))
 
-(def failed (filter (comp not second) @checks))
-(doseq [[nm ok] @checks] (println (str "  [" (if ok "PASS" "FAIL") "]  " nm)))
-(println (str "\nfram.query projection: " (- (count @checks) (count failed)) " / " (count @checks) " PASS"))
-(when (seq failed) (System/exit 1))
+(with-redefs [q/max-page-payload-bytes 8]
+  (let [page (q/run-page propositions pending-plan 1 nil)]
+    (check! "row exceeding the bounded response is a typed error"
+            (contains? (page-codes page) :query-page-row-too-large))))
+
+(with-redefs [q/max-results 2]
+  (let [limited (q/run propositions pending-plan)]
+    (check! "plain result limit reports a typed error"
+            (and (contains? (result-codes limited) :query-result-limit)
+                 (> (q/result-over-limit limited) (q/result-maximum limited))))))
+
+(let [control (d/query-control 1 60000)
+      stopped (binding [q/*query-control* control]
+                (q/run-projected projection pending-plan))]
+  (check! "step budget aborts with query-work-limit"
+          (contains? (result-codes stopped) :query-work-limit))
+  (check! "step counter records consumed work" (> (d/query-steps control) 1)))
+
+(let [control (d/query-control 1000000 0)
+      stopped (binding [q/*query-control* control]
+                (q/run-projected projection pending-plan))]
+  (check! "deadline aborts with query-time-limit"
+          (contains? (result-codes stopped) :query-time-limit)))
+
+(let [control (d/query-control 1000000 60000)
+      _ (d/cancel-query! control :operator-request)
+      stopped (binding [q/*query-control* control]
+                (q/run-projected projection pending-plan))]
+  (check! "explicit cancellation aborts with query-cancelled"
+          (contains? (result-codes stopped) :query-cancelled)))
+
+(let [syntax-form
+      {:find "direct"
+       :rules [{:head {:rel "direct" :args [{:var "message"}]}
+                :body [{:rel "triple" :args [{:var "message"} :to recipient]}]}]}
+      compiled (q/compile-query syntax-form)
+      syntax-result (q/run-syntax propositions syntax-form)]
+  (check! "syntax adapter produces typed QueryPlan"
+          (and (q/compile-ok? compiled)
+               (q/query-plan? (q/compiled-plan compiled))))
+  (check! "syntax adapter returns typed QueryResult"
+          (and (q/result-ok? syntax-result)
+               (= 30 (count (q/result-rows syntax-result))))))
+
+(let [unknown-plan
+      (plan "output"
+            [[(rule "output" [(v "value")]
+                    [(rel "unknown" [(v "value")])])]])
+      result (q/run propositions unknown-plan)]
+  (check! "validation failures remain typed QueryErrors"
+          (and (not (q/result-ok? result))
+               (= :query-unknown-relation
+                  (q/error-code (first (q/result-errors result)))))))
+
+(let [inconsistent
+      (plan "output"
+            [[(rule "output" [(v "message")]
+                    [(rel "triple" [(v "message") (c :to) (v "target")])])
+              (rule "output" [(v "message") (v "target")]
+                    [(rel "triple" [(v "message") (c :to) (v "target")])])]])
+      forward
+      (plan "output"
+            [[(rule "output" [(v "message")]
+                    [(rel "later" [(v "message")])])]
+             [(rule "later" [(v "message")]
+                    [(rel "triple" [(v "message") (c :to) (v "target")])])]])
+      unstratified
+      (plan "looping"
+            [[(rule "looping" [(v "message")]
+                    [(rel "triple" [(v "message") (c :to) (v "target")])
+                     (neg "looping" [(v "message")])])]])
+      shadow
+      (plan "output"
+            [[(rule "triple" [(v "left") (v "middle") (v "right")]
+                    [(rel "triple" [(v "left") (v "middle") (v "right")])])
+              (rule "output" [(v "left")]
+                    [(rel "triple" [(v "left") (v "middle") (v "right")])])]])]
+  (check! "derived relation arity must be consistent"
+          (contains? (result-codes (q/run propositions inconsistent)) :query-arity))
+  (check! "later-stratum positive reference is rejected"
+          (contains? (result-codes (q/run propositions forward)) :query-forward-reference))
+  (check! "negation of a same-stratum relation is rejected"
+          (contains? (result-codes (q/run propositions unstratified)) :query-stratification))
+  (check! "rules cannot redefine a base relation"
+          (contains? (result-codes (q/run propositions shadow)) :query-base-shadow)))
+
+(doseq [[label passed] @checks]
+  (println (if passed "PASS" "FAIL") "-" label))
+(when-not (every? second @checks)
+  (throw (ex-info "projection query test failed" {:checks @checks})))
+(println "projection query checks:" (count @checks) "passed")
