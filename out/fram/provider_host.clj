@@ -1,5 +1,6 @@
 (ns fram.provider-host
-  (:require [fram.types :as t]))
+  (:require [fram.types :as t]
+            [fram.rt :as rt]))
 
 (defrecord ProviderDescriptor [identity capability contract imports boot-result])
 
@@ -166,3 +167,31 @@
 (defn plan-request [^String space ^ProviderPlan plan]
   (let [batch (plan-batch space plan)]
   (if batch (batch-request batch) nil)))
+
+(defrecord ProviderInvocation [descriptor request response])
+
+(defn providerinvocation-descriptor [r] (:descriptor r))
+
+(defn providerinvocation-request [r] (:request r))
+
+(defn providerinvocation-response [r] (:response r))
+
+(defn ^Boolean plan-capability? [^ProviderPlan plan capability-value]
+  (let [stages (providerplan-stages plan)]
+  (and (pos? (count stages)) (every? (fn [stage] (= capability-value (providerstage-capability stage))) stages))))
+
+(defn ^Boolean response-matches-request? [request response]
+  (and (= (t/rpcrequest-space request) (t/rpcresponse-space response)) (= (t/rpcrequest-op request) (t/rpcresponse-op response))))
+
+(defn ^ProviderInvocation invoke-plan-with! [descriptors enabled capability-value ^String space ^ProviderPlan plan executor]
+  (let [boot (boot-providers descriptors enabled)
+   descriptor-value (provider-for boot capability-value)]
+  (cond
+  (not (providerplan-accepted plan)) (throw (ex-info "provider invocation refuses a rejected plan" {:type :provider/plan-rejected}))
+  (not (plan-capability? plan capability-value)) (throw (ex-info "provider plan capability does not match the boot-selected provider" {:type :provider/capability-mismatch}))
+  :else (let [request (plan-request space plan)]
+  (if request (let [response (executor request)]
+  (if (and (t/rpc-response? response) (response-matches-request? request response)) (->ProviderInvocation descriptor-value request response) (throw (ex-info "provider executor returned a mismatched FRAMRPC response" {:type :provider/response-mismatch})))) (throw (ex-info "accepted provider plan did not lower to FRAMRPC" {:type :provider/request-missing})))))))
+
+(defn ^ProviderInvocation invoke-plan-to! [descriptors enabled capability-value ^String address port ^String space ^ProviderPlan plan]
+  (invoke-plan-with! descriptors enabled capability-value space plan (fn [request] (rt/native-request-to! address port request))))

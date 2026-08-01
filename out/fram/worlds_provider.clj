@@ -1,6 +1,7 @@
 (ns fram.worlds-provider
   (:require [fram.provider-host :as host]
-            [fram.types :as t]))
+            [fram.types :as t]
+            [coord-daemon-wire :as wire]))
 
 (def worlds-capability (host/capability "worlds" 1))
 
@@ -20,14 +21,18 @@
 (defn operation-id [candidate ordinal]
   (if (>= ordinal 0) (t/triple candidate :worlds/operation ordinal) (throw (ex-info "operation identity requires a non-negative ordinal" {:type :worlds/invalid-operation}))))
 
-(defn version-id [world ^String digest]
-  (t/triple world :worlds/version digest))
+(def local-term-codec-writer wire/write-term-codec-v1!)
 
-(defn build-id [version ^String digest]
-  (t/triple version :worlds/build digest))
+(declare canonical-term-digest promotion-result-marker promotion-recovery)
 
-(defn receipt-id [build ^String digest]
-  (t/triple build :worlds/receipt digest))
+(defn version-id [world content ^String digest]
+  (if (= digest (canonical-term-digest content)) (t/triple world :worlds/version digest) (throw (ex-info "version digest does not match canonical TermCodec content" {:type :worlds/digest-mismatch}))))
+
+(defn build-id [version build-input ^String digest]
+  (if (= digest (canonical-term-digest build-input)) (t/triple version :worlds/build digest) (throw (ex-info "build digest does not match canonical TermCodec input" {:type :worlds/digest-mismatch}))))
+
+(defn receipt-id [build receipt-input ^String digest]
+  (if (= digest (canonical-term-digest receipt-input)) (t/triple build :worlds/receipt digest) (throw (ex-info "receipt digest does not match canonical TermCodec input" {:type :worlds/digest-mismatch}))))
 
 (defn promotion-id [candidate expected-head]
   (t/triple candidate :worlds/promote expected-head))
@@ -113,11 +118,18 @@
   (t/triple build :worlds/result result))
 
 (defn ^Boolean known-version? [live world version]
-  (and (= 1 (count (filterv (fn [value] (= version value)) (fact-values live world :worlds/version)))) (= 1 (fact-count live version :worlds/content))))
+  (if (not (t/triple? version)) false (let [contents (fact-values live version :worlds/content)]
+  (and (= world (t/triple-slot0 version)) (= :worlds/version (t/triple-slot1 version)) (digest? (t/triple-slot2 version)) (= 1 (count (filterv (fn [value] (= version value)) (fact-values live world :worlds/version)))) (= 1 (count contents)) (t/triple? (first contents)) (= (t/triple-slot2 version) (canonical-term-digest (first contents)))))))
 
 (defn ^Boolean receipt-valid? [live version receipt]
-  (if (not (t/triple? receipt)) false (let [build (t/triple-slot0 receipt)]
-  (and (= :worlds/receipt (t/triple-slot1 receipt)) (and (t/triple? build) (and (= version (t/triple-slot0 build)) (and (= :worlds/build (t/triple-slot1 build)) (and (has-fact? live (t/triple build :worlds/receipt receipt)) (has-fact? live (t/triple receipt :worlds/result :worlds/success))))))))))
+  (if (not (t/triple? receipt)) false (let [build-value (t/triple-slot0 receipt)]
+  (if (not (t/triple? build-value)) false (let [build build-value
+   build-input-value (fact-value live build :worlds/input none)
+   receipt-input-value (fact-value live receipt :worlds/input none)
+   result (fact-value live receipt :worlds/result none)]
+  (if (or (not (t/triple? build-input-value)) (not (t/triple? receipt-input-value))) false (let [build-input build-input-value
+   receipt-input receipt-input-value]
+  (and (= :worlds/receipt (t/triple-slot1 receipt)) (digest? (t/triple-slot2 receipt)) (= version (t/triple-slot0 build)) (= :worlds/build (t/triple-slot1 build)) (digest? (t/triple-slot2 build)) (= version (t/triple-slot0 build-input)) (= :worlds/build-spec (t/triple-slot1 build-input)) (= (t/triple-slot2 build) (canonical-term-digest build-input)) (= receipt-input (receipt-digest-input build result)) (= (t/triple-slot2 receipt) (canonical-term-digest receipt-input)) (= 1 (fact-count live build :worlds/input)) (= 1 (count (filterv (fn [value] (= receipt value)) (fact-values live build :worlds/receipt)))) (= 1 (fact-count live receipt :worlds/input)) (= 1 (fact-count live receipt :worlds/result)) (= :worlds/success result)))))))))
 
 (defn one-stage [stage result]
   [(host/provider-stage worlds-capability stage result)])
@@ -162,40 +174,70 @@
   (not= none (candidate-sealed live candidate)) (reject-plan :worlds/candidate-sealed result expected-version :worlds/seal)
   (not (operations-contiguous? live candidate)) (reject-plan :worlds/candidate-gapped result expected-version :worlds/seal)
   (not= supplied-content (seal-digest-input live candidate)) (reject-plan :worlds/digest-input-mismatch result expected-version :worlds/seal)
-  :else (let [version (version-id world digest)]
+  (not= digest (canonical-term-digest supplied-content)) (reject-plan :worlds/digest-mismatch result expected-version :worlds/seal)
+  :else (let [version (version-id world supplied-content digest)]
   (if (known-version? live world version) (reject-plan :worlds/version-exists version expected-version :worlds/seal) (accept-plan version expected-version [] [(t/triple world :worlds/version version) (t/triple version :worlds/content supplied-content) (t/triple candidate :worlds/operation-count (linked-operation-count live candidate)) (t/triple candidate :worlds/sealed-version version)] :worlds/seal))))))
 
 (defn build-plan [expected-version live version build-spec supplied-build-input ^String build-digest result supplied-receipt-input ^String receipt-digest]
   (let [world (t/triple-slot0 version)
-   build (build-id version build-digest)
-   receipt (receipt-id build receipt-digest)]
+   raw-build (t/triple version :worlds/build build-digest)]
   (cond
-  (or (not (digest? build-digest)) (not (digest? receipt-digest))) (reject-plan :worlds/digest-invalid build expected-version :worlds/build)
-  (not (and (t/triple? world) (known-version? live world version))) (reject-plan :worlds/version-missing build expected-version :worlds/build)
-  (not= supplied-build-input (build-digest-input version build-spec)) (reject-plan :worlds/digest-input-mismatch build expected-version :worlds/build)
-  (not= supplied-receipt-input (receipt-digest-input build result)) (reject-plan :worlds/digest-input-mismatch receipt expected-version :worlds/build)
-  (pos? (fact-count live build :worlds/receipt)) (reject-plan :worlds/receipt-exists receipt expected-version :worlds/build)
-  :else (accept-plan receipt expected-version [] [(t/triple build :worlds/input supplied-build-input) (t/triple build :worlds/receipt receipt) (t/triple receipt :worlds/input supplied-receipt-input) (t/triple receipt :worlds/result result)] :worlds/build))))
+  (or (not (digest? build-digest)) (not (digest? receipt-digest))) (reject-plan :worlds/digest-invalid raw-build expected-version :worlds/build)
+  (not (and (t/triple? world) (known-version? live world version))) (reject-plan :worlds/version-missing raw-build expected-version :worlds/build)
+  (not= supplied-build-input (build-digest-input version build-spec)) (reject-plan :worlds/digest-input-mismatch raw-build expected-version :worlds/build)
+  (not= build-digest (canonical-term-digest supplied-build-input)) (reject-plan :worlds/digest-mismatch raw-build expected-version :worlds/build)
+  :else (let [build (build-id version supplied-build-input build-digest)
+   raw-receipt (t/triple build :worlds/receipt receipt-digest)]
+  (cond
+  (not= supplied-receipt-input (receipt-digest-input build result)) (reject-plan :worlds/digest-input-mismatch raw-receipt expected-version :worlds/build)
+  (not= receipt-digest (canonical-term-digest supplied-receipt-input)) (reject-plan :worlds/digest-mismatch raw-receipt expected-version :worlds/build)
+  (pos? (fact-count live build :worlds/receipt)) (reject-plan :worlds/receipt-exists raw-receipt expected-version :worlds/build)
+  :else (let [receipt (receipt-id build supplied-receipt-input receipt-digest)]
+  (accept-plan receipt expected-version [] [(t/triple build :worlds/input supplied-build-input) (t/triple build :worlds/receipt receipt) (t/triple receipt :worlds/input supplied-receipt-input) (t/triple receipt :worlds/result result)] :worlds/build)))))))
 
 (defn promote-plan [expected-version live world candidate expected-head receipt]
   (let [promotion (promotion-id candidate expected-head)
    current (world-head live world)
    sealed (candidate-sealed live candidate)
+   recovered (promotion-recovery live world candidate expected-head receipt)
    declared-head (fact-value live candidate :worlds/expected-head ambiguous)
    declared-count (fact-value live candidate :worlds/operation-count -1)
    actual-count (linked-operation-count live candidate)]
   (cond
+  (some? recovered) (reject-plan :worlds/already-promoted promotion expected-version :worlds/promote)
   (not (candidate-present? live world candidate)) (reject-plan :worlds/candidate-missing promotion expected-version :worlds/promote)
   (not= expected-head declared-head) (reject-plan :worlds/candidate-head-mismatch promotion expected-version :worlds/promote)
   (not= expected-head current) (reject-plan :worlds/head-conflict promotion expected-version :worlds/promote)
   (not (and (t/triple? sealed) (known-version? live world sealed))) (reject-plan :worlds/candidate-unsealed promotion expected-version :worlds/promote)
   (not (and (= declared-count actual-count) (operations-contiguous? live candidate))) (reject-plan :worlds/candidate-gapped promotion expected-version :worlds/promote)
   (not (receipt-valid? live sealed receipt)) (reject-plan :worlds/receipt-invalid promotion expected-version :worlds/promote)
-  (pos? (fact-count live promotion :worlds/result)) (reject-plan :worlds/already-promoted promotion expected-version :worlds/promote)
-  :else (accept-plan promotion expected-version (if (= current none) [] [(t/triple world :worlds/head current)]) [(t/triple world :worlds/head sealed) (t/triple promotion :worlds/result sealed)] :worlds/promote))))
+  (pos? (fact-count live promotion :worlds/result)) (reject-plan :worlds/promotion-conflict promotion expected-version :worlds/promote)
+  :else (let [marker (promotion-result-marker sealed receipt)]
+  (accept-plan promotion expected-version (if (= current none) [] [(t/triple world :worlds/head current)]) [(t/triple world :worlds/head sealed) (t/triple promotion :worlds/result marker)] :worlds/promote)))))
 
 (def worlds-identity (host/provider-identity worlds-capability "fram.worlds/v1"))
 
 (def worlds-contract (host/provider-contract worlds-capability 1))
 
 (def worlds-descriptor (host/descriptor worlds-identity worlds-capability worlds-contract [] :provider/ready))
+
+(defn ^String canonical-term-digest [term]
+  (if (t/term? term) (let [out (java.io.ByteArrayOutputStream.)]
+  (do
+  (local-term-codec-writer out term wire/rpc-v1-max-string-bytes wire/rpc-v1-max-term-nodes wire/rpc-v1-max-term-depth)
+  (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-256") (.toByteArray out))]
+  (str "sha256:" (apply str (mapv (fn [value] (format "%02x" (bit-and 255 value))) (vec digest))))))) (throw (ex-info "world digest input lies outside TermCodecV1" {:type :worlds/invalid-term}))))
+
+(defn promotion-result-marker [version receipt]
+  (t/triple version :worlds/authorized-by receipt))
+
+(defn promotion-recovery [live world candidate expected-head receipt]
+  (let [promotion (promotion-id candidate expected-head)
+   sealed (candidate-sealed live candidate)]
+  (if (and (t/triple? sealed) (and (receipt-valid? live sealed receipt) (and (= sealed (world-head live world)) (let [marker (promotion-result-marker sealed receipt)]
+  (and (= 1 (fact-count live promotion :worlds/result)) (has-fact? live (t/triple promotion :worlds/result marker))))))) (promotion-result-marker sealed receipt) nil)))
+
+(def worlds-registry [worlds-descriptor])
+
+(defn invoke-plan-to! [^String address port ^String space plan]
+  (host/invoke-plan-to! worlds-registry [worlds-capability] worlds-capability address port space plan))

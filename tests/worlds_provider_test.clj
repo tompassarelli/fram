@@ -1,5 +1,6 @@
 (require '[coord-daemon-wire :as wire]
          '[fram.provider-host :as host]
+         '[fram.rt :as rt]
          '[fram.store :as store]
          '[fram.types :as t]
          '[fram.worlds-provider :as worlds])
@@ -43,6 +44,9 @@
   (when-not (host/providerplan-accepted plan)
     (host/providerplan-code plan)))
 
+(defn throws? [f]
+  (try (f) false (catch Throwable _ true)))
+
 (println "worlds/v1 provider — recursive Terms, OCC batches, and restart replay")
 
 (let [boot (host/boot-providers [worlds/worlds-descriptor]
@@ -72,6 +76,21 @@
         (let [request (host/plan-request space begin)]
           (and (= :rpc/batch (t/rpcrequest-op request))
                (= 0 (t/rpcrequest-expected-version request)))))
+(let [calls (atom [])
+      response (t/->RpcResponse space :rpc/batch 1 nil nil :rpc/ok)
+      invocation
+      (with-redefs [rt/native-request-to!
+                    (fn [address port request]
+                      (swap! calls conj [address port request])
+                      response)]
+        (worlds/invoke-plan-to! "127.0.0.1" 17771 space begin))]
+  (check! "worlds non-test entrypoint boots its private registry and reaches local FRAMRPC"
+          (and (= worlds/worlds-descriptor
+                  (host/providerinvocation-descriptor invocation))
+               (= response (host/providerinvocation-response invocation))
+               (= [["127.0.0.1" 17771
+                    (host/providerinvocation-request invocation)]]
+                  @calls))))
 (commit-plan! term-store begin)
 
 (def append
@@ -85,13 +104,15 @@
 (def seal-input
   (worlds/seal-digest-input (store/live-propositions term-store) candidate))
 (def seal-digest (sha256-term seal-input))
+(check! "provider canonical digest is exactly TermCodecV1 SHA-256"
+        (= seal-digest (worlds/canonical-term-digest seal-input)))
 (def seal
   (worlds/seal-plan 2 (store/live-propositions term-store)
                     candidate seal-input seal-digest))
 (def version (host/providerplan-result seal))
 
 (check! "version identity nests world and canonical TermCodec digest"
-        (and (= version (worlds/version-id world seal-digest))
+        (and (= version (worlds/version-id world seal-input seal-digest))
              (worlds/digest? (t/triple-slot2 version))))
 (check! "TermCodec digest is stable and structure-sensitive"
         (and (= seal-digest (sha256-term seal-input))
@@ -104,6 +125,19 @@
                                  candidate bad-content (sha256-term bad-content))]
   (check! "seal rejects a digest over any term except its canonical input"
           (= :worlds/digest-input-mismatch (rejected-code rejected))))
+(let [before (store/dump-term-store term-store)
+      forged-digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      rejected (worlds/seal-plan 2 (store/live-propositions term-store)
+                                 candidate seal-input forged-digest)]
+  (check! "seal rejects a forged caller digest before any batch or mutation"
+          (and (= :worlds/digest-mismatch (rejected-code rejected))
+               (empty? (host/providerplan-actions rejected))
+               (nil? (host/plan-request space rejected))
+               (= before (store/dump-term-store term-store)))))
+(check! "version identity cannot be minted with a forged digest"
+        (throws? #(worlds/version-id
+                   world seal-input
+                   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
 (commit-plan! term-store seal)
 
 (def build-spec
@@ -111,7 +145,7 @@
             :builder/target "x86_64-linux"))
 (def build-input (worlds/build-digest-input version build-spec))
 (def build-digest (sha256-term build-input))
-(def build (worlds/build-id version build-digest))
+(def build (worlds/build-id version build-input build-digest))
 (def receipt-input (worlds/receipt-digest-input build :worlds/success))
 (def receipt-digest (sha256-term receipt-input))
 (def build-plan
@@ -121,13 +155,50 @@
 (def receipt (host/providerplan-result build-plan))
 
 (check! "build and receipt identities recursively bind version and digests"
-        (= receipt (worlds/receipt-id (worlds/build-id version build-digest)
-                                     receipt-digest)))
+        (= receipt (worlds/receipt-id
+                    (worlds/build-id version build-input build-digest)
+                    receipt-input receipt-digest)))
+(let [before (store/dump-term-store term-store)
+      forged-build-digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      forged-build (t/triple version :worlds/build forged-build-digest)
+      forged-receipt-input
+      (worlds/receipt-digest-input forged-build :worlds/success)
+      rejected
+      (worlds/build-plan
+       3 (store/live-propositions term-store)
+       version build-spec build-input forged-build-digest :worlds/success
+       forged-receipt-input (sha256-term forged-receipt-input))]
+  (check! "build rejects a forged build digest before any batch or mutation"
+          (and (= :worlds/digest-mismatch (rejected-code rejected))
+               (empty? (host/providerplan-actions rejected))
+               (nil? (host/plan-request space rejected))
+               (= before (store/dump-term-store term-store)))))
+(let [before (store/dump-term-store term-store)
+      forged-receipt-digest
+      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      rejected
+      (worlds/build-plan
+       3 (store/live-propositions term-store)
+       version build-spec build-input build-digest :worlds/success
+       receipt-input forged-receipt-digest)]
+  (check! "receipt rejects a forged caller digest before any batch or mutation"
+          (and (= :worlds/digest-mismatch (rejected-code rejected))
+               (empty? (host/providerplan-actions rejected))
+               (nil? (host/plan-request space rejected))
+               (= before (store/dump-term-store term-store)))))
+(check! "build and receipt identities cannot be minted with forged digests"
+        (and
+         (throws? #(worlds/build-id
+                    version build-input
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+         (throws? #(worlds/receipt-id
+                    build receipt-input
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))))
 (commit-plan! term-store build-plan)
 
 (let [before (store/live-propositions term-store)
-      forged (worlds/receipt-id build
-                                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      forged (t/triple build :worlds/receipt
+                       "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
       rejected (worlds/promote-plan 4 before world candidate worlds/none forged)]
   (check! "promotion rejects a receipt that is not a live successful build result"
           (= :worlds/receipt-invalid (rejected-code rejected)))
@@ -140,14 +211,40 @@
   (worlds/promote-plan 4 (store/live-propositions term-store)
                        world candidate worlds/none receipt))
 (def promotion (host/providerplan-result promote))
+(def promotion-marker (worlds/promotion-result-marker version receipt))
 (check! "promotion identity is a recursive candidate/head coordinate"
         (= promotion (worlds/promotion-id candidate worlds/none)))
+(check! "one promotion batch binds its resulting head to the exact authorizing receipt"
+        (some #(= (t/triple promotion :worlds/result promotion-marker)
+                  (host/provideraction-proposition %))
+              (host/providerplan-actions promote)))
 (commit-plan! term-store promote)
 
 (check! "promotion atomically advances the one live world head"
         (and (= version (worlds/world-head (store/live-propositions term-store)
                                           world))
              (= 5 (store/current-sequence term-store))))
+(check! "lost-response recovery proves the exact receipt and resulting head"
+        (= promotion-marker
+           (worlds/promotion-recovery
+            (store/live-propositions term-store)
+            world candidate worlds/none receipt)))
+(let [wrong-receipt
+      (t/triple build :worlds/receipt
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]
+  (check! "lost-response recovery refuses a different receipt"
+          (nil? (worlds/promotion-recovery
+                 (store/live-propositions term-store)
+                 world candidate worlds/none wrong-receipt))))
+(let [before (store/dump-term-store term-store)
+      replay (worlds/promote-plan
+              5 (store/live-propositions term-store)
+              world candidate worlds/none receipt)]
+  (check! "promotion replay is recognized without a second batch or mutation"
+          (and (= :worlds/already-promoted (rejected-code replay))
+               (empty? (host/providerplan-actions replay))
+               (nil? (host/plan-request space replay))
+               (= before (store/dump-term-store term-store)))))
 
 (let [dump (store/dump-term-store term-store)
       restarted (store/new-term-store space)
@@ -160,6 +257,11 @@
                   (worlds/world-head (store/live-propositions restarted) world))
                (= (store/semantic-history term-store)
                   (store/semantic-history restarted))))
+  (check! "restart recovery preserves exact receipt-bound promotion proof"
+          (= promotion-marker
+             (worlds/promotion-recovery
+              (store/live-propositions restarted)
+              world candidate worlds/none receipt)))
   (let [next-plan
         (worlds/begin-plan space 5 (store/live-propositions restarted)
                            "main" version "candidate-b")]

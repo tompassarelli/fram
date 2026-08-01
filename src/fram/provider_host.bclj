@@ -7,6 +7,11 @@
 
 (define-mode strict)
 
+(require fram.rt :as rt)
+
+(declare-extern fram.rt/native-request-to!
+  [String Int t/RpcRequest -> t/RpcResponse])
+
 (defrecord ProviderDescriptor [identity :- t/Triple capability :- t/Triple contract :- t/Triple imports :- (Vec t/Triple) boot-result :- Keyword])
 
 (defrecord ProviderViolation [code :- Keyword capability :- t/Triple identity :- t/Triple detail :- t/Triple])
@@ -155,3 +160,40 @@
 
 (defn plan-request [space :- String plan :- ProviderPlan] :- t/RpcRequest?
   (let [batch (plan-batch space plan)] (if batch (batch-request batch) nil)))
+
+(defrecord ProviderInvocation [descriptor :- ProviderDescriptor request :- t/RpcRequest response :- t/RpcResponse])
+
+(defn plan-capability? [plan :- ProviderPlan capability-value :- t/Triple] :- Bool
+  (let [stages :- (Vec ProviderStage) (providerplan-stages plan)]
+    (and (pos? (count stages))
+      (every? (fn [stage :- ProviderStage] :- Bool (= capability-value (providerstage-capability stage)))
+        stages))))
+
+(defn response-matches-request? [request :- t/RpcRequest response :- t/RpcResponse] :- Bool
+  (and (= (t/rpcrequest-space request) (t/rpcresponse-space response))
+    (= (t/rpcrequest-op request) (t/rpcresponse-op response))))
+
+(defn invoke-plan-with! [descriptors :- (Vec ProviderDescriptor) enabled :- (Vec t/Triple) capability-value :- t/Triple space :- String plan :- ProviderPlan executor :- [t/RpcRequest -> t/RpcResponse]] :- ProviderInvocation
+  (let [boot :- ProviderBoot (boot-providers descriptors enabled) descriptor-value :- ProviderDescriptor (provider-for boot capability-value)]
+    (cond
+      [(not (providerplan-accepted plan))
+       (throw (ex-info "provider invocation refuses a rejected plan" {:type :provider/plan-rejected}))]
+      [(not (plan-capability? plan capability-value))
+       (throw (ex-info "provider plan capability does not match the boot-selected provider" {:type :provider/capability-mismatch}))]
+      [:else
+       (let [request (plan-request space plan)]
+         (if request
+           (let [response :- t/RpcResponse (executor request)]
+             (if (and (t/rpc-response? response) (response-matches-request? request response))
+               (->ProviderInvocation descriptor-value request response)
+               (throw (ex-info "provider executor returned a mismatched FRAMRPC response" {:type :provider/response-mismatch}))))
+           (throw (ex-info "accepted provider plan did not lower to FRAMRPC" {:type :provider/request-missing}))))])))
+
+(defn invoke-plan-to! [descriptors :- (Vec ProviderDescriptor) enabled :- (Vec t/Triple) capability-value :- t/Triple address :- String port :- Int space :- String plan :- ProviderPlan] :- ProviderInvocation
+  (invoke-plan-with! descriptors
+    enabled
+    capability-value
+    space
+    plan
+    (fn [request :- t/RpcRequest] :- t/RpcResponse
+      (rt/native-request-to! address port request))))

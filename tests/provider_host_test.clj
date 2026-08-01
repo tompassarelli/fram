@@ -1,5 +1,6 @@
 (require '[coord-daemon-wire :as wire]
          '[fram.provider-host :as host]
+         '[fram.rt :as rt]
          '[fram.types :as t])
 
 (def failures (atom []))
@@ -95,6 +96,52 @@
   (check! "the seam refuses operations outside assert/retract"
           (throws? #(host/provider-action :rpc/worlds proposition
                                           :rpc/subject-any))))
+
+(let [proposition (t/triple "entity" :example/value 9)
+      action (host/provider-action :rpc/assert proposition :rpc/subject-any)
+      plan (host/accepted-plan
+            proposition 41 [action]
+            [(host/provider-stage worlds :provider/test :provider/accepted)])
+      calls (atom [])
+      response (t/->RpcResponse "space" :rpc/batch 42 nil nil :rpc/ok)
+      invocation
+      (with-redefs [rt/native-request-to!
+                    (fn [address port request]
+                      (swap! calls conj [address port request])
+                      response)]
+        (host/invoke-plan-to! [worlds-provider] [worlds] worlds
+                              "127.0.0.1" 17771 "space" plan))]
+  (check! "private invocation boots the registry and executes its exact FRAMRPC request"
+          (and (= worlds-provider
+                  (host/providerinvocation-descriptor invocation))
+               (= response (host/providerinvocation-response invocation))
+               (= [["127.0.0.1" 17771
+                    (host/providerinvocation-request invocation)]]
+                  @calls)
+               (= :rpc/batch
+                  (t/rpcrequest-op
+                   (host/providerinvocation-request invocation))))))
+
+(let [duplicate
+      (host/descriptor
+       (host/provider-identity worlds "fake-second")
+       worlds (host/provider-contract worlds 1) [] :provider/ready)
+      proposition (t/triple "entity" :example/value 10)
+      plan (host/accepted-plan
+            proposition 0
+            [(host/provider-action :rpc/assert proposition :rpc/subject-any)]
+            [(host/provider-stage worlds :provider/test :provider/accepted)])
+      calls (atom 0)
+      refused
+      (with-redefs [rt/native-request-to!
+                    (fn [_ _ _]
+                      (swap! calls inc)
+                      (t/->RpcResponse "space" :rpc/batch 1 nil nil :rpc/ok))]
+        (throws? #(host/invoke-plan-to!
+                   [worlds-provider duplicate] [worlds] worlds
+                   "127.0.0.1" 17771 "space" plan)))]
+  (check! "boot uniqueness refusal occurs before private transport execution"
+          (and refused (zero? @calls))))
 
 (let [result (t/triple worlds :provider/test :provider/rejected)
       plan (host/rejected-plan :provider/test-rejection result 2
