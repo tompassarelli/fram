@@ -1021,7 +1021,35 @@
           (recur (rest rs) [] (into out buf))
           (recur (rest rs) (conj buf r) out))))))
 
+(defn- validate-replay-records! [recs]
+  (when-let [{:keys [record field]}
+             (some (fn [record]
+                     (case (:k record)
+                       :value (when-not (integer? (:id record))
+                                {:record record :field :id})
+                       :entity (when-not (integer? (:id record))
+                                 {:record record :field :id})
+                       :fact (some (fn [field]
+                                     (when-not (integer? (get record field))
+                                       {:record record :field field}))
+                                   [:cid :l :p :r :tx])
+                       :tx (some (fn [field]
+                                   (when-not (integer? (get record field))
+                                     {:record record :field field}))
+                                 [:tx :seq])
+                       nil))
+                   recs)]
+    (throw
+     (ex-info
+      (str "invalid v2 checkpoint " (name (:k record))
+           " record: " (name field) " must be an integer")
+      {:code :invalid-v2-checkpoint-record
+       :record-kind (:k record)
+       :field field
+       :record record}))))
+
 (defn- assemble-dump [recs]
+  (validate-replay-records! recs)
   (let [vals   (vec (for [r recs :when (= (:k r) :value)]  [(:id r) (:v r)]))
         ents   (vec (for [r recs :when (= (:k r) :entity)] (:id r)))
         facts (vec (for [r recs :when (= (:k r) :fact)]  [(:cid r) {:l (:l r) :p (:p r) :r (:r r)}]))

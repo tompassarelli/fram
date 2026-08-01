@@ -2208,7 +2208,7 @@
                               (clear! "cardinality"))                        ; fallback multi: clear -> default
         (= p "predicate_alias") (clear-value! p r)
         :else (clear! p))
-      (let [seq (get-in @st [:txs tx :seq])]
+      (let [seq (c/tx-seq st tx)]
         (append-flat! op te p r seq)
         ;; mirror the log fact into the READ view directly from the op (append-flat! is
         ;; async, so re-reading the file here would race): assert installs the fact,
@@ -8351,6 +8351,19 @@
                        :link? (= "ref" value-kind)}])))
           (distinct (concat (:domain schema-plan) (:card-only schema-plan))))))
 
+(defn- replace-store-tx-seq! [st tx seq]
+  (swap! st update :txs
+         (fn [entries]
+           (let [matches (count (filter #(= tx (:id %)) entries))]
+             (when-not (= 1 matches)
+               (throw
+                (ex-info
+                 "store transaction row is missing or duplicated"
+                 {:code :invalid-store-transaction
+                  :tx tx
+                  :matches matches})))
+             (mapv #(if (= tx (:id %)) (assoc % :seq seq) %) entries)))))
+
 (defn migrate-flat->co [flat]
   (let [;; drop torn/partial lines BEFORE folding: the live flat log is appended
         ;; without fsync, so a copy/read caught mid-write can yield an assertion
@@ -8429,7 +8442,7 @@
     ;; coherent, and (c) projected flat :tx CONTINUE the flat space (no collision;
     ;; coord.clj can still fold the log on rollback).
     (swap! st assoc :next-seq flat-max-tx)
-    (swap! st update :txs assoc tx {:seq flat-max-tx :agent "migrate"})
+    (replace-store-tx-seq! st tx flat-max-tx)
     ;; :log nil — DROP-IN: the flat log is canonical and is written ONLY by the
     ;; daemon's append-flat!; the reified store must NOT dump v2 :k-records into it.
     {:store st :log nil :lock (Object.)
@@ -8800,7 +8813,7 @@
               nil)))
         (let [tmax (:max-tx tail-plan)]
           (swap! st assoc :next-seq tmax)
-          (swap! st update :txs assoc tx {:seq tmax :agent "tail"}))))
+          (replace-store-tx-seq! st tx tmax))))
     co))
 
 ;; live name-triples (store-independent: names + literals, not entity ids) — the

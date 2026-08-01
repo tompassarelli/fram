@@ -34,7 +34,9 @@
         st  (:store @co)]
     (chk "(a) assert @note cardinality single -> :ok" (:ok res))
     (chk "(a) daemon store: s/cardinality note == single" (= "single" (s/cardinality st "note")))
-    (chk "(a) CLI fold of appended log sees note=single" (true? (get (cmap-of LOG) "note"))))
+    (chk "(a) CLI fold of appended log sees note=single" (true? (get (cmap-of LOG) "note")))
+    (chk "(a) appended schema fact carries the committed integer tx"
+         (= (:ok res) (:tx (last (fram.rt/read-log LOG))))))
   ;; value_kind is likewise a validated schema write
   (let [res (do-assert "@note" "value_kind" "ref" nil)]
     (chk "(a) assert @note value_kind ref -> :ok" (:ok res)))

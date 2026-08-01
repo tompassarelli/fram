@@ -9,7 +9,7 @@
 ;;     a bad checkpoint may cost a slower boot, NEVER wrong state.
 ;; Run from the repo root: bb -cp out tests/coord_snapshot_boot_test.clj
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt]
-         '[clojure.string :as str])
+         '[clojure.edn :as edn] '[clojure.string :as str])
 (load-file "coord_daemon.clj")
 ;; This in-process test owns LOG below; never compose it with the caller's live
 ;; North telemetry half captured by coord_daemon at load time.
@@ -42,6 +42,21 @@
      (ln 3 "assert" "@T2" "title" "Two")])
   (boot-flat! LOG)
   (write-snapshot! @co LOG)
+  (let [records (mapv edn/read-string
+                      (str/split-lines (slurp (:image (read-sidecar LOG)))))
+        tx-records (filterv #(= :tx (:k %)) records)]
+    (chk "checkpoint: every transaction record has integer tx and seq"
+         (and (seq tx-records)
+              (every? #(and (integer? (:tx %)) (integer? (:seq %)))
+                      tx-records))))
+  (let [bad-log "/tmp/store-snapshot-invalid-v2-test.log"]
+    (spit bad-log
+          (str (pr-str {:k :tx :tx nil :seq 1 :agent "bad"}) "\n"
+               (pr-str {:k :commit :tx :migration}) "\n"))
+    (let [error (try (replay bad-log) nil (catch clojure.lang.ExceptionInfo e e))]
+      (chk "checkpoint: malformed transaction record throws a coded error"
+           (and (= :invalid-v2-checkpoint-record (:code (ex-data error)))
+                (not (str/blank? (.getMessage error)))))))
   (chk "checkpoint: fold fingerprint covers resolver-derived snapshot state"
        (some #{"out/resolve.clj"} fold-fingerprint-files))
   (chk "checkpoint: sidecar carries a fold_version stamp" (some? (:fold_version (read-sidecar LOG))))
