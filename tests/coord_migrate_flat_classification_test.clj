@@ -59,7 +59,11 @@
                      (if (#'coord-daemon/code-structural-link-pred? p)
                        (assoc legacy-config p "ref")
                        legacy-config)
-                     value-kind (ck/value-kind-of facts configured p)]
+                     value-kind
+                     (ck/value-kind-of
+                      facts
+                      (#'coord-daemon/predicate-settings configured)
+                      p)]
                  [p {:cardinality (ck/cardinality-of facts {} p)
                      :value-kind value-kind
                      :link? (= "ref" value-kind)}])))

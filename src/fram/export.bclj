@@ -26,7 +26,7 @@
 ;; a ref-pred's value renders as its @id bare; a literal is EDN-quoted whenever
 ;; bare would be ambiguous — whitespace, NEWLINE, empty, or a leading @/".
 (defn- render-obj [facts :- (Vec k/Fact) p :- String v :- String] :- String
-  (if (= "ref" (k/value-kind-of facts {} p))
+  (if (= "ref" (k/value-kind-of facts [] p))
     (if (str/starts-with? v "@") v (str "@" v))
     (if (or (str/blank? v)
             (str/includes? v " ") (str/includes? v "\t")

@@ -44,7 +44,7 @@
   (k/predicate-name (k/predicate-registry facts) pred))
 
 (defn ref-value [facts ^String pred value]
-  (if (= "ref" (k/value-kind-of facts {} pred)) (at value) value))
+  (if (= "ref" (k/value-kind-of facts [] pred)) (at value) value))
 
 (defn catalog [facts]
   (let [subj-param [(->Param "subject" "string" true)]

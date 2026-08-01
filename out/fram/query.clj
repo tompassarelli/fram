@@ -43,7 +43,7 @@
    spelling (nth entry 0)
    identity (nth entry 1)
    canonical (k/predicate-name reg identity)]
-  (conj rows [identity spelling canonical (k/cardinality-of facts {} identity) (k/value-kind-of facts {} identity)]))) #{} spellings)))
+  (conj rows [identity spelling canonical (k/cardinality-of facts {} identity) (k/value-kind-of facts [] identity)]))) #{} spellings)))
 
 (defn facts->edb [facts]
   (loop [cs facts

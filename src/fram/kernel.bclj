@@ -6,6 +6,9 @@
   Pure logic — host interop (file IO, sockets) lives in fram.rt externs.")
 
 (require clojure.string :as str)
+(require fram.kernel-host)
+
+(declare-extern fram.kernel-host/getenv [String -> String?])
 
 ;; --- vocabulary --------------------------------------------------------------
 
@@ -16,8 +19,8 @@
 ;; space-separated) — the engine hard-codes NO domain vocab of its own. The literal
 ;; below is a TRANSITIONAL fallback for back-compat (tests / un-wrapped invocation);
 ;; it goes away once every caller sets the env. (§1.1, fram/north un-tangle.)
-(def single-valued :- (Vec String)
-  (let [env :- Any (System/getenv "FRAM_SINGLE_VALUED")]
+(def single-valued: (Vec String)
+  (let [env: String? (fram.kernel-host/getenv "FRAM_SINGLE_VALUED")]
     (if (and (some? env) (not (= env "")))
       (vec (str/split env #"\s+"))
       ["title" "owner" "lead" "driver" "source" "part_of"
@@ -32,14 +35,14 @@
 ;; consumers that still read it: the coordinator's the-model §9 terminal-cascade
 ;; (coord_daemon) and the doctor vocab-fingerprint. Defaults are the north
 ;; lifecycle vocab; a consumer overrides via the env vars.
-(def terminal-preds :- (Vec String)
-  (let [env :- Any (System/getenv "FRAM_TERMINAL_PREDS")]
+(def terminal-preds: (Vec String)
+  (let [env: String? (fram.kernel-host/getenv "FRAM_TERMINAL_PREDS")]
     (if (and (some? env) (not (= env "")))
       (vec (str/split env #"\s+"))
       ["outcome" "abandoned" "superseded_by"])))
 
-(def withdrawn-preds :- (Vec String)
-  (let [env :- Any (System/getenv "FRAM_WITHDRAWN_PREDS")]
+(def withdrawn-preds: (Vec String)
+  (let [env: String? (fram.kernel-host/getenv "FRAM_WITHDRAWN_PREDS")]
     (if (and (some? env) (not (= env "")))
       (vec (str/split env #"\s+"))
       ["abandoned"])))
@@ -73,8 +76,8 @@
 ;; True iff FRAM_SINGLE_VALUED was actually set (so `single-valued` is the
 ;; injected vocab); false means the TRANSITIONAL hardcoded fallback is live —
 ;; the precise divergence vector ("daemon booted before the env was added").
-(defn single-valued-from-env? [] :- Bool
-  (let [env :- Any (System/getenv "FRAM_SINGLE_VALUED")]
+(defn single-valued-from-env? [] -> Bool
+  (let [env: String? (fram.kernel-host/getenv "FRAM_SINGLE_VALUED")]
     (and (some? env) (not (= env "")))))
 
 ;; Order-independent fingerprint of the ACTIVE cardinality/lifecycle vocab. Two
@@ -261,6 +264,10 @@
 (defn- strip-at [s :- String] :- String
   (if (str/starts-with? s "@") (subs s 1) s))
 
+(defrecord PredicateSetting
+  [predicate: String
+   value: String])
+
 (defrecord PredicateRegistry
   [by-name :- (Map String String)
    canonical :- (Map String String)])
@@ -372,8 +379,26 @@
       value
       (if (single-eff-reg? reg {} pname) "single" "multi"))))
 
-(defn value-kind-of [facts :- (Vec Fact) configured :- (Map String String) pname :- String] :- String
-  (let [value (effective-predicate-value facts configured ref-kind-fallback pname "value_kind")]
+(defn- predicate-settings-map
+  [configured: (Vec PredicateSetting)] -> (Map String String)
+  (reduce
+   (fn [values: (Map String String)
+        setting: PredicateSetting] -> (Map String String)
+     (assoc values (:predicate setting) (:value setting)))
+   {}
+   configured))
+
+(defn value-kind-of
+  [facts: (Vec Fact)
+   configured: (Vec PredicateSetting)
+   pname: String] -> String
+  (let [value
+        (effective-predicate-value
+         facts
+         (predicate-settings-map configured)
+         ref-kind-fallback
+         pname
+         "value_kind")]
     (if (some? value) value "literal")))
 
 (defn acyclic-of? [facts :- (Vec Fact) configured :- (Map String String) pname :- String] :- Bool

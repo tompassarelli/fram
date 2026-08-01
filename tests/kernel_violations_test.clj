@@ -88,10 +88,15 @@
    ["(i) explicit acyclic false removes depends_on cycle validation" (not (has? (vi cyclic-allowed "@a") "depends_on cycle"))]
    ["(f) explicit acyclic false removes depends_on cycle validation" (not (has? (vf cyclic-allowed "@a") "depends_on cycle"))]
    ["effective value_kind: configured value overrides fallback"
-    (= "literal" (k/value-kind-of [] {"depends_on" "literal"} "depends_on"))]
+    (= "literal"
+       (k/value-kind-of
+        []
+        [(k/->PredicateSetting "depends_on" "literal")]
+        "depends_on"))]
    ["effective value_kind: explicit fact overrides configured value"
     (= "ref" (k/value-kind-of [(k/->Fact "@depends_on" "value_kind" "ref")]
-                              {"depends_on" "literal"} "depends_on"))]
+                              [(k/->PredicateSetting "depends_on" "literal")]
+                              "depends_on"))]
    ["effective acyclic: configured value overrides fallback"
     (not (k/acyclic-of? [] {"depends_on" "false"} "depends_on"))]
    ["effective acyclic: explicit fact overrides configured value"

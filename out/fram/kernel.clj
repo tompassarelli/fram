@@ -1,13 +1,14 @@
 (ns fram.kernel
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [fram.kernel-host :as kernel-host]))
 
-(def single-valued (let [env (System/getenv "FRAM_SINGLE_VALUED")]
+(def single-valued (let [env (fram.kernel-host/getenv "FRAM_SINGLE_VALUED")]
   (if (and (some? env) (not (= env ""))) (vec (str/split env #"\s+")) ["title" "owner" "lead" "driver" "source" "part_of" "do_on" "valid_until" "estimate_hours" "created_at" "updated_at" "name" "body" "created_by" "committed" "outcome" "abandoned" "superseded_by" "merged_into" "session_of" "start_time" "end_time" "clockify_id"])))
 
-(def terminal-preds (let [env (System/getenv "FRAM_TERMINAL_PREDS")]
+(def terminal-preds (let [env (fram.kernel-host/getenv "FRAM_TERMINAL_PREDS")]
   (if (and (some? env) (not (= env ""))) (vec (str/split env #"\s+")) ["outcome" "abandoned" "superseded_by"])))
 
-(def withdrawn-preds (let [env (System/getenv "FRAM_WITHDRAWN_PREDS")]
+(def withdrawn-preds (let [env (fram.kernel-host/getenv "FRAM_WITHDRAWN_PREDS")]
   (if (and (some? env) (not (= env ""))) (vec (str/split env #"\s+")) ["abandoned"])))
 
 (defn ^Boolean vec-contains? [xs ^String s]
@@ -15,7 +16,7 @@
   (if (empty? r) false (if (= (first r) s) true (recur (rest r))))))
 
 (defn ^Boolean single-valued-from-env? []
-  (let [env (System/getenv "FRAM_SINGLE_VALUED")]
+  (let [env (fram.kernel-host/getenv "FRAM_SINGLE_VALUED")]
   (and (some? env) (not (= env "")))))
 
 (defn- ^String sorted-join [xs]
@@ -113,6 +114,12 @@
 (defn- ^String strip-at [^String s]
   (if (str/starts-with? s "@") (subs s 1) s))
 
+(defrecord PredicateSetting [predicate value])
+
+(defn predicatesetting-predicate [r] (:predicate r))
+
+(defn predicatesetting-value [r] (:value r))
+
 (defrecord PredicateRegistry [by-name canonical])
 
 (defn predicateregistry-by-name [r] (:by-name r))
@@ -183,8 +190,11 @@
    value (effective-predicate-value-r reg explicit configured {} pname)]
   (if (some? value) value (if (single-eff-reg? reg {} pname) "single" "multi"))))
 
+(defn- predicate-settings-map [configured]
+  (reduce (fn [values setting] (assoc values (:predicate setting) (:value setting))) {} configured))
+
 (defn ^String value-kind-of [facts configured ^String pname]
-  (let [value (effective-predicate-value facts configured ref-kind-fallback pname "value_kind")]
+  (let [value (effective-predicate-value facts (predicate-settings-map configured) ref-kind-fallback pname "value_kind")]
   (if (some? value) value "literal")))
 
 (defn ^Boolean acyclic-of? [facts configured ^String pname]

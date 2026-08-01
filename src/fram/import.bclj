@@ -47,7 +47,7 @@
          (fn [c :- k/Fact] :- k/Fact
            (let [p (k/predicate-name reg (:p c))
                  r (:r c)
-                 rv (if (and (= "ref" (k/value-kind-of facts {} p))
+                 rv (if (and (= "ref" (k/value-kind-of facts [] p))
                              (not (str/starts-with? r "@")))
                       (str "@" r)
                       r)]

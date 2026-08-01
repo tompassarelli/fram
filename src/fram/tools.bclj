@@ -60,7 +60,7 @@
 ;; @ is kept as-is.
 ;; GAP: value is an EDN write-value -> Any (the engine interns arbitrary EDN).
 (defn ref-value [facts :- (Vec k/Fact) pred :- String value :- Any] :- Any
-  (if (= "ref" (k/value-kind-of facts {} pred)) (at value) value))
+  (if (= "ref" (k/value-kind-of facts [] pred)) (at value) value))
 
 ;; --- catalog: the CLOSED, O(1) surface (exactly twelve tools) ----------------
 (defn catalog [facts :- (Vec k/Fact)] :- (Vec ToolSpec)

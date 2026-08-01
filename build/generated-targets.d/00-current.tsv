@@ -1,6 +1,7 @@
 # kind	source	destination
 beagle	src/fram/rt_core.bclj	out/fram/rt_core.clj
 copy	src/fram/rt.clj	out/fram/rt.clj
+copy	src/fram/kernel_host.clj	out/fram/kernel_host.clj
 copy	src/fram/json.clj	out/fram/json.clj
 copy	src/fram/authority_json.clj	out/fram/authority_json.clj
 beagle	src/fram/types.bclj	out/fram/types.clj

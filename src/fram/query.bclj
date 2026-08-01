@@ -100,7 +100,7 @@
          (conj rows
                [identity spelling canonical
                 (k/cardinality-of facts {} identity)
-                (k/value-kind-of facts {} identity)])))
+                (k/value-kind-of facts [] identity)])))
      #{}
      spellings)))
 

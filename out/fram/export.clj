@@ -9,7 +9,7 @@
   (reduce (fn [acc x] (if (k/vec-contains? acc x) acc (conj acc x))) [] xs))
 
 (defn- ^String render-obj [facts ^String p ^String v]
-  (if (= "ref" (k/value-kind-of facts {} p)) (if (str/starts-with? v "@") v (str "@" v)) (if (or (str/blank? v) (str/includes? v " ") (str/includes? v "\t") (str/includes? v "\n") (str/includes? v "\r") (str/starts-with? v "@") (str/starts-with? v "\"")) (fram.rt/edn-quote v) v)))
+  (if (= "ref" (k/value-kind-of facts [] p)) (if (str/starts-with? v "@") v (str "@" v)) (if (or (str/blank? v) (str/includes? v " ") (str/includes? v "\t") (str/includes? v "\n") (str/includes? v "\r") (str/starts-with? v "@") (str/starts-with? v "\"")) (fram.rt/edn-quote v) v)))
 
 (defn ^String thread-md [facts ^String te]
   (let [reg (k/predicate-registry facts)

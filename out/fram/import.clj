@@ -32,7 +32,7 @@
   (let [reg (k/predicate-registry facts)
    normalized (mapv (fn [c] (let [p (k/predicate-name reg (:p c))
    r (:r c)
-   rv (if (and (= "ref" (k/value-kind-of facts {} p)) (not (str/starts-with? r "@"))) (str "@" r) r)]
+   rv (if (and (= "ref" (k/value-kind-of facts [] p)) (not (str/starts-with? r "@"))) (str "@" r) r)]
   (k/->Fact (:l c) p rv))) facts)]
   (vec (concat (filterv identity-fact? normalized) (filterv (fn [c] (not (identity-fact? c))) normalized)))))
 

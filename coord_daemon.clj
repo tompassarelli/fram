@@ -2083,13 +2083,19 @@
       (let [kind (s/lookup st pid "value_kind")]
         (when (#{"ref" "literal"} kind) kind)))))
 
+(defn- predicate-settings [configured]
+  (mapv
+   (fn [[predicate value]]
+     (ck/->PredicateSetting predicate value))
+   configured))
+
 (defn- effective-value-kind* [metadata st legacy-config p]
   (let [stored (store-value-kind st p)
         configured (cond
                      (some? stored) {p stored}
                      (code-structural-link-pred? p) (assoc legacy-config p "ref")
                      :else legacy-config)]
-    (ck/value-kind-of metadata configured p)))
+    (ck/value-kind-of metadata (predicate-settings configured) p)))
 
 (defn- effective-value-kind [p]
   (effective-value-kind*
