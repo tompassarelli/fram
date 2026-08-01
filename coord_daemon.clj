@@ -6,8 +6,6 @@
 (ns coord-daemon
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [fram.kernel :as kernel]
-            [fram.store :as term-store]
             [fram.types :as t])
   (:import [java.net ServerSocket Socket]
            [java.io BufferedReader InputStreamReader OutputStreamWriter
@@ -78,12 +76,23 @@
 
 (defn writer-authority-status []
   (when @coordinator
-    (coord-writer-authority/status
-     @coordinator-role @writer-authority (:log @coordinator))))
+    (let [physical (coord-writer-authority/status
+                    @coordinator-role @writer-authority (:log @coordinator))
+          lock-held (:write-authorized physical)
+          recovery (coord/coordinator-recovery-state @coordinator)]
+      (assoc physical
+             :lock-held lock-held
+             :write-authorized (and lock-held
+                                    (coord/mutation-ready? @coordinator))
+             :coordinator-recovery recovery))))
 
-(defn write-authorized? []
+(defn- writer-lock-held? []
   (boolean (and (= :active @coordinator-role)
                 (coord-writer-authority/held? @writer-authority))))
+
+(defn write-authorized? []
+  (boolean (and (writer-lock-held?)
+                (coord/mutation-ready? @coordinator))))
 
 (defn shutdown! []
   (reset! stopping? true)
@@ -163,13 +172,15 @@
 
 (defn- status-response []
   (let [co @coordinator
-        context (coord/coordinator-store co)]
+        status (coord/coordinator-status co)]
     {:format :termstore-v2/framlog
-     :space-id (coord/coordinator-space co)
-     :version (coord/current-transaction co)
-     :transactions (term-store/transaction-count context)
-     :operations (term-store/operation-count context)
-     :terms (term-store/term-count context)
+     :space-id (:space-id status)
+     :version (:version status)
+     :transactions (:transactions status)
+     :operations (:operations status)
+     :terms (:terms status)
+     :readable (:readable status)
+     :recovery (:recovery status)
      :writer-authority (writer-authority-status)
      :torn-tail (:torn-tail co)
      :recovered-tail (:recovered-tail co)
@@ -182,7 +193,7 @@
   (let [co @coordinator]
     (case (:op request)
       :status (status-response)
-      :version {:version (coord/current-transaction co)}
+      :version (select-keys (coord/coordinator-status co) [:version :recovery])
       :history {:history (coord/history co)}
       :live {:occurrences (coord/live-occurrences co)
              :propositions (coord/live-propositions co)}
@@ -263,9 +274,16 @@
               (if-not (= expected actual)
                 {:code :log-mismatch :expected expected :actual actual}
                 (handle (:request request))))
-            (if (and (mutation? (:op request)) (not (write-authorized?)))
-              {:code :writer-authority-required
-               :writer-authority (writer-authority-status)}
+            (if (mutation? (:op request))
+              (cond
+                (not (writer-lock-held?))
+                {:code :writer-authority-required
+                 :writer-authority (writer-authority-status)}
+
+                (not (coord/mutation-ready? @coordinator))
+                (coord/require-mutation-ready! @coordinator)
+
+                :else (handle-native request))
               (handle-native request)))]
       (response->wire response))
     (catch clojure.lang.ExceptionInfo error

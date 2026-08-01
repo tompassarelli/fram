@@ -194,6 +194,108 @@
 (check! "a repaired generation accepts and cold-replays the next whole frame"
         (some #{nested} (coord/live-propositions after-repair)))
 
+;; A thrown append cannot reveal whether the frame reached stable storage. The
+;; coordinator rebuilds its readable state from disk but stays mutation-fenced.
+(def append-frame-var
+  (ns-resolve 'coord 'append-frame-durable!))
+(def append-frame-original @append-frame-var)
+
+(def pre-append-file (java.io.File. scratch "pre-append-failure.framlog"))
+(coord/create-triple-log! (.getPath pre-append-file) "pre-append-space")
+(def pre-append-co
+  (coord/open-coordinator! (.getPath pre-append-file) "pre-append-space"))
+(def pre-append-error
+  (with-redefs-fn
+    {append-frame-var
+     (fn [_ _]
+       (throw (ex-info "injected before append" {:type :injected-pre-append})))}
+    #(error-code
+      (fn [] (coord/assert! pre-append-co (t/triple "pre" :state "attempted") {})))))
+(check! "pre-append exception is reported as durability-ambiguous"
+        (= :durability-ambiguous pre-append-error))
+(check! "pre-append reconciliation preserves the exact durable version"
+        (and (= :recovery-required
+                (:status (coord/coordinator-recovery-state pre-append-co)))
+             (= (t/transaction-coordinate "pre-append-space" 0)
+                (coord/current-transaction pre-append-co))
+             (empty? (:frames
+                      (coord/read-triple-log! (.getPath pre-append-file))))))
+(check! "pre-append coordinator rejects retry until restart"
+        (= :recovery-required
+           (error-code
+            #(coord/assert! pre-append-co (t/triple "pre" :state "retry") {}))))
+
+(def post-force-file (java.io.File. scratch "post-force-failure.framlog"))
+(coord/create-triple-log! (.getPath post-force-file) "post-force-space")
+(def post-force-co
+  (coord/open-coordinator! (.getPath post-force-file) "post-force-space"))
+(def post-force-error
+  (with-redefs-fn
+    {append-frame-var
+     (fn [path frame]
+       (append-frame-original path frame)
+       (throw (ex-info "injected after force" {:type :injected-post-force})))}
+    #(error-code
+      (fn []
+        (coord/assert! post-force-co (t/triple "post" :state "durable") {})))))
+(check! "post-force exception is reported as durability-ambiguous"
+        (= :durability-ambiguous post-force-error))
+(check! "post-force reconciliation advances readable memory to durable tx1"
+        (and (= :recovery-required
+                (:status (coord/coordinator-recovery-state post-force-co)))
+             (= (t/transaction-coordinate "post-force-space" 1)
+                (coord/current-transaction post-force-co))
+             (= [1] (mapv :tx-seq
+                           (:frames
+                            (coord/read-triple-log!
+                             (.getPath post-force-file)))))))
+(check! "post-force coordinator rejects a stale-sequence retry"
+        (= :recovery-required
+           (error-code
+            #(coord/assert! post-force-co (t/triple "post" :state "retry") {}))))
+(def post-force-restarted
+  (coord/open-coordinator! (.getPath post-force-file) "post-force-space"))
+(def post-force-next
+  (coord/assert! post-force-restarted (t/triple "post" :state "next") {}))
+(check! "restart resumes at tx2 without duplicate tx1"
+        (and (= (t/transaction-coordinate "post-force-space" 2)
+                (:ok post-force-next))
+             (= [1 2]
+                (mapv :tx-seq
+                      (:frames
+                       (coord/read-triple-log! (.getPath post-force-file)))))
+             (= (t/transaction-coordinate "post-force-space" 2)
+                (coord/current-transaction
+                 (coord/open-coordinator! (.getPath post-force-file)
+                                          "post-force-space")))))
+
+(def corrupt-file (java.io.File. scratch "reconcile-corrupt.framlog"))
+(coord/create-triple-log! (.getPath corrupt-file) "corrupt-space")
+(def corrupt-co (coord/open-coordinator! (.getPath corrupt-file) "corrupt-space"))
+(def corrupt-error
+  (with-redefs-fn
+    {append-frame-var
+     (fn [path frame]
+       (append-frame-original path frame)
+       (with-open [file (java.io.RandomAccessFile. (str path) "rw")]
+         (.seek file (dec (.length file)))
+         (let [last-byte (.read file)]
+           (.seek file (dec (.length file)))
+           (.write file (bit-xor last-byte 1))
+           (.force (.getChannel file) true)))
+       (throw (ex-info "injected corrupt durable frame"
+                       {:type :injected-corruption})))}
+    #(error-code
+      (fn [] (coord/assert! corrupt-co (t/triple "bad" :frame true) {})))))
+(check! "failed durable replay permanently fences the coordinator as corrupt"
+        (and (= :coordinator-corrupt corrupt-error)
+             (= :corrupt (:status (coord/coordinator-recovery-state corrupt-co)))
+             (= :coordinator-corrupt
+                (error-code
+                 #(coord/assert! corrupt-co (t/triple "bad" :retry true) {})))
+             (= :coordinator-corrupt
+                (error-code #(coord/current-transaction corrupt-co)))))
+
 (def legacy-file (java.io.File. scratch "legacy.log"))
 (spit legacy-file "{:tx 1, :op \"assert\", :l \"A\", :p \"p\", :r \"B\"}\n")
 (check! "runtime boot rejects legacy flat bytes with migration-required"

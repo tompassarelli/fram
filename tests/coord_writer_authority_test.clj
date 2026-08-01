@@ -97,6 +97,37 @@
       (check! "wire response contains no physical row handle"
               (not-any? #(and (map? %) (contains? % :cid))
                         (tree-seq coll? seq result))))
+    (let [append-var (ns-resolve 'coord 'append-frame-durable!)
+          original @append-var
+          failure
+          (with-redefs-fn
+            {append-var
+             (fn [path frame]
+               (original path frame)
+               (throw (ex-info "injected after force"
+                               {:type :injected-post-force})))}
+            #(coord-daemon/handle
+              {:op :assert :triple ["A" :email "second@example.com"]}))
+          status (coord-daemon/handle {:op :status})]
+      (check! "ambiguous daemon append fails closed after durable force"
+              (= :durability-ambiguous (:code failure)))
+      (check! "daemon status exposes reconciled tx2 without write authority"
+              (and (= ["direct-space" :kernel/tx-sequence 2]
+                      (:version status))
+                   (= :recovery-required (get-in status [:recovery :status]))
+                   (true? (get-in status [:recovery :reconciled?]))
+                   (true? (get-in status [:writer-authority :lock-held]))
+                   (false? (get-in status
+                                   [:writer-authority :write-authorized]))))
+      (check! "daemon rejects retry while its physical writer lock remains held"
+              (= :recovery-required
+                 (:code
+                  (coord-daemon/handle
+                   {:op :assert :triple ["A" :email "retry@example.com"]}))))
+      (check! "daemon ambiguity writes one tx2 frame, never duplicate tx2"
+              (= [1 2]
+                 (mapv :tx-seq
+                       (:frames (coord/read-triple-log! log))))))
     (check! "removed schema/query operation fails explicitly"
             (= :unsupported-termstore-operation
                (:code (coord-daemon/handle {:op :query :query []}))))

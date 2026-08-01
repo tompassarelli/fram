@@ -435,6 +435,7 @@
         :space-id space-id
         :log canonical
         :lock (Object.)
+        :mutation-state (atom {:status :ready})
         :torn-tail (when-not repair-torn? (:torn-tail parsed))
         :recovered-tail (when repair-torn? (:torn-tail parsed))}))))
 
@@ -443,15 +444,77 @@
   [space-id]
   {:term-store (term-store/new-term-store space-id)
    :space-id space-id :log nil :lock (Object.)
+   :mutation-state (atom {:status :ready})
    :torn-tail nil :recovered-tail nil})
 
-(defn coordinator-store [co] (:term-store co))
+(defn coordinator-recovery-state [co]
+  @(:mutation-state co))
+
+(defn mutation-ready? [co]
+  (= :ready (:status (coordinator-recovery-state co))))
+
+(defn require-mutation-ready! [co]
+  (let [{:keys [status] :as state} (coordinator-recovery-state co)]
+    (case status
+      :ready true
+      :recovery-required
+      (fail! :recovery-required
+             "coordinator is fenced after a durability-ambiguous commit"
+             {:recovery state})
+      :corrupt
+      (fail! :coordinator-corrupt
+             "coordinator is permanently fenced because durable history is corrupt"
+             {:recovery state})
+      (fail! :coordinator-state-invalid "coordinator mutation state is invalid"
+             {:recovery state}))))
+
+(defn- require-readable! [co]
+  (let [{:keys [status reconciled?] :as state}
+        (coordinator-recovery-state co)]
+    (case status
+      :ready true
+      :recovery-required
+      (if reconciled?
+        true
+        (fail! :recovery-required
+               "durable history reconciliation has not completed"
+               {:recovery state}))
+      :corrupt
+      (fail! :coordinator-corrupt
+             "durable history could not be reconciled"
+             {:recovery state})
+      (fail! :coordinator-state-invalid "coordinator mutation state is invalid"
+             {:recovery state}))))
+
+(defn coordinator-store [co]
+  (require-readable! co)
+  (:term-store co))
+
 (defn coordinator-space [co] (:space-id co))
 
 (defn current-transaction [co]
   (t/transaction-coordinate
    (coordinator-space co)
    (term-store/current-sequence (coordinator-store co))))
+
+(defn coordinator-status [co]
+  (locking (:lock co)
+    (let [{:keys [status reconciled?] :as recovery}
+          (coordinator-recovery-state co)
+          readable? (or (= :ready status)
+                        (and (= :recovery-required status) reconciled?))
+          context (:term-store co)]
+      {:space-id (coordinator-space co)
+       :version (when readable?
+                  (t/transaction-coordinate
+                   (coordinator-space co)
+                   (term-store/current-sequence context)))
+       :transactions (when readable? (term-store/transaction-count context))
+       :operations (when readable? (term-store/operation-count context))
+       :terms (when readable? (term-store/term-count context))
+       :readable readable?
+       :mutation-ready (= :ready status)
+       :recovery recovery})))
 
 (defn instant-now []
   (let [now (java.time.Instant/now)]
@@ -600,10 +663,6 @@
     (vec (concat per-source tx-metadata))))
 
 (defn- append-and-replay! [co sequence operations]
-  (when (:torn-tail co)
-    (fail! :torn-tail-repair-required
-           "FRAMLOG has a torn trailing frame; writer authority must repair it"
-           {:path (:log co) :torn-tail (:torn-tail co)}))
   (let [frame (term-store/transaction-frame sequence operations)
         serializable {:tx-seq sequence
                       :operations (mapv operation-map (range) operations)}]
@@ -611,12 +670,76 @@
       (append-frame-durable! path serializable))
     (term-store/replay-transaction! (coordinator-store co) frame)))
 
+(defn- throwable-code [error]
+  (let [data (ex-data error)]
+    (or (:fram/code data) (:type data) (:code data)
+        (keyword (.getSimpleName (class error))))))
+
+(defn- fence-and-reconcile! [co before-store error]
+  ;; No caller may observe the pre-append version as writable while the log is
+  ;; being resolved after a write whose durable outcome is unknown.
+  (let [cause {:code (throwable-code error) :message (.getMessage error)}]
+    (reset! (:mutation-state co)
+            {:status :recovery-required :reconciled? false :cause cause})
+    (try
+      (let [{:keys [context torn-tail valid-bytes source]}
+            (if-let [path (:log co)]
+              (let [parsed (read-triple-log! path)
+                    space-id (:space-id parsed)
+                    context (term-store/new-term-store space-id)]
+                (when-not (= (coordinator-space co) space-id)
+                  (fail! :space-mismatch
+                         "durable history changed SpaceId during reconciliation"
+                         {:expected (coordinator-space co) :actual space-id}))
+                (replay-frames! context (:frames parsed))
+                {:context context :torn-tail (:torn-tail parsed)
+                 :valid-bytes (:valid-bytes parsed) :source :durable-prefix})
+              (let [context (term-store/new-term-store (coordinator-space co))]
+                (reset! context before-store)
+                {:context context :torn-tail nil :valid-bytes nil
+                 :source :memory-snapshot}))
+            sequence (term-store/current-sequence context)
+            recovery {:status :recovery-required
+                      :reconciled? true
+                      :source source
+                      :cause cause
+                      :version (t/transaction-coordinate
+                                (coordinator-space co) sequence)
+                      :torn-tail torn-tail
+                      :valid-bytes valid-bytes}]
+        (reset! (:term-store co) @context)
+        (reset! (:mutation-state co) recovery)
+        recovery)
+      (catch Throwable reconciliation-error
+        (let [corruption {:status :corrupt
+                          :reconciled? false
+                          :cause cause
+                          :corruption
+                          {:code (throwable-code reconciliation-error)
+                           :message (.getMessage reconciliation-error)}}]
+          (reset! (:mutation-state co) corruption)
+          corruption)))))
+
+(defn- propagate-ambiguous-commit! [recovery error]
+  (if (= :corrupt (:status recovery))
+    (throw
+     (ex-info "durable history is corrupt after a commit failure"
+              {:type :coordinator-corrupt :fram/code :coordinator-corrupt
+               :recovery recovery}
+              error))
+    (throw
+     (ex-info "commit outcome is durability-ambiguous; restart is required"
+              {:type :durability-ambiguous :fram/code :durability-ambiguous
+               :recovery recovery}
+              error))))
+
 (defn commit!
   "Commit one ordered transaction. REQUEST contains :operations and may contain
    :base, :actor, and typed :recorded-at. The response exposes transaction and
    occurrence coordinates; no physical row handle is public."
   [co {:keys [operations base] :as request}]
   (locking (:lock co)
+    (require-mutation-ready! co)
     (validate-base co base)
     (let [current (current-transaction co)]
       (if (and base (not= base current))
@@ -625,6 +748,10 @@
           (when-not (and (vector? operations) (seq operations))
             (fail! :invalid-transaction-frame
                    "transaction requires a nonempty operation vector" {}))
+          (when (:torn-tail co)
+            (fail! :torn-tail-repair-required
+                   "FRAMLOG has a torn trailing frame; writer authority must repair it"
+                   {:path (:log co) :torn-tail (:torn-tail co)}))
           (let [context (coordinator-store co)
                 sequence (term-store/next-sequence context)
                 tx-coordinate (t/transaction-coordinate
@@ -633,17 +760,23 @@
                 metadata (metadata-operations co tx-coordinate operations request)
                 all-operations (into source-operations metadata)
                 before (term-store/operation-count context)
-                committed (append-and-replay! co sequence all-operations)
-                events (subvec (term-store/operation-occurrences context)
-                               before (+ before (count source-operations)))
-                event-coordinates (into #{} (map kernel/occurrence-of) events)
-                withdrawals (filterv #(contains? event-coordinates
-                                                  (t/triple-slot0 %))
-                                     (withdrawal-triples co))]
-            {:ok committed
-             :occurrences events
-             :withdrawals withdrawals
-             :operation-count (count all-operations)}))))))
+                before-store @context]
+            (try
+              (let [committed (append-and-replay! co sequence all-operations)
+                    events (subvec (term-store/operation-occurrences context)
+                                   before (+ before (count source-operations)))
+                    event-coordinates (into #{} (map kernel/occurrence-of) events)
+                    withdrawals (filterv #(contains? event-coordinates
+                                                      (t/triple-slot0 %))
+                                         (withdrawal-triples co))]
+                {:ok committed
+                 :occurrences events
+                 :withdrawals withdrawals
+                 :operation-count (count all-operations)})
+              (catch Throwable error
+                (propagate-ambiguous-commit!
+                 (fence-and-reconcile! co before-store error)
+                 error)))))))))
 
 (defn assert!
   ([co proposition] (assert! co proposition {}))
