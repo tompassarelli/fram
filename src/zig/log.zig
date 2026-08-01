@@ -37,11 +37,122 @@ pub const Term = union(enum) {
 
 /// The one semantic aggregate stored by Fram. Slot meaning belongs to the
 /// ontology; the physical codec treats all three positions uniformly.
-/// “Turtles all the way down” names that uniformity thesis, never this type.
+/// “Turtles all the way down” is the architectural preference for that
+/// recursive uniformity where it fits; it never names a runtime or storage type.
 pub const Triple = struct {
     slot0: Term,
     slot1: Term,
     slot2: Term,
+};
+
+pub const TermLimits = struct {
+    max_depth: usize = max_term_depth,
+    max_nodes: usize = max_frame_payload_bytes,
+    max_string_bytes: usize = max_frame_payload_bytes,
+    max_total_string_bytes: usize = max_frame_payload_bytes,
+};
+
+pub const TermDecodeResult = struct {
+    term: Term,
+    consumed: usize,
+};
+
+pub const TripleDecodeResult = struct {
+    triple: Triple,
+    consumed: usize,
+};
+
+pub const TermMeasure = struct {
+    encoded_bytes: usize,
+    nodes: usize,
+    string_bytes: usize,
+};
+
+pub const TermMeasureError = error{
+    InvalidAtom,
+    InvalidAtomUtf8,
+    InvalidInstant,
+    TermTooDeep,
+    TermNodeLimit,
+    TermStringTooLarge,
+    FrameTooLarge,
+};
+
+pub const TermDecodeError = Allocator.Error || error{
+    InvalidTerm,
+    InvalidTermTag,
+    TruncatedTerm,
+    TrailingTermBytes,
+    TermTooDeep,
+    TermNodeLimit,
+    TermStringTooLarge,
+};
+
+/// The sole v1 recursive-term codec. Logs and RPC frames share these exact tags
+/// and validation rules; neither protocol owns a private term dialect.
+pub const TermCodecV1 = struct {
+    pub fn measure(term: Term, limits: TermLimits) TermMeasureError!TermMeasure {
+        var meter: TermMeter = .{ .limits = limits };
+        try meter.visit(term, 0);
+        return .{
+            .encoded_bytes = meter.encoded_bytes,
+            .nodes = meter.nodes,
+            .string_bytes = meter.string_bytes,
+        };
+    }
+
+    pub fn encode(allocator: Allocator, term: Term) EncodeError![]u8 {
+        var out: Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        try writeTerm(&out.writer, term, 0);
+        return out.toOwnedSlice();
+    }
+
+    pub fn append(writer: *Writer, term: Term) EncodeError!void {
+        try writeTerm(writer, term, 0);
+    }
+
+    pub fn decode(
+        allocator: Allocator,
+        bytes: []const u8,
+        limits: TermLimits,
+    ) TermDecodeError!Term {
+        const result = try decodePrefix(allocator, bytes, limits);
+        if (result.consumed != bytes.len) return error.TrailingTermBytes;
+        return result.term;
+    }
+
+    pub fn decodePrefix(
+        allocator: Allocator,
+        bytes: []const u8,
+        limits: TermLimits,
+    ) TermDecodeError!TermDecodeResult {
+        var decoder: TermDecoder = .{
+            .allocator = allocator,
+            .cursor = .{ .input = bytes },
+            .limits = limits,
+        };
+        const term = try decoder.parse(0);
+        return .{ .term = term, .consumed = decoder.cursor.pos };
+    }
+
+    pub fn decodeTriplePrefix(
+        allocator: Allocator,
+        bytes: []const u8,
+        limits: TermLimits,
+    ) TermDecodeError!TripleDecodeResult {
+        var decoder: TermDecoder = .{
+            .allocator = allocator,
+            .cursor = .{ .input = bytes },
+            .limits = limits,
+        };
+        try decoder.beginNode(0);
+        const tag = std.enums.fromInt(TermTag, try decoder.cursor.readByte()) orelse
+            return error.InvalidTermTag;
+        if (tag != .triple) return error.InvalidTerm;
+        const triple = try decoder.parseTripleAfterTag(0);
+        return .{ .triple = triple, .consumed = decoder.cursor.pos };
+    }
 };
 
 pub const Action = enum(u8) {
@@ -746,14 +857,20 @@ fn parseTransaction(allocator: Allocator, payload: []const u8) DecodeError!Trans
         if (ordinal != index) return error.InvalidFrame;
         const action = std.enums.fromInt(Action, try cursor.readByte()) orelse
             return error.InvalidFrame;
-        const root_tag = std.enums.fromInt(TermTag, try cursor.readByte()) orelse
-            return error.InvalidFrame;
-        if (root_tag != .triple) return error.InvalidFrame;
-        const triple = try parseTripleAfterTag(allocator, &cursor, 0);
+        const decoded = TermCodecV1.decodeTriplePrefix(
+            allocator,
+            cursor.input[cursor.pos..],
+            .{},
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TermTooDeep => return error.TermTooDeep,
+            else => return error.InvalidFrame,
+        };
+        cursor.pos += decoded.consumed;
         try ops.append(allocator, .{
             .ordinal = ordinal,
             .action = action,
-            .triple = triple,
+            .triple = decoded.triple,
         });
     }
     if (cursor.pos != payload.len) return error.InvalidFrame;
@@ -763,60 +880,166 @@ fn parseTransaction(allocator: Allocator, payload: []const u8) DecodeError!Trans
     };
 }
 
-fn parseTerm(allocator: Allocator, cursor: *Cursor, depth: usize) DecodeError!Term {
-    if (depth > max_term_depth) return error.TermTooDeep;
-    const tag = std.enums.fromInt(TermTag, try cursor.readByte()) orelse
-        return error.InvalidFrame;
-    return switch (tag) {
-        .string => .{ .atom = .{ .string = try parseText(allocator, cursor, false) } },
-        .integer => .{ .atom = .{ .integer = try cursor.readInt(i64) } },
-        .float => .{ .atom = .{ .float = @bitCast(try cursor.readInt(u64)) } },
-        .bool_false => .{ .atom = .{ .boolean = false } },
-        .bool_true => .{ .atom = .{ .boolean = true } },
-        .keyword => .{ .atom = .{ .keyword = try parseText(allocator, cursor, true) } },
-        .instant => instant: {
-            const value: Instant = .{
-                .epoch_seconds = try cursor.readInt(i64),
-                .nanosecond = try cursor.readInt(u32),
-            };
-            if (value.nanosecond > 999_999_999) return error.InvalidFrame;
-            break :instant .{ .atom = .{ .instant = value } };
-        },
-        .triple => triple: {
-            const value = try allocator.create(Triple);
-            value.* = try parseTripleAfterTag(allocator, cursor, depth);
-            break :triple .{ .triple = value };
-        },
-    };
-}
+const TermCursor = struct {
+    input: []const u8,
+    pos: usize = 0,
 
-fn parseTripleAfterTag(
-    allocator: Allocator,
-    cursor: *Cursor,
-    depth: usize,
-) DecodeError!Triple {
-    if (depth > max_term_depth) return error.TermTooDeep;
-    return .{
-        .slot0 = try parseTerm(allocator, cursor, depth + 1),
-        .slot1 = try parseTerm(allocator, cursor, depth + 1),
-        .slot2 = try parseTerm(allocator, cursor, depth + 1),
-    };
-}
-
-fn parseText(
-    allocator: Allocator,
-    cursor: *Cursor,
-    keyword: bool,
-) DecodeError![]const u8 {
-    const length = try cursor.readInt(u32);
-    const value = try cursor.readSlice(length);
-    if (!std.unicode.utf8ValidateSlice(value) or
-        (keyword and (value.len == 0 or value[0] == ':')))
-    {
-        return error.InvalidFrame;
+    fn readByte(cursor: *TermCursor) TermDecodeError!u8 {
+        if (cursor.pos >= cursor.input.len) return error.TruncatedTerm;
+        const result = cursor.input[cursor.pos];
+        cursor.pos += 1;
+        return result;
     }
-    return allocator.dupe(u8, value);
-}
+
+    fn readInt(cursor: *TermCursor, comptime T: type) TermDecodeError!T {
+        if (cursor.input.len - cursor.pos < @sizeOf(T))
+            return error.TruncatedTerm;
+        const result = readIntAt(T, cursor.input, cursor.pos);
+        cursor.pos += @sizeOf(T);
+        return result;
+    }
+
+    fn readSlice(cursor: *TermCursor, length: usize) TermDecodeError![]const u8 {
+        if (cursor.input.len - cursor.pos < length)
+            return error.TruncatedTerm;
+        const result = cursor.input[cursor.pos .. cursor.pos + length];
+        cursor.pos += length;
+        return result;
+    }
+};
+
+const TermDecoder = struct {
+    allocator: Allocator,
+    cursor: TermCursor,
+    limits: TermLimits,
+    nodes: usize = 0,
+    total_string_bytes: usize = 0,
+
+    fn parse(decoder: *TermDecoder, depth: usize) TermDecodeError!Term {
+        try decoder.beginNode(depth);
+
+        const tag = std.enums.fromInt(TermTag, try decoder.cursor.readByte()) orelse
+            return error.InvalidTermTag;
+        return switch (tag) {
+            .string => .{ .atom = .{ .string = try decoder.parseText(false) } },
+            .integer => .{ .atom = .{ .integer = try decoder.cursor.readInt(i64) } },
+            .float => .{ .atom = .{ .float = @bitCast(try decoder.cursor.readInt(u64)) } },
+            .bool_false => .{ .atom = .{ .boolean = false } },
+            .bool_true => .{ .atom = .{ .boolean = true } },
+            .keyword => .{ .atom = .{ .keyword = try decoder.parseText(true) } },
+            .instant => instant: {
+                const value: Instant = .{
+                    .epoch_seconds = try decoder.cursor.readInt(i64),
+                    .nanosecond = try decoder.cursor.readInt(u32),
+                };
+                if (value.nanosecond > 999_999_999) return error.InvalidTerm;
+                break :instant .{ .atom = .{ .instant = value } };
+            },
+            .triple => triple: {
+                const value = try decoder.allocator.create(Triple);
+                value.* = try decoder.parseTripleAfterTag(depth);
+                break :triple .{ .triple = value };
+            },
+        };
+    }
+
+    fn beginNode(decoder: *TermDecoder, depth: usize) TermDecodeError!void {
+        if (depth > decoder.limits.max_depth) return error.TermTooDeep;
+        if (decoder.nodes >= decoder.limits.max_nodes)
+            return error.TermNodeLimit;
+        decoder.nodes += 1;
+    }
+
+    fn parseTripleAfterTag(
+        decoder: *TermDecoder,
+        depth: usize,
+    ) TermDecodeError!Triple {
+        return .{
+            .slot0 = try decoder.parse(depth + 1),
+            .slot1 = try decoder.parse(depth + 1),
+            .slot2 = try decoder.parse(depth + 1),
+        };
+    }
+
+    fn parseText(
+        decoder: *TermDecoder,
+        keyword: bool,
+    ) TermDecodeError![]const u8 {
+        const length = try decoder.cursor.readInt(u32);
+        if (length > decoder.limits.max_string_bytes or
+            decoder.total_string_bytes >
+                decoder.limits.max_total_string_bytes -| length)
+        {
+            return error.TermStringTooLarge;
+        }
+        const value = try decoder.cursor.readSlice(length);
+        if (!std.unicode.utf8ValidateSlice(value) or
+            (keyword and (value.len == 0 or value[0] == ':')))
+        {
+            return error.InvalidTerm;
+        }
+        decoder.total_string_bytes += length;
+        return decoder.allocator.dupe(u8, value);
+    }
+};
+
+const TermMeter = struct {
+    limits: TermLimits,
+    encoded_bytes: usize = 0,
+    nodes: usize = 0,
+    string_bytes: usize = 0,
+
+    fn visit(meter: *TermMeter, term: Term, depth: usize) TermMeasureError!void {
+        if (depth > meter.limits.max_depth) return error.TermTooDeep;
+        if (meter.nodes >= meter.limits.max_nodes) return error.TermNodeLimit;
+        meter.nodes += 1;
+        try meter.addBytes(1);
+
+        switch (term) {
+            .atom => |atom| switch (atom) {
+                .string => |value| try meter.visitText(value, false),
+                .keyword => |value| try meter.visitText(value, true),
+                .integer, .float => try meter.addBytes(@sizeOf(u64)),
+                .boolean => {},
+                .instant => |value| {
+                    if (value.nanosecond > 999_999_999)
+                        return error.InvalidInstant;
+                    try meter.addBytes(@sizeOf(i64) + @sizeOf(u32));
+                },
+            },
+            .triple => |triple| {
+                try meter.visit(triple.slot0, depth + 1);
+                try meter.visit(triple.slot1, depth + 1);
+                try meter.visit(triple.slot2, depth + 1);
+            },
+        }
+    }
+
+    fn visitText(
+        meter: *TermMeter,
+        value: []const u8,
+        keyword: bool,
+    ) TermMeasureError!void {
+        if (!std.unicode.utf8ValidateSlice(value))
+            return error.InvalidAtomUtf8;
+        if (keyword and (value.len == 0 or value[0] == ':'))
+            return error.InvalidAtom;
+        if (value.len > meter.limits.max_string_bytes or
+            meter.string_bytes > meter.limits.max_total_string_bytes -| value.len)
+        {
+            return error.TermStringTooLarge;
+        }
+        if (value.len > std.math.maxInt(u32)) return error.FrameTooLarge;
+        meter.string_bytes += value.len;
+        try meter.addBytes(@sizeOf(u32));
+        try meter.addBytes(value.len);
+    }
+
+    fn addBytes(meter: *TermMeter, count: usize) TermMeasureError!void {
+        meter.encoded_bytes = std.math.add(usize, meter.encoded_bytes, count) catch
+            return error.FrameTooLarge;
+    }
+};
 
 fn stringTerm(value: []const u8) Term {
     return .{ .atom = .{ .string = value } };
@@ -1037,12 +1260,11 @@ test "transaction canonicality and instant bounds are enforced" {
     invalid_instant_wire[0] = @intFromEnum(TermTag.instant);
     std.mem.writeInt(i64, invalid_instant_wire[1..9], 0, .little);
     std.mem.writeInt(u32, invalid_instant_wire[9..13], 1_000_000_000, .little);
-    var cursor: Cursor = .{ .input = &invalid_instant_wire };
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     try std.testing.expectError(
-        error.InvalidFrame,
-        parseTerm(arena.allocator(), &cursor, 0),
+        error.InvalidTerm,
+        TermCodecV1.decode(arena.allocator(), &invalid_instant_wire, .{}),
     );
 }
 
