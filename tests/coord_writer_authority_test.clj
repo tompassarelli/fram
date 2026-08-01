@@ -1,12 +1,13 @@
-;; Writer authority and narrow TermStore daemon integration.
-;; Daemon subprocesses always use JVM Clojure.
+;; Writer authority and FRAMRPC v1 JVM daemon integration.
 (require '[babashka.process :as process]
-         '[clojure.edn :as edn]
          '[clojure.java.io :as io]
-         '[clojure.string :as str])
+         '[clojure.string :as str]
+         '[coord-daemon-wire :as wire]
+         '[fram.types :as t])
 
 (load-file "coord_writer_authority.clj")
 (load-file "coord_daemon.clj")
+(load-file "tests/native_rpc_client.clj")
 
 (when (= "hold" (first *command-line-args*))
   (let [[_ log ready] *command-line-args*
@@ -18,6 +19,8 @@
   (System/exit 0))
 
 (def failures (atom []))
+(def request-id (atom 1000))
+
 (defn check! [label ok]
   (println (str (if ok "[PASS] " "[FAIL] ") label))
   (when-not ok (swap! failures conj label)))
@@ -25,24 +28,30 @@
 (defn free-port []
   (with-open [socket (java.net.ServerSocket. 0)] (.getLocalPort socket)))
 
-(defn request! [port request]
-  (with-open [socket (java.net.Socket.)]
-    (.connect socket
-              (java.net.InetSocketAddress. "127.0.0.1" (int port)) 500)
-    (.setSoTimeout socket 3000)
-    (with-open [writer (io/writer (.getOutputStream socket))
-                reader (java.io.PushbackReader.
-                        (io/reader (.getInputStream socket)))]
-      (.write writer (str (pr-str request) "\n"))
-      (.flush writer)
-      (edn/read reader))))
-
 (defn eventually [f]
   (loop [attempt 0]
     (let [value (try (f) (catch Throwable _ nil))]
       (cond value value
             (>= attempt 240) nil
             :else (do (Thread/sleep 25) (recur (inc attempt)))))))
+
+(defn response-error [response]
+  (some-> response t/rpcresponse-error t/rpcerror-code))
+
+(defn request! [port space operation payload]
+  (native-rpc-client/request!
+   port (swap! request-id inc)
+   (wire/rpc-request! space operation nil nil nil payload)))
+
+(defn direct-request! [space operation payload]
+  (coord-daemon/handle-rpc-request!
+   (wire/rpc-request! space operation nil nil nil payload)
+   {:cancelled (atom false) :query-control (atom nil)}))
+
+(defn scan-values [response]
+  (let [[values] (wire/rpc-record-fields!
+                  (t/rpc-response-payload-value response) :rpc/triples 1)]
+    (wire/rpc-list-values! values)))
 
 (def scratch
   (.toFile
@@ -73,30 +82,30 @@
             (coord-writer-authority/held? successor))
     (coord-writer-authority/release! successor)))
 
-;; Host-level narrow daemon: authority gates occurrence-native writes before
-;; any transaction frame is appended.
-(let [log (str (io/file scratch "direct.framlog"))]
-  (coord-daemon/boot! log "direct-space" :active)
+;; Host-level native dispatcher: physical authority gates a typed occurrence
+;; write before the durable transaction frame is appended.
+(let [log (str (io/file scratch "direct.framlog"))
+      space "direct-space"]
+  (coord-daemon/boot! log space :active)
   (try
-    (check! "active narrow daemon advertises TermStore v2 authority"
-            (let [status (coord-daemon/handle {:op :status})]
-              (and (= :termstore-v2/framlog (:format status))
-                   (true? (get-in status [:writer-authority :write-authorized]))
-                   (= :occurrence-native/narrow (:surface status)))))
-    (let [result (coord-daemon/handle
-                  {:op :assert :triple ["A" :email "a@example.com"]
-                   :actor "tester"
-                   :recorded-at {:instant [100 7]}})]
-      (check! "active write returns transaction and occurrence coordinates"
-              (and (= ["direct-space" :kernel/tx-sequence 1] (:ok result))
-                   (= [[[["direct-space" :kernel/tx-sequence 1]
-                          :kernel/op-ordinal 0]
-                         :kernel/asserts
-                         ["A" :email "a@example.com"]]]
-                      (:occurrences result))))
-      (check! "wire response contains no physical row handle"
-              (not-any? #(and (map? %) (contains? % :cid))
-                        (tree-seq coll? seq result))))
+    (check! "active daemon holds TermStore writer authority"
+            (true? (:write-authorized (coord-daemon/writer-authority-status))))
+    (let [proposition (t/triple "A" :email "a@example.com")
+          response (direct-request!
+                    space :rpc/assert
+                    (wire/rpc-write! proposition wire/rpc-subject-any nil))
+          [[_ changed occurrences]]
+          (let [[results]
+                (wire/rpc-record-fields!
+                 (t/rpc-response-payload-value response) :rpc/mutation-result 1)]
+            (mapv #(wire/rpc-record-fields! % :rpc/action-result 3)
+                  (wire/rpc-list-values! results)))
+          [event] (wire/rpc-list-values! occurrences)]
+      (check! "active write returns logical version and direct occurrence"
+              (and changed (= 1 (t/rpcresponse-served-version response))
+                   (= proposition (t/triple-slot2 event))))
+      (check! "native response contains no physical content handle"
+              (not (str/includes? (pr-str response) "cid"))))
     (let [append-var (ns-resolve 'coord 'append-frame-durable!)
           original @append-var
           failure
@@ -106,56 +115,54 @@
                (original path frame)
                (throw (ex-info "injected after force"
                                {:type :injected-post-force})))}
-            #(coord-daemon/handle
-              {:op :assert :triple ["A" :email "second@example.com"]}))
-          status (coord-daemon/handle {:op :status})]
-      (check! "ambiguous daemon append fails closed after durable force"
-              (= :durability-ambiguous (:code failure)))
-      (check! "daemon status exposes reconciled tx2 without write authority"
-              (and (= ["direct-space" :kernel/tx-sequence 2]
-                      (:version status))
-                   (= :recovery-required (get-in status [:recovery :status]))
-                   (true? (get-in status [:recovery :reconciled?]))
-                   (true? (get-in status [:writer-authority :lock-held]))
-                   (false? (get-in status
-                                   [:writer-authority :write-authorized]))))
-      (check! "daemon rejects retry while its physical writer lock remains held"
+            #(direct-request!
+              space :rpc/assert
+              (wire/rpc-write! (t/triple "A" :email "second@example.com")
+                               wire/rpc-subject-any nil)))
+          status (coord-daemon/writer-authority-status)]
+      (check! "ambiguous native append fails closed after durable force"
+              (= :durability-ambiguous (response-error failure)))
+      (check! "reconciled ambiguity retains lock but removes write authority"
+              (and (= :recovery-required
+                      (get-in status [:coordinator-recovery :status]))
+                   (true? (:lock-held status))
+                   (false? (:write-authorized status))))
+      (check! "retry remains fenced while physical writer lock is held"
               (= :recovery-required
-                 (:code
-                  (coord-daemon/handle
-                   {:op :assert :triple ["A" :email "retry@example.com"]}))))
-      (check! "daemon ambiguity writes one tx2 frame, never duplicate tx2"
-              (= [1 2]
-                 (mapv :tx-seq
-                       (:frames (coord/read-triple-log! log))))))
-    (check! "removed schema/query operation fails explicitly"
-            (= :unsupported-termstore-operation
-               (:code (coord-daemon/handle {:op :query :query []}))))
+                 (response-error
+                  (direct-request!
+                   space :rpc/assert
+                   (wire/rpc-write! (t/triple "A" :email "retry@example.com")
+                                    wire/rpc-subject-any nil)))))
+      (check! "ambiguity writes one tx2 frame, never duplicate tx2"
+              (= [1 2] (mapv :tx-seq (:frames (coord/read-triple-log! log))))))
+    (check! "legacy query name is rejected by the native operation set"
+            (= :rpc/unsupported-operation
+               (response-error (direct-request! space :query wire/rpc-unit))))
     (finally (coord-daemon/shutdown!))))
 
-;; Real overlapping generations: one active JVM writer, one JVM standby, and a
-;; refused second active process over the same canonical FRAMLOG.
+;; One active JVM writer, one JVM standby, and a refused duplicate active over
+;; the same canonical FRAMLOG. All client traffic is FRAMRPC v1 binary.
 (let [log (str (io/file scratch "shared.framlog"))
+      space "shared-space"
       active-port (free-port)
       duplicate-port (free-port)
       standby-port (free-port)
       active
       (process/process
        ["clojure" "-M" "coord_daemon.clj" "serve"
-        (str active-port) log "shared-space"]
+        (str active-port) log space]
        {:out :string :err :string
         :extra-env {"FRAM_COORD_ROLE" "active"
                     "FRAM_TELEMETRY_LOG" nil}})]
   (try
-    (check! "active JVM generation starts with writer authority"
-            (some? (eventually
-                    #(let [status (request! active-port {:op :status})]
-                       (when (get-in status [:writer-authority :write-authorized])
-                         status)))))
+    (check! "active JVM generation starts on the native listener"
+            (some? (eventually #(request! active-port space :rpc/version
+                                          wire/rpc-unit))))
     (let [duplicate
           (process/process
            ["clojure" "-M" "coord_daemon.clj" "serve"
-            (str duplicate-port) log "shared-space"]
+            (str duplicate-port) log space]
            {:out :string :err :string
             :extra-env {"FRAM_COORD_ROLE" "active"
                         "FRAM_TELEMETRY_LOG" nil}})
@@ -170,53 +177,48 @@
     (let [standby
           (process/process
            ["clojure" "-M" "coord_daemon.clj" "serve"
-            (str standby-port) log "shared-space"]
+            (str standby-port) log space]
            {:out :string :err :string
             :extra-env {"FRAM_COORD_ROLE" "standby"
                         "FRAM_TELEMETRY_LOG" nil}})]
       (try
-        (check! "standby JVM generation serves read-only"
-                (some? (eventually
-                        #(let [status (request! standby-port {:op :status})]
-                           (when (and (= :standby
-                                         (get-in status [:writer-authority :role]))
-                                      (false? (get-in status
-                                                      [:writer-authority
-                                                       :write-authorized])))
-                             status)))))
-        (let [asserted
-              (request! active-port
-                        {:op :assert
-                         :triple ["blue-green" :status "visible"]})]
-          (check! "active JVM generation appends a whole transaction frame"
-                  (vector? (:ok asserted))))
-        (check! "standby rejects the same occurrence-native mutation"
-                (= :writer-authority-required
-                   (:code
-                    (request! standby-port
-                              {:op :assert
-                               :triple ["blue-green" :status "forbidden"]}))))
-        (check! "standby refresh observes the active generation append"
-                (some? (eventually
-                        #(let [live (:propositions
-                                    (request! standby-port {:op :live}))]
-                           (when (some #{["blue-green" :status "visible"]}
-                                       live)
-                             live)))))
-        (check! "for-log mismatch is rejected before authority routing"
-                (= :log-mismatch
-                   (:code
-                    (request! standby-port
-                              {:op :for-log
-                               :expected-log (str (io/file scratch "other.framlog"))
-                               :request {:op :assert
-                                         :triple ["A" :p "B"]}}))))
+        (check! "standby JVM generation serves native reads"
+                (some? (eventually #(request! standby-port space :rpc/status
+                                              wire/rpc-unit))))
+        (let [proposition (t/triple "blue-green" :status "visible")
+              asserted
+              (request! active-port space :rpc/assert
+                        (wire/rpc-write! proposition wire/rpc-subject-any nil))]
+          (check! "active JVM generation appends a typed transaction"
+                  (and (nil? (response-error asserted))
+                       (pos? (t/rpcresponse-served-version asserted))))
+          (check! "standby rejects the same native mutation"
+                  (= :rpc/writer-authority-required
+                     (response-error
+                      (request! standby-port space :rpc/assert
+                                (wire/rpc-write!
+                                 (t/triple "blue-green" :status "forbidden")
+                                 wire/rpc-subject-any nil)))))
+          (check! "standby refresh observes the active append"
+                  (some? (eventually
+                          #(let [response
+                                 (request! standby-port space :rpc/scan
+                                           (wire/rpc-triple-pattern!
+                                            "blue-green" :status nil))]
+                             (when (some #{proposition} (scan-values response))
+                               response))))))
+        (check! "old for-log envelope is explicitly unsupported"
+                (= :rpc/unsupported-operation
+                   (response-error
+                    (request! standby-port space :for-log wire/rpc-unit))))
         (finally
           (process/destroy-tree standby)
           @standby)))
     (finally
       (process/destroy-tree active)
       @active)))
+
+(shutdown-agents)
 
 (if (seq @failures)
   (do

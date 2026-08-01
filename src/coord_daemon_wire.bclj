@@ -2,14 +2,14 @@
 
 ;; coord-daemon-wire — pure request/response formatting and classification.
 ;;
-;; This is deliberately text-upstream for the bounded M6 Cut 1. EDN request and
-;; response maps are open protocol envelopes, so Any is the honest host-boundary
-;; type: their keys and value shapes vary by operation.
+;; Legacy EDN adapter helpers remain here for non-listener callers and adapters
+;; outside the native data boundary.
 ;;
-;; Zero-downtime seam: coord_daemon/serve-conn remains the socket owner and calls
-;; these pure functions behind its existing framing boundary. A later cutover can
-;; replace the host dispatcher while draining old connections; this cut does not
-;; change listener, connection, reload, lock, queue, boot, or shutdown behavior.
+;; The JVM listener consumes only the closed FRAMRPC records and the ordinary
+;; Triple ontology defined below. It does not negotiate or parse the legacy map
+;; protocol; there is one live binary data surface.
+;; Request-map typing remains intentionally Any on that isolated legacy seam.
+;;
 (ns coord-daemon-wire
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
@@ -677,8 +677,8 @@
     (t/->TermCodecDecoded value (deref counter))))
 
 ;; --- FRAMRPC v1 ------------------------------------------------------------
-;; This is a codec boundary only. The production coordinator socket remains on
-;; its existing protocol until a separate cutover proves transport parity.
+;; The JVM coordinator listener and native test client share this bounded codec;
+;; its header and body limits are enforced before allocation.
 
 (def rpc-v1-major: Int 1)
 (def rpc-v1-minor: Int 0)
@@ -1218,3 +1218,202 @@
             frame
             (rpc-fail! :rpc-trailing-bytes
                        "FRAMRPC body decoder left trailing bytes")))))))
+
+;; --- Native RPC ontology ---------------------------------------------------
+;; Records, options, and lists are ordinary recursive Triple terms. These
+;; helpers are the only structural vocabulary understood by the JVM listener.
+
+(def rpc-unit: Keyword :rpc/unit)
+(def rpc-list-end: Keyword :rpc/list-end)
+(def rpc-none: Keyword :rpc/none)
+(def rpc-subject-any: Keyword :rpc/subject-any)
+(def rpc-subject-existing: Keyword :rpc/subject-existing)
+(def query-current: Keyword :query/current)
+
+(defn rpc-list! [values: (Vec Any)] -> Any
+  (reduce (fn [tail: Any value: Any] -> Any
+            (require-rpc-term! value "RPC list value")
+            (t/triple :rpc/list value tail))
+          rpc-list-end (reverse values)))
+
+(defn rpc-list-values! [value: Any] -> (Vec Any)
+  (loop [cursor value result: (Vec Any) [] count-value 0]
+    (cond
+      [(= cursor rpc-list-end) result]
+      [(>= count-value rpc-v1-max-term-nodes)
+       (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")]
+      [(and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor)))
+       (let [head (t/triple-slot1 cursor)
+             tail (t/triple-slot2 cursor)]
+         (require-rpc-term! head "RPC list head")
+         (require-rpc-term! tail "RPC list tail")
+         (recur tail (conj result head) (+ count-value 1)))]
+      [:else (rpc-fail! :rpc-invalid-list
+                        "RPC list must end with :rpc/list-end")])))
+
+(defn rpc-some! [value: Any] -> t/Triple
+  (require-rpc-term! value "RPC option value")
+  (t/triple :rpc/some value :rpc/option))
+
+(defn rpc-option! [value: Any] -> Any
+  (if (nil? value) rpc-none (rpc-some! value)))
+
+(defn rpc-option-present?! [value: Any] -> Bool
+  (cond
+    [(= value rpc-none) false]
+    [(and (t/triple? value)
+          (and (= :rpc/some (t/triple-slot0 value))
+               (= :rpc/option (t/triple-slot2 value)))) true]
+    [:else (rpc-fail! :rpc-invalid-option
+                      "RPC option must be :rpc/none or (:rpc/some value :rpc/option)")]))
+
+(defn rpc-option-value! [value: Any] -> Any
+  (if (rpc-option-present?! value) (t/triple-slot1 value) nil))
+
+(defn rpc-record! [tag: Keyword fields: (Vec Any)] -> t/Triple
+  (t/triple tag (rpc-list! fields) :rpc/record))
+
+(defn rpc-record-fields!
+  [value: Any tag: Keyword field-count: Int] -> (Vec Any)
+  (if (and (t/triple? value)
+           (and (= tag (t/triple-slot0 value))
+                (= :rpc/record (t/triple-slot2 value))))
+    (let [fields (rpc-list-values! (t/triple-slot1 value))]
+      (if (= field-count (count fields))
+        fields
+        (rpc-fail! :rpc-invalid-record
+                   "RPC record contains the wrong number of fields")))
+    (rpc-fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
+
+(defn rpc-fence! [resource: Any holder: Any epoch: Int] -> t/Triple
+  (require-rpc-term! resource "lease resource")
+  (require-rpc-term! holder "lease holder")
+  (rpc-record! :rpc/fence [resource holder epoch]))
+
+(defn rpc-action!
+  [operation: Keyword proposition: t/Triple policy: Keyword] -> t/Triple
+  (if (or (= operation :rpc/assert) (= operation :rpc/retract))
+    nil
+    (rpc-fail! :rpc-invalid-action "RPC action operation is invalid"))
+  (if (or (= policy rpc-subject-any) (= policy rpc-subject-existing))
+    nil
+    (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  (rpc-record! :rpc/action [operation proposition policy]))
+
+(defn rpc-action-result!
+  [input-index: Int changed: Bool occurrences: (Vec Any)] -> t/Triple
+  (rpc-record! :rpc/action-result
+               [input-index changed (rpc-list! occurrences)]))
+
+(defn rpc-mutation-result! [results: (Vec Any)] -> t/Triple
+  (rpc-record! :rpc/mutation-result [(rpc-list! results)]))
+
+(defn rpc-write! [proposition: t/Triple policy: Keyword fence: Any] -> t/Triple
+  (if (or (= policy rpc-subject-any) (= policy rpc-subject-existing))
+    nil
+    (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  (rpc-record! :rpc/write [proposition policy (rpc-option! fence)]))
+
+(defn rpc-batch! [actions: (Vec Any) fence: Any] -> t/Triple
+  (rpc-record! :rpc/batch [(rpc-list! actions) (rpc-option! fence)]))
+
+(defn rpc-triple-pattern! [slot0: Any slot1: Any slot2: Any] -> t/Triple
+  (rpc-record! :rpc/triple-pattern
+               [(rpc-option! slot0) (rpc-option! slot1) (rpc-option! slot2)]))
+
+(defn rpc-status! [state: Keyword live-count: Int engine: Keyword] -> t/Triple
+  (rpc-record! :rpc/status [state live-count engine]))
+
+(defn rpc-triples! [values: (Vec Any)] -> t/Triple
+  (rpc-record! :rpc/triples [(rpc-list! values)]))
+
+(defn rpc-occurrences! [values: (Vec Any)] -> t/Triple
+  (rpc-record! :rpc/occurrences [(rpc-list! values)]))
+
+(defn rpc-lease-acquire! [resource: Any holder: Any ttl-ms: Int] -> t/Triple
+  (rpc-record! :lease/acquire [resource holder ttl-ms]))
+
+(defn rpc-lease-renew! [fence: t/Triple ttl-ms: Int] -> t/Triple
+  (rpc-record! :lease/renew [fence ttl-ms]))
+
+(defn rpc-lease-grant! [fence: t/Triple expires: t/Instant] -> t/Triple
+  (rpc-record! :lease/grant [fence expires]))
+
+(defn rpc-lease-released! [released: Bool] -> t/Triple
+  (rpc-record! :lease/released [released]))
+
+(defn rpc-lease-check! [valid: Bool expires: Any] -> t/Triple
+  (rpc-record! :lease/check [valid (rpc-option! expires)]))
+
+(defn rpc-violation! [code: Keyword detail: Any] -> t/Triple
+  (rpc-record! :rpc/violation [code detail]))
+
+(defn rpc-validation! [valid: Bool violations: (Vec Any)] -> t/Triple
+  (rpc-record! :rpc/validation [valid (rpc-list! violations)]))
+
+(defn rpc-query-variable! [name: String] -> t/Triple
+  (rpc-record! :query/var [name]))
+
+(defn rpc-query-constant! [value: Any] -> t/Triple
+  (rpc-record! :query/const [value]))
+
+(defn rpc-query-head!
+  [relation: String terms: (Vec Any)] -> t/Triple
+  (rpc-record! :query/head [relation (rpc-list! terms)]))
+
+(defn rpc-query-relation!
+  [relation: String terms: (Vec Any) negated: Bool] -> t/Triple
+  (rpc-record! :query/relation [relation (rpc-list! terms) negated]))
+
+(defn rpc-query-predicate!
+  [operation: Keyword left: Any right: Any] -> t/Triple
+  (rpc-record! :query/predicate [operation left right]))
+
+(defn rpc-query-function!
+  [operation: Keyword terms: (Vec Any) bind-variable: String] -> t/Triple
+  (rpc-record! :query/function
+               [operation (rpc-list! terms) bind-variable]))
+
+(defn rpc-query-rule! [head: t/Triple clauses: (Vec Any)] -> t/Triple
+  (rpc-record! :query/rule [head (rpc-list! clauses)]))
+
+(defn rpc-query-stratum! [rules: (Vec Any)] -> t/Triple
+  (rpc-record! :query/stratum [(rpc-list! rules)]))
+
+(defn rpc-query-find-relation! [relation: String] -> t/Triple
+  (rpc-record! :query/find-relation [relation]))
+
+(defn rpc-query-aggregate! [operation: Keyword argument-index: Any] -> t/Triple
+  (rpc-record! :query/aggregate [operation (rpc-option! argument-index)]))
+
+(defn rpc-query-having!
+  [comparison: Keyword aggregate-index: Int value: Any] -> t/Triple
+  (rpc-record! :query/having [comparison aggregate-index value]))
+
+(defn rpc-query-find-aggregate!
+  [relation: String grouping: (Vec Any)
+   aggregates: (Vec Any) having: (Vec Any)] -> t/Triple
+  (rpc-record! :query/find-aggregate
+               [relation (rpc-list! grouping) (rpc-list! aggregates)
+                (rpc-list! having)]))
+
+(defn rpc-query-plan! [find: t/Triple strata: (Vec Any)] -> t/Triple
+  (rpc-record! :query/plan [find (rpc-list! strata)]))
+
+(defn rpc-query-as-of! [version: Int] -> t/Triple
+  (rpc-record! :query/as-of [version]))
+
+(defn rpc-query-request! [plan: t/Triple snapshot: Any] -> t/Triple
+  (rpc-record! :query/request [plan snapshot]))
+
+(defn rpc-query-row! [values: (Vec Any)] -> t/Triple
+  (rpc-record! :query/row [(rpc-list! values)]))
+
+(defn rpc-query-rows! [rows: (Vec Any)] -> t/Triple
+  (rpc-record! :query/rows [(rpc-list! rows)]))
+
+(defn rpc-query-cursor!
+  [snapshot-version: Int query-sha256: String next-page-ordinal: Int
+   after-row: t/Triple] -> t/Triple
+  (rpc-record! :query/cursor
+               [snapshot-version query-sha256 next-page-ordinal after-row]))

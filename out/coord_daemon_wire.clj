@@ -786,3 +786,166 @@
   ^{:line 1210 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= kind :event) ^{:line 1211 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-event-frame request-id ^{:line 1211 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (read-rpc-response! buffer nodes))
   :else ^{:line 1213 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1213 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= body-length 0) ^{:line 1214 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-cancel-frame request-id) ^{:line 1215 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-shape "FRAMRPC cancel body must be exactly empty")))]
   ^{:line 1217 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1217 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (zero? ^{:line 1217 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (.remaining buffer)) frame ^{:line 1219 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-trailing-bytes "FRAMRPC body decoder left trailing bytes")))))))
+
+^{:line 1226 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def rpc-unit :rpc/unit)
+
+^{:line 1227 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def rpc-list-end :rpc/list-end)
+
+^{:line 1228 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def rpc-none :rpc/none)
+
+^{:line 1229 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def rpc-subject-any :rpc/subject-any)
+
+^{:line 1230 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def rpc-subject-existing :rpc/subject-existing)
+
+^{:line 1231 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (def query-current :query/current)
+
+^{:line 1233 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-list! [values]
+  ^{:line 1234 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (reduce ^{:line 1234 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (fn [tail value] ^{:line 1235 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! value "RPC list value")
+  ^{:line 1236 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple :rpc/list value tail)) rpc-list-end ^{:line 1237 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (reverse values)))
+
+^{:line 1239 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-list-values! [value]
+  ^{:line 1240 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (loop [cursor value
+   result ^{:line 1240 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} []
+   count-value 0]
+  ^{:line 1241 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (cond
+  ^{:line 1242 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= cursor rpc-list-end) result
+  ^{:line 1243 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (>= count-value rpc-v1-max-term-nodes) ^{:line 1244 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
+  ^{:line 1245 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (and ^{:line 1245 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple? cursor) ^{:line 1245 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= :rpc/list ^{:line 1245 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot0 cursor))) ^{:line 1246 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (let [head ^{:line 1246 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot1 cursor)
+   tail ^{:line 1247 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot2 cursor)]
+  ^{:line 1248 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! head "RPC list head")
+  ^{:line 1249 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! tail "RPC list tail")
+  ^{:line 1250 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (recur tail ^{:line 1250 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (conj result head) ^{:line 1250 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (+ count-value 1)))
+  :else ^{:line 1251 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-list "RPC list must end with :rpc/list-end"))))
+
+^{:line 1254 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-some! [value]
+  ^{:line 1255 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! value "RPC option value")
+  ^{:line 1256 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple :rpc/some value :rpc/option))
+
+^{:line 1258 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-option! [value]
+  ^{:line 1259 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1259 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (nil? value) rpc-none ^{:line 1259 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-some! value)))
+
+^{:line 1261 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn ^Boolean rpc-option-present?! [value]
+  ^{:line 1262 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (cond
+  ^{:line 1263 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= value rpc-none) false
+  ^{:line 1264 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (and ^{:line 1264 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple? value) ^{:line 1265 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (and ^{:line 1265 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= :rpc/some ^{:line 1265 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot0 value)) ^{:line 1266 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= :rpc/option ^{:line 1266 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot2 value)))) true
+  :else ^{:line 1267 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-option "RPC option must be :rpc/none or (:rpc/some value :rpc/option)")))
+
+^{:line 1270 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-option-value! [value]
+  ^{:line 1271 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1271 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option-present?! value) ^{:line 1271 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot1 value) nil))
+
+^{:line 1273 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-record! [tag fields]
+  ^{:line 1274 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple tag ^{:line 1274 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! fields) :rpc/record))
+
+^{:line 1276 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-record-fields! [value tag field-count]
+  ^{:line 1278 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1278 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (and ^{:line 1278 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple? value) ^{:line 1279 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (and ^{:line 1279 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= tag ^{:line 1279 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot0 value)) ^{:line 1280 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= :rpc/record ^{:line 1280 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot2 value)))) ^{:line 1281 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (let [fields ^{:line 1281 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list-values! ^{:line 1281 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (t/triple-slot1 value))]
+  ^{:line 1282 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1282 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= field-count ^{:line 1282 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (count fields)) fields ^{:line 1284 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-record "RPC record contains the wrong number of fields"))) ^{:line 1286 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
+
+^{:line 1288 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-fence! [resource holder epoch]
+  ^{:line 1289 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! resource "lease resource")
+  ^{:line 1290 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (require-rpc-term! holder "lease holder")
+  ^{:line 1291 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/fence ^{:line 1291 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [resource holder epoch]))
+
+^{:line 1293 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-action! [operation proposition policy]
+  ^{:line 1295 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1295 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (or ^{:line 1295 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= operation :rpc/assert) ^{:line 1295 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= operation :rpc/retract)) nil ^{:line 1297 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-action "RPC action operation is invalid"))
+  ^{:line 1298 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1298 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (or ^{:line 1298 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= policy rpc-subject-any) ^{:line 1298 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= policy rpc-subject-existing)) nil ^{:line 1300 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  ^{:line 1301 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/action ^{:line 1301 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [operation proposition policy]))
+
+^{:line 1303 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-action-result! [input-index ^Boolean changed occurrences]
+  ^{:line 1305 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/action-result ^{:line 1306 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [input-index changed ^{:line 1306 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! occurrences)]))
+
+^{:line 1308 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-mutation-result! [results]
+  ^{:line 1309 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/mutation-result ^{:line 1309 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1309 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! results)]))
+
+^{:line 1311 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-write! [proposition policy fence]
+  ^{:line 1312 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (if ^{:line 1312 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (or ^{:line 1312 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= policy rpc-subject-any) ^{:line 1312 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (= policy rpc-subject-existing)) nil ^{:line 1314 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
+  ^{:line 1315 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/write ^{:line 1315 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [proposition policy ^{:line 1315 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! fence)]))
+
+^{:line 1317 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-batch! [actions fence]
+  ^{:line 1318 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/batch ^{:line 1318 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1318 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! actions) ^{:line 1318 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! fence)]))
+
+^{:line 1320 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-triple-pattern! [slot0 slot1 slot2]
+  ^{:line 1321 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/triple-pattern ^{:line 1322 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1322 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! slot0) ^{:line 1322 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! slot1) ^{:line 1322 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! slot2)]))
+
+^{:line 1324 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-status! [state live-count engine]
+  ^{:line 1325 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/status ^{:line 1325 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [state live-count engine]))
+
+^{:line 1327 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-triples! [values]
+  ^{:line 1328 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/triples ^{:line 1328 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1328 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! values)]))
+
+^{:line 1330 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-occurrences! [values]
+  ^{:line 1331 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/occurrences ^{:line 1331 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1331 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! values)]))
+
+^{:line 1333 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-lease-acquire! [resource holder ttl-ms]
+  ^{:line 1334 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :lease/acquire ^{:line 1334 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [resource holder ttl-ms]))
+
+^{:line 1336 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-lease-renew! [fence ttl-ms]
+  ^{:line 1337 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :lease/renew ^{:line 1337 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [fence ttl-ms]))
+
+^{:line 1339 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-lease-grant! [fence expires]
+  ^{:line 1340 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :lease/grant ^{:line 1340 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [fence expires]))
+
+^{:line 1342 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-lease-released! [^Boolean released]
+  ^{:line 1343 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :lease/released ^{:line 1343 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [released]))
+
+^{:line 1345 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-lease-check! [^Boolean valid expires]
+  ^{:line 1346 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :lease/check ^{:line 1346 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [valid ^{:line 1346 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! expires)]))
+
+^{:line 1348 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-violation! [code detail]
+  ^{:line 1349 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/violation ^{:line 1349 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [code detail]))
+
+^{:line 1351 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-validation! [^Boolean valid violations]
+  ^{:line 1352 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :rpc/validation ^{:line 1352 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [valid ^{:line 1352 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! violations)]))
+
+^{:line 1354 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-variable! [^String name]
+  ^{:line 1355 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/var ^{:line 1355 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [name]))
+
+^{:line 1357 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-constant! [value]
+  ^{:line 1358 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/const ^{:line 1358 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [value]))
+
+^{:line 1360 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-head! [^String relation terms]
+  ^{:line 1362 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/head ^{:line 1362 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [relation ^{:line 1362 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! terms)]))
+
+^{:line 1364 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-relation! [^String relation terms ^Boolean negated]
+  ^{:line 1366 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/relation ^{:line 1366 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [relation ^{:line 1366 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! terms) negated]))
+
+^{:line 1368 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-predicate! [operation left right]
+  ^{:line 1370 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/predicate ^{:line 1370 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [operation left right]))
+
+^{:line 1372 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-function! [operation terms ^String bind-variable]
+  ^{:line 1374 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/function ^{:line 1375 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [operation ^{:line 1375 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! terms) bind-variable]))
+
+^{:line 1377 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-rule! [head clauses]
+  ^{:line 1378 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/rule ^{:line 1378 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [head ^{:line 1378 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! clauses)]))
+
+^{:line 1380 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-stratum! [rules]
+  ^{:line 1381 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/stratum ^{:line 1381 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1381 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! rules)]))
+
+^{:line 1383 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-find-relation! [^String relation]
+  ^{:line 1384 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/find-relation ^{:line 1384 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [relation]))
+
+^{:line 1386 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-aggregate! [operation argument-index]
+  ^{:line 1387 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/aggregate ^{:line 1387 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [operation ^{:line 1387 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-option! argument-index)]))
+
+^{:line 1389 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-having! [comparison aggregate-index value]
+  ^{:line 1391 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/having ^{:line 1391 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [comparison aggregate-index value]))
+
+^{:line 1393 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-find-aggregate! [^String relation grouping aggregates having]
+  ^{:line 1396 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/find-aggregate ^{:line 1397 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [relation ^{:line 1397 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! grouping) ^{:line 1397 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! aggregates) ^{:line 1398 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! having)]))
+
+^{:line 1400 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-plan! [find strata]
+  ^{:line 1401 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/plan ^{:line 1401 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [find ^{:line 1401 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! strata)]))
+
+^{:line 1403 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-as-of! [version]
+  ^{:line 1404 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/as-of ^{:line 1404 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [version]))
+
+^{:line 1406 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-request! [plan snapshot]
+  ^{:line 1407 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/request ^{:line 1407 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [plan snapshot]))
+
+^{:line 1409 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-row! [values]
+  ^{:line 1410 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/row ^{:line 1410 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1410 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! values)]))
+
+^{:line 1412 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-rows! [rows]
+  ^{:line 1413 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/rows ^{:line 1413 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [^{:line 1413 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-list! rows)]))
+
+^{:line 1415 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (defn rpc-query-cursor! [snapshot-version ^String query-sha256 next-page-ordinal after-row]
+  ^{:line 1418 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} (rpc-record! :query/cursor ^{:line 1419 :file "/home/tom/code/fram/wt-fram-rpc/src/coord_daemon_wire.bclj"} [snapshot-version query-sha256 next-page-ordinal after-row]))
