@@ -22,7 +22,43 @@
 (defrecord Triple [slot0: Any slot1: Any slot2: Any])
 (defalias Term (Dyn String Int Float Bool Keyword Instant Triple))
 
+;; FRAMRPC payloads are closed records over the same recursive Term vocabulary.
+;; A cancel frame carries only its header request-id; event bodies use RpcResponse.
+(defrecord RpcPageRequest [limit: Int cursor: Term?])
+(defrecord RpcPageResponse [ordinal: Int next-cursor: Term? done: Bool])
+(defrecord RpcError
+  [code: Keyword retryable: Bool message: String detail: Term?])
+(defrecord RpcRequest
+  [space: String op: Keyword expected-version: Int?
+   page: RpcPageRequest? timeout-ms: Int? payload: Term])
+(defrecord RpcResponse
+  [space: String op: Keyword served-version: Int
+   page: RpcPageResponse? error: RpcError? payload: Term?])
+(defrecord RpcFrameV1
+  [kind: Keyword flags: Int request-id: Int
+   request: RpcRequest? response: RpcResponse?])
+(defrecord TermCodecMeasure [bytes: Int nodes: Int])
+;; The value field is runtime-checked Term; Beagle cannot pass a recursive Dyn
+;; across a module boundary without losing its alternatives.
+(defrecord TermCodecDecoded [value: Any nodes: Int])
+
 (defn triple? [v: Any] -> Bool (instance? Triple v))
+(defn rpc-page-request? [v: Any] -> Bool (instance? RpcPageRequest v))
+(defn rpc-page-response? [v: Any] -> Bool (instance? RpcPageResponse v))
+(defn rpc-error? [v: Any] -> Bool (instance? RpcError v))
+(defn rpc-request? [v: Any] -> Bool (instance? RpcRequest v))
+(defn rpc-response? [v: Any] -> Bool (instance? RpcResponse v))
+(defn rpc-frame-v1? [v: Any] -> Bool (instance? RpcFrameV1 v))
+
+;; These bridges preserve the closed Term fields while working around Beagle's
+;; current inability to pass a recursive Dyn through a module boundary.
+(defn rpc-page-request-cursor-value [v: RpcPageRequest] -> Any
+  (rpcpagerequest-cursor v))
+(defn rpc-page-response-cursor-value [v: RpcPageResponse] -> Any
+  (rpcpageresponse-next-cursor v))
+(defn rpc-error-detail-value [v: RpcError] -> Any (rpcerror-detail v))
+(defn rpc-request-payload-value [v: RpcRequest] -> Any (rpcrequest-payload v))
+(defn rpc-response-payload-value [v: RpcResponse] -> Any (rpcresponse-payload v))
 
 ;; Term handles are private tagged integers.  Only these three structural slots
 ;; cross the store/native boundary; no handle is part of Triple semantics.

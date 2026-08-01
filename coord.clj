@@ -6,6 +6,7 @@
 (ns coord
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [coord-daemon-wire :as wire]
             [fram.kernel :as kernel]
             [fram.store :as term-store]
             [fram.types :as t]))
@@ -86,58 +87,29 @@
       (fail! :invalid-utf8 (str label " is not valid UTF-8")
              {:label label :cause (.getMessage e)}))))
 
-(defn- write-sized-text! [^java.io.OutputStream out value label]
-  (let [bytes (strict-utf8-bytes value label)]
-    (write-u32-le! out (alength ^bytes bytes))
-    (.write out ^bytes bytes)))
-
-(declare write-term!)
-
 (defn- write-triple! [^java.io.OutputStream out value depth]
   (when-not (t/triple? value)
     (fail! :invalid-triple "recursive encoder requires a Triple" {:value value}))
-  (when (> depth max-term-depth)
-    (fail! :term-depth-exceeded "recursive Term exceeds the FRAMLOG depth bound"
-           {:maximum max-term-depth}))
-  (write-u8! out 7)
-  (write-term! out (t/triple-slot0 value) (inc depth))
-  (write-term! out (t/triple-slot1 value) (inc depth))
-  (write-term! out (t/triple-slot2 value) (inc depth)))
-
-(defn- write-term! [^java.io.OutputStream out term depth]
-  (cond
-    (t/triple? term)
-    (write-triple! out term depth)
-
-    (string? term)
-    (do (write-u8! out 1) (write-sized-text! out term "String atom"))
-
-    (integer? term)
-    (do (write-u8! out 2) (write-i64-le! out term))
-
-    (and (number? term) (not (integer? term)))
-    (do (write-u8! out 3)
-        (write-i64-le! out (Double/doubleToLongBits (double term))))
-
-    (false? term) (write-u8! out 4)
-    (true? term) (write-u8! out 5)
-
-    (keyword? term)
-    (let [spelling (subs (str term) 1)]
-      (when (empty? spelling)
-        (fail! :invalid-keyword "Keyword atom spelling must be nonempty"
-               {:value term}))
-      (write-u8! out 6)
-      (write-sized-text! out spelling "Keyword atom"))
-
-    (t/instant? term)
-    (do (write-u8! out 8)
-        (write-i64-le! out (t/instant-epoch-seconds term))
-        (write-u32-le! out (t/instant-nanos term)))
-
-    :else
-    (fail! :unsupported-term "FRAMLOG encountered a value outside Term"
-           {:value term :class (some-> term class str)})))
+  (when-not (zero? depth)
+    (fail! :invalid-term-depth "FRAMLOG Term encoding must begin at depth zero"
+           {:depth depth}))
+  (try
+    (wire/write-term-codec-v1!
+     out value Integer/MAX_VALUE Integer/MAX_VALUE max-term-depth)
+    (catch clojure.lang.ExceptionInfo e
+      (let [code (:fram/code (ex-data e))]
+        (case code
+          :term-depth-exceeded (throw e)
+          :term-codec-invalid-utf8
+          (fail! :invalid-utf8 "FRAMLOG Term contains invalid UTF-8" {:cause code})
+          :term-codec-invalid-keyword
+          (fail! :invalid-keyword "FRAMLOG Keyword atom is empty" {:cause code})
+          :term-codec-integer-range
+          (fail! :invalid-integer "FRAMLOG Term integer is out of range" {:cause code})
+          :term-codec-unsupported-term
+          (fail! :unsupported-term "FRAMLOG encountered a value outside Term"
+                 {:value value :class (some-> value class str)})
+          (throw e))))))
 
 (defn- ensure-remaining! [^java.nio.ByteBuffer buffer n context]
   (when (< (.remaining buffer) n)
@@ -148,40 +120,19 @@
   (ensure-remaining! buffer 4 context)
   (Integer/toUnsignedLong (.getInt buffer)))
 
-(defn- read-sized-text [^java.nio.ByteBuffer buffer context]
-  (let [length (read-u32 buffer context)]
-    (when (> length Integer/MAX_VALUE)
-      (fail! :corrupt-triple-log "FRAMLOG text length exceeds JVM bounds"
-             {:context context :length length}))
-    (ensure-remaining! buffer (int length) context)
-    (let [bytes (byte-array (int length))]
-      (.get buffer bytes)
-      (strict-utf8-string bytes context))))
-
-(declare read-term)
-
 (defn- read-term [^java.nio.ByteBuffer buffer depth]
-  (when (> depth max-term-depth)
-    (fail! :term-depth-exceeded "recursive Term exceeds the FRAMLOG depth bound"
-           {:maximum max-term-depth}))
-  (ensure-remaining! buffer 1 "Term tag")
-  (case (bit-and 255 (int (.get buffer)))
-    1 (read-sized-text buffer "String atom")
-    2 (do (ensure-remaining! buffer 8 "Int atom") (.getLong buffer))
-    3 (do (ensure-remaining! buffer 8 "Float atom")
-          (Double/longBitsToDouble (.getLong buffer)))
-    4 false
-    5 true
-    6 (let [spelling (read-sized-text buffer "Keyword atom")]
-        (when (empty? spelling)
-          (fail! :corrupt-triple-log "FRAMLOG contains an empty Keyword atom" {}))
-        (keyword spelling))
-    7 (t/triple (read-term buffer (inc depth))
-                (read-term buffer (inc depth))
-                (read-term buffer (inc depth)))
-    8 (do (ensure-remaining! buffer 12 "Instant atom")
-          (t/instant (.getLong buffer) (read-u32 buffer "Instant nanos")))
-    (fail! :corrupt-triple-log "FRAMLOG contains an unknown Term tag" {})))
+  (when-not (zero? depth)
+    (fail! :corrupt-triple-log "FRAMLOG Term decoding must begin at depth zero"
+           {:depth depth}))
+  (try
+    (t/termcodecdecoded-value
+     (wire/decode-term-codec-v1!
+      buffer Integer/MAX_VALUE Integer/MAX_VALUE max-term-depth))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :term-depth-exceeded (:fram/code (ex-data e)))
+        (throw e)
+        (fail! :corrupt-triple-log "FRAMLOG contains a malformed Term"
+               {:cause (:fram/code (ex-data e))})))))
 
 (defn- wire-action [action]
   (case action :assert 1 :retract 2
