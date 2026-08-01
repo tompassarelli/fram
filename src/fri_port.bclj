@@ -1,793 +1,477 @@
 #lang beagle/clj
-
-;; fri-port — typed implementation behind the incremental fri.clj migration.
-;;
-;; Any is confined to two host boundaries Beagle cannot currently name:
-;; primitive JVM arrays/ByteBuffers and the heterogeneous Store/image maps.
+;; FRI is a disposable acceleration cache over a canonical TermStore/FRAMLOG.
+;; Its private handles never cross the semantic API boundary.
 (ns fri-port
-  (:require [clojure.string :as str] [clojure.edn :as edn])
-  (:import [java.io RandomAccessFile DataOutputStream BufferedOutputStream FileOutputStream ByteArrayOutputStream]
-           [java.nio ByteBuffer]
-           [java.nio.channels FileChannel FileChannel$MapMode]
+  (:require [clojure.edn :as edn]
+            [fram.store :as store]
+            [fram.types :as t])
+  (:import [java.io ByteArrayInputStream ByteArrayOutputStream
+            DataInputStream DataOutputStream File FileOutputStream]
            [java.nio.charset StandardCharsets]
-           [java.nio.file Files CopyOption StandardCopyOption]
-           [java.security MessageDigest]
-           [clojure.lang PersistentQueue]))
+           [java.nio.file Files StandardCopyOption]
+           [java.security MessageDigest]))
 
 (define-mode strict)
 
-(def MAGIC :- String "FRAMFRI1")
-(def FMT :- Int 1)
-(def CHUNK :- Int (* 1024 1024 1024))
+(def MAGIC: String "FRAMFRI2")
+(def FMT: Int 2)
 
-;; Writer. JVM byte arrays and buffers are the host seam; Store data is the
-;; heterogeneous map emitted by fram.store.
-(defn utf8 [s :- String] :- Any
-  (.getBytes s StandardCharsets/UTF_8))
+;; The cache is accepted only when its immutable space and exact canonical-log
+;; prefix match the caller's expectation.
+(defrecord CacheSource [space-id: String fingerprint: String valid-bytes: Int])
+(defrecord CacheReceipt
+  [format: Int space-id: String source-fingerprint: String
+   source-position: Int sha256: String])
+(defrecord CacheImage
+  [source: CacheSource dump: t/TermStoreDump indexes: Any store: Any])
 
-(defn sha256-hex [b :- Any] :- String
-  (let [d (.digest (MessageDigest/getInstance "SHA-256") b)]
-    (apply str (map (fn [x :- Any] :- String (format "%02x" x)) d))))
+(defn- fail [message: String type: Keyword] -> Any
+  (throw (ex-info message {:type type})))
 
-(defn bb [n :- Int] :- Any
-  (ByteBuffer/allocate n))
+(defn- valid-fingerprint? [value: String] -> Bool
+  (some? (re-matches #"[0-9a-f]{64}" value)))
 
-(defn facts-segment [facts-sorted :- Any] :- [Any -> Any]
-  (fn [tx-of :- Any] :- Any
-    (let [n (count facts-sorted)
-          buf (bb (* n 40))]
-      (do
-        (doseq [[cid m] facts-sorted]
-          (.putLong buf (long cid))
-          (.putLong buf (long (:l m)))
-          (.putLong buf (long (:p m)))
-          (.putLong buf (long (:r m)))
-          (.putLong buf (long (or (get tx-of cid) 0))))
-        (.array buf)))))
+(defn source-binding
+  [space-id: String fingerprint: String valid-bytes: Int] -> CacheSource
+  (if (and (pos? (count space-id))
+           (and (valid-fingerprint? fingerprint) (>= valid-bytes 0)))
+    (->CacheSource space-id fingerprint valid-bytes)
+    (fail "fri: source binding requires SpaceId, sha256, and non-negative valid-byte position"
+          :invalid-cache-source)))
 
-(defn values-segments [values :- Any] :- Any
-  (let [rows (vec values)
-        blob (ByteArrayOutputStream.)
-        meta (reduce
-              (fn [acc :- Any row :- Any] :- Any
-                (let [id (first row)
-                      v (second row)
-                      b (utf8 (str v))
-                      off (.size blob)]
-                  (do
-                    (.write blob b 0 (alength b))
-                    (conj acc {:id (long id)
-                               :off off
-                               :len (alength b)
-                               :s (str v)}))))
-              []
-              rows)
-        by-id (sort-by :id meta)
-        by-str (sort-by :s meta)
-        vid (bb (* (count meta) 20))
-        vstr (bb (* (count meta) 20))]
-    (do
-      (doseq [m by-id]
-        (.putLong vid (:id m))
-        (.putLong vid (long (:off m)))
-        (.putInt vid (int (:len m))))
-      (doseq [m by-str]
-        (.putLong vstr (long (:off m)))
-        (.putInt vstr (int (:len m)))
-        (.putLong vstr (:id m)))
-      {:values-id (.array vid)
-       :values-str (.array vstr)
-       :values-blob (.toByteArray blob)})))
+(defn- utf8 [value: String] -> Any
+  (.getBytes value StandardCharsets/UTF_8))
 
-(defn longs-segment [ids :- Any] :- Any
-  (let [v (vec (sort ids))
-        buf (bb (* (count v) 8))]
-    (do
-      (doseq [x v] (.putLong buf (long x)))
-      (.array buf))))
+(defn- hex [bytes: Any] -> String
+  (apply str (map (fn [value: Any] -> String
+                    (format "%02x" (bit-and value 255)))
+                  bytes)))
 
-(defn txs-segments [txs :- Any] :- Any
-  (let [rows (vec txs)
-        blob (ByteArrayOutputStream.)
-        meta (mapv
-              (fn [row :- Any] :- Any
-                (let [tx (first row)
-                      t (second row)
-                      a (utf8 (str (:agent t)))
-                      off (.size blob)]
-                  (do
-                    (.write blob a 0 (alength a))
-                    {:tx (long tx)
-                     :seq (long (or (:seq t) 0))
-                     :off off
-                     :len (alength a)})))
-              rows)
-        buf (bb (* (count meta) 28))]
-    (do
-      (doseq [m meta]
-        (.putLong buf (:tx m))
-        (.putLong buf (:seq m))
-        (.putLong buf (long (:off m)))
-        (.putInt buf (int (:len m))))
-      {:txs (.array buf) :txs-blob (.toByteArray blob)})))
+(defn- sha256 [bytes: Any] -> String
+  (hex (.digest (MessageDigest/getInstance "SHA-256") bytes)))
 
-(defn postings-l [ord->l :- Any n :- Int] :- Any
-  (let [groups (reduce
-                (fn [m :- Any ord :- Int] :- Any
-                  (update m (aget ord->l ord) (fnil conj []) ord))
-                (sorted-map)
-                (range n))
-        runs (ByteArrayOutputStream.)
-        keytab (bb (* (count groups) 20))]
-    (do
-      (doseq [row groups]
-        (let [lid (first row)
-              ords (second row)
-              off (.size runs)
-              rb (bb (* (count ords) 4))]
-          (do
-            (doseq [o ords] (.putInt rb (int o)))
-            (let [a (.array rb)] (.write runs a 0 (alength a)))
-            (.putLong keytab (long lid))
-            (.putLong keytab (long off))
-            (.putInt keytab (int (count ords))))))
-      {:postings-l (.array keytab) :pl-runs (.toByteArray runs)})))
+(defn- instant-data [value: Any] -> Any
+  [(t/instant-epoch-seconds value) (t/instant-nanos value)])
 
-(defn postings-lp [ord->l :- Any ord->p :- Any n :- Int] :- Any
-  (let [groups (reduce
-                (fn [m :- Any ord :- Int] :- Any
-                  (update m [(aget ord->l ord) (aget ord->p ord)]
-                          (fnil conj [])
-                          ord))
-                (sorted-map)
-                (range n))
-        runs (ByteArrayOutputStream.)
-        keytab (bb (* (count groups) 28))]
-    (do
-      (doseq [row groups]
-        (let [key (first row)
-              lid (first key)
-              pid (second key)
-              ords (second row)
-              off (.size runs)
-              rb (bb (* (count ords) 4))]
-          (do
-            (doseq [o ords] (.putInt rb (int o)))
-            (let [a (.array rb)] (.write runs a 0 (alength a)))
-            (.putLong keytab (long lid))
-            (.putLong keytab (long pid))
-            (.putLong keytab (long off))
-            (.putInt keytab (int (count ords))))))
-      {:postings-lp (.array keytab) :plp-runs (.toByteArray runs)})))
+(defn- atom-row-data [row: t/AtomRow] -> Any
+  (let [kind: Keyword (t/atomrow-kind row)]
+    (cond
+      [(= kind :string) [kind (t/atomrow-string-value row)]]
+      [(= kind :int) [kind (t/atomrow-int-value row)]]
+      [(= kind :float) [kind (t/atomrow-float-value row)]]
+      [(= kind :bool) [kind (t/atomrow-bool-value row)]]
+      [(= kind :keyword) [kind (t/atomrow-keyword-value row)]]
+      [(= kind :instant) [kind (instant-data (t/atomrow-instant-value row))]]
+      [:else (fail "fri: AtomRow has an unknown kind" :invalid-fri-cache)])))
 
-(defn names-segments [store-val :- Any] :- Any
-  (let [name-pid (get (:val-intern store-val) "name")
-        superseded (set (keys (:superseded store-val)))
-        rows (if (nil? name-pid)
-               []
-               (reduce
-                (fn [acc :- Any row :- Any] :- Any
-                  (let [cid (first row)
-                        f (second row)]
-                    (if (and (= (:p f) name-pid)
-                             (not (contains? superseded cid)))
-                      (conj acc [(get (:values store-val) (:r f)) (:l f)])
-                      acc)))
-                []
-                (:facts store-val)))
-        blob (ByteArrayOutputStream.)
-        meta (reduce
-              (fn [acc :- Any row :- Any] :- Any
-                (let [nm (first row)
-                      eid (second row)
-                      b (utf8 (str nm))
-                      off (.size blob)]
-                  (do
-                    (.write blob b 0 (alength b))
-                    (conj acc {:s (str nm)
-                               :off off
-                               :len (alength b)
-                               :eid (long eid)}))))
-              []
-              rows)
-        by-str (sort-by :s meta)
-        tab (bb (* (count meta) 20))]
-    (do
-      (doseq [x by-str]
-        (.putLong tab (long (:off x)))
-        (.putInt tab (int (:len x)))
-        (.putLong tab (:eid x)))
-      {:names (.array tab) :names-blob (.toByteArray blob)})))
+(defn- data-atom-row [entry: Any] -> t/AtomRow
+  (if (not (and (vector? entry) (= 2 (count entry))))
+    (fail "fri: malformed AtomRow" :invalid-fri-cache)
+    (let [kind: Any (nth entry 0)
+          value: Any (nth entry 1)]
+      (cond
+        [(and (= kind :string) (string? value))
+         (t/->AtomRow :string value nil nil nil nil nil)]
+        [(and (= kind :int) (integer? value))
+         (t/->AtomRow :int nil value nil nil nil nil)]
+        [(and (= kind :float) (and (number? value) (not (integer? value))))
+         (t/->AtomRow :float nil nil value nil nil nil)]
+        [(and (= kind :bool) (boolean? value))
+         (t/->AtomRow :bool nil nil nil value nil nil)]
+        [(and (= kind :keyword) (keyword? value))
+         (t/->AtomRow :keyword nil nil nil nil value nil)]
+        [(and (= kind :instant)
+              (and (vector? value)
+                   (and (= 2 (count value))
+                        (and (integer? (nth value 0))
+                             (integer? (nth value 1))))))
+         (t/->AtomRow :instant nil nil nil nil nil
+                      (t/instant (nth value 0) (nth value 1)))]
+        [:else (fail "fri: malformed AtomRow value" :invalid-fri-cache)]))))
 
-(defn superseded-segment [ord-superseded? :- [Int -> Bool] n :- Int] :- Any
-  (let [b (byte-array (quot (+ n 7) 8))]
-    (do
-      (doseq [ord :- Int (range n)]
-        (when (ord-superseded? ord)
-          (aset-byte b
-                     (quot ord 8)
-                     (unchecked-byte
-                      (bit-or (aget b (quot ord 8))
-                              (bit-shift-left 1 (rem ord 8)))))))
-      b)))
+(defn- triple-row-data [row: t/TripleRow] -> Any
+  [(t/triplerow-slot0 row) (t/triplerow-slot1 row) (t/triplerow-slot2 row)])
 
-(defn write-fri! [store-val :- Any path :- Any & opts :- Any] :- Any
-  (let [fold-fingerprint (get (apply hash-map opts) :fold-fingerprint)
-        facts-sorted (sort-by first (:facts store-val))
-        n (count facts-sorted)
-        cids (long-array (map first facts-sorted))
-        ord->l (long-array (map (comp :l second) facts-sorted))
-        ord->p (long-array (map (comp :p second) facts-sorted))
-        superseded (set (keys (:superseded store-val)))
-        ord-sup? (fn [ord :- Int] :- Bool (contains? superseded (aget cids ord)))
-        make-facts (facts-segment facts-sorted)
-        entities (remove
-                  (fn [x :- Any] :- Bool
-                    (or (contains? (:values store-val) x)
-                        (contains? (:facts store-val) x)))
-                  (keys (:objects store-val)))
-        segs (merge
-              {:facts (make-facts (:tx-of store-val))
-               :entities (longs-segment entities)
-               :superseded (superseded-segment ord-sup? n)}
-              (values-segments (:values store-val))
-              (txs-segments (:txs store-val))
-              (names-segments store-val)
-              (postings-l ord->l n)
-              (postings-lp ord->l ord->p n))
-        order [:facts :values-id :values-str :values-blob :entities
-               :txs :txs-blob :names :names-blob
-               :postings-l :pl-runs :postings-lp :plp-runs :superseded]
-        tmp (str path ".tmp")
-        fos (FileOutputStream. tmp)]
-    (with-open [os (DataOutputStream. (BufferedOutputStream. fos))]
-      (.write os (utf8 MAGIC))
-      (.writeInt os FMT)
-      (let [start (+ (alength (utf8 MAGIC)) 4)
-            pair
-            (loop [pos start acc {} ks order]
-              (let [k (first ks)]
-                (if (nil? k)
-                  [acc pos]
-                  (let [b (get segs k)]
-                    (do
-                      (.write os b 0 (alength b))
-                      (recur (+ pos (alength b))
-                             (assoc acc k {:off pos
-                                           :len (alength b)
-                                           :sha256 (sha256-hex b)})
-                             (next ks)))))))
-            table (first pair)
-            foff (second pair)
-            footer {:magic MAGIC
-                    :fmt FMT
-                    :covers_seq (or (:next-seq store-val) 0)
-                    :next_id (or (:next-id store-val) 0)
-                    :supersedes_pred (:supersedes-pred store-val)
-                    :fold_fingerprint fold-fingerprint
-                    :counts {:facts n
-                             :values (count (:values store-val))
-                             :entities (count entities)
-                             :txs (count (:txs store-val))
-                             :superseded (count superseded)}
-                    :segments table}
-            fb (utf8 (pr-str footer))]
-        (do
-          (.write os fb 0 (alength fb))
-          (.writeLong os (long foff))
-          (.flush os)
-          (.force (.getChannel fos) true)
-          (Files/move
-           (.toPath (java.io.File. tmp))
-           (.toPath (java.io.File. (str path)))
-           (into-array
-            CopyOption
-            [StandardCopyOption/ATOMIC_MOVE
-             StandardCopyOption/REPLACE_EXISTING]))
-          {:covers_seq (:covers_seq footer)
-           :next_id (:next_id footer)
-           :supersedes_pred (:supersedes_pred footer)
-           :counts (:counts footer)
-           :segments table})))))
+(defn- data-triple-row [entry: Any] -> t/TripleRow
+  (if (and (vector? entry)
+           (and (= 3 (count entry)) (every? integer? entry)))
+    (t/->TripleRow (nth entry 0) (nth entry 1) (nth entry 2))
+    (fail "fri: malformed TripleRow" :invalid-fri-cache)))
 
-;; Reader primitives. `img` is the heterogeneous host-resource map containing
-;; channels, mapped buffers, immutable metadata, and bounded cache atoms.
-(defn map-segment [ch :- Any off :- Int len :- Int] :- (Vec Any)
-  (loop [pos 0 acc []]
-    (if (>= pos len)
-      acc
-      (let [sz (min CHUNK (- len pos))
-            mbb (.map ch FileChannel$MapMode/READ_ONLY (+ off pos) sz)]
-        (recur (+ pos sz) (conj acc [pos sz mbb]))))))
+(defn- transaction-row-data [row: t/TransactionRow] -> Any
+  [(t/transactionrow-sequence row)
+   (t/transactionrow-first-operation row)
+   (t/transactionrow-operation-count row)])
 
-(defn segbuf [img :- Any seg :- Any] :- Any
-  (get (:buf img) seg))
+(defn- data-transaction-row [entry: Any] -> t/TransactionRow
+  (if (and (vector? entry)
+           (and (= 3 (count entry)) (every? integer? entry)))
+    (t/->TransactionRow (nth entry 0) (nth entry 1) (nth entry 2))
+    (fail "fri: malformed TransactionRow" :invalid-fri-cache)))
 
-(defn locate-chunked [img :- Any seg :- Any pos :- Int len :- Int] :- Any
-  (loop [cs (get-in img [:maps seg])]
-    (if-let [c (first cs)]
-      (let [cpos (nth c 0)
-            csz (nth c 1)
-            mbb (nth c 2)]
-        (if (and (>= pos cpos) (<= (+ pos len) (+ cpos csz)))
-          (let [out (object-array 2)]
-            (do (aset out 0 mbb)
-                (aset out 1 (int (- pos cpos)))
-                out))
-          (recur (next cs))))
-      (throw (ex-info "fri: read past segment" {:seg seg :pos pos})))))
+(defn- action-code [action: Keyword] -> Int
+  (cond
+    [(= action t/assert-action) 1]
+    [(= action t/retract-action) 2]
+    [:else (fail "fri: operation has an unknown action" :invalid-fri-cache)]))
 
-(defn seg-long [img :- Any seg :- Any pos :- Int] :- Int
-  (if-let [b (segbuf img seg)]
-    (.getLong b (int pos))
-    (let [o (locate-chunked img seg pos 8)]
-      (.getLong (aget o 0) (int (aget o 1))))))
+(defn- code-action [code: Int] -> Keyword
+  (cond
+    [(= code 1) t/assert-action]
+    [(= code 2) t/retract-action]
+    [:else (fail "fri: operation has an unknown action code" :invalid-fri-cache)]))
 
-(defn seg-int [img :- Any seg :- Any pos :- Int] :- Int
-  (if-let [b (segbuf img seg)]
-    (long (.getInt b (int pos)))
-    (let [o (locate-chunked img seg pos 4)]
-      (long (.getInt (aget o 0) (int (aget o 1)))))))
+(defn- operation-row-data [row: t/OperationRow] -> Any
+  [(t/operationrow-tx-sequence row)
+   (t/operationrow-ordinal row)
+   (action-code (t/operationrow-action row))
+   (t/operationrow-triple-handle row)])
 
-(defn seg-get-bytes [img :- Any seg :- Any pos :- Int len :- Int] :- Any
-  (let [out (byte-array len)]
-    (if-let [b (segbuf img seg)]
-      (let [dup (.duplicate b)]
-        (do (.position dup (int pos)) (.get dup out) out))
-      (let [o (locate-chunked img seg pos len)
-            dup (.duplicate (aget o 0))]
-        (do (.position dup (int (aget o 1))) (.get dup out) out)))))
+(defn- data-operation-row [entry: Any] -> t/OperationRow
+  (if (and (vector? entry)
+           (and (= 4 (count entry)) (every? integer? entry)))
+    (t/->OperationRow (nth entry 0) (nth entry 1)
+                      (code-action (nth entry 2)) (nth entry 3))
+    (fail "fri: malformed OperationRow" :invalid-fri-cache)))
 
-(def DEFAULT-RENDER-CACHE :- Int 65536)
+(defn- atom-handle [position: Int] -> Int (* 2 position))
+(defn- triple-handle [position: Int] -> Int (inc (* 2 position)))
 
-(defn env-long [k :- String default :- Int] :- Int
-  (or (try
-        (let [raw (System/getenv k)]
-          (if (nil? raw)
-            nil
-            (let [trimmed (str/trim raw)]
-              (if (empty? trimmed) nil (Long/parseLong trimmed)))))
-        (catch Exception _ nil))
-      default))
+(defn- index-data [rows: Any] -> Any
+  (let [with-handles: Any
+        (map-indexed (fn [position: Int row: t/TripleRow] -> Any
+                       [(triple-handle position) row])
+                     rows)]
+    [(vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot0 (nth entry 1)) (nth entry 0)])
+                     with-handles)))
+     (vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot1 (nth entry 1)) (nth entry 0)])
+                     with-handles)))
+     (vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot2 (nth entry 1)) (nth entry 0)])
+                     with-handles)))
+     (vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot0 (nth entry 1))
+                        (t/triplerow-slot1 (nth entry 1))
+                        (nth entry 0)])
+                     with-handles)))
+     (vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot1 (nth entry 1))
+                        (t/triplerow-slot2 (nth entry 1))
+                        (nth entry 0)])
+                     with-handles)))
+     (vec (sort (map (fn [entry: Any] -> Any
+                       [(t/triplerow-slot0 (nth entry 1))
+                        (t/triplerow-slot2 (nth entry 1))
+                        (nth entry 0)])
+                     with-handles))) ]))
 
-(def ^:dynamic *cache-cap* :- Int? nil)
+;; The payload contains only named-row projections and homogeneous row vectors.
+;; It is deterministic and intentionally carries no semantic assertion id.
+(defn- dump-data [dump: t/TermStoreDump] -> Any
+  [(t/termstoredump-space-id dump)
+   (t/termstoredump-next-sequence dump)
+   (mapv atom-row-data (t/termstoredump-atoms dump))
+   (mapv triple-row-data (t/termstoredump-triples dump))
+   (mapv transaction-row-data (t/termstoredump-transactions dump))
+   (mapv operation-row-data (t/termstoredump-operations dump))
+   (index-data (t/termstoredump-triples dump))])
 
-(defn render-cache-cap [cap :- Int?] :- Int
-  (or cap (env-long "FRAM_MMAP_RENDER_CACHE" DEFAULT-RENDER-CACHE)))
+(defn- valid-index-row? [width: Int entry: Any] -> Bool
+  (and (vector? entry)
+       (and (= width (count entry)) (every? integer? entry))))
 
-(defn lru [] :- Any
-  (atom {:m {} :q PersistentQueue/EMPTY}))
+(defn- data-cache [value: Any] -> Any
+  (if (not (and (vector? value) (= 7 (count value))))
+    (fail "fri: malformed TermStore payload" :invalid-fri-cache)
+    (let [space-id: Any (nth value 0)
+          next-sequence: Any (nth value 1)
+          atoms: Any (nth value 2)
+          triples: Any (nth value 3)
+          transactions: Any (nth value 4)
+          operations: Any (nth value 5)
+          indexes: Any (nth value 6)]
+      (if (not (and (string? space-id)
+                    (and (integer? next-sequence)
+                         (and (vector? atoms)
+                              (and (vector? triples)
+                                   (and (vector? transactions)
+                                        (and (vector? operations)
+                                             (and (vector? indexes)
+                                                  (= 6 (count indexes))))))))))
+        (fail "fri: malformed TermStore payload fields" :invalid-fri-cache)
+        (let [dump: t/TermStoreDump
+              (t/->TermStoreDump
+               store/term-store-dump-version space-id next-sequence
+               (mapv data-atom-row atoms)
+               (mapv data-triple-row triples)
+               (mapv data-transaction-row transactions)
+               (mapv data-operation-row operations))
+              widths: Any [2 2 2 3 3 3]]
+          (if (not (every? true?
+                           (map-indexed
+                            (fn [position: Int entries: Any] -> Bool
+                              (and (vector? entries)
+                                   (every? (fn [entry: Any] -> Bool
+                                             (valid-index-row? (nth widths position) entry))
+                                           entries)))
+                            indexes)))
+            (fail "fri: malformed slot index" :invalid-fri-cache)
+            (if (not (= indexes (index-data (t/termstoredump-triples dump))))
+              (fail "fri: slot index does not match TripleRow table"
+                    :invalid-fri-cache)
+              {:dump dump :indexes indexes})))))))
 
-(defn clear-render-caches! [img :- Any] :- Nil
-  (doseq [k [:render-cache :name-cache :lit-cache]]
-    (when-let [a (get img k)]
-      (reset! a {:m {} :q PersistentQueue/EMPTY}))))
+(defn- validate-dump! [dump: Any source: CacheSource] -> Any
+  (if (not (t/term-store-dump? dump))
+    (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG"
+          :cache-rebuild-required)
+    (if (not (= store/term-store-dump-version (t/termstoredump-version dump)))
+      (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG"
+            :cache-rebuild-required)
+      (if (not (= (cachesource-space-id source)
+                  (t/termstoredump-space-id dump)))
+        (fail "fri: cache source and TermStore belong to different spaces"
+              :cache-space-mismatch)
+        (let [ctx: Any (store/new-term-store (cachesource-space-id source))]
+          (store/load-term-store! ctx dump)
+          ctx)))))
 
-(defn cache-get [a :- Any k :- Any] :- Any
-  (get (:m @a) k))
-
-(defn cache-put! [a :- Any k :- Any v :- Any cap :- Int] :- Any
-  (do
-    (swap!
-     a
-     (fn [s :- Any] :- Any
-       (let [m (:m s)
-             q (:q s)]
-         (if (contains? m k)
-           s
-           (let [m1 (assoc m k v)
-                 q1 (conj q k)]
-             (if (> (count m1) cap)
-               {:m (dissoc m1 (peek q1)) :q (pop q1)}
-               {:m m1 :q q1}))))))
-    v))
-
-;; Public fri reads memoize but intentionally do not carry ! in their API.
-;; Hide the local cache effect behind value aliases; the cache is an
-;; implementation detail over an immutable image, not a semantic mutation.
-(def cache-put :- Any cache-put!)
-
-(defn memo-put! [memo :- Any k :- Any v :- Any] :- Any
-  (swap! memo assoc k v))
-
-(def memo-put :- Any memo-put!)
-
-(defn nfacts [img :- Any] :- Int
-  (long (get-in img [:footer :counts :facts])))
-
-(defn covers-seq [img :- Any] :- Int
-  (long (get-in img [:footer :covers_seq])))
-
-(defn next-id [img :- Any] :- Int
-  (long (get-in img [:footer :next_id])))
-
-(defn supersedes-pred [img :- Any] :- Any
-  (get-in img [:footer :supersedes_pred]))
-
-(defn ord-cid [img :- Any ord :- Int] :- Int
-  (seg-long img :facts (* ord 40)))
-
-(defn ord-l [img :- Any ord :- Int] :- Int
-  (seg-long img :facts (+ (* ord 40) 8)))
-
-(defn ord-p [img :- Any ord :- Int] :- Int
-  (seg-long img :facts (+ (* ord 40) 16)))
-
-(defn ord-r [img :- Any ord :- Int] :- Int
-  (seg-long img :facts (+ (* ord 40) 24)))
-
-(defn ord-tx [img :- Any ord :- Int] :- Int
-  (seg-long img :facts (+ (* ord 40) 32)))
-
-(defn cid->ord [img :- Any cid :- Int] :- Int
-  (let [n (nfacts img)]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        -1
-        (let [mid (quot (+ lo hi) 2)
-              c (ord-cid img mid)]
-          (cond
-            (= c cid) mid
-            (< c cid) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
-
-(defn superseded-ord? [img :- Any ord :- Int] :- Bool
-  (let [b (if-let [buf (segbuf img :superseded)]
-            (.get buf (int (quot ord 8)))
-            (aget (seg-get-bytes img :superseded (quot ord 8) 1) 0))]
-    (not (zero? (bit-and (int b) (bit-shift-left 1 (rem ord 8)))))))
-
-(defn live-cid? [img :- Any cid :- Int] :- Bool
-  (let [ord (cid->ord img cid)]
-    (and (>= ord 0) (not (superseded-ord? img ord)))))
-
-(defn fact-of [img :- Any cid :- Int] :- Any
-  (let [ord (cid->ord img cid)]
-    (when (>= ord 0)
-      {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)})))
-
-(defn vcount [img :- Any] :- Int
-  (long (get-in img [:footer :counts :values])))
-
-(defn literal [img :- Any id :- Int] :- String?
-  (let [n (vcount img)]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        nil
-        (let [mid (quot (+ lo hi) 2)
-              base (* mid 20)
-              vid (seg-long img :values-id base)]
-          (cond
-            (= vid id)
-            (let [off (seg-long img :values-id (+ base 8))
-                  len (seg-int img :values-id (+ base 16))]
-              (String. (seg-get-bytes img :values-blob off len)
-                       StandardCharsets/UTF_8))
-            (< vid id) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
-
-(defn value-object? [img :- Any id :- Int] :- Bool
-  (some? (literal img id)))
-
-(defn value-id [img :- Any s :- String] :- Int?
-  (let [n (vcount img)
-        target (utf8 s)]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        nil
-        (let [mid (quot (+ lo hi) 2)
-              base (* mid 20)
-              off (seg-long img :values-str base)
-              len (seg-int img :values-str (+ base 8))
-              b (seg-get-bytes img :values-blob off len)
-              cmp (compare (String. b StandardCharsets/UTF_8) s)]
-          (cond
-            (zero? cmp) (seg-long img :values-str (+ base 12))
-            (neg? cmp) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
-
-(defn open-fri-with-cap [path :- Any cache-cap :- Int?] :- Any
-  (let [raf (RandomAccessFile. (str path) "r")
-        ch (.getChannel raf)
-        flen (.length raf)
-        _seek-footer (.seek raf (- flen 8))
-        foff (.readLong raf)
-        _seek-body (.seek raf foff)
-        fb (byte-array (- flen foff 8))
-        _read (.readFully raf fb)
-        footer (edn/read-string (String. fb StandardCharsets/UTF_8))
-        maps
-        (reduce
-         (fn [acc :- Any row :- Any] :- Any
-           (let [seg (first row)
-                 meta (second row)]
-             (assoc acc seg (map-segment ch (:off meta) (:len meta)))))
-         {}
-         (:segments footer))
-        buf
-        (reduce
-         (fn [acc :- Any row :- Any] :- Any
-           (let [seg (first row)
-                 chunks (second row)]
-             (if (= 1 (count chunks))
-               (assoc acc seg (nth (first chunks) 2))
-               acc)))
-         {}
-         maps)
-        base {:raf raf
-              :channel ch
-              :footer footer
-              :maps maps
-              :buf buf
-              :vid-memo (atom {})}
-        nn (long (/ (get-in footer [:segments :names :len] 0) 20))
-        nmap
-        (reduce
-         (fn [m :- Any i :- Int] :- Any
-           (let [b (* i 20)
-                 soff (seg-long base :names b)
-                 slen (seg-int base :names (+ b 8))
-                 eid (seg-long base :names (+ b 12))
-                 s (String. (seg-get-bytes base :names-blob soff slen)
-                            StandardCharsets/UTF_8)]
-             (assoc m s eid)))
-         {}
-         (range nn))]
-    (assoc base
-           :names-map nmap
-           :name-pid (value-id base "name")
-           :cache-cap (render-cache-cap cache-cap)
-           :render-cache (lru)
-           :name-cache (lru)
-           :lit-cache (lru))))
-
-(defn open-fri [path :- Any] :- Any
-  (open-fri-with-cap path *cache-cap*))
-
-(defn close-fri! [img :- Any] :- Nil
-  (do
-    (try (.close (:channel img)) (catch Exception _ nil))
-    (try (.close (:raf img)) (catch Exception _ nil))
+(defn- write-bytes! [path: String bytes: Any] -> Nil
+  (let [target: Any (File. path)
+        parent: Any (.getParentFile target)
+        temporary: Any (File. (str path ".tmp"))]
+    (when (some? parent) (.mkdirs parent))
+    (with-open [stream (FileOutputStream. temporary)]
+      (.write stream bytes)
+      (.flush stream)
+      (.force (.getChannel stream) true))
+    (Files/move (.toPath temporary) (.toPath target)
+                (into-array StandardCopyOption
+                            [StandardCopyOption/ATOMIC_MOVE
+                             StandardCopyOption/REPLACE_EXISTING]))
     nil))
 
-(defn run-ords [img :- Any runseg :- Any off :- Int len :- Int] :- (Vec Int)
-  (mapv
-   (fn [i :- Int] :- Int (seg-int img runseg (+ off (* i 4))))
-   (range len)))
+(defn write-fri!
+  [dump: Any path: String source: CacheSource] -> Any
+  (do
+    (validate-dump! dump source)
+    (let [payload: Any (utf8 (pr-str (dump-data dump)))
+          header: Any (utf8 (pr-str [(cachesource-space-id source)
+                                     (cachesource-fingerprint source)
+                                     (cachesource-valid-bytes source)
+                                     (sha256 payload)]))
+          buffer: ByteArrayOutputStream (ByteArrayOutputStream.)]
+      (with-open [stream (DataOutputStream. buffer)]
+        (.write stream (utf8 MAGIC))
+        (.writeInt stream FMT)
+        (.writeInt stream (alength header))
+        (.write stream header)
+        (.writeLong stream (alength payload))
+        (.write stream payload)
+        (.flush stream))
+      (write-bytes! path (.toByteArray buffer))
+      (->CacheReceipt FMT
+                      (cachesource-space-id source)
+                      (cachesource-fingerprint source)
+                      (cachesource-valid-bytes source)
+                      (sha256 (.toByteArray buffer))))))
 
-(defn by-l [img :- Any lid :- Int] :- (Vec Int)
-  (let [n (long (/ (get-in img [:footer :segments :postings-l :len]) 20))]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        []
-        (let [mid (quot (+ lo hi) 2)
-              base (* mid 20)
-              k (seg-long img :postings-l base)]
-          (cond
-            (= k lid)
-            (let [off (seg-long img :postings-l (+ base 8))
-                  len (seg-int img :postings-l (+ base 16))]
-              (reduce
-               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
-                 (if (superseded-ord? img ord)
-                   acc
-                   (conj acc (ord-cid img ord))))
-               []
-               (run-ords img :pl-runs off len)))
-            (< k lid) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
+(defn- read-sized [stream: DataInputStream n: Int] -> Any
+  (if (or (< n 0) (> n 2147483647))
+    (fail "fri: invalid segment length" :invalid-fri-cache)
+    (let [bytes: Any (byte-array n)]
+      (.readFully stream bytes)
+      bytes)))
 
-(defn by-lp [img :- Any lid :- Int pid :- Int] :- (Vec Int)
-  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        []
-        (let [mid (quot (+ lo hi) 2)
-              base (* mid 28)
-              kl (seg-long img :postings-lp base)
-              kp (seg-long img :postings-lp (+ base 8))
-              cmp (if (< kl lid)
-                    -1
-                    (if (> kl lid)
-                      1
-                      (if (< kp pid) -1 (if (> kp pid) 1 0))))]
-          (cond
-            (zero? cmp)
-            (let [off (seg-long img :postings-lp (+ base 16))
-                  len (seg-int img :postings-lp (+ base 24))]
-              (reduce
-               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
-                 (if (superseded-ord? img ord)
-                   acc
-                   (conj acc (ord-cid img ord))))
-               []
-               (run-ords img :plp-runs off len)))
-            (neg? cmp) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
+(defn- decode-header [bytes: Any] -> Any
+  (let [value: Any (edn/read-string (String. bytes StandardCharsets/UTF_8))]
+    (if (and (vector? value)
+             (and (= 4 (count value))
+                  (and (string? (nth value 0))
+                       (and (string? (nth value 1))
+                            (and (integer? (nth value 2))
+                                 (string? (nth value 3)))))))
+      value
+      (fail "fri: malformed cache header" :invalid-fri-cache))))
 
-(defn pred-id [img :- Any s :- String] :- Int?
-  (let [memo (:vid-memo img)]
-    (or (get @memo s)
-        (let [v (value-id img s)]
-          (do (when (some? v) (memo-put memo s v)) v)))))
+(defn- read-envelope [path: String] -> Any
+  (try
+    (with-open [stream (DataInputStream.
+                        (ByteArrayInputStream. (Files/readAllBytes (.toPath (File. path)))))]
+      (let [magic-bytes: Any (read-sized stream (count MAGIC))
+            magic: String (String. magic-bytes StandardCharsets/US_ASCII)]
+        (if (= magic "FRAMFRI1")
+          (fail "fri: legacy or unknown cache requires rebuild from canonical FRAMLOG"
+                :cache-rebuild-required)
+          (if (not (= magic MAGIC))
+            (fail "fri: invalid cache magic" :invalid-fri-cache)
+            (let [format: Int (.readInt stream)]
+              (if (= format 1)
+              (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG"
+                    :cache-rebuild-required)
+                (if (not (= format FMT))
+                  (fail "fri: unsupported cache format" :invalid-fri-cache)
+                  (let [header: Any (decode-header (read-sized stream (.readInt stream)))
+                        payload-length: Int (.readLong stream)
+                        payload: Any (read-sized stream payload-length)]
+                    (if (not (= 0 (.available stream)))
+                      (fail "fri: cache has trailing bytes" :invalid-fri-cache)
+                      {:header header :payload payload})))))))))
+    (catch clojure.lang.ExceptionInfo error
+      (throw error))
+    (catch Throwable error
+      (throw (ex-info "fri: cache is truncated or malformed"
+                      {:type :invalid-fri-cache :cause (str error)})))))
 
-(defn resolve-name [img :- Any nm :- String] :- Int?
-  (get (:names-map img) nm))
+(defn open-fri! [path: String source: CacheSource] -> Any
+  (let [envelope: Any (read-envelope path)
+        header: Any (:header envelope)
+        payload: Any (:payload envelope)
+        stored-space: Any (nth header 0)
+        stored-fingerprint: Any (nth header 1)
+        stored-position: Any (nth header 2)
+        stored-sha: Any (nth header 3)]
+    (if (not (= stored-space (cachesource-space-id source)))
+      (fail "fri: cache belongs to a different SpaceId" :cache-space-mismatch)
+      (if (not (and (= stored-fingerprint (cachesource-fingerprint source))
+                    (= stored-position (cachesource-valid-bytes source))))
+        (fail "fri: cache does not match the canonical FRAMLOG prefix"
+              :cache-source-mismatch)
+        (if (not (= stored-sha (sha256 payload)))
+          (fail "fri: cache payload checksum mismatch" :invalid-fri-cache)
+          (let [cache-data: Any
+                (data-cache (edn/read-string (String. payload StandardCharsets/UTF_8)))
+                dump: t/TermStoreDump (:dump cache-data)
+                ctx: Any (validate-dump! dump source)]
+            (->CacheImage source dump (:indexes cache-data) ctx)))))))
 
-(defn name-of [img :- Any subj :- Int] :- String?
-  (when-let [name-pid (:name-pid img)]
-    (let [cids (by-lp img subj name-pid)]
-      (when (seq cids)
-        (let [f (fact-of img (first cids))]
-          (if (nil? f) nil (literal img (:r f))))))))
+(defn- atom-value [row: t/AtomRow] -> Any
+  (let [kind: Keyword (t/atomrow-kind row)]
+    (cond
+      [(= kind :string) (t/atomrow-string-value row)]
+      [(= kind :int) (t/atomrow-int-value row)]
+      [(= kind :float) (t/atomrow-float-value row)]
+      [(= kind :bool) (t/atomrow-bool-value row)]
+      [(= kind :keyword) (t/atomrow-keyword-value row)]
+      [(= kind :instant) (t/atomrow-instant-value row)]
+      [:else (fail "fri: AtomRow has an unknown kind" :invalid-fri-cache)])))
 
-(defn cold->dump [img :- Any] :- Any
-  (let [n (nfacts img)
-        facts (mapv
-               (fn [ord :- Int] :- Any
-                 [(ord-cid img ord)
-                  {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)}])
-               (range n))
-        tx-of (mapv
-               (fn [ord :- Int] :- Any [(ord-cid img ord) (ord-tx img ord)])
-               (range n))
-        vc (vcount img)
-        values
-        (mapv
-         (fn [i :- Int] :- Any
-           (let [base (* i 20)
-                 id (seg-long img :values-id base)
-                 off (seg-long img :values-id (+ base 8))
-                 len (seg-int img :values-id (+ base 16))]
-             [id (String. (seg-get-bytes img :values-blob off len)
-                          StandardCharsets/UTF_8)]))
-         (range vc))
-        ec (get-in img [:footer :counts :entities])
-        ents (mapv
-              (fn [i :- Int] :- Int (seg-long img :entities (* i 8)))
-              (range ec))
-        txc (get-in img [:footer :counts :txs])
-        txs
-        (mapv
-         (fn [i :- Int] :- Any
-           (let [base (* i 28)
-                 tx (seg-long img :txs base)
-                 sq (seg-long img :txs (+ base 8))
-                 off (seg-long img :txs (+ base 16))
-                 len (seg-int img :txs (+ base 24))
-                 agent (String. (seg-get-bytes img :txs-blob off len)
-                                StandardCharsets/UTF_8)]
-             [tx {:seq sq :agent agent}]))
-         (range txc))
-        superd
-        (reduce
-         (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
-           (if (superseded-ord? img ord)
-             (conj acc (ord-cid img ord))
-             acc))
-         []
-         (range n))]
-    {:next-id (next-id img)
-     :next-seq (covers-seq img)
-     :supersedes-pred (supersedes-pred img)
-     :objects (vec (concat (map first values) ents (map first facts)))
-     :values values
-     :facts facts
-     :tx-of tx-of
-     :txs txs
-     :superseded superd}))
+(defn- atom-handle? [handle: Int] -> Bool (= 0 (mod handle 2)))
+(defn- handle-position [handle: Int] -> Int (quot handle 2))
 
-(defn literal* [img :- Any id :- Int] :- String?
-  (let [c (:lit-cache img)
-        v (cache-get c id)]
-    (if (some? v)
-      v
-      (let [r (literal img id)]
-        (do (when (some? r) (cache-put c id r (:cache-cap img))) r)))))
+(defn- resolve-handle [dump: t/TermStoreDump handle: Int] -> Any
+  (let [position: Int (handle-position handle)]
+    (if (atom-handle? handle)
+      (atom-value (nth (t/termstoredump-atoms dump) position))
+      (let [row: t/TripleRow (nth (t/termstoredump-triples dump) position)]
+        (t/triple (resolve-handle dump (t/triplerow-slot0 row))
+                  (resolve-handle dump (t/triplerow-slot1 row))
+                  (resolve-handle dump (t/triplerow-slot2 row)))))))
 
-(defn name-of* [img :- Any subj :- Int] :- String?
-  (let [c (:name-cache img)
-        v (cache-get c subj)]
-    (if (some? v)
-      v
-      (let [r (name-of img subj)]
-        (do (when (some? r) (cache-put c subj r (:cache-cap img))) r)))))
+(defn- term-handles [dump: t/TermStoreDump] -> Any
+  (into {}
+        (concat
+         (map-indexed (fn [position: Int row: t/AtomRow] -> Any
+                        [(atom-value row) (atom-handle position)])
+                      (t/termstoredump-atoms dump))
+         (map-indexed (fn [position: Int row: t/TripleRow] -> Any
+                        [(resolve-handle dump (triple-handle position))
+                         (triple-handle position)])
+                      (t/termstoredump-triples dump)))))
 
-(defn render [img :- Any cid :- Int] :- Any
-  (when-let [f (fact-of img cid)]
-    [(name-of img (:l f))
-     (literal img (:p f))
-     (let [r (:r f)] (or (literal img r) (name-of img r)))]))
+(defn- index-matches [image: Any index-position: Int keys: Any] -> Any
+  (let [dump: t/TermStoreDump (cacheimage-dump image)
+        handles: Any (term-handles dump)
+        key-handles: Any (mapv (fn [term: Any] -> Any (get handles term)) keys)]
+    (if (some nil? key-handles)
+      []
+      (let [entries: Any (nth (cacheimage-indexes image) index-position)
+            key-count: Int (count key-handles)]
+        (mapv (fn [entry: Any] -> Any
+                (resolve-handle dump (nth entry key-count)))
+              (filter (fn [entry: Any] -> Bool
+                        (= key-handles (subvec entry 0 key-count)))
+                      entries))))))
 
-(defn render-ord [img :- Any ord :- Int] :- Any
-  [(name-of* img (ord-l img ord))
-   (literal* img (ord-p img ord))
-   (let [r (ord-r img ord)] (or (literal* img r) (name-of* img r)))])
+(defn- live-positions-as-of [image: Any sequence: Int] -> Any
+  (if (< sequence 0)
+    (fail "fri: as-of sequence must be non-negative" :invalid-as-of-sequence)
+    (let [dump: t/TermStoreDump (cacheimage-dump image)
+          operations: Any (t/termstoredump-operations dump)]
+      (loop [position 0 active {} live []]
+        (if (or (>= position (count operations))
+                (> (t/operationrow-tx-sequence (nth operations position)) sequence))
+          (vec (keep-indexed (fn [index: Int present?: Bool] -> Any
+                               (when present? index))
+                             live))
+          (let [row: t/OperationRow (nth operations position)
+                handle: Int (t/operationrow-triple-handle row)
+                positions: Any (get active handle [])]
+            (if (= t/assert-action (t/operationrow-action row))
+              (recur (inc position)
+                     (assoc active handle (conj positions position))
+                     (conj live true))
+              (if (empty? positions)
+                (recur (inc position) active (conj live false))
+                (let [target: Int (peek positions)]
+                  (recur (inc position)
+                         (assoc active handle (pop positions))
+                         (conj (assoc live target false) false)))))))))))
 
-(defn by-lp-ords [img :- Any lid :- Int pid :- Int] :- (Vec Int)
-  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
-    (loop [lo 0 hi (dec n)]
-      (if (> lo hi)
-        []
-        (let [mid (quot (+ lo hi) 2)
-              base (* mid 28)
-              kl (seg-long img :postings-lp base)
-              kp (seg-long img :postings-lp (+ base 8))
-              cmp (if (< kl lid)
-                    -1
-                    (if (> kl lid)
-                      1
-                      (if (< kp pid) -1 (if (> kp pid) 1 0))))]
-          (cond
-            (zero? cmp)
-            (let [off (seg-long img :postings-lp (+ base 16))
-                  len (seg-int img :postings-lp (+ base 24))]
-              (reduce
-               (fn [acc :- (Vec Int) ord :- Int] :- (Vec Int)
-                 (if (superseded-ord? img ord) acc (conj acc ord)))
-               []
-               (run-ords img :plp-runs off len)))
-            (neg? cmp) (recur (inc mid) hi)
-            :else (recur lo (dec mid))))))))
+(defn- occurrence-event [dump: t/TermStoreDump position: Int] -> t/Triple
+  (let [row: t/OperationRow (nth (t/termstoredump-operations dump) position)
+        transaction: t/Triple
+        (t/transaction-coordinate (t/termstoredump-space-id dump)
+                                  (t/operationrow-tx-sequence row))
+        occurrence: t/Triple
+        (t/occurrence-coordinate transaction (t/operationrow-ordinal row))
+        proposition: Any
+        (resolve-handle dump (t/operationrow-triple-handle row))]
+    (if (= t/assert-action (t/operationrow-action row))
+      (t/assertion-occurrence occurrence proposition)
+      (t/retraction-occurrence occurrence proposition))))
 
-(defn render-lp [img :- Any subj-name :- String pred-name :- String] :- Any
-  (let [lid (resolve-name img subj-name)
-        pid (pred-id img pred-name)]
-    (when (and (some? lid) (some? pid))
-      (let [c (:render-cache img)
-            k [lid pid]
-            hit (cache-get c k)]
-        (if (some? hit)
-          hit
-          (let [v (mapv
-                   (fn [ord :- Int] :- Any (render-ord img ord))
-                   (by-lp-ords img lid pid))]
-            (cache-put c k v (:cache-cap img))))))))
-
-(defn cold-name-triples
-  [img :- Any schema-pred? :- [String -> Bool] read-hidden-pred? :- [String -> Bool]]
-  :- Any
-  (let [n (nfacts img)]
-    (reduce
-     (fn [acc :- Any ord :- Int] :- Any
-       (if (superseded-ord? img ord)
-         acc
-         (let [l (ord-l img ord)
-               p (ord-p img ord)
-               r (ord-r img ord)
-               pstr (literal img p)]
-           (if (or (nil? pstr) (schema-pred? pstr) (read-hidden-pred? pstr))
-             acc
-             (let [lname (name-of img l)
-                   rrend (if (value-object? img r)
-                           (literal img r)
-                           (name-of img r))]
-               (conj acc [lname pstr rrend]))))))
-     #{}
-     (range n))))
-
-(defn verify-segments? [img :- Any seg-table :- Any] :- Bool
-  (and
-   (map? seg-table)
-   (every?
-    (fn [row :- Any] :- Bool
-      (let [seg (first row)
-            want (:sha256 (second row))
-            chunks (get-in img [:maps seg])
-            md (MessageDigest/getInstance "SHA-256")]
-        (do
-          (doseq [chunk chunks]
-            (let [csz (nth chunk 1)
-                  mbb (nth chunk 2)
-                  b (byte-array csz)
-                  dup (.duplicate mbb)]
-              (do
-                (.position dup 0)
-                (.get dup b)
-                (.update md b))))
-          (= want
-             (apply
-              str
-              (map (fn [x :- Any] :- String (format "%02x" x))
-                   (.digest md)))))))
-    seg-table)))
+(defn close-fri! [image: Any] -> Nil nil)
+(defn restore-store! [image: Any target: Any] -> Any
+  (store/load-term-store! target (cacheimage-dump image)))
+(defn space-id [image: Any] -> String
+  (cachesource-space-id (cacheimage-source image)))
+(defn source-fingerprint [image: Any] -> String
+  (cachesource-fingerprint (cacheimage-source image)))
+(defn source-position [image: Any] -> Int
+  (cachesource-valid-bytes (cacheimage-source image)))
+(defn transaction-count [image: Any] -> Int
+  (store/transaction-count (cacheimage-store image)))
+(defn operation-count [image: Any] -> Int
+  (store/operation-count (cacheimage-store image)))
+(defn semantic-history [image: Any] -> Any
+  (store/semantic-history (cacheimage-store image)))
+(defn operation-occurrences [image: Any] -> Any
+  (store/operation-occurrences (cacheimage-store image)))
+(defn live-occurrences [image: Any] -> Any
+  (store/live-occurrences (cacheimage-store image)))
+(defn live-propositions [image: Any] -> Any
+  (store/live-propositions (cacheimage-store image)))
+(defn by-slot0 [image: Any term: Any] -> Any (index-matches image 0 [term]))
+(defn by-slot1 [image: Any term: Any] -> Any (index-matches image 1 [term]))
+(defn by-slot2 [image: Any term: Any] -> Any (index-matches image 2 [term]))
+(defn by-slot01 [image: Any slot0: Any slot1: Any] -> Any
+  (index-matches image 3 [slot0 slot1]))
+(defn by-slot12 [image: Any slot1: Any slot2: Any] -> Any
+  (index-matches image 4 [slot1 slot2]))
+(defn by-slot02 [image: Any slot0: Any slot2: Any] -> Any
+  (index-matches image 5 [slot0 slot2]))
+(defn live-occurrences-as-of [image: Any sequence: Int] -> Any
+  (let [dump: t/TermStoreDump (cacheimage-dump image)]
+    (mapv (fn [position: Int] -> t/Triple (occurrence-event dump position))
+          (live-positions-as-of image sequence))))
+(defn live-propositions-as-of [image: Any sequence: Int] -> Any
+  (let [dump: t/TermStoreDump (cacheimage-dump image)]
+    (mapv (fn [position: Int] -> Any
+            (resolve-handle
+             dump
+             (t/operationrow-triple-handle
+              (nth (t/termstoredump-operations dump) position))))
+          (live-positions-as-of image sequence))))

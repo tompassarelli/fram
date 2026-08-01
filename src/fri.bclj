@@ -1,56 +1,39 @@
 #lang beagle/clj
-
-;; fri — public typed facade over the ported mmap image implementation.
+;; Public FRI2 facade. FRI is a rebuildable cache, never semantic authority.
 (ns fri
   (:require [fri-port :as fp]))
 
 (define-mode strict)
 
-(def MAGIC :- String fp/MAGIC)
-(def FMT :- Int fp/FMT)
-(def ^:dynamic *cache-cap* :- Int? nil)
-
-(defn write-fri! [store-val :- Any path :- Any & opts :- Any] :- Any
-  (apply fp/write-fri! store-val path opts))
-
-(defn render-cache-cap [] :- Int
-  (fp/render-cache-cap *cache-cap*))
-
-(defn clear-render-caches! [img :- Any] :- Nil
-  (fp/clear-render-caches! img))
-
-(defn open-fri [path :- Any] :- Any
-  (fp/open-fri-with-cap path *cache-cap*))
-
-(defn close-fri! [img :- Any] :- Nil
-  (fp/close-fri! img))
-
-(defn nfacts [img :- Any] :- Int (fp/nfacts img))
-(defn covers-seq [img :- Any] :- Int (fp/covers-seq img))
-(defn next-id [img :- Any] :- Int (fp/next-id img))
-(defn supersedes-pred [img :- Any] :- Any (fp/supersedes-pred img))
-(defn cid->ord [img :- Any cid :- Int] :- Int (fp/cid->ord img cid))
-(defn superseded-ord? [img :- Any ord :- Int] :- Bool (fp/superseded-ord? img ord))
-(defn live-cid? [img :- Any cid :- Int] :- Bool (fp/live-cid? img cid))
-(defn fact-of [img :- Any cid :- Int] :- Any (fp/fact-of img cid))
-(defn literal [img :- Any id :- Int] :- String? (fp/literal img id))
-(defn value-object? [img :- Any id :- Int] :- Bool (fp/value-object? img id))
-(defn value-id [img :- Any value :- String] :- Int? (fp/value-id img value))
-(defn by-l [img :- Any lid :- Int] :- (Vec Int) (fp/by-l img lid))
-(defn by-lp [img :- Any lid :- Int pid :- Int] :- (Vec Int) (fp/by-lp img lid pid))
-(defn pred-id [img :- Any value :- String] :- Int? (fp/pred-id img value))
-(defn resolve-name [img :- Any value :- String] :- Int? (fp/resolve-name img value))
-(defn name-of [img :- Any subj :- Int] :- String? (fp/name-of img subj))
-(defn cold->dump [img :- Any] :- Any (fp/cold->dump img))
-(defn render [img :- Any cid :- Int] :- Any (fp/render img cid))
-(defn render-ord [img :- Any ord :- Int] :- Any (fp/render-ord img ord))
-(defn by-lp-ords [img :- Any lid :- Int pid :- Int] :- (Vec Int)
-  (fp/by-lp-ords img lid pid))
-(defn render-lp [img :- Any subj-name :- String pred-name :- String] :- Any
-  (fp/render-lp img subj-name pred-name))
-(defn cold-name-triples
-  [img :- Any schema-pred? :- [String -> Bool] read-hidden-pred? :- [String -> Bool]]
-  :- Any
-  (fp/cold-name-triples img schema-pred? read-hidden-pred?))
-(defn verify-segments? [img :- Any segments :- Any] :- Bool
-  (fp/verify-segments? img segments))
+(def MAGIC: String fp/MAGIC)
+(def FMT: Int fp/FMT)
+(defn source-binding [space-id: String fingerprint: String valid-bytes: Int] -> Any
+  (fp/source-binding space-id fingerprint valid-bytes))
+(defn write-fri! [dump: Any path: String source: Any] -> Any
+  (fp/write-fri! dump path source))
+(defn open-fri! [path: String source: Any] -> Any (fp/open-fri! path source))
+(defn close-fri! [image: Any] -> Nil (fp/close-fri! image))
+(defn restore-store! [image: Any target: Any] -> Any
+  (fp/restore-store! image target))
+(defn space-id [image: Any] -> String (fp/space-id image))
+(defn source-fingerprint [image: Any] -> String (fp/source-fingerprint image))
+(defn source-position [image: Any] -> Int (fp/source-position image))
+(defn transaction-count [image: Any] -> Int (fp/transaction-count image))
+(defn operation-count [image: Any] -> Int (fp/operation-count image))
+(defn semantic-history [image: Any] -> Any (fp/semantic-history image))
+(defn operation-occurrences [image: Any] -> Any (fp/operation-occurrences image))
+(defn live-occurrences [image: Any] -> Any (fp/live-occurrences image))
+(defn live-propositions [image: Any] -> Any (fp/live-propositions image))
+(defn by-slot0 [image: Any term: Any] -> Any (fp/by-slot0 image term))
+(defn by-slot1 [image: Any term: Any] -> Any (fp/by-slot1 image term))
+(defn by-slot2 [image: Any term: Any] -> Any (fp/by-slot2 image term))
+(defn by-slot01 [image: Any slot0: Any slot1: Any] -> Any
+  (fp/by-slot01 image slot0 slot1))
+(defn by-slot12 [image: Any slot1: Any slot2: Any] -> Any
+  (fp/by-slot12 image slot1 slot2))
+(defn by-slot02 [image: Any slot0: Any slot2: Any] -> Any
+  (fp/by-slot02 image slot0 slot2))
+(defn live-occurrences-as-of [image: Any sequence: Int] -> Any
+  (fp/live-occurrences-as-of image sequence))
+(defn live-propositions-as-of [image: Any sequence: Int] -> Any
+  (fp/live-propositions-as-of image sequence))

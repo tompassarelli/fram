@@ -1,92 +1,72 @@
 (ns fri
   (:require [fri-port :as fp]))
 
-(def ^String MAGIC fp/MAGIC)
+^{:line 8 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (def ^String MAGIC fp/MAGIC)
 
-(def FMT fp/FMT)
+^{:line 9 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (def FMT fp/FMT)
 
-(def ^:dynamic *cache-cap* nil)
+^{:line 10 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn source-binding [^String space-id ^String fingerprint valid-bytes]
+  ^{:line 11 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/source-binding space-id fingerprint valid-bytes))
 
-(defn write-fri! [store-val path & opts]
-  (apply fp/write-fri! store-val path opts))
+^{:line 12 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn write-fri! [dump ^String path source]
+  ^{:line 13 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/write-fri! dump path source))
 
-(defn render-cache-cap []
-  (fp/render-cache-cap *cache-cap*))
+^{:line 14 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn open-fri! [^String path source]
+  ^{:line 14 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/open-fri! path source))
 
-(defn clear-render-caches! [img]
-  (fp/clear-render-caches! img))
+^{:line 15 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn close-fri! [image]
+  ^{:line 15 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/close-fri! image))
 
-(defn open-fri [path]
-  (fp/open-fri-with-cap path *cache-cap*))
+^{:line 16 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn restore-store! [image target]
+  ^{:line 17 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/restore-store! image target))
 
-(defn close-fri! [img]
-  (fp/close-fri! img))
+^{:line 18 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn ^String space-id [image]
+  ^{:line 18 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/space-id image))
 
-(defn nfacts [img]
-  (fp/nfacts img))
+^{:line 19 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn ^String source-fingerprint [image]
+  ^{:line 19 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/source-fingerprint image))
 
-(defn covers-seq [img]
-  (fp/covers-seq img))
+^{:line 20 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn source-position [image]
+  ^{:line 20 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/source-position image))
 
-(defn next-id [img]
-  (fp/next-id img))
+^{:line 21 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn transaction-count [image]
+  ^{:line 21 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/transaction-count image))
 
-(defn supersedes-pred [img]
-  (fp/supersedes-pred img))
+^{:line 22 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn operation-count [image]
+  ^{:line 22 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/operation-count image))
 
-(defn cid->ord [img cid]
-  (fp/cid->ord img cid))
+^{:line 23 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn semantic-history [image]
+  ^{:line 23 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/semantic-history image))
 
-(defn ^Boolean superseded-ord? [img ord]
-  (fp/superseded-ord? img ord))
+^{:line 24 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn operation-occurrences [image]
+  ^{:line 24 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/operation-occurrences image))
 
-(defn ^Boolean live-cid? [img cid]
-  (fp/live-cid? img cid))
+^{:line 25 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn live-occurrences [image]
+  ^{:line 25 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/live-occurrences image))
 
-(defn fact-of [img cid]
-  (fp/fact-of img cid))
+^{:line 26 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn live-propositions [image]
+  ^{:line 26 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/live-propositions image))
 
-(defn literal [img id]
-  (fp/literal img id))
+^{:line 27 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot0 [image term]
+  ^{:line 27 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot0 image term))
 
-(defn ^Boolean value-object? [img id]
-  (fp/value-object? img id))
+^{:line 28 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot1 [image term]
+  ^{:line 28 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot1 image term))
 
-(defn value-id [img ^String value]
-  (fp/value-id img value))
+^{:line 29 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot2 [image term]
+  ^{:line 29 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot2 image term))
 
-(defn by-l [img lid]
-  (fp/by-l img lid))
+^{:line 30 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot01 [image slot0 slot1]
+  ^{:line 31 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot01 image slot0 slot1))
 
-(defn by-lp [img lid pid]
-  (fp/by-lp img lid pid))
+^{:line 32 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot12 [image slot1 slot2]
+  ^{:line 33 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot12 image slot1 slot2))
 
-(defn pred-id [img ^String value]
-  (fp/pred-id img value))
+^{:line 34 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn by-slot02 [image slot0 slot2]
+  ^{:line 35 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/by-slot02 image slot0 slot2))
 
-(defn resolve-name [img ^String value]
-  (fp/resolve-name img value))
+^{:line 36 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn live-occurrences-as-of [image sequence]
+  ^{:line 37 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/live-occurrences-as-of image sequence))
 
-(defn name-of [img subj]
-  (fp/name-of img subj))
-
-(defn cold->dump [img]
-  (fp/cold->dump img))
-
-(defn render [img cid]
-  (fp/render img cid))
-
-(defn render-ord [img ord]
-  (fp/render-ord img ord))
-
-(defn by-lp-ords [img lid pid]
-  (fp/by-lp-ords img lid pid))
-
-(defn render-lp [img ^String subj-name ^String pred-name]
-  (fp/render-lp img subj-name pred-name))
-
-(defn cold-name-triples [img schema-pred? read-hidden-pred?]
-  (fp/cold-name-triples img schema-pred? read-hidden-pred?))
-
-(defn ^Boolean verify-segments? [img segments]
-  (fp/verify-segments? img segments))
+^{:line 38 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (defn live-propositions-as-of [image sequence]
+  ^{:line 39 :file "/home/tom/code/fram/wt-triple-fri/src/fri.bclj"} (fp/live-propositions-as-of image sequence))

@@ -1,584 +1,334 @@
 (ns fri-port
-  (:require [clojure.string :as str]
-            [clojure.edn :as edn])
-  (:import [java.io RandomAccessFile]
-           [java.io DataOutputStream]
-           [java.io BufferedOutputStream]
-           [java.io FileOutputStream]
+  (:require [clojure.edn :as edn]
+            [fram.store :as store]
+            [fram.types :as t])
+  (:import [java.io ByteArrayInputStream]
            [java.io ByteArrayOutputStream]
-           [java.nio ByteBuffer]
-           [java.nio.channels FileChannel]
-           [java.nio.channels FileChannel$MapMode]
+           [java.io DataInputStream]
+           [java.io DataOutputStream]
+           [java.io File]
+           [java.io FileOutputStream]
            [java.nio.charset StandardCharsets]
            [java.nio.file Files]
-           [java.nio.file CopyOption]
            [java.nio.file StandardCopyOption]
-           [java.security MessageDigest]
-           [clojure.lang PersistentQueue]))
+           [java.security MessageDigest]))
 
-(def ^String MAGIC "FRAMFRI1")
+^{:line 16 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (def ^String MAGIC "FRAMFRI2")
 
-(def FMT 1)
+^{:line 17 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (def FMT 2)
 
-(def CHUNK (* 1024 1024 1024))
+^{:line 21 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defrecord CacheSource [space-id fingerprint valid-bytes])
 
-(defn utf8 [^String s]
-  (.getBytes s StandardCharsets/UTF_8))
+(defn cachesource-space-id [r] (:space-id r))
 
-(defn ^String sha256-hex [b]
-  (let [d (.digest (MessageDigest/getInstance "SHA-256") b)]
-  (apply str (map (fn [x] (format "%02x" x)) d))))
+(defn cachesource-fingerprint [r] (:fingerprint r))
 
-(defn bb [n]
-  (ByteBuffer/allocate n))
+(defn cachesource-valid-bytes [r] (:valid-bytes r))
 
-(defn facts-segment [facts-sorted]
-  (fn [tx-of] (let [n (count facts-sorted)
-   buf (bb (* n 40))]
-  (do
-  (doseq [[cid m] facts-sorted]
-  (.putLong buf (long cid))
-  (.putLong buf (long (:l m)))
-  (.putLong buf (long (:p m)))
-  (.putLong buf (long (:r m)))
-  (.putLong buf (long (or (get tx-of cid) 0))))
-  (.array buf)))))
+^{:line 22 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defrecord CacheReceipt [format space-id source-fingerprint source-position sha256])
 
-(defn values-segments [values]
-  (let [rows (vec values)
-   blob (ByteArrayOutputStream.)
-   meta (reduce (fn [acc row] (let [id (first row)
-   v (second row)
-   b (utf8 (str v))
-   off (.size blob)]
-  (do
-  (.write blob b 0 (alength b))
-  (conj acc {:id (long id) :off off :len (alength b) :s (str v)})))) [] rows)
-   by-id (sort-by :id meta)
-   by-str (sort-by :s meta)
-   vid (bb (* (count meta) 20))
-   vstr (bb (* (count meta) 20))]
-  (do
-  (doseq [m by-id]
-  (.putLong vid (:id m))
-  (.putLong vid (long (:off m)))
-  (.putInt vid (int (:len m))))
-  (doseq [m by-str]
-  (.putLong vstr (long (:off m)))
-  (.putInt vstr (int (:len m)))
-  (.putLong vstr (:id m)))
-  {:values-id (.array vid) :values-str (.array vstr) :values-blob (.toByteArray blob)})))
+(defn cachereceipt-format [r] (:format r))
 
-(defn longs-segment [ids]
-  (let [v (vec (sort ids))
-   buf (bb (* (count v) 8))]
-  (do
-  (doseq [x v]
-  (.putLong buf (long x)))
-  (.array buf))))
+(defn cachereceipt-space-id [r] (:space-id r))
 
-(defn txs-segments [txs]
-  (let [rows (vec txs)
-   blob (ByteArrayOutputStream.)
-   meta (mapv (fn [row] (let [tx (first row)
-   t (second row)
-   a (utf8 (str (:agent t)))
-   off (.size blob)]
-  (do
-  (.write blob a 0 (alength a))
-  {:tx (long tx) :seq (long (or (:seq t) 0)) :off off :len (alength a)}))) rows)
-   buf (bb (* (count meta) 28))]
-  (do
-  (doseq [m meta]
-  (.putLong buf (:tx m))
-  (.putLong buf (:seq m))
-  (.putLong buf (long (:off m)))
-  (.putInt buf (int (:len m))))
-  {:txs (.array buf) :txs-blob (.toByteArray blob)})))
+(defn cachereceipt-source-fingerprint [r] (:source-fingerprint r))
 
-(defn postings-l [ord->l n]
-  (let [groups (reduce (fn [m ord] (update m (aget ord->l ord) (fnil conj []) ord)) (sorted-map) (range n))
-   runs (ByteArrayOutputStream.)
-   keytab (bb (* (count groups) 20))]
-  (do
-  (doseq [row groups]
-  (let [lid (first row)
-   ords (second row)
-   off (.size runs)
-   rb (bb (* (count ords) 4))]
-  (do
-  (doseq [o ords]
-  (.putInt rb (int o)))
-  (let [a (.array rb)]
-  (.write runs a 0 (alength a)))
-  (.putLong keytab (long lid))
-  (.putLong keytab (long off))
-  (.putInt keytab (int (count ords))))))
-  {:postings-l (.array keytab) :pl-runs (.toByteArray runs)})))
+(defn cachereceipt-source-position [r] (:source-position r))
 
-(defn postings-lp [ord->l ord->p n]
-  (let [groups (reduce (fn [m ord] (update m [(aget ord->l ord) (aget ord->p ord)] (fnil conj []) ord)) (sorted-map) (range n))
-   runs (ByteArrayOutputStream.)
-   keytab (bb (* (count groups) 28))]
-  (do
-  (doseq [row groups]
-  (let [key (first row)
-   lid (first key)
-   pid (second key)
-   ords (second row)
-   off (.size runs)
-   rb (bb (* (count ords) 4))]
-  (do
-  (doseq [o ords]
-  (.putInt rb (int o)))
-  (let [a (.array rb)]
-  (.write runs a 0 (alength a)))
-  (.putLong keytab (long lid))
-  (.putLong keytab (long pid))
-  (.putLong keytab (long off))
-  (.putInt keytab (int (count ords))))))
-  {:postings-lp (.array keytab) :plp-runs (.toByteArray runs)})))
+(defn cachereceipt-sha256 [r] (:sha256 r))
 
-(defn names-segments [store-val]
-  (let [name-pid (get (:val-intern store-val) "name")
-   superseded (set (keys (:superseded store-val)))
-   rows (if (nil? name-pid) [] (reduce (fn [acc row] (let [cid (first row)
-   f (second row)]
-  (if (and (= (:p f) name-pid) (not (contains? superseded cid))) (conj acc [(get (:values store-val) (:r f)) (:l f)]) acc))) [] (:facts store-val)))
-   blob (ByteArrayOutputStream.)
-   meta (reduce (fn [acc row] (let [nm (first row)
-   eid (second row)
-   b (utf8 (str nm))
-   off (.size blob)]
-  (do
-  (.write blob b 0 (alength b))
-  (conj acc {:s (str nm) :off off :len (alength b) :eid (long eid)})))) [] rows)
-   by-str (sort-by :s meta)
-   tab (bb (* (count meta) 20))]
-  (do
-  (doseq [x by-str]
-  (.putLong tab (long (:off x)))
-  (.putInt tab (int (:len x)))
-  (.putLong tab (:eid x)))
-  {:names (.array tab) :names-blob (.toByteArray blob)})))
+^{:line 25 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defrecord CacheImage [source dump indexes store])
 
-(defn superseded-segment [ord-superseded? n]
-  (let [b (byte-array (quot (+ n 7) 8))]
-  (do
-  (doseq [ord (range n)]
-  (if (ord-superseded? ord) (do
-  (aset-byte b (quot ord 8) (unchecked-byte (bit-or (aget b (quot ord 8)) (bit-shift-left 1 (rem ord 8))))))))
-  b)))
+(defn cacheimage-source [r] (:source r))
 
-(defn write-fri! [store-val path & opts]
-  (let [fold-fingerprint (:fold-fingerprint (apply hash-map opts))
-   facts-sorted (sort-by first (:facts store-val))
-   n (count facts-sorted)
-   cids (long-array (map first facts-sorted))
-   ord->l (long-array (map (comp :l second) facts-sorted))
-   ord->p (long-array (map (comp :p second) facts-sorted))
-   superseded (set (keys (:superseded store-val)))
-   ord-sup? (fn [ord] (contains? superseded (aget cids ord)))
-   make-facts (facts-segment facts-sorted)
-   entities (remove (fn [x] (or (contains? (:values store-val) x) (contains? (:facts store-val) x))) (keys (:objects store-val)))
-   segs (merge {:facts (make-facts (:tx-of store-val)) :entities (longs-segment entities) :superseded (superseded-segment ord-sup? n)} (values-segments (:values store-val)) (txs-segments (:txs store-val)) (names-segments store-val) (postings-l ord->l n) (postings-lp ord->l ord->p n))
-   order [:facts :values-id :values-str :values-blob :entities :txs :txs-blob :names :names-blob :postings-l :pl-runs :postings-lp :plp-runs :superseded]
-   tmp (str path ".tmp")
-   fos (FileOutputStream. tmp)]
-  (with-open [os (DataOutputStream. (BufferedOutputStream. fos))]
-  (.write os (utf8 MAGIC))
-  (.writeInt os FMT)
-  (let [start (+ (alength (utf8 MAGIC)) 4)
-   pair (loop [pos start
-   acc {}
-   ks order]
-  (let [k (first ks)]
-  (if (nil? k) [acc pos] (let [b (get segs k)]
-  (do
-  (.write os b 0 (alength b))
-  (recur (+ pos (alength b)) (assoc acc k {:off pos :len (alength b) :sha256 (sha256-hex b)}) (next ks)))))))
-   table (first pair)
-   foff (second pair)
-   footer {:magic MAGIC :fmt FMT :covers_seq (or (:next-seq store-val) 0) :next_id (or (:next-id store-val) 0) :supersedes_pred (:supersedes-pred store-val) :fold_fingerprint fold-fingerprint :counts {:facts n :values (count (:values store-val)) :entities (count entities) :txs (count (:txs store-val)) :superseded (count superseded)} :segments table}
-   fb (utf8 (pr-str footer))]
-  (do
-  (.write os fb 0 (alength fb))
-  (.writeLong os (long foff))
-  (.flush os)
-  (.force (.getChannel fos) true)
-  (Files/move (.toPath (java.io.File. tmp)) (.toPath (java.io.File. (str path))) (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
-  {:covers_seq (:covers_seq footer) :next_id (:next_id footer) :supersedes_pred (:supersedes_pred footer) :counts (:counts footer) :segments table})))))
+(defn cacheimage-dump [r] (:dump r))
 
-(defn map-segment [ch off len]
-  (loop [pos 0
-   acc []]
-  (if (>= pos len) acc (let [sz (min CHUNK (- len pos))
-   mbb (.map ch FileChannel$MapMode/READ_ONLY (+ off pos) sz)]
-  (recur (+ pos sz) (conj acc [pos sz mbb]))))))
+(defn cacheimage-indexes [r] (:indexes r))
 
-(defn segbuf [img seg]
-  (get (:buf img) seg))
+(defn cacheimage-store [r] (:store r))
 
-(defn locate-chunked [img seg pos len]
-  (loop [cs (get-in img [:maps seg])]
-  (let [c (first cs)]
-  (if c (let [cpos (nth c 0)
-   csz (nth c 1)
-   mbb (nth c 2)]
-  (if (and (>= pos cpos) (<= (+ pos len) (+ cpos csz))) (let [out (object-array 2)]
-  (do
-  (aset out 0 mbb)
-  (aset out 1 (int (- pos cpos)))
-  out)) (recur (next cs)))) (throw (ex-info "fri: read past segment" {:seg seg :pos pos}))))))
+^{:line 28 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- fail [^String message type]
+  ^{:line 29 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (throw ^{:line 29 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (ex-info message ^{:line 29 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {:type type})))
 
-(defn seg-long [img seg pos]
-  (let [b (segbuf img seg)]
-  (if b (.getLong b (int pos)) (let [o (locate-chunked img seg pos 8)]
-  (.getLong (aget o 0) (int (aget o 1)))))))
+^{:line 31 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- ^Boolean valid-fingerprint? [^String value]
+  ^{:line 32 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (some? ^{:line 32 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (re-matches #"[0-9a-f]{64}" value)))
 
-(defn seg-int [img seg pos]
-  (let [b (segbuf img seg)]
-  (if b (long (.getInt b (int pos))) (let [o (locate-chunked img seg pos 4)]
-  (long (.getInt (aget o 0) (int (aget o 1))))))))
+^{:line 34 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn ^CacheSource source-binding [^String space-id ^String fingerprint valid-bytes]
+  ^{:line 36 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 36 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 36 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (pos? ^{:line 36 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count space-id)) ^{:line 37 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 37 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (valid-fingerprint? fingerprint) ^{:line 37 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (>= valid-bytes 0))) ^{:line 38 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (->CacheSource space-id fingerprint valid-bytes) ^{:line 39 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: source binding requires SpaceId, sha256, and non-negative valid-byte position" :invalid-cache-source)))
 
-(defn seg-get-bytes [img seg pos len]
-  (let [out (byte-array len)]
-  (let [b (segbuf img seg)]
-  (if b (let [dup (.duplicate b)]
-  (do
-  (.position dup (int pos))
-  (.get dup out)
-  out)) (let [o (locate-chunked img seg pos len)
-   dup (.duplicate (aget o 0))]
-  (do
-  (.position dup (int (aget o 1)))
-  (.get dup out)
-  out))))))
+^{:line 42 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- utf8 [^String value]
+  ^{:line 43 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.getBytes value StandardCharsets/UTF_8))
 
-(def DEFAULT-RENDER-CACHE 65536)
+^{:line 45 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- ^String hex [bytes]
+  ^{:line 46 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (apply str ^{:line 46 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 46 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [value] ^{:line 47 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (format "%02x" ^{:line 47 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (bit-and value 255))) bytes)))
 
-(defn env-long [^String k default]
-  (or (try
-  (let [raw (System/getenv k)]
-  (if (nil? raw) nil (let [trimmed (str/trim raw)]
-  (if (empty? trimmed) nil (Long/parseLong trimmed)))))
-  (catch Exception _
-    nil)) default))
+^{:line 50 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- ^String sha256 [bytes]
+  ^{:line 51 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (hex ^{:line 51 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.digest ^{:line 51 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (MessageDigest/getInstance "SHA-256") bytes)))
 
-(def ^:dynamic *cache-cap* nil)
+^{:line 53 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- instant-data [value]
+  ^{:line 54 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 54 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/instant-epoch-seconds value) ^{:line 54 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/instant-nanos value)])
 
-(defn render-cache-cap [cap]
-  (or cap (env-long "FRAM_MMAP_RENDER_CACHE" DEFAULT-RENDER-CACHE)))
+^{:line 56 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- atom-row-data [row]
+  ^{:line 57 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [kind ^{:line 57 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-kind row)]
+  ^{:line 58 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cond
+  ^{:line 59 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :string) ^{:line 59 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 59 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-string-value row)]
+  ^{:line 60 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :int) ^{:line 60 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 60 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-int-value row)]
+  ^{:line 61 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :float) ^{:line 61 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 61 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-float-value row)]
+  ^{:line 62 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :bool) ^{:line 62 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 62 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-bool-value row)]
+  ^{:line 63 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :keyword) ^{:line 63 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 63 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-keyword-value row)]
+  ^{:line 64 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :instant) ^{:line 64 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [kind ^{:line 64 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (instant-data ^{:line 64 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-instant-value row))]
+  :else ^{:line 65 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: AtomRow has an unknown kind" :invalid-fri-cache))))
 
-(defn lru []
-  (atom {:m {} :q PersistentQueue/EMPTY}))
+^{:line 67 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- data-atom-row [entry]
+  ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entry) ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 2 ^{:line 68 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count entry)))) ^{:line 69 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed AtomRow" :invalid-fri-cache) ^{:line 70 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [kind ^{:line 70 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)
+   value ^{:line 71 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)]
+  ^{:line 72 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cond
+  ^{:line 73 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 73 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :string) ^{:line 73 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (string? value)) ^{:line 74 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :string value nil nil nil nil nil)
+  ^{:line 75 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 75 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :int) ^{:line 75 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? value)) ^{:line 76 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :int nil value nil nil nil nil)
+  ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :float) ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (number? value) ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 77 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? value)))) ^{:line 78 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :float nil nil value nil nil nil)
+  ^{:line 79 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 79 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :bool) ^{:line 79 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (boolean? value)) ^{:line 80 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :bool nil nil nil value nil nil)
+  ^{:line 81 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 81 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :keyword) ^{:line 81 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (keyword? value)) ^{:line 82 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :keyword nil nil nil nil value nil)
+  ^{:line 83 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 83 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :instant) ^{:line 84 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 84 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? value) ^{:line 85 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 85 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 2 ^{:line 85 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count value)) ^{:line 86 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 86 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? ^{:line 86 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 0)) ^{:line 87 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? ^{:line 87 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 1)))))) ^{:line 88 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->AtomRow :instant nil nil nil nil nil ^{:line 89 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/instant ^{:line 89 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 0) ^{:line 89 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 1)))
+  :else ^{:line 90 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed AtomRow value" :invalid-fri-cache)))))
 
-(defn clear-render-caches! [img]
-  (doseq [k [:render-cache :name-cache :lit-cache]]
-  (let [a (get img k)]
-  (if a (do
-  (reset! a {:m {} :q PersistentQueue/EMPTY}))))))
+^{:line 92 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- triple-row-data [row]
+  ^{:line 93 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 93 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot0 row) ^{:line 93 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot1 row) ^{:line 93 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot2 row)])
 
-(defn cache-get [a k]
-  (get (:m (deref a)) k))
+^{:line 95 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- data-triple-row [entry]
+  ^{:line 96 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 96 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 96 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entry) ^{:line 97 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 97 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 3 ^{:line 97 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count entry)) ^{:line 97 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? integer? entry))) ^{:line 98 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->TripleRow ^{:line 98 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0) ^{:line 98 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1) ^{:line 98 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 2)) ^{:line 99 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed TripleRow" :invalid-fri-cache)))
 
-(defn cache-put! [a k v cap]
-  (do
-  (swap! a (fn [s] (let [m (:m s)
-   q (:q s)]
-  (if (contains? m k) s (let [m1 (assoc m k v)
-   q1 (conj q k)]
-  (if (> (count m1) cap) {:m (dissoc m1 (peek q1)) :q (pop q1)} {:m m1 :q q1}))))))
-  v))
+^{:line 101 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- transaction-row-data [row]
+  ^{:line 102 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 102 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/transactionrow-sequence row) ^{:line 103 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/transactionrow-first-operation row) ^{:line 104 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/transactionrow-operation-count row)])
 
-(def cache-put cache-put!)
+^{:line 106 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- data-transaction-row [entry]
+  ^{:line 107 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 107 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 107 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entry) ^{:line 108 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 108 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 3 ^{:line 108 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count entry)) ^{:line 108 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? integer? entry))) ^{:line 109 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->TransactionRow ^{:line 109 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0) ^{:line 109 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1) ^{:line 109 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 2)) ^{:line 110 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed TransactionRow" :invalid-fri-cache)))
 
-(defn memo-put! [memo k v]
-  (swap! memo assoc k v))
+^{:line 112 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- action-code [action]
+  ^{:line 113 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cond
+  ^{:line 114 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= action t/assert-action) 1
+  ^{:line 115 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= action t/retract-action) 2
+  :else ^{:line 116 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: operation has an unknown action" :invalid-fri-cache)))
 
-(def memo-put memo-put!)
+^{:line 118 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- code-action [code]
+  ^{:line 119 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cond
+  ^{:line 120 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= code 1) t/assert-action
+  ^{:line 121 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= code 2) t/retract-action
+  :else ^{:line 122 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: operation has an unknown action code" :invalid-fri-cache)))
 
-(defn nfacts [img]
-  (long (get-in img [:footer :counts :facts])))
+^{:line 124 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- operation-row-data [row]
+  ^{:line 125 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 125 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-tx-sequence row) ^{:line 126 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-ordinal row) ^{:line 127 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (action-code ^{:line 127 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-action row)) ^{:line 128 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-triple-handle row)])
 
-(defn covers-seq [img]
-  (long (get-in img [:footer :covers_seq])))
+^{:line 130 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- data-operation-row [entry]
+  ^{:line 131 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 131 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 131 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entry) ^{:line 132 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 132 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 4 ^{:line 132 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count entry)) ^{:line 132 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? integer? entry))) ^{:line 133 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->OperationRow ^{:line 133 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0) ^{:line 133 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1) ^{:line 134 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (code-action ^{:line 134 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 2)) ^{:line 134 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 3)) ^{:line 135 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed OperationRow" :invalid-fri-cache)))
 
-(defn next-id [img]
-  (long (get-in img [:footer :next_id])))
+^{:line 137 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- atom-handle [position]
+  ^{:line 137 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (* 2 position))
 
-(defn supersedes-pred [img]
-  (get-in img [:footer :supersedes_pred]))
+^{:line 138 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- triple-handle [position]
+  ^{:line 138 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (inc ^{:line 138 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (* 2 position)))
 
-(defn ord-cid [img ord]
-  (seg-long img :facts (* ord 40)))
+^{:line 140 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- index-data [rows]
+  ^{:line 141 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [with-handles ^{:line 142 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map-indexed ^{:line 142 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position row] ^{:line 143 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 143 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (triple-handle position) row]) rows)]
+  ^{:line 145 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 145 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 145 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 145 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 145 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 146 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 146 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot0 ^{:line 146 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 146 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles))) ^{:line 148 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 148 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 148 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 148 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 149 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 149 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot1 ^{:line 149 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 149 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles))) ^{:line 151 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 151 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 151 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 151 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 152 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 152 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot2 ^{:line 152 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 152 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles))) ^{:line 154 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 154 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 154 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 154 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 155 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 155 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot0 ^{:line 155 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 156 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot1 ^{:line 156 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 157 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles))) ^{:line 159 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 159 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 159 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 159 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 160 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 160 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot1 ^{:line 160 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 161 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot2 ^{:line 161 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 162 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles))) ^{:line 164 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 164 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sort ^{:line 164 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map ^{:line 164 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 165 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 165 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot0 ^{:line 165 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 166 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot2 ^{:line 166 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 1)) ^{:line 167 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry 0)]) with-handles)))]))
 
-(defn ord-l [img ord]
-  (seg-long img :facts (+ (* ord 40) 8)))
+^{:line 172 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- dump-data [dump]
+  ^{:line 173 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 173 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-space-id dump) ^{:line 174 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-next-sequence dump) ^{:line 175 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv atom-row-data ^{:line 175 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-atoms dump)) ^{:line 176 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv triple-row-data ^{:line 176 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-triples dump)) ^{:line 177 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv transaction-row-data ^{:line 177 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-transactions dump)) ^{:line 178 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv operation-row-data ^{:line 178 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-operations dump)) ^{:line 179 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-data ^{:line 179 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-triples dump))])
 
-(defn ord-p [img ord]
-  (seg-long img :facts (+ (* ord 40) 16)))
+^{:line 181 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- ^Boolean valid-index-row? [width entry]
+  ^{:line 182 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 182 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entry) ^{:line 183 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 183 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= width ^{:line 183 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count entry)) ^{:line 183 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? integer? entry))))
 
-(defn ord-r [img ord]
-  (seg-long img :facts (+ (* ord 40) 24)))
+^{:line 185 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- data-cache [value]
+  ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? value) ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 7 ^{:line 186 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count value)))) ^{:line 187 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed TermStore payload" :invalid-fri-cache) ^{:line 188 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [space-id ^{:line 188 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 0)
+   next-sequence ^{:line 189 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 1)
+   atoms ^{:line 190 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 2)
+   triples ^{:line 191 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 3)
+   transactions ^{:line 192 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 4)
+   operations ^{:line 193 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 5)
+   indexes ^{:line 194 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 6)]
+  ^{:line 195 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 195 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 195 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 195 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (string? space-id) ^{:line 196 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 196 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? next-sequence) ^{:line 197 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 197 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? atoms) ^{:line 198 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 198 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? triples) ^{:line 199 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 199 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? transactions) ^{:line 200 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 200 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? operations) ^{:line 201 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 201 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? indexes) ^{:line 202 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 6 ^{:line 202 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count indexes)))))))))) ^{:line 203 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed TermStore payload fields" :invalid-fri-cache) ^{:line 204 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [dump ^{:line 205 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/->TermStoreDump store/term-store-dump-version space-id next-sequence ^{:line 207 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv data-atom-row atoms) ^{:line 208 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv data-triple-row triples) ^{:line 209 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv data-transaction-row transactions) ^{:line 210 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv data-operation-row operations))
+   widths ^{:line 211 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [2 2 2 3 3 3]]
+  ^{:line 212 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 212 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 212 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? true? ^{:line 213 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map-indexed ^{:line 214 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position entries] ^{:line 215 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 215 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? entries) ^{:line 216 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (every? ^{:line 216 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 217 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (valid-index-row? ^{:line 217 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth widths position) entry)) entries))) indexes))) ^{:line 220 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed slot index" :invalid-fri-cache) ^{:line 221 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 221 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 221 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= indexes ^{:line 221 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-data ^{:line 221 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-triples dump)))) ^{:line 222 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: slot index does not match TripleRow table" :invalid-fri-cache) ^{:line 224 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {:dump dump :indexes indexes})))))))
 
-(defn ord-tx [img ord]
-  (seg-long img :facts (+ (* ord 40) 32)))
+^{:line 226 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- validate-dump! [dump ^CacheSource source]
+  ^{:line 227 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 227 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 227 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/term-store-dump? dump)) ^{:line 228 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG" :cache-rebuild-required) ^{:line 230 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 230 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 230 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= store/term-store-dump-version ^{:line 230 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-version dump))) ^{:line 231 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: legacy cache input requires rebuild from canonical FRAMLOG" :cache-rebuild-required) ^{:line 233 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 233 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 233 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= ^{:line 233 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id source) ^{:line 234 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-space-id dump))) ^{:line 235 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: cache source and TermStore belong to different spaces" :cache-space-mismatch) ^{:line 237 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [ctx ^{:line 237 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/new-term-store ^{:line 237 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id source))]
+  ^{:line 238 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/load-term-store! ctx dump)
+  ctx)))))
 
-(defn cid->ord [img cid]
-  (let [n (nfacts img)]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) -1 (let [mid (quot (+ lo hi) 2)
-   c (ord-cid img mid)]
-  (cond
-  (= c cid) mid
-  (< c cid) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
-
-(defn ^Boolean superseded-ord? [img ord]
-  (let [b (let [buf (segbuf img :superseded)]
-  (if buf (.get buf (int (quot ord 8))) (aget (seg-get-bytes img :superseded (quot ord 8) 1) 0)))]
-  (not (zero? (bit-and (int b) (bit-shift-left 1 (rem ord 8)))))))
-
-(defn ^Boolean live-cid? [img cid]
-  (let [ord (cid->ord img cid)]
-  (and (>= ord 0) (not (superseded-ord? img ord)))))
-
-(defn fact-of [img cid]
-  (let [ord (cid->ord img cid)]
-  (if (>= ord 0) (do
-  {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)}))))
-
-(defn vcount [img]
-  (long (get-in img [:footer :counts :values])))
-
-(defn literal [img id]
-  (let [n (vcount img)]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) nil (let [mid (quot (+ lo hi) 2)
-   base (* mid 20)
-   vid (seg-long img :values-id base)]
-  (cond
-  (= vid id) (let [off (seg-long img :values-id (+ base 8))
-   len (seg-int img :values-id (+ base 16))]
-  (String. (seg-get-bytes img :values-blob off len) StandardCharsets/UTF_8))
-  (< vid id) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
-
-(defn ^Boolean value-object? [img id]
-  (some? (literal img id)))
-
-(defn value-id [img ^String s]
-  (let [n (vcount img)
-   target (utf8 s)]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) nil (let [mid (quot (+ lo hi) 2)
-   base (* mid 20)
-   off (seg-long img :values-str base)
-   len (seg-int img :values-str (+ base 8))
-   b (seg-get-bytes img :values-blob off len)
-   cmp (compare (String. b StandardCharsets/UTF_8) s)]
-  (cond
-  (zero? cmp) (seg-long img :values-str (+ base 12))
-  (neg? cmp) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
-
-(defn open-fri-with-cap [path cache-cap]
-  (let [raf (RandomAccessFile. (str path) "r")
-   ch (.getChannel raf)
-   flen (.length raf)
-   _seek-footer (.seek raf (- flen 8))
-   foff (.readLong raf)
-   _seek-body (.seek raf foff)
-   fb (byte-array (- flen foff 8))
-   _read (.readFully raf fb)
-   footer (edn/read-string (String. fb StandardCharsets/UTF_8))
-   maps (reduce (fn [acc row] (let [seg (first row)
-   meta (second row)]
-  (assoc acc seg (map-segment ch (:off meta) (:len meta))))) {} (:segments footer))
-   buf (reduce (fn [acc row] (let [seg (first row)
-   chunks (second row)]
-  (if (= 1 (count chunks)) (assoc acc seg (nth (first chunks) 2)) acc))) {} maps)
-   base {:raf raf :channel ch :footer footer :maps maps :buf buf :vid-memo (atom {})}
-   nn (long (/ (get-in footer [:segments :names :len] 0) 20))
-   nmap (reduce (fn [m i] (let [b (* i 20)
-   soff (seg-long base :names b)
-   slen (seg-int base :names (+ b 8))
-   eid (seg-long base :names (+ b 12))
-   s (String. (seg-get-bytes base :names-blob soff slen) StandardCharsets/UTF_8)]
-  (assoc m s eid))) {} (range nn))]
-  (assoc base :names-map nmap :name-pid (value-id base "name") :cache-cap (render-cache-cap cache-cap) :render-cache (lru) :name-cache (lru) :lit-cache (lru))))
-
-(defn open-fri [path]
-  (open-fri-with-cap path *cache-cap*))
-
-(defn close-fri! [img]
-  (do
-  (try
-  (.close (:channel img))
-  (catch Exception _
-    nil))
-  (try
-  (.close (:raf img))
-  (catch Exception _
-    nil))
+^{:line 241 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- write-bytes! [^String path bytes]
+  ^{:line 242 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [target ^{:line 242 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (File. path)
+   parent ^{:line 243 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.getParentFile target)
+   temporary ^{:line 244 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (File. ^{:line 244 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (str path ".tmp"))]
+  ^{:line 245 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 245 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (some? parent) ^{:line 245 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (do
+  ^{:line 245 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.mkdirs parent)))
+  ^{:line 246 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (with-open [stream ^{:line 246 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (FileOutputStream. temporary)]
+  ^{:line 247 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.write stream bytes)
+  ^{:line 248 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.flush stream)
+  ^{:line 249 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.force ^{:line 249 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.getChannel stream) true))
+  ^{:line 250 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (Files/move ^{:line 250 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.toPath temporary) ^{:line 250 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.toPath target) ^{:line 251 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (into-array StandardCopyOption ^{:line 252 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
   nil))
 
-(defn run-ords [img runseg off len]
-  (mapv (fn [i] (seg-int img runseg (+ off (* i 4)))) (range len)))
+^{:line 256 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn write-fri! [dump ^String path ^CacheSource source]
+  ^{:line 258 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (do
+  ^{:line 259 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (validate-dump! dump source)
+  ^{:line 260 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [payload ^{:line 260 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (utf8 ^{:line 260 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (pr-str ^{:line 260 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (dump-data dump)))
+   header ^{:line 261 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (utf8 ^{:line 261 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (pr-str ^{:line 261 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 261 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id source) ^{:line 262 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-fingerprint source) ^{:line 263 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-valid-bytes source) ^{:line 264 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sha256 payload)]))
+   buffer ^{:line 265 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (ByteArrayOutputStream.)]
+  ^{:line 266 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (with-open [stream ^{:line 266 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (DataOutputStream. buffer)]
+  ^{:line 267 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.write stream ^{:line 267 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (utf8 MAGIC))
+  ^{:line 268 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.writeInt stream FMT)
+  ^{:line 269 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.writeInt stream ^{:line 269 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (alength header))
+  ^{:line 270 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.write stream header)
+  ^{:line 271 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.writeLong stream ^{:line 271 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (alength payload))
+  ^{:line 272 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.write stream payload)
+  ^{:line 273 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.flush stream))
+  ^{:line 274 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (write-bytes! path ^{:line 274 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.toByteArray buffer))
+  ^{:line 275 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (->CacheReceipt FMT ^{:line 276 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id source) ^{:line 277 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-fingerprint source) ^{:line 278 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-valid-bytes source) ^{:line 279 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sha256 ^{:line 279 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.toByteArray buffer))))))
 
-(defn by-l [img lid]
-  (let [n (long (/ (get-in img [:footer :segments :postings-l :len]) 20))]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) [] (let [mid (quot (+ lo hi) 2)
-   base (* mid 20)
-   k (seg-long img :postings-l base)]
-  (cond
-  (= k lid) (let [off (seg-long img :postings-l (+ base 8))
-   len (seg-int img :postings-l (+ base 16))]
-  (reduce (fn [acc ord] (if (superseded-ord? img ord) acc (conj acc (ord-cid img ord)))) [] (run-ords img :pl-runs off len)))
-  (< k lid) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
+^{:line 281 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- read-sized [stream n]
+  ^{:line 282 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 282 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (or ^{:line 282 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (< n 0) ^{:line 282 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (> n 2147483647)) ^{:line 283 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: invalid segment length" :invalid-fri-cache) ^{:line 284 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [bytes ^{:line 284 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (byte-array n)]
+  ^{:line 285 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.readFully stream bytes)
+  bytes)))
 
-(defn by-lp [img lid pid]
-  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) [] (let [mid (quot (+ lo hi) 2)
-   base (* mid 28)
-   kl (seg-long img :postings-lp base)
-   kp (seg-long img :postings-lp (+ base 8))
-   cmp (if (< kl lid) -1 (if (> kl lid) 1 (if (< kp pid) -1 (if (> kp pid) 1 0))))]
-  (cond
-  (zero? cmp) (let [off (seg-long img :postings-lp (+ base 16))
-   len (seg-int img :postings-lp (+ base 24))]
-  (reduce (fn [acc ord] (if (superseded-ord? img ord) acc (conj acc (ord-cid img ord)))) [] (run-ords img :plp-runs off len)))
-  (neg? cmp) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
+^{:line 288 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- decode-header [bytes]
+  ^{:line 289 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [value ^{:line 289 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (edn/read-string ^{:line 289 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (String. bytes StandardCharsets/UTF_8))]
+  ^{:line 290 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 290 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 290 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vector? value) ^{:line 291 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 291 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 4 ^{:line 291 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count value)) ^{:line 292 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 292 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (string? ^{:line 292 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 0)) ^{:line 293 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 293 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (string? ^{:line 293 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 1)) ^{:line 294 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 294 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (integer? ^{:line 294 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 2)) ^{:line 295 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (string? ^{:line 295 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth value 3))))))) value ^{:line 297 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: malformed cache header" :invalid-fri-cache))))
 
-(defn pred-id [img ^String s]
-  (let [memo (:vid-memo img)]
-  (or (get (deref memo) s) (let [v (value-id img s)]
-  (do
-  (if (some? v) (do
-  (memo-put memo s v)))
-  v)))))
+^{:line 299 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- read-envelope [^String path]
+  ^{:line 300 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (try
+  ^{:line 301 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (with-open [stream ^{:line 301 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (DataInputStream. ^{:line 302 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (ByteArrayInputStream. ^{:line 302 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (Files/readAllBytes ^{:line 302 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.toPath ^{:line 302 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (File. path)))))]
+  ^{:line 303 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [magic-bytes ^{:line 303 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (read-sized stream ^{:line 303 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count MAGIC))
+   magic ^{:line 304 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (String. magic-bytes StandardCharsets/US_ASCII)]
+  ^{:line 305 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 305 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= magic "FRAMFRI1") ^{:line 306 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: legacy or unknown cache requires rebuild from canonical FRAMLOG" :cache-rebuild-required) ^{:line 308 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 308 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 308 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= magic MAGIC)) ^{:line 309 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: invalid cache magic" :invalid-fri-cache) ^{:line 310 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [format ^{:line 310 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.readInt stream)]
+  ^{:line 311 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 311 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= format 1) ^{:line 312 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG" :cache-rebuild-required) ^{:line 314 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 314 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 314 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= format FMT)) ^{:line 315 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: unsupported cache format" :invalid-fri-cache) ^{:line 316 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [header ^{:line 316 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (decode-header ^{:line 316 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (read-sized stream ^{:line 316 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.readInt stream)))
+   payload-length ^{:line 317 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.readLong stream)
+   payload ^{:line 318 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (read-sized stream payload-length)]
+  ^{:line 319 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 319 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 319 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 0 ^{:line 319 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (.available stream))) ^{:line 320 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: cache has trailing bytes" :invalid-fri-cache) ^{:line 321 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {:header header :payload payload})))))))))
+  (catch clojure.lang.ExceptionInfo error
+    ^{:line 323 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (throw error))
+  (catch Throwable error
+    ^{:line 325 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (throw ^{:line 325 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (ex-info "fri: cache is truncated or malformed" ^{:line 326 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {:type :invalid-fri-cache :cause ^{:line 326 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (str error)})))))
 
-(defn resolve-name [img ^String nm]
-  (get (:names-map img) nm))
+^{:line 328 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn open-fri! [^String path ^CacheSource source]
+  ^{:line 329 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [envelope ^{:line 329 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (read-envelope path)
+   header ^{:line 330 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (:header envelope)
+   payload ^{:line 331 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (:payload envelope)
+   stored-space ^{:line 332 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth header 0)
+   stored-fingerprint ^{:line 333 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth header 1)
+   stored-position ^{:line 334 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth header 2)
+   stored-sha ^{:line 335 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth header 3)]
+  ^{:line 336 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 336 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 336 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= stored-space ^{:line 336 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id source))) ^{:line 337 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: cache belongs to a different SpaceId" :cache-space-mismatch) ^{:line 338 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 338 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 338 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (and ^{:line 338 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= stored-fingerprint ^{:line 338 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-fingerprint source)) ^{:line 339 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= stored-position ^{:line 339 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-valid-bytes source)))) ^{:line 340 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: cache does not match the canonical FRAMLOG prefix" :cache-source-mismatch) ^{:line 342 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 342 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (not ^{:line 342 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= stored-sha ^{:line 342 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (sha256 payload))) ^{:line 343 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: cache payload checksum mismatch" :invalid-fri-cache) ^{:line 344 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [cache-data ^{:line 345 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (data-cache ^{:line 345 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (edn/read-string ^{:line 345 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (String. payload StandardCharsets/UTF_8)))
+   dump ^{:line 346 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (:dump cache-data)
+   ctx ^{:line 347 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (validate-dump! dump source)]
+  ^{:line 348 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (->CacheImage source dump ^{:line 348 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (:indexes cache-data) ctx)))))))
 
-(defn name-of [img subj]
-  (let [name-pid (:name-pid img)]
-  (if name-pid (do
-  (let [cids (by-lp img subj name-pid)]
-  (if (seq cids) (do
-  (let [f (fact-of img (first cids))]
-  (if (nil? f) nil (literal img (:r f)))))))))))
+^{:line 350 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- atom-value [row]
+  ^{:line 351 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [kind ^{:line 351 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-kind row)]
+  ^{:line 352 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cond
+  ^{:line 353 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :string) ^{:line 353 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-string-value row)
+  ^{:line 354 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :int) ^{:line 354 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-int-value row)
+  ^{:line 355 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :float) ^{:line 355 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-float-value row)
+  ^{:line 356 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :bool) ^{:line 356 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-bool-value row)
+  ^{:line 357 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :keyword) ^{:line 357 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-keyword-value row)
+  ^{:line 358 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= kind :instant) ^{:line 358 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/atomrow-instant-value row)
+  :else ^{:line 359 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: AtomRow has an unknown kind" :invalid-fri-cache))))
 
-(defn cold->dump [img]
-  (let [n (nfacts img)
-   facts (mapv (fn [ord] [(ord-cid img ord) {:l (ord-l img ord) :p (ord-p img ord) :r (ord-r img ord)}]) (range n))
-   tx-of (mapv (fn [ord] [(ord-cid img ord) (ord-tx img ord)]) (range n))
-   vc (vcount img)
-   values (mapv (fn [i] (let [base (* i 20)
-   id (seg-long img :values-id base)
-   off (seg-long img :values-id (+ base 8))
-   len (seg-int img :values-id (+ base 16))]
-  [id (String. (seg-get-bytes img :values-blob off len) StandardCharsets/UTF_8)])) (range vc))
-   ec (get-in img [:footer :counts :entities])
-   ents (mapv (fn [i] (seg-long img :entities (* i 8))) (range ec))
-   txc (get-in img [:footer :counts :txs])
-   txs (mapv (fn [i] (let [base (* i 28)
-   tx (seg-long img :txs base)
-   sq (seg-long img :txs (+ base 8))
-   off (seg-long img :txs (+ base 16))
-   len (seg-int img :txs (+ base 24))
-   agent (String. (seg-get-bytes img :txs-blob off len) StandardCharsets/UTF_8)]
-  [tx {:seq sq :agent agent}])) (range txc))
-   superd (reduce (fn [acc ord] (if (superseded-ord? img ord) (conj acc (ord-cid img ord)) acc)) [] (range n))]
-  {:next-id (next-id img) :next-seq (covers-seq img) :supersedes-pred (supersedes-pred img) :objects (vec (concat (map first values) ents (map first facts))) :values values :facts facts :tx-of tx-of :txs txs :superseded superd}))
+^{:line 361 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- ^Boolean atom-handle? [handle]
+  ^{:line 361 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= 0 ^{:line 361 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mod handle 2)))
 
-(defn literal* [img id]
-  (let [c (:lit-cache img)
-   v (cache-get c id)]
-  (if (some? v) v (let [r (literal img id)]
-  (do
-  (if (some? r) (do
-  (cache-put c id r (:cache-cap img))))
-  r)))))
+^{:line 362 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- handle-position [handle]
+  ^{:line 362 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (quot handle 2))
 
-(defn name-of* [img subj]
-  (let [c (:name-cache img)
-   v (cache-get c subj)]
-  (if (some? v) v (let [r (name-of img subj)]
-  (do
-  (if (some? r) (do
-  (cache-put c subj r (:cache-cap img))))
-  r)))))
+^{:line 364 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- resolve-handle [dump handle]
+  ^{:line 365 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [position ^{:line 365 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (handle-position handle)]
+  ^{:line 366 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 366 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (atom-handle? handle) ^{:line 367 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (atom-value ^{:line 367 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth ^{:line 367 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-atoms dump) position)) ^{:line 368 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [row ^{:line 368 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth ^{:line 368 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-triples dump) position)]
+  ^{:line 369 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triple ^{:line 369 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 369 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot0 row)) ^{:line 370 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 370 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot1 row)) ^{:line 371 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 371 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/triplerow-slot2 row)))))))
 
-(defn render [img cid]
-  (let [f (fact-of img cid)]
-  (if f (do
-  [(name-of img (:l f)) (literal img (:p f)) (let [r (:r f)]
-  (or (literal img r) (name-of img r)))]))))
+^{:line 373 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- term-handles [dump]
+  ^{:line 374 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (into ^{:line 374 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {} ^{:line 375 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (concat ^{:line 376 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map-indexed ^{:line 376 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position row] ^{:line 377 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 377 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (atom-value row) ^{:line 377 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (atom-handle position)]) ^{:line 378 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-atoms dump)) ^{:line 379 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (map-indexed ^{:line 379 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position row] ^{:line 380 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [^{:line 380 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 380 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (triple-handle position)) ^{:line 381 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (triple-handle position)]) ^{:line 382 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-triples dump)))))
 
-(defn render-ord [img ord]
-  [(name-of* img (ord-l img ord)) (literal* img (ord-p img ord)) (let [r (ord-r img ord)]
-  (or (literal* img r) (name-of* img r)))])
+^{:line 384 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- index-matches [image index-position keys]
+  ^{:line 385 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [dump ^{:line 385 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-dump image)
+   handles ^{:line 386 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (term-handles dump)
+   key-handles ^{:line 387 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv ^{:line 387 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [term] ^{:line 387 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (get handles term)) keys)]
+  ^{:line 388 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 388 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (some nil? key-handles) ^{:line 389 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [] ^{:line 390 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [entries ^{:line 390 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth ^{:line 390 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-indexes image) index-position)
+   key-count ^{:line 391 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count key-handles)]
+  ^{:line 392 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv ^{:line 392 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 393 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 393 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth entry key-count))) ^{:line 394 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (filter ^{:line 394 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [entry] ^{:line 395 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= key-handles ^{:line 395 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (subvec entry 0 key-count))) entries))))))
 
-(defn by-lp-ords [img lid pid]
-  (let [n (long (/ (get-in img [:footer :segments :postings-lp :len]) 28))]
-  (loop [lo 0
-   hi (dec n)]
-  (if (> lo hi) [] (let [mid (quot (+ lo hi) 2)
-   base (* mid 28)
-   kl (seg-long img :postings-lp base)
-   kp (seg-long img :postings-lp (+ base 8))
-   cmp (if (< kl lid) -1 (if (> kl lid) 1 (if (< kp pid) -1 (if (> kp pid) 1 0))))]
-  (cond
-  (zero? cmp) (let [off (seg-long img :postings-lp (+ base 16))
-   len (seg-int img :postings-lp (+ base 24))]
-  (reduce (fn [acc ord] (if (superseded-ord? img ord) acc (conj acc ord))) [] (run-ords img :plp-runs off len)))
-  (neg? cmp) (recur (inc mid) hi)
-  :else (recur lo (dec mid))))))))
+^{:line 398 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- live-positions-as-of [image sequence]
+  ^{:line 399 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 399 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (< sequence 0) ^{:line 400 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fail "fri: as-of sequence must be non-negative" :invalid-as-of-sequence) ^{:line 401 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [dump ^{:line 401 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-dump image)
+   operations ^{:line 402 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-operations dump)]
+  ^{:line 403 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (loop [position 0
+   active ^{:line 403 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} {}
+   live ^{:line 403 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} []]
+  ^{:line 404 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 404 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (or ^{:line 404 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (>= position ^{:line 404 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (count operations)) ^{:line 405 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (> ^{:line 405 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-tx-sequence ^{:line 405 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth operations position)) sequence)) ^{:line 406 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (vec ^{:line 406 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (keep-indexed ^{:line 406 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [index present?] ^{:line 407 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if present? ^{:line 407 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (do
+  index))) live)) ^{:line 409 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [row ^{:line 409 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth operations position)
+   handle ^{:line 410 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-triple-handle row)
+   positions ^{:line 411 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (get active handle ^{:line 411 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [])]
+  ^{:line 412 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 412 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= t/assert-action ^{:line 412 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-action row)) ^{:line 413 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (recur ^{:line 413 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (inc position) ^{:line 414 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (assoc active handle ^{:line 414 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (conj positions position)) ^{:line 415 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (conj live true)) ^{:line 416 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 416 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (empty? positions) ^{:line 417 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (recur ^{:line 417 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (inc position) active ^{:line 417 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (conj live false)) ^{:line 418 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [target ^{:line 418 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (peek positions)]
+  ^{:line 419 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (recur ^{:line 419 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (inc position) ^{:line 420 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (assoc active handle ^{:line 420 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (pop positions)) ^{:line 421 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (conj ^{:line 421 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (assoc live target false) false)))))))))))
 
-(defn render-lp [img ^String subj-name ^String pred-name]
-  (let [lid (resolve-name img subj-name)
-   pid (pred-id img pred-name)]
-  (if (and (some? lid) (some? pid)) (do
-  (let [c (:render-cache img)
-   k [lid pid]
-   hit (cache-get c k)]
-  (if (some? hit) hit (let [v (mapv (fn [ord] (render-ord img ord)) (by-lp-ords img lid pid))]
-  (cache-put c k v (:cache-cap img)))))))))
+^{:line 423 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn- occurrence-event [dump position]
+  ^{:line 424 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [row ^{:line 424 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth ^{:line 424 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-operations dump) position)
+   transaction ^{:line 426 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/transaction-coordinate ^{:line 426 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-space-id dump) ^{:line 427 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-tx-sequence row))
+   occurrence ^{:line 429 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/occurrence-coordinate transaction ^{:line 429 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-ordinal row))
+   proposition ^{:line 431 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 431 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-triple-handle row))]
+  ^{:line 432 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (if ^{:line 432 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (= t/assert-action ^{:line 432 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-action row)) ^{:line 433 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/assertion-occurrence occurrence proposition) ^{:line 434 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/retraction-occurrence occurrence proposition))))
 
-(defn cold-name-triples [img schema-pred? read-hidden-pred?]
-  (let [n (nfacts img)]
-  (reduce (fn [acc ord] (if (superseded-ord? img ord) acc (let [l (ord-l img ord)
-   p (ord-p img ord)
-   r (ord-r img ord)
-   pstr (literal img p)]
-  (if (or (nil? pstr) (schema-pred? pstr) (read-hidden-pred? pstr)) acc (let [lname (name-of img l)
-   rrend (if (value-object? img r) (literal img r) (name-of img r))]
-  (conj acc [lname pstr rrend])))))) #{} (range n))))
+^{:line 436 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn close-fri! [image]
+  nil)
 
-(defn ^Boolean verify-segments? [img seg-table]
-  (and (map? seg-table) (every? (fn [row] (let [seg (first row)
-   want (:sha256 (second row))
-   chunks (get-in img [:maps seg])
-   md (MessageDigest/getInstance "SHA-256")]
-  (do
-  (doseq [chunk chunks]
-  (let [csz (nth chunk 1)
-   mbb (nth chunk 2)
-   b (byte-array csz)
-   dup (.duplicate mbb)]
-  (do
-  (.position dup 0)
-  (.get dup b)
-  (.update md b))))
-  (= want (apply str (map (fn [x] (format "%02x" x)) (.digest md))))))) seg-table)))
+^{:line 437 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn restore-store! [image target]
+  ^{:line 438 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/load-term-store! target ^{:line 438 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-dump image)))
+
+^{:line 439 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn ^String space-id [image]
+  ^{:line 440 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-space-id ^{:line 440 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-source image)))
+
+^{:line 441 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn ^String source-fingerprint [image]
+  ^{:line 442 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-fingerprint ^{:line 442 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-source image)))
+
+^{:line 443 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn source-position [image]
+  ^{:line 444 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cachesource-valid-bytes ^{:line 444 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-source image)))
+
+^{:line 445 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn transaction-count [image]
+  ^{:line 446 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/transaction-count ^{:line 446 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 447 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn operation-count [image]
+  ^{:line 448 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/operation-count ^{:line 448 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 449 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn semantic-history [image]
+  ^{:line 450 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/semantic-history ^{:line 450 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 451 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn operation-occurrences [image]
+  ^{:line 452 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/operation-occurrences ^{:line 452 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 453 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn live-occurrences [image]
+  ^{:line 454 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/live-occurrences ^{:line 454 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 455 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn live-propositions [image]
+  ^{:line 456 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (store/live-propositions ^{:line 456 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-store image)))
+
+^{:line 457 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot0 [image term]
+  ^{:line 457 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 0 ^{:line 457 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [term]))
+
+^{:line 458 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot1 [image term]
+  ^{:line 458 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 1 ^{:line 458 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [term]))
+
+^{:line 459 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot2 [image term]
+  ^{:line 459 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 2 ^{:line 459 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [term]))
+
+^{:line 460 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot01 [image slot0 slot1]
+  ^{:line 461 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 3 ^{:line 461 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [slot0 slot1]))
+
+^{:line 462 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot12 [image slot1 slot2]
+  ^{:line 463 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 4 ^{:line 463 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [slot1 slot2]))
+
+^{:line 464 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn by-slot02 [image slot0 slot2]
+  ^{:line 465 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (index-matches image 5 ^{:line 465 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} [slot0 slot2]))
+
+^{:line 466 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn live-occurrences-as-of [image sequence]
+  ^{:line 467 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [dump ^{:line 467 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-dump image)]
+  ^{:line 468 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv ^{:line 468 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position] ^{:line 468 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (occurrence-event dump position)) ^{:line 469 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (live-positions-as-of image sequence))))
+
+^{:line 470 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (defn live-propositions-as-of [image sequence]
+  ^{:line 471 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (let [dump ^{:line 471 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (cacheimage-dump image)]
+  ^{:line 472 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (mapv ^{:line 472 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (fn [position] ^{:line 473 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (resolve-handle dump ^{:line 475 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/operationrow-triple-handle ^{:line 476 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (nth ^{:line 476 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (t/termstoredump-operations dump) position)))) ^{:line 477 :file "/home/tom/code/fram/wt-triple-fri/src/fri_port.bclj"} (live-positions-as-of image sequence))))
