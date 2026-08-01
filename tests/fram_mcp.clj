@@ -1472,8 +1472,16 @@
 
 (defn- module-bytes [module]
   (when (string? module)
-    (let [f (io/file fram-src (str module ".bclj"))]
-      (when (.isFile f) (.length f)))))
+    (try
+      (let [candidate (io/file module)
+            f (if (.isAbsolute candidate)
+                candidate
+                (io/file fram-src (str module ".bclj")))
+            root (canon fram-src)
+            path (canon f)]
+        (when (and (str/starts-with? path (str root "/")) (.isFile f))
+          (.length f)))
+      (catch Throwable _ nil))))
 
 (defn- retry-seq! [op module definition]
   (let [k [op module definition]
@@ -1561,6 +1569,58 @@
 (def ^:private library-mode? (= "1" (System/getenv "FRAM_MCP_LIBRARY")))
 
 ;; (canon — the canonical-path helper — is defined above route-edit, which needs it.)
+
+;; The text guard identifies an adopted module by its canonical filesystem path,
+;; while the graph stores path-derived dotted module ids. Accept that same path at
+;; the MCP boundary and normalize it before catalog dispatch; the coordinator still
+;; resolves and revalidates the sealed tracked path before any mutation.
+(def ^:private beagle-source-path-re
+  #"\.b(?:clj|cljs|js|nix|gl|sql|py|zig|odin)$")
+
+(defn- normalize-module-selector [selector label]
+  (if-not (and (string? selector) (.isAbsolute (io/file selector)))
+    {:value selector}
+    (let [root (canon fram-src)
+          path (canon selector)]
+      (cond
+        (not= selector path)
+        {:error (str label " path " (pr-str selector)
+                     " is not canonical (resolves to " (pr-str path) ")")}
+
+        (not (str/starts-with? path (str root "/")))
+        {:error (str label " path " path " is outside FRAM_SRC " root)}
+
+        (not (re-find beagle-source-path-re path))
+        {:error (str label " path " path " is not a supported Beagle source")}
+
+        :else
+        (let [relative (subs path (inc (count root)))
+              module (-> relative
+                         (str/replace "/" ".")
+                         (str/replace beagle-source-path-re ""))]
+          {:value module})))))
+
+(defn- normalize-edit-arguments [tool args]
+  (if-not (edit-tool? tool)
+    {:args args}
+    (let [top (normalize-module-selector (:module args) "module")]
+      (if (:error top)
+        top
+        (let [args (assoc args :module (:value top))]
+          (if-not (and (= tool "edit-transaction") (sequential? (:edits args)))
+            {:args args}
+            (loop [i 0 edits (vec (:edits args)) normalized []]
+              (if (= i (count edits))
+                {:args (assoc args :edits normalized)}
+                (let [edit (nth edits i)]
+                  (if-not (and (map? edit) (contains? edit :module))
+                    (recur (inc i) edits (conj normalized edit))
+                    (let [result (normalize-module-selector
+                                  (:module edit) (str "edits[" i "].module"))]
+                      (if (:error result)
+                        result
+                        (recur (inc i) edits
+                               (conj normalized (assoc edit :module (:value result))))))))))))))))
 
 ;; graph-edit-v1 per-call gate: nil = authorized, else {:text <denial>}.
 ;;   (1) the name must be one of the seven edit verbs — everything else
@@ -1726,10 +1786,10 @@
                           closed-tools)})
 
       (= method "tools/call")
-      ;; PROFILE GATE FIRST: under a restricted profile an unauthorized or
-      ;; unconfined call is denied HERE — before alias normalization
-      ;; (handle-call / tl-call), before load-state, before any coordinator or
-      ;; subprocess contact. The denial mutates no graph/store state; the outer
+      ;; PROFILE GATE FIRST: selector normalization is pure path confinement; after
+      ;; it, a restricted profile denies unauthorized or unconfined calls HERE —
+      ;; before alias normalization (handle-call / tl-call), load-state, coordinator,
+      ;; or subprocess contact. The denial mutates no graph/store state; the outer
       ;; telemetry wrapper may append its rejected observation to a separate file.
       ;;
       ;; Then: graph-AST edits run a multi-process recompile-gated transaction that
@@ -1742,11 +1802,18 @@
             r (with-graph-op-telemetry
                 nm args
                 (fn []
-                  (if-let [denial (profile-gate nm args)]
-                    {:isError true :text (:text denial)}
-                    (if (edit-tool? nm)
-                      (handle-call nm args)
-                      (with-timeout 10000 (fn [] (handle-call nm args)))))))]
+                  (let [normalized (normalize-edit-arguments nm args)]
+                    (if-let [selector-error (:error normalized)]
+                      {:isError true
+                       :text (str "module selector rejected: " selector-error
+                                  " — refused before dispatch; nothing mutated.")}
+                      (let [normalized-args (:args normalized)]
+                        (if-let [denial (profile-gate nm normalized-args)]
+                          {:isError true :text (:text denial)}
+                          (if (edit-tool? nm)
+                            (handle-call nm normalized-args)
+                            (with-timeout 10000
+                              (fn [] (handle-call nm normalized-args))))))))))]
         (reply id {:content [{:type "text" :text (:text r)}]
                    :isError (boolean (:isError r))}))
 

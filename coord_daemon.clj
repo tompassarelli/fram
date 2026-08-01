@@ -19,7 +19,7 @@
 ;; existing load-file callers keep working unchanged.
 (ns coord-daemon
   (:require [clojure.string :as str] [clojure.edn :as edn] [clojure.set]
-            [fram.store :as c] [fram.schema :as s]
+            [fram.store :as c] [fram.schema :as s] [fram.types :as t]
             [fram.kernel :as ck]
             [fram.authority :as authority] [fram.tools :as tools]
             [cheshire.core :as json]
@@ -2913,12 +2913,10 @@
 ;; :callers — warm scope-correct callers of a binding, from refers_to over `co`.
 ;; ============================================================================
 ;; clean slate: surgically drop EVERY live resolve-pred fact (refers_to + render
-;; markers) from the store STORE's facts + all five indexes (idx-by-l/p/r/lp/pr) + the
-;; superseded set. (Independent of the S1-fix cache's :by-lp index — this is the store,
-;; not the warm cache.) The resolver assumes a clean slate, else a re-resolve over an
-;; existing edge set doubles the refers_to edges. These facts are derived/in-memory
-;; only, so dropping them from the map (rather than appending a supersede) is exactly
-;; right — nothing durable references them, and they were never written to the flat log.
+;; markers) from the store. The resolver assumes a clean slate, else a re-resolve over
+;; an existing edge set doubles the refers_to edges. These facts are derived/in-memory
+;; only, so rebuilding from the retained portable vectors (rather than appending a
+;; supersede) is exactly right and keeps every slot-backed index coherent.
 ;; subj-keep? : an optional predicate on the SUBJECT node-id (:l of the resolve-pred
 ;; fact). nil => strip every resolve-pred fact (whole-corpus, the S3.2 behavior).
 ;; A set/fn => strip only those whose subject is in scope (S3.3 scoped strip: clear
@@ -2930,28 +2928,25 @@
   ([st] (strip-resolve-facts! st nil))
   ([st subj-keep?]
    (let [m @st
-         rp-ids (set (keep (fn [[vid v]] (when (resolve-preds v) vid)) (:values m)))
-         victims (set (keep (fn [[cid cl]]
-                              (when (and (rp-ids (:p cl))
-                                         (or (nil? subj-keep?) (subj-keep? (:l cl))))
-                                cid))
-                            (:facts m)))]
+         rp-ids (set (keep (fn [entry]
+                             (when (resolve-preds (:value entry)) (:id entry)))
+                           (c/value-entries st)))
+         victims (set (keep (fn [entry]
+                              (when (and (rp-ids (:p entry))
+                                         (or (nil? subj-keep?) (subj-keep? (:l entry))))
+                                (:id entry)))
+                            (c/fact-entries st)))]
      (when (seq victims)
-       (let [drop-from (fn [idx] (reduce-kv (fn [acc k cids]
-                                              (let [kept (vec (remove victims cids))]
-                                                (if (seq kept) (assoc acc k kept) acc)))
-                                            {} idx))]
-         (swap! st (fn [s]
-                     (-> s
-                         (update :facts #(reduce dissoc % victims))
-                         (update :tx-of #(reduce dissoc % victims))
-                         (update :objects #(reduce dissoc % victims))
-                         (update :superseded #(reduce dissoc % victims))
-                         (update :idx-by-l drop-from)
-                         (update :idx-by-p drop-from)
-                         (update :idx-by-r drop-from)
-                         (update :idx-by-lp drop-from)
-                         (update :idx-by-pr drop-from))))))
+       (c/load-store!
+        st
+        (t/->StoreDump
+         1 (:next-id m) (:next-seq m) (:supersedes-pred m)
+         (filterv #(not (victims %)) (:objects m))
+         (:values m)
+         (filterv #(not (victims (:id %))) (:facts m))
+         (filterv #(not (victims (:cid %))) (:tx-of m))
+         (:txs m)
+         (filterv #(not (victims %)) (:superseded m)))))
      (count victims))))
 
 ;; node-ids whose @<mod># name-prefix is in `mods` — the subject scope for a scoped
@@ -3596,9 +3591,9 @@
           ;; name) get a fresh @<mod>#<int>, numbered above every existing int.
           name-of* (fn [eid] (s/name-of clone eid))
           new-eids (->> since-ids
-                        (filter (fn [id] (and (contains? (:objects m) id)
-                                              (not (contains? (:values m) id))
-                                              (not (contains? (:facts m) id))
+                        (filter (fn [id] (and (nil? (c/fact-of clone id))
+                                              (not (c/value-object? clone id))
+                                              (zero? (c/tx-seq clone id))
                                               (nil? (name-of* id)))))
                         vec)
           ;; assign names to the new entities (sequential, above the current max int).
@@ -3613,7 +3608,9 @@
                          rs (if (c/value-object? clone r) (c/literal clone r) (wire-name r))]
                      (when (and te (some? rs)) [te p rs])))
           ;; the verb's NEW facts = the fact ids in [since, next-id) (O(delta)).
-          new-cid-facts (keep (fn [cid] (when-let [cl (get (:facts m) cid)] [cid cl])) since-ids)
+          new-cid-facts (keep (fn [cid]
+                                (when-let [cl (c/fact-of clone cid)] [cid cl]))
+                              since-ids)
           ;; ASSERTS: every NEW AST fact still LIVE in the clone
           ;; (kind/v/fN/... ; skip derived + schema preds). A staged verb may mint
           ;; an edge and supersede it again before sealing—for example when a
@@ -3622,7 +3619,7 @@
           ;; of the candidate's net delta.
           new-facts (->> new-cid-facts
                           (remove (fn [[cid _]]
-                                    (contains? (:superseded m) cid)))
+                                    (not (c/live? clone cid))))
                           (map second)
                           (filter (fn [cl] (let [p (c/literal clone (:p cl))]
                                              (ast-pred-str? p)))))
@@ -3637,7 +3634,7 @@
                            (map (fn [[_ cl]] (:r cl)))
                            (filter #(<= % since)))
           retracts (vec (keep (fn [vcid]
-                                (when-let [vcl (get (:facts m) vcid)]
+                                (when-let [vcl (c/fact-of clone vcid)]
                                   (when (ast-pred-str? (c/literal clone (:p vcl)))
                                     (->wire vcl))))
                               victim-cids))]
@@ -4246,12 +4243,10 @@
 ;; (@<module>#root `file` <path>). {:path p} | {:reject [..] :code ..}. Read off the
 ;; given store snapshot — never off anything the client supplies.
 (defn- tracked-path-of [st module]
-  (let [m @st
-        root-id (s/resolve-name st (str "@" module "#root"))
+  (let [root-id (s/resolve-name st (str "@" module "#root"))
         fp (c/value-id st "file")
         vals (when (and root-id fp)
-               (->> (get (:idx-by-lp m) [root-id fp])
-                    (remove #(contains? (:superseded m) %))
+               (->> (c/by-lp st root-id fp)
                     (map #(c/literal st (:r (c/fact-of st %))))
                     distinct vec))]
     (cond

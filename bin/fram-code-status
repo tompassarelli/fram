@@ -12,7 +12,7 @@
 #
 # Output line (key=value, stable order):
 #   level=N src=<beagle file count> log=<code.log|-> facts=<n> mcp=present|absent
-#   port=<n|-> coord=alive|dead|- canonical=<registered graph-upstream files under dir>
+#   port=<n|-> coord=alive|dead|- canonical=<adopted graph-upstream files under dir>
 set -uo pipefail
 
 fallback() { echo "level=0 src=0 log=- facts=0 mcp=absent port=- coord=- canonical=0"; exit 0; }
@@ -27,15 +27,21 @@ DIR="$(cd "$DIR" 2>/dev/null && pwd)" || fallback
 # dir (/tmp, $HOME) must not blow the <100ms budget; a partial count still
 # detects L1 correctly.
 BEAGLE_EXT_RE='\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$'
+SOURCE_FILES=()
 if git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  SRC_COUNT="$(timeout 0.5 git -C "$DIR" ls-files --cached --others --exclude-standard 2>/dev/null \
-               | grep -cE "$BEAGLE_EXT_RE")" || SRC_COUNT=0
+  REPO_ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT="$DIR"
+  mapfile -t SOURCE_FILES < <(
+    timeout 0.5 git -C "$DIR" ls-files --cached --others --exclude-standard 2>/dev/null \
+      | grep -E "$BEAGLE_EXT_RE" \
+      | sed "s|^|$REPO_ROOT/|"
+  )
 else
-  SRC_COUNT="$(timeout 0.5 find "$DIR" \
+  mapfile -t SOURCE_FILES < <(timeout 0.5 find "$DIR" \
     \( -name .git -o -name .fram -o -name .beagle -o -name .cache -o -name node_modules \
        -o -name .direnv -o -name result \) -prune \
-    -o -type f -print 2>/dev/null | grep -cE "$BEAGLE_EXT_RE")" || SRC_COUNT=0
+    -o -type f -print 2>/dev/null | grep -E "$BEAGLE_EXT_RE")
 fi
+SRC_COUNT="${#SOURCE_FILES[@]}"
 
 # --- flip artifacts -----------------------------------------------------------
 CODE_LOG="$DIR/.fram/code.log"
@@ -72,12 +78,101 @@ if [ -f "$CODE_LOG" ]; then
   fi
 fi
 
-# --- graph-upstream registry entries under this dir ------------------------
+# --- graph-upstream adoption under this dir --------------------------------
+# The guard recognizes either a registry row or an in-band leading-comment
+# sentinel. Count that same contract only over source files present in this tree.
 REG="${GRAPH_UPSTREAM_REGISTRY:-$HOME/.config/fram/graph-upstream-files}"
 CANON=0
-if [ -f "$REG" ]; then
-  CANON="$(awk -v d="$DIR/" '!/^[[:space:]]*#/ && index($0, d)==1 {n++} END{print n+0}' "$REG" 2>/dev/null)" || CANON=0
-fi
+CANON="$(python3 - "$REG" "${SOURCE_FILES[@]}" <<'PY'
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+registry_path = sys.argv[1]
+sources = [os.path.abspath(path) for path in sys.argv[2:]]
+
+git_bin = shutil.which("git")
+repo_cache = []
+
+def git_provenance(path):
+    real = os.path.realpath(path)
+    directory = os.path.dirname(real) or "."
+    for root, common in repo_cache:
+        if directory == root or directory.startswith(root + os.sep):
+            return common, os.path.relpath(real, root).replace(os.sep, "/")
+    if git_bin is None or not os.path.isdir(directory):
+        return None
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("GIT_")}
+    env.update({"GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_SYSTEM": os.devnull,
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        result = subprocess.run(
+            [git_bin, "-C", directory, "rev-parse",
+             "--show-toplevel", "--git-common-dir"],
+            capture_output=True, text=True, timeout=1, env=env)
+    except Exception:
+        return None
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 or len(lines) != 2:
+        return None
+    root = os.path.realpath(lines[0])
+    common = os.path.realpath(os.path.join(directory, lines[1]))
+    repo_cache.append((root, common))
+    return common, os.path.relpath(real, root).replace(os.sep, "/")
+
+registry = set()
+registry_provenance = set()
+try:
+    with open(registry_path, "r", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                entry = os.path.expanduser(line)
+                registry.add(os.path.realpath(entry))
+                provenance = git_provenance(entry)
+                if provenance is not None:
+                    registry_provenance.add(provenance)
+except OSError:
+    pass
+
+markers = ("@upstream:graph", "@upstream-is-graph", "@claim-canonical")
+directive = re.compile(
+    r";+\s*(?:" + "|".join(re.escape(marker) for marker in markers) + r")(?:\s|$)"
+)
+header = re.compile(r"(?:#lang\s+\S+|\(define-target\s+\S+\))\Z")
+
+def self_declared(path):
+    try:
+        with open(path, "r", errors="replace") as handle:
+            scanned = 0
+            while scanned < 65536:
+                line = handle.readline()
+                if line == "":
+                    return False
+                scanned += len(line)
+                stripped = line.strip()
+                if not stripped or header.fullmatch(stripped):
+                    continue
+                if stripped.startswith(";;"):
+                    if directive.match(stripped):
+                        return True
+                    continue
+                return False
+    except OSError:
+        return False
+    return False
+
+print(sum(1 for path in sources
+          if (os.path.realpath(path) in registry
+              or git_provenance(path) in registry_provenance
+              or self_declared(path))))
+PY
+)" || CANON=0
 
 # --- level --------------------------------------------------------------------
 LEVEL=0

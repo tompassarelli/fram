@@ -38,6 +38,7 @@
 (def source-file (str nested-dir "/model.bclj"))
 (def root-level-artifact (str project "/src.plangrep.model.bclj"))
 (def code-log (str project "/.fram/code.log"))
+(def graph-registry (str tmp "/graph-upstream-files"))
 (run! #(.mkdirs (io/file %)) [nested-dir (str project "/.fram")])
 
 (spit source-file
@@ -48,6 +49,7 @@
            "(defn base [] :- Int 1)\n"
            "(defn semantic-index-accepted? [schema-version :- String] :- Bool\n"
            "  (= schema-version \"firn-index/v1\"))\n"))
+(spit graph-registry "/stale/pre-container/model.bclj\n")
 
 (def checks (atom []))
 (defn check! [label value]
@@ -78,6 +80,11 @@
   (with-open [socket (java.net.ServerSocket. 0)] (.getLocalPort socket)))
 
 (def port (free-port))
+(spit (str project "/.mcp.json")
+      (json/generate-string
+       {:mcpServers
+        {:fram {:command (str root "/bin/fram-mcp")
+                :env {:FRAM_CODE_PORT (str port)}}}}))
 ;; The edit gate is launch-sealed: a coordinator started without FRAM_EDIT_VERIFIER
 ;; rejects every graph edit as verification-unavailable.
 (def daemon
@@ -130,13 +137,14 @@
 (defn mcp-call [env id tool arguments]
   (:reply (mcp-run env id tool arguments)))
 
-(defn reply-error? [reply] (boolean (get-in reply [:result :isError])))
+(defn reply-error? [reply]
+  (boolean (or (:error reply) (get-in reply [:result :isError]))))
 (defn reply-text [reply] (or (get-in reply [:result :content 0 :text]) ""))
 (defn version [] (:version (coord {:op :version})))
 
 (def watchdog
   (future
-    (Thread/sleep 300000)          ; must outlast the readiness budget plus the edits
+    (Thread/sleep 600000)          ; must outlast the readiness budget plus the edits
     (binding [*out* *err*] (println "mcp-warm-graph-edit-regression: hard timeout"))
     (try (p/destroy-tree daemon) (catch Throwable _ nil))
     (System/exit 124)))
@@ -149,11 +157,36 @@
     (check! ":module-path resolves the exact registered nested source"
             (and (:ok path-response) (= source-file (:path path-response)))))
 
+  (let [status (p/shell {:dir root :out :string :err :string :continue true
+                         :extra-env {"GRAPH_UPSTREAM_REGISTRY" graph-registry}}
+                        "bin/fram-code-status" project)]
+    (check! "status counts the in-band adopted path, not the stale registry row"
+            (and (zero? (:exit status))
+                 (str/includes? (:out status) "level=3 ")
+                 (str/includes? (:out status) "mcp=present")
+                 (str/includes? (:out status) "coord=alive")
+                 (str/includes? (:out status) "canonical=1"))))
+
+  (let [event (json/generate-string
+               {:tool_name "Edit" :tool_input {:file_path source-file}})
+        guard (p/shell {:dir root :in (str event "\n")
+                        :out :string :err :string :continue true
+                        :extra-env {"GRAPH_UPSTREAM_REGISTRY" graph-registry
+                                    "AGENT_NO_AUTHORING_HOOKS" "0"}}
+                       "integrations/north/hooks/code-upstream-guard.sh")
+        decision (try (json/parse-string (:out guard) true)
+                      (catch Throwable _ nil))]
+    (check! "the canonical adopted path is refused by direct text authoring"
+            (and (zero? (:exit guard))
+                 (= "deny" (get-in decision
+                                    [:hookSpecificOutput :permissionDecision])))))
+
   (let [reply (mcp-call mcp-env 10 "add-def"
-                        {:module "src.plangrep.model"
+                        {:module source-file
                          :form "(defn increment [x :- Int] :- Int (+ x 1))"})
         rendered (slurp source-file)]
-    (check! "warm add-def succeeds" (and reply (not (reply-error? reply))))
+    (check! "the same canonical adopted path is accepted by graph authoring"
+            (and reply (not (reply-error? reply))))
     (check! "add-def JSON string renders as a real top-level form"
             (and (str/includes? rendered "(defn increment")
                  (str/includes? rendered "(+ x 1)")

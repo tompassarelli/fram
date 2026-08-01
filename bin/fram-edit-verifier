@@ -187,6 +187,7 @@
          ["checker" (relative-path beagle-lib checker) (digest-file checker)]]]
     {:digest (digest-string (pr-str identity))
      :racket (.getPath racket)
+     :beagle-lib beagle-lib-path
      :checker checker-path}))
 
 (defn validate-namespace! [value label]
@@ -309,13 +310,21 @@
     (when (.exists file)
       (Files/deleteIfExists (.toPath file)))))
 
-(defn with-temp-overlay [request f]
+(defn with-temp-overlay [toolchain request f]
   (let [root (.toFile
               (Files/createTempDirectory
                "fram-edit-verifier-"
-               (make-array java.nio.file.attribute.FileAttribute 0)))]
+               (make-array java.nio.file.attribute.FileAttribute 0)))
+        collects (io/file root "collects")
+        beagle-collection (io/file collects "beagle")]
     (try
-      (let [paths
+      (let [_ (require! (.mkdirs collects)
+                        "cannot create verifier collection root")
+            _ (Files/createSymbolicLink
+               (.toPath beagle-collection)
+               (.toPath (io/file (:beagle-lib toolchain)))
+               (make-array java.nio.file.attribute.FileAttribute 0))
+            paths
             (mapv
              (fn [index row]
                (let [path (io/file root (format "%06d.edn" index))]
@@ -323,8 +332,11 @@
                  (.getPath path)))
              (range)
              (:overlay request))]
-        (f paths))
+        (f paths (.getPath collects)))
       (finally
+        ;; file-seq follows directory symlinks, so unlink the collection before
+        ;; recursively deleting the private overlay directory.
+        (Files/deleteIfExists (.toPath beagle-collection))
         (delete-tree! root)))))
 
 (defn bounded [value limit]
@@ -333,7 +345,7 @@
       (str (subs value 0 limit) "…")
       value)))
 
-(defn run-checker [toolchain request paths]
+(defn run-checker [toolchain request paths collects]
   (let [selectors
         (mapcat (fn [source] ["--check-source" source])
                 (:checked-modules request))
@@ -342,7 +354,8 @@
         ;; versions whose in-tree compiled caches are mutually incompatible.
         ;; Proofs trade a little load time for source-authentic, race-free
         ;; checking. `-U` also excludes user-specific collection roots.
-        (into [(:racket toolchain) "-U" "-c" (:checker toolchain)]
+        (into [(:racket toolchain) "-U" "-c" "-S" collects
+               (:checker toolchain)]
               (concat selectors paths))
         builder
         (ProcessBuilder.
@@ -482,8 +495,9 @@
          before (toolchain-snapshot)]
     (let [checker-result
           (with-temp-overlay
+            before
             request
-            #(run-checker before request %))
+            #(run-checker before request %1 %2))
           after (toolchain-snapshot)]
       (if-not (= (:digest before) (:digest after))
         (if (zero? attempt)

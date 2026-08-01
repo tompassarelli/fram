@@ -143,11 +143,35 @@ assert "re-running wire on: exactly one [mcp_servers.fram] block" \
 assert "re-running wire on: exactly one mcpServers.fram key" \
   '[ "$(jq ".mcpServers | keys | map(select(. == \"fram\")) | length" "$DIR/.mcp.json")" = "1" ]'
 
-# --- fram-code-status reads canonical= from the upstream registry ----------
+# --- fram-code-status reports the guard's registry-or-sentinel contract -----
 REG="$TMP/graph-upstream-files"
+mkdir -p "$DIR/some"
+printf '%s\n' '(define-target clj)' '(defn ordinary [] 1)' > "$DIR/some/file.bclj"
 printf '%s/some/file.bclj\n' "$DIR" > "$REG"
 STATUS_LINE="$(GRAPH_UPSTREAM_REGISTRY="$REG" "$HERE/bin/fram-code-status" "$DIR")"
 assert "fram-code-status honors GRAPH_UPSTREAM_REGISTRY override" \
+  'echo "$STATUS_LINE" | grep -q "canonical=1"'
+
+printf '%s\n' '(define-target clj)' ';; @upstream:graph' '(defn adopted [] 2)' \
+  > "$DIR/some/adopted.bclj"
+printf '%s\n' '/stale/pre-container/file.bclj' > "$REG"
+STATUS_LINE="$(GRAPH_UPSTREAM_REGISTRY="$REG" "$HERE/bin/fram-code-status" "$DIR")"
+assert "fram-code-status counts an in-band adopted file and ignores a stale registry row" \
+  'echo "$STATUS_LINE" | grep -q "canonical=1"'
+
+PRIMARY="$TMP/status-main"
+LINKED="$TMP/status-linked"
+git init -q "$PRIMARY"
+git -C "$PRIMARY" config user.name fram-test
+git -C "$PRIMARY" config user.email fram-test@example.invalid
+mkdir -p "$PRIMARY/src"
+printf '%s\n' '(define-target clj)' '(defn linked [] 3)' > "$PRIMARY/src/linked.bclj"
+git -C "$PRIMARY" add src/linked.bclj
+git -C "$PRIMARY" commit -qm seed
+git -C "$PRIMARY" worktree add -q -b status-linked "$LINKED"
+printf '%s/src/linked.bclj\n' "$PRIMARY" > "$REG"
+STATUS_LINE="$(GRAPH_UPSTREAM_REGISTRY="$REG" "$HERE/bin/fram-code-status" "$LINKED")"
+assert "fram-code-status carries registry adoption across a linked worktree" \
   'echo "$STATUS_LINE" | grep -q "canonical=1"'
 assert "bin/fram-code-status never references graph-owned-files" \
   '[ "$(grep -c "graph-owned-files" "$HERE/bin/fram-code-status")" = "0" ]'
