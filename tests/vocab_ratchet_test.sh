@@ -15,8 +15,8 @@
 # use the identical command, so the comparison is self-consistent; the metric is
 # a regrowth tripwire, not a census.
 #
-# EXCLUDED: LICENSE* and */LICENSE* (legal text, not ours to edit) and the
-# baseline file itself (it names the residue it tracks).
+# EXCLUDED: legal text, the vocabulary baseline, and CI inventory files that
+# necessarily name paths rather than using those paths as substrate vocabulary.
 #
 #   bash tests/vocab_ratchet_test.sh            # gate; exit 0 iff no regrowth
 #   bash tests/vocab_ratchet_test.sh --regen    # rewrite the baseline
@@ -26,6 +26,8 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE" || exit 2
 BASELINE_REL="tests/vocab_ratchet_baseline.txt"
 BASELINE="$HERE/$BASELINE_REL"
+CI_MANIFEST_REL="tests/occurrence_native_ci_manifest.txt"
+CI_FAILURES_REL="tests/occurrence_native_ci_failures.txt"
 
 # count<TAB>path for every tracked-or-untracked, non-exempt file with at least
 # one hit, sorted by PATH so the baseline diffs cleanly when a count changes.
@@ -38,6 +40,7 @@ scan() {
     case "$f" in
       LICENSE*|*/LICENSE*) continue ;;
       "$BASELINE_REL")     continue ;;
+      "$CI_MANIFEST_REL"|"$CI_FAILURES_REL") continue ;;
     esac
     [ -f "$f" ] || continue
     n=$(grep -ioc claim -- "$f" 2>/dev/null)

@@ -106,11 +106,8 @@
                  (contains? (get-in by-id [1 :result :capabilities]) :tools)))
     (let [tools (get-in by-id [2 :result :tools])
           names (mapv :name tools)]
-      (check! "tools/list is the fixed twelve-tool catalog"
-              (= ["tell" "retract" "show" "ask" "validate"
-                  "add-def" "set-body" "rename-def" "insert-after"
-                  "insert-before" "replace-in-body" "edit-transaction"]
-                 names))
+      (check! "tools/list is exactly the five public data verbs"
+              (= ["tell" "retract" "show" "ask" "validate"] names))
       (check! "every tool carries a closed object input schema"
               (every? #(= "object" (get-in % [:inputSchema :type])) tools)))
     (check! "tell commits through FRAMRPC"
@@ -137,9 +134,9 @@
     (check! "missing required arguments fail before socket dispatch"
             (and (get-in by-id [10 :result :isError])
                  (str/includes? (call-text (get by-id 10)) "object")))
-    (check! "graph edit is explicitly sealed, not routed on public FRAMRPC"
+    (check! "graph-control names are absent from the public MCP runtime"
             (and (get-in by-id [11 :result :isError])
-                 (str/includes? (call-text (get by-id 11)) "sealed-control")))
+                 (= "unknown tool: add-def" (call-text (get by-id 11)))))
     (check! "malformed query is a bounded MCP error"
             (and (get-in by-id [12 :result :isError])
                  (seq (call-text (get by-id 12))))))

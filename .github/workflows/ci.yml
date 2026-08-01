@@ -5,7 +5,7 @@ on:
   pull_request:
 
 # The occurrence-native manifest is exhaustive: every Clojure test is either a
-# current gate or an explicit pre-cutover hold. New tests fail CI until classified.
+# current gate, an exact known-failure baseline, or an evidence-backed exclusion.
 
 jobs:
   test:
@@ -69,32 +69,91 @@ jobs:
         run: |
           set -uo pipefail
           manifest=tests/occurrence_native_ci_manifest.txt
+          expected_failures=tests/occurrence_native_ci_failures.txt
           manifest_scratch="$(mktemp -d)"
           trap 'rm -rf "${manifest_scratch:?}"' EXIT INT TERM
 
-          rg --files tests -g '*_test.clj' | sort > "$manifest_scratch/actual"
-          awk '$1 == "run" || $1 == "legacy" {print $2}' "$manifest" \
-            | sort > "$manifest_scratch/declared"
-          if [ -s "$manifest_scratch/declared" ] && \
-             [ -n "$(uniq -d "$manifest_scratch/declared")" ]; then
-            echo "duplicate Clojure test disposition in $manifest" >&2
-            uniq -d "$manifest_scratch/declared" >&2
-            exit 1
-          fi
-          if ! diff -u "$manifest_scratch/actual" "$manifest_scratch/declared"; then
-            echo "classify every tests/*_test.clj entry as run or legacy" >&2
+          if ! awk -F '\t' '
+            /^[[:space:]]*$/ || /^#/ { next }
+            NF != 4 {
+              printf "%s:%d: expected four tab-separated fields, got %d\n", FILENAME, FNR, NF > "/dev/stderr"
+              invalid = 1
+            }
+            END { exit invalid }
+          ' "$manifest"; then
             exit 1
           fi
 
+          rg --files tests -g '*_test.clj' | sort > "$manifest_scratch/actual"
+          awk -F '\t' \
+            '$1 ~ /^(run-bb|run-clojure|baseline-bb|exclude)$/ {print $3}' \
+            "$manifest" \
+            | sort > "$manifest_scratch/declared"
+          uniq -d "$manifest_scratch/declared" > "$manifest_scratch/duplicates"
+          if [ -s "$manifest_scratch/duplicates" ]; then
+            echo "duplicate Clojure test disposition in $manifest" >&2
+            sed 's/^/  /' "$manifest_scratch/duplicates" >&2
+            exit 1
+          fi
+          if ! diff -u "$manifest_scratch/actual" "$manifest_scratch/declared"; then
+            echo "classify every tests/*_test.clj entry in $manifest" >&2
+            exit 1
+          fi
+
+          : > "$manifest_scratch/actual-failures"
           fail=0
-          while read -r disposition test_path; do
+          baseline_index=0
+          while IFS=$'\t' read -r disposition class test_path evidence; do
             case "$disposition" in
-              ''|'#') continue ;;
-              run)
+              ''|'#'*) continue ;;
+            esac
+
+            if [ ! -f "$test_path" ]; then
+              echo "missing inventoried path: $test_path" >&2
+              fail=1
+              continue
+            fi
+
+            evidence_file=""
+            evidence_regex=""
+            case "$disposition" in
+              exclude|exclude-gate|aggregate-nix|aggregate-zig|baseline-bb|baseline-shell)
+                if [[ "$evidence" != *'#'* ]]; then
+                  echo "$test_path: evidence must be file#regex" >&2
+                  fail=1
+                  continue
+                fi
+                evidence_file="${evidence%%#*}"
+                evidence_regex="${evidence#*#}"
+                if [ ! -f "$evidence_file" ] || [ -z "$evidence_regex" ]; then
+                  echo "$test_path: invalid evidence $evidence" >&2
+                  fail=1
+                  continue
+                fi
+                ;;
+            esac
+
+            case "$disposition" in
+              exclude|exclude-gate|aggregate-nix|aggregate-zig)
+                if ! rg -q -- "$evidence_regex" "$evidence_file"; then
+                  echo "$test_path: evidence not found in $evidence_file: $evidence_regex" >&2
+                  fail=1
+                fi
+                ;;
+            esac
+
+            case "$disposition" in
+              run-bb)
                 echo "== $test_path =="
                 env -u FRAM_TELEMETRY_LOG \
                   timeout --signal=TERM --kill-after=10s 240s \
                   bb -cp out "$test_path" || fail=1
+                ;;
+              run-clojure)
+                echo "== $test_path =="
+                env -u FRAM_TELEMETRY_LOG \
+                  timeout --signal=TERM --kill-after=10s 240s \
+                  clojure -M "$test_path" || fail=1
                 ;;
               run-shell)
                 echo "== $test_path =="
@@ -107,11 +166,45 @@ jobs:
                 timeout --signal=TERM --kill-after=10s 240s \
                   node "$test_path" || fail=1
                 ;;
-              legacy|legacy-gate)
-                [ -f "$test_path" ] || {
-                  echo "missing inventoried legacy gate: $test_path" >&2
+              baseline-bb)
+                baseline_index=$((baseline_index + 1))
+                baseline_output="$manifest_scratch/baseline-$baseline_index.out"
+                echo "== $test_path (known-failure baseline: $class) =="
+                if env -u FRAM_TELEMETRY_LOG \
+                    timeout --signal=TERM --kill-after=10s 240s \
+                    bb -cp out "$test_path" > "$baseline_output" 2>&1; then
+                  :
+                elif rg -q -- "$evidence_regex" "$baseline_output"; then
+                  printf '%s\t%s\n' "$class" "$class" \
+                    >> "$manifest_scratch/actual-failures"
+                else
+                  echo "$test_path failed outside its recorded baseline" >&2
+                  sed 's/^/  /' "$baseline_output" >&2
                   fail=1
-                }
+                fi
+                ;;
+              baseline-shell)
+                baseline_index=$((baseline_index + 1))
+                baseline_output="$manifest_scratch/baseline-$baseline_index.out"
+                echo "== $test_path (known-failure baseline: $class) =="
+                if env -u FRAM_TELEMETRY_LOG \
+                    timeout --signal=TERM --kill-after=10s 240s \
+                    bash "$test_path" > "$baseline_output" 2>&1; then
+                  :
+                else
+                  sed -n 's/^  REGROWTH  \([^:]*\):.*/vocab-residue\t\1/p' \
+                    "$baseline_output" >> "$manifest_scratch/actual-failures"
+                  if ! rg -q -- "$evidence_regex" "$baseline_output"; then
+                    echo "$test_path failed outside its recorded baseline" >&2
+                    sed 's/^/  /' "$baseline_output" >&2
+                    fail=1
+                  fi
+                fi
+                ;;
+              aggregate-nix|aggregate-zig)
+                echo "== $test_path (current $class aggregate; toolchain-owned) =="
+                ;;
+              exclude|exclude-gate)
                 ;;
               *)
                 echo "unknown manifest disposition: $disposition" >&2
@@ -120,6 +213,19 @@ jobs:
             esac
           done < "$manifest"
 
-          echo "current Clojure gates: $(awk '$1 == "run" {n++} END {print n+0}' "$manifest")"
-          echo "inventoried legacy Clojure suites: $(awk '$1 == "legacy" {n++} END {print n+0}' "$manifest")"
+          sort -u "$manifest_scratch/actual-failures" \
+            > "$manifest_scratch/actual-failures.sorted"
+          awk -F '\t' '!/^[[:space:]]*$/ && !/^#/ {print $1 "\t" $2}' \
+            "$expected_failures" | sort -u \
+            > "$manifest_scratch/expected-failures.sorted"
+          if ! diff -u \
+              "$manifest_scratch/expected-failures.sorted" \
+              "$manifest_scratch/actual-failures.sorted"; then
+            echo "known failure set changed; repair it or update the explicit baseline" >&2
+            fail=1
+          fi
+
+          echo "direct current gates: $(awk -F '\t' '$1 ~ /^run-/ {n++} END {print n+0}' "$manifest")"
+          echo "known-failure baselines: $(awk -F '\t' '$1 ~ /^baseline-/ {n++} END {print n+0}' "$manifest")"
+          echo "evidence-backed Clojure exclusions: $(awk -F '\t' '$1 == "exclude" {n++} END {print n+0}' "$manifest")"
           exit $fail

@@ -1,172 +1,174 @@
-# Explicit CI disposition for every tests/*_test.clj file.
-# run: occurrence-native component gate. legacy: pre-cutover suite retained
-# for deliberate port/retirement; adding a test without classifying it fails CI.
-# run-shell/run-node: current boundary gates outside the Clojure glob.
-# legacy-gate: former standalone CI gate whose model dependency is retired.
+# disposition<TAB>class<TAB>path<TAB>evidence-file#evidence-regex
+# exclude/exclude-gate entries are accepted only when their evidence regex
+# occurs in the named evidence file. Baseline entries run and compare failure sets.
+# aggregate entries name current gates exercised by their toolchain producer.
 
-run tests/cloudflare_json_response_test.clj
-run tests/cloudflare_runtime_closure_test.clj
-run tests/coord_migrate_flat_classification_test.clj
-run tests/coord_test.clj
-run tests/coord_writer_authority_test.clj
-run tests/datalog_fn_test.clj
-run tests/datalog_predicate_test.clj
-run tests/fold_occurrence_test.clj
-run tests/fram_rpc_v1_test.clj
-run tests/fri_cache_v2_test.clj
-run tests/mcp_test.clj
-run tests/native_rpc_boundary_ratchet_test.clj
-run tests/native_rpc_daemon_test.clj
-run tests/query_aggregate_test.clj
-run tests/query_projection_test.clj
-run tests/rotations_v2_test.clj
-run tests/store_test.clj
-run tests/triple_kernel_test.clj
-run tests/triple_log_migration_test.clj
-run tests/triple_query_test.clj
+run-bb	current-model	tests/cloudflare_json_response_test.clj	-
+run-bb	current-model	tests/cloudflare_runtime_closure_test.clj	-
+run-bb	current-model	tests/codegraph_seam_test.clj	-
+run-bb	current-model	tests/coord_migrate_flat_classification_test.clj	-
+run-bb	current-model	tests/coord_test.clj	-
+run-bb	current-model	tests/coord_writer_authority_test.clj	-
+run-bb	current-model	tests/core_code_blind_test.clj	-
+run-bb	current-model	tests/datalog_fn_test.clj	-
+run-bb	current-model	tests/datalog_predicate_test.clj	-
+run-bb	current-model	tests/fold_occurrence_test.clj	-
+run-bb	current-model	tests/fram_promotion_test.clj	-
+run-bb	current-model	tests/fram_rpc_v1_test.clj	-
+run-bb	current-model	tests/fri_cache_v2_test.clj	-
+run-bb	current-model	tests/kernel_classify_test.clj	-
+run-bb	current-model	tests/log_split_readiness_dead_child_test.clj	-
+run-bb	current-model	tests/mcp_test.clj	-
+run-bb	current-model	tests/native_rpc_boundary_ratchet_test.clj	-
+run-bb	current-model	tests/native_rpc_daemon_test.clj	-
+run-bb	current-model	tests/query_aggregate_test.clj	-
+run-bb	current-model	tests/query_projection_test.clj	-
+run-bb	current-model	tests/rotations_v2_test.clj	-
+run-bb	current-model	tests/store_invariant_test.clj	-
+run-bb	current-model	tests/store_ordkey_test.clj	-
+run-bb	current-model	tests/store_test.clj	-
+run-bb	current-model	tests/triple_kernel_test.clj	-
+run-bb	current-model	tests/triple_log_migration_test.clj	-
+run-bb	current-model	tests/triple_query_test.clj	-
+run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
+baseline-bb	catalog-drift	tests/catalog_current_test.clj	tests/catalog_current_test.clj#catalog_current_test:.*FAIL.*DRIFTED
 
-run-shell tests/fram_up_readiness_test.sh
-run-shell tests/fri_golden.sh
-run-shell tests/zig_rpc_source_ratchet.sh
-run-node tests/cloudflare_worker_client_test.mjs
+run-shell	current-boundary	tests/fram_up_readiness_test.sh	-
+run-shell	current-cache	tests/fri_golden.sh	-
+run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
+run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
+aggregate-nix	package-closure	tests/package_daemon_smoke.sh	flake.nix#package_daemon_smoke
+aggregate-zig	zig-bootstrap	tests/zig_daemon_bootstrap_test.sh	build.zig#fram-daemon-zig
+aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-daemon-zig
+baseline-shell	vocab-residue	tests/vocab_ratchet_test.sh	tests/vocab_ratchet_test.sh#REGROWTH
 
-legacy-gate bench/propagation/check-budget.clj
-legacy-gate scripts/readme-check.sh
-legacy-gate tests/daemon_read_perf_ratchet.sh
-legacy-gate tests/vocab_ratchet_test.sh
+exclude-gate	removed-flat-cli	scripts/readme-check.sh	scripts/readme-check.sh#core.engine.loop
+exclude-gate	removed-flat-store	bench/propagation/check-budget.clj	bench/propagation/sweep.clj#fram.schema
+exclude-gate	removed-serve-flat	tests/daemon_read_perf_ratchet.sh	tests/daemon_read_perf_ratchet.sh#serve-flat
 
-legacy tests/adversarial_torn_sweep_test.clj
-legacy tests/adversarial_world_fuzz_test.clj
-legacy tests/adversarial_world_surgery_test.clj
-legacy tests/assert_batch_flat_log_test.clj
-legacy tests/authority_graph_authoring_test.clj
-legacy tests/authority_primitives_test.clj
-legacy tests/bind_test.clj
-legacy tests/cascade_test.clj
-legacy tests/catalog_current_test.clj
-legacy tests/claims_daemon_test.clj
-legacy tests/claims_spec_test.clj
-legacy tests/codegraph_seam_test.clj
-legacy tests/coherence_doctor_test.clj
-legacy tests/coord_addressable_forms_test.clj
-legacy tests/coord_admission_deadline_test.clj
-legacy tests/coord_aggregate_seam_test.clj
-legacy tests/coord_appender_failure_test.clj
-legacy tests/coord_assert_at_version_test.clj
-legacy tests/coord_assert_batch_at_version_test.clj
-legacy tests/coord_assert_batch_atomicity_test.clj
-legacy tests/coord_authority_snapshot_test.clj
-legacy tests/coord_authority_test.clj
-legacy tests/coord_batch_commit_test.clj
-legacy tests/coord_blue_green_cutover_test.clj
-legacy tests/coord_cardinality_fact_test.clj
-legacy tests/coord_causality_test.clj
-legacy tests/coord_client_wire_boundary_test.clj
-legacy tests/coord_code_flip_test.clj
-legacy tests/coord_coexist_elect_test.clj
-legacy tests/coord_concern_overlap_test.clj
-legacy tests/coord_daemon_wire_test.clj
-legacy tests/coord_defcheck_untyped_e2e_test.clj
-legacy tests/coord_dropin_test.clj
-legacy tests/coord_edit_min_core_test.clj
-legacy tests/coord_edit_min_socket_test.clj
-legacy tests/coord_editpath_defect_test.clj
-legacy tests/coord_existing_write_test.clj
-legacy tests/coord_expected_log_test.clj
-legacy tests/coord_facts_serialization_cache_test.clj
-legacy tests/coord_fenced_publish_kernel_test.clj
-legacy tests/coord_fenced_publish_test.clj
-legacy tests/coord_fenced_write_kernel_test.clj
-legacy tests/coord_fenced_write_test.clj
-legacy tests/coord_flip_test.clj
-legacy tests/coord_group_queue_bound_test.clj
-legacy tests/coord_honesty_pass_test.clj
-legacy tests/coord_lease_external_freshness_test.clj
-legacy tests/coord_lease_flat_durability_test.clj
-legacy tests/coord_lease_test.clj
-legacy tests/coord_lock_convoy_test.clj
-legacy tests/coord_migrate_test.clj
-legacy tests/coord_mmap_image_test.clj
-legacy tests/coord_notify_bound_test.clj
-legacy tests/coord_occ_verbs_test.clj
-legacy tests/coord_projection_singleflight_test.clj
-legacy tests/coord_proto_upsert_test.clj
-legacy tests/coord_query_cache_reload_stability_test.clj
-legacy tests/coord_query_cancellation_test.clj
-legacy tests/coord_query_page_snapshot_test.clj
-legacy tests/coord_query_snapshot_isolation_test.clj
-legacy tests/coord_rotations_test.clj
-legacy tests/coord_schema_read_test.clj
-legacy tests/coord_schema_write_test.clj
-legacy tests/coord_scoped_facts_test.clj
-legacy tests/coord_show_indexed_test.clj
-legacy tests/coord_shutdown_test.clj
-legacy tests/coord_snapshot_boot_test.clj
-legacy tests/coord_snapshot_split_boot_test.clj
-legacy tests/coord_snapshot_test.clj
-legacy tests/coord_split_log_reload_test.clj
-legacy tests/coord_telemetry_shed_test.clj
-legacy tests/coord_torn_tail_repair_test.clj
-legacy tests/coord_views_resolve_test.clj
-legacy tests/coord_views_test.clj
-legacy tests/coord_write_def_realcheck_test.clj
-legacy tests/coord_write_def_test.clj
-legacy tests/core_code_blind_test.clj
-legacy tests/daemon_read_cli_test.clj
-legacy tests/daemon_small_corpus_order_test.clj
-legacy tests/datalog_diff_test.clj
-legacy tests/datalog_scale_test.clj
-legacy tests/datalog_shared_index_test.clj
-legacy tests/datalog_test.clj
-legacy tests/doctor_fingerprint_test.clj
-legacy tests/edit_verifier_adapter_test.clj
-legacy tests/fram_commit_code_prestate_test.clj
-legacy tests/fram_promotion_test.clj
-legacy tests/graph_ops_telemetry_smoke_test.clj
-legacy tests/kernel_classify_test.clj
-legacy tests/kernel_violations_test.clj
-legacy tests/log_split_boot_test.clj
-legacy tests/log_split_e2e_test.clj
-legacy tests/log_split_readiness_dead_child_test.clj
-legacy tests/log_split_readiness_slow_boot_test.clj
-legacy tests/mcp_candidate_test.clj
-legacy tests/mcp_edit_test.clj
-legacy tests/mcp_profile_test.clj
-legacy tests/mcp_warm_graph_edit_regression_test.clj
-legacy tests/pull_test.clj
-legacy tests/query_cache_singleflight_test.clj
-legacy tests/query_page_wire_test.clj
-legacy tests/query_test.clj
-legacy tests/receipt_envelope_producer_test.clj
-legacy tests/resolve_logical_identity_test.clj
-legacy tests/resolve_mint_symbol_fallback_test.clj
-legacy tests/resolve_shim_identity_test.clj
-legacy tests/roundtrip_test.clj
-legacy tests/schema_test.clj
-legacy tests/set_tx_test.clj
-legacy tests/show_reporter_join_test.clj
-legacy tests/slow_read_attribution_test.clj
-legacy tests/snapshot_retention_test.clj
-legacy tests/store_anchor_disambig_test.clj
-legacy tests/store_colon_marker_roundtrip_test.clj
-legacy tests/store_defcheck_test.clj
-legacy tests/store_defcheck_untyped_test.clj
-legacy tests/store_delete_reorder_test.clj
-legacy tests/store_domain_test.clj
-legacy tests/store_invariant_test.clj
-legacy tests/store_ordkey_test.clj
-legacy tests/store_replace_in_body_test.clj
-legacy tests/store_replay_test.clj
-legacy tests/store_write_conc_test.clj
-legacy tests/telemetry_retention_test.clj
-legacy tests/tls_test.clj
-legacy tests/tools_test.clj
-legacy tests/top_level_insert_test.clj
-legacy tests/torn_tail_daemon_test.clj
-legacy tests/torn_tail_test.clj
-legacy tests/vguard_floor_test.clj
-legacy tests/wire_fault_daemon_read_cli_test.clj
-legacy tests/world_git_bridge_test.clj
-legacy tests/world_kernel_test.clj
-legacy tests/world_persistence_test.clj
-legacy tests/world_vertical_slice_test.clj
+exclude	moved-world-service	tests/adversarial_torn_sweep_test.clj	tests/adversarial_torn_sweep_test.clj#fram\.world
+exclude	moved-world-service	tests/adversarial_world_fuzz_test.clj	tests/adversarial_world_fuzz_test.clj#fram\.world
+exclude	moved-world-service	tests/adversarial_world_surgery_test.clj	tests/adversarial_world_surgery_test.clj#fram\.world
+exclude	removed-serve-flat	tests/assert_batch_flat_log_test.clj	tests/assert_batch_flat_log_test.clj#serve-flat
+exclude	moved-graph-control	tests/authority_graph_authoring_test.clj	tests/authority_graph_authoring_test.clj#graph.?author
+exclude	moved-graph-control	tests/authority_primitives_test.clj	tests/authority_primitives_test.clj#graph-edit
+exclude	removed-flat-log	tests/bind_test.clj	tests/bind_test.clj#facts\.log
+exclude	removed-coordinator-v1	tests/cascade_test.clj	tests/cascade_test.clj#coord_daemon\.clj
+exclude	removed-serve-flat	tests/claims_daemon_test.clj	tests/claims_daemon_test.clj#serve-flat
+exclude	moved-world-service	tests/claims_spec_test.clj	tests/claims_spec_test.clj#fram\.world
+exclude	moved-world-service	tests/coherence_doctor_test.clj	tests/coherence_doctor_test.clj#world[_-]
+exclude	moved-graph-control	tests/coord_addressable_forms_test.clj	tests/coord_addressable_forms_test.clj#edit-min
+exclude	removed-serve-flat	tests/coord_admission_deadline_test.clj	tests/coord_admission_deadline_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_aggregate_seam_test.clj	tests/coord_aggregate_seam_test.clj#fram\.store
+exclude	removed-flat-log	tests/coord_appender_failure_test.clj	tests/coord_appender_failure_test.clj#facts\.log
+exclude	removed-serve-flat	tests/coord_assert_at_version_test.clj	tests/coord_assert_at_version_test.clj#serve-flat
+exclude	removed-serve-flat	tests/coord_assert_batch_at_version_test.clj	tests/coord_assert_batch_at_version_test.clj#serve-flat
+exclude	removed-serve-flat	tests/coord_assert_batch_atomicity_test.clj	tests/coord_assert_batch_atomicity_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_authority_snapshot_test.clj	tests/coord_authority_snapshot_test.clj#fram\.store
+exclude	moved-graph-control	tests/coord_authority_test.clj	tests/coord_authority_test.clj#edit-prepare
+exclude	removed-flat-store	tests/coord_batch_commit_test.clj	tests/coord_batch_commit_test.clj#fram\.store
+exclude	removed-serve-flat	tests/coord_blue_green_cutover_test.clj	tests/coord_blue_green_cutover_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_cardinality_fact_test.clj	tests/coord_cardinality_fact_test.clj#fram\.store
+exclude	removed-flat-store	tests/coord_causality_test.clj	tests/coord_causality_test.clj#c/value-id
+exclude	removed-flat-log	tests/coord_client_wire_boundary_test.clj	tests/coord_client_wire_boundary_test.clj#facts\.log
+exclude	moved-graph-control	tests/coord_code_flip_test.clj	tests/coord_code_flip_test.clj#set-body
+exclude	removed-flat-store	tests/coord_coexist_elect_test.clj	tests/coord_coexist_elect_test.clj#c/value-id
+exclude	moved-graph-control	tests/coord_concern_overlap_test.clj	tests/coord_concern_overlap_test.clj#edit-min
+exclude	removed-edn-wire	tests/coord_daemon_wire_test.clj	tests/coord_daemon_wire_test.clj#request-dispatch
+exclude	moved-graph-control	tests/coord_defcheck_untyped_e2e_test.clj	tests/coord_defcheck_untyped_e2e_test.clj#write-def
+exclude	removed-flat-store	tests/coord_dropin_test.clj	tests/coord_dropin_test.clj#c/fact-of
+exclude	moved-graph-control	tests/coord_edit_min_core_test.clj	tests/coord_edit_min_core_test.clj#edit-min
+exclude	moved-graph-control	tests/coord_edit_min_socket_test.clj	tests/coord_edit_min_socket_test.clj#edit-min
+exclude	moved-graph-control	tests/coord_editpath_defect_test.clj	tests/coord_editpath_defect_test.clj#edit-min
+exclude	removed-serve-flat	tests/coord_existing_write_test.clj	tests/coord_existing_write_test.clj#serve-flat
+exclude	moved-graph-control	tests/coord_expected_log_test.clj	tests/coord_expected_log_test.clj#edit-min
+exclude	removed-flat-log	tests/coord_facts_serialization_cache_test.clj	tests/coord_facts_serialization_cache_test.clj#facts\.log
+exclude	removed-flat-log	tests/coord_fenced_publish_kernel_test.clj	tests/coord_fenced_publish_kernel_test.clj#facts\.log
+exclude	removed-serve-flat	tests/coord_fenced_publish_test.clj	tests/coord_fenced_publish_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_fenced_write_kernel_test.clj	tests/coord_fenced_write_kernel_test.clj#fram\.store
+exclude	removed-serve-flat	tests/coord_fenced_write_test.clj	tests/coord_fenced_write_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_flip_test.clj	tests/coord_flip_test.clj#c/entity!
+exclude	removed-flat-log	tests/coord_group_queue_bound_test.clj	tests/coord_group_queue_bound_test.clj#facts\.log
+exclude	removed-coordinator-v1	tests/coord_honesty_pass_test.clj	tests/coord_honesty_pass_test.clj#coord_daemon\.clj
+exclude	removed-serve-flat	tests/coord_lease_external_freshness_test.clj	tests/coord_lease_external_freshness_test.clj#serve-flat
+exclude	removed-serve-flat	tests/coord_lease_flat_durability_test.clj	tests/coord_lease_flat_durability_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_lease_test.clj	tests/coord_lease_test.clj#fram\.store
+exclude	removed-serve-flat	tests/coord_lock_convoy_test.clj	tests/coord_lock_convoy_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_migrate_test.clj	tests/coord_migrate_test.clj#c/entity!
+exclude	removed-flat-store	tests/coord_mmap_image_test.clj	tests/coord_mmap_image_test.clj#\bcid\b
+exclude	removed-serve-flat	tests/coord_notify_bound_test.clj	tests/coord_notify_bound_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_occ_verbs_test.clj	tests/coord_occ_verbs_test.clj#c/value-id
+exclude	removed-flat-store	tests/coord_projection_singleflight_test.clj	tests/coord_projection_singleflight_test.clj#k/->Fact
+exclude	moved-graph-control	tests/coord_proto_upsert_test.clj	tests/coord_proto_upsert_test.clj#write-def
+exclude	removed-serve-flat	tests/coord_query_cache_reload_stability_test.clj	tests/coord_query_cache_reload_stability_test.clj#serve-flat
+exclude	removed-serve-flat	tests/coord_query_cancellation_test.clj	tests/coord_query_cancellation_test.clj#serve-flat
+exclude	removed-flat-log	tests/coord_query_page_snapshot_test.clj	tests/coord_query_page_snapshot_test.clj#facts\.log
+exclude	removed-flat-log	tests/coord_query_snapshot_isolation_test.clj	tests/coord_query_snapshot_isolation_test.clj#facts\.log
+exclude	removed-flat-store	tests/coord_rotations_test.clj	tests/coord_rotations_test.clj#k/->Fact
+exclude	removed-flat-store	tests/coord_schema_read_test.clj	tests/coord_schema_read_test.clj#fram\.store
+exclude	removed-flat-store	tests/coord_schema_write_test.clj	tests/coord_schema_write_test.clj#fram\.store
+exclude	removed-flat-log	tests/coord_scoped_facts_test.clj	tests/coord_scoped_facts_test.clj#facts\.log
+exclude	removed-flat-log	tests/coord_show_indexed_test.clj	tests/coord_show_indexed_test.clj#facts\.log
+exclude	removed-serve-flat	tests/coord_shutdown_test.clj	tests/coord_shutdown_test.clj#serve-flat
+exclude	moved-graph-control	tests/coord_snapshot_boot_test.clj	tests/coord_snapshot_boot_test.clj#out/resolve\.clj
+exclude	removed-flat-log	tests/coord_snapshot_split_boot_test.clj	tests/coord_snapshot_split_boot_test.clj#coordination\.log
+exclude	removed-flat-store	tests/coord_snapshot_test.clj	tests/coord_snapshot_test.clj#fram\.store
+exclude	removed-flat-log	tests/coord_split_log_reload_test.clj	tests/coord_split_log_reload_test.clj#coordination\.log
+exclude	removed-coordinator-v1	tests/coord_telemetry_shed_test.clj	tests/coord_telemetry_shed_test.clj#coord_daemon\.clj
+exclude	removed-serve-flat	tests/coord_torn_tail_repair_test.clj	tests/coord_torn_tail_repair_test.clj#serve-flat
+exclude	removed-flat-store	tests/coord_views_resolve_test.clj	tests/coord_views_resolve_test.clj#c/value!
+exclude	removed-flat-store	tests/coord_views_test.clj	tests/coord_views_test.clj#c/value-id
+exclude	moved-graph-control	tests/coord_write_def_realcheck_test.clj	tests/coord_write_def_realcheck_test.clj#write-def
+exclude	moved-graph-control	tests/coord_write_def_test.clj	tests/coord_write_def_test.clj#write-def
+exclude	removed-flat-log	tests/daemon_read_cli_test.clj	tests/daemon_read_cli_test.clj#coordination\.log
+exclude	removed-flat-log	tests/daemon_small_corpus_order_test.clj	tests/daemon_small_corpus_order_test.clj#facts\.log
+exclude	removed-query-v1	tests/datalog_diff_test.clj	tests/datalog_diff_test.clj#fixpoint-oracle
+exclude	removed-flat-store	tests/datalog_scale_test.clj	tests/datalog_scale_test.clj#k/->Fact
+exclude	removed-query-v1	tests/datalog_shared_index_test.clj	tests/datalog_shared_index_test.clj#fixpoint-bi
+exclude	removed-flat-store	tests/datalog_test.clj	tests/datalog_test.clj#c/value!
+exclude	removed-flat-log	tests/doctor_fingerprint_test.clj	tests/doctor_fingerprint_test.clj#facts\.log
+exclude	moved-world-service	tests/edit_verifier_adapter_test.clj	tests/edit_verifier_adapter_test.clj#world[_-]
+exclude	moved-graph-control	tests/fram_commit_code_prestate_test.clj	tests/fram_commit_code_prestate_test.clj#edit-min
+exclude	moved-graph-control	tests/graph_ops_telemetry_smoke_test.clj	tests/graph_ops_telemetry_smoke_test.clj#set-body
+exclude	removed-flat-store	tests/kernel_violations_test.clj	tests/kernel_violations_test.clj#k/->Fact
+exclude	removed-flat-log	tests/log_split_boot_test.clj	tests/log_split_boot_test.clj#facts\.log
+exclude	removed-flat-log	tests/log_split_e2e_test.clj	tests/log_split_e2e_test.clj#coordination\.log
+exclude	removed-flat-log	tests/log_split_readiness_slow_boot_test.clj	tests/log_split_readiness_slow_boot_test.clj#coordination\.log
+exclude	moved-world-service	tests/mcp_candidate_test.clj	tests/mcp_candidate_test.clj#world[_-]
+exclude	moved-graph-control	tests/mcp_edit_test.clj	tests/mcp_edit_test.clj#edit-min
+exclude	moved-world-service	tests/mcp_profile_test.clj	tests/mcp_profile_test.clj#world[_-]
+exclude	moved-graph-control	tests/mcp_warm_graph_edit_regression_test.clj	tests/mcp_warm_graph_edit_regression_test.clj#edit-min
+exclude	moved-graph-control	tests/pull_test.clj	tests/pull_test.clj#graph.?author
+exclude	removed-flat-log	tests/query_cache_singleflight_test.clj	tests/query_cache_singleflight_test.clj#coordination\.log
+exclude	removed-serve-flat	tests/query_page_wire_test.clj	tests/query_page_wire_test.clj#serve-flat
+exclude	removed-flat-store	tests/query_test.clj	tests/query_test.clj#k/->Fact
+exclude	moved-graph-control	tests/receipt_envelope_producer_test.clj	tests/receipt_envelope_producer_test.clj#fram-edit
+exclude	moved-graph-control	tests/resolve_logical_identity_test.clj	tests/resolve_logical_identity_test.clj#replace-in-body
+exclude	removed-flat-store	tests/resolve_mint_symbol_fallback_test.clj	tests/resolve_mint_symbol_fallback_test.clj#c/value!
+exclude	moved-graph-control	tests/resolve_shim_identity_test.clj	tests/resolve_shim_identity_test.clj#out/resolve\.clj
+exclude	removed-flat-store	tests/roundtrip_test.clj	tests/roundtrip_test.clj#k/->Fact
+exclude	removed-flat-store	tests/schema_test.clj	tests/schema_test.clj#c/value!
+exclude	removed-flat-store	tests/set_tx_test.clj	tests/set_tx_test.clj#->Fact
+exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_join_test.clj#facts\.log
+exclude	removed-flat-log	tests/slow_read_attribution_test.clj	tests/slow_read_attribution_test.clj#coordination\.log
+exclude	removed-flat-log	tests/snapshot_retention_test.clj	tests/snapshot_retention_test.clj#coordination\.log
+exclude	moved-graph-control	tests/store_anchor_disambig_test.clj	tests/store_anchor_disambig_test.clj#replace-in-body
+exclude	moved-graph-control	tests/store_colon_marker_roundtrip_test.clj	tests/store_colon_marker_roundtrip_test.clj#graph.?author
+exclude	moved-graph-control	tests/store_defcheck_test.clj	tests/store_defcheck_test.clj#graph.?author
+exclude	moved-graph-control	tests/store_delete_reorder_test.clj	tests/store_delete_reorder_test.clj#out/resolve\.clj
+exclude	removed-flat-store	tests/store_domain_test.clj	tests/store_domain_test.clj#c/entity!
+exclude	moved-graph-control	tests/store_replace_in_body_test.clj	tests/store_replace_in_body_test.clj#replace-in-body
+exclude	removed-flat-store	tests/store_replay_test.clj	tests/store_replay_test.clj#c/value!
+exclude	removed-serve-flat	tests/store_write_conc_test.clj	tests/store_write_conc_test.clj#serve-flat
+exclude	removed-serve-flat	tests/telemetry_retention_test.clj	tests/telemetry_retention_test.clj#serve-flat
+exclude	removed-flat-log	tests/tls_test.clj	tests/tls_test.clj#facts\.log
+exclude	moved-graph-control	tests/tools_test.clj	tests/tools_test.clj#replace-in-body
+exclude	moved-graph-control	tests/top_level_insert_test.clj	tests/top_level_insert_test.clj#FRAM_GRAPH_EDIT
+exclude	removed-flat-log	tests/torn_tail_daemon_test.clj	tests/torn_tail_daemon_test.clj#rt/read-log
+exclude	removed-flat-log	tests/torn_tail_test.clj	tests/torn_tail_test.clj#rt/read-log
+exclude	removed-serve-flat	tests/vguard_floor_test.clj	tests/vguard_floor_test.clj#serve-flat
+exclude	removed-serve-flat	tests/wire_fault_daemon_read_cli_test.clj	tests/wire_fault_daemon_read_cli_test.clj#serve-flat
+exclude	moved-world-service	tests/world_git_bridge_test.clj	tests/world_git_bridge_test.clj#fram\.world
+exclude	moved-world-service	tests/world_kernel_test.clj	tests/world_kernel_test.clj#fram\.world
+exclude	moved-world-service	tests/world_persistence_test.clj	tests/world_persistence_test.clj#fram\.world
+exclude	moved-world-service	tests/world_vertical_slice_test.clj	tests/world_vertical_slice_test.clj#fram\.world

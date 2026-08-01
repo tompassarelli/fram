@@ -61,7 +61,13 @@
           nil))
 
 (let [mcp (file-source "tests/fram_mcp.clj")
-      public (between mcp "(defn- term-json" ";; wall-clock budget")]
+      catalog (between mcp "(def ^:private closed-catalog"
+                       "(defn- input-schema")
+      public (between mcp "(defn- term-json" "(def ^:private max-live-queries")
+      tool-names (mapv second (re-seq #":name \"([^\"]+)\"" catalog))]
+  (check! "MCP tools/list catalog is exactly the five public data verbs"
+          (= ["tell" "retract" "show" "ask" "validate"] tool-names)
+          tool-names)
   (check! "MCP public data dispatch is FRAMRPC-only"
           (and public
                (str/includes? public "fram.rt/native-call!")
@@ -69,9 +75,11 @@
                                 "coord-assert-for-log" "coord-retract-for-log"
                                 "edn/read"]))
           nil)
-  (check! "MCP graph authoring fails into the sealed-control follow-up"
-          (str/includes? public
-                         "graph authoring is sealed-control work and is not routed through public FRAMRPC")
+  (check! "MCP runtime closure contains no graph-control implementation"
+          (absent? mcp ["resolve-core" "babashka.process" "FRAM_GRAPH_EDIT"
+                        "route-edit" "add-def" "set-body" "rename-def"
+                        "insert-after" "insert-before" "replace-in-body"
+                        "edit-transaction"])
           nil))
 
 (let [fast (file-source "bin/fram-fast.clj")
