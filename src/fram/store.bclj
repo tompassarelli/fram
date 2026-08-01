@@ -1,34 +1,26 @@
 #lang beagle/clj
-;; Portable recursive Term/Triple kernel plus the legacy cid migration boundary.
-;; Its native representation is record/vector only;
-;; linear scans are intentional until the native index layer owns this concern —
-;; except the probes that are linear in the whole store, which made loading one
-;; impossible.  find-value, the fact-index bucket family, find-fact and find-tx
-;; are addressed through a hash-slot table; find-value-by-id and find-tx-of binary
-;; search, because :values and :tx-of are ordered by construction (see fresh-id!).
+;; Portable recursive Term storage and occurrence-ordered transaction history.
 (ns fram.store)
 (define-mode strict)
 (require fram.types :as t)
 
-(def empty-ids :- (Vec Int) [])
-(def empty-values :- (Vec t/StoredValue) [])
-(def empty-facts :- (Vec t/StoredFact) [])
-(def empty-tx-of :- (Vec t/StoredTxOf) [])
-(def empty-txs :- (Vec t/StoredTx) [])
-(def empty-id-buckets :- (Vec t/IdBucket) [])
-(def empty-pair-buckets :- (Vec t/PairBucket) [])
-
-;; Slot-table sizing. A table doubles once its indexed vector holds more than
-;; slot-load entries per slot.
-(def initial-slots :- Int 64)
-(def slot-load :- Int 4)
-
-;; Recursive Term/Triple store.  Tagged handles are derived from table position
-;; (even atom, odd triple), remain private to this module, and never become a
-;; fourth semantic slot.
+(def empty-ids: (Vec Int) [])
+(def empty-bools: (Vec Bool) [])
 (def empty-atoms: (Vec t/AtomRow) [])
 (def empty-triple-rows: (Vec t/TripleRow) [])
+(def empty-transaction-rows: (Vec t/TransactionRow) [])
+(def empty-operation-rows: (Vec t/OperationRow) [])
+(def empty-active-buckets: (Vec t/ActiveBucket) [])
 (def empty-term-buckets: (Vec t/TermBucket) [])
+(def term-store-dump-version: Int 2)
+
+;; A slot table doubles once its indexed vector holds more than this many rows
+;; per slot. Every lookup still checks the complete physical row for collision.
+(def initial-slots: Int 64)
+(def slot-load: Int 4)
+
+(defn- valid-space-id? [space-id: Any] -> Bool
+  (and (string? space-id) (pos? (count space-id))))
 
 (defn- fresh-term-slots [width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) empty-term-buckets position 0]
@@ -38,32 +30,63 @@
 
 (defn- term-slot [value: Any width: Int] -> Int (mod (hash value) width))
 
-(defn- term-slot-add [slots: (Vec t/TermBucket) slot: Int position: Int] -> (Vec t/TermBucket)
+(defn- term-slot-add
+  [slots: (Vec t/TermBucket) slot: Int position: Int] -> (Vec t/TermBucket)
   (assoc slots slot
-         (t/->TermBucket slot (conj (t/termbucket-positions (nth slots slot)) position))))
+         (t/->TermBucket slot
+                         (conj (t/termbucket-positions (nth slots slot)) position))))
 
 (defn- term-slots-width-for [n: Int] -> Int
   (loop [width initial-slots]
     (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
-(defn- build-atom-term-slots [atoms: (Vec t/AtomRow) width: Int] -> (Vec t/TermBucket)
+(defn- build-atom-term-slots
+  [atoms: (Vec t/AtomRow) width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
     (if (>= position (count atoms))
       slots
       (recur (term-slot-add slots (term-slot (nth atoms position) width) position)
              (inc position)))))
 
-(defn- build-triple-term-slots [rows: (Vec t/TripleRow) width: Int] -> (Vec t/TermBucket)
+(defn- build-triple-term-slots
+  [rows: (Vec t/TripleRow) width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
     (if (>= position (count rows))
       slots
       (recur (term-slot-add slots (term-slot (nth rows position) width) position)
              (inc position)))))
 
-(defn new-term-store [] -> (Atom t/TermStore)
-  (atom (t/->TermStore empty-atoms empty-triple-rows
-                       (fresh-term-slots initial-slots)
-                       (fresh-term-slots initial-slots))))
+(defn- build-active-slots
+  [buckets: (Vec t/ActiveBucket) width: Int] -> (Vec t/TermBucket)
+  (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
+    (if (>= position (count buckets))
+      slots
+      (recur
+       (term-slot-add slots
+                      (term-slot (t/activebucket-triple-handle (nth buckets position)) width)
+                      position)
+       (inc position)))))
+
+(defn new-term-store [space-id: String] -> (Atom t/TermStore)
+  (if (valid-space-id? space-id)
+    (atom (t/->TermStore
+           space-id 1 empty-atoms empty-triple-rows
+           empty-transaction-rows empty-operation-rows empty-bools empty-ids
+           empty-active-buckets
+           (fresh-term-slots initial-slots)
+           (fresh-term-slots initial-slots)
+           (fresh-term-slots initial-slots)))
+    (throw (ex-info "fram: TermStore requires a non-empty SpaceId"
+                    {:type :invalid-space-id}))))
+
+(defn space-id [ctx: (Atom t/TermStore)] -> String
+  (t/termstore-space-id (deref ctx)))
+
+(defn next-sequence [ctx: (Atom t/TermStore)] -> Int
+  (t/termstore-next-sequence (deref ctx)))
+
+(defn current-sequence [ctx: (Atom t/TermStore)] -> Int
+  (dec (next-sequence ctx)))
 
 (defn- atom-row [value: Any] -> t/AtomRow
   (cond
@@ -95,7 +118,7 @@
         (t/termbucket-positions (nth slots (term-slot value (count slots))))]
     (loop [offset 0]
       (if (>= offset (count positions))
-      -1
+        -1
         (let [position (nth positions offset)]
           (if (= (nth atoms position) value)
             position
@@ -107,13 +130,14 @@
         (t/termbucket-positions (nth slots (term-slot value (count slots))))]
     (loop [offset 0]
       (if (>= offset (count positions))
-      -1
+        -1
         (let [position (nth positions offset)]
           (if (= (nth rows position) value)
             position
             (recur (inc offset))))))))
 
-(defn- index-atom-term! [ctx: (Atom t/TermStore) value: t/AtomRow position: Int] -> t/TermStore
+(defn- index-atom-term!
+  [ctx: (Atom t/TermStore) value: t/AtomRow position: Int] -> t/TermStore
   (let [store: t/TermStore
         (swap! ctx update :atom-slots
                (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
@@ -121,11 +145,13 @@
     (if (> (count (t/termstore-atoms store))
            (* slot-load (count (t/termstore-atom-slots store))))
       (swap! ctx assoc :atom-slots
-             (build-atom-term-slots (t/termstore-atoms store)
-                                    (* 2 (count (t/termstore-atom-slots store)))))
+             (build-atom-term-slots
+              (t/termstore-atoms store)
+              (* 2 (count (t/termstore-atom-slots store)))))
       store)))
 
-(defn- index-triple-term! [ctx: (Atom t/TermStore) value: t/TripleRow position: Int] -> t/TermStore
+(defn- index-triple-term!
+  [ctx: (Atom t/TermStore) value: t/TripleRow position: Int] -> t/TermStore
   (let [store: t/TermStore
         (swap! ctx update :triple-slots
                (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
@@ -133,8 +159,9 @@
     (if (> (count (t/termstore-triples store))
            (* slot-load (count (t/termstore-triple-slots store))))
       (swap! ctx assoc :triple-slots
-             (build-triple-term-slots (t/termstore-triples store)
-                                      (* 2 (count (t/termstore-triple-slots store)))))
+             (build-triple-term-slots
+              (t/termstore-triples store)
+              (* 2 (count (t/termstore-triple-slots store)))))
       store)))
 
 (defn- atom-handle [position: Int] -> Int (* 2 position))
@@ -169,7 +196,8 @@
           (atom-handle known)
           (let [position (count atoms)]
             (swap! ctx update :atoms
-                   (fn [current: (Vec t/AtomRow)] -> (Vec t/AtomRow) (conj current value)))
+                   (fn [current: (Vec t/AtomRow)] -> (Vec t/AtomRow)
+                     (conj current value)))
             (index-atom-term! ctx value position)
             (atom-handle position)))))))
 
@@ -190,6 +218,13 @@
                     (resolve-handle store (t/triplerow-slot1 row))
                     (resolve-handle store (t/triplerow-slot2 row))))))))
 
+(defn- resolve-triple-handle [store: t/TermStore handle: Int] -> t/Triple
+  (let [term (resolve-handle store handle)]
+    (if (t/triple? term)
+      term
+      (throw (ex-info "fram: operation handle does not resolve to Triple"
+                      {:type :invalid-operation-handle})))))
+
 (defn intern-term! [ctx: (Atom t/TermStore) term: Any] -> Any
   (let [handle (intern-handle! ctx term)]
     (resolve-handle (deref ctx) handle)))
@@ -208,9 +243,252 @@
 (defn term-count [ctx: (Atom t/TermStore)] -> Int
   (+ (atom-term-count ctx) (triple-term-count ctx)))
 
+(defn transaction-count [ctx: (Atom t/TermStore)] -> Int
+  (count (t/termstore-transactions (deref ctx))))
+
+(defn operation-count [ctx: (Atom t/TermStore)] -> Int
+  (count (t/termstore-operations (deref ctx))))
+
+(defn assert-operation [proposition: Any] -> t/CommitOperation
+  (if (and (t/triple? proposition) (t/term? proposition))
+    (t/->CommitOperation t/assert-action proposition)
+    (throw (ex-info "fram: assertion operation requires a Triple"
+                    {:type :invalid-commit-operation}))))
+
+(defn retract-operation [proposition: Any] -> t/CommitOperation
+  (if (and (t/triple? proposition) (t/term? proposition))
+    (t/->CommitOperation t/retract-action proposition)
+    (throw (ex-info "fram: retraction operation requires a Triple"
+                    {:type :invalid-commit-operation}))))
+
+(defn- valid-commit-operation? [operation: t/CommitOperation] -> Bool
+  (and (or (= t/assert-action (t/commitoperation-action operation))
+           (= t/retract-action (t/commitoperation-action operation)))
+       (and (t/triple? (t/commitoperation-proposition operation))
+            (t/term? (t/commitoperation-proposition operation)))))
+
+(defn- valid-operations? [operations: (Vec t/CommitOperation)] -> Bool
+  (and (pos? (count operations))
+       (every? (fn [operation: t/CommitOperation] -> Bool
+                 (valid-commit-operation? operation))
+               operations)))
+
+(defn transaction-frame
+  [sequence: Int operations: (Vec t/CommitOperation)] -> t/TransactionFrame
+  (if (and (>= sequence 0) (valid-operations? operations))
+    (t/->TransactionFrame sequence operations)
+    (throw (ex-info "fram: transaction frame requires a non-negative sequence and operations"
+                    {:type :invalid-transaction-frame}))))
+
+(defn- find-active-bucket-position [store: t/TermStore handle: Int] -> Int
+  (let [slots: (Vec t/TermBucket) (t/termstore-active-slots store)
+        buckets: (Vec t/ActiveBucket) (t/termstore-active-buckets store)
+        positions: (Vec Int)
+        (t/termbucket-positions (nth slots (term-slot handle (count slots))))]
+    (loop [offset 0]
+      (if (>= offset (count positions))
+        -1
+        (let [position (nth positions offset)]
+          (if (= handle (t/activebucket-triple-handle (nth buckets position)))
+            position
+            (recur (inc offset))))))))
+
+(defn- active-positions [store: t/TermStore handle: Int] -> (Vec Int)
+  (let [position (find-active-bucket-position store handle)]
+    (if (>= position 0)
+      (t/activebucket-positions (nth (t/termstore-active-buckets store) position))
+      empty-ids)))
+
+(defn- set-active-positions
+  [store: t/TermStore handle: Int positions: (Vec Int)] -> t/TermStore
+  (let [known (find-active-bucket-position store handle)]
+    (if (>= known 0)
+      (assoc store :active-buckets
+             (assoc (t/termstore-active-buckets store) known
+                    (t/->ActiveBucket handle positions)))
+      (let [buckets: (Vec t/ActiveBucket)
+            (conj (t/termstore-active-buckets store) (t/->ActiveBucket handle positions))
+            position (dec (count buckets))
+            slots: (Vec t/TermBucket) (t/termstore-active-slots store)
+            store-with-bucket: t/TermStore
+            (assoc store
+                   :active-buckets buckets
+                   :active-slots
+                   (term-slot-add slots (term-slot handle (count slots)) position))]
+        (if (> (count buckets) (* slot-load (count slots)))
+          (assoc store-with-bucket :active-slots
+                 (build-active-slots buckets (* 2 (count slots))))
+          store-with-bucket)))))
+
+(defn- apply-operation-state
+  [store: t/TermStore operation-position: Int row: t/OperationRow] -> t/TermStore
+  (let [handle (t/operationrow-triple-handle row)
+        action (t/operationrow-action row)
+        active: (Vec Int) (active-positions store handle)]
+    (if (= action t/assert-action)
+      (set-active-positions
+       (assoc store
+              :operation-live (conj (t/termstore-operation-live store) true)
+              :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
+       handle
+       (conj active operation-position))
+      (if (empty? active)
+        (assoc store
+               :operation-live (conj (t/termstore-operation-live store) false)
+               :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1))
+        (let [target (peek active)
+              live: (Vec Bool) (t/termstore-operation-live store)]
+          (set-active-positions
+           (assoc store
+                  :operation-live (conj (assoc live target false) false)
+                  :withdrawal-targets
+                  (conj (t/termstore-withdrawal-targets store) target))
+           handle
+           (pop active)))))))
+
+(defn- operation-handles!
+  [ctx: (Atom t/TermStore) operations: (Vec t/CommitOperation)] -> (Vec Int)
+  (reduce
+   (fn [handles: (Vec Int) operation: t/CommitOperation] -> (Vec Int)
+     (conj handles
+           (intern-handle! ctx (t/commitoperation-proposition operation))))
+   empty-ids
+   operations))
+
+(defn- append-transaction!
+  [ctx: (Atom t/TermStore) sequence: Int
+   operations: (Vec t/CommitOperation)] -> t/Triple
+  (let [before: t/TermStore (deref ctx)]
+    (if (not (valid-operations? operations))
+      (throw (ex-info "fram: transaction requires at least one valid operation"
+                      {:type :invalid-transaction-frame}))
+      (if (< sequence (t/termstore-next-sequence before))
+        (throw (ex-info "fram: transaction sequence must advance within its space"
+                        {:type :nonmonotonic-transaction-sequence}))
+        (let [handles: (Vec Int) (operation-handles! ctx operations)
+              store: t/TermStore (deref ctx)
+              first-operation (count (t/termstore-operations store))
+              transaction-row: t/TransactionRow
+              (t/->TransactionRow sequence first-operation (count operations))
+              with-transaction: t/TermStore
+              (assoc store :transactions
+                     (conj (t/termstore-transactions store) transaction-row))
+              appended: t/TermStore
+              (loop [current: t/TermStore with-transaction ordinal 0]
+                (if (>= ordinal (count operations))
+                  current
+                  (let [operation: t/CommitOperation (nth operations ordinal)
+                        row: t/OperationRow
+                        (t/->OperationRow sequence ordinal
+                                          (t/commitoperation-action operation)
+                                          (nth handles ordinal))
+                        operation-position (+ first-operation ordinal)
+                        with-row: t/TermStore
+                        (assoc current :operations
+                               (conj (t/termstore-operations current) row))]
+                    (recur (apply-operation-state with-row operation-position row)
+                           (inc ordinal)))))
+              final-store: t/TermStore (assoc appended :next-sequence (inc sequence))]
+          (reset! ctx final-store)
+          (t/transaction-coordinate (t/termstore-space-id final-store) sequence))))))
+
+(defn commit-transaction!
+  [ctx: (Atom t/TermStore) operations: (Vec t/CommitOperation)] -> t/Triple
+  (append-transaction! ctx (t/termstore-next-sequence (deref ctx)) operations))
+
+(defn replay-transaction!
+  [ctx: (Atom t/TermStore) frame: t/TransactionFrame] -> t/Triple
+  (if (and (t/transaction-frame? frame)
+           (and (>= (t/transactionframe-sequence frame) 0)
+                (valid-operations? (t/transactionframe-operations frame))))
+    (append-transaction! ctx
+                         (t/transactionframe-sequence frame)
+                         (t/transactionframe-operations frame))
+    (throw (ex-info "fram: invalid transaction frame"
+                    {:type :invalid-transaction-frame}))))
+
+(defn- occurrence-at [store: t/TermStore operation-position: Int] -> t/Triple
+  (let [row: t/OperationRow (nth (t/termstore-operations store) operation-position)]
+    (t/occurrence-coordinate
+     (t/transaction-coordinate (t/termstore-space-id store)
+                               (t/operationrow-tx-sequence row))
+     (t/operationrow-ordinal row))))
+
+(defn- event-at [store: t/TermStore operation-position: Int] -> t/Triple
+  (let [row: t/OperationRow (nth (t/termstore-operations store) operation-position)
+        occurrence: t/Triple (occurrence-at store operation-position)
+        proposition: t/Triple
+        (resolve-triple-handle store (t/operationrow-triple-handle row))]
+    (if (= t/assert-action (t/operationrow-action row))
+      (t/assertion-occurrence occurrence proposition)
+      (t/retraction-occurrence occurrence proposition))))
+
+(defn operation-occurrences [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
+  (let [store: t/TermStore (deref ctx)]
+    (loop [position 0 events: (Vec t/Triple) []]
+      (if (>= position (count (t/termstore-operations store)))
+        events
+        (recur (inc position) (conj events (event-at store position)))))))
+
+(defn withdrawal-triples [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
+  (let [store: t/TermStore (deref ctx)]
+    (loop [position 0 withdrawals: (Vec t/Triple) []]
+      (if (>= position (count (t/termstore-operations store)))
+        withdrawals
+        (let [target (nth (t/termstore-withdrawal-targets store) position)]
+          (if (>= target 0)
+            (recur (inc position)
+                   (conj withdrawals
+                         (t/withdrawal (occurrence-at store position)
+                                       (occurrence-at store target))))
+            (recur (inc position) withdrawals)))))))
+
+(defn semantic-history [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
+  (let [store: t/TermStore (deref ctx)]
+    (loop [position 0 history: (Vec t/Triple) []]
+      (if (>= position (count (t/termstore-operations store)))
+        history
+        (let [with-event: (Vec t/Triple) (conj history (event-at store position))
+              target (nth (t/termstore-withdrawal-targets store) position)]
+          (if (>= target 0)
+            (recur (inc position)
+                   (conj with-event
+                         (t/withdrawal (occurrence-at store position)
+                                       (occurrence-at store target))))
+            (recur (inc position) with-event)))))))
+
+(defn live-occurrences [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
+  (let [store: t/TermStore (deref ctx)]
+    (loop [position 0 live: (Vec t/Triple) []]
+      (if (>= position (count (t/termstore-operations store)))
+        live
+        (if (nth (t/termstore-operation-live store) position)
+          (recur (inc position) (conj live (event-at store position)))
+          (recur (inc position) live))))))
+
+(defn live-propositions [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
+  (let [store: t/TermStore (deref ctx)]
+    (loop [position 0 live: (Vec t/Triple) []]
+      (if (>= position (count (t/termstore-operations store)))
+        live
+        (let [row: t/OperationRow (nth (t/termstore-operations store) position)]
+          (if (nth (t/termstore-operation-live store) position)
+            (recur (inc position)
+                   (conj live
+                         (resolve-triple-handle store
+                                                (t/operationrow-triple-handle row))))
+            (recur (inc position) live)))))))
+
 (defn dump-term-store [ctx: (Atom t/TermStore)] -> t/TermStoreDump
   (let [store: t/TermStore (deref ctx)]
-    (t/->TermStoreDump 1 (t/termstore-atoms store) (t/termstore-triples store))))
+    (t/->TermStoreDump
+     term-store-dump-version
+     (t/termstore-space-id store)
+     (t/termstore-next-sequence store)
+     (t/termstore-atoms store)
+     (t/termstore-triples store)
+     (t/termstore-transactions store)
+     (t/termstore-operations store))))
 
 (defn- valid-prior-handle? [atom-count: Int triple-position: Int handle: Int] -> Bool
   (and (>= handle 0)
@@ -229,403 +507,101 @@
           (recur (inc position))
           false)))))
 
-(defn load-term-store! [ctx: (Atom t/TermStore) data: t/TermStoreDump] -> (Atom t/TermStore)
-  (let [atoms: (Vec t/AtomRow) (t/termstoredump-atoms data)
-        rows: (Vec t/TripleRow) (t/termstoredump-triples data)]
-    (if (and (= 1 (t/termstoredump-version data))
-             (and (every? (fn [row: t/AtomRow] -> Bool (valid-atom-row? row)) atoms)
-                  (valid-triple-rows? (count atoms) rows)))
-      (do
-        (reset! ctx
-                (t/->TermStore atoms rows
-                               (build-atom-term-slots atoms (term-slots-width-for (count atoms)))
-                               (build-triple-term-slots rows (term-slots-width-for (count rows)))))
-        ctx)
-      (throw (ex-info "fram: invalid recursive term-store dump"
-                      {:type :invalid-term-store-dump})))))
+(defn- valid-dump-operation?
+  [triple-count: Int sequence: Int ordinal: Int row: t/OperationRow] -> Bool
+  (let [handle (t/operationrow-triple-handle row)]
+    (and (= sequence (t/operationrow-tx-sequence row))
+         (and (= ordinal (t/operationrow-ordinal row))
+              (and (or (= t/assert-action (t/operationrow-action row))
+                       (= t/retract-action (t/operationrow-action row)))
+                   (and (>= handle 0)
+                        (and (not (atom-handle? handle))
+                             (< (handle-position handle) triple-count))))))))
 
-(defn- value-hash [v :- t/StoreValue] :- Int
-  (if (string? v) (hash v)
-    (if (integer? v) (hash v)
-      (if (boolean? v) (hash v)
-        (if (keyword? v) (hash v)
-          (if (vector? v) (hash v) 0))))))
+(defn- valid-operation-slice?
+  [operations: (Vec t/OperationRow) triple-count: Int sequence: Int
+   first-operation: Int operation-count: Int] -> Bool
+  (loop [ordinal 0]
+    (if (>= ordinal operation-count)
+      true
+      (if (valid-dump-operation?
+           triple-count sequence ordinal (nth operations (+ first-operation ordinal)))
+        (recur (inc ordinal))
+        false))))
 
-;; Agrees with value=?: it narrows on the same five alternatives, so two values
-;; that intern as one always land in the same slot.
-(defn- slot-of [v :- t/StoreValue width :- Int] :- Int
-  (mod (value-hash v) width))
+(defn- valid-history-rows?
+  [transactions: (Vec t/TransactionRow) operations: (Vec t/OperationRow)
+   triple-count: Int next-sequence-value: Int] -> Bool
+  (loop [transaction-position 0 operation-position 0 previous-sequence -1]
+    (if (>= transaction-position (count transactions))
+      (and (= operation-position (count operations))
+           (= next-sequence-value
+              (if (< previous-sequence 0) 1 (inc previous-sequence))))
+      (let [row: t/TransactionRow (nth transactions transaction-position)
+            sequence (t/transactionrow-sequence row)
+            first-operation (t/transactionrow-first-operation row)
+            operation-count-value (t/transactionrow-operation-count row)]
+        (if (and (> sequence previous-sequence)
+                 (and (= first-operation operation-position)
+                      (and (pos? operation-count-value)
+                           (and (<= (+ first-operation operation-count-value)
+                                    (count operations))
+                                (valid-operation-slice?
+                                 operations triple-count sequence first-operation
+                                 operation-count-value)))))
+          (recur (inc transaction-position)
+                 (+ operation-position operation-count-value)
+                 sequence)
+          false)))))
 
-(defn- fresh-slots [width :- Int] :- (Vec t/IdBucket)
-  (loop [acc :- (Vec t/IdBucket) empty-id-buckets i 0]
-    (if (>= i width) acc
-      (recur (conj acc (t/->IdBucket i empty-ids)) (inc i)))))
+(defn- rebuild-operation-state [store: t/TermStore] -> t/TermStore
+  (let [base: t/TermStore
+        (assoc store
+               :operation-live empty-bools
+               :withdrawal-targets empty-ids
+               :active-buckets empty-active-buckets
+               :active-slots (fresh-term-slots initial-slots))]
+    (loop [current: t/TermStore base position 0]
+      (if (>= position (count (t/termstore-operations current)))
+        current
+        (recur
+         (apply-operation-state
+          current position (nth (t/termstore-operations current) position))
+         (inc position))))))
 
-;; Slot-addressed update: assoc rewrites one path of the persistent vector, where
-;; the put-bucket idiom would rebuild every bucket per insert (linear in width).
-(defn- slot-add [slots :- (Vec t/IdBucket) i :- Int pos :- Int] :- (Vec t/IdBucket)
-  (assoc slots i (t/->IdBucket i (conj (t/idbucket-ids (nth slots i)) pos))))
-
-(defn- slot-put [slots :- (Vec t/IdBucket) v :- t/StoreValue pos :- Int] :- (Vec t/IdBucket)
-  (slot-add slots (slot-of v (count slots)) pos))
-
-;; Ids are minted in strides (an entity, its name value, its name fact), so mod on
-;; a raw id would fold whole strides onto one slot of a power-of-two width.
-(defn- key-slot [key :- Int width :- Int] :- Int (mod (hash key) width))
-(defn- pair-slot [left :- Int right :- Int width :- Int] :- Int
-  (mod (+ (* 31 (hash left)) (hash right)) width))
-
-(defn- build-slots [values :- (Vec t/StoredValue) width :- Int] :- (Vec t/IdBucket)
-  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
-    (if (>= i (count values)) slots
-      (recur (slot-put slots (t/storedvalue-value (nth values i)) i) (inc i)))))
-
-(defn- build-fact-slots [facts :- (Vec t/StoredFact) width :- Int] :- (Vec t/IdBucket)
-  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
-    (if (>= i (count facts)) slots
-      (recur (slot-add slots (key-slot (t/storedfact-id (nth facts i)) width) i) (inc i)))))
-
-(defn- build-tx-slots [entries :- (Vec t/StoredTx) width :- Int] :- (Vec t/IdBucket)
-  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
-    (if (>= i (count entries)) slots
-      (recur (slot-add slots (key-slot (t/storedtx-id (nth entries i)) width) i) (inc i)))))
-
-(defn- build-key-slots [buckets :- (Vec t/IdBucket) width :- Int] :- (Vec t/IdBucket)
-  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
-    (if (>= i (count buckets)) slots
-      (recur (slot-add slots (key-slot (t/idbucket-key (nth buckets i)) width) i) (inc i)))))
-
-(defn- build-pair-slots [buckets :- (Vec t/PairBucket) width :- Int] :- (Vec t/IdBucket)
-  (loop [slots :- (Vec t/IdBucket) (fresh-slots width) i 0]
-    (if (>= i (count buckets)) slots
-      (let [bucket :- t/PairBucket (nth buckets i)]
-        (recur (slot-add slots (pair-slot (t/pairbucket-left bucket) (t/pairbucket-right bucket) width) i)
-               (inc i))))))
-
-(defn- slots-width-for [n :- Int] :- Int
-  (loop [width initial-slots]
-    (if (>= (* slot-load width) n) width (recur (* 2 width)))))
-
-(defn new-store [] :- (Atom t/Store)
-  (atom (t/->Store 0 0 nil empty-ids empty-values empty-facts empty-tx-of empty-txs empty-ids
-                   empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets
-                   (fresh-slots initial-slots)
-                   (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots)
-                   (fresh-slots initial-slots) (fresh-slots initial-slots)
-                   (fresh-slots initial-slots) (fresh-slots initial-slots))))
-
-(defn- includes-id? [ids :- (Vec Int) id :- Int] :- Bool
-  (loop [i 0]
-    (if (>= i (count ids)) false
-      (if (= id (nth ids i)) true (recur (inc i))))))
-
-;; Dedup for caller-supplied ids (:superseded). :objects never needs it — see fresh-id!.
-(defn- add-id [ids :- (Vec Int) id :- Int] :- (Vec Int)
-  (if (includes-id? ids id) ids (conj ids id)))
-
-;; Sole minter of object ids, strictly increasing and never reissued, so every id
-;; it returns is provably absent from :objects: the three :objects inserts conj
-;; directly instead of paying add-id's O(n) membership scan per insert.
-(defn fresh-id! [ctx :- (Atom t/Store)] :- Int
-  (:next-id (swap! ctx update :next-id inc)))
-
-(defn entity! [ctx :- (Atom t/Store)] :- Int
-  (let [id (fresh-id! ctx)]
-    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids id)))
-    id))
-
-(defn- value=? [a :- t/StoreValue b :- t/StoreValue] :- Bool
-  (if (string? a) (and (string? b) (= a b))
-    (if (integer? a) (and (integer? b) (= a b))
-      (if (boolean? a) (and (boolean? b) (= a b))
-        (if (keyword? a) (and (keyword? b) (= a b))
-          (and (vector? b) (= a b)))))))
-
-;; The one site the file-header position does NOT cover: value! probes for an
-;; existing intern on every write, so a scan of :values here made loading a store
-;; quadratic in its distinct values.  The probe walks one hash slot instead.
-(defn- find-value [s :- t/Store v :- t/StoreValue] :- t/StoredValue?
-  (let [values :- (Vec t/StoredValue) (:values s)
-        slots :- (Vec t/IdBucket) (:value-slots s)
-        ids :- (Vec Int) (t/idbucket-ids (nth slots (slot-of v (count slots))))]
-    (loop [i 0]
-      (if (>= i (count ids)) nil
-        (let [entry :- t/StoredValue (nth values (nth ids i))]
-          (if (value=? (t/storedvalue-value entry) v) entry (recur (inc i))))))))
-
-;; value-object?/literal run once per fact on a boot, so a scan here was quadratic
-;; in the corpus.  fresh-id! is the sole, strictly increasing minter and value!
-;; appends at mint time, so :values is ordered by id and a probe can halve it.
-(defn- find-value-by-id [values :- (Vec t/StoredValue) id :- Int] :- t/StoredValue?
-  (loop [lo 0 hi (dec (count values))]
-    (if (> lo hi) nil
-      (let [mid (quot (+ lo hi) 2)
-            entry :- t/StoredValue (nth values mid)
-            k (t/storedvalue-id entry)]
-        (if (= k id) entry
-          (if (< k id) (recur (inc mid) hi) (recur lo (dec mid))))))))
-
-;; fact-of is on the supersede path, so this ran once per assert against the whole
-;; of :facts.  The probe walks one hash slot of positions instead.
-(defn- find-fact [s :- t/Store cid :- Int] :- t/StoredFact?
-  (let [facts :- (Vec t/StoredFact) (:facts s)
-        slots :- (Vec t/IdBucket) (:fact-slots s)
-        ids :- (Vec Int) (t/idbucket-ids (nth slots (key-slot cid (count slots))))]
-    (loop [i 0]
-      (if (>= i (count ids)) nil
-        (let [entry :- t/StoredFact (nth facts (nth ids i))]
-          (if (= cid (t/storedfact-id entry)) entry (recur (inc i))))))))
-
-;; fact! conj's the tx-of row under the cid it just minted, so :tx-of carries the
-;; same ascending-cid order as :facts and halves the same way.
-(defn- find-tx-of [entries :- (Vec t/StoredTxOf) cid :- Int] :- t/StoredTxOf?
-  (loop [lo 0 hi (dec (count entries))]
-    (if (> lo hi) nil
-      (let [mid (quot (+ lo hi) 2)
-            entry :- t/StoredTxOf (nth entries mid)
-            k (t/storedtxof-cid entry)]
-        (if (= k cid) entry
-          (if (< k cid) (recur (inc mid) hi) (recur lo (dec mid))))))))
-
-;; The one by-id vector that is NOT ordered: coord_daemon's migrate/tail seam
-;; assoc's a raw map into :txs behind begin-tx!'s back, so a mid-vector key can be
-;; nil and a binary search would read it.  Slotted like :facts instead.
-(defn- find-tx [s :- t/Store id :- Int] :- t/StoredTx?
-  (let [entries :- (Vec t/StoredTx) (:txs s)
-        slots :- (Vec t/IdBucket) (:tx-slots s)
-        ids :- (Vec Int) (t/idbucket-ids (nth slots (key-slot id (count slots))))]
-    (loop [i 0]
-      (if (>= i (count ids)) nil
-        (let [entry :- t/StoredTx (nth entries (nth ids i))]
-          (if (= id (t/storedtx-id entry)) entry (recur (inc i))))))))
-
-;; pos is the position the new entry took in :values, so the probe reaches it by
-;; nth rather than by another scan.  Doubling keeps the chain at slot-load.
-(defn- index-value! [ctx :- (Atom t/Store) v :- t/StoreValue pos :- Int] :- t/Store
-  (let [s :- t/Store (swap! ctx update :value-slots
-                            (fn [slots :- (Vec t/IdBucket)] :- (Vec t/IdBucket) (slot-put slots v pos)))]
-    (if (> (count (:values s)) (* slot-load (count (:value-slots s))))
-      (swap! ctx assoc :value-slots (build-slots (:values s) (* 2 (count (:value-slots s)))))
-      s)))
-
-(defn- index-fact-slot! [ctx :- (Atom t/Store) cid :- Int pos :- Int] :- t/Store
-  (let [s :- t/Store (swap! ctx update :fact-slots
-                            (fn [slots :- (Vec t/IdBucket)] :- (Vec t/IdBucket)
-                              (slot-add slots (key-slot cid (count slots)) pos)))]
-    (if (> (count (:facts s)) (* slot-load (count (:fact-slots s))))
-      (swap! ctx assoc :fact-slots (build-fact-slots (:facts s) (* 2 (count (:fact-slots s)))))
-      s)))
-
-(defn value! [ctx :- (Atom t/Store) v :- t/StoreValue] :- Int
-  (let [s :- t/Store (deref ctx) known :- t/StoredValue? (find-value s v)]
-    (if (some? known)
-      (t/storedvalue-id known)
-      (let [id (fresh-id! ctx) pos (count (:values s))]
-        (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids id)))
-        (swap! ctx update :values (fn [entries :- (Vec t/StoredValue)] :- (Vec t/StoredValue)
-                                    (conj entries (t/->StoredValue id v))))
-        (index-value! ctx v pos)
-        id))))
-
-(defn value-object? [ctx :- (Atom t/Store) id :- Int] :- Bool
-  (some? (find-value-by-id (:values (let [s :- t/Store (deref ctx)] s)) id)))
-
-(defn literal [ctx :- (Atom t/Store) id :- Int] :- t/StoreValue?
-  (let [entry :- t/StoredValue? (find-value-by-id (:values (let [s :- t/Store (deref ctx)] s)) id)]
-    (if (some? entry) (t/storedvalue-value entry) nil)))
-
-(defn value-id [ctx :- (Atom t/Store) v :- t/StoreValue] :- Int?
-  (let [entry :- t/StoredValue? (find-value (let [s :- t/Store (deref ctx)] s) v)]
-    (if (some? entry) (t/storedvalue-id entry) nil)))
-
-;; pos is read back off the appended vector, not predicted: a foreign append into
-;; :txs must shift this row's position rather than silently mis-slot it.
-(defn begin-tx! [ctx :- (Atom t/Store) agent :- t/StoreValue] :- Int
-  (let [tx (fresh-id! ctx) updated :- t/Store (swap! ctx update :next-seq inc)
-        seq (:next-seq updated)
-        after :- t/Store (swap! ctx update :txs (fn [entries :- (Vec t/StoredTx)] :- (Vec t/StoredTx)
-                                                  (conj entries (t/->StoredTx tx seq agent nil nil))))
-        pos (dec (count (:txs after)))
-        s :- t/Store (swap! ctx update :tx-slots
-                            (fn [slots :- (Vec t/IdBucket)] :- (Vec t/IdBucket)
-                              (slot-add slots (key-slot tx (count slots)) pos)))]
-    (when (> (count (:txs s)) (* slot-load (count (:tx-slots s))))
-      (swap! ctx assoc :tx-slots (build-tx-slots (:txs s) (* 2 (count (:tx-slots s))))))
-    tx))
-
-(defn tx-seq [ctx :- (Atom t/Store) tx :- Int] :- Int
-  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? entry) (t/storedtx-seq entry) 0)))
-(defn tx-agent [ctx :- (Atom t/Store) tx :- Int] :- t/StoreValue?
-  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? entry) (t/storedtx-agent entry) nil)))
-(defn tx-observed [ctx :- (Atom t/Store) tx :- Int] :- Int?
-  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? entry) (t/storedtx-observed entry) nil)))
-(defn tx-ts [ctx :- (Atom t/Store) tx :- Int] :- String?
-  (let [entry :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? entry) (t/storedtx-ts entry) nil)))
-(defn current-seq [ctx :- (Atom t/Store)] :- Int (:next-seq (let [s :- t/Store (deref ctx)] s)))
-(defn supersedes-pred [ctx :- (Atom t/Store)] :- Int? (:supersedes-pred (let [s :- t/Store (deref ctx)] s)))
-
-(defn- replace-tx [entries :- (Vec t/StoredTx) id :- Int observed :- Int? ts :- String?] :- (Vec t/StoredTx)
-  (mapv (fn [entry :- t/StoredTx] :- t/StoredTx
-          (if (= id (t/storedtx-id entry))
-            (t/->StoredTx id (t/storedtx-seq entry) (t/storedtx-agent entry) observed ts)
-            entry)) entries))
-(defn set-tx-observed! [ctx :- (Atom t/Store) tx :- Int observed :- Int] :- t/Store
-  (let [old :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? old)
-      (swap! ctx update :txs replace-tx tx observed (t/storedtx-ts old))
-      (let [s :- t/Store (deref ctx)] s))))
-(defn set-tx-ts! [ctx :- (Atom t/Store) tx :- Int ts :- String] :- t/Store
-  (let [old :- t/StoredTx? (find-tx (let [s :- t/Store (deref ctx)] s) tx)]
-    (if (some? old)
-      (swap! ctx update :txs replace-tx tx (t/storedtx-observed old) ts)
-      (let [s :- t/Store (deref ctx)] s))))
-(defn set-supersedes-pred! [ctx :- (Atom t/Store) pid :- Int] :- t/Store (swap! ctx assoc :supersedes-pred pid))
-
-;; A bucket vector is addressed through its slot table: the key's slot holds the
-;; POSITIONS of the buckets that hash there, so a probe compares slot-load keys
-;; instead of every distinct key in the index.  -1 is "no bucket for this key".
-(defn- bucket-pos [buckets :- (Vec t/IdBucket) slots :- (Vec t/IdBucket) key :- Int] :- Int
-  (let [ids :- (Vec Int) (t/idbucket-ids (nth slots (key-slot key (count slots))))]
-    (loop [i 0]
-      (if (>= i (count ids)) -1
-        (let [pos (nth ids i)]
-          (if (= key (t/idbucket-key (nth buckets pos))) pos (recur (inc i))))))))
-(defn- pair-bucket-pos [buckets :- (Vec t/PairBucket) slots :- (Vec t/IdBucket) left :- Int right :- Int] :- Int
-  (let [ids :- (Vec Int) (t/idbucket-ids (nth slots (pair-slot left right (count slots))))]
-    (loop [i 0]
-      (if (>= i (count ids)) -1
-        (let [pos (nth ids i) bucket :- t/PairBucket (nth buckets pos)]
-          (if (and (= left (t/pairbucket-left bucket)) (= right (t/pairbucket-right bucket)))
-            pos (recur (inc i))))))))
-
-(defn- bucket-ids [buckets :- (Vec t/IdBucket) slots :- (Vec t/IdBucket) key :- Int] :- (Vec Int)
-  (let [pos (bucket-pos buckets slots key)]
-    (if (< pos 0) empty-ids (t/idbucket-ids (nth buckets pos)))))
-(defn- pair-bucket-ids [buckets :- (Vec t/PairBucket) slots :- (Vec t/IdBucket) left :- Int right :- Int] :- (Vec Int)
-  (let [pos (pair-bucket-pos buckets slots left right)]
-    (if (< pos 0) empty-ids (t/pairbucket-ids (nth buckets pos)))))
-
-;; An existing key rewrites one path with assoc where the mapv idiom rebuilt every
-;; bucket; a new key appends, and only then does its slot table need a position.
-(defn- put-bucket [buckets :- (Vec t/IdBucket) pos :- Int key :- Int cid :- Int] :- (Vec t/IdBucket)
-  (if (< pos 0)
-    (conj buckets (t/->IdBucket key (conj empty-ids cid)))
-    (assoc buckets pos (t/->IdBucket key (conj (t/idbucket-ids (nth buckets pos)) cid)))))
-(defn- put-pair-bucket [buckets :- (Vec t/PairBucket) pos :- Int left :- Int right :- Int cid :- Int] :- (Vec t/PairBucket)
-  (if (< pos 0)
-    (conj buckets (t/->PairBucket left right (conj empty-ids cid)))
-    (assoc buckets pos (t/->PairBucket left right (conj (t/pairbucket-ids (nth buckets pos)) cid)))))
-
-(defn- grow-key-slots [slots :- (Vec t/IdBucket) buckets :- (Vec t/IdBucket) key :- Int] :- (Vec t/IdBucket)
-  (if (> (count buckets) (* slot-load (count slots)))
-    (build-key-slots buckets (* 2 (count slots)))
-    (slot-add slots (key-slot key (count slots)) (dec (count buckets)))))
-(defn- grow-pair-slots [slots :- (Vec t/IdBucket) buckets :- (Vec t/PairBucket) left :- Int right :- Int] :- (Vec t/IdBucket)
-  (if (> (count buckets) (* slot-load (count slots)))
-    (build-pair-slots buckets (* 2 (count slots)))
-    (slot-add slots (pair-slot left right (count slots)) (dec (count buckets)))))
-
-(defn- index-by-l! [ctx :- (Atom t/Store) key :- Int cid :- Int] :- t/Store
-  (let [s :- t/Store (deref ctx) buckets :- (Vec t/IdBucket) (:idx-by-l s) slots :- (Vec t/IdBucket) (:l-slots s)
-        pos (bucket-pos buckets slots key) put :- (Vec t/IdBucket) (put-bucket buckets pos key cid)]
-    (swap! ctx assoc :idx-by-l put)
-    (if (< pos 0) (swap! ctx assoc :l-slots (grow-key-slots slots put key)) (deref ctx))))
-(defn- index-by-p! [ctx :- (Atom t/Store) key :- Int cid :- Int] :- t/Store
-  (let [s :- t/Store (deref ctx) buckets :- (Vec t/IdBucket) (:idx-by-p s) slots :- (Vec t/IdBucket) (:p-slots s)
-        pos (bucket-pos buckets slots key) put :- (Vec t/IdBucket) (put-bucket buckets pos key cid)]
-    (swap! ctx assoc :idx-by-p put)
-    (if (< pos 0) (swap! ctx assoc :p-slots (grow-key-slots slots put key)) (deref ctx))))
-(defn- index-by-r! [ctx :- (Atom t/Store) key :- Int cid :- Int] :- t/Store
-  (let [s :- t/Store (deref ctx) buckets :- (Vec t/IdBucket) (:idx-by-r s) slots :- (Vec t/IdBucket) (:r-slots s)
-        pos (bucket-pos buckets slots key) put :- (Vec t/IdBucket) (put-bucket buckets pos key cid)]
-    (swap! ctx assoc :idx-by-r put)
-    (if (< pos 0) (swap! ctx assoc :r-slots (grow-key-slots slots put key)) (deref ctx))))
-(defn- index-by-lp! [ctx :- (Atom t/Store) left :- Int right :- Int cid :- Int] :- t/Store
-  (let [s :- t/Store (deref ctx) buckets :- (Vec t/PairBucket) (:idx-by-lp s) slots :- (Vec t/IdBucket) (:lp-slots s)
-        pos (pair-bucket-pos buckets slots left right) put :- (Vec t/PairBucket) (put-pair-bucket buckets pos left right cid)]
-    (swap! ctx assoc :idx-by-lp put)
-    (if (< pos 0) (swap! ctx assoc :lp-slots (grow-pair-slots slots put left right)) (deref ctx))))
-(defn- index-by-pr! [ctx :- (Atom t/Store) left :- Int right :- Int cid :- Int] :- t/Store
-  (let [s :- t/Store (deref ctx) buckets :- (Vec t/PairBucket) (:idx-by-pr s) slots :- (Vec t/IdBucket) (:pr-slots s)
-        pos (pair-bucket-pos buckets slots left right) put :- (Vec t/PairBucket) (put-pair-bucket buckets pos left right cid)]
-    (swap! ctx assoc :idx-by-pr put)
-    (if (< pos 0) (swap! ctx assoc :pr-slots (grow-pair-slots slots put left right)) (deref ctx))))
-
-(defn- index-fact! [ctx :- (Atom t/Store) cid :- Int l :- Int p :- Int r :- Int] :- t/Store
-  (index-by-l! ctx l cid)
-  (index-by-p! ctx p cid)
-  (index-by-r! ctx r cid)
-  (index-by-lp! ctx l p cid)
-  (index-by-pr! ctx p r cid))
-
-(defn fact! [ctx :- (Atom t/Store) l :- Int p :- Int r :- Int tx :- Int] :- Int
-  (let [cid (fresh-id! ctx) pos (count (:facts (let [s :- t/Store (deref ctx)] s)))]
-    (swap! ctx update :objects (fn [ids :- (Vec Int)] :- (Vec Int) (conj ids cid)))
-    (swap! ctx update :facts (fn [facts :- (Vec t/StoredFact)] :- (Vec t/StoredFact) (conj facts (t/->StoredFact cid l p r))))
-    (swap! ctx update :tx-of (fn [entries :- (Vec t/StoredTxOf)] :- (Vec t/StoredTxOf) (conj entries (t/->StoredTxOf cid tx))))
-    (index-fact-slot! ctx cid pos)
-    (index-fact! ctx cid l p r)
-    (when (= p (supersedes-pred ctx))
-      (swap! ctx update :superseded (fn [ids :- (Vec Int)] :- (Vec Int) (add-id ids r))))
-    cid))
-
-;; A record keeps keyword lookup and structural map equality for Clojure callers
-;; without asking the native backend to lower an open map literal.
-(defn fact-of [ctx :- (Atom t/Store) cid :- Int] :- t/FactView?
-  (let [entry :- t/StoredFact? (find-fact (let [s :- t/Store (deref ctx)] s) cid)]
-    (if (some? entry) (t/->FactView (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)) nil)))
-(defn fact-tx [ctx :- (Atom t/Store) cid :- Int] :- Int?
-  (let [entry :- t/StoredTxOf? (find-tx-of (:tx-of (let [s :- t/Store (deref ctx)] s)) cid)]
-    (if (some? entry) (t/storedtxof-tx entry) nil)))
-(defn fact-l [ctx :- (Atom t/Store) cid :- Int] :- Int? (let [f (fact-of ctx cid)] (if (some? f) (:l f) nil)))
-(defn fact-p [ctx :- (Atom t/Store) cid :- Int] :- Int? (let [f (fact-of ctx cid)] (if (some? f) (:p f) nil)))
-(defn fact-r [ctx :- (Atom t/Store) cid :- Int] :- Int? (let [f (fact-of ctx cid)] (if (some? f) (:r f) nil)))
-(defn live? [ctx :- (Atom t/Store) cid :- Int] :- Bool
-  (not (includes-id? (:superseded (let [s :- t/Store (deref ctx)] s)) cid)))
-(defn- live-only [ctx :- (Atom t/Store) ids :- (Vec Int)] :- (Vec Int)
-  (filterv (fn [id :- Int] :- Bool (live? ctx id)) ids))
-(defn raw-by-l [ctx :- (Atom t/Store) l :- Int] :- (Vec Int) (let [s :- t/Store (deref ctx)] (bucket-ids (:idx-by-l s) (:l-slots s) l)))
-(defn raw-by-p [ctx :- (Atom t/Store) p :- Int] :- (Vec Int) (let [s :- t/Store (deref ctx)] (bucket-ids (:idx-by-p s) (:p-slots s) p)))
-(defn raw-by-r [ctx :- (Atom t/Store) r :- Int] :- (Vec Int) (let [s :- t/Store (deref ctx)] (bucket-ids (:idx-by-r s) (:r-slots s) r)))
-(defn raw-by-lp [ctx :- (Atom t/Store) l :- Int p :- Int] :- (Vec Int) (let [s :- t/Store (deref ctx)] (pair-bucket-ids (:idx-by-lp s) (:lp-slots s) l p)))
-(defn raw-by-pr [ctx :- (Atom t/Store) p :- Int r :- Int] :- (Vec Int) (let [s :- t/Store (deref ctx)] (pair-bucket-ids (:idx-by-pr s) (:pr-slots s) p r)))
-(defn by-l [ctx :- (Atom t/Store) l :- Int] :- (Vec Int) (live-only ctx (raw-by-l ctx l)))
-(defn by-p [ctx :- (Atom t/Store) p :- Int] :- (Vec Int) (live-only ctx (raw-by-p ctx p)))
-(defn by-r [ctx :- (Atom t/Store) r :- Int] :- (Vec Int) (live-only ctx (raw-by-r ctx r)))
-(defn by-lp [ctx :- (Atom t/Store) l :- Int p :- Int] :- (Vec Int) (live-only ctx (raw-by-lp ctx l p)))
-(defn by-pr [ctx :- (Atom t/Store) p :- Int r :- Int] :- (Vec Int) (live-only ctx (raw-by-pr ctx p r)))
-(defn all-facts [ctx :- (Atom t/Store)] :- (Vec Int)
-  (mapv (fn [entry :- t/StoredFact] :- Int (t/storedfact-id entry))
-        (:facts (let [s :- t/Store (deref ctx)] s))))
-(defn current-facts [ctx :- (Atom t/Store)] :- (Vec Int) (live-only ctx (all-facts ctx)))
-(defn object-ids [ctx :- (Atom t/Store)] :- (Vec Int) (:objects (let [s :- t/Store (deref ctx)] s)))
-(defn value-entries [ctx :- (Atom t/Store)] :- (Vec t/StoredValue) (:values (let [s :- t/Store (deref ctx)] s)))
-(defn fact-entries [ctx :- (Atom t/Store)] :- (Vec t/StoredFact) (:facts (let [s :- t/Store (deref ctx)] s)))
-(defn tx-entries [ctx :- (Atom t/Store)] :- (Vec t/StoredTx) (:txs (let [s :- t/Store (deref ctx)] s)))
-
-(defn dump-store [ctx :- (Atom t/Store)] :- t/StoreDump
-  (let [s :- t/Store (deref ctx)]
-    (t/->StoreDump 1 (:next-id s) (:next-seq s) (:supersedes-pred s) (:objects s) (:values s) (:facts s) (:tx-of s) (:txs s) (:superseded s))))
-;; Every slot table is derived, never dumped.  :values and :facts arrive whole, so
-;; theirs are built once sized to the corpus; the fact indexes are rebuilt fact by
-;; fact below and their tables double along with them.
-(defn load-store! [ctx :- (Atom t/Store) data :- t/StoreDump] :- (Atom t/Store)
-  (let [values :- (Vec t/StoredValue) (t/storedump-values data)
-        facts :- (Vec t/StoredFact) (t/storedump-facts data)
-        txs :- (Vec t/StoredTx) (t/storedump-txs data)]
-    (reset! ctx (t/->Store (t/storedump-next-id data) (t/storedump-next-seq data) (t/storedump-supersedes-pred data)
-                            (t/storedump-objects data) values facts
-                            (t/storedump-tx-of data) txs (t/storedump-superseded data)
-                            empty-id-buckets empty-id-buckets empty-id-buckets empty-pair-buckets empty-pair-buckets
-                            (build-slots values (slots-width-for (count values)))
-                            (fresh-slots initial-slots) (fresh-slots initial-slots) (fresh-slots initial-slots)
-                            (fresh-slots initial-slots) (fresh-slots initial-slots)
-                            (build-fact-slots facts (slots-width-for (count facts)))
-                            (build-tx-slots txs (slots-width-for (count txs)))))
-    (doseq [entry facts]
-      (index-fact! ctx (t/storedfact-id entry) (t/storedfact-l entry) (t/storedfact-p entry) (t/storedfact-r entry)))
-    ctx))
+(defn load-term-store! [ctx: (Atom t/TermStore) data: Any] -> (Atom t/TermStore)
+  (if (not (t/term-store-dump? data))
+    (throw (ex-info "fram: legacy store dump requires one-shot migration"
+                    {:type :migration-required}))
+    (if (not (= term-store-dump-version (t/termstoredump-version data)))
+      (throw (ex-info "fram: legacy TermStore dump requires one-shot migration"
+                      {:type :migration-required}))
+      (let [atoms: (Vec t/AtomRow) (t/termstoredump-atoms data)
+            rows: (Vec t/TripleRow) (t/termstoredump-triples data)
+            transactions: (Vec t/TransactionRow) (t/termstoredump-transactions data)
+            operations: (Vec t/OperationRow) (t/termstoredump-operations data)
+            dump-space: String (t/termstoredump-space-id data)
+            next-sequence-value (t/termstoredump-next-sequence data)]
+        (if (not (and (valid-space-id? dump-space)
+                      (and (>= next-sequence-value 1)
+                           (and (every? (fn [row: t/AtomRow] -> Bool
+                                         (valid-atom-row? row))
+                                       atoms)
+                                (and (valid-triple-rows? (count atoms) rows)
+                                     (valid-history-rows?
+                                      transactions operations (count rows)
+                                      next-sequence-value))))))
+          (throw (ex-info "fram: invalid TermStore dump"
+                          {:type :invalid-term-store-dump}))
+          (if (not (= (space-id ctx) dump-space))
+            (throw (ex-info "fram: TermStore dump belongs to a different space"
+                            {:type :space-mismatch}))
+            (let [loaded: t/TermStore
+                  (t/->TermStore
+                   dump-space next-sequence-value atoms rows transactions operations
+                   empty-bools empty-ids empty-active-buckets
+                   (build-atom-term-slots atoms (term-slots-width-for (count atoms)))
+                   (build-triple-term-slots rows (term-slots-width-for (count rows)))
+                   (fresh-term-slots initial-slots))]
+              (reset! ctx (rebuild-operation-state loaded))
+              ctx)))))))

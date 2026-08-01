@@ -1,80 +1,174 @@
-;; store_test.clj — reified store kernel: smoke + the app-B checks + SEMANTIC
-;; conformance to the Racket oracle's real fixtures (store-experiments).
-;;   bb -cp out store_test.clj
-(require '[fram.store :as k])
+;; Authoritative TermStore occurrence history.
+;;   env -u FRAM_TELEMETRY_LOG bb -cp out tests/store_test.clj
+(require '[fram.kernel :as kernel]
+         '[fram.store :as store]
+         '[fram.types :as t])
 
-(def ctx (k/new-store))
-(def tx (k/begin-tx! ctx "test"))
+(defn error-type [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))
 
-;; --- interning (oracle fixture A/B) -----------------------------------------
-(def h1 (k/value! ctx "hello"))
-(def h2 (k/value! ctx "hello"))
-(def w  (k/value! ctx "world"))
-(def i42a (k/value! ctx 42))
-(def i42b (k/value! ctx 42))
-(def f42  (k/value! ctx 42.0))
-(def kw   (k/value! ctx :foo))
-(def vfalse (k/value! ctx false))
-(def vlist (k/value! ctx [1 2 3]))
+(def proposition (t/triple "Alice" :email "alice@example.com"))
+(def nested-proposition
+  (t/triple (t/triple "Alice" :account "primary")
+            (t/triple :ontology/slot "email" 2)
+            (t/triple "alice@example.com" :observed-at (t/instant 1785561000 7))))
 
-;; --- entities + facts + reification (fixture D) ----------------------------
-(def e (k/entity! ctx))
-(def p-title (k/value! ctx "title"))
-(def foo (k/value! ctx "Foo"))
-(def c1 (k/fact! ctx e p-title foo tx))
-(def p-noted (k/value! ctx "noted_by"))
-(def who (k/value! ctx "claude"))
-(def c-meta (k/fact! ctx c1 p-noted who tx))
+(def ctx (store/new-term-store "msa-space"))
 
-;; --- facts are NOT interned: identical (l p r) -> two distinct cids ---------
-(def e2 (k/entity! ctx))
-(def p-tag (k/value! ctx "tag"))
-(def vred (k/value! ctx "red"))
-(def d1 (k/fact! ctx e2 p-tag vred tx))
-(def d2 (k/fact! ctx e2 p-tag vred tx))
+;; Equal content may occur more than once. The transaction-local ordinals, not
+;; the shared private content handle, distinguish the two assertions.
+(def tx1
+  (store/commit-transaction!
+   ctx [(store/assert-operation proposition)
+        (store/assert-operation proposition)]))
+(def assertions-after-tx1 (store/live-occurrences ctx))
+(def first-assertion (nth assertions-after-tx1 0))
+(def second-assertion (nth assertions-after-tx1 1))
+(def first-coordinate (kernel/occurrence-of first-assertion))
+(def second-coordinate (kernel/occurrence-of second-assertion))
 
-;; --- ordering: multiple (l p) values keep insertion order (fixture E) -------
-(def e3 (k/entity! ctx))
-(def p-child (k/value! ctx "child"))
-(def cx (k/fact! ctx e3 p-child (k/value! ctx "x") tx))
-(def cy (k/fact! ctx e3 p-child (k/value! ctx "y") tx))
-(def cz (k/fact! ctx e3 p-child (k/value! ctx "z") tx))
+;; Retractions withdraw the most recent live occurrence of equal content.
+(def tx2 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
+(def live-after-first-retract (store/live-occurrences ctx))
+(def withdrawals-after-first-retract (store/withdrawal-triples ctx))
 
-;; --- data-driven supersession (fixture C/C2) --------------------------------
-(def sp (k/value! ctx "superseded_by"))
-(k/set-supersedes-pred! ctx sp)
-(def e4 (k/entity! ctx))
-(def p-name (k/value! ctx "name"))
-(def old (k/fact! ctx e4 p-name (k/value! ctx "v1") tx))
-(def newc (k/fact! ctx e4 p-name (k/value! ctx "v2") tx))
-;; assert (newc superseded_by old) -> marks `old` not-live
-(def sup (k/fact! ctx newc sp old tx))
+(def tx3 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
+(def live-after-second-retract (store/live-occurrences ctx))
+(def withdrawals-after-second-retract (store/withdrawal-triples ctx))
+
+;; A retraction with no live target remains an exact history occurrence but
+;; does not invent a withdrawal edge.
+(def tx4 (store/commit-transaction! ctx [(store/retract-operation proposition)]))
+(def occurrences-after-noop (store/operation-occurrences ctx))
+(def withdrawals-after-noop (store/withdrawal-triples ctx))
+
+(def tx5 (store/commit-transaction! ctx [(store/assert-operation nested-proposition)]))
+(def dump (store/dump-term-store ctx))
+(def history (store/semantic-history ctx))
+(def occurrences (store/operation-occurrences ctx))
+
+(def restored (store/new-term-store "msa-space"))
+(store/load-term-store! restored dump)
+
+(def wrong-space (store/new-term-store "other-space"))
+(def legacy-version (assoc dump :version 1))
+(def first-row (first (t/termstoredump-operations dump)))
+(def malformed-ordinal
+  (assoc dump :operations
+         (assoc (t/termstoredump-operations dump) 0
+                (t/->OperationRow
+                 (t/operationrow-tx-sequence first-row)
+                 9
+                 (t/operationrow-action first-row)
+                 (t/operationrow-triple-handle first-row)))))
+(def malformed-next-sequence (assoc dump :next-sequence 99))
+
+(def growth-context (store/new-term-store "growth-space"))
+(def growth-propositions
+  (mapv #(t/triple :growth/entry % (t/triple % :parity (odd? %))) (range 257)))
+(store/commit-transaction! growth-context
+                           (mapv store/assert-operation growth-propositions))
+(def growth-live-count (count (store/live-occurrences growth-context)))
+(store/commit-transaction! growth-context
+                           (mapv store/retract-operation growth-propositions))
+(def growth-dump (store/dump-term-store growth-context))
+(def growth-restored (store/new-term-store "growth-space"))
+(store/load-term-store! growth-restored growth-dump)
 
 (def checks
-  [["[A] same literal interns to same id"            (= h1 h2)]
-   ["[A] value-id round-trips"                        (= h1 (k/value-id ctx "hello"))]
-   ["[A] distinct literal -> distinct id"             (not= h1 w)]
-   ["[B] number interns idempotently"                 (= i42a i42b)]
-   ["[B] 42 and 42.0 are distinct values"             (not= i42a f42)]
-   ["[B] keyword interns to an id"                    (integer? kw)]
-   ["[B] #f is a real value-object (not 'absent')"    (and (k/value-object? ctx vfalse) (= false (k/literal ctx vfalse)))]
-   ["[B] list literal round-trips"                    (= [1 2 3] (k/literal ctx vlist))]
-   ["[check1] interning is type-general"              (and (integer? i42a) (integer? kw) (integer? vlist))]
-   ["fact! returns a fresh object id"                (and (integer? c1) (not= c1 e))]
-   ["fact-of resolves the triple"                    (let [f (k/fact-of ctx c1)] (and (= e (:l f)) (= p-title (:p f)) (= foo (:r f))))]
-   ["fact-tx records the tx"                         (= tx (k/fact-tx ctx c1))]
-   ["[check3/D] fact-id usable as l (reification)"   (= [c-meta] (k/by-lp ctx c1 p-noted))]
-   ["[check3/D] meta-fact resolves with fact as l"  (let [f (k/fact-of ctx c-meta)] (and (= c1 (:l f)) (= p-noted (:p f)) (= who (:r f))))]
-   ["facts are NOT interned (2 distinct cids)"        (and (not= d1 d2) (= [d1 d2] (k/by-lp ctx e2 p-tag)))]
-   ["[check2/E] insertion order preserved"            (= [cx cy cz] (k/by-lp ctx e3 p-child))]
-   ["[C] supersedes-fact marks old not-live"         (not (k/live? ctx old))]
-   ["[C] new fact stays live"                        (k/live? ctx newc)]
-   ["[C] live view excludes the superseded fact"     (= [newc] (k/by-lp ctx e4 p-name))]
-   ["[C] the supersedes-fact itself is live"         (k/live? ctx sup)]
-   ["[check4] single monotonic id space, all distinct" (apply distinct? [e e2 e3 e4 c1 c-meta d1 d2 foo p-title])]])
+  [["store carries immutable SpaceId" (= "msa-space" (store/space-id ctx))]
+   ["first commit receives logical transaction sequence 1"
+    (= (t/transaction-coordinate "msa-space" 1) tx1)]
+   ["two equal assertions have different occurrence coordinates"
+    (and (not= first-coordinate second-coordinate)
+         (= (t/occurrence-coordinate tx1 0) first-coordinate)
+         (= (t/occurrence-coordinate tx1 1) second-coordinate))]
+   ["two equal assertions preserve the same proposition"
+    (and (= proposition (kernel/proposition-of first-assertion))
+         (= proposition (kernel/proposition-of second-assertion)))]
+   ["first retraction withdraws the most recent matching occurrence"
+    (and (= [first-assertion] live-after-first-retract)
+         (= 1 (count withdrawals-after-first-retract))
+         (= second-coordinate
+            (kernel/withdrawal-target (first withdrawals-after-first-retract))))]
+   ["second retraction withdraws the earlier matching occurrence"
+    (and (empty? live-after-second-retract)
+         (= 2 (count withdrawals-after-second-retract))
+         (= first-coordinate
+            (kernel/withdrawal-target (second withdrawals-after-second-retract))))]
+   ["no-target retraction is history without a fabricated withdrawal"
+    (and (= 5 (count occurrences-after-noop))
+         (= 2 (count withdrawals-after-noop)))]
+   ["nested Triple terms survive as a live proposition"
+    (= [nested-proposition] (store/live-propositions ctx))]
+   ["physical transaction rows preserve frame boundaries"
+    (and (= 5 (store/transaction-count ctx))
+         (= 6 (store/operation-count ctx))
+         (= [0 2 3 4 5]
+            (mapv t/transactionrow-first-operation
+                  (t/termstoredump-transactions dump)))
+         (= [2 1 1 1 1]
+            (mapv t/transactionrow-operation-count
+                  (t/termstoredump-transactions dump))))]
+   ["operation ordinals are contiguous inside each transaction"
+    (= [0 1 0 0 0 0]
+       (mapv t/operationrow-ordinal (t/termstoredump-operations dump)))]
+   ["physical operation identity contains no wall-clock field"
+    (= #{:tx-sequence :ordinal :action :triple-handle}
+       (set (keys first-row)))]
+   ["semantic projection consists only of Triples"
+    (and (every? t/triple? occurrences) (every? t/triple? history))]
+   ["dump carries SpaceId and the next logical sequence"
+    (and (= "msa-space" (t/termstoredump-space-id dump))
+         (= 6 (t/termstoredump-next-sequence dump)))]
+   ["dump/load preserves authoritative rows exactly"
+    (= dump (store/dump-term-store restored))]
+   ["dump/load rebuilds identical semantic history"
+    (and (= history (store/semantic-history restored))
+         (= (store/live-occurrences ctx) (store/live-occurrences restored)))]
+   ["legacy dump versions require the one-shot migration"
+    (= :migration-required
+       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
+                                            legacy-version)))]
+   ["untyped legacy dump shapes require the one-shot migration"
+    (= :migration-required
+       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
+                                            {:version 1 :facts []})))]
+   ["a dump cannot cross SpaceId boundaries"
+    (= :space-mismatch (error-type #(store/load-term-store! wrong-space dump)))]
+   ["malformed transaction-local ordinals are rejected"
+    (= :invalid-term-store-dump
+       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
+                                            malformed-ordinal)))]
+   ["dump next-sequence must name the exact successor coordinate"
+    (= :invalid-term-store-dump
+       (error-type #(store/load-term-store! (store/new-term-store "msa-space")
+                                            malformed-next-sequence)))]
+   ["raw operation rows cannot smuggle an Atom in place of a Triple"
+    (= :invalid-transaction-frame
+       (error-type #(store/transaction-frame
+                     6 [(t/->CommitOperation t/assert-action "not-a-triple")])))]
+   ["active occurrence index growth preserves exact withdrawal state"
+    (and (= 257 growth-live-count)
+         (empty? (store/live-occurrences growth-context))
+         (= 257 (count (store/withdrawal-triples growth-context)))
+         (= growth-dump (store/dump-term-store growth-restored))
+         (= (store/semantic-history growth-context)
+            (store/semantic-history growth-restored)))]
+   ["replay rejects nonmonotonic transaction coordinates"
+    (= :nonmonotonic-transaction-sequence
+       (error-type #(store/replay-transaction!
+                     restored
+                     (store/transaction-frame 5 [(store/assert-operation proposition)]))))]])
 
-(let [fails (remove second checks)]
-  (doseq [[nm ok] checks] (println (if ok "  [PASS] " "  [FAIL] ") nm))
-  (if (empty? fails)
-    (println "\nstore kernel conformance:" (count checks) "/" (count checks) "PASS")
-    (do (println "\nstore kernel:" (count fails) "FAILED") (System/exit 1))))
+(let [failures (remove second checks)]
+  (doseq [[label ok] checks]
+    (println (if ok "  [PASS]" "  [FAIL]") label))
+  (if (empty? failures)
+    (println "\nTermStore occurrence history:" (count checks) "/" (count checks) "PASS")
+    (do
+      (println "\nTermStore occurrence history:" (count failures) "FAILED")
+      (System/exit 1))))

@@ -2,7 +2,8 @@
 ;; coordinates, and portable store round-trip.
 ;;   env -u FRAM_TELEMETRY_LOG bb -cp out tests/triple_kernel_test.clj
 (require '[fram.types :as t]
-         '[fram.store :as store])
+         '[fram.store :as store]
+         '[fram.kernel :as kernel])
 
 (defn error-type [f]
   (try
@@ -39,13 +40,13 @@
   [nested-all assertion-0 assertion-1 retraction-1 withdrawal-1 recorded
    (t/triple 1.5 :float "roundtrip")])
 
-(def term-store (store/new-term-store))
+(def term-store (store/new-term-store "triple-kernel-test"))
 (store/replay-terms! term-store terms)
 (def first-count (store/term-count term-store))
 (def first-dump (store/dump-term-store term-store))
 (def second-dump (store/dump-term-store term-store))
 
-(def restored (store/new-term-store))
+(def restored (store/new-term-store "triple-kernel-test"))
 (store/load-term-store! restored first-dump)
 (def restored-count (store/term-count restored))
 (def canonical-recorded (store/intern-term! restored recorded))
@@ -53,16 +54,20 @@
 
 (def malformed-row
   (t/->TermStoreDump
+   2
+   "triple-kernel-test"
    1
    (t/termstoredump-atoms first-dump)
-   (conj (t/termstoredump-triples first-dump) (t/->TripleRow 999999 0 0))))
+   (conj (t/termstoredump-triples first-dump) (t/->TripleRow 999999 0 0))
+   (t/termstoredump-transactions first-dump)
+   (t/termstoredump-operations first-dump)))
 
-(def collision-store (store/new-term-store))
+(def collision-store (store/new-term-store "collision-test"))
 (def collision-row-a (t/->AtomRow :string "Aa" nil nil nil nil nil))
 (def collision-row-b (t/->AtomRow :string "BB" nil nil nil nil nil))
 (store/replay-terms! collision-store ["Aa" "BB" "Aa"])
 
-(def growth-store (store/new-term-store))
+(def growth-store (store/new-term-store "growth-test"))
 (store/replay-terms! growth-store (vec (range 257)))
 (def growth-count (store/term-count growth-store))
 (store/intern-term! growth-store 256)
@@ -96,6 +101,13 @@
    ["retraction and withdrawal use ordinary Triples"
     (and (= :kernel/retracts (t/triple-slot1 retraction-1))
          (= :kernel/withdraws (t/triple-slot1 withdrawal-1)))]
+   ["slot-addressed query assigns no positional roles"
+    (and (= [nested-slot0] (kernel/by-slot0 [nested-slot0 nested-slot1 nested-slot2]
+                                           proposition-a))
+         (= [nested-slot1] (kernel/by-slot1 [nested-slot0 nested-slot1 nested-slot2]
+                                           proposition-a))
+         (= [nested-slot2] (kernel/by-slot2 [nested-slot0 nested-slot1 nested-slot2]
+                                           proposition-a)))]
    ["replay interns a finite structural store" (pos? first-count)]
    ["dump is deterministic" (= first-dump second-dump)]
    ["dump/load preserves every AtomRow and TripleRow" (= first-dump (store/dump-term-store restored))]
@@ -113,7 +125,8 @@
     (= :invalid-transaction-coordinate (error-type #(t/transaction-coordinate "" 1)))]
    ["dangling physical handles are rejected on load"
     (= :invalid-term-store-dump
-       (error-type #(store/load-term-store! (store/new-term-store) malformed-row)))]] )
+       (error-type #(store/load-term-store!
+                     (store/new-term-store "triple-kernel-test") malformed-row)))]] )
 
 (let [failures (remove second checks)]
   (doseq [[label ok] checks]

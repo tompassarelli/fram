@@ -1,11 +1,9 @@
 #lang beagle/clj
 ;; The portable store ABI deliberately uses only records and homogeneous
-;; vectors.  Clojure-facing accessors may project map-shaped facts, but no map
-;; crosses into native code.
+;; vectors. Semantic values are recursive Terms; transaction history is kept
+;; in private physical rows and projected back to ordinary Triples.
 (ns fram.types)
 (define-mode strict)
-
-(defalias StoreValue (Dyn String Int Bool Keyword (Vec Int)))
 
 ;; Atom is the closed grounding vocabulary for the recursive term model.  An
 ;; Instant is canonical epoch seconds plus nanoseconds; civil-time context is
@@ -33,10 +31,33 @@
    bool-value: Bool? keyword-value: Keyword? instant-value: Instant?])
 (defrecord TripleRow [slot0: Int slot1: Int slot2: Int])
 (defrecord TermBucket [key: Int positions: (Vec Int)])
+
+;; SpaceId plus the transaction sequence and operation ordinal form an exact
+;; occurrence coordinate. The handle is only a private content reference.
+(defalias SpaceId String)
+(defrecord TransactionRow
+  [sequence: Int first-operation: Int operation-count: Int])
+(defrecord OperationRow
+  [tx-sequence: Int ordinal: Int action: Keyword triple-handle: Int])
+(defrecord ActiveBucket [triple-handle: Int positions: (Vec Int)])
+(defrecord CommitOperation [action: Keyword proposition: Triple])
+(defrecord TransactionFrame [sequence: Int operations: (Vec CommitOperation)])
 (defrecord TermStore
-  [atoms: (Vec AtomRow) triples: (Vec TripleRow)
-   atom-slots: (Vec TermBucket) triple-slots: (Vec TermBucket)])
-(defrecord TermStoreDump [version: Int atoms: (Vec AtomRow) triples: (Vec TripleRow)])
+  [space-id: SpaceId next-sequence: Int
+   atoms: (Vec AtomRow) triples: (Vec TripleRow)
+   transactions: (Vec TransactionRow) operations: (Vec OperationRow)
+   operation-live: (Vec Bool) withdrawal-targets: (Vec Int)
+   active-buckets: (Vec ActiveBucket)
+   atom-slots: (Vec TermBucket) triple-slots: (Vec TermBucket)
+   active-slots: (Vec TermBucket)])
+(defrecord TermStoreDump
+  [version: Int space-id: SpaceId next-sequence: Int
+   atoms: (Vec AtomRow) triples: (Vec TripleRow)
+   transactions: (Vec TransactionRow) operations: (Vec OperationRow)])
+
+(defn commit-operation? [v: Any] -> Bool (instance? CommitOperation v))
+(defn transaction-frame? [v: Any] -> Bool (instance? TransactionFrame v))
+(defn term-store-dump? [v: Any] -> Bool (instance? TermStoreDump v))
 
 (def tx-sequence: Keyword :kernel/tx-sequence)
 (def op-ordinal: Keyword :kernel/op-ordinal)
@@ -44,6 +65,8 @@
 (def retracts: Keyword :kernel/retracts)
 (def withdraws: Keyword :kernel/withdraws)
 (def recorded-at-predicate: Keyword :kernel/recorded-at)
+(def assert-action: Keyword :assert)
+(def retract-action: Keyword :retract)
 
 (defn atom? [v: Any] -> Bool
   (or (string? v)
@@ -132,38 +155,3 @@
                         {:type :incomparable-occurrence-spaces}))))
     (throw (ex-info "fram: occurrence ordering requires occurrence coordinates"
                     {:type :invalid-occurrence-order}))))
-
-;; The records below are the legacy cid runtime boundary.  New representation
-;; code must use TermStore/TripleRow; the one-shot migration removes this shape.
-
-(defrecord StoredValue [id :- Int value :- StoreValue])
-(defrecord StoredFact [id :- Int l :- Int p :- Int r :- Int])
-(defrecord FactView [l :- Int p :- Int r :- Int])
-(defrecord StoredTxOf [cid :- Int tx :- Int])
-(defrecord StoredTx [id :- Int seq :- Int agent :- StoreValue observed :- Int? ts :- String?])
-(defrecord IdBucket [key :- Int ids :- (Vec Int)])
-(defrecord PairBucket [left :- Int right :- Int ids :- (Vec Int)])
-
-(defrecord StoreDump
-  [version :- Int next-id :- Int next-seq :- Int supersedes-pred :- Int?
-   objects :- (Vec Int) values :- (Vec StoredValue)
-   facts :- (Vec StoredFact) tx-of :- (Vec StoredTxOf) txs :- (Vec StoredTx)
-   superseded :- (Vec Int)])
-
-(defrecord Store
-  [next-id :- Int next-seq :- Int supersedes-pred :- Int?
-   objects :- (Vec Int) values :- (Vec StoredValue) facts :- (Vec StoredFact)
-   tx-of :- (Vec StoredTxOf) txs :- (Vec StoredTx) superseded :- (Vec Int)
-   idx-by-l :- (Vec IdBucket) idx-by-p :- (Vec IdBucket) idx-by-r :- (Vec IdBucket)
-   idx-by-lp :- (Vec PairBucket) idx-by-pr :- (Vec PairBucket)
-   ;; hash-slot index over :values, keyed by slot, holding POSITIONS in :values
-   value-slots :- (Vec IdBucket)
-   ;; the same slot table over each fact index and over :facts.  The bucket
-   ;; vectors above keep their shape — readers outside fram.store walk them — so
-   ;; every slot here holds POSITIONS in the vector it indexes, never its entries.
-   l-slots :- (Vec IdBucket) p-slots :- (Vec IdBucket) r-slots :- (Vec IdBucket)
-   lp-slots :- (Vec IdBucket) pr-slots :- (Vec IdBucket)
-   fact-slots :- (Vec IdBucket)
-   ;; :txs is the one vector NOT ordered by id: coord_daemon's migrate/tail seam
-   ;; appends a raw map behind the store's back, so it is slotted, not searched.
-   tx-slots :- (Vec IdBucket)])

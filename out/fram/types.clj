@@ -53,23 +53,92 @@
 
 (defn termbucket-positions [r] (:positions r))
 
-(defrecord TermStore [atoms triples atom-slots triple-slots])
+(defrecord TransactionRow [sequence first-operation operation-count])
+
+(defn transactionrow-sequence [r] (:sequence r))
+
+(defn transactionrow-first-operation [r] (:first-operation r))
+
+(defn transactionrow-operation-count [r] (:operation-count r))
+
+(defrecord OperationRow [tx-sequence ordinal action triple-handle])
+
+(defn operationrow-tx-sequence [r] (:tx-sequence r))
+
+(defn operationrow-ordinal [r] (:ordinal r))
+
+(defn operationrow-action [r] (:action r))
+
+(defn operationrow-triple-handle [r] (:triple-handle r))
+
+(defrecord ActiveBucket [triple-handle positions])
+
+(defn activebucket-triple-handle [r] (:triple-handle r))
+
+(defn activebucket-positions [r] (:positions r))
+
+(defrecord CommitOperation [action proposition])
+
+(defn commitoperation-action [r] (:action r))
+
+(defn commitoperation-proposition [r] (:proposition r))
+
+(defrecord TransactionFrame [sequence operations])
+
+(defn transactionframe-sequence [r] (:sequence r))
+
+(defn transactionframe-operations [r] (:operations r))
+
+(defrecord TermStore [space-id next-sequence atoms triples transactions operations operation-live withdrawal-targets active-buckets atom-slots triple-slots active-slots])
+
+(defn termstore-space-id [r] (:space-id r))
+
+(defn termstore-next-sequence [r] (:next-sequence r))
 
 (defn termstore-atoms [r] (:atoms r))
 
 (defn termstore-triples [r] (:triples r))
 
+(defn termstore-transactions [r] (:transactions r))
+
+(defn termstore-operations [r] (:operations r))
+
+(defn termstore-operation-live [r] (:operation-live r))
+
+(defn termstore-withdrawal-targets [r] (:withdrawal-targets r))
+
+(defn termstore-active-buckets [r] (:active-buckets r))
+
 (defn termstore-atom-slots [r] (:atom-slots r))
 
 (defn termstore-triple-slots [r] (:triple-slots r))
 
-(defrecord TermStoreDump [version atoms triples])
+(defn termstore-active-slots [r] (:active-slots r))
+
+(defrecord TermStoreDump [version space-id next-sequence atoms triples transactions operations])
 
 (defn termstoredump-version [r] (:version r))
+
+(defn termstoredump-space-id [r] (:space-id r))
+
+(defn termstoredump-next-sequence [r] (:next-sequence r))
 
 (defn termstoredump-atoms [r] (:atoms r))
 
 (defn termstoredump-triples [r] (:triples r))
+
+(defn termstoredump-transactions [r] (:transactions r))
+
+(defn termstoredump-operations [r] (:operations r))
+
+(defn ^Boolean commit-operation? [v]
+  (instance? CommitOperation v))
+
+(defn ^Boolean transaction-frame? [v]
+  (instance? TransactionFrame v))
+
+(defn ^Boolean term-store-dump? [v]
+  (instance? TermStoreDump v))
 
 (def tx-sequence :kernel/tx-sequence)
 
@@ -82,6 +151,10 @@
 (def withdraws :kernel/withdraws)
 
 (def recorded-at-predicate :kernel/recorded-at)
+
+(def assert-action :assert)
+
+(def retract-action :retract)
 
 (defn ^Boolean atom? [v]
   (or (string? v) (or (integer? v) (or (and (number? v) (not (integer? v))) (or (boolean? v) (or (keyword? v) (instant? v)))))))
@@ -127,127 +200,3 @@
    left-ordinal (triple-slot2 left)
    right-ordinal (triple-slot2 right)]
   (if (= left-space right-space) (or (< left-seq right-seq) (and (= left-seq right-seq) (< left-ordinal right-ordinal))) (throw (ex-info "fram: occurrences from different spaces have no shared order" {:type :incomparable-occurrence-spaces})))) (throw (ex-info "fram: occurrence ordering requires occurrence coordinates" {:type :invalid-occurrence-order}))))
-
-(defrecord StoredValue [id value])
-
-(defn storedvalue-id [r] (:id r))
-
-(defn storedvalue-value [r] (:value r))
-
-(defrecord StoredFact [id l p r])
-
-(defn storedfact-id [r] (:id r))
-
-(defn storedfact-l [r] (:l r))
-
-(defn storedfact-p [r] (:p r))
-
-(defn storedfact-r [r] (:r r))
-
-(defrecord FactView [l p r])
-
-(defn factview-l [r] (:l r))
-
-(defn factview-p [r] (:p r))
-
-(defn factview-r [r] (:r r))
-
-(defrecord StoredTxOf [cid tx])
-
-(defn storedtxof-cid [r] (:cid r))
-
-(defn storedtxof-tx [r] (:tx r))
-
-(defrecord StoredTx [id seq agent observed ts])
-
-(defn storedtx-id [r] (:id r))
-
-(defn storedtx-seq [r] (:seq r))
-
-(defn storedtx-agent [r] (:agent r))
-
-(defn storedtx-observed [r] (:observed r))
-
-(defn storedtx-ts [r] (:ts r))
-
-(defrecord IdBucket [key ids])
-
-(defn idbucket-key [r] (:key r))
-
-(defn idbucket-ids [r] (:ids r))
-
-(defrecord PairBucket [left right ids])
-
-(defn pairbucket-left [r] (:left r))
-
-(defn pairbucket-right [r] (:right r))
-
-(defn pairbucket-ids [r] (:ids r))
-
-(defrecord StoreDump [version next-id next-seq supersedes-pred objects values facts tx-of txs superseded])
-
-(defn storedump-version [r] (:version r))
-
-(defn storedump-next-id [r] (:next-id r))
-
-(defn storedump-next-seq [r] (:next-seq r))
-
-(defn storedump-supersedes-pred [r] (:supersedes-pred r))
-
-(defn storedump-objects [r] (:objects r))
-
-(defn storedump-values [r] (:values r))
-
-(defn storedump-facts [r] (:facts r))
-
-(defn storedump-tx-of [r] (:tx-of r))
-
-(defn storedump-txs [r] (:txs r))
-
-(defn storedump-superseded [r] (:superseded r))
-
-(defrecord Store [next-id next-seq supersedes-pred objects values facts tx-of txs superseded idx-by-l idx-by-p idx-by-r idx-by-lp idx-by-pr value-slots l-slots p-slots r-slots lp-slots pr-slots fact-slots tx-slots])
-
-(defn store-next-id [r] (:next-id r))
-
-(defn store-next-seq [r] (:next-seq r))
-
-(defn store-supersedes-pred [r] (:supersedes-pred r))
-
-(defn store-objects [r] (:objects r))
-
-(defn store-values [r] (:values r))
-
-(defn store-facts [r] (:facts r))
-
-(defn store-tx-of [r] (:tx-of r))
-
-(defn store-txs [r] (:txs r))
-
-(defn store-superseded [r] (:superseded r))
-
-(defn store-idx-by-l [r] (:idx-by-l r))
-
-(defn store-idx-by-p [r] (:idx-by-p r))
-
-(defn store-idx-by-r [r] (:idx-by-r r))
-
-(defn store-idx-by-lp [r] (:idx-by-lp r))
-
-(defn store-idx-by-pr [r] (:idx-by-pr r))
-
-(defn store-value-slots [r] (:value-slots r))
-
-(defn store-l-slots [r] (:l-slots r))
-
-(defn store-p-slots [r] (:p-slots r))
-
-(defn store-r-slots [r] (:r-slots r))
-
-(defn store-lp-slots [r] (:lp-slots r))
-
-(defn store-pr-slots [r] (:pr-slots r))
-
-(defn store-fact-slots [r] (:fact-slots r))
-
-(defn store-tx-slots [r] (:tx-slots r))
