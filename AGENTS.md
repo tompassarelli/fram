@@ -19,7 +19,7 @@ only to the revision checked; never treat it as evergreen.
   checker oracle; compiler output and protocol integration may be consumed by
   FRAM under either offered license.
 
-- 2026-07-30 — Beagle packaged-input revision
-  `80e0c27409236a2cc4c7e7a33aafed25dc9fde7c` is MIT OR Apache-2.0. It is
+- 2026-08-02 — Beagle packaged-input revision
+  `309c6f216392648f7ec10dfeb7bb7e234c08e60c` is MIT OR Apache-2.0. It is
   the current `flake.nix` graph-authoring runtime pin and is license-compatible
   with FRAM; update this dated record when the package pin advances.
