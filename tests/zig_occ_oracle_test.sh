@@ -150,7 +150,8 @@ run_zig_daemon_once() {
   : >"$log"
 
   env -u FRAM_REQUIRE_LOG_FENCE \
-    "$FRAM_ZIG_DAEMON" serve-flat "$port" "$log" \
+    FRAM_SPACE_ID="oracle-$name-$attempt" FRAM_CREATE_LOG=1 \
+    "$FRAM_ZIG_DAEMON" serve-log "$port" "$log" \
     >"$daemon_out" 2>&1 &
   daemon_pid=$!
 

@@ -37,6 +37,7 @@ pub const Term = union(enum) {
 
 /// The one semantic aggregate stored by Fram. Slot meaning belongs to the
 /// ontology; the physical codec treats all three positions uniformly.
+/// “Turtles all the way down” names that uniformity thesis, never this type.
 pub const Triple = struct {
     slot0: Term,
     slot1: Term,
@@ -362,6 +363,27 @@ pub fn replayFile(
     return replayBytes(allocator, bytes);
 }
 
+pub fn replayFileForSpace(
+    allocator: Allocator,
+    io: Io,
+    dir: Dir,
+    sub_path: []const u8,
+    max_bytes: usize,
+    expected_space_id: []const u8,
+) !ReadOutcome {
+    const bytes = dir.readFileAlloc(
+        io,
+        sub_path,
+        allocator,
+        .limited(max_bytes),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return error.MigrationRequired,
+        else => |other| return other,
+    };
+    defer allocator.free(bytes);
+    return replayBytesForSpace(allocator, bytes, expected_space_id);
+}
+
 /// Append against the byte boundary returned by replay. The immutable SpaceId
 /// and exact file size are both fenced before bytes are written and synced.
 pub fn appendTransactionDurable(
@@ -468,6 +490,44 @@ pub fn termEql(left: Term, right: Term) bool {
         .atom => |left_atom| atomEql(left_atom, right.atom),
         .triple => |left_triple| tripleEql(left_triple.*, right.triple.*),
     };
+}
+
+/// Clone a recursive term into an allocator whose lifetime owns every nested
+/// triple and byte slice.
+pub fn cloneTerm(allocator: Allocator, term: Term) Allocator.Error!Term {
+    return switch (term) {
+        .atom => |atom| .{ .atom = switch (atom) {
+            .string => |value| .{ .string = try allocator.dupe(u8, value) },
+            .integer => |value| .{ .integer = value },
+            .float => |value| .{ .float = value },
+            .boolean => |value| .{ .boolean = value },
+            .keyword => |value| .{ .keyword = try allocator.dupe(u8, value) },
+            .instant => |value| .{ .instant = value },
+        } },
+        .triple => |triple| .{ .triple = try cloneTriplePtr(allocator, triple.*) },
+    };
+}
+
+pub fn cloneTriple(allocator: Allocator, triple: Triple) Allocator.Error!Triple {
+    return .{
+        .slot0 = try cloneTerm(allocator, triple.slot0),
+        .slot1 = try cloneTerm(allocator, triple.slot1),
+        .slot2 = try cloneTerm(allocator, triple.slot2),
+    };
+}
+
+fn cloneTriplePtr(allocator: Allocator, triple: Triple) Allocator.Error!*Triple {
+    const copy = try allocator.create(Triple);
+    copy.* = try cloneTriple(allocator, triple);
+    return copy;
+}
+
+/// The canonical tagged encoding is also the structural key for a proposition.
+pub fn encodeTripleKey(allocator: Allocator, triple: Triple) EncodeError![]u8 {
+    var out: Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try writeTerm(&out.writer, .{ .triple = &triple }, 0);
+    return out.toOwnedSlice();
 }
 
 fn atomEql(left: Atom, right: Atom) bool {

@@ -91,25 +91,15 @@ fenced_request() {
 
 log_a="$test_dir/a.log"
 log_b="$test_dir/b.log"
-printf '%s\n' \
-  '{:tx 1, :op "assert", :l "@seed", :p "title", :r "one"}' \
-  '{:tx 3, :op "assert", :l "@seed", :p "note", :r "two"}' \
-  '{:tx 3, :op "assert", :l "@a", :p "depends_on", :r "@b"}' \
-  '{:tx 3, :op "assert", :l "@b", :p "depends_on", :r "@c"}' \
-  '{:tx 3, :op "assert", :l "@c", :p "depends_on", :r "@d"}' \
-  '{:tx 3, :op "assert", :l "@title", :p "predicate_name", :r "title"}' \
-  '{:tx 3, :op "assert", :l "@title", :p "predicate_alias", :r ":title"}' \
-  '{:tx 3, :op "assert", :l "@title", :p "cardinality", :r "single"}' \
-  '{:tx 3, :op "assert", :l "@title", :p "value_kind", :r "literal"}' \
-  >"$log_a"
+: >"$log_a"
 : >"$log_b"
 canonical_a="$(realpath "$log_a")"
 canonical_b="$(realpath "$log_b")"
 initial_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 
 port="$(free_port)"
-FRAM_REQUIRE_LOG_FENCE=1 \
-  "$daemon_bin" serve-flat "$port" "$log_a" \
+FRAM_REQUIRE_LOG_FENCE=1 FRAM_SPACE_ID=bootstrap-space FRAM_CREATE_LOG=1 \
+  "$daemon_bin" serve-log "$port" "$log_a" \
   >"$test_dir/daemon.out" 2>&1 &
 daemon_pid=$!
 
@@ -123,17 +113,33 @@ for _ in $(seq 1 100); do
   sleep 0.025
 done
 [[ -n "$ready" ]]
-assert_response "$ready" '(fn [r] (= 3 (:version r)))'
+assert_response "$ready" '(fn [r] (= 0 (:version r)))'
+
+seed_requests=(
+  '{:op :assert :te "@seed" :p "title" :r "one"}'
+  '{:op :assert :te "@seed" :p "note" :r "two"}'
+  '{:op :assert :te "@a" :p "depends_on" :r "@b"}'
+  '{:op :assert :te "@b" :p "depends_on" :r "@c"}'
+  '{:op :assert :te "@c" :p "depends_on" :r "@d"}'
+  '{:op :assert :te "@title" :p "predicate_name" :r "title"}'
+  '{:op :assert :te "@title" :p "predicate_alias" :r ":title"}'
+  '{:op :assert :te "@title" :p "cardinality" :r "single"}'
+  '{:op :assert :te "@title" :p "value_kind" :r "literal"}'
+)
+for seed_request in "${seed_requests[@]}"; do
+  fenced_request "$port" "$canonical_a" "$seed_request" >/dev/null
+done
 
 status="$(fenced_request "$port" "$canonical_a" "{:op :status}")"
 assert_response "$status" \
-  "(fn [r] (and (= 3 (:version r))
+  "(fn [r] (and (= 9 (:version r))
                 (= \"$canonical_a\" (:log r))
+                (= \"bootstrap-space\" (:space-id r))
                 (true? (get-in r [:writer-authority :write-authorized]))))"
 
 facts="$(fenced_request "$port" "$canonical_a" '{:op :facts}')"
 assert_response "$facts" \
-  "(fn [r] (and (= 3 (:version r)) (= \"$canonical_a\" (:log r))
+  "(fn [r] (and (= 9 (:version r)) (= \"$canonical_a\" (:log r))
                 (= #{[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]
                      [\"@a\" \"depends_on\" \"@b\"]
                      [\"@b\" \"depends_on\" \"@c\"]
@@ -146,7 +152,7 @@ assert_response "$facts" \
 scoped_seed="$(fenced_request "$port" "$canonical_a" \
   '{:op :facts-for-subjects :subjects ["@seed"]}')"
 assert_response "$scoped_seed" \
-  "(fn [r] (and (= 3 (:version r)) (= \"$canonical_a\" (:log r))
+  "(fn [r] (and (= 9 (:version r)) (= \"$canonical_a\" (:log r))
                 (= [[\"@seed\" \"title\" \"one\"] [\"@seed\" \"note\" \"two\"]]
                    (:facts r))))"
 
@@ -154,7 +160,7 @@ joined="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find "seed-row" :rules [{:head {:rel "seed-row" :args [{:var "subject"} {:var "title"} {:var "note"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]} {:rel "fact" :args [{:var "subject"} "note" {:var "note"}]}]}]}}')"
 assert_response "$joined" \
   '(fn [r] (and (= [["@seed" "one" "two"]] (:ok r))
-                (= 3 (:version r))
+                (= 9 (:version r))
                 (= "scan" (:engine r))))'
 
 triple_joined="$(fenced_request "$port" "$canonical_a" \
@@ -176,12 +182,15 @@ assert_response "$predicate_metadata" \
                ["title" "@title" "title" "title" "single" "literal"]]
               (:ok r)))'
 
-fact_ids="$(fenced_request "$port" "$canonical_a" \
-  '{:op :query :query {:find "identified" :rules [{:head {:rel "identified" :args [{:var "cid"} {:var "predicate"} {:var "value"}]} :body [{:rel "fact-id" :args [{:var "cid"} "@seed" {:var "predicate"} {:var "value"}]}]}]}}')"
-assert_response "$fact_ids" \
-  '(fn [r] (= [["c0" "title" "one"]
-               ["c1" "note" "two"]]
-              (:ok r)))'
+seed_occurrences="$(fenced_request "$port" "$canonical_a" \
+  '{:op :occurrences}')"
+assert_response "$seed_occurrences" \
+  '(fn [r] (and (= "bootstrap-space" (:space-id r))
+                (some #{[[["bootstrap-space" :kernel/tx-sequence 1]
+                           :kernel/op-ordinal 0]
+                          :kernel/asserts
+                          ["@seed" "title" "one"]]}
+                      (:occurrences r))))'
 
 deterministic="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find "seed-facts" :rules [{:head {:rel "seed-facts" :args [{:var "predicate"} {:var "value"}]} :body [{:rel "fact" :args ["@seed" {:var "predicate"} {:var "value"}]}]}]}}')"
@@ -217,6 +226,22 @@ aggregate="$(fenced_request "$port" "$canonical_a" \
   '{:op :query :query {:find {:rel "values" :group [0] :agg [{:op :count}]} :rules [{:head {:rel "values" :args [{:var "subject"}]} :body [{:rel "fact" :args [{:var "subject"} "title" {:var "title"}]}]}]}}')"
 assert_response "$aggregate" '(fn [r] (= :unsupported-query (:code r)))'
 
+nested="$(fenced_request "$port" "$canonical_a" \
+  '{:op :assert-triple :triple [["Alice" :profile true] :email "alice@example.com"]}')"
+assert_response "$nested" '(fn [r] (= 10 (:ok r)))'
+nested_triples="$(fenced_request "$port" "$canonical_a" '{:op :triples}')"
+assert_response "$nested_triples" \
+  '(fn [r] (some #{[["Alice" :profile true] :email "alice@example.com"]}
+                 (:triples r)))'
+nested_occurrences="$(fenced_request "$port" "$canonical_a" \
+  '{:op :occurrences}')"
+assert_response "$nested_occurrences" \
+  '(fn [r] (some #{[[["bootstrap-space" :kernel/tx-sequence 10]
+                       :kernel/op-ordinal 0]
+                      :kernel/asserts
+                      [["Alice" :profile true] :email "alice@example.com"]]}
+                 (:occurrences r)))'
+
 mismatch="$(fenced_request "$port" "$canonical_b" "{:op :version}")"
 assert_response "$mismatch" \
   "(fn [r] (and (= :log-mismatch (:code r))
@@ -230,38 +255,35 @@ assert_response "$unwrapped" \
 
 single="$(fenced_request "$port" "$canonical_a" \
   '{:op :assert :te "@mutation" :p "progress" :r "one"}')"
-assert_response "$single" '(fn [r] (= 4 (:ok r)))'
+assert_response "$single" '(fn [r] (= 11 (:ok r)))'
 
 batch="$(fenced_request "$port" "$canonical_a" \
   '{:op :assert-batch :te "@mutation" :facts [{:p "alpha" :r "A"} {:p "beta" :r "B"}]}')"
 assert_response "$batch" \
-  '(fn [r] (and (= 5 (:ok r))
+  '(fn [r] (and (= 12 (:ok r))
                 (= ["alpha" "beta"] (:written r))
                 (empty? (:idempotent r))
                 (true? (:batch r))))'
 
-FRAM_TEST_LOG="$log_a" FRAM_TEST_TX=5 bb -e '
-  (require (quote [clojure.edn :as edn])
-           (quote [clojure.string :as str]))
-  (let [tx (parse-long (System/getenv "FRAM_TEST_TX"))
-        records (->> (str/split-lines (slurp (System/getenv "FRAM_TEST_LOG")))
-                     (map edn/read-string)
-                     (filter #(and (= tx (:tx %))
-                                   (= "@mutation" (:l %))
-                                   (#{"alpha" "beta"} (:p %))))
-                     vec)]
-    (when-not (and (= 2 (count records))
-                   (= #{tx} (set (map :tx records))))
-      (binding [*out* *err*]
-        (println "batch was not one fsync-visible transaction:" (pr-str records)))
-      (System/exit 1)))'
+batch_occurrences="$(fenced_request "$port" "$canonical_a" \
+  '{:op :occurrences}')"
+assert_response "$batch_occurrences" \
+  '(fn [r] (let [expected #{[[["bootstrap-space" :kernel/tx-sequence 12]
+                                :kernel/op-ordinal 0]
+                               :kernel/asserts
+                               ["@mutation" "alpha" "A"]]
+                              [[["bootstrap-space" :kernel/tx-sequence 12]
+                                :kernel/op-ordinal 1]
+                               :kernel/asserts
+                               ["@mutation" "beta" "B"]]}]
+             (every? (set (:occurrences r)) expected)))'
 
 before_stale_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 before_stale_size="$(stat -c %s "$log_a")"
 stale="$(fenced_request "$port" "$canonical_a" \
-  '{:op :assert-at-version :te "@stale" :p "marker" :r "must-not-land" :base 4}')"
+  '{:op :assert-at-version :te "@stale" :p "marker" :r "must-not-land" :base 11}')"
 assert_response "$stale" \
-  '(fn [r] (and (= :conflict (:reject r)) (= 5 (:version r))))'
+  '(fn [r] (and (= :conflict (:reject r)) (= 12 (:version r))))'
 [[ "$before_stale_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
 [[ "$before_stale_size" == "$(stat -c %s "$log_a")" ]]
 
@@ -272,24 +294,24 @@ assert_response "$invalid" '(fn [r] (= :invalid-request (:code r)))'
 
 retracted="$(fenced_request "$port" "$canonical_a" \
   '{:op :retract :te "@mutation" :p "beta" :r "B"}')"
-assert_response "$retracted" '(fn [r] (= 6 (:ok r)))'
+assert_response "$retracted" '(fn [r] (= 13 (:ok r)))'
 
 scoped_mutation="$(fenced_request "$port" "$canonical_a" \
   '{:op :facts-for-subjects :subjects ["@mutation" "@missing"]}')"
 assert_response "$scoped_mutation" \
-  "(fn [r] (and (= 6 (:version r)) (= \"$canonical_a\" (:log r))
+  "(fn [r] (and (= 13 (:version r)) (= \"$canonical_a\" (:log r))
                 (= #{[\"@mutation\" \"progress\" \"one\"] [\"@mutation\" \"alpha\" \"A\"]}
                    (set (:facts r)))))"
 
 lease="$(fenced_request "$port" "$canonical_a" \
   '{:op :acquire-lease :res "native-write" :holder "holder-a" :ttl-ms 5000}')"
 assert_response "$lease" \
-  '(fn [r] (and (= 7 (:ok r)) (= "holder-a" (:holder r)) (= (:ok r) (:epoch r))))'
+  '(fn [r] (and (= 14 (:ok r)) (= "holder-a" (:holder r)) (= (:ok r) (:epoch r))))'
 
 lease_epoch="$(FRAM_TEST_RESPONSE="$lease" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
 fenced_write="$(fenced_request "$port" "$canonical_a" \
   "{:op :assert-with-fence :res \"native-write\" :holder \"holder-a\" :epoch $lease_epoch :te \"@lease-proof\" :p \"marker\" :r \"accepted\"}")"
-assert_response "$fenced_write" '(fn [r] (= 8 (:ok r)))'
+assert_response "$fenced_write" '(fn [r] (= 15 (:ok r)))'
 
 before_fence_reject_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 stale_fenced_write="$(fenced_request "$port" "$canonical_a" \
@@ -299,20 +321,20 @@ assert_response "$stale_fenced_write" '(fn [r] (= :fence-lost (:reject r)))'
 
 renewed="$(fenced_request "$port" "$canonical_a" \
   "{:op :renew-lease :res \"native-write\" :holder \"holder-a\" :epoch $lease_epoch :ttl-ms 5000}")"
-assert_response "$renewed" '(fn [r] (and (= 9 (:ok r)) (= (:ok r) (:epoch r))))'
+assert_response "$renewed" '(fn [r] (and (= 16 (:ok r)) (= (:ok r) (:epoch r))))'
 renewed_epoch="$(FRAM_TEST_RESPONSE="$renewed" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
 released="$(fenced_request "$port" "$canonical_a" \
   "{:op :release-lease :res \"native-write\" :holder \"holder-a\" :epoch $renewed_epoch}")"
-assert_response "$released" '(fn [r] (= 10 (:ok r)))'
+assert_response "$released" '(fn [r] (= 17 (:ok r)))'
 
 expiring="$(fenced_request "$port" "$canonical_a" \
   '{:op :acquire-lease :res "native-expiry" :holder "old-holder" :ttl-ms 20}')"
-assert_response "$expiring" '(fn [r] (= 11 (:ok r)))'
+assert_response "$expiring" '(fn [r] (= 18 (:ok r)))'
 old_epoch="$(FRAM_TEST_RESPONSE="$expiring" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
 sleep 0.05
 successor="$(fenced_request "$port" "$canonical_a" \
   '{:op :acquire-lease :res "native-expiry" :holder "new-holder" :ttl-ms 5000}')"
-assert_response "$successor" '(fn [r] (and (= 12 (:ok r)) (= "new-holder" (:holder r))))'
+assert_response "$successor" '(fn [r] (and (= 19 (:ok r)) (= "new-holder" (:holder r))))'
 before_expired_reject_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 expired_write="$(fenced_request "$port" "$canonical_a" \
   "{:op :assert-with-fence :res \"native-expiry\" :holder \"old-holder\" :epoch $old_epoch :te \"@expired-proof\" :p \"marker\" :r \"rejected\"}")"
@@ -321,17 +343,31 @@ assert_response "$expired_write" '(fn [r] (= :fence-lost (:reject r)))'
 successor_epoch="$(FRAM_TEST_RESPONSE="$successor" bb -e '(require (quote [clojure.edn :as edn])) (print (:epoch (edn/read-string (System/getenv "FRAM_TEST_RESPONSE"))))')"
 successor_release="$(fenced_request "$port" "$canonical_a" \
   "{:op :release-lease :res \"native-expiry\" :holder \"new-holder\" :epoch $successor_epoch}")"
-assert_response "$successor_release" '(fn [r] (= 13 (:ok r)))'
+assert_response "$successor_release" '(fn [r] (= 20 (:ok r)))'
 
 duplicate_port="$(free_port)"
 set +e
-FRAM_REQUIRE_LOG_FENCE=1 timeout 5 \
-  "$daemon_bin" serve-flat "$duplicate_port" "$log_a" \
+FRAM_REQUIRE_LOG_FENCE=1 FRAM_SPACE_ID=bootstrap-space timeout 5 \
+  "$daemon_bin" serve-log "$duplicate_port" "$log_a" \
   >"$test_dir/duplicate.out" 2>&1
 duplicate_status=$?
 set -e
 [[ $duplicate_status -ne 0 && $duplicate_status -ne 124 ]]
 grep -q "holds writer authority" "$test_dir/duplicate.out"
+
+legacy_log="$test_dir/legacy.log"
+printf '%s\n' \
+  '{:tx 1, :op "assert", :l "@legacy", :p "title", :r "old"}' \
+  >"$legacy_log"
+legacy_port="$(free_port)"
+set +e
+FRAM_SPACE_ID=bootstrap-space timeout 5 \
+  "$daemon_bin" serve-log "$legacy_port" "$legacy_log" \
+  >"$test_dir/legacy.out" 2>&1
+legacy_status=$?
+set -e
+[[ $legacy_status -ne 0 && $legacy_status -ne 124 ]]
+grep -q "requires one-shot FRAMLOG v1 migration" "$test_dir/legacy.out"
 
 committed_hash="$(sha256sum "$log_a" | cut -d' ' -f1)"
 [[ "$committed_hash" != "$initial_hash" ]]
@@ -345,9 +381,14 @@ daemon_pid=
 [[ $shutdown_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/daemon.out"
 
+# A prefix of a new frame is not a transaction. Replay drops it atomically and
+# restores the exact last complete boundary before accepting another writer.
+printf '\x40\x00\x00' >>"$log_a"
+[[ "$committed_hash" != "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+
 restart_port="$(free_port)"
-FRAM_REQUIRE_LOG_FENCE=1 \
-  "$daemon_bin" serve-flat "$restart_port" "$log_a" \
+FRAM_REQUIRE_LOG_FENCE=1 FRAM_SPACE_ID=bootstrap-space \
+  "$daemon_bin" serve-log "$restart_port" "$log_a" \
   >"$test_dir/restart.out" 2>&1 &
 daemon_pid=$!
 
@@ -361,15 +402,16 @@ for _ in $(seq 1 100); do
   sleep 0.025
 done
 [[ -n "$restart_ready" ]]
-assert_response "$restart_ready" '(fn [r] (= 13 (:version r)))'
+assert_response "$restart_ready" '(fn [r] (= 20 (:version r)))'
 [[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
+grep -q "incomplete final transaction" "$test_dir/restart.out"
 
 live_noop="$(fenced_request "$restart_port" "$canonical_a" \
   '{:op :assert-existing :te "@mutation" :p "progress" :r "one"}')"
-assert_response "$live_noop" '(fn [r] (= 13 (:ok r)))'
+assert_response "$live_noop" '(fn [r] (= 20 (:ok r)))'
 retracted_noop="$(fenced_request "$restart_port" "$canonical_a" \
   '{:op :retract-existing :te "@mutation" :p "beta" :r "B"}')"
-assert_response "$retracted_noop" '(fn [r] (= 13 (:ok r)))'
+assert_response "$retracted_noop" '(fn [r] (= 20 (:ok r)))'
 [[ "$committed_hash" == "$(sha256sum "$log_a" | cut -d' ' -f1)" ]]
 
 kill -TERM "$daemon_pid"
@@ -381,4 +423,4 @@ daemon_pid=
 [[ $restart_status -eq 0 ]]
 grep -q "\\[fram\\] shutdown complete" "$test_dir/restart.out"
 
-printf 'zig-daemon: fenced bootstrap, fact/triple/fact-id/predicate queries, durable mutation/OCC/batch/retract, leases/fenced writes, replay, writer exclusion, and SIGTERM passed\n'
+printf 'zig-daemon: recursive triples, exact occurrence coordinates, atomic FRAMLOG transactions, OCC/leases, torn-tail replay, migration refusal, writer exclusion, and SIGTERM passed\n'

@@ -21,18 +21,23 @@ const Operation = enum {
     assert_fact,
     assert_existing,
     assert_batch,
+    assert_batch_at_version,
     assert_at_version,
     assert_with_fence,
     assert_at_version_with_fence,
+    assert_triple,
     retract_fact,
     retract_existing,
     retract_with_fence,
+    retract_triple,
     acquire_lease,
     renew_lease,
     release_lease,
     fence_ok,
     facts,
     facts_for_subjects,
+    triples,
+    occurrences,
     query,
     unknown,
 };
@@ -40,13 +45,6 @@ const Operation = enum {
 const EventOperation = enum {
     assert_fact,
     retract_fact,
-
-    fn wireName(operation: EventOperation) []const u8 {
-        return switch (operation) {
-            .assert_fact => "assert",
-            .retract_fact => "retract",
-        };
-    }
 };
 
 const StringField = union(enum) {
@@ -84,6 +82,7 @@ const field_epoch: u16 = 1 << 10;
 const field_ttl_ms: u16 = 1 << 11;
 const field_subjects: u16 = 1 << 12;
 const field_query: u16 = 1 << 13;
+const field_triple: u16 = 1 << 14;
 
 const MapFields = struct {
     op: Operation = .unknown,
@@ -100,6 +99,7 @@ const MapFields = struct {
     ttl_ms: IntField = .missing,
     subjects: ?[]const u8 = null,
     query: ?[]const u8 = null,
+    triple: ?[]const u8 = null,
     present: u16 = 0,
     duplicate: bool = false,
     unknown_field: bool = false,
@@ -214,31 +214,74 @@ const Parser = struct {
     }
 };
 
-const StoredEvent = struct {
-    tx: i64,
+const TripleRow = struct {
+    tx_seq: i64,
+    ordinal: u32,
     operation: EventOperation,
-    l: []const u8,
-    p: []const u8,
-    r: []const u8,
+    triple: flat_log.Triple,
 };
 
 const LatestDeclaration = struct {
-    tx: i64,
+    tx_seq: i64,
+    ordinal: u32,
     operation: EventOperation,
     single: bool,
 };
 
+const StringTripleView = struct {
+    slot0: []const u8,
+    slot1: []const u8,
+    slot2: []const u8,
+};
+
+fn stringAtom(term: flat_log.Term) ?[]const u8 {
+    return switch (term) {
+        .atom => |atom| switch (atom) {
+            .string => |value| value,
+            else => null,
+        },
+        .triple => null,
+    };
+}
+
+fn stringTripleView(triple: flat_log.Triple) ?StringTripleView {
+    return .{
+        .slot0 = stringAtom(triple.slot0) orelse return null,
+        .slot1 = stringAtom(triple.slot1) orelse return null,
+        .slot2 = stringAtom(triple.slot2) orelse return null,
+    };
+}
+
+fn stringTriple(slot0: []const u8, slot1: []const u8, slot2: []const u8) flat_log.Triple {
+    return .{
+        .slot0 = .{ .atom = .{ .string = slot0 } },
+        .slot1 = .{ .atom = .{ .string = slot1 } },
+        .slot2 = .{ .atom = .{ .string = slot2 } },
+    };
+}
+
+fn laterPosition(left: TripleRow, right: TripleRow) bool {
+    return left.tx_seq > right.tx_seq or
+        (left.tx_seq == right.tx_seq and left.ordinal > right.ordinal);
+}
+
 const DaemonState = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
-    events: std.ArrayList(StoredEvent),
+    events: std.ArrayList(TripleRow),
     cardinality: std.StringHashMap(bool),
     configured_single: std.StringHashMap(void),
     latest: std.StringHashMap(usize),
     subjects: std.StringHashMap(void),
+    space_id: []const u8,
+    log_valid_bytes: u64,
     version: i64,
 
-    fn init(allocator: Allocator, environ: *const std.process.Environ.Map) !DaemonState {
+    fn init(
+        allocator: Allocator,
+        environ: *const std.process.Environ.Map,
+        space_id: []const u8,
+    ) !DaemonState {
         var state: DaemonState = .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -247,9 +290,12 @@ const DaemonState = struct {
             .configured_single = std.StringHashMap(void).init(allocator),
             .latest = std.StringHashMap(usize).init(allocator),
             .subjects = std.StringHashMap(void).init(allocator),
+            .space_id = undefined,
+            .log_valid_bytes = 0,
             .version = 0,
         };
         errdefer state.deinit();
+        state.space_id = try state.arena.allocator().dupe(u8, space_id);
         if (environ.get("FRAM_SINGLE_VALUED")) |configured| {
             if (std.mem.trim(u8, configured, " \t\r\n").len != 0) {
                 var tokens = std.mem.tokenizeAny(u8, configured, " \t\r\n");
@@ -277,19 +323,17 @@ const DaemonState = struct {
 
     fn copyEvent(
         state: *DaemonState,
-        tx: i64,
+        tx_seq: i64,
+        ordinal: u32,
         operation: EventOperation,
-        l: []const u8,
-        p: []const u8,
-        r: []const u8,
-    ) !StoredEvent {
+        triple: flat_log.Triple,
+    ) !TripleRow {
         const arena = state.arena.allocator();
         return .{
-            .tx = tx,
+            .tx_seq = tx_seq,
+            .ordinal = ordinal,
             .operation = operation,
-            .l = try arena.dupe(u8, l),
-            .p = try arena.dupe(u8, p),
-            .r = try arena.dupe(u8, r),
+            .triple = try flat_log.cloneTriple(arena, triple),
         };
     }
 
@@ -307,15 +351,19 @@ const DaemonState = struct {
         );
         defer declarations.deinit();
         for (state.events.items) |event| {
-            if (!std.mem.eql(u8, event.p, "cardinality")) continue;
-            const predicate = kernel_classify.stripAt(event.l);
+            const triple = stringTripleView(event.triple) orelse continue;
+            if (!std.mem.eql(u8, triple.slot1, "cardinality")) continue;
+            const predicate = kernel_classify.stripAt(triple.slot0);
             const declaration: LatestDeclaration = .{
-                .tx = event.tx,
+                .tx_seq = event.tx_seq,
+                .ordinal = event.ordinal,
                 .operation = event.operation,
-                .single = std.mem.eql(u8, event.r, "single"),
+                .single = std.mem.eql(u8, triple.slot2, "single"),
             };
             if (declarations.get(predicate)) |previous| {
-                if (previous.tx > event.tx) continue;
+                if (previous.tx_seq > event.tx_seq or
+                    (previous.tx_seq == event.tx_seq and
+                        previous.ordinal > event.ordinal)) continue;
             }
             try declarations.put(predicate, declaration);
         }
@@ -343,26 +391,32 @@ const DaemonState = struct {
     fn applyEvent(
         state: *DaemonState,
         index: usize,
-        event: StoredEvent,
+        event: TripleRow,
     ) !void {
-        try state.subjects.put(event.l, {});
-        if (!std.mem.eql(u8, event.p, "v") and refShape(event.r)) {
-            try state.subjects.put(event.r, {});
+        if (stringTripleView(event.triple)) |triple| {
+            try state.subjects.put(triple.slot0, {});
+            if (!std.mem.eql(u8, triple.slot1, "v") and refShape(triple.slot2)) {
+                try state.subjects.put(triple.slot2, {});
+            }
         }
         const key = try state.eventKey(event);
         if (state.latest.get(key)) |previous_index| {
-            if (state.events.items[previous_index].tx > event.tx) return;
+            if (laterPosition(state.events.items[previous_index], event)) return;
         }
         try state.latest.put(key, index);
     }
 
     fn appendCommitted(
         state: *DaemonState,
-        event: StoredEvent,
+        event: TripleRow,
     ) !void {
         try state.events.append(state.allocator, event);
-        state.version = @max(state.version, event.tx);
-        if (std.mem.eql(u8, event.p, "cardinality")) {
+        state.version = @max(state.version, event.tx_seq);
+        const changes_cardinality = if (stringTripleView(event.triple)) |triple|
+            std.mem.eql(u8, triple.slot1, "cardinality")
+        else
+            false;
+        if (changes_cardinality) {
             try state.rebuildDerived();
         } else {
             try state.applyEvent(state.events.items.len - 1, event);
@@ -371,16 +425,18 @@ const DaemonState = struct {
 
     fn appendCommittedBatch(
         state: *DaemonState,
-        events: []const StoredEvent,
+        events: []const TripleRow,
     ) !void {
         try state.events.ensureUnusedCapacity(state.allocator, events.len);
         var changes_cardinality = false;
         const start = state.events.items.len;
         for (events) |event| {
             state.events.appendAssumeCapacity(event);
-            state.version = @max(state.version, event.tx);
-            changes_cardinality = changes_cardinality or
-                std.mem.eql(u8, event.p, "cardinality");
+            state.version = @max(state.version, event.tx_seq);
+            if (stringTripleView(event.triple)) |triple| {
+                changes_cardinality = changes_cardinality or
+                    std.mem.eql(u8, triple.slot1, "cardinality");
+            }
         }
         if (changes_cardinality) {
             try state.rebuildDerived();
@@ -403,11 +459,21 @@ const DaemonState = struct {
         return state.cardinality.get(predicate) orelse false;
     }
 
-    fn eventKey(state: *DaemonState, event: StoredEvent) ![]const u8 {
-        return if (state.isSingle(event.p))
-            groupKeyAlloc(state.arena.allocator(), event.l, event.p)
-        else
-            tripleKeyAlloc(state.arena.allocator(), event.l, event.p, event.r);
+    fn eventKey(state: *DaemonState, event: TripleRow) ![]const u8 {
+        return state.eventKeyAlloc(state.arena.allocator(), event.triple);
+    }
+
+    fn eventKeyAlloc(
+        state: *const DaemonState,
+        allocator: Allocator,
+        triple: flat_log.Triple,
+    ) ![]const u8 {
+        if (stringTripleView(triple)) |view| {
+            if (state.isSingle(view.slot1)) {
+                return groupKeyAlloc(allocator, view.slot0, view.slot1);
+            }
+        }
+        return flat_log.encodeTripleKey(allocator, triple);
     }
 
     fn liveEvent(
@@ -416,16 +482,31 @@ const DaemonState = struct {
         l: []const u8,
         p: []const u8,
         r: []const u8,
-    ) !?StoredEvent {
-        const key = if (state.isSingle(p))
-            try groupKeyAlloc(scratch, l, p)
-        else
-            try tripleKeyAlloc(scratch, l, p, r);
+    ) !?TripleRow {
+        const key = try state.eventKeyAlloc(scratch, stringTriple(l, p, r));
         defer scratch.free(key);
         const index = state.latest.get(key) orelse return null;
         const event = state.events.items[index];
         if (event.operation != .assert_fact) return null;
-        if (state.isSingle(p) and !std.mem.eql(u8, event.r, r)) return null;
+        const view = stringTripleView(event.triple) orelse return null;
+        if (state.isSingle(p) and !std.mem.eql(u8, view.slot2, r)) return null;
+        return event;
+    }
+
+    fn liveTriple(
+        state: *DaemonState,
+        scratch: Allocator,
+        triple: flat_log.Triple,
+    ) !?TripleRow {
+        const key = try state.eventKeyAlloc(scratch, triple);
+        defer scratch.free(key);
+        const index = state.latest.get(key) orelse return null;
+        const event = state.events.items[index];
+        if (event.operation != .assert_fact) return null;
+        if (stringTripleView(triple)) |view| {
+            if (state.isSingle(view.slot1) and
+                !flat_log.tripleEql(event.triple, triple)) return null;
+        }
         return event;
     }
 
@@ -434,7 +515,7 @@ const DaemonState = struct {
         scratch: Allocator,
         l: []const u8,
         p: []const u8,
-    ) !?StoredEvent {
+    ) !?TripleRow {
         if (state.isSingle(p)) {
             const key = try groupKeyAlloc(scratch, l, p);
             defer scratch.free(key);
@@ -445,9 +526,10 @@ const DaemonState = struct {
         var latest = state.latest.iterator();
         while (latest.next()) |entry| {
             const event = state.events.items[entry.value_ptr.*];
+            const triple = stringTripleView(event.triple) orelse continue;
             if (event.operation == .assert_fact and
-                std.mem.eql(u8, event.l, l) and
-                std.mem.eql(u8, event.p, p))
+                std.mem.eql(u8, triple.slot0, l) and
+                std.mem.eql(u8, triple.slot1, p))
             {
                 return event;
             }
@@ -462,7 +544,7 @@ const DaemonState = struct {
         p: []const u8,
     ) !i64 {
         const live = try state.liveGroup(scratch, l, p);
-        return if (live) |event| event.tx else 0;
+        return if (live) |event| event.tx_seq else 0;
     }
 
     fn allLivePredicateValuesRef(
@@ -473,12 +555,13 @@ const DaemonState = struct {
         var seen = false;
         while (latest.next()) |entry| {
             const event = state.events.items[entry.value_ptr.*];
+            const triple = stringTripleView(event.triple) orelse continue;
             if (event.operation != .assert_fact or
-                !std.mem.eql(u8, event.p, predicate))
+                !std.mem.eql(u8, triple.slot1, predicate))
             {
                 continue;
             }
-            if (!refShape(event.r)) return false;
+            if (!refShape(triple.slot2)) return false;
             seen = true;
         }
         return seen;
@@ -492,7 +575,8 @@ const DaemonState = struct {
         const subject = try std.fmt.allocPrint(scratch, "@lease:{s}", .{resource});
         defer scratch.free(subject);
         const event = try state.liveGroup(scratch, subject, "lease") orelse return null;
-        return parseLease(event.r);
+        const triple = stringTripleView(event.triple) orelse return null;
+        return parseLease(triple.slot2);
     }
 };
 
@@ -531,10 +615,25 @@ pub fn main(init: std.process.Init) void {
         switch (err) {
             error.InvalidArguments => {
                 std.debug.print(
-                    "usage: fram-daemon-zig serve-flat PORT LOG\n",
+                    "usage: fram-daemon-zig serve-log PORT LOG\n",
                     .{},
                 );
                 std.process.exit(2);
+            },
+            error.MissingSpaceId => {
+                std.debug.print("fram: FRAM_SPACE_ID is required\n", .{});
+                std.process.exit(2);
+            },
+            error.MigrationRequired => {
+                std.debug.print(
+                    "fram: legacy or empty log requires one-shot FRAMLOG v1 migration\n",
+                    .{},
+                );
+                std.process.exit(1);
+            },
+            error.SpaceMismatch => {
+                std.debug.print("fram: immutable SpaceId does not match log header\n", .{});
+                std.process.exit(1);
             },
             error.WriterAuthorityHeld => {
                 std.debug.print(
@@ -568,17 +667,20 @@ fn run(init: std.process.Init) !void {
     const mode = args.next() orelse return error.InvalidArguments;
     const port_text = args.next() orelse return error.InvalidArguments;
     const log_argument = args.next() orelse return error.InvalidArguments;
-    if (args.next() != null or !std.mem.eql(u8, mode, "serve-flat"))
+    if (args.next() != null or !std.mem.eql(u8, mode, "serve-log"))
         return error.InvalidArguments;
     const port = std.fmt.parseInt(u16, port_text, 10) catch
         return error.InvalidArguments;
 
-    var created = try Dir.cwd().createFile(
+    const space_id = init.environ_map.get("FRAM_SPACE_ID") orelse
+        return error.MissingSpaceId;
+    try ensureLogImage(
+        init.gpa,
         init.io,
+        init.environ_map,
         log_argument,
-        .{ .truncate = false },
+        space_id,
     );
-    created.close(init.io);
 
     const canonical_log = try Dir.cwd().realPathFileAlloc(
         init.io,
@@ -599,6 +701,7 @@ fn run(init: std.process.Init) !void {
         init.io,
         init.environ_map,
         canonical_log,
+        space_id,
     );
     defer state.deinit();
     const strict_fence = if (init.environ_map.get("FRAM_REQUIRE_LOG_FENCE")) |value|
@@ -618,53 +721,97 @@ fn run(init: std.process.Init) !void {
     );
 }
 
+fn ensureLogImage(
+    allocator: Allocator,
+    io: Io,
+    environ: *const std.process.Environ.Map,
+    log_path: []const u8,
+    space_id: []const u8,
+) !void {
+    const stat = Dir.cwd().statFile(io, log_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => |other| return other,
+    };
+    if (stat != null and stat.?.size != 0) return;
+    const may_create = if (environ.get("FRAM_CREATE_LOG")) |value|
+        std.mem.eql(u8, value, "1")
+    else
+        false;
+    if (!may_create) return error.MigrationRequired;
+
+    const image = try flat_log.encodeLog(allocator, space_id, &.{});
+    defer allocator.free(image);
+    try flat_log.rewriteDurableAtomic(
+        allocator,
+        io,
+        Dir.cwd(),
+        log_path,
+        space_id,
+        image,
+    );
+}
+
 fn replayState(
     allocator: Allocator,
     io: Io,
     environ: *const std.process.Environ.Map,
     canonical_log: []const u8,
+    expected_space_id: []const u8,
 ) !DaemonState {
-    var outcome = try flat_log.replayFile(
+    var outcome = try flat_log.replayFileForSpace(
         allocator,
         io,
         Dir.cwd(),
         canonical_log,
         std.math.maxInt(usize),
+        expected_space_id,
     );
     switch (outcome) {
         .corrupt => |corruption| {
             std.debug.print(
-                "fram: corrupt log line in {s} at byte {d}; refusing to serve\n",
+                "fram: corrupt transaction frame in {s} at byte {d}; refusing to serve\n",
                 .{ canonical_log, corruption.byte_offset },
             );
             return error.CorruptLog;
         },
         .replay => |*replay| {
             defer replay.deinit();
-            var state = try DaemonState.init(allocator, environ);
+            var state = try DaemonState.init(
+                allocator,
+                environ,
+                replay.space_id,
+            );
             errdefer state.deinit();
-            for (replay.records) |record| {
-                if (record.fact.tx) |tx| state.version = @max(state.version, tx);
-                if (!record.fact.complete()) continue;
-                const operation: EventOperation =
-                    if (std.mem.eql(u8, record.fact.op.?, "assert"))
-                        .assert_fact
-                    else
-                        .retract_fact;
-                const event = try state.copyEvent(
-                    record.fact.tx.?,
-                    operation,
-                    record.fact.l.?,
-                    record.fact.p.?,
-                    record.fact.r.?,
-                );
-                try state.events.append(allocator, event);
+            state.log_valid_bytes = @intCast(replay.valid_bytes);
+            for (replay.transactions) |transaction| {
+                state.version = @max(state.version, transaction.tx_seq);
+                for (transaction.ops) |op| {
+                    const operation: EventOperation = switch (op.action) {
+                        .assert => .assert_fact,
+                        .retract => .retract_fact,
+                    };
+                    const event = try state.copyEvent(
+                        transaction.tx_seq,
+                        op.ordinal,
+                        operation,
+                        op.triple,
+                    );
+                    try state.events.append(allocator, event);
+                }
             }
             try state.rebuildDerived();
             if (replay.torn_tail) |tail| {
+                var file = try Dir.cwd().openFile(
+                    io,
+                    canonical_log,
+                    .{ .mode = .read_write },
+                );
+                defer file.close(io);
+                try file.setLength(io, state.log_valid_bytes);
+                try file.sync(io);
                 std.debug.print(
-                    "fram: WARN torn-tail: {s}: torn final log line at byte {d} — recovered {d} prior fact(s), incomplete tail dropped\n",
-                    .{ canonical_log, tail.byte_offset, tail.recovered_records },
+                    "fram: WARN torn-tail: {s}: incomplete final transaction at byte {d}; recovered {d} complete transaction(s)\n",
+                    .{ canonical_log, tail.byte_offset, tail.recovered_transactions },
                 );
             }
             return state;
@@ -969,6 +1116,15 @@ fn dispatchOperation(
             canonical_log,
             state,
             request,
+            false,
+        ),
+        .assert_batch_at_version => assertBatch(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            true,
         ),
         .assert_at_version => mutateOne(
             allocator,
@@ -1003,6 +1159,14 @@ fn dispatchOperation(
             true,
             true,
         ),
+        .assert_triple => mutateTriple(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .assert_fact,
+        ),
         .retract_fact => mutateOne(
             allocator,
             io,
@@ -1036,6 +1200,14 @@ fn dispatchOperation(
             true,
             false,
         ),
+        .retract_triple => mutateTriple(
+            allocator,
+            io,
+            canonical_log,
+            state,
+            request,
+            .retract_fact,
+        ),
         .acquire_lease => acquireLease(
             allocator,
             io,
@@ -1060,13 +1232,15 @@ fn dispatchOperation(
         .fence_ok => fenceOk(allocator, io, state, request),
         .facts => renderFacts(allocator, state, canonical_log, null),
         .facts_for_subjects => factsForSubjects(allocator, state, canonical_log, request),
+        .triples => renderTriples(allocator, state, canonical_log),
+        .occurrences => renderOccurrences(allocator, state),
         .query => queryFacts(allocator, state, request),
         else => if (try requestFieldError(
             allocator,
             request,
             field_op | field_expected_log | field_request | field_te |
                 field_p | field_r | field_base | field_facts |
-                field_subjects | field_query,
+                field_subjects | field_query | field_triple,
             0,
         )) |response| response else allocator.dupe(
             u8,
@@ -1115,7 +1289,7 @@ fn requestFieldError(
     const missing = (required | field_op) & ~request.present;
     if (missing == 0) return null;
 
-    var messages: [8][]const u8 = undefined;
+    var messages: [16][]const u8 = undefined;
     var count: usize = 0;
     const candidates = [_]struct { mask: u16, message: []const u8 }{
         .{ .mask = field_op, .message = "op is required" },
@@ -1131,6 +1305,8 @@ fn requestFieldError(
         .{ .mask = field_epoch, .message = "epoch is required" },
         .{ .mask = field_ttl_ms, .message = "ttl-ms is required" },
         .{ .mask = field_subjects, .message = "subjects is required" },
+        .{ .mask = field_query, .message = "query is required" },
+        .{ .mask = field_triple, .message = "triple is required" },
     };
     for (candidates) |candidate| {
         if ((missing & candidate.mask) != 0) {
@@ -1211,6 +1387,130 @@ fn requestHasCurrentFence(
         std.mem.eql(u8, lease.holder, fields.holder);
 }
 
+const PendingOperation = struct {
+    operation: EventOperation,
+    triple: flat_log.Triple,
+};
+
+fn occurrenceCoordinate(
+    allocator: Allocator,
+    space_id: []const u8,
+    tx_seq: i64,
+    ordinal: u32,
+) !flat_log.Term {
+    const tx_coord = try allocator.create(flat_log.Triple);
+    tx_coord.* = .{
+        .slot0 = .{ .atom = .{ .string = space_id } },
+        .slot1 = .{ .atom = .{ .keyword = "kernel/tx-sequence" } },
+        .slot2 = .{ .atom = .{ .integer = tx_seq } },
+    };
+    const occurrence = try allocator.create(flat_log.Triple);
+    occurrence.* = .{
+        .slot0 = .{ .triple = tx_coord },
+        .slot1 = .{ .atom = .{ .keyword = "kernel/op-ordinal" } },
+        .slot2 = .{ .atom = .{ .integer = ordinal } },
+    };
+    return .{ .triple = occurrence };
+}
+
+fn realInstant(io: Io) !flat_log.Instant {
+    const nanoseconds = Io.Clock.real.now(io).nanoseconds;
+    const epoch_seconds = @divFloor(nanoseconds, std.time.ns_per_s);
+    const remainder = nanoseconds - epoch_seconds * std.time.ns_per_s;
+    return .{
+        .epoch_seconds = @intCast(epoch_seconds),
+        .nanosecond = @intCast(remainder),
+    };
+}
+
+fn commitTransaction(
+    allocator: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    pending: []const PendingOperation,
+) !i64 {
+    if (pending.len == 0) return error.EmptyTransaction;
+    if (state.version == std.math.maxInt(i64)) return error.VersionExhausted;
+    if (pending.len > std.math.maxInt(u32) / 3)
+        return error.TooManyOperations;
+
+    const tx_seq = state.version + 1;
+    const recorded_at = try realInstant(io);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const transaction_allocator = arena.allocator();
+    const operations = try transaction_allocator.alloc(
+        flat_log.Op,
+        pending.len * 3,
+    );
+
+    for (pending, 0..) |item, index| {
+        operations[index] = .{
+            .ordinal = @intCast(index),
+            .action = switch (item.operation) {
+                .assert_fact => .assert,
+                .retract_fact => .retract,
+            },
+            .triple = item.triple,
+        };
+    }
+    for (pending, 0..) |_, index| {
+        const occurrence = try occurrenceCoordinate(
+            transaction_allocator,
+            state.space_id,
+            tx_seq,
+            @intCast(index),
+        );
+        const metadata_offset = pending.len + index * 2;
+        operations[metadata_offset] = .{
+            .ordinal = @intCast(metadata_offset),
+            .action = .assert,
+            .triple = .{
+                .slot0 = occurrence,
+                .slot1 = .{ .atom = .{ .keyword = "kernel/recorded-at" } },
+                .slot2 = .{ .atom = .{ .instant = recorded_at } },
+            },
+        };
+        operations[metadata_offset + 1] = .{
+            .ordinal = @intCast(metadata_offset + 1),
+            .action = .assert,
+            .triple = .{
+                .slot0 = occurrence,
+                .slot1 = .{ .atom = .{ .keyword = "kernel/asserted-by" } },
+                .slot2 = .{ .atom = .{ .string = "coord" } },
+            },
+        };
+    }
+
+    var stored: std.ArrayList(TripleRow) = .empty;
+    defer stored.deinit(allocator);
+    try stored.ensureTotalCapacity(allocator, operations.len);
+    for (operations) |op| {
+        stored.appendAssumeCapacity(try state.copyEvent(
+            tx_seq,
+            op.ordinal,
+            switch (op.action) {
+                .assert => .assert_fact,
+                .retract => .retract_fact,
+            },
+            op.triple,
+        ));
+    }
+
+    state.log_valid_bytes = try flat_log.appendTransactionDurable(
+        allocator,
+        io,
+        Dir.cwd(),
+        canonical_log,
+        state.space_id,
+        state.log_valid_bytes,
+        .{ .tx_seq = tx_seq, .ops = operations },
+    );
+    try state.appendCommittedBatch(stored.items);
+    return tx_seq;
+}
+
 fn appendLeaseEvent(
     allocator: Allocator,
     io: Io,
@@ -1224,14 +1524,10 @@ fn appendLeaseEvent(
     const tx = state.version + 1;
     const subject = try std.fmt.allocPrint(allocator, "@lease:{s}", .{resource});
     defer allocator.free(subject);
-    const timestamp = try timestampUtc(allocator, io);
-    defer allocator.free(timestamp);
 
-    var payload: Writer.Allocating = .init(allocator);
-    defer payload.deinit();
-    var stored: std.ArrayList(StoredEvent) = .empty;
-    defer stored.deinit(allocator);
-    try stored.ensureTotalCapacity(allocator, 3);
+    var pending: std.ArrayList(PendingOperation) = .empty;
+    defer pending.deinit(allocator);
+    try pending.ensureTotalCapacity(allocator, 3);
 
     // `lease` is schema-declared, not an intrinsic single: a log carrying lease
     // events without these two facts replays wrong on the JVM/portable path, so
@@ -1241,41 +1537,26 @@ fn appendLeaseEvent(
             .{ "cardinality", "single" },
             .{ "value_kind", "literal" },
         }) |declaration| {
-            const schema_line = try flat_log.encodeLine(allocator, .{
-                .tx = tx,
-                .op = EventOperation.assert_fact.wireName(),
-                .l = "@lease",
-                .p = declaration[0],
-                .r = declaration[1],
-            }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
-            defer allocator.free(schema_line);
-            try writeAll(&payload.writer, schema_line);
-            stored.appendAssumeCapacity(try state.copyEvent(
-                tx,
-                .assert_fact,
-                "@lease",
-                declaration[0],
-                declaration[1],
-            ));
+            pending.appendAssumeCapacity(.{
+                .operation = .assert_fact,
+                .triple = stringTriple("@lease", declaration[0], declaration[1]),
+            });
         }
     }
 
-    const lease_line = try flat_log.encodeLine(allocator, .{
-        .tx = tx,
-        .op = operation.wireName(),
-        .l = subject,
-        .p = "lease",
-        .r = value,
-    }, .{ .coordinator = .{ .ts = timestamp, .by = "coord" } });
-    defer allocator.free(lease_line);
-    try writeAll(&payload.writer, lease_line);
-    stored.appendAssumeCapacity(
-        try state.copyEvent(tx, operation, subject, "lease", value),
+    pending.appendAssumeCapacity(.{
+        .operation = operation,
+        .triple = stringTriple(subject, "lease", value),
+    });
+    const committed_tx = try commitTransaction(
+        allocator,
+        io,
+        canonical_log,
+        state,
+        pending.items,
     );
-
-    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload.written());
-    try state.appendCommittedBatch(stored.items);
-    return tx;
+    std.debug.assert(committed_tx == tx);
+    return committed_tx;
 }
 
 fn renderLease(allocator: Allocator, epoch: i64, holder: []const u8, exp: i64) ![]u8 {
@@ -1302,6 +1583,73 @@ fn renderHeld(allocator: Allocator, lease: Lease, version: i64) ![]u8 {
 
 fn renderFenceLost(allocator: Allocator, version: i64) ![]u8 {
     return renderLeaseReject(allocator, "fence-lost", version);
+}
+
+const MultiValuedGroups = struct {
+    count: usize,
+    subjects: [3][]const u8,
+    subject_count: usize,
+};
+
+fn multiValuedGroups(
+    allocator: Allocator,
+    state: *const DaemonState,
+    predicate: []const u8,
+) !MultiValuedGroups {
+    var values_per_subject = std.StringHashMap(usize).init(allocator);
+    defer values_per_subject.deinit();
+    var latest = state.latest.iterator();
+    while (latest.next()) |entry| {
+        const event = state.events.items[entry.value_ptr.*];
+        if (event.operation != .assert_fact) continue;
+        const triple = stringTripleView(event.triple) orelse continue;
+        if (!std.mem.eql(u8, triple.slot1, predicate)) continue;
+        const result = try values_per_subject.getOrPut(triple.slot0);
+        if (!result.found_existing) result.value_ptr.* = 0;
+        result.value_ptr.* += 1;
+    }
+
+    var result: MultiValuedGroups = .{
+        .count = 0,
+        .subjects = undefined,
+        .subject_count = 0,
+    };
+    var groups = values_per_subject.iterator();
+    while (groups.next()) |entry| {
+        if (entry.value_ptr.* <= 1) continue;
+        result.count += 1;
+        if (result.subject_count < result.subjects.len) {
+            result.subjects[result.subject_count] = entry.key_ptr.*;
+            result.subject_count += 1;
+        }
+    }
+    return result;
+}
+
+fn renderCardinalityCollapse(
+    allocator: Allocator,
+    predicate: []const u8,
+    groups: MultiValuedGroups,
+    version: i64,
+) ![]u8 {
+    var message: Writer.Allocating = .init(allocator);
+    defer message.deinit();
+    try message.writer.print(
+        "cardinality multi->single on '{s}' would collapse {d} live multi-valued group(s) to latest-tx (data loss); first: ",
+        .{ predicate, groups.count },
+    );
+    for (groups.subjects[0..groups.subject_count], 0..) |subject, index| {
+        if (index != 0) try writeAll(&message.writer, ", ");
+        try writeAll(&message.writer, subject);
+    }
+    try writeAll(&message.writer, " — retract extra values first");
+
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try writeAll(&output.writer, "{:reject [");
+    try writeEdnString(&output.writer, message.written());
+    try output.writer.print("], :version {d}}}", .{version});
+    return output.toOwnedSlice();
 }
 
 fn acquireLease(allocator: Allocator, io: Io, canonical_log: []const u8, state: *DaemonState, request: *MapFields) ![]u8 {
@@ -1408,9 +1756,13 @@ fn subjectWanted(subjects: []const []u8, subject: []const u8) bool {
     return false;
 }
 
-fn currentEvent(state: *DaemonState, scratch: Allocator, event: StoredEvent) !bool {
-    const live = try state.liveEvent(scratch, event.l, event.p, event.r) orelse return false;
-    return live.tx == event.tx and live.operation == .assert_fact;
+fn currentEvent(state: *DaemonState, scratch: Allocator, event: TripleRow) !bool {
+    const key = try state.eventKeyAlloc(scratch, event.triple);
+    defer scratch.free(key);
+    const index = state.latest.get(key) orelse return false;
+    const live = state.events.items[index];
+    return live.tx_seq == event.tx_seq and live.ordinal == event.ordinal and
+        live.operation == .assert_fact;
 }
 
 fn renderFacts(allocator: Allocator, state: *DaemonState, canonical_log: []const u8, subjects: ?[]const []u8) ![]u8 {
@@ -1422,17 +1774,124 @@ fn renderFacts(allocator: Allocator, state: *DaemonState, canonical_log: []const
     var first = true;
     for (state.events.items) |event| {
         if (event.operation != .assert_fact or !(try currentEvent(state, allocator, event))) continue;
+        const triple = stringTripleView(event.triple) orelse continue;
         if (subjects) |wanted| {
-            if (!subjectWanted(wanted, event.l)) continue;
+            if (!subjectWanted(wanted, triple.slot0)) continue;
         }
         if (!first) try writeAll(&output.writer, " ");
         first = false;
         try writeAll(&output.writer, "[");
-        try writeEdnString(&output.writer, event.l);
+        try writeEdnString(&output.writer, triple.slot0);
         try writeAll(&output.writer, " ");
-        try writeEdnString(&output.writer, event.p);
+        try writeEdnString(&output.writer, triple.slot1);
         try writeAll(&output.writer, " ");
-        try writeEdnString(&output.writer, event.r);
+        try writeEdnString(&output.writer, triple.slot2);
+        try writeAll(&output.writer, "]");
+    }
+    try writeAll(&output.writer, "]}");
+    return output.toOwnedSlice();
+}
+
+fn writeTermEdn(writer: *Writer, term: flat_log.Term) Allocator.Error!void {
+    switch (term) {
+        .atom => |atom| switch (atom) {
+            .string => |value| try writeEdnString(writer, value),
+            .integer => |value| writer.print("{d}", .{value}) catch
+                return error.OutOfMemory,
+            .float => |value| {
+                const bits: u64 = @bitCast(value);
+                try writeAll(writer, "{:fram/type :float :bits \"");
+                writer.print("{x:0>16}", .{bits}) catch return error.OutOfMemory;
+                try writeAll(writer, "\"}");
+            },
+            .boolean => |value| try writeAll(
+                writer,
+                if (value) "true" else "false",
+            ),
+            .keyword => |value| {
+                try writeAll(writer, ":");
+                try writeAll(writer, value);
+            },
+            .instant => |value| {
+                try writeAll(writer, "{:fram/type :instant :epoch-seconds ");
+                writer.print("{d}", .{value.epoch_seconds}) catch
+                    return error.OutOfMemory;
+                try writeAll(writer, " :nanosecond ");
+                writer.print("{d}", .{value.nanosecond}) catch
+                    return error.OutOfMemory;
+                try writeAll(writer, "}");
+            },
+        },
+        .triple => |triple| {
+            try writeAll(writer, "[");
+            try writeTermEdn(writer, triple.slot0);
+            try writeAll(writer, " ");
+            try writeTermEdn(writer, triple.slot1);
+            try writeAll(writer, " ");
+            try writeTermEdn(writer, triple.slot2);
+            try writeAll(writer, "]");
+        },
+    }
+}
+
+fn writeTripleEdn(writer: *Writer, triple: flat_log.Triple) Allocator.Error!void {
+    try writeTermEdn(writer, .{ .triple = &triple });
+}
+
+fn writeOccurrenceCoordinateEdn(
+    writer: *Writer,
+    state: *const DaemonState,
+    event: TripleRow,
+) Allocator.Error!void {
+    try writeAll(writer, "[[");
+    try writeEdnString(writer, state.space_id);
+    try writeAll(writer, " :kernel/tx-sequence ");
+    writer.print("{d}", .{event.tx_seq}) catch return error.OutOfMemory;
+    try writeAll(writer, "] :kernel/op-ordinal ");
+    writer.print("{d}", .{event.ordinal}) catch return error.OutOfMemory;
+    try writeAll(writer, "]");
+}
+
+fn renderTriples(
+    allocator: Allocator,
+    state: *DaemonState,
+    canonical_log: []const u8,
+) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try output.writer.print("{{:version {d}, :log ", .{state.version});
+    try writeEdnString(&output.writer, canonical_log);
+    try writeAll(&output.writer, " :triples [");
+    var first = true;
+    for (state.events.items) |event| {
+        if (event.operation != .assert_fact or
+            !(try currentEvent(state, allocator, event))) continue;
+        if (!first) try writeAll(&output.writer, " ");
+        first = false;
+        try writeTripleEdn(&output.writer, event.triple);
+    }
+    try writeAll(&output.writer, "]}");
+    return output.toOwnedSlice();
+}
+
+fn renderOccurrences(allocator: Allocator, state: *const DaemonState) ![]u8 {
+    var output: Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    try output.writer.print("{{:version {d} :space-id ", .{state.version});
+    try writeEdnString(&output.writer, state.space_id);
+    try writeAll(&output.writer, " :occurrences [");
+    for (state.events.items, 0..) |event, index| {
+        if (index != 0) try writeAll(&output.writer, " ");
+        try writeAll(&output.writer, "[");
+        try writeOccurrenceCoordinateEdn(&output.writer, state, event);
+        try writeAll(
+            &output.writer,
+            if (event.operation == .assert_fact)
+                " :kernel/asserts "
+            else
+                " :kernel/retracts ",
+        );
+        try writeTripleEdn(&output.writer, event.triple);
         try writeAll(&output.writer, "]");
     }
     try writeAll(&output.writer, "]}");
@@ -1992,7 +2451,6 @@ fn baseQueryArity(relation: []const u8) ?usize {
     {
         return 3;
     }
-    if (std.mem.eql(u8, relation, "fact-id")) return 4;
     if (std.mem.eql(u8, relation, "predicate")) return 5;
     return null;
 }
@@ -2209,7 +2667,6 @@ fn parseQuery(
 }
 
 const QueryFact = struct {
-    cid: []const u8,
     l: []const u8,
     p: []const u8,
     r: []const u8,
@@ -2298,12 +2755,11 @@ fn buildQueryFacts(
         {
             continue;
         }
-        const cid = try std.fmt.allocPrint(allocator, "c{d}", .{facts.items.len});
+        const triple = stringTripleView(event.triple) orelse continue;
         try facts.append(allocator, .{
-            .cid = cid,
-            .l = event.l,
-            .p = event.p,
-            .r = event.r,
+            .l = triple.slot0,
+            .p = triple.slot1,
+            .r = triple.slot2,
         });
     }
     return facts;
@@ -2594,14 +3050,6 @@ fn negativeQueryLiteralMatches(
         }
         return false;
     }
-    if (std.mem.eql(u8, literal.relation, "fact-id")) {
-        for (facts) |fact| {
-            const values = [_][]const u8{ fact.cid, fact.l, fact.p, fact.r };
-            if (queryTermsMatch(substitution, literal.args.items, &values))
-                return true;
-        }
-        return false;
-    }
     if (std.mem.eql(u8, literal.relation, "predicate")) {
         for (predicates) |predicate| {
             if (queryTermsMatch(
@@ -2656,22 +3104,6 @@ fn evaluateQueryBody(
             {
                 for (facts) |fact| {
                     const values = [_][]const u8{ fact.l, fact.p, fact.r };
-                    try appendUnifiedQueryRow(
-                        allocator,
-                        &next,
-                        substitution,
-                        literal.args.items,
-                        &values,
-                    );
-                }
-            } else if (std.mem.eql(u8, literal.relation, "fact-id")) {
-                for (facts) |fact| {
-                    const values = [_][]const u8{
-                        fact.cid,
-                        fact.l,
-                        fact.p,
-                        fact.r,
-                    };
                     try appendUnifiedQueryRow(
                         allocator,
                         &next,
@@ -2896,6 +3328,68 @@ fn queryFacts(
     return output.toOwnedSlice();
 }
 
+fn mutateTriple(
+    allocator: Allocator,
+    io: Io,
+    canonical_log: []const u8,
+    state: *DaemonState,
+    request: *MapFields,
+    operation: EventOperation,
+) ![]u8 {
+    if (try requestFieldError(
+        allocator,
+        request,
+        field_op | field_triple | field_base,
+        field_triple,
+    )) |response| return response;
+
+    const base: ?i64 = switch (request.base) {
+        .missing, .nil => null,
+        .value => |value| value,
+        .invalid => return renderInvalidRequest(
+            allocator,
+            &.{"base must be an integer or nil"},
+        ),
+    };
+    if (base) |expected| {
+        if (expected < 0) return renderInvalidBase(allocator, state.version);
+        if (expected != state.version) return renderConflict(allocator, state.version);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const triple = parseTripleTerm(
+        arena.allocator(),
+        request.triple orelse unreachable,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidTerm => return renderInvalidRequest(
+            allocator,
+            &.{"triple must contain exactly three recursive typed terms"},
+        ),
+    };
+    const live = try state.liveTriple(allocator, triple);
+    if ((operation == .assert_fact and live != null) or
+        (operation == .retract_fact and live == null))
+    {
+        return renderOk(allocator, state.version);
+    }
+    if (state.version == std.math.maxInt(i64)) {
+        return allocator.dupe(
+            u8,
+            "{:reject :version-exhausted, :code :version-exhausted}",
+        );
+    }
+    const tx_seq = try commitTransaction(
+        allocator,
+        io,
+        canonical_log,
+        state,
+        &.{.{ .operation = operation, .triple = triple }},
+    );
+    return renderOk(allocator, tx_seq);
+}
+
 fn mutateOne(
     allocator: Allocator,
     io: Io,
@@ -2992,6 +3486,28 @@ fn mutateOne(
         return renderConflict(allocator, state.version);
     }
 
+    if (operation == .assert_fact and
+        std.mem.eql(u8, predicate, "cardinality") and
+        std.mem.eql(u8, value, "single"))
+    {
+        const declared_predicate = kernel_classify.stripAt(te);
+        if (!state.isSingle(declared_predicate)) {
+            const groups = try multiValuedGroups(
+                allocator,
+                state,
+                declared_predicate,
+            );
+            if (groups.count != 0) {
+                return renderCardinalityCollapse(
+                    allocator,
+                    declared_predicate,
+                    groups,
+                    state.version,
+                );
+            }
+        }
+    }
+
     const live = if (operation == .assert_fact)
         try state.liveEvent(allocator, te, predicate, value)
     else if (state.isSingle(predicate))
@@ -3014,25 +3530,21 @@ fn mutateOne(
         );
     }
 
-    const tx = state.version + 1;
-    const timestamp = try timestampUtc(allocator, io);
-    defer allocator.free(timestamp);
-    const payload = try flat_log.encodeLine(
+    const tx = try commitTransaction(
         allocator,
-        .{
-            .tx = tx,
-            .op = operation.wireName(),
-            .l = te,
-            .p = predicate,
-            .r = value,
-        },
-        .{ .coordinator = .{ .ts = timestamp, .by = "coord" } },
+        io,
+        canonical_log,
+        state,
+        &.{.{
+            .operation = operation,
+            .triple = stringTriple(te, predicate, value),
+        }},
     );
-    defer allocator.free(payload);
-    const stored = try state.copyEvent(tx, operation, te, predicate, value);
-
-    try flat_log.appendDurable(io, Dir.cwd(), canonical_log, payload);
-    try state.appendCommitted(stored);
+    if (operation == .assert_fact and
+        std.mem.eql(u8, predicate, "cardinality"))
+    {
+        return allocator.dupe(u8, "{:ok nil}");
+    }
     return renderOk(allocator, tx);
 }
 
@@ -3042,12 +3554,13 @@ fn assertBatch(
     canonical_log: []const u8,
     state: *DaemonState,
     request: *MapFields,
+    global_version: bool,
 ) ![]u8 {
     if (try requestFieldError(
         allocator,
         request,
         field_op | field_te | field_facts | field_base,
-        field_te | field_facts,
+        field_te | field_facts | if (global_version) field_base else 0,
     )) |response| return response;
 
     const te = switch (request.te) {
@@ -3094,6 +3607,20 @@ fn assertBatch(
             state.version,
         );
     }
+    if (global_version) {
+        for (batch.facts.items) |fact| {
+            if (fact.base != .missing) {
+                return renderFactLocalBaseReject(allocator, state.version);
+            }
+        }
+        const expected = top_base orelse return renderInvalidBase(
+            allocator,
+            state.version,
+        );
+        if (expected < 0) return renderInvalidBase(allocator, state.version);
+        if (expected != state.version)
+            return renderConflict(allocator, state.version);
+    }
 
     var ordered: std.ArrayList(usize) = .empty;
     defer ordered.deinit(allocator);
@@ -3121,7 +3648,7 @@ fn assertBatch(
                 state.version,
             );
         }
-        const fact_base: ?i64 = switch (fact.base) {
+        const fact_base: ?i64 = if (global_version) null else switch (fact.base) {
             .missing => top_base,
             .nil => null,
             .value => |value| value,
@@ -3166,47 +3693,24 @@ fn assertBatch(
         );
     }
 
-    const tx = state.version + 1;
-    var payload: Writer.Allocating = .init(allocator);
-    defer payload.deinit();
-    var stored: std.ArrayList(StoredEvent) = .empty;
-    defer stored.deinit(allocator);
-    try stored.ensureTotalCapacity(allocator, writes.items.len);
+    var pending: std.ArrayList(PendingOperation) = .empty;
+    defer pending.deinit(allocator);
+    try pending.ensureTotalCapacity(allocator, writes.items.len);
     for (writes.items) |fact_index| {
         const fact = batch.facts.items[fact_index];
-        const timestamp = try timestampUtc(allocator, io);
-        defer allocator.free(timestamp);
-        const line = try flat_log.encodeLine(
-            allocator,
-            .{
-                .tx = tx,
-                .op = EventOperation.assert_fact.wireName(),
-                .l = te,
-                .p = fact.p,
-                .r = fact.r,
-            },
-            .{ .coordinator = .{ .ts = timestamp, .by = "coord" } },
-        );
-        defer allocator.free(line);
-        try writeAll(&payload.writer, line);
-        stored.appendAssumeCapacity(
-            try state.copyEvent(
-                tx,
-                .assert_fact,
-                te,
-                fact.p,
-                fact.r,
-            ),
-        );
+        pending.appendAssumeCapacity(.{
+            .operation = .assert_fact,
+            .triple = stringTriple(te, fact.p, fact.r),
+        });
     }
 
-    try flat_log.appendDurable(
+    const tx = try commitTransaction(
+        allocator,
         io,
-        Dir.cwd(),
         canonical_log,
-        payload.written(),
+        state,
+        pending.items,
     );
-    try state.appendCommittedBatch(stored.items);
     return renderBatchSuccess(
         allocator,
         tx,
@@ -3331,6 +3835,14 @@ fn renderInvalidBase(allocator: Allocator, version: i64) ![]u8 {
     );
 }
 
+fn renderFactLocalBaseReject(allocator: Allocator, version: i64) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{:reject [\"assert-batch-at-version rejects fact-local :base; use only the top-level :base\"], :code :fact-local-base, :version {d}}}",
+        .{version},
+    );
+}
+
 fn renderMissingSubject(
     allocator: Allocator,
     subject: []const u8,
@@ -3411,31 +3923,6 @@ fn renderBatchSuccess(
     return output.toOwnedSlice();
 }
 
-fn timestampUtc(allocator: Allocator, io: Io) ![]u8 {
-    const nanoseconds = Io.Clock.real.now(io).nanoseconds;
-    if (nanoseconds < 0) return error.InvalidSystemTime;
-    const seconds: u64 = @intCast(@divFloor(
-        nanoseconds,
-        std.time.ns_per_s,
-    ));
-    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = seconds };
-    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_seconds = epoch_seconds.getDaySeconds();
-    return std.fmt.allocPrint(
-        allocator,
-        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
-        .{
-            year_day.year,
-            month_day.month.numeric(),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-        },
-    );
-}
-
 /// Authority: `key-sep` in fram/kernel_classify.bclj; a clean value never contains U+0001.
 const key_sep = "\x01";
 
@@ -3446,21 +3933,8 @@ fn groupKeyAlloc(
 ) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "{s}" ++ key_sep ++ "{s}",
+        "\x00{s}" ++ key_sep ++ "{s}",
         .{ l, p },
-    );
-}
-
-fn tripleKeyAlloc(
-    allocator: Allocator,
-    l: []const u8,
-    p: []const u8,
-    r: []const u8,
-) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{s}" ++ key_sep ++ "{s}" ++ key_sep ++ "{s}",
-        .{ l, p, r },
     );
 }
 
@@ -3559,6 +4033,9 @@ fn parseMap(allocator: Allocator, input: []const u8) !MapFields {
         } else if (std.mem.eql(u8, name, "query")) {
             fields.noteField(field_query);
             fields.query = value;
+        } else if (std.mem.eql(u8, name, "triple")) {
+            fields.noteField(field_triple);
+            fields.triple = value;
         } else {
             fields.unknown_field = true;
         }
@@ -3572,23 +4049,29 @@ fn parseOperation(raw: []const u8) Operation {
     if (std.mem.eql(u8, raw, ":assert")) return .assert_fact;
     if (std.mem.eql(u8, raw, ":assert-existing")) return .assert_existing;
     if (std.mem.eql(u8, raw, ":assert-batch")) return .assert_batch;
+    if (std.mem.eql(u8, raw, ":assert-batch-at-version"))
+        return .assert_batch_at_version;
     if (std.mem.eql(u8, raw, ":assert-at-version"))
         return .assert_at_version;
     if (std.mem.eql(u8, raw, ":assert-with-fence"))
         return .assert_with_fence;
     if (std.mem.eql(u8, raw, ":assert-at-version-with-fence"))
         return .assert_at_version_with_fence;
+    if (std.mem.eql(u8, raw, ":assert-triple")) return .assert_triple;
     if (std.mem.eql(u8, raw, ":retract")) return .retract_fact;
     if (std.mem.eql(u8, raw, ":retract-existing"))
         return .retract_existing;
     if (std.mem.eql(u8, raw, ":retract-with-fence"))
         return .retract_with_fence;
+    if (std.mem.eql(u8, raw, ":retract-triple")) return .retract_triple;
     if (std.mem.eql(u8, raw, ":acquire-lease")) return .acquire_lease;
     if (std.mem.eql(u8, raw, ":renew-lease")) return .renew_lease;
     if (std.mem.eql(u8, raw, ":release-lease")) return .release_lease;
     if (std.mem.eql(u8, raw, ":fence-ok")) return .fence_ok;
     if (std.mem.eql(u8, raw, ":facts")) return .facts;
     if (std.mem.eql(u8, raw, ":facts-for-subjects")) return .facts_for_subjects;
+    if (std.mem.eql(u8, raw, ":triples")) return .triples;
+    if (std.mem.eql(u8, raw, ":occurrences")) return .occurrences;
     if (std.mem.eql(u8, raw, ":query")) return .query;
     return .unknown;
 }
@@ -3608,6 +4091,141 @@ fn parseIntField(raw: []const u8) IntField {
     if (std.mem.eql(u8, raw, "nil")) return .nil;
     const value = std.fmt.parseInt(i64, raw, 10) catch return .invalid;
     return .{ .value = value };
+}
+
+const TermParseError = Allocator.Error || error{InvalidTerm};
+
+fn parseTripleTerm(
+    allocator: Allocator,
+    raw: []const u8,
+) TermParseError!flat_log.Triple {
+    const term = try parseTerm(allocator, raw, 0);
+    return switch (term) {
+        .triple => |triple| triple.*,
+        .atom => error.InvalidTerm,
+    };
+}
+
+fn parseTerm(
+    allocator: Allocator,
+    raw_untrimmed: []const u8,
+    depth: usize,
+) TermParseError!flat_log.Term {
+    if (depth > flat_log.max_term_depth) return error.InvalidTerm;
+    const raw = std.mem.trim(u8, raw_untrimmed, " \t\r\n,");
+    if (raw.len == 0) return error.InvalidTerm;
+    if (raw[0] == '"') {
+        return .{ .atom = .{ .string = decodeEdnString(allocator, raw) catch |err|
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidTerm,
+            } } };
+    }
+    if (raw[0] == ':') {
+        if (raw.len == 1) return error.InvalidTerm;
+        return .{ .atom = .{ .keyword = raw[1..] } };
+    }
+    if (raw[0] == '[') {
+        var parser: Parser = .{ .input = raw };
+        parser.index = 1;
+        var terms: [3]flat_log.Term = undefined;
+        for (&terms) |*term| {
+            const item = parser.scanValue() catch return error.InvalidTerm;
+            term.* = try parseTerm(allocator, item, depth + 1);
+        }
+        parser.skipSeparators();
+        if (parser.index >= raw.len or raw[parser.index] != ']')
+            return error.InvalidTerm;
+        parser.index += 1;
+        parser.skipSeparators();
+        if (parser.index != raw.len) return error.InvalidTerm;
+        const triple = try allocator.create(flat_log.Triple);
+        triple.* = .{ .slot0 = terms[0], .slot1 = terms[1], .slot2 = terms[2] };
+        return .{ .triple = triple };
+    }
+    if (raw[0] == '{') return parseTypedAtomTerm(raw);
+    if (std.mem.eql(u8, raw, "true"))
+        return .{ .atom = .{ .boolean = true } };
+    if (std.mem.eql(u8, raw, "false"))
+        return .{ .atom = .{ .boolean = false } };
+
+    var float_token = false;
+    for (raw) |byte| {
+        if (byte == '.' or byte == 'e' or byte == 'E') {
+            float_token = true;
+            break;
+        }
+    }
+    if (float_token) {
+        const value = std.fmt.parseFloat(f64, raw) catch return error.InvalidTerm;
+        return .{ .atom = .{ .float = value } };
+    }
+    const integer = std.fmt.parseInt(i64, raw, 10) catch return error.InvalidTerm;
+    return .{ .atom = .{ .integer = integer } };
+}
+
+fn parseTypedAtomTerm(raw: []const u8) TermParseError!flat_log.Term {
+    var parser: Parser = .{ .input = raw };
+    parser.index = 1;
+    const AtomType = enum { instant, float };
+    var atom_type: ?AtomType = null;
+    var epoch_seconds: ?i64 = null;
+    var nanosecond: ?u32 = null;
+    var float_bits: ?u64 = null;
+    var seen: u8 = 0;
+    while (true) {
+        parser.skipSeparators();
+        if (parser.index >= raw.len) return error.InvalidTerm;
+        if (raw[parser.index] == '}') {
+            parser.index += 1;
+            parser.skipSeparators();
+            if (parser.index != raw.len) return error.InvalidTerm;
+            return switch (atom_type orelse return error.InvalidTerm) {
+                .instant => if (seen == 0b0111)
+                    .{ .atom = .{ .instant = .{
+                        .epoch_seconds = epoch_seconds.?,
+                        .nanosecond = nanosecond.?,
+                    } } }
+                else
+                    error.InvalidTerm,
+                .float => if (seen == 0b1001)
+                    .{ .atom = .{ .float = @bitCast(float_bits.?) } }
+                else
+                    error.InvalidTerm,
+            };
+        }
+        const key = parser.scanValue() catch return error.InvalidTerm;
+        const value = parser.scanValue() catch return error.InvalidTerm;
+        if (std.mem.eql(u8, key, ":fram/type")) {
+            if ((seen & 1) != 0) return error.InvalidTerm;
+            seen |= 1;
+            atom_type = if (std.mem.eql(u8, value, ":instant"))
+                .instant
+            else if (std.mem.eql(u8, value, ":float"))
+                .float
+            else
+                return error.InvalidTerm;
+        } else if (std.mem.eql(u8, key, ":epoch-seconds")) {
+            if ((seen & 2) != 0) return error.InvalidTerm;
+            seen |= 2;
+            epoch_seconds = std.fmt.parseInt(i64, value, 10) catch
+                return error.InvalidTerm;
+        } else if (std.mem.eql(u8, key, ":nanosecond")) {
+            if ((seen & 4) != 0) return error.InvalidTerm;
+            seen |= 4;
+            nanosecond = std.fmt.parseInt(u32, value, 10) catch
+                return error.InvalidTerm;
+            if (nanosecond.? > 999_999_999) return error.InvalidTerm;
+        } else if (std.mem.eql(u8, key, ":bits")) {
+            if ((seen & 8) != 0 or value.len != 18 or
+                value[0] != '"' or value[17] != '"') return error.InvalidTerm;
+            seen |= 8;
+            float_bits = std.fmt.parseInt(u64, value[1..17], 16) catch
+                return error.InvalidTerm;
+        } else {
+            return error.InvalidTerm;
+        }
+    }
 }
 
 fn decodeEdnString(allocator: Allocator, raw: []const u8) ![]u8 {
@@ -3724,6 +4342,10 @@ fn renderStatus(
     writer.print("{d}", .{state.version}) catch return error.OutOfMemory;
     try writeAll(writer, " :log ");
     try writeEdnString(writer, canonical_log);
+    try writeAll(writer, " :space-id ");
+    try writeEdnString(writer, state.space_id);
+    try writeAll(writer, " :valid-bytes ");
+    writer.print("{d}", .{state.log_valid_bytes}) catch return error.OutOfMemory;
     try writeAll(writer, " :writer-authority {:format ");
     try writeEdnString(writer, authority_format);
     try writeAll(writer, " :role :active :write-authorized true :log ");
@@ -3776,10 +4398,40 @@ test "parse ordinary and fenced bootstrap requests" {
     try std.testing.expectEqual(Operation.status, nested.op);
 }
 
+test "recursive request terms preserve typed float bits and instants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const triple = try parseTripleTerm(
+        arena.allocator(),
+        "[{:fram/type :float :bits \"8000000000000000\"} [true :kind -7] {:fram/type :instant :epoch-seconds -1 :nanosecond 999999999}]",
+    );
+    const float_value = switch (triple.slot0) {
+        .atom => |atom| switch (atom) {
+            .float => |value| value,
+            else => return error.TestUnexpectedResult,
+        },
+        .triple => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(
+        @as(u64, 0x8000000000000000),
+        @as(u64, @bitCast(float_value)),
+    );
+    try std.testing.expect(triple.slot1 == .triple);
+    const instant = switch (triple.slot2) {
+        .atom => |atom| switch (atom) {
+            .instant => |value| value,
+            else => return error.TestUnexpectedResult,
+        },
+        .triple => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(i64, -1), instant.epoch_seconds);
+    try std.testing.expectEqual(@as(u32, 999_999_999), instant.nanosecond);
+}
+
 test "strict bootstrap response rejects an unwrapped request" {
     var environ = std.process.Environ.Map.init(std.testing.allocator);
     defer environ.deinit();
-    var state = try DaemonState.init(std.testing.allocator, &environ);
+    var state = try DaemonState.init(std.testing.allocator, &environ, "test-space");
     defer state.deinit();
     state.version = 7;
     const response = try handleRequest(
@@ -3802,7 +4454,7 @@ test "strict bootstrap response rejects an unwrapped request" {
 test "version and status expose replayed version and authority" {
     var environ = std.process.Environ.Map.init(std.testing.allocator);
     defer environ.deinit();
-    var state = try DaemonState.init(std.testing.allocator, &environ);
+    var state = try DaemonState.init(std.testing.allocator, &environ, "test-space");
     defer state.deinit();
     state.version = 9;
 
