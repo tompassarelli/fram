@@ -58,43 +58,150 @@
 
 (let [log (scratch ".log")
       co0 (coord/new-coord log)
+      _ (coord/commit! co0 "test" "@rotation-rebuild" "title" :assert "ready" nil)
       schema-root {}
-      cache0 ((var-get #'coord-daemon/build-warm-cache) co0 schema-root)
       old-co @coord-daemon/co
       old-flat @coord-daemon/flat-log
       old-schema @coord-daemon/schema-view
       old-cache @coord-daemon/cache
-      started (promise)
-      release (promise)
-      holder (future
-               (locking coord-daemon/dlock
-                 (locking coord-daemon/query-cache-build-lock
-                   (deliver started true)
-                   @release)))]
+      old-cold @coord-daemon/cold-image
+      old-flight @coord-daemon/query-cache-flight
+      published (atom nil)]
   (try
     (reset! coord-daemon/co co0)
     (reset! coord-daemon/flat-log log)
     (reset! coord-daemon/schema-view schema-root)
-    (reset! coord-daemon/cache cache0)
-    @started
-    (let [result
+    (reset! coord-daemon/cache {:index nil :version -1})
+    (reset! coord-daemon/cold-image nil)
+    (reset! coord-daemon/query-cache-flight nil)
+    (let [manifest
           (with-redefs-fn
             {#'coord-daemon/rotation-provenance
              (fn [_] {:fold-fingerprint "test" :log-identity "test"})
              #'rotations/write-set!
-             (fn [& _] (throw (NullPointerException.)))}
-            #(deref (future ((var-get #'coord-daemon/compact-rotations-quietly!)
-                             "interval"))
-                    1000 ::timeout))]
-      (check! "failing interval compaction makes progress while read-fencing locks are held"
-              (false? result)))
+             (fn [_ triples metadata]
+               (reset! published {:triples triples :metadata metadata})
+               {:segments {}})
+             #'rotations/gc-segments! (fn [_] nil)}
+            #(coord-daemon/compact-rotations! "interval"))
+          c @coord-daemon/cache
+          store-root @(:store co0)]
+      (check! "stale post-invalidation cache is rebuilt and rotation publishes"
+              (and manifest
+                   (seq (:triples @published))
+                   (= (coord/current-seq co0) (:version c))
+                   (identical? store-root (:store-root c))
+                   (identical? schema-root (:schema-root c)))))
     (finally
-      (deliver release true)
-      @holder
       (reset! coord-daemon/co old-co)
       (reset! coord-daemon/flat-log old-flat)
       (reset! coord-daemon/schema-view old-schema)
-      (reset! coord-daemon/cache old-cache))))
+      (reset! coord-daemon/cache old-cache)
+      (reset! coord-daemon/cold-image old-cold)
+      (reset! coord-daemon/query-cache-flight old-flight))))
+
+(let [log (scratch ".log")
+      co0 (coord/new-coord log)
+      _ (coord/commit! co0 "test" "@rotation-race" "title" :assert "ready" nil)
+      schema-root {}
+      old-co @coord-daemon/co
+      old-flat @coord-daemon/flat-log
+      old-schema @coord-daemon/schema-view
+      old-cache @coord-daemon/cache
+      old-cold @coord-daemon/cold-image
+      old-flight @coord-daemon/query-cache-flight
+      original-build (var-get #'coord-daemon/build-query-cache-for-roots)
+      started (promise)
+      release (promise)
+      published? (atom false)]
+  (try
+    (reset! coord-daemon/co co0)
+    (reset! coord-daemon/flat-log log)
+    (reset! coord-daemon/schema-view schema-root)
+    (reset! coord-daemon/cache {:index nil :version -1})
+    (reset! coord-daemon/cold-image nil)
+    (reset! coord-daemon/query-cache-flight nil)
+    (let [{:keys [result read-result started-result]}
+          (with-redefs-fn
+            {#'coord-daemon/build-query-cache-for-roots
+             (fn [roots]
+               (deliver started true)
+               @release
+               (original-build roots))
+             #'coord-daemon/rotation-provenance
+             (fn [_] {:fold-fingerprint "test" :log-identity "test"})
+             #'rotations/write-set!
+             (fn [& _]
+               (reset! published? true)
+               {:segments {}})}
+            #(let [rotation (future
+                              ((var-get #'coord-daemon/compact-rotations-quietly!)
+                               "interval"))
+                   started-result (deref started 5000 ::timeout)
+                   read-result (deref
+                                (future
+                                  ((var-get #'coord-daemon/capture-status-roots!)))
+                                1000 ::timeout)
+                   _ (when (= ::timeout read-result)
+                       (deliver release true))
+                   _ (when-not (= ::timeout read-result)
+                       (locking coord-daemon/dlock
+                         (reset! coord-daemon/schema-view
+                                 {[:synthetic "cardinality"]
+                                  (fram.kernel/->Fact
+                                   "@synthetic" "cardinality" "single")})))
+                   _ (deliver release true)
+                   result (deref rotation 5000 ::timeout)]
+               {:result result
+                :read-result read-result
+                :started-result started-result}))]
+      (check! "concurrent status read is not fenced by a slow failing cache build"
+              (and (not= ::timeout started-result)
+                   (not= ::timeout read-result)
+                   (false? result)))
+      (check! "cache generation race fails with a typed capture code"
+              (= :rotation-cache-raced
+                 (get-in @coord-daemon/rotation-stats [:last-error :code])))
+      (check! "cache generation race publishes neither rotation nor stale cache"
+              (and (false? @published?)
+                   (= {:index nil :version -1} @coord-daemon/cache))))
+    (finally
+      (deliver release true)
+      (reset! coord-daemon/co old-co)
+      (reset! coord-daemon/flat-log old-flat)
+      (reset! coord-daemon/schema-view old-schema)
+      (reset! coord-daemon/cache old-cache)
+      (reset! coord-daemon/cold-image old-cold)
+      (reset! coord-daemon/query-cache-flight old-flight))))
+
+(let [log (scratch ".log")
+      old-flat @coord-daemon/flat-log
+      old-cold @coord-daemon/cold-image
+      started (promise)
+      release (promise)
+      holder (future
+               (locking coord-daemon/dlock
+                 (deliver started true)
+                 @release))]
+  (try
+    (reset! coord-daemon/flat-log log)
+    (reset! coord-daemon/cold-image (Object.))
+    @started
+    (let [result (deref
+                  (future
+                    ((var-get #'coord-daemon/compact-rotations-quietly!) "interval"))
+                  500 ::timeout)]
+      (check! "mmap-cold rotation skips before acquiring the read-fencing lock"
+              (and (false? result)
+                   (= :rotation-cold-image
+                      (get-in @coord-daemon/rotation-stats [:last-error :code]))
+                   (= :preflight
+                      (get-in @coord-daemon/rotation-stats [:last-error :stage])))))
+    (finally
+      (deliver release true)
+      @holder
+      (reset! coord-daemon/flat-log old-flat)
+      (reset! coord-daemon/cold-image old-cold))))
 
 (let [base coord-daemon/rotation-compact-interval-ms
       cap coord-daemon/rotation-compact-max-backoff-ms]

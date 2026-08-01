@@ -10505,6 +10505,40 @@
                         {:code code :stage stage}
                         error))))))
 
+(defn- rotation-capture-roots!
+  "Build or join the immutable query cache without retaining dlock, then
+   capture it only if the installed Store generation is still current."
+  []
+  ;; mmap-cold is intentionally not a rotation materialization trigger.  The
+  ;; interval worker backs off without entering the writer monitor.
+  (when @cold-image
+    (throw (ex-info "cold snapshot image is not materialized"
+                    {:code :rotation-cold-image :stage :preflight})))
+  (let [roots (locking dlock
+                ;; Recheck the lock-free preflight before capturing identities.
+                (when @cold-image
+                  (throw (ex-info "cold snapshot image is not materialized"
+                                  {:code :rotation-cold-image :stage :capture})))
+                (capture-query-roots!))
+        built (rotation-stage! :rotation-cache-build-failed :cache-build
+                               #(query-cache-for-roots roots))]
+    ;; Cache construction may take seconds.  Only this identity check and root
+    ;; capture run in the writer turn; a racing mutation produces typed backoff.
+    (locking dlock
+      (let [current (capture-query-roots!)]
+        (when-not (and (query-cache-matches-roots? built roots)
+                       (query-cache-matches-roots? built current))
+          (throw (ex-info "immutable query cache lost the current generation"
+                          {:code :rotation-cache-raced
+                           :stage :capture
+                           :cache-version (:version built)
+                           :current-version (:version current)})))
+        {:flat @flat-log
+         :store-root (:store-root current)
+         :schema-root (:schema-root current)
+         :version (:version current)
+         :idx (:idx built)}))))
+
 (defn compact-rotations!
   "Drain the in-memory novelty into a fresh immutable covering segment set and
    publish it. Returns the manifest, or nil when there is nothing to publish."
@@ -10512,24 +10546,8 @@
   (let [flat @flat-log]
     (when flat
       (let [t0 (System/nanoTime)
-            ;; Compaction consumes only an already-current immutable cache. It
-            ;; never joins the cache-build lock or initiates an O(corpus) rebuild.
-            co-root @co
-            store-root @(:store co-root)
-            schema-root @schema-view
-            current-version (long (current-seq co-root))
-            c @cache
-            idx (:idx c)
-            version (:version c)
-            _ (when-not (and idx
-                             (= current-version (long version))
-                             (identical? store-root (:store-root c))
-                             (identical? schema-root (:schema-root c)))
-                (throw (ex-info "current immutable query cache is unavailable"
-                                {:code :rotation-cache-stale
-                                 :stage :capture
-                                 :cache-version version
-                                 :current-version current-version})))
+            {:keys [flat store-root schema-root version idx]}
+            (rotation-capture-roots!)
             prov (rotation-stage! :rotation-provenance-failed :provenance
                                   #(rotation-provenance flat))]
         (when-not (:fold-fingerprint prov)
