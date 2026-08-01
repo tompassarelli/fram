@@ -670,9 +670,9 @@
         (if (and (some? raw) (not (= raw ""))) (parse-long raw) nil)]
     (if (and (some? parsed) (> parsed 0)) parsed 100000)))
 
-(defn- evaluate-plan [projection: Projection plan: QueryPlan] -> d/Db
+(defn- evaluate-plan! [projection: Projection plan: QueryPlan] -> d/Db
   (binding [d/*query-control* *query-control*]
-    (d/run-strata-db (projection-edb projection) (queryplan-strata plan))))
+    (d/run-strata-db! (projection-edb projection) (queryplan-strata plan))))
 
 (defn- abort-result [problem: Any] -> QueryResult
   (let [data (ex-data problem)]
@@ -810,12 +810,12 @@
                count-value max-results)
               (success-result (vec (sort-by row-key survivors))))))))))
 
-(defn run-plan-projected [projection: Projection plan: QueryPlan] -> QueryResult
+(defn run-plan-projected! [projection: Projection plan: QueryPlan] -> QueryResult
   (let [errors (validate-plan plan)]
     (if (not (empty? errors))
       (failure-result errors)
       (try
-        (let [db (evaluate-plan projection plan)
+        (let [db (evaluate-plan! projection plan)
               find (queryplan-find plan)]
           (if (aggregate-find? find)
             (aggregate-result db find)
@@ -830,17 +830,17 @@
                 (success-result (ordered-rows rows))))))
         (catch Exception problem (abort-result problem))))))
 
-(defn run-projected [projection: Projection plan: QueryPlan] -> QueryResult
-  (run-plan-projected projection plan))
+(defn run-projected! [projection: Projection plan: QueryPlan] -> QueryResult
+  (run-plan-projected! projection plan))
 
-(defn run [propositions: (Vec t/Triple) plan: QueryPlan] -> QueryResult
-  (run-plan-projected (project propositions) plan))
+(defn run! [propositions: (Vec t/Triple) plan: QueryPlan] -> QueryResult
+  (run-plan-projected! (project propositions) plan))
 
-(defn run-syntax [propositions: (Vec t/Triple) form: Any] -> QueryResult
+(defn run-syntax! [propositions: (Vec t/Triple) form: Any] -> QueryResult
   (let [compiled (compile-query form)
         plan (compileresult-plan compiled)]
     (if (some? plan)
-      (run propositions plan)
+      (run! propositions plan)
       (failure-result (compileresult-errors compiled)))))
 
 ;; --- stable cursor paging ---------------------------------------------------
@@ -902,7 +902,7 @@
       (failure-page [(query-error (:code data) (.getMessage problem))])
       (throw problem))))
 
-(defn run-page-plan-projected
+(defn run-page-plan-projected!
   [projection: Projection plan: QueryPlan limit: Any after: Any] -> QueryPage
   (let [validation-errors (validate-plan plan)]
     (cond
@@ -924,7 +924,7 @@
          (if (some? cursor-error)
            (failure-page [cursor-error])
            (try
-             (let [db (evaluate-plan projection plan)
+             (let [db (evaluate-plan! projection plan)
                    relation (get db (findspec-relation (queryplan-find plan)) #{})
                    ordered (ordered-rows relation)
                    after-key (cursorresult-key decoded)
@@ -947,10 +947,10 @@
                      (page-envelope window count-value)))))
              (catch Exception problem (abort-page problem)))))])))
 
-(defn run-page-projected
+(defn run-page-projected!
   [projection: Projection plan: QueryPlan limit: Any after: Any] -> QueryPage
-  (run-page-plan-projected projection plan limit after))
+  (run-page-plan-projected! projection plan limit after))
 
-(defn run-page
+(defn run-page!
   [propositions: (Vec t/Triple) plan: QueryPlan limit: Any after: Any] -> QueryPage
-  (run-page-plan-projected (project propositions) plan limit after))
+  (run-page-plan-projected! (project propositions) plan limit after))

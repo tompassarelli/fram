@@ -19,7 +19,7 @@
    (aggregate-plan relation grouping aggregates [] [rules]))
   ([relation grouping aggregates clauses strata]
    (q/query-plan (q/aggregate-find relation grouping aggregates clauses) strata)))
-(defn result [propositions query-plan] (q/run propositions query-plan))
+(defn result! [propositions query-plan] (q/run! propositions query-plan))
 (defn rows [query-result] (q/result-rows query-result))
 (defn codes [query-result] (set (map q/error-code (q/result-errors query-result))))
 
@@ -34,7 +34,7 @@
   (rule "score" [(v "person") (v "value")]
         [(rel "triple" [(v "person") (c :score) (v "value")])]))
 (defn score-aggregate [operator]
-  (result scores
+  (result! scores
           (aggregate-plan "score" [0]
                           [(aggregate operator (when (not= operator :count) 1))]
                           [score-rule])))
@@ -59,7 +59,7 @@
       query-plan
       (aggregate-plan "value" [0] [(aggregate :count-distinct 2)] [value-rule])]
   (check! ":count-distinct deduplicates recursive relation values"
-          (= [[alice 2]] (rows (result propositions query-plan)))))
+          (= [[alice 2]] (rows (result! propositions query-plan)))))
 
 (let [propositions [(t/triple carol :score 1.5)
                     (t/triple carol :other-score 2.5)]
@@ -67,7 +67,7 @@
       (rule "value" [(v "person") (v "value")]
             [(rel "triple" [(v "person") (v "slot") (v "value")])])
       sum-result
-      (result propositions
+      (result! propositions
               (aggregate-plan "value" [0] [(aggregate :sum 1)] [value-rule]))]
   (check! ":sum widens to Double when an input is fractional"
           (= [[carol 4.0]] (rows sum-result))))
@@ -82,7 +82,7 @@
              [(rel "triple" [(v "from") (c :edge) (v "via")])
               (rel "path" [(v "via") (v "to")])])]
       query-result
-      (result propositions
+      (result! propositions
               (aggregate-plan "path" [0]
                               [(aggregate :count-distinct 1)] path-rules))]
   (check! "aggregate composes with recursive closure"
@@ -92,13 +92,13 @@
       (rule "missing" [(v "person")]
             [(rel "triple" [(v "person") (c :absent) (v "value")])])
       query-result
-      (result scores
+      (result! scores
               (aggregate-plan "missing" [] [(aggregate :count nil)] [empty-rule]))]
   (check! "empty input produces no aggregate row"
           (and (q/result-ok? query-result) (empty? (rows query-result)))))
 
 (let [query-result
-      (result scores
+      (result! scores
               (aggregate-plan "score" [] [(aggregate :count nil)] [score-rule]))]
   (check! "empty grouping creates one global group"
           (= [[4]] (rows query-result))))
@@ -108,24 +108,24 @@
       (rule "name" [(v "person") (v "value")]
             [(rel "triple" [(v "person") (c :name) (v "value")])])
       query-result
-      (result propositions
+      (result! propositions
               (aggregate-plan "name" [0] [(aggregate :sum 1)] [name-rule]))]
   (check! "nonnumeric aggregate input is a typed error"
           (contains? (codes query-result) :query-nonnumeric-aggregate)))
 
 (check! "having filters after aggregation"
         (= [[bob 30]]
-           (rows (result scores
+           (rows (result! scores
                          (aggregate-plan "score" [0] [(aggregate :sum 1)]
                                          [(having :ge 0 30)] [[score-rule]])))))
 (check! "multiple having clauses are conjoined"
         (= [[bob 30]]
-           (rows (result scores
+           (rows (result! scores
                          (aggregate-plan "score" [0] [(aggregate :sum 1)]
                                          [(having :gt 0 8) (having :le 0 30)]
                                          [[score-rule]])))))
 (check! "having can remove every group"
-        (empty? (rows (result scores
+        (empty? (rows (result! scores
                              (aggregate-plan "score" [0] [(aggregate :count nil)]
                                              [(having :gt 0 100)] [[score-rule]])))))
 
@@ -138,7 +138,7 @@
              (neg "done" [(v "person")])])
       propositions (conj scores (t/triple bob :state :done))
       query-result
-      (result propositions
+      (result! propositions
               (aggregate-plan "open" [] [(aggregate :count nil)]
                               [(having :eq 0 1)] [[done-rule] [open-rule]]))]
   (check! "aggregate and having compose with stratified negation"
@@ -160,19 +160,19 @@
       (aggregate-plan "score" [0] [(aggregate :count nil)]
                       [(having :gt 4 1)] [[score-rule]])]
   (check! "unknown aggregate relation is rejected"
-          (contains? (codes (result scores unknown)) :query-invalid-find))
+          (contains? (codes (result! scores unknown)) :query-invalid-find))
   (check! "base relation cannot be an aggregate find target"
-          (contains? (codes (result scores base)) :query-invalid-find))
+          (contains? (codes (result! scores base)) :query-invalid-find))
   (check! "group positions are range checked"
-          (contains? (codes (result scores bad-group)) :query-invalid-aggregate))
+          (contains? (codes (result! scores bad-group)) :query-invalid-aggregate))
   (check! "aggregate operators are validated"
-          (contains? (codes (result scores bad-op)) :query-invalid-aggregate))
+          (contains? (codes (result! scores bad-op)) :query-invalid-aggregate))
   (check! "numeric aggregate requires an argument"
-          (contains? (codes (result scores missing-arg)) :query-invalid-aggregate))
+          (contains? (codes (result! scores missing-arg)) :query-invalid-aggregate))
   (check! "aggregate argument is range checked"
-          (contains? (codes (result scores bad-arg)) :query-invalid-aggregate))
+          (contains? (codes (result! scores bad-arg)) :query-invalid-aggregate))
   (check! "having aggregate index is range checked"
-          (contains? (codes (result scores bad-having)) :query-invalid-having)))
+          (contains? (codes (result! scores bad-having)) :query-invalid-having)))
 
 (let [pair-rule
       (rule "pair" [(v "left") (v "right")]
@@ -184,8 +184,8 @@
       (aggregate-plan "pair" [0 1] [(aggregate :count nil)]
                       [(having :gt 0 100)] [[pair-rule]])]
   (with-redefs [q/max-results 1]
-    (let [over (result scores over-plan)
-          trimmed (result scores trimmed-plan)]
+    (let [over (result! scores over-plan)
+          trimmed (result! scores trimmed-plan)]
       (check! "aggregate limit reports cardinality and maximum"
               (and (contains? (codes over) :query-result-limit)
                    (> (q/result-over-limit over) (q/result-maximum over))))
@@ -194,7 +194,7 @@
 
 (let [aggregate-query
       (aggregate-plan "score" [0] [(aggregate :count nil)] [score-rule])
-      page (q/run-page scores aggregate-query 10 nil)]
+      page (q/run-page! scores aggregate-query 10 nil)]
   (check! "aggregate results are explicitly not pageable"
           (= :query-aggregate-not-pageable
              (q/error-code (first (q/page-errors page))))))

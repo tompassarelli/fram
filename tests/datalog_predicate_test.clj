@@ -13,7 +13,7 @@
 (defn rule [name head body] (d/rule name head body))
 (defn plan [name rules] (q/query-plan (q/relation-find name) [rules]))
 (defn result-set [propositions query-plan]
-  (set (q/result-rows (q/run propositions query-plan))))
+  (set (q/result-rows (q/run! propositions query-plan))))
 (defn error-codes [query-plan]
   (set (map q/error-code (q/compile-errors (q/compile-query query-plan)))))
 
@@ -71,7 +71,7 @@
       big (rule "big" [(v "x")]
                 [(rel "triple" [(v "x") (c :count) (v "n")])
                  (cmp :ge [(v "n") (c 100)])])
-      result (q/run propositions (plan "big" [big]))]
+      result (q/run! propositions (plan "big" [big]))]
   (check! "nonnumeric ordering operand drops only that row"
           (and (q/result-ok? result)
                (= [["good"]] (q/result-rows result)))))

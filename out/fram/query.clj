@@ -431,9 +431,9 @@
    parsed ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? raw) ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= raw ""))) ^{:line 670 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (parse-long raw) nil)]
   ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (and ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? parsed) ^{:line 671 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> parsed 0)) parsed 100000)))
 
-^{:line 673 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- evaluate-plan [^Projection projection ^QueryPlan plan]
+^{:line 673 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- evaluate-plan! [^Projection projection ^QueryPlan plan]
   ^{:line 674 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (binding [d/*query-control* *query-control*]
-  ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/run-strata-db ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (projection-edb projection) ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-strata plan))))
+  ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (d/run-strata-db! ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (projection-edb projection) ^{:line 675 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-strata plan))))
 
 ^{:line 677 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn- ^QueryResult abort-result [problem]
   ^{:line 678 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [data ^{:line 678 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ex-data problem)]
@@ -509,10 +509,10 @@
    count-value ^{:line 804 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count survivors)]
   ^{:line 805 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 805 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (> count-value max-results) ^{:line 806 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (limited-result ^{:line 807 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error :query-result-limit ^{:line 808 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (str "aggregate result has " count-value " groups, over limit " max-results)) count-value max-results) ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (success-result ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (vec ^{:line 811 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (sort-by row-key survivors))))))))))
 
-^{:line 813 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-plan-projected [^Projection projection ^QueryPlan plan]
+^{:line 813 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-plan-projected! [^Projection projection ^QueryPlan plan]
   ^{:line 814 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [errors ^{:line 814 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan plan)]
   ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 815 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? errors)) ^{:line 816 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result errors) ^{:line 817 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (try
-  ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan projection plan)
+  ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 818 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan! projection plan)
    find ^{:line 819 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan)]
   ^{:line 820 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 820 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-find? find) ^{:line 821 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (aggregate-result db find) ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [rows ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get db ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation find) ^{:line 822 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{})
    count-value ^{:line 823 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (count rows)]
@@ -520,16 +520,16 @@
   (catch Exception problem
     ^{:line 831 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (abort-result problem))))))
 
-^{:line 833 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-projected [^Projection projection ^QueryPlan plan]
-  ^{:line 834 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected projection plan))
+^{:line 833 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-projected! [^Projection projection ^QueryPlan plan]
+  ^{:line 834 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected! projection plan))
 
-^{:line 836 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run [propositions ^QueryPlan plan]
-  ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan))
+^{:line 836 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run! [propositions ^QueryPlan plan]
+  ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-plan-projected! ^{:line 837 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan))
 
-^{:line 839 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-syntax [propositions form]
+^{:line 839 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryResult run-syntax! [propositions form]
   ^{:line 840 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [compiled ^{:line 840 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compile-query form)
    plan ^{:line 841 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-plan compiled)]
-  ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? plan) ^{:line 843 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run propositions plan) ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-errors compiled)))))
+  ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 842 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? plan) ^{:line 843 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run! propositions plan) ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-result ^{:line 844 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (compileresult-errors compiled)))))
 
 ^{:line 847 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (def max-page-limit 4096)
 
@@ -575,7 +575,7 @@
   ^{:line 900 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [data ^{:line 900 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ex-data problem)]
   ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (= :fram-query-abort ^{:line 901 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:type data)) ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (query-error ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (:code data) ^{:line 902 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (.getMessage problem))]) ^{:line 903 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (throw problem))))
 
-^{:line 905 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-plan-projected [^Projection projection ^QueryPlan plan limit after]
+^{:line 905 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-plan-projected! [^Projection projection ^QueryPlan plan limit after]
   ^{:line 907 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [validation-errors ^{:line 907 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (validate-plan plan)]
   ^{:line 908 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cond
   ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (not ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (empty? validation-errors)) ^{:line 909 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page validation-errors)
@@ -585,7 +585,7 @@
   :else ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [decoded ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 920 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? after) ^{:line 921 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (decode-page-cursor after) ^{:line 922 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (->CursorResult nil nil))
    cursor-error ^{:line 923 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cursorresult-error decoded)]
   ^{:line 924 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (if ^{:line 924 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (some? cursor-error) ^{:line 925 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (failure-page ^{:line 925 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} [cursor-error]) ^{:line 926 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (try
-  ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan projection plan)
+  ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (let [db ^{:line 927 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (evaluate-plan! projection plan)
    relation ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (get db ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (findspec-relation ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (queryplan-find plan)) ^{:line 928 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} #{})
    ordered ^{:line 929 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (ordered-rows relation)
    after-key ^{:line 930 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (cursorresult-key decoded)
@@ -597,8 +597,8 @@
   (catch Exception problem
     ^{:line 948 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (abort-page problem))))))))
 
-^{:line 950 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-projected [^Projection projection ^QueryPlan plan limit after]
-  ^{:line 952 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected projection plan limit after))
+^{:line 950 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page-projected! [^Projection projection ^QueryPlan plan limit after]
+  ^{:line 952 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected! projection plan limit after))
 
-^{:line 954 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page [propositions ^QueryPlan plan limit after]
-  ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan limit after))
+^{:line 954 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (defn ^QueryPage run-page! [propositions ^QueryPlan plan limit after]
+  ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (run-page-plan-projected! ^{:line 956 :file "/home/tom/code/fram/wt-triple-query/src/fram/query.bclj"} (project propositions) plan limit after))

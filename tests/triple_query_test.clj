@@ -46,7 +46,7 @@
 (def slot-plan (plan "slot-matches" [slot-rules]))
 
 (let [compiled (q/compile-query slot-plan)
-      result (q/run (conj live nested-middle) slot-plan)
+      result (q/run! (conj live nested-middle) slot-plan)
       found (rows result)]
   (check! "typed plan compiles" (and (q/compile-ok? compiled)
                                       (q/query-plan? (q/compiled-plan compiled))))
@@ -63,7 +63,7 @@
 (def closure-plan (plan "reaches" [closure-rules]))
 
 (check! "recursive rule keeps recursive terms as values"
-        (contains? (rows (q/run live closure-plan)) [node-a node-c]))
+        (contains? (rows (q/run! live closure-plan)) [node-a node-c]))
 
 (def negation-plan
   (plan "terminal"
@@ -74,15 +74,15 @@
                  (neg "outgoing" [(v "node")])])]]))
 
 (check! "stratified negation keeps recursive Term equality"
-        (= #{[node-c]} (rows (q/run live negation-plan))))
+        (= #{[node-c]} (rows (q/run! live negation-plan))))
 
 (def occurrence-plan
   (plan "events"
         [[(rule "events" [(v "where") (v "action") (v "value")]
                 [(rel "occurrence" [(v "where") (v "action") (v "value")])])]]))
 
-(let [without-history (q/run live occurrence-plan)
-      with-history (q/run-plan-projected
+(let [without-history (q/run! live occurrence-plan)
+      with-history (q/run-plan-projected!
                     (q/project-with-occurrences live history)
                     occurrence-plan)
       found (rows with-history)
@@ -114,7 +114,7 @@
                 [(rel "triple" [(v "a") (v "b") (v "c")])])]]))
 
 (loop [after nil collected []]
-  (let [page (q/run-page live all-live-plan 1 after)
+  (let [page (q/run-page! live all-live-plan 1 after)
         collected2 (vec (concat collected (q/page-rows page)))]
     (if (q/page-more? page)
       (recur (q/page-next page) collected2)

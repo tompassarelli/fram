@@ -145,7 +145,7 @@
         (assoc subst name value))
       (if (= (queryterm-value term) value) subst nil))))
 
-(defn- unify-arguments
+(defn- unify-arguments!
   [arguments: (Vec QueryTerm) tuple: Tuple subst: Substitution] -> (U Substitution Nil)
   (query-check!)
   (if (not (= (count arguments) (count tuple)))
@@ -246,51 +246,51 @@
           []
           [(assoc subst (literal-binding literal) result)])))))
 
-(defn- relation-results
+(defn- relation-results!
   [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
   (let [relation (literal-relation literal)
         arguments (literal-arguments literal)]
     (if (literal-negated literal)
       (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst])
       (reduce (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
-                (let [matched (unify-arguments arguments tuple subst)]
+                (let [matched (unify-arguments! arguments tuple subst)]
                   (if (some? matched) (conj acc matched) acc)))
               [] (vec (get db relation #{}))))))
 
-(defn- literal-results
+(defn- literal-results!
   [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
   (query-check!)
   (cond
-    [(= :relation (literal-kind literal)) (relation-results db literal subst)]
+    [(= :relation (literal-kind literal)) (relation-results! db literal subst)]
     [(= :comparison (literal-kind literal))
      (if (comparison-result literal subst) [subst] [])]
     [(= :builtin (literal-kind literal)) (builtin-results literal subst)]
     [:else []]))
 
-(defn- body-results
+(defn- body-results!
   [db: Db body: (Vec Literal) seed: Substitution] -> (Vec Substitution)
   (reduce
    (fn [substitutions: (Vec Substitution) literal: Literal] -> (Vec Substitution)
      (reduce (fn [acc: (Vec Substitution) subst: Substitution] -> (Vec Substitution)
-               (vec (concat acc (literal-results db literal subst))))
+               (vec (concat acc (literal-results! db literal subst))))
              [] substitutions))
    [seed] body))
 
-(defn- derive-rule [db: Db value: Rule] -> (Set Tuple)
+(defn- derive-rule! [db: Db value: Rule] -> (Set Tuple)
   (reduce (fn [acc: (Set Tuple) subst: Substitution] -> (Set Tuple)
             (conj acc (ground (rule-head-arguments value) subst)))
-          #{} (body-results db (rule-body value) {})))
+          #{} (body-results! db (rule-body value) {})))
 
 (defn- rule-head-relations [rules: (Vec Rule)] -> (Vec String)
   (vec (reduce (fn [acc: (Set String) value: Rule] -> (Set String)
                  (conj acc (rule-head-relation value)))
                #{} rules)))
 
-(defn- derive-round [db: Db rules: (Vec Rule)] -> Db
+(defn- derive-round! [db: Db rules: (Vec Rule)] -> Db
   (reduce
    (fn [acc: Db value: Rule] -> Db
      (let [relation (rule-head-relation value)
-           derived (derive-rule db value)]
+           derived (derive-rule! db value)]
        (update acc relation
                (fn [current: (U (Set Tuple) Nil)] -> (Set Tuple)
                  (reduce (fn [rows-value: (Set Tuple) row: Tuple] -> (Set Tuple)
@@ -307,24 +307,24 @@
           (recur (rest remaining))
           false)))))
 
-(defn fixpoint [db0: Db rules: (Vec Rule)] -> Db
+(defn fixpoint! [db0: Db rules: (Vec Rule)] -> Db
   (let [relations (rule-head-relations rules)]
     (loop [db db0]
-      (let [next (derive-round db rules)]
+      (let [next (derive-round! db rules)]
         (if (relations-stable? db next relations)
           next
           (recur next))))))
 
-(defn run-rules [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
-  (fixpoint (edb propositions) rules))
+(defn run-rules! [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
+  (fixpoint! (edb propositions) rules))
 
-(defn run-strata-db [db0: Db strata: (Vec (Vec Rule))] -> Db
-  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db (fixpoint db stratum))
+(defn run-strata-db! [db0: Db strata: (Vec (Vec Rule))] -> Db
+  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db (fixpoint! db stratum))
           db0 strata))
 
-(defn run-strata
+(defn run-strata!
   [propositions: (Vec t/Triple) strata: (Vec (Vec Rule))] -> Db
-  (run-strata-db (edb propositions) strata))
+  (run-strata-db! (edb propositions) strata))
 
 (defn- negated-relations [stratum: (Vec Rule)] -> (Vec String)
   (reduce

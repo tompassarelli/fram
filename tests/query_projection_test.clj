@@ -66,25 +66,25 @@
                     (remove #{2} (range 6))))))
 
 (def projection (q/project propositions))
-(let [one-shot (q/run propositions pending-plan)
-      projected (q/run-projected projection pending-plan)]
+(let [one-shot (q/run! propositions pending-plan)
+      projected (q/run-projected! projection pending-plan)]
   (check! "shared projection equals one-shot evaluation"
           (= (q/result-rows one-shot) (q/result-rows projected)))
   (check! "projection returns the expected recursive Term rows"
           (= expected (set (q/result-rows projected))))
   (check! "result order is deterministic across input order"
           (= (q/result-rows one-shot)
-             (q/result-rows (q/run (vec (reverse propositions)) pending-plan)))))
+             (q/result-rows (q/run! (vec (reverse propositions)) pending-plan)))))
 
 (let [before (q/projection-edb projection)
-      _ (q/run-projected projection pending-plan)
-      _ (q/run-page-projected projection pending-plan 4 nil)]
+      _ (q/run-projected! projection pending-plan)
+      _ (q/run-page-projected! projection pending-plan 4 nil)]
   (check! "projection is immutable across reuse"
           (= before (q/projection-edb projection))))
 
 (defn drain [projection-value limit]
   (loop [after nil accumulated []]
-    (let [page (q/run-page-projected projection-value pending-plan limit after)]
+    (let [page (q/run-page-projected! projection-value pending-plan limit after)]
       (when-not (q/page-ok? page)
         (throw (ex-info "page drain failed" {:errors (q/page-errors page)})))
       (let [next-rows (into accumulated (q/page-rows page))]
@@ -103,9 +103,9 @@
   (check! "input order changes preserve the exact paged result"
           (= small-pages reversed-pages)))
 
-(let [one-shot (q/run-page propositions pending-plan 5 nil)
-      projected (q/run-page-projected projection pending-plan 5 nil)
-      reversed (q/run-page (vec (reverse propositions)) pending-plan 5 nil)]
+(let [one-shot (q/run-page! propositions pending-plan 5 nil)
+      projected (q/run-page-projected! projection pending-plan 5 nil)
+      reversed (q/run-page! (vec (reverse propositions)) pending-plan 5 nil)]
   (check! "one-shot and projected page rows agree"
           (= (q/page-rows one-shot) (q/page-rows projected)))
   (check! "canonical first-page cursor is projection independent"
@@ -115,43 +115,43 @@
 
 (doseq [[label page expected-code]
         [["zero page limit is a typed error"
-          (q/run-page propositions pending-plan 0 nil) :query-page-limit]
+          (q/run-page! propositions pending-plan 0 nil) :query-page-limit]
          ["oversized page limit is a typed error"
-          (q/run-page propositions pending-plan (inc q/max-page-limit) nil) :query-page-limit]
+          (q/run-page! propositions pending-plan (inc q/max-page-limit) nil) :query-page-limit]
          ["nonnumeric cursor is a typed error"
-          (q/run-page propositions pending-plan 5 7) :query-page-cursor]
+          (q/run-page! propositions pending-plan 5 7) :query-page-cursor]
          ["noncanonical cursor is a typed error"
-          (q/run-page propositions pending-plan 5 "not-a-fram-cursor") :query-page-cursor]]]
+          (q/run-page! propositions pending-plan 5 "not-a-fram-cursor") :query-page-cursor]]]
   (check! label (contains? (page-codes page) expected-code)))
 
 (with-redefs [q/max-page-payload-bytes 8]
-  (let [page (q/run-page propositions pending-plan 1 nil)]
+  (let [page (q/run-page! propositions pending-plan 1 nil)]
     (check! "row exceeding the bounded response is a typed error"
             (contains? (page-codes page) :query-page-row-too-large))))
 
 (with-redefs [q/max-results 2]
-  (let [limited (q/run propositions pending-plan)]
+  (let [limited (q/run! propositions pending-plan)]
     (check! "plain result limit reports a typed error"
             (and (contains? (result-codes limited) :query-result-limit)
                  (> (q/result-over-limit limited) (q/result-maximum limited))))))
 
 (let [control (d/query-control 1 60000)
       stopped (binding [q/*query-control* control]
-                (q/run-projected projection pending-plan))]
+                (q/run-projected! projection pending-plan))]
   (check! "step budget aborts with query-work-limit"
           (contains? (result-codes stopped) :query-work-limit))
   (check! "step counter records consumed work" (> (d/query-steps control) 1)))
 
 (let [control (d/query-control 1000000 0)
       stopped (binding [q/*query-control* control]
-                (q/run-projected projection pending-plan))]
+                (q/run-projected! projection pending-plan))]
   (check! "deadline aborts with query-time-limit"
           (contains? (result-codes stopped) :query-time-limit)))
 
 (let [control (d/query-control 1000000 60000)
       _ (d/cancel-query! control :operator-request)
       stopped (binding [q/*query-control* control]
-                (q/run-projected projection pending-plan))]
+                (q/run-projected! projection pending-plan))]
   (check! "explicit cancellation aborts with query-cancelled"
           (contains? (result-codes stopped) :query-cancelled)))
 
@@ -160,7 +160,7 @@
        :rules [{:head {:rel "direct" :args [{:var "message"}]}
                 :body [{:rel "triple" :args [{:var "message"} :to recipient]}]}]}
       compiled (q/compile-query syntax-form)
-      syntax-result (q/run-syntax propositions syntax-form)]
+      syntax-result (q/run-syntax! propositions syntax-form)]
   (check! "syntax adapter produces typed QueryPlan"
           (and (q/compile-ok? compiled)
                (q/query-plan? (q/compiled-plan compiled))))
@@ -172,7 +172,7 @@
       (plan "output"
             [[(rule "output" [(v "value")]
                     [(rel "unknown" [(v "value")])])]])
-      result (q/run propositions unknown-plan)]
+      result (q/run! propositions unknown-plan)]
   (check! "validation failures remain typed QueryErrors"
           (and (not (q/result-ok? result))
                (= :query-unknown-relation
@@ -202,13 +202,13 @@
               (rule "output" [(v "left")]
                     [(rel "triple" [(v "left") (v "middle") (v "right")])])]])]
   (check! "derived relation arity must be consistent"
-          (contains? (result-codes (q/run propositions inconsistent)) :query-arity))
+          (contains? (result-codes (q/run! propositions inconsistent)) :query-arity))
   (check! "later-stratum positive reference is rejected"
-          (contains? (result-codes (q/run propositions forward)) :query-forward-reference))
+          (contains? (result-codes (q/run! propositions forward)) :query-forward-reference))
   (check! "negation of a same-stratum relation is rejected"
-          (contains? (result-codes (q/run propositions unstratified)) :query-stratification))
+          (contains? (result-codes (q/run! propositions unstratified)) :query-stratification))
   (check! "rules cannot redefine a base relation"
-          (contains? (result-codes (q/run propositions shadow)) :query-base-shadow)))
+          (contains? (result-codes (q/run! propositions shadow)) :query-base-shadow)))
 
 (doseq [[label passed] @checks]
   (println (if passed "PASS" "FAIL") "-" label))

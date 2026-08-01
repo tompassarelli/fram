@@ -15,7 +15,7 @@
 (defn rule [name head body] (d/rule name head body))
 (defn plan [name rules] (q/query-plan (q/relation-find name) [rules]))
 (defn result-set [propositions query-plan]
-  (set (q/result-rows (q/run propositions query-plan))))
+  (set (q/result-rows (q/run! propositions query-plan))))
 (defn error-codes [query-plan]
   (set (map q/error-code (q/compile-errors (q/compile-query query-plan)))))
 
@@ -112,7 +112,7 @@
              [(rel "path" [(v "from") (v "to")])
               (builtin :+ [(c 1) (c 2)] "score")])]
       propositions [(t/triple entity :edge (t/triple :entity :key "b"))]
-      result (q/run propositions (plan "scored" path-rules))]
+      result (q/run! propositions (plan "scored" path-rules))]
   (check! "nonrecursive projection may calculate over recursive output"
           (and (q/result-ok? result)
                (= 3 (last (first (q/result-rows result)))))))
