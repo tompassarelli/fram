@@ -1,127 +1,119 @@
 # Fram
 
-*Fram is a slot-addressable, typed-triple substrate: an append-only store whose
-stored unit is a triple that carries its own address.*
+*Fram is a persistent engine for recursive, typed triples with neutral,
+slot-addressable structure.*
 
 [![license](https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue.svg)](LICENSE)
 
-The stored unit is `(id, l, p, r)` — one identity plus three slots
-([`src/fram/types.bclj`](src/fram/types.bclj)). Its values come from a declared
-sum type — string, integer, boolean, keyword, id-vector — and that declaration is
-an ABI commitment, not a convention: no map crosses into native code. That
-is the *typed* half. Five indexes over the slots (`l`, `p`, `r`, `lp`, `pr`) are
-written on every assert, which is the *slot-addressable* half. Because each
-triple is minted as an entity in the same space it lives in, the query surface
-offers `fact-id(cid, l, p, r)` next to `fact(l, p, r)`: one clause binds a
-triple's own address alongside its three slots. Reification is a base relation
-here, not a modelling pattern layered on afterwards.
+The semantic kernel has three definitions:
 
-Anything with a domain flavour — coordination threads, code ASTs, versioned
-worlds, claims under verification — is a module over that substrate rather than
-part of it.
+```text
+Atom   := String | Int | Float | Bool | Keyword | Instant
+Term   := Atom | Triple
+Triple := (Term, Term, Term)
+```
 
-## Documentation
+The positions are `slot0`, `slot1`, and `slot2`. The kernel does not impose
+subject/predicate/object roles, and any Triple can occupy any slot of another
+Triple. `Atom`, `Term`, and `Triple` are the public semantic vocabulary;
+`TripleRow` and integer term handles are private storage mechanics.
 
-- [Why Fram exists](docs/WHY_FRAM_EXISTS.md) — the long argument, negative space conceded.
-- [Architecture and project layout](docs/architecture.md) — the fold, the consumers, what lives where.
-- [Query reference](docs/query-reference.md) — base relations, aggregates, filters, arithmetic.
-- [Pull reference](docs/pull-reference.md) — nested reads, per-value provenance, `:as-of`.
-- [Concurrency and writes](docs/concurrency-and-writes.md) — sole writer, optimistic versioning, commit-time checks.
-- [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains, hosting, the edge recipe.
-- [Tool catalog](docs/tool-catalog.md) · [Measurements](docs/measurements.md) · [Naming ledger](docs/naming.md) · [ADRs](docs/adr/) · [Thread format](THREAD-FORMAT.md)
+A proposition is one Triple. Its place in history is another Triple, not a
+fourth field attached to the proposition:
+
+```text
+tx         := ("demo-space", :kernel/tx-sequence, 1)
+occurrence := (tx, :kernel/op-ordinal, 0)
+proposition := ("Alice", :contact/email, "alice@example.com")
+
+(occurrence, :kernel/asserts, proposition)
+(tx, :kernel/recorded-at, Instant(...))
+```
+
+Equal propositions can have distinct assertion occurrences. Retractions and
+withdrawals are ordinary Triples too. Logical transaction order is intrinsic to
+the occurrence coordinate; wall-clock, valid, and observation time are related
+metadata and never part of proposition identity.
+
+“Turtles” names the architectural prior—*turtles all the way down*: prefer the
+same recursive Triple language for data, identity coordinates, history, and
+metadata whenever the model permits. It is not a second primitive or a code
+type. See the [naming ledger](docs/naming.md).
+
+## Current documentation
+
+- [Why Fram exists](docs/WHY_FRAM_EXISTS.md) — the recursive-Triple argument and its negative space.
+- [Architecture](docs/architecture.md) — semantic kernel, physical rows, log, coordinator, and projections.
+- [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
+- [Concurrency and writes](docs/concurrency-and-writes.md) — one writer, exact OCC, occurrence receipts, and replay.
+- [Coordinator wire](docs/coordinator-bind-and-wire.md) — binary FRAMRPC v1 and the private-network boundary.
+- [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
+- [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
+- [Thread format](THREAD-FORMAT.md) — the current v0.3 Markdown
+  import/export compatibility projection.
+- [Coordinator cutover](docs/coordinator-cutover.md) — the live, versioned v0.3
+  blue/green operator contract retained until cluster migration.
+
+The old pull, Worlds, claims, and Codegraph documents are retained as explicitly
+historical design evidence. They are not recursive-kernel runtime references.
 
 ## Quickstart
 
-The only prerequisite is [babashka](https://babashka.org). The engine is authored
-in [Beagle](https://github.com/Autonymy/beagle), a typed Lisp that compiles to
-Clojure, but the compiled output ships committed under `out/` — Beagle is needed
-to rebuild Fram, never to run it, and the cold loop needs no daemon.
+The checkout runtime needs Babashka for the CLI and Clojure/JVM for the daemon.
+Beagle is needed only when rebuilding graph-authored source; compiled Clojure is
+committed under `out/`.
 
 ```console
 $ git clone https://github.com/Autonymy/fram && cd fram
-$ ./demo.sh
+$ export FRAM_SPACE_ID=fram-demo
+$ export FRAM_LOG=/tmp/fram-demo.framlog
+$ bin/fram-up
+$ bin/fram tell Alice :contact/email alice@example.com
+$ bin/fram show Alice
+$ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :contact/email {:var "email"}]}]}]}'
+$ bin/fram occurrences
+$ bin/fram validate
 ```
 
-`demo.sh` copies the bundled example corpus — a fictional "launch a personal
-website" project, no personal data — into a temporary directory before it touches
-anything, so the committed corpus stays clean. This is the loop it drives:
+Bare `Alice` is local CLI shorthand for the String `"@Alice"`; keywords,
+numbers, recursive three-element vectors, and `{:instant [seconds nanos]}` are
+lowered to Terms before the socket opens. EDN is only human CLI syntax. The live
+engine wire is binary FRAMRPC.
 
-```console
-$ bin/fram import                       # fold Markdown into the triple store
-imported -> 162 facts -> /tmp/…/facts.log
+## Runtime surfaces
 
-$ bin/fram show 2026-01-01-090500       # one entity, as the triples it became
-  body  …
-  committed  2026-01-01
-  depends_on  @2026-01-01-090200
-  depends_on  @2026-01-01-090400
-  part_of  @2026-01-01-090000
-  title  Deploy the site to production
+- `bin/fram-daemon` is the JVM coordinator. It owns one `SpaceId` and one
+  `history.framlog`, accepts the closed thirteen-operation FRAMRPC v1 set, and
+  holds writer authority for its active lifetime.
+- `bin/fram` routes public data commands (`tell`, `retract`, `show`, `query`,
+  `scan`, `occurrences`, `version`, `status`, and `validate`) over FRAMRPC.
+  Explicit local migration/projection/admin commands are separate from that
+  wire path.
+- `bin/fram-mcp` is a JSON-RPC-over-stdio edge with exactly five public data
+  tools: `tell`, `retract`, `show`, `ask`, and `validate`. Graph authoring and
+  deployment control are separate sealed services.
+- The Cloudflare shim accepts closed JSON with tagged recursive Terms and lowers
+  it to FRAMRPC. It does not accept EDN or an untyped escape hatch.
 
-$ bin/fram query '{:find "dep" :rules [{:head {:rel "dep" :args [{:var "cid"} {:var "x"} {:var "y"}]} :body [{:rel "fact-id" :args [{:var "cid"} {:var "x"} "depends_on" {:var "y"}]}]}]}'
-  ["c87" "@2026-01-01-090600" "@2026-01-01-090500"]
-  ["c73" "@2026-01-01-090500" "@2026-01-01-090400"]
-  ["c72" "@2026-01-01-090500" "@2026-01-01-090200"]
+## Why own the engine?
 
-$ bin/fram validate                     # cycles, dangling refs, closed vocabulary
-OK — 17 threads, no violations.
+Fram's differentiator is not “a triple plus an id.” It is the uniform recursive
+term model: a Triple is itself a Term, so a relationship, an identity
+coordinate, an assertion occurrence, and metadata can all use the same three
+slots without a privileged attribute position or bolt-on statement entity.
 
-$ bin/fram export /tmp/regen            # regenerate the Markdown from the store
-exported 17 threads -> /tmp/regen
-```
+The storage implementation interns Atoms and Triples and keeps compact
+`TripleRow`/operation tables, but those handles are deliberately not semantic
+identity. Querying is slot-neutral and history remains addressable after a
+withdrawal. The exact executable contracts live in
+[`tests/triple_kernel_test.clj`](tests/triple_kernel_test.clj),
+[`tests/coord_test.clj`](tests/coord_test.clj), and
+[`tests/triple_query_test.clj`](tests/triple_query_test.clj).
 
-`c87` in that result is the address of the `depends_on` triple itself, bound in
-the same clause as its three slots. Hang anything you like off it — provenance,
-supersession, a verification status — using nothing but more triples.
-
-## Why?
-
-- **Per-triple identity and reification are in the primitive.** A triple is minted
-  with its own id and enters the object space, so it is addressable without a
-  side table or a reification vocabulary
-  ([`src/fram/store.bclj`](src/fram/store.bclj), [`src/fram/query.bclj`](src/fram/query.bclj)).
-- **Typing is data in the same triple space.** `cardinality` and `value_kind` are
-  ordinary triples asserted about the predicate entity
-  ([`src/fram/schema.bclj`](src/fram/schema.bclj)). Precedence is
-  triple > environment > fallback, so a warm daemon and a cold CLI folding the
-  same log classify identically even when they booted with different environments
-  ([`src/fram/kernel.bclj`](src/fram/kernel.bclj)).
-- **Files are a view you can walk away with.** `import` → `export` → `import`
-  yields the same triple set, guarded by
-  [`tests/roundtrip_test.clj`](tests/roundtrip_test.clj).
-- **One write path, adversarially receipted.** Optimistic version checking lives
-  in a single place ([`src/coord_commit.bclj`](src/coord_commit.bclj)); 24
-  concurrent writers racing the same base yield exactly one winner and 23
-  rejections ([`tests/coord_test.clj`](tests/coord_test.clj)).
-- **The query boundary rejects rather than runs.** Unknown relations, unbound head
-  variables, and unstratified negation are refused before evaluation
-  ([`tests/query_test.clj`](tests/query_test.clj)).
-- **Fram's own source lives in a Fram graph.** 25 Beagle modules carry
-  `;; @upstream:graph`: the `.bclj` text is a rendered view, and the graph is the
-  upstream you edit ([`build.sh`](build.sh), [`codegraph/`](codegraph/)).
-- **A second daemon implementation in Zig serves as a parity oracle.**
-  [`src/zig/daemon.zig`](src/zig/daemon.zig) speaks the same wire protocol, and
-  [`tests/zig_occ_oracle_test.sh`](tests/zig_occ_oracle_test.sh) replays corpora
-  through both to compare their log fingerprints.
-
-## Status
-
-Fram is pre-1.0 and removes rather than deprecates — there are no
-back-compatibility shims, so any surface can change between releases. Two limits
-are structural rather than provisional: there is no access control (isolation is
-process, log, and network, one graph per trust domain), and the concurrency
-guarantees are proven under local test load on one machine, not by distributed
+Fram is pre-1.0. There is no engine access control: isolate by process, network,
+SpaceId, and FRAMLOG, and put authenticated public edges in front. The
+concurrency receipts cover one machine and one writer; they are not distributed
 consensus.
-
-What does hold is mechanically enforced.
-[`scripts/readme-check.sh`](scripts/readme-check.sh) fails CI when a verb, a
-linked path, or a licence claim in this file stops being true, and re-runs the
-core loop above against a scratch copy of the corpus;
-[`bench/propagation/`](bench/propagation) fails CI on a propagation-latency
-regression ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-
-For the argument behind all of it, start with
-[docs/WHY_FRAM_EXISTS.md](docs/WHY_FRAM_EXISTS.md).
 
 ## License
 

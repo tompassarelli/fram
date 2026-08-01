@@ -1,5 +1,11 @@
 # Coordinator blue/green cutover contract
 
+**Status:** Current deployed-v0.3 operator contract. Keep using this protocol
+until each cluster has migrated to the recursive native runtime. Its EDN control
+requests, flat-store/log vocabulary, and marker fields are version-scoped
+deployment mechanics; they do not define the source-head Term/Triple kernel or
+FRAMRPC v1 public data surface.
+
 Protocol: `fram-coordinator-cutover/v1`
 
 This protocol transfers writer authority between two already-running

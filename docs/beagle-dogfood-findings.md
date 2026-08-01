@@ -1,5 +1,9 @@
 # Beagle dogfooding — findings (gap list)
 
+**Status: historical compiler-dogfooding evidence. Not a current Fram runtime
+reference.** Recheck each gap against the current Beagle compiler before using
+it as implementation guidance.
+
 A real artifact, not scar tissue. The discipline: when typing dynamic data forces a
 contortion, write it down here as "Beagle lacks X" — don't silently absorb it as
 `Any` in the code. (Policy lives in the global beagle-authoring skill, §4.)

@@ -1,47 +1,77 @@
 # Isolation and deployment
 
-One coordinator process owns the writes; clients connect over a socket. The same
-design runs on your laptop, on a server you own, or in a service you host —
-**one coordinator plus one log per account**. Only the transport differs.
+**Status:** Current source-head deployment boundary, with the deployed v0.3
+handoff called out separately.
 
-## Be honest about what isolates what
+## Trust domains
 
-Fram has **no access control**. Isolation is **process, log, and network** only:
+Fram has no engine-level accounts, authorization, or tenant policy. Isolation
+comes from four aligned coordinates:
 
-- the coordinator binds loopback (`127.0.0.1`) by default;
-- remote or multi-tenant hosting puts an authenticated gateway in front —
-  bearer token → tenant → that tenant's coordinator.
+- one `SpaceId`;
+- one binary FRAMLOG history;
+- one active writer process and its lock;
+- one private network boundary.
 
-The rule is **one graph per trust domain**. A personal life-graph, a client's
-data, and public code tooling are *separate logs in separate processes*, never
-one. Share machinery across domains freely; never share data.
+Treat that set as one trust domain. Personal data, client data, and public
+tooling belong in separate spaces, logs, processes, and gateway routes. Do not
+use an ontology field as a substitute for tenant isolation.
 
-## Hosting from an edge platform (Cloudflare Workers)
+## Private engine, authenticated edge
 
-Workers are ephemeral and hold no state, so a Worker cannot be the writer. Put
-the coordinator in a Docker container as the durable single writer, and a small
-bearer-token HTTP shim in front of it to bridge the Worker's `fetch()` to the
-coordinator's TCP protocol. Workers cannot present a client certificate on a raw
-socket, so engine-terminated mTLS is not reachable directly from a Worker today.
+The native coordinator speaks plaintext FRAMRPC and binds loopback by default.
+Remote deployments keep that socket private. TLS, bearer-token validation,
+tenant routing, request limits, and public audit policy belong at the gateway or
+sidecar.
 
-Exact procedure, Dockerfiles, and an observed local smoke test:
-[`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
+The public edge must select a SpaceId and route only to the matching private
+coordinator. The daemon rejects a request whose SpaceId disagrees with its log.
 
-## What your data is
+## Cloudflare shape
 
-Two plain-text things you can `grep`: your Markdown, and an append-only
-`coordination.log`. No proprietary format, no telemetry, no lock-in.
+A Cloudflare Worker is an edge client, not the durable writer. The supported
+shape is:
 
-The log is the recoverable history. Each line records *who* and *when*;
-`fram history <id>` replays an entity's timeline in `tx` order.
+```text
+client -- HTTPS/JSON --> Worker or authenticated shim
+       -- private FRAMRPC --> active Fram coordinator
+       -- append --> history.framlog
+```
 
-## Runtime shape
+The JSON boundary uses tagged recursive Terms and a closed operation mapping.
+It does not forward EDN or arbitrary daemon records. Exact setup and probes are
+in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
 
-Nothing to build — compiled Clojure is committed under `out/`.
+## Durable state
 
-- The **CLI and MCP server run on [babashka](https://babashka.org)**, for fast
-  startup.
-- The long-lived **coordinator runs on the JVM**: real threads, and
-  `SSLServerSocket` for engine-terminated **mTLS**.
-- An optional GraalVM native binary (`native/build.sh`) targets ~0.2 s per
-  command.
+`history.framlog` is a binary FRAMLOG v1 file, not a line-oriented text log.
+Back it up as an append-only durable artifact and preserve its SpaceId. Use the
+engine's scan, query, occurrence, and validation surfaces to inspect semantic
+content; do not scrape binary bytes with text tools.
+
+The one-shot migration command converts a legacy flat log to the recursive
+format. Run it against an explicitly chosen source and destination while the
+source is quiescent. The native daemon refuses the removed flat-serving mode.
+
+## Runtime processes
+
+- `bin/fram-daemon` is the long-lived JVM active or standby coordinator.
+- `bin/fram` is the local CLI and FRAMRPC client.
+- `bin/fram-mcp` is a five-tool JSON-RPC-over-stdio data edge.
+- the Cloudflare shim/Worker is an optional authenticated JSON edge.
+
+Compiled Clojure is committed under `out/`. Beagle is required to regenerate
+source projections, not to start a released daemon. The Zig daemon is replacing
+the JVM implementation behind the same semantic and FRAMRPC contracts; a
+cluster moves only after its required operations and oracle gates are complete.
+
+## Deployment handoff
+
+Source-head FRAMRPC does not expose deployment control. The currently deployed
+v0.3 generations use the operator-owned
+[`coordinator-cutover.md`](coordinator-cutover.md) protocol for blue/green
+writer transfer. That document is live for v0.3 until cluster migration; its
+flat-store terminology is not part of the recursive kernel model.
+
+Keep runtime deployment worktrees pristine. A deployment marker belongs in the
+controller's state, never inside the source worktree the runtime validates.

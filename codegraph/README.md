@@ -1,5 +1,10 @@
 # Codegraph
 
+**Status: historical Codegraph experiment documentation. Not a current
+recursive-kernel runtime reference.** The implementation and receipts are kept
+as evidence; references below to a reified fact graph describe that experiment's
+legacy projection.
+
 **Code as facts, on [Fram](https://github.com/tompassarelli/fram).** Codegraph
 projects a beagle source tree into the same reified fact graph that North
 uses for life and work, then *derives* code intelligence — call graphs, scope-correct caller

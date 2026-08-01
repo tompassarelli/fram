@@ -1,51 +1,86 @@
 # Concurrency and writes
 
-All writes go through one coordinator, so the agents you already run can keep the
-graph current concurrently without corrupting state.
+**Status:** Current source-head transaction contract.
 
-It is a single-writer daemon. Clients query and assert over a localhost socket;
-writes serialize through one lock with **optimistic versioning** — each assert
-carries a `base_version`, and conflicts are rejected for the caller to retry.
-Rule-breaking writes (dependency cycles, dangling refs) are **rejected at
-commit**.
+Fram is a single-writer engine with concurrent clients. One active coordinator
+holds writer authority for a `SpaceId` and serializes accepted transactions. A
+standby may read the durable prefix but cannot append while it lacks authority.
+This is a single-machine concurrency model, not distributed consensus.
 
-The optimistic-versioning decision lives in one place,
-[`../src/coord_commit.bclj`](../src/coord_commit.bclj), as a pure function over
-commit intents: `version-conflict?` is one branch, `single` is a per-predicate
-flag, so the guarantee generalizes across every single-valued predicate rather
-than being re-implemented per call site.
+## Optimistic concurrency
 
-## What the rule check does and does not guarantee
+A native mutation may carry `expected-version`. Under the coordinator lock,
+the value must equal the current logical version before any operation is
+prepared. A stale or future value returns `:rpc/conflict` without moving the
+version.
 
-The rule check guarantees **referential integrity**: references resolve, the
-vocabulary is closed, structure is sound.
+Two requests with the same expected version can race, but once one commits and
+advances the head, the other observes a mismatch. Unguarded requests still
+serialize; they simply do not ask Fram to reject intervening commits.
 
-It does *not* judge whether a write is *semantically* what you meant. That stays
-with the author.
+Lease fencing is an additional resource-level guard. A write carrying a fence
+must match the current unexpired holder and epoch. It does not replace the
+single writer or transaction version.
 
-Honest framing on scope: these properties are proven under local test load on a
-single machine. This is **not** distributed consensus.
+## Transaction and occurrence order
 
-## The receipt
+One accepted transaction receives:
 
-[`../tests/coord_test.clj`](../tests/coord_test.clj) is an adversarial
-concurrency and durability suite. Its headline case races 24 concurrent writers
-setting *different* values for the same single-valued `(entity, predicate)` at
-the same base version, and asserts three things: exactly one racer wins, the
-other 23 come back `:conflict`, and exactly one live triple remains.
-
-The suite also covers multi-valued idempotency — an identical link asserted twice
-is a no-op leaving exactly one live edge — alongside durability and replay.
-
-## Running the daemon
-
-```sh
-bin/fram-up                                            # start the warm, multi-agent-safe daemon
-bin/fram-promote                                       # clean HEAD -> restart this checkout's daemon only
-bin/fram tell 2026-01-01-090700 committed 2026-06-21   # writes route through the coordinator
+```text
+(space, :kernel/tx-sequence, sequence)
 ```
 
-`bin/fram-promote` is the checkout-first development path: it refuses tracked or
-untracked dirt, captures the exact local commit, and restarts only Fram through
-that checkout's `bin/fram-up --restart`. It never builds or switches a NixOS
-generation — the Nix package remains the explicit release and system baseline.
+Its actions execute in request order. Every committed action receives:
+
+```text
+(transaction-coordinate, :kernel/op-ordinal, ordinal)
+```
+
+The resulting assertion or retraction occurrence is returned in the mutation
+receipt. Batch actions either prepare under the same locked snapshot and commit
+as one transaction, or fail before an append.
+
+## Liveness is occurrence-based
+
+Asserting a proposition always creates a new occurrence, even if equal
+proposition content is already live. Equal propositions are structural equals,
+but their assertion occurrences remain distinct.
+
+Retracting an exact proposition withdraws its latest live equal occurrence.
+The semantic history records both the retraction and its exact withdrawal
+target. Retracting a proposition with no live match is an explicit no-op: its
+receipt says unchanged and the logical version does not move.
+
+Cardinality, uniqueness, referential integrity, and domain replacement policy
+are not implicit in any of the three slots. A domain can express and validate
+those rules above the kernel; the storage transaction does not silently replace
+a value merely because it occupies `slot1`.
+
+## Durability
+
+The writer appends one binary FRAMLOG transaction frame before publishing the
+new in-memory head. Replay restores logical order and occurrence liveness. Boot
+rejects invalid structure and repairs only a recognized torn tail when running
+with active writer authority; a standby never rewrites the log.
+
+The old flat log is accepted only by the one-shot migration command. Serving
+does not keep a dual-write or dual-read compatibility path.
+
+## Running locally
+
+```sh
+export FRAM_SPACE_ID=fram-demo
+export FRAM_LOG=/tmp/fram-demo.framlog
+bin/fram-up
+bin/fram version
+bin/fram tell Alice :contact/email alice@example.com
+bin/fram occurrences
+```
+
+The executable contracts are
+[`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj),
+[`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), and
+[`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj).
+The deployed v0.3 generation handoff remains governed by the separately
+versioned [`coordinator-cutover.md`](coordinator-cutover.md) until cluster
+migration replaces that runtime.

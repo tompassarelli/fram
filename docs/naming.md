@@ -37,6 +37,11 @@ occurrence coordinate to that proposition.
 
 ## world — chosen 2026-07-26
 
+**Current scope:** historical Worlds-service vocabulary. The Worlds service has
+moved out of the public recursive-kernel runtime, so `world` and `version` are
+not kernel primitives or FRAMRPC data operations. The entry below preserves the
+prior that governed that service and its retained design records.
+
 The primitive: a named, forkable lineage of immutable versions. A version fixes *which
 facts are in scope* — the thing you evaluate queries "at." It deliberately does **not**
 guarantee those facts agree with each other: rival assertions coexist inside a world by
@@ -65,6 +70,11 @@ Practical tie-breakers, all of which "world" wins: it compounds cleanly (`world.
 verbs naturally ("fork a world"). Try `reality.sealed` with a straight face.
 
 ## codegraph — chosen 2026-07-26
+
+**Current scope:** historical experiment and sealed-consumer vocabulary, not a
+public data primitive. The retained Codegraph code and receipts may project
+recursive Triples for analysis, but they do not enlarge the five-tool MCP edge
+or the thirteen-operation FRAMRPC boundary.
 
 The thing: the code-intelligence surface. Point the engine at a Beagle source tree,
 project it to facts, and *derive* the answers — scope-correct who-calls, transitive

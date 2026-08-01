@@ -87,7 +87,7 @@
   {"find" "result"
    "rules"
    [{"head" {"rel" "result" "args" [{"var" "r"}]}
-     "body" [{"rel" "fact" "args" ["@subject" "title" {"var" "r"}]}]}]})
+     "body" [{"rel" "triple" "args" ["@subject" "title" {"var" "r"}]}]}]})
 
 (def ^:private ask-query-schema
   {:type "object"

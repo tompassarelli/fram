@@ -1,11 +1,9 @@
 # Views & Branches — conflict is the shadow of a cardinality axiom
 
-**Status: forward-looking design note (the §5 companion to [WHY_FRAM_EXISTS.md](WHY_FRAM_EXISTS.md)).**
-Unlike `WHY_FRAM_EXISTS.md`, which describes the *running* engine, this note describes the
-*model the substrate is heading toward*. Nothing here is a task; nothing gets implemented from
-it yet. It exists so the idea is preserved precisely and the present codebase can be measured
-against it. Where it makes a fact about today's code, that fact is marked **[today]** and is
-backed by the apple-sweep in §6.
+**Status: historical pre-recursive-kernel design note. Not a current runtime
+reference.** Its `[today]` labels describe the repository snapshot at which this
+note was written, not source head. Preserve its terminology as design evidence;
+use [WHY_FRAM_EXISTS.md](WHY_FRAM_EXISTS.md) for the current model.
 
 ---
 

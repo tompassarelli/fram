@@ -1,5 +1,10 @@
 # Fram world ⇄ Git bridge
 
+**Status: historical Worlds compatibility adapter. Not a current recursive-kernel
+runtime reference.** The code and examples are retained as migration and design
+evidence; their world/version/CID vocabulary does not add primitives to the
+current Term/Triple model.
+
 `bridge/world_git.clj` is an additive adapter over the durable world verbs in
 `coord.clj`. It writes and reads Git objects directly; it never creates a
 working-tree checkout.

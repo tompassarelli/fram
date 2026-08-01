@@ -1,63 +1,63 @@
-# The tool catalog — closed, O(1), vocabulary-as-data
+# Public tool catalog
 
-The primary query author is a model, so the surface is tuned for what a model
-emits correctly with zero examples: a **closed, O(1) tool catalog** plus a
-structured query escape hatch. The catalog is a fixed twelve tools. It is never
-minted per-predicate, because the vocabulary is **data in the graph**, not tools.
+**Status:** Current source-head MCP data surface.
 
-Run `bin/fram tools` for the live catalog — count and signatures. That command is
-the source of truth; the summary below is not.
+`bin/fram-mcp` advertises exactly five public data verbs:
 
-## The closed TELL/ASK catalog — exactly twelve tools
+| Tool | Contract |
+|---|---|
+| `tell` | assert one Triple |
+| `retract` | retract one exact Triple |
+| `show` | return live Triples whose `slot0` matches |
+| `ask` | run one validated structured query |
+| `validate` | report structural integrity |
 
-`tell` (assert a triple) · `retract` (remove one) · `show` (everything on a
-subject) · `ask` (structured query) · `validate`, plus the seven code-authoring
-verbs the resolver adds: `add-def` · `set-body` · `rename-def` · `insert-after` ·
-`insert-before` · `replace-in-body` · `edit-transaction`.
+That list is closed. Missing arguments and unknown names fail at the boundary.
+The public process does not link or advertise graph-authoring verbs. Those
+belong to a separate sealed control service.
 
-A single-valued predicate replaces its value; a multi-valued one accumulates —
-and **cardinality is itself a fact** (`tell <pred> cardinality single|multi`), so
-`tell` = assert subsumes the older `set-P` / `add-P` pairs with no per-predicate
-tools.
+## Current MCP value boundary
 
-Predicates are entities. `show <pred>` reveals a predicate's `cardinality` /
-`value_kind` / `acyclic` facts, and `ask` enumerates the vocabulary through the
-`predicate` base relation. The tool count stays O(1) while the vocabulary lives
-in the graph as data.
+The kernel supports recursive typed Terms, but the current MCP write schemas
+intentionally expose `subject`, `predicate`, and `object` as strings. `show`
+takes one subject string. `ask` accepts a structured JSON query; its advertised
+constant schema currently covers strings and numbers. This is a real edge
+limitation, not a second kernel model.
 
-A missing required parameter is **rejected server-side**.
+Use the native CLI or the tagged Cloudflare JSON API when a request must carry
+recursive Triples, Keywords, Bools, or Instants without string projection. Do
+not send an undocumented JSON shape to MCP and assume its current permissive
+decoder is a compatibility promise.
 
-## `ask` — a structured Datalog escape hatch
+## `ask`
 
-For multi-hop questions no read covers. The model emits **data**, not text — the
-shape *is* the engine's internal rule data — so the only added layer is total
-validation at the boundary: a query cannot parse-fail, reference an undefined
-relation, leave a head variable unbound, or smuggle in unstratified negation.
-Same fixpoint as everything else (recursion plus stratified negation), no
-query-library dependency. Full surface: [query-reference.md](query-reference.md).
+`ask` accepts the JSON equivalent of the structured query in
+[`query-reference.md`](query-reference.md). It is lowered to the typed query
+plan and sent over FRAMRPC; it is not a string query language.
 
-```sh
-bin/fram tools            # the closed catalog (count + signatures)
-bin/fram query '{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]}
-                                     :body [{:rel "fact" :args [{:var "x"} "part_of" {:var "y"}]}]}]}'
+```json
+{
+  "find": "titles",
+  "rules": [
+    {
+      "head": {"rel": "titles", "args": [{"var": "item"}, {"var": "title"}]},
+      "body": [
+        {"rel": "triple", "args": [{"var": "item"}, ":document/title", {"var": "title"}]}
+      ]
+    }
+  ]
+}
 ```
 
-## Why closed, and not generated
+## CLI is not the MCP catalog
 
-A large generated per-predicate catalog is a per-session context tax that buys no
-safety the engine does not already provide:
+`bin/fram` exposes human commands such as `scan`, `occurrences`, `version`, and
+`status` in addition to the five data concepts above. Those commands map to the
+closed native FRAMRPC protocol; they are not extra MCP tools. Local
+migration/projection/admin commands are compatibility utilities and likewise do
+not enlarge the public MCP catalog.
 
-- every write is serialized and rule-checked at the coordinator
-  ([concurrency-and-writes.md](concurrency-and-writes.md));
-- single-vs-multi cardinality is a fact in the log, so a cold CLI fold and the
-  warm daemon classify identically.
-
-So the surface stays closed, and the vocabulary is reached through `show` and
-`ask` rather than through the tool list.
-
-## Transports
-
-The catalog is served over **MCP** by `bin/fram-mcp` (JSON-RPC over stdio). The
-CLI — `bin/fram tools`, `bin/fram call <tool> <edn>`, `bin/fram query <edn>` — is
-the same surface for humans. `tools/call` accepts `untell` as an alias for
-`retract`, and `query` for `ask`.
+The executable catalog contract is
+[`../tests/mcp_test.clj`](../tests/mcp_test.clj). The native operation boundary
+is separately ratcheted by
+[`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj).

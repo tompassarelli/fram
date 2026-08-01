@@ -1,6 +1,7 @@
 # ADR 0001 — Facts are the universal substrate; SQL is optional interop
 
-**Status:** Accepted — 2026-06-18
+**Status: historical, superseded by the recursive Term/Triple kernel on
+2026-08-01. Not a current runtime reference.** Accepted — 2026-06-18.
 **Supersedes the recurring "where do the boundaries go?" debate.** If you are about
 to re-open the project-boundary or "is eddy real?" question, read this first.
 

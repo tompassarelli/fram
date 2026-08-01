@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Fram coordinator daemon — the sole-writer multi-agent service. Runs on the JVM
-# (Clojure), NOT babashka: a long-lived server wants JIT throughput and full Java
-# (real threads; javax.net.ssl.SSLServerSocket for engine-terminated mTLS, which
-# bb's native image lacks). bb's fast startup is irrelevant for a daemon. The CLI
-# + MCP stay on babashka. Checkout runs resolve deps.edn; the package supplies a
-# build-time-resolved, store-only Java classpath.
+# (Clojure), not babashka: a long-lived server wants JIT throughput and full Java
+# threads; fast startup is irrelevant. The CLI and MCP edge stay on babashka.
+# Checkout runs resolve deps.edn; the package supplies a build-time-resolved,
+# store-only Java classpath.
 #   fram-daemon [serve] [port] [framlog] [space-id]   (mode defaults to serve)
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
 #   TLS termination belongs at the authenticated gateway until the sealed native

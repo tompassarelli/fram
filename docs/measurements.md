@@ -1,5 +1,9 @@
 # Measurements
 
+**Status: historical benchmark and incident evidence. Not a current semantic or
+runtime reference.** Reproduce a named receipt before applying any result to
+source head.
+
 Every number here is pinned to a receipt and a regeneration command. Read the
 provenance line before quoting any of them: most of these receipts were produced
 **outside this repository**, against builds that are not the current one, and are

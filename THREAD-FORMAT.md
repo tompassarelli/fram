@@ -1,14 +1,19 @@
 # Thread format
 
-A **thread** is one Markdown file in `threads/`: a header of fact triples, a
+**Status:** Current v0.3 Markdown import/export compatibility projection. This
+document describes that projection's domain vocabulary and validation, not the
+recursive kernel's neutral slots or native FRAMRPC surface.
+
+A **thread** is one Markdown file in `threads/`: a header of projected triples, a
 `---` separator, then a free Markdown body. The filename is
 `<id>-<snake_name>.md`; the first line, `@<id>`, is the canonical identity (the
 filename is just for navigation).
 
-To the engine there is no "thread" type — a thread is simply an entity id that
-has a `title` fact. A "project" isn't a separate type either; it's just a thread
-other threads point at with `part_of`. `import` folds these files into the fact
-graph; `export` regenerates them from the graph, **fact-identically**
+To this projection there is no "thread" type — a thread is simply an entity id
+that has a `title` row. A "project" isn't a separate type either; it is a thread
+other threads point at with `part_of`. The local `import` utility folds these
+files into the v0.3 compatibility graph; `export` regenerates them
+**fact-identically**
 (`roundtrip_test.clj`), so the files are a *view*, not a competing source of
 truth.
 
@@ -48,7 +53,9 @@ Ship the finished site behind the custom domain over HTTPS.
   **interned** — rename a person/topic/repo *once*, not in N files.
 - **Multi-valued predicates repeat** — `depends_on` and `relates_to` above each
   appear twice. Single-valued predicates (e.g. `title`, `owner`) appear once;
-  the cardinality vocabulary is configurable via `FRAM_SINGLE_VALUED`.
+  this compatibility projection's cardinality vocabulary is configurable via
+  `FRAM_SINGLE_VALUED`. The recursive kernel itself assigns no cardinality role
+  to any slot.
 - **`---`** — separates the fact header from the prose body. The body is stored
   as the `body` fact and round-trips verbatim.
 
@@ -92,9 +99,9 @@ remaining domain defaults being genericized — see the README.)
 `depends_on` and `part_of` must both be **acyclic**, and every `@`-ref must
 resolve — `fram validate` rejects cycles and dangling refs.
 
-## How it becomes facts
+## How it becomes projected triples
 
-`import` turns each line into a `(left predicate right)` fact, minting interned
+`import` turns each line into a `(left predicate right)` projection row, minting interned
 entities so a thing referenced by many threads is one object:
 
 ```
@@ -107,5 +114,6 @@ entities so a thing referenced by many threads is one object:
 ...
 ```
 
-The engine validates structure (cardinality, acyclicity, no dangling refs). The
+The compatibility importer validates structure (cardinality, acyclicity, no
+dangling refs). The
 *value model* — how a consumer weighs and ranks threads — is defined on top.

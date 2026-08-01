@@ -1,152 +1,134 @@
 # Why Fram Exists
 
-**Status:** Load-bearing rationale. Referenced by the Fram README.
-**Revisit policy:** This document may only be retired by *refuting the argument in its own terms* (see [Decision Record](#decision-record)). It may not be retired because a faster store appeared, because a benchmark regressed, or because re-using an existing database "seems simpler." Those objections are pre-answered below.
+**Status:** Current, load-bearing rationale. The executable model is
+[`src/fram/types.bclj`](../src/fram/types.bclj) and
+[`tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj).
 
----
+## Verdict
 
-## Verdict (one sentence)
+Fram exists to make one small language uniform all the way down:
 
-Fram exists because the unit of Fact Normal Form is the **fact-object** — a proposition that is itself an addressable, reifiable object — and no datom store, triple store, or graph database takes the fact-object as its atom; building store on top of one means emulating store's atom on a foreign atom, which is strictly worse than owning the engine.
-
-The necessity is about the **primitive**, not about performance, concurrency, or query power. On every axis people *expect* to justify a custom code-store, an off-the-shelf store wins or ties. The justification is the atom, and only the atom.
-
----
-
-## The question this settles
-
-The recurring, reasonable doubt — the one that will resurface every time someone new reads this code — is:
-
-> "This is an EAV store with a Datalog-ish query layer and an MVCC-ish write path. That's Datomic. That's Datahike. Why was any of it built instead of imported?"
-
-This document answers that airtight. It does so the only way an airtight answer can be written: by first **granting** that the doubt is correct on every axis except one, and then showing that the one remaining axis is dispositive.
-
----
-
-## 1. What store actually is (the primitive)
-
-store is built on a single primitive and one fact-shape.
-
-```
-Object  =  addressable identity                       — the sole primitive
-Entity  =  object                          (entity!)  — bare identity, nothing more
-Value   =  object + literal                (value!)   — interned, canonical (one identity per literal)
-Fact   =  object + (l p r)                (fact!)   — a proposition; itself an object
+```text
+Atom   := String | Int | Float | Bool | Keyword | Instant
+Term   := Atom | Triple
+Triple := (Term, Term, Term)
 ```
 
-Two properties follow, and together they *are* store:
+A Triple can occupy `slot0`, `slot1`, or `slot2` of another Triple. The slots
+have no kernel-assigned roles. This gives Fram recursive propositions,
+coordinates, history, and metadata without a privileged attribute position or a
+second statement-object mechanism.
 
-1. **Every slot is an object.** In a fact `(l p r)`, each of `l`, `p`, `r` is one of {entity, value, fact}, drawn from the *same* universe of objects. No slot is privileged. `p` is not a schema-registered, typed attribute — it is an object, identical in kind to `l` and `r`. The triple is **symmetric**.
+The decisive feature is therefore **recursive Triple-as-Term**, not “every row
+has an id.” Proposition content and assertion occurrence are deliberately
+separate.
 
-2. **The fact is itself an object** — so it has identity, so it can appear in the `l`, `p`, or `r` slot of *another* fact. **Reification is the default, not a bolt-on.**
+## Proposition versus occurrence
 
-Property (2) is the load-bearing one. Because a fact is an object, every piece of metadata that other systems treat as privileged machinery is, in store, *just another fact about a fact*:
+This Triple is proposition content:
 
-| Concern | In store it is simply… |
-|---|---|
-| Supersession | `(fact₁ supersedes fact₀)` |
-| Provenance | `(fact₁ proposed-by agent₅)` |
-| Transaction membership | `(fact₁ in-tx tx₇)` |
-| Justification | `(fact₁ because fact₃)` |
-| Naming | a fact named like any other object |
-
-**The unit of store — the thing stored, addressed, indexed, and superseded — is therefore the fact-object: a fact that can itself be the subject of facts, at the granularity of the individual fact.** Hold onto that phrase. The entire argument is whether a vendor store can take *that* as its atom.
-
----
-
-## 2. The core argument: the datom is the wrong atom
-
-Datomic's atom is the **datom**:
-
-```
-[E  A  V  Tx  Op]
- │  │  │  │   └─ assert / retract
- │  │  │  └───── transaction entity that added this datom
- │  │  └──────── value
- │  └─────────── attribute
- └────────────── entity
+```text
+("Alice", :contact/email, "alice@example.com")
 ```
 
-Three structural properties of the datom make it the wrong atom for store — not slower, *wrong*:
+An assertion of it is located by ordinary Triples:
 
-**(a) The datom is not an object you can reference.**
-Entities are addressable; datoms are not. There is no datom-id you can place in the `E` slot of another datom. The finest granularity at which Datomic permits reification is the **transaction**: transaction entities are real entities and *can* carry attributes (this is how transaction metadata works). But you cannot make an assertion about an *individual datom*. store requires exactly that — `(fact₁ supersedes fact₀)` is a statement about two specific facts. Datomic's reification granularity is the transaction (coarse); store's is the fact (fine). The datom cannot express per-datom reification because the datom is not addressable.
+```text
+tx := ("people", :kernel/tx-sequence, 1842)
+op := (tx, :kernel/op-ordinal, 7)
 
-**(b) The attribute slot is privileged.**
-Attribute value types and cardinalities must be declared before an attribute is used; an undeclared attribute is rejected by the transactor. `E` and `V` carry no such obligation. The three slots are not peers — `A` is a typed, pre-registered, cardinality-bearing slot the others are not. store's `(l p r)` is symmetric by definition; `p` is a plain object. This is a category difference in what a slot *is*.
+(op, :kernel/asserts,
+     ("Alice", :contact/email, "alice@example.com"))
+```
 
-**(c) The datom hard-codes the two reifications Datomic cannot live without.**
-`Tx` and `Op` exist precisely because Datomic needs *some* reification (for time, and for assert/retract) but has no general fact-as-object mechanism. So it welds the two it requires directly into the struct layout and offers no general facility for the rest. store welds nothing on: time, retraction, provenance, and justification are all just facts about facts, because the fact is an object. Datomic reifies **twice, by force, in the layout**. store reifies **without bound, by default, because of the primitive.**
+The same proposition can be asserted again at another coordinate. A retraction
+is `(op, :kernel/retracts, proposition)`; when it withdraws an earlier
+assertion, `(retraction-op, :kernel/withdraws, assertion-op)` records the exact
+target. No semantic CID, fact-id, or stored reified row is needed.
 
-Datomic's atom is *the typed property of an entity*. store's atom is *the reifiable proposition*. These are different primitives. A store built on the first cannot natively hold the second.
+Logical order comes from transaction sequence plus operation ordinal. Wall
+clock is ordinary metadata such as `(tx, :kernel/recorded-at, Instant(...))`.
+Valid time, observation time, calendars, uncertainty, and time zones belong in
+additional Triples chosen by the domain. Correcting any of them does not change
+the proposition or occurrence coordinate.
 
----
+## Why an EAV/datom substrate is not the same model
 
-## 3. Why "just use Datomic" collapses into building Fram anyway
+An EAV datom gives its positions different jobs: entity, registered attribute,
+and value. The attribute position commonly owns schema and cardinality. Fram's
+three positions are peers and each accepts the same recursive `Term` sum.
 
-The argument above is not "it is impossible to put store on Datomic." It is **possible**, and naming exactly what that possibility costs is what makes this document airtight.
+One can emulate Fram on EAV by creating an entity for every proposition and
+storing its three positions as attributes. That is logically possible, but the
+recursive Triple is then an application convention assembled from several
+foreign atoms. Fram owns the smaller matching primitive directly.
 
-To represent a fact-object on Datomic, you model each fact as **its own entity**, with attributes `:fact/l`, `:fact/p`, `:fact/r`. Facts-about-facts then point at that fact-entity. This works. And the moment you do it:
+Datomic's transaction entity and ordered transaction coordinate solve useful
+transaction-level history problems. Fram uses the same important separation
+between logical order and wall clock, but it represents assertion occurrences
+at operation granularity and exposes them through the same Triple language as
+domain data.
 
-1. **You have abandoned the datom as your unit.** Your real atom (the fact-object) is now *emulated* as a 3-attribute entity. The datom is no longer the thing you reason about; it is plumbing beneath an emulation layer.
+## Why RDF and RDF-star are close but not identical
 
-2. **You bypass everything Datomic is good at.** EAVT/AEVT/AVET indexing, entity-projection (the `E → {A:V}` map view), the datom-as-atom model — all of it now indexes the *emulation*, not your model. You are paying, in full, for machinery you are using sideways.
+RDF triples have named subject/predicate/object roles. Classic RDF needs a
+statement description or named graph when metadata must target one assertion.
+RDF-star makes an embedded triple available in selected statement positions and
+is much closer to Fram's goal.
 
-3. **You re-implement your real engine on top.** Fact addressing, reification semantics, supersession, and per-fact provenance are not served by Datomic — you build them above it, against an atom that fights you. Datomic degrades to a vestigial byte-bucket underneath the engine you actually needed.
+Fram makes recursion the kernel rule, not an annotation feature: a Triple is a
+Term in **every** slot, and transaction/occurrence coordinates are Triples too.
+There is no separate quoted-triple category and no distinct reification
+vocabulary required by storage.
 
-This is the decisive point: **trying to avoid building Fram by adopting a datom store does not avoid building Fram. It builds Fram anyway — as an emulation layer over a foreign atom you then bypass.** The necessity is not logical impossibility; it is architectural inevitability. Either way you build the fact-object engine. The only choice is whether it sits on a primitive that fits (Fram) or one that doesn't (Datomic, plus a vestige).
+## What does not justify a custom engine
 
-Datahike inherits Datomic's model and the same verdict applies without modification.
+These are useful properties, but none is the reason Fram exists:
 
----
+- Datalog, recursion, stratified negation, aggregation, and indexes are well
+  understood elsewhere.
+- A sole writer with concurrent readers and optimistic version checks is a
+  conventional, correct concurrency shape.
+- Schema and vocabulary can be represented as data in many systems.
+- An opaque UUID could identify an occurrence; Fram's recursive coordinate is a
+  semantic uniformity choice, not a uniqueness breakthrough.
+- Performance alone is not architectural necessity. An established database
+  may be faster, more mature, and operationally cheaper.
 
-## 4. The closest near-miss: RDF, and why it is still the wrong shape
+If the required model were ordinary records, EAV, or non-recursive triples,
+using an established database would be the right default.
 
-RDF deserves explicit treatment because it is the *closest* existing thing, and a future reader who knows RDF will raise it.
+## Physical implementation is not semantic identity
 
-RDF is genuinely closer than Datomic on one axis: an RDF triple is `(subject predicate object)` where the predicate is a first-class **resource**, not a pre-typed schema attribute. That is nearer to store's symmetric `(l p r)` than the datom is.
+The engine interns Atoms and recursive Triples. `TermStore` uses integer term
+handles, `AtomRow`, `TripleRow`, transaction rows, operation rows, and
+slot-addressed buckets for compact storage and indexing. Those values are
+private implementation coordinates. They may change across dump/load or a new
+engine implementation without changing a Term or occurrence coordinate.
 
-But RDF treats reification as **exceptional**, where store treats it as the **ground state** — and that difference is the whole game:
+The semantic boundary exposes Terms, Triples, transaction coordinates,
+occurrence coordinates, and ordinary assertion/retraction/withdrawal Triples.
+The FRAMLOG and FRAMRPC codecs preserve that boundary exactly.
 
-- **Classic RDF reification** (`rdf:Statement` with `rdf:subject` / `rdf:predicate` / `rdf:object`) is the notorious "reification quad": to make one statement addressable you emit four extra triples describing it. It is verbose, semantically awkward, and universally understood as a bolt-on.
-- **Named graphs** and the later **RDF-star** effort (embedding a triple as the subject of another) are precisely *retrofits* of the fact-as-subject property onto a model that did not have it natively.
+## The Turtle thesis
 
-That the RDF world keeps building toward "a statement can be a subject" is positive evidence that the property is real and load-bearing — it is the same property store is built on. But a retrofit pays the bolt-on tax in perpetuity: reification is the special case, addressing a single statement is the verbose path, and the data model's center of gravity is the un-reified triple. store inverts this. The fact is an object **first**; addressing it, superseding it, and annotating it are the *default* operations, not the exceptional ones. Adopting an RDF store would mean building store's default on top of RDF's exception — the same emulation tax as §3, in a different dialect.
+“Turtles” means *turtles all the way down*: prefer uniform recursive Triples
+where the model permits. It is an architectural prior, not a type, row, id, or
+log format. Code therefore says `Term`, `Triple`, `TripleRow`, and
+`slot0`/`slot1`/`slot2`. The binding terminology decision is recorded in
+[`naming.md`](naming.md).
 
----
+## Decision
 
-## 5. What was NOT the reason (the negative space)
+Own the small recursive-Term kernel and keep everything else replaceable:
 
-This section exists so that no future maintainer can resurrect a *wrong* justification for Fram, conclude it is weak, and use that to discredit the engine. Each item below is an axis where an off-the-shelf store ties or beats us. **None of them is why Fram exists.**
+- binary FRAMRPC for the live engine boundary;
+- JSON at authenticated public edges;
+- stratified Datalog as a projection over live Triples and occurrences;
+- private storage handles hidden below the semantic API;
+- domain meaning, including time and provenance, expressed with more Triples.
 
-- **Concurrency was not the reason.** store's write model — parallel lock-free compute (clone, resolve, harvest, serialized id allocation), then a brief serialized commit with per-`(te,p)` optimistic concurrency — **converges on Datomic's single-writer architecture.** Datomic has been single-writer-with-parallel-readers since 2012, by deliberate design, because a correct implementation of perception requires no coordination. We re-derived this model and validated it; we did not transcend it. Anyone who says "Datomic already does parallel-compute / serial-commit for code edits" is **right** — and it was never the reason to build Fram.
-
-- **Graph / Datalog queries were not the reason.** "Find all callers," "all references to X," reachability, type-reference traversal — these are exactly what datom stores and triple stores are *best* at. If query power were the only requirement, the correct answer would be Datahike, not Fram.
-
-- **Schema-as-data was not a differentiator.** It is tempting to fact store is special because vocabulary is data. It is not special on this axis: in Datomic, **attributes are themselves entities**, and schema is asserted with the same transaction mechanism as application data. Datomic already collapses the meta-level into the object-level for schema. Do not rebuild the engine on this argument; it is false.
-
-- **Predicate typing was a *cost we accepted*, not a *win we earned*.** Datomic's mandatory per-attribute cardinality is genuinely *useful*: single-valued cardinality is what lets a store know that two writes to the same `(entity, attribute)` conflict — it is infrastructure for uniqueness and conflict detection. By making `p` a plain object with no mandatory cardinality, store **gives that up** and must recover single-valued semantics by other means in the write path. This is a real tradeoff against us, stated plainly. It is not evidence for Fram; it is a debt Fram has to service.
-
-The point of enumerating these is that the argument for Fram **survives every concession.** Strip away concurrency, queries, schema-as-data, and the cardinality convenience — hand all of them to Datomic — and the fact-object primitive *still* cannot be expressed on the datom without emulation. That residue is the entire reason, and it is load-bearing precisely because nothing else is propping it up.
-
----
-
-## 6. What Fram therefore is
-
-> **Fram is the storage-and-indexing engine whose native atom is the fact-object** — a proposition that is itself an addressable, reifiable object, annotatable at the granularity of the individual fact.
-
-Everything else about Fram — the OCC write path, the index layout, the scoped invalidation keyed on binding-set-delta, the resolver coupling — is *implementation in service of that atom*. The concurrency model is borrowed (correctly) from Datomic. The query model is conventional Datalog. The reason the engine is ours, and had to be, is the unit it stores. The atom is not the datom. store's atom has no vendor.
-
----
-
-## Decision Record
-
-**Decision:** Build a custom fact engine (Fram) whose atomic unit is the reifiable fact-object. Do not adopt Datomic, Datahike, or an RDF store as the substrate.
-
-**This decision is correct as long as both of the following hold. To overturn it, refute one of them in its own terms — not with a benchmark, a "simpler" appeal, or a new vendor that is fast:**
-
-1. **store requires per-fact reification.** The fact is an object; metadata (supersession, provenance, transaction membership, justification) is expressed as facts about individual facts, at the granularity of the individual fact. *If this is ever false — if store can be redefined so that reification is needed only at transaction granularity or coarser — re-evaluate, because the datom becomes admissible.*
-
-2. **No available store takes the reifiable fact-object as its native atom.** Datom stores reify at transaction granularity and privilege a typed attribute slot; RDF stores treat statement-level reification as a bolt-on/retrofit. *If a store ever ships whose native, non-emulated atom is the per-fact-reifiable proposition, re-evaluate, because adoption may then beat ownership.*
-
-Absent a refutation of (1) or (2), Fram is not incidental, not a reinvented database, and not optional. It is the only store shape that holds store's primitive, and the primitive is the point.
+Revisit this decision if an available engine exposes the same recursive,
+slot-neutral Term model and exact occurrence history as its native boundary at a
+lower total cost. Do not defend Fram using stale claims about per-row IDs,
+special reification, query novelty, or performance.

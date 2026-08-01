@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
 # Fram MCP server — the AI-facing edge of one instance. Speaks MCP (JSON-RPC 2.0
-# over stdio). The surface is the CLOSED TELL/ASK knowledge-base catalog — exactly
-# twelve tools: tell / retract / show / ask / validate + seven graph-edit verbs
-# (add-def / set-body / rename-def / insert-after / insert-before / replace-in-body /
-# edit-transaction). It is never
-# minted per-predicate: the vocabulary is DATA in the graph (a predicate is an
-# entity), so the tool count is O(1). `untell` is accepted as an alias for
-# `retract`, `query` for `ask`. Public data calls use FRAMRPC; graph authoring is
-# a separate sealed-control surface and is refused here.
+# over stdio) and advertises exactly five public data tools: tell, retract, show,
+# ask, and validate. Public calls use FRAMRPC; graph authoring is a separate
+# sealed-control surface and is refused here.
 # Point a model's MCP client at this command.
 #
 #   FRAM_SPACE_ID selects the database identity. FRAM_PORT selects its daemon.
-#   FRAM_GRAPH_OPS_LOG selects the separate graph-op JSONL telemetry file;
-#   set it to off, false, 0, or disabled for a zero-overhead disabled path.
-#   FRAM_MCP_PROFILE (optional; unset = "full", the exact twelve-tool surface):
-#   "graph-edit-v1" is reserved for the sealed channel and fails closed here.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
   echo "fram-mcp: FRAM_SPACE_ID is required" >&2

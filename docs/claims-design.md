@@ -1,6 +1,7 @@
 # fram.claims — assertion under verification
 
-**Status: design draft, spec-first.** The contract is already executable:
+**Status: historical pre-recursive-kernel design draft. Not a current runtime
+reference.** The old contract remains executable as evidence:
 [`tests/claims_spec_test.clj`](../tests/claims_spec_test.clj) — 90 bars, 13 green
 (the substrate self-check) and 77 red by absence. The module does not exist yet;
 the bars define it. Run it from the repo root:

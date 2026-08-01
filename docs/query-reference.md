@@ -1,130 +1,190 @@
 # Query reference
 
-The query surface is structured data, not text: a query is an EDN (or JSON, over
-MCP) map that is validated in full at the boundary before anything runs. A query
-cannot parse-fail halfway, reference an undefined relation, leave a head variable
-unbound, or smuggle in unstratified negation — those are rejections, not runtime
-errors. Evaluation is a stratified Datalog fixpoint with recursion and stratified
-negation, with no query-library dependency.
+**Status:** Current source-head query contract.
 
-Reach it from the CLI with `bin/fram query <edn>`, or as the `ask` tool over MCP.
+A query is structured data compiled into a closed typed plan. The CLI accepts
+one EDN map; JSON adapters accept the equivalent JSON shape. Both lower Terms,
+variables, rules, and controls before FRAMRPC is written. The evaluator never
+parses query text.
+
+Use `bin/fram query '<edn>'` from the CLI or the public MCP `ask` tool.
+
+## Terms and variables
+
+A constant can be any Fram Term:
+
+```text
+Atom   := String | Int | Float | Bool | Keyword | Instant
+Term   := Atom | Triple
+Triple := (Term, Term, Term)
+```
+
+In local EDN, a recursive Triple is a three-element vector and an Instant is
+`{:instant [epoch-seconds nanos]}`. A variable is `{:var "name"}`. Constants
+retain their types; numbers are not coerced into strings.
 
 ## Base relations
 
-| Relation | Arity | Binds |
-|---|---|---|
-| `fact(l, p, r)` | 3 | the three slots of a triple |
-| `fact-id(cid, l, p, r)` | 4 | the triple's own address plus its three slots |
-| `predicate(pid, spelling, canonical, cardinality, value-kind)` | 5 | the vocabulary, as data |
+There are exactly two kernel base relations:
 
-`triple` is accepted as an alias for `fact`, so older queries keep running.
-`predicate` is additive — one row per canonical spelling or alias — and legacy
-predicates without registry facts receive their implicit `@<name>` identity.
-`fact` and `fact-id` remain byte-for-byte projections of the store.
-
-## Aggregates — grouped counts and sums over the fixpoint
-
-`:find` can name a **grouped aggregate spec** instead of a bare relation name. It
-is applied *after* the Datalog fixpoint, so it composes with recursion and
-stratified negation for free rather than having to re-derive them.
-
-```edn
-;; deg(x,y) :- fact(x,"depends_on",y) ; count out-edges per subject
-{:find {:rel "deg" :group [0] :agg [{:op :count}]}
- :rules [{:head {:rel "deg" :args [{:var "x"} {:var "y"}]}
-          :body [{:rel "fact" :args [{:var "x"} "depends_on" {:var "y"}]}]}]}
-;; => {:ok [["@a" 2] ["@b" 1]]}
+```text
+triple(slot0, slot1, slot2)
+occurrence(coordinate, action, proposition)
 ```
 
+| Relation | Arity | Rows |
+|---|---:|---|
+| `triple` | 3 | live proposition `slot0`, `slot1`, `slot2` |
+| `occurrence` | 3 | occurrence coordinate, action, proposition |
+
+Every cell is a Term. A recursive Triple can therefore be matched in any
+position. Ordinary current-state queries use `triple`. `occurrence` is an
+explicit history projection; it is not an implicit fourth column on `triple`.
+
+There are no `fact`, `fact-id`, `predicate`, or row-handle compatibility base
+relations in the recursive query kernel.
+
+## Smallest query
+
+This derives every email relation from the live Triple projection:
+
 ```edn
-;; reaches = transitive closure of depends_on ; distinct reachable targets per source
-{:find {:rel "reaches" :group [0] :agg [{:op :count-distinct :arg 1}]}
- :rules [...]}
-;; => {:ok [["@a" 3] ["@b" 2] ["@c" 1]]}
+{:find "emails"
+ :rules
+ [{:head {:rel "emails"
+          :args [{:var "who"} {:var "email"}]}
+   :body [{:rel "triple"
+           :args [{:var "who"} :contact/email {:var "email"}]}]}]}
 ```
 
-Ops: `:count` (`:arg` optional), `:count-distinct`, `:sum`, `:avg`, `:min`,
-`:max` (the last four take `:arg`, the group position to aggregate).
+`:find` names a derived relation. `:rules` supplies one stratum. A rule has one
+`:head` and an ordered vector of body clauses. Relation names are strings;
+operation names such as `:gt` are keywords.
 
-- `:group []` is one global group — a single row, no group columns.
-- `count` over an empty relation is `[]`, not a zero row.
-- `sum` / `avg` / `min` / `max` parse string values numerically. `sum` stays
-  integer when every value is a long; `avg` is always a double.
-- A non-numeric value at the aggregated position is a hard `{:error}` naming the
-  position.
-- Result rows are sorted canonically; the output group count is capped by
-  `FRAM_MAX_RESULTS`.
+Use `:strata` instead of `:rules` when negation needs more than one stratum. A
+query must provide exactly one of them.
 
-### `:having` — filtering grouped rows
+## Recursive Terms and recursive rules
+
+The same matcher handles a Triple constant in every slot:
 
 ```edn
-;; subjects with more than 5 out-edges
-{:find {:rel "deg" :group [0] :agg [{:op :count}]
+{:find "members"
+ :rules
+ [{:head {:rel "members" :args [{:var "member"}]}
+   :body [{:rel "triple"
+           :args [[:team :key "ops"] :contains {:var "member"}]}]}]}
+```
+
+Rules may also recurse. Transitive reachability is two rules with the same
+derived head:
+
+```edn
+{:find "reaches"
+ :rules
+ [{:head {:rel "reaches" :args [{:var "x"} {:var "y"}]}
+   :body [{:rel "triple"
+           :args [{:var "x"} :edge {:var "y"}]}]}
+  {:head {:rel "reaches" :args [{:var "x"} {:var "z"}]}
+   :body [{:rel "triple"
+           :args [{:var "x"} :edge {:var "y"}]}
+          {:rel "reaches"
+           :args [{:var "y"} {:var "z"}]}]}]}
+```
+
+## Occurrence history
+
+The history relation has the same three-cell shape:
+
+```edn
+{:find "events"
+ :rules
+ [{:head {:rel "events"
+          :args [{:var "where"} {:var "action"} {:var "value"}]}
+   :body [{:rel "occurrence"
+           :args [{:var "where"} {:var "action"} {:var "value"}]}]}]}
+```
+
+`where` is an occurrence-coordinate Triple, `action` is
+`:kernel/asserts` or `:kernel/retracts`, and `value` is the proposition Triple.
+The native query request may select a logical `as-of` sequence. Current-state is
+the default.
+
+## Negation
+
+Set `:neg true` on a relation clause. Every variable read by a negated clause
+must already be bound by a positive clause in that rule. A negated dependency
+must point to an earlier stratum; unstratified negation is rejected during
+compilation.
+
+```edn
+{:find "terminal"
+ :strata
+ [[{:head {:rel "outgoing" :args [{:var "node"}]}
+    :body [{:rel "triple"
+            :args [{:var "node"} :edge {:var "next"}]}]}]
+  [{:head {:rel "terminal" :args [{:var "node"}]}
+    :body [{:rel "triple"
+            :args [{:var "prior"} :edge {:var "node"}]}
+           {:rel "outgoing" :args [{:var "node"}] :neg true}]}]]}
+```
+
+## Comparisons and arithmetic
+
+A comparison filters a row and never binds a variable:
+
+```edn
+{:pred :gt :args [{:var "count"} 100]}
+```
+
+Supported comparison operations are `:eq`, `:ne`, `:lt`, `:le`, `:gt`, and
+`:ge`. Variables must already be bound. Equality uses Term equality; ordering
+operations require numeric operands and drop a nonnumeric row.
+
+An arithmetic clause binds one fresh variable:
+
+```edn
+{:fn :+ :args [{:var "count"} 1] :bind "next"}
+```
+
+Supported operations are `:+`, `:-`, `:*`, `:/`, and `:mod`. Inputs must be
+bound variables or numeric constants. Invalid arithmetic drops the row.
+Arithmetic clauses are rejected in recursive rules so a fixpoint cannot grow an
+unbounded stream of computed values.
+
+## Aggregates
+
+An aggregate `:find` groups the completed relation:
+
+```edn
+{:find {:rel "degree"
+        :group [0]
+        :agg [{:op :count}]
         :having [{:op :gt :agg 0 :val 5}]}
- :rules [...]}
+ :rules
+ [{:head {:rel "degree" :args [{:var "node"} {:var "next"}]}
+   :body [{:rel "triple"
+           :args [{:var "node"} :edge {:var "next"}]}]}]}
 ```
 
-`:having` is a vector of clauses, ANDed. A clause is
-`{:op <op> :agg <i> :val <n>}`:
+Supported aggregates are `:count`, `:count-distinct`, `:sum`, `:avg`, `:min`,
+and `:max`. All except `:count` require `:arg`, the zero-based input position.
+Numeric aggregates accept numeric Terms and reject a nonnumeric selected
+position. `:having` clauses address aggregate entries by index. Aggregate finds
+are not pageable.
 
-- the operand `{:agg i}` addresses the *i-th* `:agg` entry — layout-independent,
-  not a column position;
-- `:op` is one of `:eq :ne :lt :le :gt :ge`, all **numeric** here (aggregate
-  outputs are always numbers, so `:eq` on `:avg` is fragile);
-- `:val` is a required number.
+## Validation, limits, and paging
 
-`:having []` filters nothing; a clause set that excludes every group yields
-`{:ok []}`. The cap fires **post-having** — `FRAM_MAX_RESULTS` bounds the
-*survivor* count, so a query with a huge group set trimmed to a few by `:having`
-returns `{:ok}`.
+Compilation rejects malformed terms, unknown relations, arity disagreement,
+undefined derived relations, unbound head/filter/negation variables, invalid
+strata, and recursive arithmetic. Execution has step, time, result-count, and
+wire-byte limits.
 
-**Limits.** An aggregate result cannot feed back into a rule body, and an
-aggregate `:find` is not pageable (`run-page` rejects it).
+Nonaggregate results have deterministic Term ordering. Page cursors encode the
+last row key, and the coordinator pins continuation reads to the same snapshot.
+A cursor is opaque to clients.
 
-## Comparison predicates — filter only, never bind
-
-A rule body can carry a filter literal alongside its `:rel` clauses:
-
-```edn
-;; big(x) :- fact(x,"count",c), c > 100
-{:find "big"
- :rules [{:head {:rel "big" :args [{:var "x"}]}
-          :body [{:rel "fact" :args [{:var "x"} "count" {:var "c"}]}
-                 {:pred :gt :args [{:var "c"} 100]}]}]}
-```
-
-Ops: `:eq` and `:ne` are raw string equality and disequality; `:lt` `:le` `:gt`
-`:ge` are numeric ordering, and a non-numeric operand silently drops the row
-rather than erroring.
-
-A predicate **never binds a variable**. Every var it reads must already be bound
-by an earlier `:rel` clause in the same body — the same range-restriction rule
-negation follows.
-
-## Arithmetic fn clauses — compute and bind
-
-A body can also carry an arithmetic **fn clause** that computes a value and binds
-it to a fresh variable:
-
-```edn
-;; h = c + s  (then usable by later clauses / the head)
-{:fn :+ :args [{:var "c"} {:var "s"}] :bind "h"}
-```
-
-Ops: `:+` `:-` `:*` `:/` `:mod`, all binary. Both args must be already-bound vars
-or numeric constants.
-
-The result is bound as a **canonical string**, keeping the query database
-all-String: `8` → `"8"`, `3.5` → `"3.5"`, `8.0` → `"8.0"`. Integer preservation
-mirrors `:sum` — `:+ :- :*` stay long when both operands parse as longs, else
-fall to double; **`:/` is always double**.
-
-Any failure — a non-numeric operand, division or modulus by zero, or `:mod` of a
-non-long — **drops the row**, never errors, exactly like a predicate filter.
-
-The fresh `:bind` var **counts as a binding** for later `:pred` / `:neg` clauses
-and for head vars; its `:args` vars do not.
-
-A fn clause is **forbidden in a recursive rule** — a rule whose head relation
-reaches itself. Fn-introduced values could grow without bound through the
-fixpoint, so this is rejected at validation to preserve termination.
+The executable contract is
+[`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native
+lowering and paging are covered by
+[`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj).

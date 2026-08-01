@@ -1,107 +1,71 @@
-# Coordinator: wire protocol + configurable bind
+# Coordinator bind and wire contract
 
-This is the **seam** between Fram (the engine) and a gateway-fronted consumer like
-North. It documents the one interface the two repos meet at — the coordinator's
-wire protocol — and the configurable bind that lets the coordinator run behind a
-gateway on a private network.
+**Status:** Current source-head native coordinator boundary.
 
-> Originally a hand-off from the North multi-tenant work; the engine-side change
-> (configurable bind) is **implemented** (`coord_daemon.clj` `bind-cfg`/`serve`)
-> and tested (`bind_test.clj`). Kept here as the contract of record.
+## Bind
 
-## The seam (who owns what)
+`bin/fram-daemon` listens on `127.0.0.1` by default. Set `FRAM_BIND` only when
+the surrounding network policy is intentional. `FRAM_PORT` selects the client
+port; `FRAM_CONNECT` may select a different client host.
 
-The two repos meet at **exactly one interface: the coordinator's wire protocol.**
+The coordinator owns one immutable `SpaceId` and one FRAMLOG. A new log requires
+`FRAM_SPACE_ID`; every request also carries a SpaceId, and a mismatch is
+rejected.
 
-| Concern | Owner |
-|---|---|
-| Fact kernel, fold, Datalog, structural integrity (`validate`) | **Fram** |
-| Coordinator daemon: socket, **bind address**, wire protocol, sole-writer lock | **Fram** |
-| Authentication, tenant routing, rate limit, audit, body caps | **Consumer gateway** (e.g. North) |
-| Tenant provisioning, lifecycle projections, time/billing | **Consumer** |
+The listener is plaintext. Keep it on loopback or a private network and put an
+authenticated TLS gateway or sidecar in front. There is no engine-level user
+authentication in this boundary.
 
-**The contract** (must stay stable, or be versioned): a client opens a TCP
-connection, writes **one line of EDN** (the request), reads **one line of EDN**
-(the response). The coordinator carries **no auth and no domain code** — auth is the
-gateway's job, lifecycle is the consumer's. If Fram changes this protocol it is a
-**breaking change for any gateway**; version it or keep it additive.
+## FRAMRPC v1
 
-Request/response surface (`coord_daemon.clj` `handle`):
+The live wire is binary FRAMRPC v1. Each bounded frame carries protocol magic,
+version, request identity, SpaceId, one operation tag, typed controls, and a
+closed payload record. Terms use the shared recursive tagged codec:
 
-```
-{:op :version}                          -> {:version <n>}
-{:op :status}                           -> {:version <n> :facts <n> :log "<path>"}
-{:op :validate}                         -> {:violations [...]}
-{:op :assert  :te "@id" :p "pred" :r v :base <n>} -> {:ok <n>} | {:conflict ...}
-{:op :retract :te "@id" :p "pred" :r v :base <n>} -> {:ok <n>} | {:conflict ...}
-{:op :subscribe}                        -> {:subscribed <n>} then a stream of events
-(unknown)                               -> {:error "unknown op"}
+```text
+String | Int | Float | Bool | Keyword | Instant | Triple(Term, Term, Term)
 ```
 
-## Configurable bind (`FRAM_BIND`)
+Unknown operation tags, record tags, fields, term tags, trailing bytes, and
+over-limit nesting are rejected. The protocol has request/body, term-node, and
+term-depth limits. It is not an EDN line protocol.
 
-The daemon binds **loopback by default**, so no single-machine user is silently
-exposed. `FRAM_BIND` overrides it for gateway-fronted / cross-host deployment:
+## Closed operation set
 
-- unset / `loopback` / `127.0.0.1` → binds `127.0.0.1` (default; unchanged).
-- any other value (e.g. `0.0.0.0`) → binds that address and logs a **one-time
-  WARNING to stderr** that the protocol is UNAUTHENTICATED and must sit behind the
-  gateway / a firewall.
+The native daemon accepts exactly thirteen operations:
 
-**Recommended cross-host value: `FRAM_BIND=0.0.0.0`.** It binds *all* interfaces
-*including loopback*, so the local CLI and `fram-up` doctor (which connect to
-`127.0.0.1`) keep working, and isolation is enforced by the **network** (firewall /
-private network / the gateway as sole ingress) rather than by binding a single IP.
-(Binding a single non-loopback IP would break the local clients; if you need that,
-make the client connect address configurable too — not currently implemented.)
+- metadata: `rpc/version`, `rpc/status`, `rpc/validate`;
+- mutations: `rpc/assert`, `rpc/retract`, `rpc/batch`;
+- reads: `rpc/scan`, `rpc/query`, `rpc/occurrences`;
+- fencing: `rpc/lease-acquire`, `rpc/lease-renew`, `rpc/lease-release`,
+  `rpc/lease-check`.
 
-### Security invariant (must hold)
+Only `rpc/query` accepts paging and timeout controls. Mutations may carry an
+expected logical version. Read responses report the logical version they
+served.
 
-The protocol is unauthenticated by design. Binding non-loopback is only safe paired
-with a network boundary where **the only thing that can reach the port is the
-gateway** (which authenticates). **Never publish the raw port.** Default-loopback +
-the loud warning is what protects existing users.
+There is no native `rpc/pull`, import/export, graph-edit, deployment, or cutover
+operation. Import/export and legacy projections are local utilities. Graph and
+deployment controls have separate authority boundaries.
 
-## Securing a non-loopback bind (mTLS)
+## Listener handoff
 
-Over an **untrusted** link, use mutual TLS. **Engine-terminated mTLS ships** — set
-all three on the daemon:
+`FRAM_LISTEN_FD` allows an operator-owned launcher to pass an inherited listener
+to the JVM coordinator. It does not change the FRAMRPC codec or add public
+operations. Writer authority remains a separate per-log lock.
 
-```
-FRAM_TLS_KEYSTORE=server.p12    # PKCS12: the coordinator's cert+key
-FRAM_TLS_TRUSTSTORE=trust.p12   # PKCS12: the client CA/cert it will accept
-FRAM_TLS_PASS=...               # store password
-```
+The deployed v0.3 blue/green controller still uses its own versioned private
+protocol. Its operational contract is
+[`coordinator-cutover.md`](coordinator-cutover.md); it must not be inferred from
+FRAMRPC v1.
 
-The listener becomes an `SSLServerSocket` with `setNeedClientAuth(true)` — it
-**requires and verifies a client cert** (mutual TLS). Unset → plaintext (default,
-unchanged). The EDN wire protocol is identical inside the TLS session. Clients
-present a cert with the same `FRAM_TLS_*` vars plus `FRAM_CONNECT=<coordinator-host>`
-(`fram.rt` connects with an `SSLSocket`); this works on **babashka** — only the
-*server*-side socket needs the JVM, which is why **the daemon runs on the JVM** (bb's
-native image has no `SSLServerSocket`; the CLI/MCP stay on bb). Verified end-to-end
-by `tls_test.clj` (trusted cert in; plaintext + wrong-cert rejected).
+## Probes
 
-**Alternative — stunnel sidecar** (`deploy/stunnel.example.conf`): keep the
-coordinator loopback+plaintext and front it with stunnel for TLS. Zero engine TLS
-config; useful if you'd rather manage certs outside the engine. Either way, **never
-publish the raw plaintext port.**
-
-## Target topology this enables
-
-```
-internet ─TLS▶ gateway ─┬─ coordinator-acme   (FRAM_BIND=0.0.0.0, port 7801, not published)
-                        └─ coordinator-globex (FRAM_BIND=0.0.0.0, port 7802, not published)
-```
-
-Each tenant's coordinator runs as a separate container/host on a private network;
-the gateway (the only public ingress) authenticates and routes to the right
-coordinator by its private host/port.
-
-## Verification
-
-- `bb bind_test.clj` — asserts both bind modes (default loopback via `ss`;
-  `FRAM_BIND=0.0.0.0` binds all interfaces, loopback still answers, warning logged).
-- North's gateway smoke test is the cross-repo contract regression check:
-  `FRAM_HOME=/path/to/fram bash deploy/gateway/smoke_test.sh` (run from a North
-  checkout) — exercises auth, body cap, audit, revocation over the wire protocol.
+- [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj) verifies
+  record and recursive Term encoding.
+- [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj)
+  exercises the real listener.
+- [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj)
+  prevents operation drift and legacy parsers from returning.
+- [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj)
+  verifies active/standby write authority.

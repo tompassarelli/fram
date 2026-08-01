@@ -1,5 +1,9 @@
 # Pull reference — nested reads over the graph
 
+**Status: historical, unimplemented legacy API sketch. Not a current runtime
+reference.** The native daemon does not implement `rpc/pull`. Use `rpc/query` or
+`rpc/scan`; do not send the request shape below to FRAMRPC v1.
+
 The daemon speaks a `{:op :pull}` wire query alongside `ask`. Name a root entity
 and a declarative pattern, get back a nested map — no rule-writing for "give me
 this thing and its dependencies' titles":
