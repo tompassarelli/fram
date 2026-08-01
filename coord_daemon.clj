@@ -878,14 +878,16 @@
                 (swap! active-requests dissoc request-id)))))))))
 
 (defn serve!
-  "Serve FRAMRPC v1 requests over loopback. The active process holds writer
-   authority for the full listener lifetime; a standby refreshes before reads."
+  "Serve FRAMRPC v1 requests. The default bind is loopback; an authenticated
+   private gateway may set FRAM_BIND explicitly. The active process holds
+   writer authority for the full listener lifetime; a standby refreshes reads."
   [port path expected-space role]
   (boot! path expected-space role)
-  (let [server (ServerSocket. (int port) 128
-                              (java.net.InetAddress/getByName "127.0.0.1"))]
+  (let [bind-host (or (not-empty (System/getenv "FRAM_BIND")) "127.0.0.1")
+        server (ServerSocket. (int port) 128
+                              (java.net.InetAddress/getByName bind-host))]
     (reset! listener server)
-    (println (str "TermStore coordinator listening on 127.0.0.1:" port
+    (println (str "TermStore coordinator listening on " bind-host ":" port
                   " space=" (coord/coordinator-space @coordinator)
                   " role=" (name @coordinator-role)))
     (flush)

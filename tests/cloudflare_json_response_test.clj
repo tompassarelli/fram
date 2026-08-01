@@ -1,36 +1,29 @@
-;; Real JVM coordinator + Babashka shim proof for negotiated Cloudflare replies.
-;; Requests remain EDN; only {:fmt :json} changes the response serializer.
+;; Real daemon + authenticated JSON shim + FRAMRPC restart proof.
 (require '[babashka.fs :as fs]
          '[babashka.process :as proc]
          '[cheshire.core :as json]
-         '[clojure.edn :as edn]
          '[clojure.java.io :as io]
-         '[clojure.string :as str])
-(import '[java.net URI Socket InetSocketAddress ServerSocket]
+         '[coord-daemon-wire :as wire]
+         '[fram.rt :as rt]
+         '[fram.types :as terms])
+(import '[java.net URI ServerSocket]
         '[java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
           HttpResponse$BodyHandlers])
 
 (def root (.getCanonicalPath (io/file (System/getProperty "user.dir"))))
 (def checks (atom []))
 (defn check! [label value] (swap! checks conj [label (boolean value)]))
-
-(def watchdog
-  (future
-    (Thread/sleep 60000)
-    (binding [*out* *err*]
-      (println "cloudflare-json-response: hard timeout after 60s"))
-    (System/exit 124)))
-
-(defn free-port []
-  (with-open [socket (ServerSocket. 0)]
-    (.getLocalPort socket)))
-
+(defn free-port [] (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 (defn eventually [f]
   (loop [remaining 800]
-    (cond
-      (try (f) (catch Throwable _ false)) true
-      (zero? remaining) false
-      :else (do (Thread/sleep 25) (recur (dec remaining))))))
+    (cond (try (boolean (f)) (catch Throwable _ false)) true
+          (zero? remaining) false
+          :else (do (Thread/sleep 25) (recur (dec remaining))))))
+
+(def watchdog
+  (future (Thread/sleep 90000)
+          (binding [*out* *err*] (println "cloudflare FRAMRPC: hard timeout"))
+          (System/exit 124)))
 
 (defn stop-process! [process]
   (when process
@@ -40,199 +33,267 @@
         (.destroyForcibly java-process)
         (.waitFor java-process 5 java.util.concurrent.TimeUnit/SECONDS)))))
 
-(defn coordinator-request [port request]
-  (with-open [socket (Socket.)]
-    (.connect socket (InetSocketAddress. "127.0.0.1" (int port)) 500)
-    (.setSoTimeout socket 5000)
-    (with-open [writer (io/writer (.getOutputStream socket))
-                reader (io/reader (.getInputStream socket))]
-      (.write writer (str (pr-str request) "\n"))
-      (.flush writer)
-      (some-> (.readLine ^java.io.BufferedReader reader)
-              edn/read-string))))
+(defn term-json [value]
+  (cond
+    (string? value) ["string" value]
+    (integer? value) ["integer" (str value)]
+    (and (number? value) (not (integer? value)))
+    ["float64" (format "%016x" (Double/doubleToLongBits (double value)))]
+    (boolean? value) ["boolean" value]
+    (keyword? value) ["keyword" (subs (str value) 1)]
+    (terms/instant? value)
+    ["instant" (str (terms/instant-epoch-seconds value))
+     (str (terms/instant-nanos value))]
+    (terms/triple? value)
+    ["triple" (term-json (terms/triple-slot0 value))
+     (term-json (terms/triple-slot1 value))
+     (term-json (terms/triple-slot2 value))]
+    :else (throw (ex-info "not a Term" {:value value}))))
+
+(defn list-json-values [value]
+  (loop [cursor value result []]
+    (cond
+      (= ["keyword" "rpc/list-end"] cursor) result
+      (and (= "triple" (first cursor))
+           (= ["keyword" "rpc/list"] (second cursor)))
+      (recur (nth cursor 3) (conj result (nth cursor 2)))
+      :else (throw (ex-info "malformed JSON RPC list" {:value value})))))
+
+(defn record-json-fields [value tag field-count]
+  (when-not (and (= "triple" (first value))
+                 (= ["keyword" tag] (second value))
+                 (= ["keyword" "rpc/record"] (nth value 3)))
+    (throw (ex-info "malformed JSON RPC record" {:tag tag :value value})))
+  (let [fields (list-json-values (nth value 2))]
+    (when-not (= field-count (count fields))
+      (throw (ex-info "wrong JSON RPC field count" {:tag tag :value value})))
+    fields))
 
 (def http-client (HttpClient/newHttpClient))
-
-(defn http-post [port path token accept body]
-  (let [builder
-        (doto (HttpRequest/newBuilder
-               (URI/create (str "http://127.0.0.1:" port path)))
-          (.header "content-type" "application/edn")
-          (.POST (HttpRequest$BodyPublishers/ofString body)))
+(defn http-post [port path token content-type body]
+  (let [builder (doto (HttpRequest/newBuilder
+                       (URI/create (str "http://127.0.0.1:" port path)))
+                  (.POST (HttpRequest$BodyPublishers/ofString body)))
         _ (when token (.header builder "authorization" (str "Bearer " token)))
-        _ (when accept (.header builder "accept" accept))
-        response (.send http-client (.build builder)
-                        (HttpResponse$BodyHandlers/ofString))]
+        _ (when content-type (.header builder "content-type" content-type))
+        response (.send http-client (.build builder) (HttpResponse$BodyHandlers/ofString))]
     {:status (.statusCode response)
      :content-type (.orElse (.firstValue (.headers response) "content-type") "")
-     :body (.body response)}))
+     :body (.body response)
+     :json (try (json/parse-string-strict (.body response)) (catch Throwable _ nil))}))
 
-(defn large-query []
-  {:find "out"
-   :rules
-   [{:head {:rel "out" :args [{:var "l"} {:var "r"}]}
-     :body [{:rel "triple"
-             :args [{:var "l"} "json-test-payload" {:var "r"}]}]}]})
+(defn request-json
+  ([space op payload] (request-json space op payload nil))
+  ([space op payload options]
+   (json/generate-string
+    (cond-> {"space" space "op" (subs (str op) 1) "payload" (term-json payload)}
+      (:expected-version options) (assoc "expectedVersion" (str (:expected-version options)))
+      (:timeout-ms options) (assoc "timeoutMs" (str (:timeout-ms options)))
+      (:page options) (assoc "page" (:page options))))))
+
+(defn direct-version [port space]
+  (let [response
+        (rt/native-request-to!
+         "127.0.0.1" port
+         (wire/rpc-request! space :rpc/version nil nil nil wire/rpc-unit))]
+    (when-not (terms/rpcresponse-error response)
+      (terms/rpcresponse-served-version response))))
+
+(defn all-triples-plan []
+  (let [slot0 (wire/rpc-query-variable! "slot0")
+        slot1 (wire/rpc-query-variable! "slot1")
+        slot2 (wire/rpc-query-variable! "slot2")]
+    (wire/rpc-query-plan!
+     (wire/rpc-query-find-relation! "all")
+     [(wire/rpc-query-stratum!
+       [(wire/rpc-query-rule!
+         (wire/rpc-query-head! "all" [slot0 slot1 slot2])
+         [(wire/rpc-query-relation! "triple" [slot0 slot1 slot2] false)])])])))
 
 (let [daemon-port (free-port)
       shim-port (free-port)
-      dir (fs/create-temp-dir {:prefix "fram-cloudflare-json-"})
-      log (io/file (str dir) "facts.log")
-      inherited-env (apply dissoc (into {} (System/getenv))
-                           ["FRAM_LOG"
-                            "FRAM_TELEMETRY_LOG"
-                            "NORTH_PORT"
-                            "NORTH_TELEMETRY_PARTITION"
-                            "NORTH_TELEMETRY_PORT"])
-      token "json-response-test-token"
-      bulk-version (atom nil)
+      scratch (fs/create-temp-dir {:prefix "fram-cloudflare-rpc-"})
+      log-path (str (io/file (str scratch) "history.framlog"))
+      space "cloudflare-rpc-test"
+      token "cloudflare-rpc-secret"
+      inherited (apply dissoc (into {} (System/getenv))
+                       ["FRAM_LOG" "FRAM_TELEMETRY_LOG" "SHIM_LIBRARY"
+                        "FRAM_COORD_TLS" "FRAM_TLS_KEYSTORE" "FRAM_TLS_TRUSTSTORE"])
       daemon (atom nil)
-      shim (atom nil)]
+      shim (atom nil)
+      start-daemon!
+      (fn []
+        (reset! daemon
+                (proc/process
+                 {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
+                  :out :inherit :err :inherit}
+                 "bin/fram-daemon" "serve" (str daemon-port) log-path space)))]
   (try
-    (let [result @(proc/process
-                   {:dir root :out :string :err :string}
-                   "node" "tests/cloudflare_worker_client_test.mjs")
-          ok? (zero? (:exit result))]
-      (when-not ok?
-        (println (:out result))
-        (binding [*out* *err*] (println (:err result))))
-      (check! "Worker client request and decoder contract" ok?))
+    (let [node @(proc/process {:dir root :out :string :err :string}
+                              "node" "tests/cloudflare_worker_client_test.mjs")]
+      (when-not (zero? (:exit node))
+        (println (:out node))
+        (binding [*out* *err*] (println (:err node))))
+      (check! "Worker client typed JSON contract" (zero? (:exit node))))
 
-    (spit log "")
-
-    (reset!
-     daemon
-     (proc/process
-      {:dir root
-       :env (assoc inherited-env "FRAM_SNAPSHOT_BOOT" "0")
-       :out :inherit
-       :err :inherit}
-      "bin/fram-daemon" "serve-flat" (str daemon-port) (.getPath log)))
-    (check! "real JVM coordinator starts"
-            (eventually #(= 0
-                            (:version
-                             (coordinator-request daemon-port {:op :version})))))
-    (let [response
-          (coordinator-request
-           daemon-port
-           {:op :assert-batch
-            :te "@bulk"
-            :facts (mapv (fn [i] {:p "json-test-payload"
-                                  :r (str "value-" i)})
-                         (range 1000))})]
-      (reset! bulk-version (:ok response))
-      (check! "one real atomic batch creates the large response fixture"
-              (and (:batch response)
-                   (integer? @bulk-version))))
-
-    (reset!
-     shim
-     (proc/process
-      {:dir root
-       :env (assoc inherited-env
-                   "FRAM_HOST" "127.0.0.1"
-                   "FRAM_PORT" (str daemon-port)
-                   "SHIM_PORT" (str shim-port)
-                   "SHIM_TOKEN" token)
-       :out :inherit
-       :err :inherit}
-      "bb" "deploy/cloudflare/shim.clj"))
-    (check! "shim becomes ready through its authenticated EDN path"
+    (start-daemon!)
+    (check! "real JVM daemon starts on FRAMRPC"
+            (eventually #(= 0 (direct-version daemon-port space))))
+    (reset! shim
+            (proc/process
+             {:dir root
+              :env (assoc inherited "FRAM_HOST" "127.0.0.1"
+                          "FRAM_PORT" (str daemon-port)
+                          "SHIM_PORT" (str shim-port)
+                          "SHIM_TOKEN" token)
+              :out :inherit :err :inherit}
+             "bb" "-cp" "out" "deploy/cloudflare/shim.clj"))
+    (check! "shim becomes ready on authenticated JSON"
             (eventually
-             #(let [response
-                    (http-post shim-port "/q" token nil
-                               (pr-str {:op :version}))]
-                (and (= 200 (:status response))
-                     (= @bulk-version
-                        (:version (edn/read-string (:body response))))))))
+             #(= 200 (:status
+                      (http-post shim-port "/q" token "application/json"
+                                 (request-json space :rpc/version wire/rpc-unit))))))
 
-    (let [response (http-post shim-port "/q" token nil
-                              (pr-str {:op :version}))]
-      (check! "default response remains EDN"
-              (and (= 200 (:status response))
-                   (= "application/edn" (:content-type response))
-                   (= {:version @bulk-version}
-                      (edn/read-string (:body response))))))
+    (let [version (http-post shim-port "/q" token "application/json"
+                             (request-json space :rpc/version wire/rpc-unit))]
+      (check! "success response is one closed JSON FRAMRPC envelope"
+              (and (= 200 (:status version))
+                   (= "application/json" (:content-type version))
+                   (= #{"space" "op" "servedVersion" "payload"}
+                      (set (keys (:json version))))
+                   (= "0" (get (:json version) "servedVersion"))
+                   (= ["keyword" "rpc/unit"] (get (:json version) "payload")))))
 
-    (let [response (http-post shim-port "/q" token "application/json"
-                              (pr-str {:op :version :fmt :json}))]
-      (check! "JSON response is generated by the real coordinator and labeled honestly"
-              (and (= 200 (:status response))
-                   (= "application/json" (:content-type response))
-                   (= {:version @bulk-version}
-                      (json/parse-string (:body response) true)))))
-
-    (let [response
+    (let [subject (terms/triple "source-file" :plangrep/page 1)
+          values ["Door Schedule" -42 1.5 true :plangrep/door
+                  (terms/instant 1785580282 123000000)
+                  (terms/triple "nested" :kernel/type "triple")]
+          actions (mapv (fn [index value]
+                          (wire/rpc-action!
+                           :rpc/assert
+                           (terms/triple subject (keyword (str "test/value-" index)) value)
+                           wire/rpc-subject-any))
+                        (range) values)
+          asserted
+          (http-post shim-port "/assert" token "application/json"
+                     (request-json space :rpc/batch (wire/rpc-batch! actions nil)
+                                   {:expected-version 0}))
+          scanned
           (http-post shim-port "/q" token "application/json"
-                     (pr-str {:op :query
-                              :query (large-query)
-                              :fmt :json}))
-          payload (json/parse-string (:body response) true)
-          ok? (and (= 200 (:status response))
-                   (= "application/json" (:content-type response))
-                   (= 1000 (count (:ok payload)))
-                   (= "index" (:engine payload))
-                   (= @bulk-version (:version payload))
-                   (some #{["@bulk" "value-999"]} (:ok payload)))]
-      (when-not ok?
-        (println "large-query diagnostic"
-                 (pr-str {:status (:status response)
-                          :content-type (:content-type response)
-                          :rows (count (:ok payload))
-                          :engine (:engine payload)
-                          :version (:version payload)
-                          :expected-version @bulk-version
-                          :sample (take-last 2 (:ok payload))})))
-      (check! "raw query returns all 1000 real rows in JSON mode" ok?))
+                     (request-json space :rpc/scan
+                                   (wire/rpc-triple-pattern! subject nil nil)))
+          [encoded-triples]
+          (record-json-fields (get (:json scanned) "payload") "rpc/triples" 1)
+          triples (list-json-values encoded-triples)]
+      (check! "batch accepts every Atom kind plus recursive Triple nesting"
+              (and (= 200 (:status asserted))
+                   (= "1" (get (:json asserted) "servedVersion"))
+                   (= 7 (count triples))
+                   (= #{"string" "integer" "float64" "boolean" "keyword" "instant" "triple"}
+                      (set (map #(first (nth % 3)) triples)))))
 
-    (let [response (http-post shim-port "/q" "wrong" "application/json"
-                              (pr-str {:op :version :fmt :json}))]
-      (check! "pre-parse authentication error follows Accept as JSON"
-              (and (= 401 (:status response))
-                   (= "application/json" (:content-type response))
-                   (= {:error "unauthorized"}
-                      (json/parse-string (:body response) true)))))
+      (let [first-page
+            (http-post shim-port "/q" token "application/json"
+                       (request-json space :rpc/query
+                                     (wire/rpc-query-request!
+                                      (all-triples-plan) wire/query-current)
+                                     {:page {"limit" "2"}}))
+            cursor (get-in first-page [:json "page" "nextCursor"])
+            second-page
+            (http-post shim-port "/q" token "application/json"
+                       (request-json space :rpc/query
+                                     (wire/rpc-query-request!
+                                      (all-triples-plan) wire/query-current)
+                                     {:page {"limit" "100" "cursor" cursor}}))]
+        (check! "pagination cursor stays a tagged Term and resumes the snapshot"
+                (and (= false (get-in first-page [:json "page" "done"]))
+                     (= "triple" (first cursor))
+                     (= true (get-in second-page [:json "page" "done"]))
+                     (= "1" (get-in second-page [:json "servedVersion"])))))
 
-    (let [response (http-post shim-port "/q" token "application/json"
-                              (pr-str {:op :assert :fmt :json}))]
-      (check! "parsed shim validation error follows :fmt as JSON"
-              (and (= 403 (:status response))
-                   (= "application/json" (:content-type response))
-                   (str/includes?
-                    (:error (json/parse-string (:body response) true))
-                    "not allowed"))))
+      (stop-process! @daemon)
+      (reset! daemon nil)
+      (start-daemon!)
+      (check! "daemon restart replays the recursive FRAMLOG"
+              (eventually #(= 1 (direct-version daemon-port space))))
+      (let [after-restart
+            (http-post shim-port "/q" token "application/json"
+                       (request-json space :rpc/scan
+                                     (wire/rpc-triple-pattern! subject nil nil)))
+            [encoded] (record-json-fields (get (:json after-restart) "payload")
+                                          "rpc/triples" 1)]
+        (check! "shim reads the same seven live Triples after restart"
+                (= 7 (count (list-json-values encoded))))))
 
-    (let [response (http-post shim-port "/q" token nil
-                              (pr-str {:op :assert}))]
-      (check! "EDN validation errors remain backward compatible"
-              (and (= 403 (:status response))
-                   (= "application/edn" (:content-type response))
-                   (str/includes? (:error (edn/read-string (:body response)))
-                                  "not allowed"))))
+    (let [unauthorized
+          (http-post shim-port "/q" "wrong" "application/json" "not json")
+          malformed-json
+          (let [body (request-json space :rpc/version wire/rpc-unit)]
+            (http-post shim-port "/q" token "application/json"
+                       (subs body 0 (dec (count body)))))
+          duplicate
+          (http-post shim-port "/q" token "application/json"
+                     (str "{\"space\":\"" space "\",\"space\":\"other\","
+                          "\"op\":\"rpc/version\",\"payload\":[\"keyword\",\"rpc/unit\"]}"))
+          extra
+          (http-post shim-port "/q" token "application/json"
+                     (json/generate-string
+                      {"space" space "op" "rpc/version"
+                       "payload" ["keyword" "rpc/unit"] "extra" true}))
+          noncanonical
+          (http-post shim-port "/assert" token "application/json"
+                     (json/generate-string
+                      {"space" space "op" "rpc/assert"
+                       "payload" ["integer" "01"]}))
+          wrong-path
+          (http-post shim-port "/q" token "application/json"
+                     (request-json space :rpc/assert wire/rpc-unit))]
+      (check! "authentication runs before malformed-body parsing"
+              (and (= 401 (:status unauthorized))
+                   (= "shim/unauthorized" (get-in unauthorized [:json "error" "code"]))))
+      (check! "malformed JSON stays a structured JSON error"
+              (and (= 400 (:status malformed-json))
+                   (= "shim/invalid-json" (get-in malformed-json [:json "error" "code"]))))
+      (check! "duplicate envelope keys are rejected"
+              (and (= 400 (:status duplicate))
+                   (= "shim/invalid-json" (get-in duplicate [:json "error" "code"]))))
+      (check! "unknown envelope keys are rejected"
+              (and (= 400 (:status extra))
+                   (= "shim/unknown-key" (get-in extra [:json "error" "code"]))))
+      (check! "noncanonical tagged scalar is rejected before FRAMRPC"
+              (and (= 400 (:status noncanonical))
+                   (= "shim/noncanonical-integer"
+                      (get-in noncanonical [:json "error" "code"]))))
+      (check! "mutation on the read path is denied"
+              (and (= 403 (:status wrong-path))
+                   (= "shim/operation-not-allowed"
+                      (get-in wrong-path [:json "error" "code"])))))
+
+    (let [wrong-space
+          (http-post shim-port "/q" token "application/json"
+                     (request-json "another-space" :rpc/version wire/rpc-unit))]
+      (check! "coordinator errors remain typed JSON response envelopes"
+              (and (= 200 (:status wrong-space))
+                   (string? (get-in wrong-space [:json "error" "code"]))
+                   (= "another-space" (get-in wrong-space [:json "space"])))))
 
     (stop-process! @daemon)
     (reset! daemon nil)
-    (let [response (http-post shim-port "/q" token "application/json"
-                              (pr-str {:op :version :fmt :json}))]
-      (check! "upstream failure remains valid JSON rather than mislabeled EDN"
-              (and (= 502 (:status response))
-                   (= "application/json" (:content-type response))
-                   (str/starts-with?
-                    (:error (json/parse-string (:body response) true))
-                    "coordinator unreachable:"))))
+    (let [upstream
+          (http-post shim-port "/q" token "application/json"
+                     (request-json space :rpc/version wire/rpc-unit))]
+      (check! "upstream failure is bounded structured JSON"
+              (and (= 502 (:status upstream))
+                   (= "shim/upstream-failure" (get-in upstream [:json "error" "code"])))))
 
     (finally
       (stop-process! @shim)
       (stop-process! @daemon)
       (future-cancel watchdog)
-      (fs/delete-tree dir))))
+      (fs/delete-tree scratch))))
 
 (let [failures (remove second @checks)]
-  (doseq [[label ok] @checks]
-    (println (if ok "  [PASS]" "  [FAIL]") label))
+  (doseq [[label ok] @checks] (println (if ok "  [PASS]" "  [FAIL]") label))
   (if (seq failures)
-    (do
-      (println "\ncloudflare JSON response:" (count failures) "FAILED")
-      (System/exit 1))
-    (println "\ncloudflare JSON response:"
-             (count @checks) "/" (count @checks) "PASS")))
+    (do (println "\ncloudflare FRAMRPC:" (count failures) "FAILED") (System/exit 1))
+    (println "\ncloudflare FRAMRPC:" (count @checks) "/" (count @checks) "PASS")))

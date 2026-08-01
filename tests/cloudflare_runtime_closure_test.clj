@@ -36,9 +36,7 @@
   (swap! checks conj [label ok detail]))
 
 (chk "daemon load-file closure is recognized"
-     (= #{"coord.clj" "coord_writer_authority.clj"
-          "out/resolve.clj" "rotations.clj" "out/defcheck_gate.clj"}
-        load-assets)
+     (= #{"coord.clj" "coord_writer_authority.clj"} load-assets)
      load-assets)
 (chk "Docker COPY sources equal the daemon runtime closure"
      (= expected-docker-sources docker-copy-sources)
@@ -47,8 +45,7 @@
      (every? #(str/includes? flake-source %) root-assets)
      root-assets)
 (chk "installed-package smoke asserts every root runtime asset"
-     (every? #(str/includes? package-smoke-source
-                             (str "$package_root/libexec/fram/" %))
+     (every? #(str/includes? package-smoke-source (str "$runtime/" %))
              root-assets)
      root-assets)
 

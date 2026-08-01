@@ -1,127 +1,144 @@
 import assert from 'node:assert/strict';
-import {
-  framClient,
-  tripleQuery,
-} from '../deploy/cloudflare/worker-client.js';
+import * as client from '../deploy/cloudflare/worker-client.js';
 
 const checks = [];
 const check = (label, fn) => checks.push(Promise.resolve().then(fn)
   .then(() => console.log(`  [PASS] ${label}`)));
 
-check('default mode preserves the exact EDN version request', async () => {
-  let request;
-  const fram = framClient({
-    url: 'https://shim.test',
-    token: 'secret',
-    fetch: async (_url, init) => {
-      request = init;
-      return new Response('{:version 12}\n', {
-        headers: { 'content-type': 'application/edn' },
-      });
-    },
-  });
+const responseFor = request => new Response(JSON.stringify({
+  space: request.space,
+  op: request.op,
+  servedVersion: '12',
+  payload: ['keyword', 'rpc/unit'],
+}), { headers: { 'content-type': 'application/json; charset=utf-8' } });
 
-  assert.deepEqual(await fram.version(), { version: 12 });
-  assert.equal(request.body, '{:op :version}');
-  assert.equal(request.headers.accept, undefined);
-  assert.equal(request.headers['content-type'], 'application/edn');
+check('all Atom tags and recursive Triples are exact and canonical', () => {
+  const values = [
+    client.stringTerm('Alice'),
+    client.integerTerm(-42n),
+    client.float64Term(1.5),
+    client.float64Term(Number.NaN),
+    client.booleanTerm(true),
+    client.keywordTerm('kernel/type'),
+    client.instantTerm(-2, 3),
+    client.tripleTerm('Alice', client.keywordTerm('contact/email'), 'alice@example.com'),
+  ];
+  for (const value of values) assert.equal(client.validateTerm(value), value);
+  assert.deepEqual(values[1], ['integer', '-42']);
+  assert.deepEqual(values[2], ['float64', '3ff8000000000000']);
+  assert.deepEqual(values[3], ['float64', '7ff8000000000000']);
+  assert.equal(values[7][0], 'triple');
 });
 
-check('JSON mode negotiates the response without changing request encoding', async () => {
-  let request;
-  const fram = framClient({
-    url: 'https://shim.test/',
-    token: 'secret',
-    format: 'json',
+check('noncanonical typed values are rejected locally', () => {
+  assert.throws(() => client.validateTerm(['integer', '01']), /canonical/);
+  assert.throws(() => client.validateTerm(['float64', '7ff0000000000001']), /canonical/);
+  assert.throws(() => client.validateTerm(['keyword', ':bad']), /canonical/);
+  assert.throws(() => client.validateTerm(['triple', ['string', 'a']]), /arity/);
+  assert.throws(() => client.integerTerm(Number.MAX_SAFE_INTEGER + 1), /safe integer/);
+});
+
+check('client has one JSON mode and requires an explicit SpaceId', () => {
+  assert.throws(() => client.framClient({ token: 'secret' }), /space required/);
+  assert.equal('RawEdn' in client, false);
+  assert.equal('raw' in client, false);
+  assert.equal('ednEncode' in client, false);
+  assert.equal('ednDecode' in client, false);
+});
+
+check('version request is the exact JSON FRAMRPC envelope', async () => {
+  let observed;
+  const fram = client.framClient({
+    url: 'https://shim.test/', token: 'secret', space: 'space-a',
     fetch: async (url, init) => {
-      request = { url, ...init };
-      return new Response('{"version":12}\n', {
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-      });
+      observed = { url, init, body: JSON.parse(init.body) };
+      return responseFor(observed.body);
     },
   });
-
-  assert.deepEqual(await fram.version(), { version: 12 });
-  assert.equal(request.url, 'https://shim.test/q');
-  assert.equal(request.body, '{:op :version :fmt :json}');
-  assert.equal(request.headers.accept, 'application/json');
-  assert.equal(request.headers['content-type'], 'application/edn');
+  const response = await fram.version();
+  assert.equal(observed.url, 'https://shim.test/q');
+  assert.deepEqual(observed.body, {
+    space: 'space-a', op: 'rpc/version', payload: ['keyword', 'rpc/unit'],
+  });
+  assert.equal(observed.init.headers['content-type'], 'application/json');
+  assert.equal(observed.init.headers.accept, 'application/json');
+  assert.equal(response.servedVersion, '12');
 });
 
-check('JSON mode preserves a pre-encoded raw EDN query', async () => {
-  let body;
-  const rawQuery = '{:find "out" :rules [{:head {:rel "out" :args [{:var "r"}]} :body [{:rel "triple" :args ["@a" "title" {:var "r"}]}]}]}';
-  const fram = framClient({
-    url: 'https://shim.test',
-    token: 'secret',
-    format: 'json',
-    fetch: async (_url, init) => {
-      body = init.body;
-      return new Response('{"ok":[["hello"]],"version":12,"engine":"index"}', {
-        headers: { 'content-type': 'application/json' },
-      });
+check('assert lowers directly to a typed recursive write record', async () => {
+  let request;
+  const fram = client.framClient({
+    token: 'secret', space: 'space-a',
+    fetch: async (_url, init) => { request = JSON.parse(init.body); return responseFor(request); },
+  });
+  await fram.assert(client.tripleTerm('file', client.keywordTerm('page'), 1),
+    client.keywordTerm('title'), 'Door Schedule', { expectedVersion: 11 });
+  assert.equal(request.op, 'rpc/assert');
+  assert.equal(request.expectedVersion, '11');
+  const [proposition, policy, fence] = client.recordFields(request.payload, 'rpc/write', 3);
+  assert.equal(proposition[0], 'triple');
+  assert.deepEqual(policy, ['keyword', 'rpc/subject-any']);
+  assert.deepEqual(fence, ['keyword', 'rpc/none']);
+});
+
+check('typed query plans and pagination contain no untyped JSON data', async () => {
+  let request;
+  const fram = client.framClient({
+    token: 'secret', space: 'space-a',
+    fetch: async (_url, init) => { request = JSON.parse(init.body); return responseFor(request); },
+  });
+  await fram.query(client.tripleQuery({ slot1: client.keywordTerm('plangrep/title') }),
+    { asOf: 9, timeoutMs: 5000, page: { limit: 100 } });
+  assert.equal(request.op, 'rpc/query');
+  assert.deepEqual(request.page, { limit: '100' });
+  assert.equal(request.timeoutMs, '5000');
+  const [plan, snapshot] = client.recordFields(request.payload, 'query/request', 2);
+  client.recordFields(plan, 'query/plan', 2);
+  assert.deepEqual(client.recordFields(snapshot, 'query/as-of', 1)[0], ['integer', '9']);
+});
+
+check('the closed client exposes every public operation and no raw escape', async () => {
+  const requests = [];
+  const fram = client.framClient({
+    token: 'secret', space: 'space-a',
+    fetch: async (url, init) => {
+      const request = JSON.parse(init.body);
+      requests.push([new URL(url).pathname, request.op]);
+      return responseFor(request);
     },
   });
-
-  assert.deepEqual((await fram.query(rawQuery)).ok, [['hello']]);
-  assert.ok(body.includes(`:query ${rawQuery}`));
-  assert.ok(body.endsWith(':fmt :json}'));
+  const fence = client.tripleTerm(client.keywordTerm('rpc/fence'), 'holder', 1);
+  await fram.version(); await fram.status(); await fram.validate(); await fram.occurrences();
+  await fram.scan({ slot0: 'a' }); await fram.query(client.tripleQuery());
+  await fram.assert('a', 'p', 'r'); await fram.retract('a', 'p', 'r');
+  await fram.batch([{ op: 'assert', slot0: 'a', slot1: 'p', slot2: 'r' }]);
+  await fram.leaseAcquire('resource', 'holder', 1000);
+  await fram.leaseRenew(fence, 1000); await fram.leaseRelease(fence); await fram.leaseCheck(fence);
+  assert.equal(requests.length, 13);
+  assert.equal(requests.filter(([path]) => path === '/q').length, 7);
+  assert.equal(requests.filter(([path]) => path === '/assert').length, 6);
+  assert.equal('raw' in fram, false);
 });
 
-check('JSON mode decodes a large result without the EDN decoder', async () => {
-  const rows = Array.from({ length: 1000 }, (_, i) =>
-    [`@node-${i}`, `value-${i}`]);
-  const fram = framClient({
-    url: 'https://shim.test',
-    token: 'secret',
-    format: 'json',
+check('unknown response fields and noncanonical versions fail closed', async () => {
+  const bad = client.framClient({
+    token: 'secret', space: 'space-a',
     fetch: async () => new Response(JSON.stringify({
-      ok: rows,
-      version: 1000,
-      engine: 'index',
+      space: 'space-a', op: 'rpc/version', servedVersion: '01', extra: true,
     }), { headers: { 'content-type': 'application/json' } }),
   });
-
-  const result = await fram.query(tripleQuery({ p: 'title' }));
-  assert.equal(result.ok.length, 1000);
-  assert.deepEqual(result.ok[999], ['@node-999', 'value-999']);
+  await assert.rejects(bad.version(), /unknown/);
 });
 
-check('negotiated shim errors remain structured and inspectable', async () => {
-  const fram = framClient({
-    url: 'https://shim.test',
-    token: 'wrong',
-    format: 'json',
-    fetch: async () => new Response('{"error":"unauthorized"}\n', {
-      status: 401,
-      headers: { 'content-type': 'application/json' },
-    }),
+check('shim HTTP errors stay structured JSON', async () => {
+  const fram = client.framClient({
+    token: 'wrong', space: 'space-a',
+    fetch: async () => new Response(JSON.stringify({
+      error: { code: 'shim/unauthorized', retryable: false, message: 'unauthorized' },
+    }), { status: 401, headers: { 'content-type': 'application/json' } }),
   });
-
-  await assert.rejects(
-    fram.version(),
-    error => error.status === 401
-      && error.body?.error === 'unauthorized'
-      && /HTTP 401/.test(error.message));
-});
-
-check('response content-type, not requested mode, selects the decoder', async () => {
-  const fram = framClient({
-    url: 'https://old-shim.test',
-    token: 'secret',
-    format: 'json',
-    fetch: async () => new Response('{:version 9}\n', {
-      headers: { 'content-type': 'application/edn' },
-    }),
-  });
-
-  assert.deepEqual(await fram.version(), { version: 9 });
-});
-
-check('unknown response modes fail before any network request', async () => {
-  assert.throws(
-    () => framClient({ token: 'secret', format: 'yaml' }),
-    /format must be 'edn' or 'json'/);
+  await assert.rejects(fram.version(), error => error.status === 401
+    && error.body.error.code === 'shim/unauthorized');
 });
 
 await Promise.all(checks);

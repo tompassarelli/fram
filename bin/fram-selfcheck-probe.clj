@@ -1,195 +1,133 @@
-;; fram-selfcheck-probe.clj — the probe half of `fram selfcheck --deep`.
-;;
-;; bin/fram-selfcheck (bash) owns the lifecycle: it boots the isolated scratch
-;; coordinators (plaintext + mTLS), mints scratch TLS material, and traps
-;; deterministic cleanup. THIS file (run on babashka, cwd = repo/package root so
-;; coord_daemon.clj's relative load-files resolve) runs the eight named probes
-;; against those scratch coordinators and prints one terse pass/fail line per
-;; subsystem. Exit 0 iff every subsystem passes; nonzero on any failure.
-;;
-;; It NEVER contacts the live coordinator: every port/log is a scratch value
-;; handed in via FRAM_SC_* env. Config is env-only so *command-line-args* stays
-;; empty (loading coord_daemon.clj then runs nothing but definitions).
-(require '[clojure.edn :as edn] '[clojure.java.io :as io] '[clojure.string :as str]
-         '[fram.store :as c] '[fram.schema :as s] '[fram.fold :as fold] '[fram.rt]
-         '[babashka.process :as bp])
-(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
+;; Native FRAMRPC probes for bin/fram-selfcheck.
+(require '[coord-daemon-wire :as wire]
+         '[fram.kernel :as kernel]
+         '[fram.rt :as rt]
+         '[fram.types :as terms])
 
-(defn env [k] (System/getenv k))
-(def SCRATCH (env "FRAM_SC_SCRATCH"))
-(def HERE    (env "FRAM_SC_HERE"))
-(def PLAIN   (Integer/parseInt (env "FRAM_SC_PORT_PLAIN")))
-(def TLS     (Integer/parseInt (env "FRAM_SC_PORT_TLS")))
-(def DEAD    (Integer/parseInt (env "FRAM_SC_PORT_DEAD")))
-(def L1      (env "FRAM_SC_LOG_PLAIN"))
-(def TLSDIR  (env "FRAM_SC_TLS_DIR"))
-(def PW      (env "FRAM_SC_TLS_PW"))
-(def FAULT   (env "FRAM_SELFCHECK_FAULT"))
-(defn tpath [f] (str TLSDIR "/" f))
-
-;; --- socket + TLS clients (one line EDN request/response over the wire) --------
-(defn ask
-  ([port req] (ask port req 3000))
-  ([port req timeout]
-   (with-open [s (java.net.Socket.)]
-     (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1500)
-     (.setSoTimeout s (int timeout))
-     (let [w (io/writer (.getOutputStream s))
-           r (java.io.PushbackReader. (io/reader (.getInputStream s)))]
-       (.write w (str (pr-str req) "\n")) (.flush w) (edn/read r)))))
-
-(defn ssl-ctx [ks ts]
-  (let [pw (.toCharArray PW)
-        load (fn [pth] (with-open [in (io/input-stream pth)]
-                         (doto (java.security.KeyStore/getInstance "PKCS12") (.load in pw))))
-        kmf (doto (javax.net.ssl.KeyManagerFactory/getInstance (javax.net.ssl.KeyManagerFactory/getDefaultAlgorithm)) (.init (load ks) pw))
-        tmf (doto (javax.net.ssl.TrustManagerFactory/getInstance (javax.net.ssl.TrustManagerFactory/getDefaultAlgorithm)) (.init (load ts)))]
-    (doto (javax.net.ssl.SSLContext/getInstance "TLS") (.init (.getKeyManagers kmf) (.getTrustManagers tmf) nil))))
-
-(defn tls-ask [ks ts req]
-  (with-open [s (.createSocket (.getSocketFactory (ssl-ctx ks ts)))]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int TLS)) 1500)
-    (.setSoTimeout s 3000) (.startHandshake s)
-    (let [w (io/writer (.getOutputStream s)) r (io/reader (.getInputStream s))]
-      (.write w (str (pr-str req) "\n")) (.flush w) (edn/read-string (.readLine r)))))
-
-(defn rejected? [thunk] (try (not (map? (thunk))) (catch Throwable _ true)))
-
-;; --- in-process corpus helpers -----------------------------------------------
-(defn ln [tx op l p r] (pr-str {:tx tx :op op :l l :p p :r r :ts "t" :by "selfcheck"}))
-(defn lines! [path & ls] (spit path (str (str/join "\n" ls) "\n")))
-(defn append! [path & ls] (spit path (str (str/join "\n" ls) "\n") :append true))
-;; boot-flat! logs a "[fram] boot(flat): ..." line to *out*; keep the operator
-;; output terse by swallowing it during the in-process probes.
-(defn qboot [log] (binding [*out* (java.io.StringWriter.)] (boot-flat! log)))
-
-;; --- section harness ----------------------------------------------------------
+(def port (Integer/parseInt (System/getenv "FRAM_SC_PORT")))
+(def space (System/getenv "FRAM_SC_SPACE"))
+(def phase (System/getenv "FRAM_SC_PHASE"))
 (def results (atom []))
-(defn section [nm thunk]
-  (let [[ok detail] (try (thunk) (catch Throwable t [false (str "exception: " (.getMessage t))]))]
-    (swap! results conj [nm (boolean ok) (str detail)])))
+(def request-id (atom 0))
 
-;; 1. socket — connect + version/status roundtrip against the scratch daemon.
-(section "socket"
-  #(let [port (if (= FAULT "socket") DEAD PLAIN)
-         v  (ask port {:op :version})
-         st (ask port {:op :status})]
-     [(and (integer? (:version v)) (integer? (:version st))
-           (integer? (:facts st)) (string? (:log st)))
-      (str "version=" (:version v) " status{facts=" (:facts st) " log=" (:log st) "}")]))
+(defn request!
+  ([operation payload] (request! operation payload nil nil))
+  ([operation payload expected page]
+   (rt/native-request-to!
+    "127.0.0.1" port
+    (wire/rpc-request! space operation expected page nil payload))))
+(defn payload [response] (terms/rpc-response-payload-value response))
+(defn error-code [response] (some-> response terms/rpcresponse-error terms/rpcerror-code))
+(defn fields [value tag count-value] (wire/rpc-record-fields! value tag count-value))
+(defn values-list [value] (wire/rpc-list-values! value))
+(defn section [name thunk]
+  (let [[ok detail]
+        (try (thunk)
+             (catch Throwable error [false (or (.getMessage error) (str (class error)))]))]
+    (swap! results conj [name (boolean ok) detail])))
 
-;; 2. cold-fold — cold CLI fold of the scratch log == warm daemon state (same CLI,
-;;    daemon port vs a dead port that forces the cold whole-log fold).
-(section "cold-fold"
-  #(let [run (fn [port]
-               (-> (bp/shell {:out :string :err :string :continue true
-                              :extra-env {"FRAM_LOG" L1 "FRAM_THREADS" (str SCRATCH "/threads")
-                                          "FRAM_PORT" (str port)}}
-                             (str HERE "/bin/fram") "show" "sc-cold")
-                   :out str/trim))
-         warm (run PLAIN)
-         cold (run DEAD)]
-     [(and (seq warm) (= warm cold) (str/includes? warm "cold-fold-canary"))
-      (str "warm(daemon)==cold(fold), " (count (str/split-lines warm)) " line(s)")]))
+(defn all-triples-plan []
+  (let [slot0 (wire/rpc-query-variable! "slot0")
+        slot1 (wire/rpc-query-variable! "slot1")
+        slot2 (wire/rpc-query-variable! "slot2")]
+    (wire/rpc-query-plan!
+     (wire/rpc-query-find-relation! "all")
+     [(wire/rpc-query-stratum!
+       [(wire/rpc-query-rule!
+         (wire/rpc-query-head! "all" [slot0 slot1 slot2])
+         [(wire/rpc-query-relation! "triple" [slot0 slot1 slot2] false)])])])))
 
-;; 3. fencing — a stale-epoch fenced write is rejected before mutation.
-(section "fencing"
-  #(let [res "sc-fence" holder "h"
-         acq (ask PLAIN {:op :acquire-lease :res res :holder holder :ttl-ms 60000})
-         ep  (:epoch acq)
-         good (ask PLAIN {:op :assert-with-fence :res res :holder holder :epoch ep
-                          :te "@sc-fence" :p "marker" :r "winner"})
-         stale (ask PLAIN {:op :assert-with-fence :res res :holder holder :epoch (inc ep)
-                           :te "@sc-fence" :p "marker" :r "loser"})
-         vals (set (:values (ask PLAIN {:op :resolved :te "@sc-fence" :p "marker"})))]
-     [(and (:ok acq) (:ok good) (= :fence-lost (:reject stale)) (= #{"winner"} vals))
-      (str "epoch " ep " writes; stale epoch " (inc ep) " -> " (:reject stale) ", no mutation")]))
+(if (= phase "restart")
+  (section "restart"
+    #(let [response (request! :rpc/scan
+                              (wire/rpc-triple-pattern! "selfcheck" nil nil))
+           [encoded] (fields (payload response) :rpc/triples 1)
+           triples (values-list encoded)]
+       [(and (nil? (error-code response)) (= 7 (count triples)))
+        (str "replayed " (count triples) " recursive Triples")]))
+  (do
+    (section "socket"
+      #(let [version (request! :rpc/version wire/rpc-unit)
+             status (request! :rpc/status wire/rpc-unit)
+             [state live-count engine] (fields (payload status) :rpc/status 3)]
+         [(and (= 0 (terms/rpcresponse-served-version version))
+               (= :ready state) (= 0 live-count) (= :rpc/jvm engine))
+          "version/status typed round-trip"]))
 
-;; 4. exact-epoch lease — renewal rotates the token; only the renewed epoch releases.
-(section "lease"
-  #(let [res "sc-lease" holder "h"
-         acq (ask PLAIN {:op :acquire-lease :res res :holder holder :ttl-ms 60000})
-         e0 (:epoch acq)
-         ren (ask PLAIN {:op :renew-lease :res res :holder holder :epoch e0 :ttl-ms 120000})
-         e1 (:epoch ren)
-         stale-rel (ask PLAIN {:op :release-lease :res res :holder holder :epoch e0})
-         old-fence (ask PLAIN {:op :fence-ok :res res :holder holder :epoch e0})
-         fresh-rel (ask PLAIN {:op :release-lease :res res :holder holder :epoch e1})
-         after     (ask PLAIN {:op :fence-ok :res res :holder holder :epoch e1})]
-     [(and (:ok acq) (:ok ren) (> e1 e0) (> (:exp ren) (:exp acq))
-           (:noop stale-rel) (false? (:fence-ok old-fence))
-           (:ok fresh-rel)   (false? (:fence-ok after)))
-      (str "epoch " e0 "->" e1 "; stale-epoch release noop; epoch-exact release ok")]))
+    (section "terms"
+      #(let [values ["text" -42 1.5 true :kernel/type
+                     (terms/instant 1785580282 123000000)
+                     (terms/triple "nested" :kernel/type "triple")]
+             actions
+             (mapv (fn [index value]
+                     (wire/rpc-action!
+                      :rpc/assert
+                      (terms/triple "selfcheck" (keyword (str "probe/value-" index)) value)
+                      wire/rpc-subject-any))
+                   (range) values)
+             response (request! :rpc/batch (wire/rpc-batch! actions nil) 0 nil)
+             scan (request! :rpc/scan
+                            (wire/rpc-triple-pattern! "selfcheck" nil nil))
+             [encoded] (fields (payload scan) :rpc/triples 1)]
+         [(and (nil? (error-code response))
+               (= 1 (terms/rpcresponse-served-version response))
+               (= 7 (count (values-list encoded))))
+          "all Atom kinds plus nested Triple committed atomically"]))
 
-;; 5. mTLS/admission — trusted client cert accepted; plaintext + rogue cert rejected.
-(section "mtls"
-  #(let [happy     (tls-ask (tpath "client.p12") (tpath "clienttrust.p12") {:op :version})
-         plain-rej (rejected? (fn [] (ask TLS {:op :version})))
-         rogue-rej (rejected? (fn [] (tls-ask (tpath "rogue.p12") (tpath "clienttrust.p12") {:op :version})))]
-     [(and (some? (:version happy)) plain-rej rogue-rej)
-      (str "trusted->version " (:version happy) "; plaintext-rejected=" plain-rej "; rogue-rejected=" rogue-rej)]))
+    (section "occ"
+      #(let [stale (request! :rpc/assert
+                             (wire/rpc-write!
+                              (terms/triple "stale" :probe/value true)
+                              wire/rpc-subject-any nil)
+                             0 nil)
+             head (request! :rpc/version wire/rpc-unit)]
+         [(and (= :rpc/conflict (error-code stale))
+               (= 1 (terms/rpcresponse-served-version head)))
+          "stale expected version rejected without movement"]))
 
-;; 6. snapshot/tail — checkpoint + tail-fold boot equals the whole-log fold (state
-;;    AND version, torn tail counted).
-(section "snapshot"
-  #(let [log (str SCRATCH "/snap.log")]
-     (reset! snapshot-boot-enabled? true)
-     (lines! log (ln 1 "assert" "@T1" "title" "First")
-                 (ln 2 "assert" "@T1" "tag" "a")
-                 (ln 3 "assert" "@T2" "title" "Two"))
-     (qboot log)
-     (write-snapshot! @co log)
-     (let [base (current-seq @co)]
-       (append! log (ln (+ base 1) "assert"  "@T1" "title" "Updated")
-                    (ln (+ base 2) "assert"  "@T3" "title" "Three")
-                    (ln (+ base 3) "retract" "@T1" "tag" "a"))
-       (append! log (pr-str {:tx (+ base 4) :op "assert" :l "@torn" :p "title" :ts "t" :by "selfcheck"})))
-     (let [truth   (live-name-triples (migrate-flat->co log))
-           truth-v (:version (fold/fold (fram.rt/read-log log)))]
-       (qboot log)
-       [(and (= :snapshot (:mode @last-boot))
-             (= (live-name-triples @co) truth)
-             (= (current-seq @co) truth-v)
-             (:ok (snapshot-reconcile @co log)))
-        (str "boot=" (name (:mode @last-boot)) "; state==whole-fold; version=" (current-seq @co)
-             "==" truth-v "; reconcile ok")])))
+    (section "fencing"
+      #(let [acquired (request! :rpc/lease-acquire
+                                (wire/rpc-lease-acquire! :selfcheck "holder" 60000))
+             [fence _] (fields (payload acquired) :lease/grant 2)
+             renewed (request! :rpc/lease-renew (wire/rpc-lease-renew! fence 60000))
+             [next-fence _] (fields (payload renewed) :lease/grant 2)
+             accepted (request! :rpc/assert
+                                (wire/rpc-write!
+                                 (terms/triple "fenced" :probe/value "winner")
+                                 wire/rpc-subject-any next-fence))
+             stale (request! :rpc/assert
+                             (wire/rpc-write!
+                              (terms/triple "fenced" :probe/value "loser")
+                              wire/rpc-subject-any fence))]
+         [(and (nil? (error-code accepted))
+               (= :rpc/lease-fence-mismatch (error-code stale)))
+          "renewed fence accepted; stale epoch rejected"]))
 
-;; 7. identity — a durable bound_to edge survives a cold restart (synthetic corpus).
-(section "identity"
-  #(let [log (str SCRATCH "/id.log")
-         bound (fn []
-                 (let [st (:store @co) BND (c/value-id st "bound_to") L (s/resolve-name st "@ref")]
-                   (when (and BND L)
-                     (let [cids (c/by-lp st L BND)]
-                       (when (seq cids)
-                         (let [rid (:r (c/fact-of st (first cids)))]
-                           {:name (s/name-of st rid) :id rid :tgt (s/resolve-name st "@tgt")}))))))]
-     (lines! log (ln 1 "assert" "@tgt" "title" "Target")
-                 (ln 2 "assert" "@ref" "bound_to" "@tgt"))
-     (qboot log)
-     (let [b0 (bound)]
-       (qboot log)                       ; cold restart from the durable log
-       (let [b1 (bound)]
-         [(and b0 b1 (= "@tgt" (:name b0)) (= (:name b0) (:name b1))
-               (= (:id b1) (:tgt b1)))         ; edge still points at the live @tgt node identity
-          (str "bound_to->" (:name b1) " survives cold restart; resolves to @tgt id " (:tgt b1))]))))
+    (section "lease"
+      #(let [acquired (request! :rpc/lease-acquire
+                                (wire/rpc-lease-acquire! :release "holder" 60000))
+             [fence _] (fields (payload acquired) :lease/grant 2)
+             checked (request! :rpc/lease-check fence)
+             [valid _] (fields (payload checked) :lease/check 2)
+             released (request! :rpc/lease-release fence)
+             [released?] (fields (payload released) :lease/released 1)
+             after (request! :rpc/lease-check fence)
+             [after-valid _] (fields (payload after) :lease/check 2)]
+         [(and valid released? (not after-valid))
+          "acquire/check/release is exact-epoch"]))
 
-;; 8. log/store reconciliation — the live incremental store == a from-scratch whole
-;;    migrate of the same log (snapshot-reconcile gate).
-(section "reconcile"
-  #(let [log (str SCRATCH "/rec.log")]
-     (lines! log (ln 1 "assert" "@r1" "title" "One")
-                 (ln 2 "assert" "@r1" "tag" "x")
-                 (ln 3 "assert" "@r2" "title" "Two"))
-     (qboot log)
-     (let [rc (snapshot-reconcile @co log)]
-       [(and (:ok rc) (= (:inc rc) (:fresh rc)))
-        (str "store==log migrate; inc=" (:inc rc) " fresh=" (:fresh rc))])))
+    (section "pagination"
+      #(let [payload (wire/rpc-query-request! (all-triples-plan) wire/query-current)
+             first-page (request! :rpc/query payload nil
+                                  (wire/rpc-page-request! 2 nil))
+             cursor (terms/rpc-page-response-cursor-value
+                     (terms/rpcresponse-page first-page))
+             second-page (request! :rpc/query payload nil
+                                   (wire/rpc-page-request! 100 cursor))]
+         [(and (some? cursor)
+               (terms/rpcpageresponse-done (terms/rpcresponse-page second-page)))
+          "cursor resumes one pinned query snapshot"]))))
 
-;; --- report -------------------------------------------------------------------
-(doseq [[nm ok detail] @results]
-  (println (format "  [%s] %-10s %s" (if ok "PASS" "FAIL") nm detail)))
-(let [n (count @results) fails (count (remove second @results))]
-  (if (zero? fails)
-    (do (println (format "\nselfcheck --deep: %d/%d PASS" n n)) (flush) (System/exit 0))
-    (do (println (format "\nselfcheck --deep: %d subsystem(s) FAILED (of %d)" fails n)) (flush) (System/exit 1))))
+(doseq [[name ok detail] @results]
+  (println (format "  [%s] %-10s %s" (if ok "PASS" "FAIL") name detail)))
+(when (some (comp not second) @results) (System/exit 1))

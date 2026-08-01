@@ -5,54 +5,19 @@
 # (add-def / set-body / rename-def / insert-after / insert-before / replace-in-body /
 # edit-transaction). It is never
 # minted per-predicate: the vocabulary is DATA in the graph (a predicate is an
-# entity — `show <pred>` reveals its cardinality/value_kind), so the tool count is
-# O(1). `untell` is accepted as an alias for `retract`, `query` for `ask`. Reads
-# reuse a versioned snapshot of the coordinator's warm store (or one process-
-# lifetime cold snapshot when offline); writes route through the coordinator.
+# entity), so the tool count is O(1). `untell` is accepted as an alias for
+# `retract`, `query` for `ask`. Public data calls use FRAMRPC; graph authoring is
+# a separate sealed-control surface and is refused here.
 # Point a model's MCP client at this command.
 #
-#   FRAM_THREADS / FRAM_LOG select the corpus; FRAM_TELEMETRY_LOG optionally
-#   names its split telemetry half. Reads expose the pair as one logical store.
+#   FRAM_SPACE_ID selects the database identity. FRAM_PORT selects its daemon.
 #   FRAM_GRAPH_OPS_LOG selects the separate graph-op JSONL telemetry file;
 #   set it to off, false, 0, or disabled for a zero-overhead disabled path.
 #   FRAM_MCP_PROFILE (optional; unset = "full", the exact twelve-tool surface):
-#   "graph-edit-v1" exposes AND server-authorizes ONLY the seven graph-edit verbs
-#   (denials pre-alias, pre-dispatch, zero mutation) and refuses to start unless
-#   graph-edit mode is wired with canonical absolute FRAM_SRC / FRAM_CODE_LOG /
-#   FRAM_CODE_PORT identity, an existing in-tree log, and a live strict-fenced
-#   coordinator. Unknown profile names fail closed.
+#   "graph-edit-v1" is reserved for the sealed channel and fails closed here.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
-  if [[ -z "${FRAM_LOG:-}" || -z "${FRAM_THREADS:-}" ]]; then
-    if [[ -n "${FRAM_STATE_DIR:-}" ]]; then
-      state_dir="$FRAM_STATE_DIR"
-    elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
-      state_dir="$XDG_STATE_HOME/fram"
-    elif [[ -n "${HOME:-}" ]]; then
-      state_dir="$HOME/.local/state/fram"
-    else
-      echo "fram-mcp: set FRAM_LOG + FRAM_THREADS, FRAM_STATE_DIR, XDG_STATE_HOME, or HOME" >&2
-      exit 2
-    fi
-  fi
-  [[ -n "${FRAM_THREADS:-}" ]] || FRAM_THREADS="$state_dir/threads"
-  [[ -n "${FRAM_LOG:-}" ]] || FRAM_LOG="$state_dir/coordination.log"
-else
-  FRAM_THREADS="${FRAM_THREADS:-$HERE/threads}"
-  FRAM_LOG="${FRAM_LOG:-$HERE/coordination.log}"
-fi
-export FRAM_THREADS FRAM_LOG
-mkdir -p "$FRAM_THREADS" "$(dirname "$FRAM_LOG")"
-# Pin Beagle's Racket for the separate facts-check-emit compiler gate.
-# facts-roundtrip itself is self-hosted and enters through $BEAGLE_HOME/bin/beagle.
-# FRAM_RACKET overrides; mirrors bin/_beagle-racket.
-BEAGLE_HOME="${BEAGLE_HOME:-${HOME:+$HOME/code/beagle/main}}"
-_pinned_racket="${FRAM_RACKET:-}"
-if [[ -z "$_pinned_racket" && -n "$BEAGLE_HOME" ]]; then
-  _pinned_racket="$(direnv exec "$BEAGLE_HOME" which racket 2>/dev/null || true)"
-fi
-if [ -n "$_pinned_racket" ]; then
-  PATH="$(dirname "$_pinned_racket"):$PATH"
-  export PATH
+if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
+  echo "fram-mcp: FRAM_SPACE_ID is required" >&2
+  exit 2
 fi
 cd "$HERE" && exec bb -cp out tests/fram_mcp.clj

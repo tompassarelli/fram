@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Fram CLI (runs the compiled Clojure on babashka).
-#   fram import | ready | blocked | leverage | next | plate | validate | show <id> | set <id> <pred> <val>
-# Checkout runs default to <repo>/threads and <repo>/coordination.log. Packaged runs
-# default to writable XDG state. Override either with FRAM_THREADS / FRAM_LOG.
+# Fram CLI. Public data commands require FRAM_SPACE_ID and speak FRAMRPC.
+# Legacy migration/projection commands retain their explicit local-file setup.
 HERE="${BASH_SOURCE[0]%/*}/.."
 # Deep daemon/recovery selfcheck is a bash-orchestrated command (boots isolated
 # scratch coordinators with trap-based cleanup) — dispatch before the bb exec.
@@ -10,6 +8,18 @@ if [[ "${1:-}" == "selfcheck" ]]; then
   shift
   exec "$HERE/bin/fram-selfcheck" "$@"
 fi
+
+case "${1:-}" in
+  show|query|tell|retract|untell|tell-existing|retract-existing|untell-existing|version|status|validate|scan|occurrences)
+    if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
+      echo "fram: FRAM_SPACE_ID is required for data commands" >&2
+      exit 2
+    fi
+    exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
+    ;;
+esac
+
+# The remaining commands are local migration/projection/admin surfaces.
 if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
   # Explicit corpus paths are a complete configuration. Resolve the user-state
   # default only for a value that is actually missing, so hermetic/service
@@ -38,15 +48,4 @@ log_parent="${FRAM_LOG%/*}"
 if [[ ! -d "$FRAM_THREADS" || ! -d "$log_parent" ]]; then
   mkdir -p "$FRAM_THREADS" "$log_parent"
 fi
-# This list is the FIRST of two gates. fram-fast.clj has its own dispatch and
-# falls back to cold on its own terms; a verb missing HERE never reaches it at
-# all, so adding a fast path inside fram-fast.clj without adding the verb here
-# is a silent no-op. That happened with `query`: the dispatch case was correct
-# and unreachable, and the command stayed on the 13s cold path while measuring
-# as if the fix had not landed.
-case "${1:-}" in
-  show|query|tell|retract|untell|tell-existing|retract-existing|untell-existing)
-    exec bb -cp "$HERE/out" "$HERE/bin/fram-fast.clj" "$@"
-    ;;
-esac
 exec bb -cp "$HERE/out" -m fram.main "$@"

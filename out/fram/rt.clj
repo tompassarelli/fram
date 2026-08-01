@@ -10,9 +10,11 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [cheshire.core :as cheshire]
+            [coord-daemon-wire :as rpc-wire]
             [fram.fold :as fold]
             [fram.kernel :as kernel]
-            [fram.rt-core :as rtc]))
+            [fram.rt-core :as rtc]
+            [fram.types :as terms]))
 
 ;; Serialize any value (records serialize as objects keyed by field name; vectors
 ;; as arrays) to JSON — the engine's structured-output path for the MCP edge.
@@ -324,8 +326,11 @@
                     (if (edit-batch-envelope-marker? m)
                       (do (validate-edit-batch-envelope! path i m)
                           (recur next-i acc))
-                      (recur next-i (conj! acc (fold/->FactOp (:tx m) (:op m) (:l m) (:p m) (:r m)
-                                                              (or (:frame m) (:by m) "legacy"))))))
+                      (recur next-i
+                             (conj! acc
+                                    ((requiring-resolve 'fram.fold/->FactOp)
+                                     (:tx m) (:op m) (:l m) (:p m) (:r m)
+                                     (or (:frame m) (:by m) "legacy"))))))
                   ;; unparseable + no terminating newline: torn tail — recover, warn once.
                   (not terminated?)
                   (let [recovered (persistent! acc)]
@@ -1187,6 +1192,323 @@
             (try (.close s) (catch Throwable _ nil))
             (throw error)))))))
 
+;; --- FRAMRPC v1 client -------------------------------------------------------
+;; Data clients share this one bounded binary implementation. Human-facing
+;; commands may parse EDN before this boundary, but only recursive Terms and
+;; closed RpcRequest records reach the socket.
+
+(def ^:private rpc-request-sequence (java.util.concurrent.atomic.AtomicLong. 0))
+
+(defn rpc-space-id []
+  (let [space (System/getenv "FRAM_SPACE_ID")]
+    (when (str/blank? space)
+      (throw (ex-info "FRAM_SPACE_ID is required for FRAMRPC data requests"
+                      {:type :rpc-space-id-required})))
+    space))
+
+(defn- next-rpc-request-id []
+  (let [value (.incrementAndGet rpc-request-sequence)]
+    (if (pos? value)
+      value
+      (do
+        (.set rpc-request-sequence 1)
+        1))))
+
+(defn- read-rpc-exact! [input bytes offset length]
+  (loop [position offset remaining length]
+    (if (zero? remaining)
+      true
+      (let [read-count (.read input bytes position remaining)]
+        (if (neg? read-count)
+          false
+          (recur (+ position read-count) (- remaining read-count)))))))
+
+(defn- rpc-stream-body-length! [header]
+  (dotimes [index 8]
+    (when-not (= (bit-and 255 (int (aget header index)))
+                 (bit-and 255 (int (aget rpc-wire/rpc-v1-magic index))))
+      (throw (ex-info "FRAMRPC response magic does not match"
+                      {:type :rpc-invalid-magic}))))
+  (let [buffer (doto (java.nio.ByteBuffer/wrap header)
+                 (.order java.nio.ByteOrder/LITTLE_ENDIAN))]
+    (.position buffer 8)
+    (let [major (Short/toUnsignedInt (.getShort buffer))
+          minor (Short/toUnsignedInt (.getShort buffer))
+          kind (bit-and 255 (int (.get buffer)))
+          flags (bit-and 255 (int (.get buffer)))
+          body-length (Integer/toUnsignedLong (.getInt buffer))]
+      (when-not (and (= major rpc-wire/rpc-v1-major)
+                     (= minor rpc-wire/rpc-v1-minor))
+        (throw (ex-info "FRAMRPC response version is unsupported"
+                        {:type :rpc-unsupported-version
+                         :major major :minor minor})))
+      (when-not (contains? #{2 4} kind)
+        (throw (ex-info "FRAMRPC client expected a response or event frame"
+                        {:type :rpc-invalid-kind :kind kind})))
+      (when-not (zero? flags)
+        (throw (ex-info "FRAMRPC v1 response flags must be zero"
+                        {:type :rpc-invalid-flags :flags flags})))
+      (when (> body-length rpc-wire/rpc-v1-max-body-bytes)
+        (throw (ex-info "FRAMRPC response body exceeds the 1 MiB limit"
+                        {:type :rpc-frame-too-large
+                         :body-length body-length})))
+      (int body-length))))
+
+(defn read-rpc-frame! [input]
+  (let [header (byte-array rpc-wire/rpc-v1-header-bytes)]
+    (when-not (read-rpc-exact! input header 0 rpc-wire/rpc-v1-header-bytes)
+      (throw (ex-info "FRAMRPC response ended inside its header"
+                      {:type :rpc-truncated})))
+    (let [body-length (rpc-stream-body-length! header)
+          body (byte-array body-length)
+          frame (byte-array (+ rpc-wire/rpc-v1-header-bytes body-length))]
+      (when-not (read-rpc-exact! input body 0 body-length)
+        (throw (ex-info "FRAMRPC response ended inside its body"
+                        {:type :rpc-truncated})))
+      (System/arraycopy header 0 frame 0 rpc-wire/rpc-v1-header-bytes)
+      (System/arraycopy body 0 frame rpc-wire/rpc-v1-header-bytes body-length)
+      (rpc-wire/decode-rpc-frame-v1! frame))))
+
+(defn native-request-to!
+  "Send one closed FRAMRPC request to host/port and return its RpcResponse.
+   The response id, space, and operation must match the request exactly."
+  [host port request]
+  (let [request-id (next-rpc-request-id)]
+    (with-open [socket (coord-socket host port)]
+      (let [timeout (max (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 15000)
+                         (+ 1000 (or (terms/rpcrequest-timeout-ms request) 0)))
+            output (.getOutputStream socket)]
+        (.setSoTimeout socket timeout)
+        (.write output
+                (rpc-wire/encode-rpc-frame-v1!
+                 (rpc-wire/rpc-request-frame request-id request)))
+        (.flush output)
+        (let [frame (read-rpc-frame! (.getInputStream socket))
+              response (terms/rpcframev1-response frame)]
+          (when-not (= :response (terms/rpcframev1-kind frame))
+            (throw (ex-info "FRAMRPC request received a non-response frame"
+                            {:type :rpc-invalid-kind})))
+          (when-not (= request-id (terms/rpcframev1-request-id frame))
+            (throw (ex-info "FRAMRPC response request-id does not match"
+                            {:type :rpc-request-id-mismatch})))
+          (when-not (and (= (terms/rpcrequest-space request)
+                            (terms/rpcresponse-space response))
+                         (= (terms/rpcrequest-op request)
+                            (terms/rpcresponse-op response)))
+            (throw (ex-info "FRAMRPC response identity does not match its request"
+                            {:type :rpc-response-mismatch})))
+          response)))))
+
+(defn native-request! [port request]
+  (native-request-to! (connect-host) port request))
+
+(defn native-call!
+  ([port operation payload]
+   (native-call! port (rpc-space-id) operation payload nil nil nil))
+  ([port space operation payload expected-version page timeout-ms]
+   (native-request!
+    port
+    (rpc-wire/rpc-request! space operation expected-version page timeout-ms
+                           payload))))
+
+(defn native-error [response] (terms/rpcresponse-error response))
+(defn native-error-code [response]
+  (some-> response native-error terms/rpcerror-code))
+(defn native-payload [response]
+  (terms/rpc-response-payload-value response))
+
+(defn require-native-success! [response]
+  (if-let [error (native-error response)]
+    (throw (ex-info (terms/rpcerror-message error)
+                    {:type (terms/rpcerror-code error)
+                     :code (terms/rpcerror-code error)
+                     :retryable (terms/rpcerror-retryable error)
+                     :served-version (terms/rpcresponse-served-version response)
+                     :detail (terms/rpc-error-detail-value error)}))
+    response))
+
+(defn rpc-record-fields! [value tag field-count]
+  (rpc-wire/rpc-record-fields! value tag field-count))
+
+(defn rpc-list-values! [value]
+  (rpc-wire/rpc-list-values! value))
+
+;; The human syntax is deliberately just a local lowering convenience. A
+;; three-element vector is a Triple; {:instant [seconds nanos]} is an Instant;
+;; symbols become String atoms. Maps and arbitrary sequences never cross the
+;; data socket.
+(declare lower-term!)
+
+(defn lower-term! [value]
+  (cond
+    (terms/term? value) value
+    (symbol? value) (str value)
+    (and (vector? value) (= 3 (count value)))
+    (terms/triple (lower-term! (nth value 0))
+                  (lower-term! (nth value 1))
+                  (lower-term! (nth value 2)))
+    (and (map? value)
+         (= #{:instant} (set (keys value)))
+         (vector? (:instant value))
+         (= 2 (count (:instant value))))
+    (terms/instant (long (nth (:instant value) 0))
+                   (long (nth (:instant value) 1)))
+    :else
+    (throw (ex-info "value cannot be lowered to Term"
+                    {:type :invalid-term-input :value value}))))
+
+(defn parse-human-term!
+  "Parse one local EDN datum, falling back to the original text as a String.
+   This parser is a CLI boundary only; its result is immediately lowered."
+  [text]
+  (let [parsed
+        (try
+          (with-open [reader (java.io.PushbackReader.
+                              (java.io.StringReader. text))]
+            (let [eof (Object.)
+                  value (edn/read {:eof eof} reader)
+                  trailing (edn/read {:eof eof} reader)]
+              (when (or (identical? eof value)
+                        (not (identical? eof trailing)))
+                (throw (ex-info "expected exactly one EDN datum" {})))
+              value))
+          (catch Throwable _ text))]
+    (try
+      (lower-term! parsed)
+      (catch Throwable _
+        (if (string? parsed) parsed text)))))
+
+(defn- query-field [value key]
+  (if (contains? value key)
+    (get value key)
+    (get value (name key))))
+
+(defn- query-has? [value key]
+  (or (contains? value key) (contains? value (name key))))
+
+(defn- require-query-field! [value key]
+  (if (query-has? value key)
+    (query-field value key)
+    (throw (ex-info (str "query field " (name key) " is required")
+                    {:type :query-invalid-syntax :field key}))))
+
+(defn- query-name! [value label]
+  (cond
+    (string? value) value
+    (keyword? value) (subs (str value) 1)
+    (symbol? value) (str value)
+    :else (throw (ex-info (str label " must be a name")
+                          {:type :query-invalid-syntax :value value}))))
+
+(defn- query-operation! [value label]
+  (cond
+    (keyword? value) value
+    (string? value) (keyword value)
+    (symbol? value) (keyword (str value))
+    :else (throw (ex-info (str label " must be a keyword spelling")
+                          {:type :query-invalid-syntax :value value}))))
+
+(defn- lower-query-term! [value]
+  (if (and (map? value)
+           (= #{(if (contains? value :var) :var "var")}
+              (set (keys value))))
+    (rpc-wire/rpc-query-variable!
+     (query-name! (query-field value :var) "query variable"))
+    (rpc-wire/rpc-query-constant! (lower-term! value))))
+
+(defn- lower-query-head! [value]
+  (rpc-wire/rpc-query-head!
+   (query-name! (require-query-field! value :rel) "query relation")
+   (mapv lower-query-term! (require-query-field! value :args))))
+
+(defn- lower-query-clause! [value]
+  (cond
+    (query-has? value :rel)
+    (rpc-wire/rpc-query-relation!
+     (query-name! (query-field value :rel) "query relation")
+     (mapv lower-query-term! (require-query-field! value :args))
+     (boolean (or (query-field value :neg)
+                  (query-field value :not)
+                  (query-field value :negated))))
+
+    (query-has? value :pred)
+    (let [arguments (vec (require-query-field! value :args))]
+      (when-not (= 2 (count arguments))
+        (throw (ex-info "query predicate requires exactly two arguments"
+                        {:type :query-invalid-syntax})))
+      (rpc-wire/rpc-query-predicate!
+       (query-operation! (query-field value :pred) "query predicate")
+       (lower-query-term! (nth arguments 0))
+       (lower-query-term! (nth arguments 1))))
+
+    (query-has? value :fn)
+    (rpc-wire/rpc-query-function!
+     (query-operation! (query-field value :fn) "query function")
+     (mapv lower-query-term! (require-query-field! value :args))
+     (query-name! (require-query-field! value :bind) "query binding"))
+
+    :else
+    (throw (ex-info "query clause must be relation, predicate, or function"
+                    {:type :query-invalid-syntax :value value}))))
+
+(defn- lower-query-rule! [value]
+  (rpc-wire/rpc-query-rule!
+   (lower-query-head! (require-query-field! value :head))
+   (mapv lower-query-clause! (require-query-field! value :body))))
+
+(defn- lower-query-find! [value]
+  (if (map? value)
+    (rpc-wire/rpc-query-find-aggregate!
+     (query-name! (require-query-field! value :rel) "aggregate relation")
+     (mapv long (or (query-field value :group) []))
+     (mapv
+      (fn [aggregate]
+        (rpc-wire/rpc-query-aggregate!
+         (query-operation! (require-query-field! aggregate :op)
+                           "aggregate operation")
+         (when (query-has? aggregate :arg)
+           (long (query-field aggregate :arg)))))
+      (require-query-field! value :agg))
+     (mapv
+      (fn [having]
+        (rpc-wire/rpc-query-having!
+         (query-operation! (require-query-field! having :op)
+                           "having comparison")
+         (long (require-query-field! having :agg))
+         (lower-term! (require-query-field! having :val))))
+      (or (query-field value :having) [])))
+    (rpc-wire/rpc-query-find-relation!
+     (query-name! value "find relation"))))
+
+(defn lower-query-plan!
+  "Lower the public structured query syntax into the closed recursive-Term IR."
+  [value]
+  (when-not (map? value)
+    (throw (ex-info "query must be a map"
+                    {:type :query-invalid-syntax})))
+  (let [rules? (query-has? value :rules)
+        strata? (query-has? value :strata)]
+    (when (= rules? strata?)
+      (throw (ex-info "query requires exactly one of rules or strata"
+                      {:type :query-invalid-syntax})))
+    (rpc-wire/rpc-query-plan!
+     (lower-query-find! (require-query-field! value :find))
+     (mapv (fn [rules]
+             (rpc-wire/rpc-query-stratum!
+              (mapv lower-query-rule! rules)))
+           (if rules?
+             [(require-query-field! value :rules)]
+             (require-query-field! value :strata))))))
+
+(defn native-query-payload!
+  ([query] (native-query-payload! query nil))
+  ([query as-of]
+   (rpc-wire/rpc-query-request!
+    (lower-query-plan! query)
+    (if (nil? as-of)
+      rpc-wire/query-current
+      (rpc-wire/rpc-query-as-of! (long as-of))))))
+
 (defn- coord-rt [port req]
   (with-open [s (coord-socket (connect-host) port)]
     (let [w (.getOutputStream s)
@@ -1377,7 +1699,9 @@
                        (vector? (get resp "facts")))
               {:version (long (get resp "version"))
                :facts (mapv
-                       (fn [t] (kernel/->Fact (nth t 0) (nth t 1) (nth t 2)))
+                       (fn [t]
+                         ((requiring-resolve 'fram.kernel/->Fact)
+                          (nth t 0) (nth t 1) (nth t 2)))
                        (get resp "facts"))}))))
       (catch Exception _ nil))))
 

@@ -33,10 +33,11 @@ case "$*" in
     exit 99
     ;;
 esac
-[[ "$*" == *coord-version-for-log* ]] || exit 98
+[[ "$*" == *native-call!* && "$*" == *:rpc/version* ]] || exit 98
 [[ "${TEST_MODE:-}" != "unavailable" ]] || exit 1
-[[ -s "$TEST_STATE/served-log" ]] || exit 1
-[[ "$(readlink -f "$FRAM_PROBE_LOG")" == "$(cat "$TEST_STATE/served-log")" ]] || exit 1
+[[ "${TEST_MODE:-}" != "wrong-space" ]] || exit 42
+[[ -s "$TEST_STATE/served-space" ]] || exit 1
+[[ "$FRAM_SPACE_ID" == "$(cat "$TEST_STATE/served-space")" ]] || exit 42
 if [[ "${TEST_MODE:-}" == "slow-start" ]]; then
   "$TEST_SLEEP" 0.5
 fi
@@ -47,7 +48,7 @@ STUB
 set -euo pipefail
 printf '%s|%s\n' "$1" "$2" >>"$TEST_STATE/daemon.calls"
 if [[ "${TEST_MODE:-}" != "unavailable" ]]; then
-  readlink -f "$2" >"$TEST_STATE/served-log"
+  printf '%s\n' "$FRAM_SPACE_ID" >"$TEST_STATE/served-space"
 fi
 STUB
 
@@ -86,6 +87,7 @@ run_up() {
       TEST_MODE="$mode" \
       TEST_SLEEP="$real_sleep" \
       FRAM_PORT=43129 \
+      FRAM_SPACE_ID=test-space \
       FRAM_LOG="$log" \
       FRAM_STARTUP_TIMEOUT_SECONDS="$timeout_seconds" \
       "$case_dir/bin/fram-up"
@@ -95,7 +97,7 @@ run_up() {
 ready_dir="$(make_case ready)"
 ready_log="$ready_dir/work/coordination.log"
 : >"$ready_log"
-readlink -f "$ready_log" >"$ready_dir/state/served-log"
+printf '%s\n' test-space >"$ready_dir/state/served-space"
 ready_output="$(run_up "$ready_dir" ready "$ready_log")" ||
   fail "exact-log ready daemon was rejected"
 [[ "$ready_output" == *"coordinator already up"* ]] ||
@@ -105,19 +107,14 @@ ready_output="$(run_up "$ready_dir" ready "$ready_log")" ||
 
 wrong_dir="$(make_case wrong-log)"
 wrong_log="$wrong_dir/work/coordination.log"
-other_log="$wrong_dir/work/other.log"
 : >"$wrong_log"
-: >"$other_log"
-readlink -f "$other_log" >"$wrong_dir/state/served-log"
-wrong_output="$(run_up "$wrong_dir" wrong-log "$wrong_log")" ||
-  fail "startup after wrong-log rejection did not become ready"
-[[ "$wrong_output" != *"coordinator already up"* ]] ||
-  fail "wrong-log daemon was accepted as already ready"
-[[ "$wrong_output" == *"starting coordinator"* &&
-   "$wrong_output" == *"coordinator up"* ]] ||
-  fail "wrong-log daemon did not take the startup path"
-[[ -s "$wrong_dir/state/daemon.calls" ]] ||
-  fail "wrong-log daemon did not trigger a fresh start"
+if run_up "$wrong_dir" wrong-space "$wrong_log" >"$wrong_dir/state/output" 2>&1; then
+  fail "wrong-space daemon was accepted"
+fi
+grep -q "different FRAM_SPACE_ID" "$wrong_dir/state/output" ||
+  fail "wrong-space daemon did not report the identity mismatch"
+[[ ! -s "$wrong_dir/state/daemon.calls" ]] ||
+  fail "wrong-space daemon triggered a competing launch"
 
 slow_dir="$(make_case slow-start)"
 slow_log="$slow_dir/work/coordination.log"

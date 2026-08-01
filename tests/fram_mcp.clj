@@ -3,7 +3,7 @@
 ;; Speaks MCP (JSON-RPC 2.0, newline-delimited, over stdio). The surface is CLOSED
 ;; and O(1): exactly twelve tools of the TELL/ASK knowledge-base core (Russell &
 ;; Norvig KB interface) — tell / retract / show / ask / validate + seven graph-edit
-;; verbs — served straight from fram.tools/catalog, never minted per-predicate. The
+;; verbs — defined as one closed protocol catalog, never minted per-predicate. The
 ;; old ~200-tool generated catalog was a per-session context tax buying no safety the
 ;; engine doesn't already give: EVERY write is serialized + rule-checked at the
 ;; coordinator, and single-vs-multi cardinality is DATA in the log (a `<pred>
@@ -14,9 +14,9 @@
 ;; NORTH concept (north serves them) and a reverse edge is an `ask`.
 ;; Reads reuse a versioned snapshot of the coordinator's warm store; writes route
 ;; through the coordinator.
-;; cheshire keywordizes the JSON arguments into exactly the EDN shape fram.tools /
-;; fram.query expect, so a model fills typed params (or, for `ask`, emits a
-;; structured Datalog-shaped object) and can't author broken syntax.
+;; cheshire keywordizes JSON arguments for the local MCP schema. Public data calls
+;; are lowered immediately to typed Terms and cross the coordinator socket only as
+;; FRAMRPC; graph authoring is a separate sealed-control concern.
 ;;
 ;;   bb -cp out fram_mcp.clj        (usually via bin/fram-mcp)
 ;; Diagnostics go to STDERR; stdout is the JSON-RPC channel only.
@@ -26,93 +26,54 @@
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc]
-         '[fram.kernel :as k]
-         '[fram.fold :as fold]
-         '[fram.query :as q]
-         '[fram.tools :as tl]
+         '[coord-daemon-wire :as rpc-wire]
+         '[fram.types :as terms]
          '[resolve-core :as rcore]
          '[fram.rt])
 
 (defn- log! [& xs] (binding [*out* *err*] (apply println xs)))
 
 ;; --- the closed surface -------------------------------------------------------
-;; One instructions string; the tool list is fram.tools/catalog verbatim (12 tools).
+;; One instructions string; the tool list is a fixed twelve-tool protocol surface.
 (def instructions
   (str
-   "Fram is a FACT engine: every fact is a triple (subject predicate object); a "
+   "Fram is a recursive Triple engine: every proposition has slot0/slot1/slot2; a "
    "thread is any @id with a `title`. Lifecycle is DERIVED from facts (committed / "
-   "outcome / abandoned / driver / depends_on), never a stored status. Facts record "
+   "outcome / abandoned / driver / depends_on), never a stored status. Triples record "
    "what was ASSERTED, not what is verified — supersession, retraction, and views "
    "handle disagreement.\n\n"
-   "TELL/ASK knowledge-base interface: `tell` asserts a fact (single-valued "
-   "predicates replace their value; multi-valued ones accumulate — repeat tells), "
+   "TELL/ASK knowledge-base interface: `tell` asserts a Triple, "
    "`retract` removes one (the verb `untell` is an accepted alias), `show` reads "
-   "every fact on a subject, and `ask` answers "
+   "every Triple at slot0, and `ask` answers "
    "multi-hop questions with a structured Datalog query (validated before it runs; "
    "recursion + stratified negation). Every write is serialized and rule-checked by "
    "the coordinator. `validate` reports integrity violations.\n\n"
-   "Predicates are entities: `show <predicate>` reveals its cardinality/value_kind "
-   "facts, and `ask` can enumerate the vocabulary — the tool surface stays closed "
+   "Slots and vocabulary values are ordinary Terms; `ask` can enumerate them — the tool surface stays closed "
    "(twelve tools) while the vocabulary lives in the graph as data.\n\n"
    "Graph-owned Beagle modules (registered `graph-upstream`) are authored by GRAPH "
    "EDIT: add-def / set-body / rename-def / insert-after / insert-before / replace-in-body / edit-transaction "
    "(recompile-gated, fail-closed)."))
 
-;; The tool catalog is deliberately closed and corpus-independent. Materialize it
-;; once so discovery never pays the cost of folding the selected corpus.
-(def ^:private closed-catalog (tl/catalog []))
+;; The catalog is deliberately closed and corpus-independent. Keeping the schema
+;; here prevents an AI-facing JSON boundary from loading the retired flat-fact
+;; query/tool stack just to describe its fixed methods.
+(defn- param
+  ([name type] (param name type true))
+  ([name type required] {:name name :type type :required required}))
 
-;; --- process-lifetime read state ---------------------------------------------
-;; The coordinator's :facts response is one internally consistent {version,facts}
-;; snapshot over the configured split corpus. Build the kernel index once per
-;; coordinator version, then reuse it across calls. A write between calls moves the
-;; cheap fenced :version probe and refreshes from the daemon's already-folded store.
-;;
-;; Offline compatibility is explicit: when no compatible daemon is available, cold
-;; fold once and keep that snapshot until this MCP process restarts (the explicit
-;; re-fold policy). Never put a whole-log fold back on the per-call path.
-(def ^:private state-cache (atom nil))
-
-(defn- indexed-state [log source version facts]
-  {:log log
-   :source source
-   :version version
-   :facts facts
-   :idx (k/build-index facts)
-   :cat closed-catalog})
-
-(defn load-state []
-  (let [port (fram.rt/coord-port)
-        log (fram.rt/canonical-log-path (fram.rt/log-path))
-        version (fram.rt/coord-version-for-log port log)
-        cached @state-cache]
-    (cond
-      (and (not (neg? version))
-           (= log (:log cached))
-           (= :coordinator (:source cached))
-           (= version (:version cached)))
-      cached
-
-      (not (neg? version))
-      (if-let [{:keys [version facts]} (fram.rt/coord-live-state port log)]
-        (let [state (indexed-state log :coordinator version facts)]
-          (reset! state-cache state)
-          state)
-        (if (= log (:log cached))
-          cached
-          (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))
-                state (indexed-state log :cold nil facts)]
-            (reset! state-cache state)
-            state)))
-
-      (= log (:log cached))
-      cached
-
-      :else
-      (let [facts (:facts (fold/fold (fram.rt/read-configured-logs)))
-            state (indexed-state log :cold nil facts)]
-        (reset! state-cache state)
-        state))))
+(def ^:private closed-catalog
+  [{:name "tell" :desc "Assert one recursive Triple." :params [(param "subject" "string") (param "predicate" "string") (param "object" "string")]}
+   {:name "retract" :desc "Retract one exact recursive Triple." :params [(param "subject" "string") (param "predicate" "string") (param "object" "string")]}
+   {:name "show" :desc "Read every live Triple whose slot0 matches subject." :params [(param "subject" "string")]}
+   {:name "ask" :desc "Run a typed recursive query." :params [(param "query" "object")]}
+   {:name "validate" :desc "Report structural integrity violations." :params []}
+   {:name "add-def" :desc "Add or replace a graph-upstream definition through sealed control." :params [(param "module" "string") (param "form" "string")]}
+   {:name "set-body" :desc "Replace a graph-upstream definition body through sealed control." :params [(param "module" "string") (param "name" "string") (param "body" "string")]}
+   {:name "rename-def" :desc "Rename a graph-upstream definition through sealed control." :params [(param "module" "string") (param "name" "string") (param "new-name" "string")]}
+   {:name "insert-after" :desc "Insert a graph-upstream form after an anchor through sealed control." :params [(param "module" "string") (param "after" "string") (param "form" "string")]}
+   {:name "insert-before" :desc "Insert a graph-upstream form before an anchor through sealed control." :params [(param "module" "string") (param "before" "string") (param "form" "string")]}
+   {:name "replace-in-body" :desc "Replace one interior graph form through sealed control." :params [(param "module" "string") (param "name" "string") (param "old" "string") (param "new" "string") (param "within" "string" false)]}
+   {:name "edit-transaction" :desc "Apply one sealed multi-definition graph edit transaction." :params [(param "module" "string") (param "edits" "array")]}])
 
 ;; --- catalog spec -> MCP tool descriptor -------------------------------------
 (defn- input-schema [params]
@@ -230,35 +191,6 @@
   {:name (:name spec) :description (:desc spec) :inputSchema (tool-input-schema spec)})
 
 (def ^:private closed-tools (mapv ->tool closed-catalog))
-
-;; --- writes -> through the coordinator (mirrors the CLI's route-write) -------
-(defn- route-write [w]
-  (let [port (fram.rt/coord-port)
-        log (fram.rt/log-path)
-        initial-version (fram.rt/coord-version-for-log port log)]
-    (if (neg? initial-version)
-      {:isError true
-       :text (case initial-version
-               -1 "no coordinator on 127.0.0.1 — start it with bin/fram-up"
-               -2 "refusing write: coordinator serves a different log (run `fram doctor` for both paths)"
-               -3 "refusing write: coordinator lacks the required log-fence protocol; restart it with current Fram"
-               "refusing write: coordinator is unusable")}
-      (loop [tries 5]
-        (let [v (fram.rt/coord-version-for-log port log)]
-          (if (neg? v)
-            {:isError true
-             :text (case v
-                     -1 "no coordinator on 127.0.0.1 — start it with bin/fram-up"
-                     -2 "refusing write: coordinator serves a different log (run `fram doctor` for both paths)"
-                     -3 "refusing write: coordinator lacks the required log-fence protocol; restart it with current Fram"
-                     "refusing write: coordinator is unusable")}
-            (let [resp (if (= (:op w) "assert")
-                         (fram.rt/coord-assert-for-log port log (:l w) (:p w) (:r w) v)
-                         (fram.rt/coord-retract-for-log port log (:l w) (:p w) (:r w) v))]
-              (cond
-                (and (= resp "conflict") (pos? tries)) (recur (dec tries))
-                (str/starts-with? (str resp) "ok:") {:text (str "committed: " (:l w) " " (:p w) " = " (:r w) " [" (:op w) "]")}
-                :else {:isError true :text (str "rejected by coordinator: " resp)}))))))))
 
 ;; --- graph-AST edits -> the gated authoring transaction (out-of-band) --------
 ;; A {:edit ...} is NOT a single coordinator triple — it mints/supersedes a whole
@@ -1656,58 +1588,173 @@
     instructions))
 
 ;; --- dispatch one tools/call (catalog path) ------------------------------------
-(defn- dispatch-call [name a]
-  ;; WARM NARROW READ PATH: serve `query` from the daemon's maintained query index
-  ;; and single-subject `show` from its cached fold-ordered projection. Whole-graph
-  ;; validate uses load-state's versioned warm snapshot and built-index cache. A nil
-  ;; response means daemon down/old/mismatched -> fall through to the cached state
-  ;; path, so this is safe against an older live daemon.
-  (if-let [warm (case name
-                  "query" (fram.rt/coord-query-for-log
-                           (fram.rt/coord-port) (fram.rt/log-path) (:query a))
-                  "show" (when (some? (:subject a))
-                           (fram.rt/coord-show-for-log
-                            (fram.rt/coord-port) (fram.rt/log-path)
-                            (let [subject (:subject a)]
-                              (if (and (string? subject)
-                                       (not (str/starts-with? subject "@")))
-                                (str "@" subject)
-                                subject))))
-                  nil)]
-    (cond (:error warm)        {:isError true :text (str/join "\n" (:error warm))}
-          (and (= name "show") (contains? warm :rows))
-          {:text (json/generate-string
-                  (mapv (fn [[pred value]] {:pred pred :value value}) (:rows warm)))}
-          (contains? warm :ok) {:text (json/generate-string (:ok warm))}
-          :else                {:text (json/generate-string warm)})
-    (let [{:keys [facts idx cat]} (load-state)
-          res (tl/call facts idx cat name a)]
-      (cond
-        (:error res) {:isError true :text (str/join "\n" (:error res))}
-        (:write res) (route-write (:write res))
-        (:edit res)  (route-edit (:edit res))
-        (contains? res :ok) {:text (json/generate-string (:ok res))}
-        :else {:text (json/generate-string (:rows res))}))))
+(defn- term-json [value]
+  (cond
+    (terms/triple? value)
+    {:triple [(term-json (terms/triple-slot0 value))
+              (term-json (terms/triple-slot1 value))
+              (term-json (terms/triple-slot2 value))]}
+    (terms/instant? value)
+    {:instant {:epochSeconds (str (terms/instant-epoch-seconds value))
+               :nanos (terms/instant-nanos value)}}
+    (keyword? value) (str value)
+    :else value))
+
+(defn- native-error-result [response]
+  (when-let [error (fram.rt/native-error response)]
+    {:isError true
+     :text (str (name (terms/rpcerror-code error)) ": "
+                (terms/rpcerror-message error))}))
+
+(defn- mcp-subject! [value]
+  (if (and (string? value) (not (str/starts-with? value "@")))
+    (str "@" value)
+    (fram.rt/lower-term! value)))
+
+(defn- native-version! []
+  (let [response (fram.rt/native-call!
+                  (fram.rt/coord-port) :rpc/version rpc-wire/rpc-unit)]
+    (fram.rt/require-native-success! response)
+    (terms/rpcresponse-served-version response)))
+
+(defn- native-mcp-write [name arguments]
+  (try
+    (let [operation (if (= name "tell") :rpc/assert :rpc/retract)
+          subject (mcp-subject! (:subject arguments))
+          proposition
+          (terms/triple subject
+                        (fram.rt/lower-term! (:predicate arguments))
+                        (fram.rt/lower-term! (:object arguments)))]
+      (loop [remaining 5]
+        (let [base (native-version!)
+              response
+              (fram.rt/native-call!
+               (fram.rt/coord-port) (fram.rt/rpc-space-id) operation
+               (rpc-wire/rpc-write! proposition rpc-wire/rpc-subject-any nil)
+               base nil nil)]
+          (cond
+            (and (= :rpc/conflict (fram.rt/native-error-code response))
+                 (pos? remaining))
+            (recur (dec remaining))
+
+            (fram.rt/native-error response)
+            (native-error-result response)
+
+            :else
+            {:text
+             (json/generate-string
+              {:changed
+               (let [[results]
+                     (fram.rt/rpc-record-fields!
+                      (fram.rt/native-payload response)
+                      :rpc/mutation-result 1)
+                     [result] (fram.rt/rpc-list-values! results)
+                     [_ changed _]
+                     (fram.rt/rpc-record-fields! result :rpc/action-result 3)]
+                 changed)
+               :servedVersion
+               (str (terms/rpcresponse-served-version response))})}))))
+    (catch Throwable error
+      {:isError true :text (or (.getMessage error) (str (class error)))})))
+
+(defn- native-mcp-show [arguments]
+  (try
+    (let [response
+          (fram.rt/native-call!
+           (fram.rt/coord-port) :rpc/scan
+           (rpc-wire/rpc-triple-pattern!
+            (mcp-subject! (:subject arguments)) nil nil))]
+      (or (native-error-result response)
+          (let [[values]
+                (fram.rt/rpc-record-fields!
+                 (fram.rt/native-payload response) :rpc/triples 1)]
+            {:text
+             (json/generate-string
+              (mapv
+               (fn [triple]
+                 {:slot1 (term-json (terms/triple-slot1 triple))
+                  :slot2 (term-json (terms/triple-slot2 triple))})
+               (fram.rt/rpc-list-values! values)))})))
+    (catch Throwable error
+      {:isError true :text (or (.getMessage error) (str (class error)))})))
+
+(defn- native-mcp-query [arguments]
+  (try
+    (let [response
+          (fram.rt/native-call!
+           (fram.rt/coord-port) :rpc/query
+           (fram.rt/native-query-payload! (:query arguments)))]
+      (or (native-error-result response)
+          (let [[rows]
+                (fram.rt/rpc-record-fields!
+                 (fram.rt/native-payload response) :query/rows 1)]
+            {:text
+             (json/generate-string
+              (mapv
+               (fn [row]
+                 (let [[values]
+                       (fram.rt/rpc-record-fields! row :query/row 1)]
+                   (mapv term-json (fram.rt/rpc-list-values! values))))
+               (fram.rt/rpc-list-values! rows)))})))
+    (catch Throwable error
+      {:isError true :text (or (.getMessage error) (str (class error)))})))
+
+(defn- native-mcp-validate []
+  (try
+    (let [response
+          (fram.rt/native-call!
+           (fram.rt/coord-port) :rpc/validate rpc-wire/rpc-unit)]
+      (or (native-error-result response)
+          (let [[valid violations]
+                (fram.rt/rpc-record-fields!
+                 (fram.rt/native-payload response) :rpc/validation 2)]
+            {:text
+             (json/generate-string
+              {:valid valid
+               :violations
+               (mapv term-json (fram.rt/rpc-list-values! violations))})})))
+    (catch Throwable error
+      {:isError true :text (or (.getMessage error) (str (class error)))})))
+
+(defn- dispatch-call [name arguments]
+  (cond
+    (= name "tell") (native-mcp-write "tell" arguments)
+    (contains? #{"retract" "untell"} name)
+    (native-mcp-write "retract" arguments)
+    (= name "show") (native-mcp-show arguments)
+    (= name "query") (native-mcp-query arguments)
+    (= name "validate") (native-mcp-validate)
+    (edit-tool? name)
+    {:isError true
+     :text "graph authoring is sealed-control work and is not routed through public FRAMRPC"}
+    :else
+    {:isError true :text (str "unknown tool: " name)}))
 
 ;; --- dispatch one tools/call ---------------------------------------------------
-;; Every tool — tell / retract / show / ask / validate + the edit verbs — dispatches
-;; through the closed catalog (fram.tools/call): tell/retract lower to a {:write}
-;; coordinator intent, ask/show/validate to reads. tl/call also accepts `untell` as an
-;; alias for `retract` (and `query` for `ask`). The only pre-map here is the `ask` KB
-;; name onto the engine's `query` op (also the warm-read fast path in dispatch-call).
+;; The public data verbs lower directly to FRAMRPC. The only aliases are the
+;; longstanding query->ask and untell->retract spellings.
 (defn handle-call [name args]
-  (let [query? (or (= name "ask") (= name "query"))
+  (let [normalized (if (= name "ask") "query" name)
         a (or args {})
-        errs (when query?
-               (if (nil? (:query a))
-                 ["missing required param 'query'"]
-                 (q/validate (:query a))))]
-    ;; q/validate is pure over the request object. Keep it ahead of name
-    ;; normalization and dispatch so malformed queries never touch a coordinator
-    ;; selector, log identity, load-state, or the cold-fold compatibility path.
-    (if (seq errs)
-      {:isError true :text (str/join "\n" errs)}
-      (dispatch-call (if (= name "ask") "query" name) a))))
+        required (cond
+                   (contains? #{"tell" "retract" "untell"} normalized)
+                   [:subject :predicate :object]
+                   (= "show" normalized) [:subject]
+                   (= "query" normalized) [:query]
+                   (= "add-def" normalized) [:module :form]
+                   (= "set-body" normalized) [:module :name :body]
+                   (= "rename-def" normalized) [:module :name :new-name]
+                   (= "insert-after" normalized) [:module :after :form]
+                   (= "insert-before" normalized) [:module :before :form]
+                   (= "replace-in-body" normalized) [:module :name :old :new]
+                   (= "edit-transaction" normalized) [:module :edits]
+                   :else [])
+        missing (filterv #(nil? (get a %)) required)]
+    (if (seq missing)
+      {:isError true
+       :text (str "missing required param(s): "
+                  (str/join ", " (map #(str "'" (clojure.core/name %) "'") missing)))}
+      (dispatch-call normalized a))))
 
 ;; wall-clock budget on the AI-facing path: validation makes a query STRUCTURALLY
 ;; safe, but evaluation is naive, so a deeply recursive query can be slow. Bound it
@@ -1845,88 +1892,9 @@
       (die! (str label " is not an existing file: " v)))
     c))
 
-;; strict-fence probe (mirrors bin/fram-code-on's coordinator_requires_fence):
-;; an UNWRAPPED {:op :version} must be REJECTED with :code :log-fence-required.
-;; A dead port, a permissive/legacy daemon, or any other answer -> NOT strict.
-(defn- strict-fence-live? [port]
-  (try
-    (with-open [s (java.net.Socket.)]
-      (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 2000)
-      (.setSoTimeout s 2000)
-      (let [w (io/writer (.getOutputStream s))
-            r (java.io.BufferedReader. (io/reader (.getInputStream s)))]
-        (.write w "{:op :version}\n") (.flush w)
-        (let [line (.readLine r)]
-          (and (some? line)
-               (= :log-fence-required (:code (clojure.edn/read-string line)))))))
-    (catch Throwable _ false)))
-
-(defn- require-port! [label raw]
-  (let [port (try (Integer/parseInt (str raw)) (catch Exception _ nil))]
-    (when-not (and port (<= 1 port 65535))
-      (die! (str label " must name a TCP port (got " (pr-str raw) ")")))
-    port))
-
 (defn- enforce-graph-edit! []
-  ;; graph-edit MODE is the licensed substrate: FRAM_GRAPH_EDIT declares the
-  ;; fram-code-on wiring and FRAM_FLIP routes every verb graph-sourced (warm
-  ;; candidate protocol) — the text-legacy edit path is not licensed in this mode.
-  (when-not graph-edit-mode?
-    (die! "graph-edit mode is required: FRAM_GRAPH_EDIT=1 (wire with bin/fram-code-on)"))
-  (when-not flip-on?
-    (die! "graph-sourced editing is required: FRAM_FLIP=1 (text-legacy edits are not licensed in graph-edit mode)"))
-  (let [read-port (require-port! "FRAM_PORT" (System/getenv "FRAM_PORT"))
-        code-port (require-port! "FRAM_CODE_PORT" flip-code-port)]
-    (when-not (= read-port code-port)
-      (die! (str "FRAM_PORT and FRAM_CODE_PORT must be equal in graph-edit mode"
-                 " (got " read-port " and " code-port ")")))
-    (let [src (require-canonical! "FRAM_SRC" (System/getenv "FRAM_SRC") true)
-          read-log (require-canonical! "FRAM_LOG" (System/getenv "FRAM_LOG") false)
-          code-log (require-canonical! "FRAM_CODE_LOG" (System/getenv "FRAM_CODE_LOG") false)]
-      (when-not (= read-log code-log)
-        (die! (str "FRAM_LOG and FRAM_CODE_LOG must be the same canonical file in graph-edit mode"
-                   " (got " read-log " and " code-log ")")))
-      ;; the code log must live INSIDE the source binding (fram-code-on puts it
-      ;; at <src>/.fram/code.log) — a log outside the tree is a foreign corpus.
-      (when-not (str/starts-with? code-log (str src "/"))
-        (die! (str "FRAM_CODE_LOG " code-log " lies OUTSIDE the FRAM_SRC source binding " src)))
-      ;; live coordinator, STRICT fence, EXACT canonical log — all three.
-      (when-not (strict-fence-live? code-port)
-        (die! (str "no strict-fenced coordinator on 127.0.0.1:" code-port
-                   " — unwrapped requests must be rejected with :log-fence-required"
-                   " (daemon dead, or permissive/legacy; rerun bin/fram-code-on)")))
-      (let [v (fram.rt/coord-version-for-log code-port code-log)]
-        (when (neg? v)
-          (die! (case v
-                  -1 (str "no coordinator answers fenced requests on 127.0.0.1:" code-port)
-                  -2 (str "coordinator on 127.0.0.1:" code-port " serves a DIFFERENT log than " code-log)
-                  -3 (str "coordinator on 127.0.0.1:" code-port " lacks the log-fence protocol")
-                  (str "coordinator on 127.0.0.1:" code-port " is unusable")))))
-      ;; PROTOCOL HANDSHAKE — the restricted profile edits ONLY through the atomic
-      ;; candidate gate (:edit-prepare/:edit-commit). A coordinator that cannot
-      ;; answer the capability op is a legacy commit-first daemon (or a future
-      ;; incompatible protocol) — refuse to serve rather than degrade to unsafe
-      ;; commit-before-check editing.
-      (let [pr (try (fram.rt/coord-request-for-log code-port code-log {:op :edit-protocol})
-                    (catch Throwable _ nil))]
-        (when-not (= candidate-protocol-name (:protocol pr))
-          (die! (str "coordinator on 127.0.0.1:" code-port " does not speak "
-                     candidate-protocol-name
-                     " (answered " (pr-str (or (:protocol pr) (:error pr) pr))
-                     ") — legacy or wrong-protocol coordinator; restart it with current Fram"
-                     " (rerun bin/fram-code-on)")))
-        (let [state (get-in pr [:durability :state])]
-          (when (#{:poisoned :committed-repair-needed} state)
-            (die! (str "coordinator on 127.0.0.1:" code-port " is "
-                       (if (= :poisoned state)
-                         "DURABILITY-POISONED"
-                         "COMMITTED-REPAIR-NEEDED")
-                       " " (pr-str (:durability pr)) " — REFUSING to serve; stop/restart it"
-                       " for sole-writer recovery/repair before authoring")))))
-      (log! (str "fram-mcp: graph-edit identity bound (profile " profile ") — src " src
-                 ", log " code-log
-                 ", strict-fenced coordinator 127.0.0.1:" code-port
-                 " [" candidate-protocol-name "]")))))
+  (die! (str "graph authoring is sealed-control work and is unavailable on the public FRAMRPC MCP hop; "
+             "use the sealed graph-edit channel after it is migrated")))
 
 ;; Fail-closed profile admission: ordinary full-profile operation stays
 ;; compatible, while full+FRAM_GRAPH_EDIT and graph-edit-v1 both use the fence.

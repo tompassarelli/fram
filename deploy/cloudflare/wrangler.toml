@@ -10,3 +10,4 @@ compatibility_date = "2026-01-01"
 # reverse proxy/tunnel, or http on a Cloudflare-supported port (e.g. :8080)
 # for a quick benchmark. NEVER the coordinator's raw TCP port.
 SHIM_URL = "https://fram-shim.example.com"
+FRAM_SPACE_ID = "cloudflare"

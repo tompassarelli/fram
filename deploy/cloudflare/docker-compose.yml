@@ -3,7 +3,7 @@
 #   SHIM_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
 #
 # Topology: the Worker fetches the shim (bearer token, HTTP); the shim speaks
-# the one-line-EDN TCP protocol to the coordinator over the private network.
+# FRAMRPC v1 to the coordinator over the private network.
 # The coordinator's port 7977 is NEVER published — the wire protocol is
 # unauthenticated by design and must stay behind the shim.
 services:
@@ -15,6 +15,8 @@ services:
       - fram-data:/data              # the durable fact log survives restarts
     networks: [framnet]
     restart: unless-stopped
+    environment:
+      FRAM_SPACE_ID: ${FRAM_SPACE_ID:-cloudflare}
     # no ports: — private network only
 
   shim:
@@ -26,6 +28,7 @@ services:
       FRAM_PORT: "7977"
       SHIM_PORT: "8787"
       SHIM_TOKEN: ${SHIM_TOKEN:?set SHIM_TOKEN (e.g. openssl rand -hex 32)}
+      FRAM_SPACE_ID: ${FRAM_SPACE_ID:-cloudflare}
     ports:
       - "8080:8787"                  # the ONE public ingress; front with TLS in prod
     networks: [framnet]

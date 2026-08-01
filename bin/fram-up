@@ -3,10 +3,15 @@
 # already up it's a no-op; otherwise it starts one (detached) on the canonical
 # log and waits until it answers.
 #
-#   FRAM_PORT / FRAM_LOG select the port + log (default 7977, ./coordination.log).
+#   FRAM_PORT / FRAM_LOG / FRAM_SPACE_ID select the listener and identity.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export FRAM_PORT="${FRAM_PORT:-7977}"
-LOG="${FRAM_LOG:-$PWD/coordination.log}"
+LOG="${FRAM_LOG:-$PWD/history.framlog}"
+if [[ -z "${FRAM_SPACE_ID:-}" ]]; then
+  echo "ERROR: FRAM_SPACE_ID is required" >&2
+  exit 2
+fi
+export FRAM_SPACE_ID
 STARTUP_TIMEOUT_SECONDS="${FRAM_STARTUP_TIMEOUT_SECONDS:-240}"
 RESTART=0; [ "$1" = "--restart" ] && RESTART=1
 
@@ -23,20 +28,21 @@ fi
 # reliably present; kill by the listener PID and VERIFY the port frees.
 port_pids() { ss -tlnpH "sport = :$FRAM_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
 
-# Readiness is only a fenced coordinator version roundtrip. `fram doctor` also
-# replays the complete log to inspect schema and recovery state, which made
-# every cold-start poll repeat the work the daemon was already doing.
+# Readiness is one identity-bound native version roundtrip.
 coordinator_ready() {
   local port="$1"
-  local log="$2"
+  local space="$2"
   local classpath="$3"
-  FRAM_PROBE_PORT="$port" FRAM_PROBE_LOG="$log" \
+  FRAM_PROBE_PORT="$port" FRAM_SPACE_ID="$space" \
     bb -cp "$classpath" -e '
-      (require (quote [fram.rt :as rt]))
+      (require (quote [fram.rt :as rt]) (quote [coord-daemon-wire :as wire]))
       (let [port (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
-            log (System/getenv "FRAM_PROBE_LOG")
-            version (rt/coord-version-for-log port log)]
-        (System/exit (if (neg? version) 1 0)))'
+            response (rt/native-call! port :rpc/version wire/rpc-unit)]
+        (System/exit
+         (cond
+           (nil? (rt/native-error response)) 0
+           (= :rpc/space-mismatch (rt/native-error-code response)) 42
+           :else 1)))'
 }
 
 if [ "$RESTART" = 1 ]; then
@@ -49,9 +55,17 @@ if [ "$RESTART" = 1 ]; then
     echo "ERROR: :$FRAM_PORT still held by PID(s) $(port_pids | tr '\n' ' ')after SIGKILL — kill manually." >&2
     exit 1
   fi
-elif coordinator_ready "$FRAM_PORT" "$LOG" "$HERE/../out" 2>/dev/null; then
-  echo "coordinator already up on :$FRAM_PORT (use \`up --restart\` to reload it)"
-  exit 0
+else
+  coordinator_ready "$FRAM_PORT" "$FRAM_SPACE_ID" "$HERE/../out" 2>/dev/null
+  probe_rc=$?
+  if [[ $probe_rc -eq 0 ]]; then
+    echo "coordinator already up on :$FRAM_PORT (use \`up --restart\` to reload it)"
+    exit 0
+  fi
+  if [[ $probe_rc -eq 42 ]]; then
+    echo "ERROR: :$FRAM_PORT serves a different FRAM_SPACE_ID; refusing to start a second daemon" >&2
+    exit 1
+  fi
 fi
 
 echo "starting coordinator on :$FRAM_PORT  (log: $LOG)"
@@ -72,7 +86,7 @@ if timeout --foreground "${STARTUP_TIMEOUT_SECONDS}s" \
       until coordinator_ready "$1" "$2" "$3" 2>/dev/null; do
         sleep 0.25
       done
-    ' _ "$FRAM_PORT" "$LOG" "$HERE/../out"; then
+    ' _ "$FRAM_PORT" "$FRAM_SPACE_ID" "$HERE/../out"; then
   echo "coordinator up on :$FRAM_PORT"
   exit 0
 fi
