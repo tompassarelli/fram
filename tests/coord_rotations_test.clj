@@ -17,7 +17,8 @@
 (require '[clojure.java.io :as io]
          '[clojure.set]
          '[fram.query :as q]
-         '[fram.kernel :as ck])
+         '[fram.kernel :as ck]
+         '[fram.types :as ft])
 (load-file "rotations.clj")
 
 (def failures (atom []))
@@ -209,6 +210,47 @@
                (select-keys idx [:tuples :s :p :o :sp :po :os])))
     (rotations/close-set! opened))
 
+  (let [original-open (var-get #'rotations/open-segment)
+        first-opened (atom nil)
+        calls (atom 0)
+        partial
+        (with-redefs-fn
+          {#'rotations/open-segment
+           (fn [& args]
+             (if (= 1 (swap! calls inc))
+               (let [segment (apply original-open args)]
+                 (reset! first-opened segment)
+                 segment)
+               (throw (ex-info "synthetic partial open" {}))))}
+          #(rotations/open-set seg-root {:fold-fingerprint "fp-abc"
+                                         :log-identity "log-xyz"}))]
+    (check! "D. a partial set open closes every segment acquired before failure"
+            (and (nil? partial)
+                 (some? @first-opened)
+                 (not (.isOpen ^java.nio.channels.FileChannel
+                               (:channel @first-opened))))))
+
+  (let [original-open (var-get #'rotations/open-segment)
+        all-opened (atom [])
+        result
+        (with-redefs-fn
+          {#'rotations/open-segment
+           (fn [& args]
+             (let [segment (apply original-open args)]
+               (swap! all-opened conj segment)
+               segment))
+           #'rotations/opened-set-value
+           (fn [& _] (throw (ex-info "synthetic result assembly failure" {})))}
+          #(rotations/open-set seg-root {:fold-fingerprint "fp-abc"
+                                         :log-identity "log-xyz"}))]
+    (check! "D. result assembly failure closes every fully-opened segment"
+            (and (nil? result)
+                 (= 3 (count @all-opened))
+                 (every? (fn [segment]
+                           (not (.isOpen ^java.nio.channels.FileChannel
+                                         (:channel segment))))
+                         @all-opened))))
+
   (check! "D. provenance mismatch fails CLOSED (no stale set is ever opened)"
           (nil? (rotations/open-set seg-root {:fold-fingerprint "fp-DIFFERENT"})))
 
@@ -230,6 +272,35 @@
                                             java.nio.file.StandardOpenOption/WRITE]))
     (check! "D. a tampered segment fails CLOSED on open"
             (nil? (rotations/open-set seg-root {:fold-fingerprint "fp-abc"})))))
+
+(let [invalid-values [(ft/->StoredValue 7 "v")
+                      (ft/->StoredFact 8 1 2 3)
+                      (Object.)]
+      root (str (System/getProperty "java.io.tmpdir")
+                "/fram-rot-mixed-" (System/nanoTime))
+      failures
+      (mapv (fn [value]
+              (try
+                (rotations/write-set! root [["@s" "p" value]] {:watermark 1})
+                nil
+                (catch clojure.lang.ExceptionInfo error error)))
+            invalid-values)]
+  (check! "D. record and unknown-object values are rejected deterministically and coded"
+          (every? (fn [error]
+                    (and (= :rotation-invalid-value (:code (ex-data error)))
+                         (= :input (:stage (ex-data error)))
+                         (seq (.getMessage error))))
+                  failures)))
+
+(let [valid [["@s" "p" "v"] ["@n" "count" 42]
+             ["@b" "enabled" true] ["@k" :predicate [1 2 3]]]
+      root (str (System/getProperty "java.io.tmpdir")
+                "/fram-rot-valid-scalars-" (System/nanoTime))
+      _ (rotations/write-set! root valid {:watermark 1})
+      opened (rotations/open-set root {})]
+  (check! "D. canonical StoreValue scalars and integer vectors round-trip"
+          (= (set valid) (set (rotations/segment-triples opened))))
+  (rotations/close-set! opened))
 
 ;; ---------------------------------------------------------------------------
 (println)

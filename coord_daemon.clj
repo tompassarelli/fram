@@ -989,54 +989,23 @@
   (client-view-facts-from c0 @schema-view))
 
 ;; Query cache misses project from the immutable Store value captured under dlock,
-;; never from the live store atom.  Keep this projection cooperative: unlike
-;; c/current-facts, the direct persistent-map walk can poll timeout/disconnect/work
-;; control at every historical fact, including superseded facts.  Name resolution is
-;; the pure equivalent of schema/name-of over that same Store root.
-(defn- store-root-name-of [store-root subj]
-  (let [name-pid (get (:val-intern store-root) "name")
-        cids (when name-pid (get (:idx-by-lp store-root) [subj name-pid] []))]
-    (some (fn [cid]
-            (when-not (contains? (:superseded store-root) cid)
-              (let [rid (get-in store-root [:facts cid :r])]
-                (get (:values store-root) rid))))
-          cids)))
-
-(defn- store-root-subject-name [store-root subj]
-  (or (store-root-name-of store-root subj)
-      (when (contains? (:values store-root) subj)
-        (str "@" (get (:values store-root) subj)))))
-
-(defn- store-root-predicate-name [store-root pid]
-  (let [name-pid (get (:val-intern store-root) "predicate_name")
-        cids (when name-pid (get (:idx-by-lp store-root) [pid name-pid] []))
-        canonical
-        (some (fn [cid]
-                (when-not (contains? (:superseded store-root) cid)
-                  (get (:values store-root) (get-in store-root [:facts cid :r]))))
-              (reverse cids))]
-    (or canonical (get (:values store-root) pid) (str pid))))
-
-(defn- store-root-fact->triple [store-root cl]
-  (let [pstr (store-root-predicate-name store-root (:p cl))]
-    (when-not (or (schema-preds pstr) (resolve-preds pstr) (read-hidden-preds pstr))
-      [(store-root-subject-name store-root (:l cl)) pstr
-       (if (contains? (:values store-root) (:r cl))
-         (get (:values store-root) (:r cl))
-         (store-root-subject-name store-root (:r cl)))])))
-
+;; never from the live store atom. Wrapping that root in a new atom preserves the
+;; snapshot while reusing the native-core store accessors; the vectors contain
+;; StoredValue/StoredFact records, not the legacy id-keyed maps.
 (defn- query-client-view-facts [store-root schema-root]
-  (let [domain
+  (let [store (atom store-root)
+        domain
         (persistent!
-         (reduce-kv
-          (fn [acc cid cl]
+         (reduce
+          (fn [acc stored-fact]
             (query-check)
-            (if (contains? (:superseded store-root) cid)
-              acc
-              (if-let [t (store-root-fact->triple store-root cl)]
-                (conj! acc (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))
+            (let [cid (:id stored-fact)]
+              (if (c/live? store cid)
+                (if-let [t (fact->triple store cid)]
+                  (conj! acc (ck/->Fact (nth t 0) (nth t 1) (nth t 2)))
+                  acc)
                 acc)))
-          (transient []) (:facts store-root)))]
+          (transient []) (c/fact-entries store)))]
     (reduce (fn [facts cl] (query-check) (conj facts cl)) domain (vals schema-root))))
 
 ;; The live (l p r) triples on ONE (te-name, p-str) group, projected exactly as
@@ -10498,18 +10467,43 @@
 ;;
 ;; The compactor holds NO lock across a write. It snapshots the immutable index
 ;; value, writes segments outside dlock, and publishes by atomic rename.
-(def rotation-set (atom nil))          ; the currently-open segment set (or nil)
+(def rotation-set (atom nil))          ; bounded summary of the boot-consumed set
 (def rotation-stats (atom {:compactions 0 :last-ms nil :last-watermark nil
-                           :boot :fold :last-error nil}))
+                           :boot :fold :last-error nil :consecutive-failures 0}))
 (def ^:private rotation-compactor-started? (atom false))
 (def rotation-compact-interval-ms
   (max 1000 (or (some-> (System/getenv "FRAM_ROTATION_COMPACT_MS") parse-long) 300000)))  ; 5 min
+(def rotation-compact-max-backoff-ms
+  (max rotation-compact-interval-ms
+       (or (some-> (System/getenv "FRAM_ROTATION_COMPACT_MAX_BACKOFF_MS") parse-long)
+           (* 64 rotation-compact-interval-ms))))
+
+(defn rotation-backoff-ms [consecutive-failures]
+  (loop [remaining (min 30 (max 0 (long consecutive-failures)))
+         delay (long rotation-compact-interval-ms)]
+    (if (zero? remaining)
+      delay
+      (recur (dec remaining)
+             (min (long rotation-compact-max-backoff-ms) (* 2 delay))))))
+
+(defn rotation-next-failure-count [consecutive-failures success?]
+  (if success? 0 (inc (long consecutive-failures))))
 
 (defn- rotation-provenance [flat]
   ;; Under log-split routing the coordination log's identity alone does not pin
   ;; the corpus, so the telemetry log's identity joins the provenance.
   (cond-> {:fold-fingerprint (fold-fingerprint) :log-identity (log-identity-of flat)}
     @telemetry-log (assoc :telemetry-identity (log-identity-of @telemetry-log))))
+
+(defn- rotation-stage! [code stage action]
+  (try
+    (action)
+    (catch Throwable error
+      (if (:code (ex-data error))
+        (throw error)
+        (throw (ex-info (throwable-summary error)
+                        {:code code :stage stage}
+                        error))))))
 
 (defn compact-rotations!
   "Drain the in-memory novelty into a fresh immutable covering segment set and
@@ -10518,62 +10512,101 @@
   (let [flat @flat-log]
     (when flat
       (let [t0 (System/nanoTime)
-            ;; ONE consistent read of the immutable cache value: version and index
-            ;; come from the same snapshot, so the watermark can never overstate.
-            c (warm!)
+            ;; Compaction consumes only an already-current immutable cache. It
+            ;; never joins the cache-build lock or initiates an O(corpus) rebuild.
+            co-root @co
+            store-root @(:store co-root)
+            schema-root @schema-view
+            current-version (long (current-seq co-root))
+            c @cache
             idx (:idx c)
             version (:version c)
-            prov (rotation-provenance flat)]
-        (if-not (:fold-fingerprint prov)
-          nil                                  ; unstampable -> never publish
-          (let [root (rotations/index-root flat)
-                manifest (rotations/write-set!
+            _ (when-not (and idx
+                             (= current-version (long version))
+                             (identical? store-root (:store-root c))
+                             (identical? schema-root (:schema-root c)))
+                (throw (ex-info "current immutable query cache is unavailable"
+                                {:code :rotation-cache-stale
+                                 :stage :capture
+                                 :cache-version version
+                                 :current-version current-version})))
+            prov (rotation-stage! :rotation-provenance-failed :provenance
+                                  #(rotation-provenance flat))]
+        (when-not (:fold-fingerprint prov)
+          (throw (ex-info "fold fingerprint is unavailable"
+                          {:code :rotation-provenance-unstamped
+                           :stage :provenance})))
+        (let [root (rotations/index-root flat)
+              manifest (rotation-stage!
+                        :rotation-publish-failed :publish
+                        #(rotations/write-set!
                           root (:tuples idx)
                           (merge prov {:watermark version
                                        :byte-offset (.length (java.io.File. (str flat)))
                                        :published-at (str (java.time.Instant/now))
-                                       :why why}))
+                                       :why why})))
                 ms (quot (- (System/nanoTime) t0) 1000000)]
-            (rotations/gc-segments! root)      ; retire the superseded generation
-            (swap! cache (fn [c2] (if (= (:version c2) version)
-                                    (assoc c2 :idx (rotations/drain-novelty (:idx c2)))
-                                    c2)))
-            (swap! rotation-stats #(-> % (update :compactions inc)
-                                       (assoc :last-ms ms :last-watermark version
-                                              :last-error nil)))
-            (println (str "[fram] rotations (" why "): watermark " version ", "
-                          (count (:tuples idx)) " triples -> " root " in " ms " ms"))
-            manifest))))))
+          (rotation-stage! :rotation-gc-failed :gc #(rotations/gc-segments! root))
+          (swap! cache
+                 (fn [c2]
+                   (if (and (= (:version c2) version)
+                            (identical? (:store-root c2) store-root)
+                            (identical? (:schema-root c2) schema-root))
+                     (assoc c2 :idx (rotations/drain-novelty (:idx c2)))
+                     c2)))
+          (swap! rotation-stats #(-> % (update :compactions inc)
+                                     (assoc :last-ms ms :last-watermark version
+                                            :last-error nil :consecutive-failures 0)))
+          (println (str "[fram] rotations (" why "): watermark " version ", "
+                        (count (:tuples idx)) " triples -> " root " in " ms " ms"))
+          manifest)))))
 
 (defn- compact-rotations-quietly! [why]
-  (try (compact-rotations! why)
-       (catch Throwable t
-         (swap! rotation-stats assoc :last-error (str why ": " (.getMessage t)))
-         (binding [*out* *err*]
-           (println (str "[fram] rotations (" why ") FAILED: " (.getMessage t))))
-         nil)))
+  (try
+    (compact-rotations! why)
+    true
+    (catch Throwable t
+      (let [reason (throwable-summary t)
+            code (or (:code (ex-data t)) :rotation-compaction-failed)
+            stage (or (:stage (ex-data t)) :unknown)]
+        (swap! rotation-stats
+               #(-> %
+                    (update :consecutive-failures (fnil inc 0))
+                    (assoc :last-error {:why why :code code :stage stage
+                                        :reason reason})))
+        (binding [*out* *err*]
+          (println (str "[fram] rotations (" why ") FAILED"
+                        " code=" (name code)
+                        " stage=" (name stage)
+                        " reason=" reason)))
+        false))))
 
 (defn load-rotations!
   "Boot path: build the warm index from a published segment set instead of
    folding the store, IFF the set verifies AND its watermark equals `version`.
    Returns the index, or nil to tell the caller to fold."
   [flat version]
-  (try
-    (let [root (rotations/index-root flat)
-          opened (rotations/open-set root (rotation-provenance flat))]
-      (when opened
-        (if (= (long version) (long (get-in opened [:manifest :watermark] -1)))
-          (let [idx (rotations/build (rotations/segment-triples opened))]
-            (reset! rotation-set opened)
-            idx)
-          (do (rotations/close-set! opened) nil))))
-    (catch Throwable _ nil)))
+  (let [opened (atom nil)]
+    (try
+      (let [root (rotations/index-root flat)
+            candidate (rotations/open-set root (rotation-provenance flat))]
+        (reset! opened candidate)
+        (when (and candidate
+                   (= (long version)
+                      (long (get-in candidate [:manifest :watermark] -1))))
+          (let [idx (rotations/build (rotations/segment-triples candidate))]
+            (reset! rotation-set (rotations/set-summary candidate))
+            idx)))
+      (catch Throwable _ nil)
+      (finally
+        (when-let [candidate @opened]
+          (rotations/close-set! candidate))))))
 
 (defn rotation-index-status []
   (merge @rotation-stats
          {:root (some-> @flat-log rotations/index-root)
           :novelty (count (:novelty (:idx @cache)))
-          :set (rotations/set-summary @rotation-set)}))
+          :set @rotation-set}))
 
 (defn start-rotation-compactor! []
   ;; Background, daemon thread, never on the commit path. Unlike the checkpoint
@@ -10582,21 +10615,26 @@
   (when (and @flat-log
              (compare-and-set! rotation-compactor-started? false true))
     (doto (Thread. (fn []
-                     (when-not (standby?)
-                       (compact-rotations-quietly! "post-boot"))
-                     (loop []
-                       (Thread/sleep (long rotation-compact-interval-ms))
+                     (let [initial-failures
+                           (if (standby?)
+                             0
+                             (rotation-next-failure-count
+                              0 (compact-rotations-quietly! "post-boot")))]
+                     (loop [failures initial-failures]
+                       (Thread/sleep (rotation-backoff-ms failures))
                        ;; Retired processes keep their one daemon thread asleep
                        ;; so rollback resumes without duplicating workers, but
                        ;; only the authority holder may publish a derived set.
-                       (when (and (not (standby?))
-                                  (not= (long (current-seq @co))
-                                        (long
-                                         (or
-                                          (:last-watermark @rotation-stats)
-                                          -1))))
-                         (compact-rotations-quietly! "interval"))
-                       (recur))))
+                       (let [success?
+                             (if (and (not (standby?))
+                                      (not= (long (current-seq @co))
+                                            (long
+                                             (or
+                                              (:last-watermark @rotation-stats)
+                                              -1))))
+                               (compact-rotations-quietly! "interval")
+                               true)]
+                         (recur (rotation-next-failure-count failures success?)))))))
       (.setName "fram-rotation-compactor") (.setDaemon true) (.start)))
   (start-telemetry-retention-sweeper!))
 

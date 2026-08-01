@@ -204,10 +204,12 @@
         target (io/file dir (str sha ext))]
     (when-not (.exists target)
       (let [tmp (io/file dir (str "." sha "." (System/nanoTime) ".tmp"))]
-        (force-write! tmp bs)
-        (try (atomic-move! tmp target)
-             (catch java.nio.file.FileAlreadyExistsException _
-               (Files/deleteIfExists (.toPath tmp))))))
+        (try
+          (force-write! tmp bs)
+          (try (atomic-move! tmp target)
+               (catch java.nio.file.FileAlreadyExistsException _))
+          (finally
+            (Files/deleteIfExists (.toPath tmp))))))
     {:sha256 sha :file (str "segments/" sha ext) :bytes (.length target)}))
 
 (defn- segment-bytes [rotation id-triples]
@@ -230,9 +232,23 @@
   (.mkdirs (io/file root))
   (let [path (manifest-path root)
         tmp (str path "." (System/nanoTime) ".tmp")]
-    (force-write! tmp (.getBytes (pr-str manifest) StandardCharsets/UTF_8))
-    (atomic-move! tmp path)
-    manifest))
+    (try
+      (force-write! tmp (.getBytes (pr-str manifest) StandardCharsets/UTF_8))
+      (atomic-move! tmp path)
+      manifest
+      (finally
+        (Files/deleteIfExists (.toPath (io/file tmp)))))))
+
+(defn- value-sort-key [value]
+  [(if (nil? value) "" (.getName (class value))) (pr-str value)])
+
+(defn- storage-value! [value]
+  (if (or (string? value) (integer? value) (boolean? value) (keyword? value)
+          (and (vector? value) (every? integer? value)))
+    value
+    (throw (ex-info (str "rotation triple contains a non-canonical value: "
+                         (if (nil? value) "nil" (.getName (class value))))
+                    {:code :rotation-invalid-value :stage :input}))))
 
 (defn write-set!
   "Publish ONE immutable covering segment set for `triples` and atomically swap
@@ -240,8 +256,8 @@
    (:watermark, :byte-offset, :fold-fingerprint, :log-identity). Returns the
    manifest."
   [root triples metadata]
-  (let [triples (into #{} (map vec) triples)
-        values (vec (sort (into #{} cat triples)))
+  (let [triples (into #{} (map #(mapv storage-value! %)) triples)
+        values (vec (sort-by value-sort-key (into #{} cat triples)))
         ids (zipmap values (map inc (range)))          ; flat space: 1..N, 0 reserved
         id-triples (mapv (fn [t] [(ids (nth t 0)) (ids (nth t 1)) (ids (nth t 2))]) triples)
         dict (assoc (install-content! root ".dict" (dictionary-bytes values))
@@ -265,25 +281,49 @@
   (let [f (io/file (abs-file root file))]
     (and (.exists f) (pos? (.length f)) (= sha256 (sha256-file f)))))
 
+(declare open-segment close-set!)
+
+(defn- track-open-segment! [opened root rotation meta]
+  (let [segment (open-segment root rotation meta)]
+    (try
+      (swap! opened assoc rotation segment)
+      segment
+      (catch Throwable error
+        (close-set! {:segments {rotation segment}})
+        (throw error)))))
+
+(defn- opened-set-value [root manifest values segments]
+  {:root root :manifest manifest
+   :values (into [nil] values)                       ; id -> value (id 0 unused)
+   :segments segments})
+
 (defn- open-segment [root rotation meta]
   (let [path (abs-file root (:file meta))
-        raf (RandomAccessFile. path "r")
-        ch (.getChannel raf)
-        len (.length raf)
-        buf (.map ch FileChannel$MapMode/READ_ONLY 0 len)
-        got (byte-array 8)]
-    (.get (.duplicate buf) got)
-    (let [dup (.duplicate buf)
-          _ (.position dup 8)
-          tag (.getInt dup)
-          n (.getLong dup)]
-      (when-not (and (= (seq magic) (seq got))
-                     (= tag (get rotation-tag rotation))
-                     (= len (+ header-bytes (* row-bytes n)))
-                     (= n (:count meta)))
-        (.close ch) (.close raf)
-        (throw (ex-info "invalid rotation segment header" {:rotation rotation :path path})))
-      {:rotation rotation :raf raf :channel ch :buf buf :count n})))
+        raf (RandomAccessFile. path "r")]
+    (try
+      (let [ch (.getChannel raf)]
+        (try
+          (let [len (.length raf)
+                buf (.map ch FileChannel$MapMode/READ_ONLY 0 len)
+                got (byte-array 8)]
+            (.get (.duplicate buf) got)
+            (let [dup (.duplicate buf)
+                  _ (.position dup 8)
+                  tag (.getInt dup)
+                  n (.getLong dup)]
+              (when-not (and (= (seq magic) (seq got))
+                             (= tag (get rotation-tag rotation))
+                             (= len (+ header-bytes (* row-bytes n)))
+                             (= n (:count meta)))
+                (throw (ex-info "invalid rotation segment header"
+                                {:rotation rotation :path path})))
+              {:rotation rotation :raf raf :channel ch :buf buf :count n}))
+          (catch Throwable error
+            (try (.close ch) (catch Throwable _))
+            (throw error))))
+      (catch Throwable error
+        (try (.close raf) (catch Throwable _))
+        (throw error)))))
 
 (defn open-set
   "Open + fully verify the latest published set. `expected` is a map of manifest
@@ -297,15 +337,26 @@
                (content-valid? root (:dictionary manifest))
                (every? #(content-valid? root (get-in manifest [:segments %])) rotation-order))
       (try
-        (let [dict (edn/read-string (slurp (abs-file root (get-in manifest [:dictionary :file]))))
-              values (:values dict)
-              _ (when-not (and (= format-version (:format dict))
-                               (= (count values) (get-in manifest [:dictionary :count])))
-                  (throw (ex-info "invalid rotation dictionary" {:root root})))]
-          {:root root :manifest manifest
-           :values (into [nil] values)                       ; id -> value (id 0 unused)
-           :segments (into {} (for [r rotation-order]
-                                [r (open-segment root r (get-in manifest [:segments r]))]))})
+        (let [opened (atom {})
+              transferred? (atom false)]
+          (try
+            (let [dict (edn/read-string
+                        (slurp (abs-file root (get-in manifest [:dictionary :file]))))
+                  values (:values dict)
+                  _ (when-not (and (= format-version (:format dict))
+                                   (= (count values)
+                                      (get-in manifest [:dictionary :count])))
+                      (throw (ex-info "invalid rotation dictionary" {:root root})))
+                  _ (doseq [rotation rotation-order]
+                      (track-open-segment! opened root rotation
+                                           (get-in manifest [:segments rotation])))
+                  result (opened-set-value root manifest values @opened)]
+              (reset! transferred? true)
+              result)
+            (catch Throwable _ nil)
+            (finally
+              (when-not @transferred?
+                (close-set! {:segments @opened})))))
         (catch Throwable _ nil)))))
 
 (defn close-set! [opened]
