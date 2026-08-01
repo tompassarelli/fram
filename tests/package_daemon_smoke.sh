@@ -192,11 +192,14 @@ space_receipt="$("$bb" -cp "$runtime/out" -e "$wrong_space_probe" "$port")"
 [[ "$space_receipt" == "space-rejected" && "$bytes_before" == "$(wc -c <"$log")" ]] || {
   echo "fram package smoke: SpaceId mismatch did not fail without mutation" >&2; exit 1; }
 
+version_before_restart="$(wait_ready)"
+[[ "$version_before_restart" =~ ^[1-9][0-9]*$ ]] || {
+  echo "fram package smoke: writes did not advance logical version: $version_before_restart" >&2; exit 1; }
 stop_daemon
 start_daemon
 restart_version="$(wait_ready)"
-[[ "$restart_version" == "2" ]] || {
-  echo "fram package smoke: restart replay expected version 2, got $restart_version" >&2; exit 1; }
+[[ "$restart_version" == "$version_before_restart" ]] || {
+  echo "fram package smoke: restart replay expected version $version_before_restart, got $restart_version" >&2; exit 1; }
 restart_show="$("${cli_env[@]}" "$package_root/bin/fram" show package)"
 "$grep_bin" -Fq "kind  smoke" <<<"$restart_show" || {
   echo "fram package smoke: restart lost MCP write" >&2; exit 1; }

@@ -98,6 +98,13 @@
             cp -r codegraph/src $out/libexec/fram/codegraph/
             chmod -R u+w $out/libexec/fram
 
+            # Generated :file metadata is diagnostic; package it repo-relative.
+            while IFS= read -r generated; do
+              ${pkgs.gnused}/bin/sed -E -i \
+                's#:file "/[^"]*/(src/[^"]+)"#:file "\1"#g' "$generated"
+            done < <(${pkgs.gnugrep}/bin/grep -R -l -E \
+              ':file "/[^"]*/src/' "$out/libexec/fram/out" || true)
+
             # Resolve tools.deps only while building, against the store-backed
             # lock cache. Canonicalizing every entry prevents a relative project
             # path or cache symlink from becoming a runtime lookup.
