@@ -9610,6 +9610,23 @@
                     :fence (:fence state)}))
                (:logs marker))}))))
 
+(defn- throwable-summary [^Throwable error]
+  (or (some-> (.getMessage error) str/trim not-empty)
+      (str (.getName (class error))
+           (when-let [frame (first (.getStackTrace error))]
+             (str " at " frame)))))
+
+(defn- cutover-stage! [code stage action]
+  (try
+    (action)
+    (catch Throwable error
+      (if (:code (ex-data error))
+        (throw error)
+        (throw
+         (ex-info (throwable-summary error)
+                  {:code code :stage stage}
+                  error))))))
+
 (defn- synchronize-cutover-source!
   "Converge the installed Store/cache and the physical log boundary before a
    handoff marker can escape.
@@ -9632,7 +9649,12 @@
            :timeout-ms cutover-sync-timeout-ms
            :attempts attempt
            :last-proof last-proof})))
-      (let [reload-result (maybe-reload!)
+      (let [_ (cutover-stage! :cutover-materialize-failed
+                              :materialize
+                              ensure-materialized!)
+            reload-result (cutover-stage! :cutover-reload-failed
+                                          :reload
+                                          maybe-reload!)
             _ (when (= :refused reload-result)
                 (throw
                  (ex-info
@@ -9643,14 +9665,22 @@
                  (ex-info
                   "cutover source reload did not join the active reload"
                   {:code :cutover-reload-in-progress})))
-            _ (when (and prewarm?
-                         (not delayed?)
-                         (pos? cutover-prepare-cache-delay-ms))
-                (Thread/sleep (long cutover-prepare-cache-delay-ms)))
-            roots (when prewarm?
-                    (locking dlock (capture-query-roots!)))
-            built (when roots (query-cache-for-roots roots))
-            proof (capture-installed-cutover-marker cutover-id)
+            prewarm (when prewarm?
+                      (cutover-stage!
+                       :cutover-prewarm-failed
+                       :prewarm
+                       (fn []
+                         (when (and (not delayed?)
+                                    (pos? cutover-prepare-cache-delay-ms))
+                           (Thread/sleep (long cutover-prepare-cache-delay-ms)))
+                         (let [roots (locking dlock (capture-query-roots!))]
+                           {:roots roots
+                            :built (query-cache-for-roots roots)}))))
+            roots (:roots prewarm)
+            built (:built prewarm)
+            proof (cutover-stage! :cutover-marker-failed
+                                  :marker
+                                  #(capture-installed-cutover-marker cutover-id))
             cache-current?
             (or
              (not prewarm?)
@@ -9815,9 +9845,9 @@
            (cutover-rejection
             (or (:code (ex-data t))
                 :cutover-prepare-failed)
-            (.getMessage t)
+            (throwable-summary t)
             (select-keys (ex-data t)
-                         [:timeout-ms :attempts]))))))))
+                         [:timeout-ms :attempts :stage]))))))))
 
 (defn cutover-demote-response [req]
   (locking cutover-control-lock

@@ -128,6 +128,18 @@
   (check! "cutover drain timeout is explicit and fail-closed"
           (= :cutover-drain-timeout timeout-code)))
 
+(with-redefs [coord-daemon/cutover-token "test-token"
+              coord-daemon/write-authorized? (constantly false)
+              coord-daemon/current-coordinator-role (constantly :standby)
+              coord-daemon/synchronize-cutover-source!
+              (fn [_ _] (throw (NullPointerException.)))]
+  (let [response (coord-daemon/cutover-prepare-response
+                  {:token "test-token" :cutover-id "coded-error"})]
+    (check! "unexpected PREPARE throwable returns a coded rejection"
+            (= :cutover-prepare-failed (:code response)))
+    (check! "unexpected PREPARE throwable returns a nonblank message"
+            (not (str/blank? (first (:reject response)))))))
+
 (let [dir (.toFile
            (java.nio.file.Files/createTempDirectory
             "fram-blue-green-cutover"
