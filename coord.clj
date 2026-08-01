@@ -1315,6 +1315,97 @@
                        {:line line-number :tx (:tx row)}))
     (assoc row :source-line line-number :source-byte-offset byte-offset)))
 
+(def ^:private torn-leading-tx-pattern
+  #"(?s)^\s*\{\s*:tx\s+(-?\d+)\s*,")
+
+(def ^:private torn-tx-token-pattern
+  #"(?<![A-Za-z0-9_./-]):tx(?=\s|,|\}|$)")
+
+(defn- outside-string-view [text]
+  (let [out (StringBuilder. (.length ^String text))]
+    (loop [index 0 in-string? false escaped? false]
+      (if (= index (.length ^String text))
+        (.toString out)
+        (let [ch (.charAt ^String text index)]
+          (if in-string?
+            (do
+              (.append out \space)
+              (cond
+                escaped? (recur (inc index) true false)
+                (= ch \\) (recur (inc index) true true)
+                (= ch \") (recur (inc index) false false)
+                :else (recur (inc index) true false)))
+            (do
+              (.append out (if (= ch \") \space ch))
+              (recur (inc index) (= ch \") false))))))))
+
+(defn- torn-transaction-sequence! [tail line-number byte-offset]
+  (let [outside (outside-string-view tail)
+        token-count (count (re-seq torn-tx-token-pattern outside))
+        leading (re-find torn-leading-tx-pattern outside)
+        location {:line line-number :byte-offset byte-offset}]
+    (when (> token-count 1)
+      (migration-fail! :migration-torn-transaction-ambiguous
+                       "torn legacy tail contains more than one transaction coordinate"
+                       (assoc location :transaction-token-count token-count)))
+    (when-not leading
+      (migration-fail! (if (and (= 1 token-count)
+                                (re-find #"(?s)^\s*\{\s*:tx(?:\s|,|\}|$)" outside))
+                         :migration-torn-transaction-ambiguous
+                         :migration-torn-transaction-missing)
+                       "torn legacy tail has no complete canonical leading transaction coordinate"
+                       (assoc location :transaction-token-count token-count)))
+    (let [value (bigint (second leading))]
+      (when (or (neg? value) (> value Long/MAX_VALUE))
+        (migration-fail! :migration-invalid-integer
+                         "torn legacy transaction sequence is outside signed 64-bit range"
+                         (assoc location :tx value)))
+      (long value))))
+
+(defn- validate-legacy-transaction-order! [rows]
+  (loop [remaining (seq rows) previous nil]
+    (when-let [row (first remaining)]
+      (when (and (some? previous) (< (:tx row) previous))
+        (migration-fail! :migration-nonmonotonic-transaction
+                         "legacy flat log transaction sequence moved backward"
+                         {:previous previous :current (:tx row)
+                          :line (:source-line row)
+                          :byte-offset (:source-byte-offset row)}))
+      (recur (next remaining) (:tx row))))
+  rows)
+
+(defn- reconcile-torn-transaction! [rows tail line-number byte-offset]
+  (let [tail-tx (torn-transaction-sequence! tail line-number byte-offset)
+        last-tx (some-> rows peek :tx)
+        base {:line line-number
+              :byte-offset byte-offset
+              :bytes (alength ^bytes (strict-utf8-bytes tail "torn tail"))
+              :transaction-sequence tail-tx}]
+    (cond
+      (nil? last-tx)
+      {:rows rows
+       :torn-tail (assoc base
+                         :dropped-complete-rows 0
+                         :reason :torn-only-transaction)}
+
+      (< tail-tx last-tx)
+      (migration-fail! :migration-nonmonotonic-torn-transaction
+                       "torn legacy transaction sequence moved backward"
+                       (assoc base :previous last-tx))
+
+      (= tail-tx last-tx)
+      (let [dropped (count (take-while #(= tail-tx (:tx %)) (rseq rows)))]
+        {:rows (subvec rows 0 (- (count rows) dropped))
+         :torn-tail (assoc base
+                           :dropped-complete-rows dropped
+                           :reason :torn-same-transaction)})
+
+      :else
+      {:rows rows
+       :torn-tail (assoc base
+                         :dropped-complete-rows 0
+                         :reason :torn-later-transaction)})))
+
 (defn- parse-legacy-flat [^bytes bytes]
   (when (and (>= (alength bytes) (alength ^bytes legacy-fri-magic))
              (java.util.Arrays/equals
@@ -1343,11 +1434,10 @@
            byte-offset 0
            rows []]
       (if (nil? remaining)
-        {:rows rows
-         :torn-tail (when tail
-                      {:line line-number
-                       :byte-offset byte-offset
-                       :bytes (alength ^bytes (strict-utf8-bytes tail "torn tail"))})}
+        (let [ordered (validate-legacy-transaction-order! rows)]
+          (if tail
+            (reconcile-torn-transaction! ordered tail line-number byte-offset)
+            {:rows ordered :torn-tail nil}))
         (let [line (first remaining)
               line-bytes (alength ^bytes (strict-utf8-bytes line "legacy line"))]
           (when (str/blank? line)

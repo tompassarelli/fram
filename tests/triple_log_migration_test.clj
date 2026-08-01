@@ -175,9 +175,103 @@
 (spit torn-source (str (pr-str (first rows)) "\n{:tx 9, :op \"assert\", :l \"cut"))
 (def torn-result
   (migrate-legacy-flat-log! (.getPath torn-source) "torn-space" (.getPath torn-target)))
-(check! "unterminated final transaction tail is dropped atomically"
-        (and (some? (:torn-tail torn-result))
+(check! "strictly later unterminated transaction is dropped and reported"
+        (and (= {:line 2 :byte-offset (inc (count (.getBytes (pr-str (first rows)) "UTF-8")))
+                 :bytes (count (.getBytes "{:tx 9, :op \"assert\", :l \"cut" "UTF-8"))
+                 :transaction-sequence 9
+                 :dropped-complete-rows 0
+                 :reason :torn-later-transaction}
+                (:torn-tail torn-result))
              (= [5] (mapv :tx (:frames (decode-log torn-target))))))
+
+;; A completed prefix of the same final transaction is not independently durable.
+(def same-tx-source (java.io.File. tmp-dir "same-tx-torn.log"))
+(def same-tx-target (java.io.File. tmp-dir "same-tx-torn.framlog"))
+(def tx4-row {:tx 4 :op "assert" :l "prior" :p "state" :r "safe"})
+(def tx5-row-a {:tx 5 :op "assert" :l "Alice" :p "email" :r "first@example.com"})
+(def tx5-row-b {:tx 5 :op "assert" :l "Alice" :p "email" :r "second@example.com"})
+(spit same-tx-source
+      (str (pr-str tx4-row) "\n"
+           (pr-str tx5-row-a) "\n"
+           (pr-str tx5-row-b) "\n"
+           "{:tx 5, :op \"assert\", :l \"cut"))
+(def same-tx-result
+  (migrate-legacy-flat-log! (.getPath same-tx-source)
+                            "same-tx-space" (.getPath same-tx-target)))
+(check! "torn same-transaction prefix drops every completed row of the final tx"
+        (and (= [4] (mapv :tx (:frames (decode-log same-tx-target))))
+             (= 5 (get-in same-tx-result [:torn-tail :transaction-sequence]))
+             (= 2 (get-in same-tx-result [:torn-tail :dropped-complete-rows]))
+             (= :torn-same-transaction
+                (get-in same-tx-result [:torn-tail :reason]))))
+(check! "manifest records the atomic torn-transaction decision"
+        (= (:torn-tail same-tx-result)
+           (:torn-tail
+            (edn/read-string (slurp (str (.getPath same-tx-target)
+                                         ".migration.edn"))))))
+
+(def hidden-token-source (java.io.File. tmp-dir "hidden-token-torn.log"))
+(def hidden-token-target (java.io.File. tmp-dir "hidden-token-torn.framlog"))
+(spit hidden-token-source
+      (str (pr-str tx5-row-a) "\n"
+           "{:tx 6, :op \"assert\", :l \":tx is data\", :p \"cut"))
+(def hidden-token-result
+  (migrate-legacy-flat-log! (.getPath hidden-token-source)
+                            "hidden-token-space" (.getPath hidden-token-target)))
+(check! "transaction-like text inside a torn String is not an ambiguous coordinate"
+        (and (= [5] (mapv :tx (:frames (decode-log hidden-token-target))))
+             (= :torn-later-transaction
+                (get-in hidden-token-result [:torn-tail :reason]))))
+
+(def ambiguous-tail-source (java.io.File. tmp-dir "ambiguous-tail.log"))
+(def ambiguous-tail-target (java.io.File. tmp-dir "ambiguous-tail.framlog"))
+(spit ambiguous-tail-source
+      (str (pr-str tx5-row-a) "\n{:tx 6, :op \"assert\", :tx 7, :l \"cut"))
+(check! "multiple coordinates in a torn tail fail typed without guessing"
+        (= :migration-torn-transaction-ambiguous
+           (throwable-code
+            #(migrate-legacy-flat-log! (.getPath ambiguous-tail-source)
+                                       "ambiguous-space" (.getPath ambiguous-tail-target)))))
+
+(def missing-tail-source (java.io.File. tmp-dir "missing-tail-tx.log"))
+(def missing-tail-target (java.io.File. tmp-dir "missing-tail-tx.framlog"))
+(spit missing-tail-source
+      (str (pr-str tx5-row-a) "\n{:op \"assert\", :l \"cut"))
+(check! "missing leading coordinate in a torn tail fails typed"
+        (= :migration-torn-transaction-missing
+           (throwable-code
+            #(migrate-legacy-flat-log! (.getPath missing-tail-source)
+                                       "missing-space" (.getPath missing-tail-target)))))
+
+(def partial-tail-source (java.io.File. tmp-dir "partial-tail-tx.log"))
+(def partial-tail-target (java.io.File. tmp-dir "partial-tail-tx.framlog"))
+(spit partial-tail-source (str (pr-str tx5-row-a) "\n{:tx 6"))
+(check! "a cut transaction number fails typed as ambiguous"
+        (= :migration-torn-transaction-ambiguous
+           (throwable-code
+            #(migrate-legacy-flat-log! (.getPath partial-tail-source)
+                                       "partial-space" (.getPath partial-tail-target)))))
+
+(def backward-tail-source (java.io.File. tmp-dir "backward-tail.log"))
+(def backward-tail-target (java.io.File. tmp-dir "backward-tail.framlog"))
+(spit backward-tail-source
+      (str (pr-str tx5-row-a) "\n{:tx 4, :op \"assert\", :l \"cut"))
+(check! "backward torn transaction fails typed"
+        (= :migration-nonmonotonic-torn-transaction
+           (throwable-code
+            #(migrate-legacy-flat-log! (.getPath backward-tail-source)
+                                       "backward-space" (.getPath backward-tail-target)))))
+
+(def backward-complete-source (java.io.File. tmp-dir "backward-complete.log"))
+(def backward-complete-target (java.io.File. tmp-dir "backward-complete.framlog"))
+(spit backward-complete-source
+      (str (pr-str tx5-row-a) "\n" (pr-str tx4-row) "\n"))
+(check! "completed transaction rows must be contiguous and nondecreasing"
+        (= :migration-nonmonotonic-transaction
+           (throwable-code
+            #(migrate-legacy-flat-log! (.getPath backward-complete-source)
+                                       "backward-complete-space"
+                                       (.getPath backward-complete-target)))))
 
 (def corrupt-source (java.io.File. tmp-dir "corrupt.log"))
 (def corrupt-target (java.io.File. tmp-dir "corrupt.framlog"))
