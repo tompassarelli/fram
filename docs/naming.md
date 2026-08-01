@@ -1,8 +1,9 @@
 # The naming ledger
 
 Why load-bearing names in Fram are what they are — recorded so no fight has to be
-re-fought. Devlog style: dated entries, appended when a name earns (or defends) its
-place. The ledger is append-only, like everything else here.
+re-fought. Entries stay dated, but a superseded ruling is marked and reconciled in
+place so obsolete vocabulary cannot masquerade as current doctrine; git preserves the
+original wording.
 
 ## The rule
 
@@ -15,33 +16,24 @@ model (or a human) reaching for the word gets it right with zero instruction.
 A name that needs a paragraph of correction is a bug. The correction loses to the
 prior eventually — every time.
 
-## fact — chosen 2026-06, reaffirmed the hard way 2026-07-26
+## fact — chosen 2026-06; superseded as a primitive 2026-08-01
 
-The substrate atom is a **fact**: an immutable, addressable `(subject predicate object)`
-triple. Chosen over "claim" for the Datalog / Datomic / Prolog prior — in every
-logic-programming tradition the stored tuple has always been a *fact*, so a model
-writing Datalog against Fram lands on the right word unprompted.
+The June ruling used **fact** for a stored `(subject predicate object)` record. The
+recursive-Triple cut supersedes that ruling: **Triple is Fram's sole structural semantic
+primitive**, its positions are neutral, and no stored `Fact` record or fact-as-synonym
+for Triple belongs in the kernel vocabulary.
 
-The epistemics live in the docs, not the name: a Fram fact records what was
-**asserted**, not what is verified. It can be wrong, disputed, and coexist with its
-rival. Nothing is silently overwritten; supersession retires without deleting.
+**Fact** remains valid only as a derived or query-level notion: a proposition represented
+by a Triple that is present in a particular world or view under that projection's
+rules. Datalog may therefore expose facts, and a world may select which facts are in
+scope, without introducing a second stored thing. Storage and kernel APIs say `Term`,
+`Triple`, and assertion occurrence; projections may say “fact” when they mean a
+proposition currently admitted by the projection.
 
-The fun-fact that reaffirmed it: for a while the repo still carried leftover "claim"
-vocabulary — a dead prompt file, some old chartroom headlines. An external integrator's
-AI read the repo, absorbed the residue, and re-coined an entire "claims" layer in its
-own product. Live proof of the rule above, run in reverse: the one instructional
-document still teaching the old word is exactly what came back out. The residue is gone
-now, and `tests/vocab_ratchet_test.sh` keeps it gone — new claim-vocabulary can't enter
-the tree; removals always pass.
-
-"Claim" isn't banished — it's *reserved*. It is the right name for an app-layer
-assertion-under-verification lifecycle (a plausible future optional module), and the
-wrong name for the substrate atom. One sentence holds the treaty: **claims are verified
-against facts.**
-
-(Pleasant recursion: this document necessarily contains the word "claim" — it records
-the fight — so the ratchet baseline had to be extended to admit the doc that explains
-the ratchet.)
+This boundary also keeps epistemics out of storage identity. A proposition can be
+asserted, disputed, withdrawn, or selected by different worlds without changing what
+its Triple is; each assertion occurrence is another ordinary Triple that relates an
+occurrence coordinate to that proposition.
 
 ## world — chosen 2026-07-26
 
@@ -132,11 +124,11 @@ Term   := Atom | Triple
 Triple := (Term, Term, Term)
 ```
 
-The three positions are `slot0`, `slot1`, and `slot2`. The kernel gives none of them a
-subject, predicate, or object role; an ontology may assign roles through ordinary
-triple shapes. A transaction coordinate such as `(space, kernel/tx-sequence, 1842)` is
-therefore a Triple, not a transaction primitive. A Triple can occupy any slot of
-another Triple.
+**Slot-addressable ontology** means `slot0`, `slot1`, and `slot2` are stable neutral
+addresses, while roles are expressed by ordinary ontology patterns and never assigned
+by kernel position. A transaction coordinate such as
+`(space, kernel/tx-sequence, 1842)` is therefore a Triple, not a transaction primitive.
+A Triple can occupy any slot of another Triple.
 
 Atoms honestly terminate the recursion. Namespaced atoms such as `plangrep/page` are
 grounding vocabulary; `/` carries no kernel semantics and does not privilege the
