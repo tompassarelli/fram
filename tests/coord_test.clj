@@ -1,80 +1,225 @@
-;; coord_test.clj — Stage 6 gate: adversarial concurrency + durability proof
-;; for the reified coordinator (mirrors coord.clj's run-test).
-;;   bb -cp out coord_test.clj
-(require '[fram.store :as c] '[fram.types :as ft] '[fram.schema :as s])
-(load-file "coord.clj")   ; side-effect-free library: new-coord/commit!/replay/...
+;; Authoritative coordinator gate: occurrence identity, OCC, durable FRAMLOG,
+;; recursive terms, views, supersession, withdrawal, and lease fencing.
+(require '[fram.kernel :as kernel]
+         '[fram.store :as store]
+         '[fram.types :as t])
 
-(let [log "/tmp/store-coord-test.log"
-      co (new-coord log)
-      _ (register-pred! co "status" "single" "literal")
-      _ (register-pred! co "tag" "multi" "ref")
-      _ (register-pred! co "part_of" "single" "ref")
-      checks (atom [])
-      chk (fn [nm ok] (swap! checks conj [nm ok]))]
+(load-file "coord.clj")
 
-  ;; ---- (A) base_version: N clients race the SAME single-valued (T,status) ----
-  ;; THIS IS THE single-valued same-key write-write SAFETY RECEIPT (#16): the true-conflict
-  ;; OCC path (not the disjoint commute path). 24 racers set DIFFERENT values for one
-  ;; single-valued (te,p) at the same base -> exactly one wins, the rest :conflict, exactly
-  ;; one live fact. commit! is the sole OCC site (uniform: `single` is a per-pred flag, the
-  ;; base_version check is one branch), so this generalizes across all single-valued preds.
-  ;; Distinct from name-allocation (the node-name-seq atomic counter). Mainline safety = closed.
-  (let [seed (commit! co "seed" "T" "status" :assert "init" 0)
-        base (:ok seed)
-        n 24
-        fs (mapv (fn [i] (future (commit! co (str "w" i) "T" "status" :assert (str "v" i) base)))
-                 (range n))
-        rs (mapv deref fs)
-        wins (filter :ok rs)
-        conflicts (filter #(= :conflict (:reject %)) rs)
-        live (live-cids-lp co (s/resolve-name (store co) "T") (c/value-id (store co) "status"))]
-    (chk "base_version: exactly one racer wins" (= 1 (count wins)))
-    (chk "base_version: the rest are :conflict" (= (dec n) (count conflicts)))
-    (chk "single-valued: exactly one live (T,status) fact" (= 1 (count live))))
+(def checks (atom []))
+(defn check! [label ok]
+  (println (str (if ok "  [PASS] " "  [FAIL] ") label))
+  (swap! checks conj [label ok]))
 
-  ;; ---- (B) multi-valued idempotency: identical link! twice = one edge --------
-  (let [_ (commit! co "a" "T" "tag" :link "X" 0)
-        r2 (commit! co "a" "T" "tag" :link "X" 0)
-        live (live-cids-lp co (s/resolve-name (store co) "T") (c/value-id (store co) "tag"))]
-    (chk "idempotency: second identical link! is a no-op" (:idempotent r2))
-    (chk "idempotency: exactly one live (T,tag,X) edge" (= 1 (count live)))
-    (chk "idempotency: distinct multi values both kept"
-         (do (commit! co "a" "T" "tag" :link "Y" 0)
-             (= 2 (count (live-cids-lp co (s/resolve-name (store co) "T")
-                                       (c/value-id (store co) "tag")))))))
+(defn error-code [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo error
+      (or (:fram/code (ex-data error)) (:type (ex-data error))))))
 
-  ;; ---- (C) obligation: part_of acyclicity rejected, no state leaked ----------
-  (commit! co "a" "A" "part_of" :link "B" 0)
-  (commit! co "a" "B" "part_of" :link "C" 0)
-  (let [before (live-triples (store co))
-        self (commit! co "a" "E" "part_of" :link "E" 0)       ; fresh subject isolates the self-loop check from base_version
-        cyc  (commit! co "a" "C" "part_of" :link "A" 0)       ; C->A closes A->B->C->A
-        after (live-triples (store co))]
-    (chk "obligation: self part_of rejected" (vector? (:reject self)))
-    (chk "obligation: cycle part_of rejected" (vector? (:reject cyc)))
-    (chk "obligation: rejected writes leak ZERO state" (= before after))
-    (chk "obligation: a valid part_of still commits"
-         (:ok (commit! co "a" "D" "part_of" :link "A" 0))))
+(def scratch
+  (.toFile
+   (java.nio.file.Files/createTempDirectory
+    "fram-term-coordinator-"
+    (make-array java.nio.file.attribute.FileAttribute 0))))
+(def log-file (java.io.File. scratch "history.framlog"))
+(coord/create-triple-log! (.getPath log-file) "coord-space")
+(def co (coord/open-coordinator! (.getPath log-file) "coord-space"))
 
-  ;; ---- (D) durability: replay reconstructs the exact live view --------------
-  (let [rp (replay log)]
-    (chk "replay: live view set-equal to the coordinator store"
-         (= (live-triples (store co)) (live-triples rp))))
+(def email (t/triple "Alice" :email "alice@example.com"))
+(def nested
+  (t/triple (t/triple "Alice" :knows "Bob")
+            :reported-by
+            (t/triple "CRM" :batch 71)))
+(def recorded (t/instant 1785560000 123456789))
 
-  ;; ---- (E) atomicity: a torn (un-committed) trailing tx is dropped ----------
-  (let [before (live-triples (store co))]
-    (with-open [os (java.io.FileOutputStream. log true)]   ; simulate a crash mid-append
-      (.write os (.getBytes (str (pr-str {:k :value :id 99999 :v "torn"}) "\n"
-                                 (pr-str {:k :fact :cid 99998 :l 0 :p 0 :r 99999 :tx 99997}) "\n"
-                                 "{:k :fact :cid 99996 :l 0 :p ")        ; torn mid-line
-                            "UTF-8")))
-    (let [rp (replay log)]
-      (chk "atomicity: torn trailing tx dropped on replay" (= before (live-triples rp)))
-      (chk "atomicity: torn value not present after replay"
-           (not (some #(= "torn" (ft/storedvalue-value %)) (c/value-entries rp))))))
+(def first-assertion
+  (coord/assert! co email {:actor "Tom" :recorded-at recorded
+                           :source-frame "coord-test"}))
+(def first-event (first (:occurrences first-assertion)))
+(def first-coordinate (kernel/occurrence-of first-event))
+(def first-tx (:ok first-assertion))
 
-  (let [cs @checks fails (remove second cs)]
-    (doseq [[nm ok] cs] (println (if ok "  [PASS] " "  [FAIL] ") nm))
-    (if (empty? fails)
-      (println "\nStage 6: reified coordinator —" (count cs) "/" (count cs) "PASS")
-      (do (println "\nStage 6:" (count fails) "FAILED") (System/exit 1)))))
+(check! "first commit returns a transaction-coordinate Triple"
+        (= (t/transaction-coordinate "coord-space" 1) first-tx))
+(check! "first assertion returns its exact occurrence coordinate"
+        (= (t/occurrence-coordinate first-tx 0) first-coordinate))
+(check! "transaction time is an ordinary typed metadata Triple"
+        (some #{(t/triple first-tx :kernel/recorded-at recorded)}
+              (coord/live-propositions co)))
+(check! "actor and source frame are ordinary metadata propositions"
+        (and (some #{(t/triple first-tx :kernel/asserted-by "Tom")}
+                   (coord/live-propositions co))
+             (some #{(t/triple first-coordinate :kernel/source-frame "coord-test")}
+                   (coord/live-propositions co))))
+
+(def duplicate (coord/assert! co email {}))
+(def duplicate-coordinate
+  (kernel/occurrence-of (first (:occurrences duplicate))))
+(check! "equal propositions remain separately occurrence-addressable"
+        (and (not= first-coordinate duplicate-coordinate)
+             (= 2 (count (filter #{email} (coord/live-propositions co))))))
+
+(def withdrawn
+  (coord/withdraw-occurrence! co duplicate-coordinate {:actor "Tom"}))
+(check! "exact withdrawal removes only the named equal occurrence"
+        (and (:ok withdrawn)
+             (= [first-coordinate]
+                (mapv kernel/occurrence-of
+                      (filter #(= email (kernel/proposition-of %))
+                              (coord/live-occurrences co))))))
+(check! "withdrawal history points to the exact occurrence coordinate"
+        (some #(= duplicate-coordinate (t/triple-slot2 %))
+              (:withdrawals withdrawn)))
+
+(def draft (t/triple "Task" :status "draft"))
+(def final (t/triple "Task" :status "final"))
+(def draft-result (coord/assert! co draft {}))
+(def draft-coordinate
+  (kernel/occurrence-of (first (:occurrences draft-result))))
+(def superseded (coord/supersede! co draft-coordinate final {:actor "reviewer"}))
+(def final-coordinate
+  (kernel/occurrence-of (first (:occurrences superseded))))
+(check! "supersession is an ordinary occurrence-to-occurrence Triple"
+        (some #{(t/triple final-coordinate :kernel/supersedes draft-coordinate)}
+              (coord/supersession-triples co)))
+(check! "effective liveness follows supersession without mutating identity"
+        (and (not (some #{draft} (coord/live-propositions co)))
+             (some #{final} (coord/live-propositions co))
+             (some #{draft} (store/live-propositions
+                             (coord/coordinator-store co)))))
+
+;; Global transaction-coordinate OCC is conservative until schema-specific
+;; conflict domains migrate; every accepted write still advances one exact tx.
+(def race-base (coord/current-transaction co))
+(def race-results
+  (mapv deref
+        (mapv (fn [n]
+                (future
+                  (coord/assert! co (t/triple "race" :winner n)
+                                 {:base race-base :actor (str "writer-" n)})))
+              (range 24))))
+(check! "one same-base racer wins"
+        (= 1 (count (filter :ok race-results))))
+(check! "all other same-base racers receive an OCC conflict"
+        (= 23 (count (filter #(= :conflict (:reject %)) race-results))))
+(let [before (store/operation-count (coord/coordinator-store co))
+      stale (coord/assert! co nested {:base race-base})]
+  (check! "stale OCC rejection leaks no TermStore operation"
+          (and (= :conflict (:reject stale))
+               (= before (store/operation-count
+                          (coord/coordinator-store co))))))
+
+(def view-result (coord/view-select! co "review-view" first-coordinate {}))
+(check! "view selection names an occurrence using an ordinary Triple"
+        (and (:ok view-result)
+             (= [first-coordinate]
+                (mapv kernel/occurrence-of
+                      (coord/view-occurrences co "review-view")))))
+(coord/view-deselect! co "review-view" first-coordinate {})
+(check! "withdrawing the selection empties the view without touching its target"
+        (and (empty? (coord/view-occurrences co "review-view"))
+             (some #{first-coordinate}
+                   (map kernel/occurrence-of (coord/live-occurrences co)))))
+
+(def lease-1 (coord/acquire-lease! co "resource-A" "worker-A" 1000 10000))
+(def lease-epoch-1 (:ok lease-1))
+(check! "lease epoch is its assertion occurrence coordinate"
+        (and (t/occurrence-coordinate? lease-epoch-1)
+             (coord/lease-fence-valid? co "resource-A" "worker-A"
+                                       lease-epoch-1 10500)))
+(check! "unexpired lease rejects a rival holder"
+        (= :lease-held
+           (:reject (coord/acquire-lease! co "resource-A" "worker-B"
+                                         1000 10500))))
+(def lease-2
+  (coord/renew-lease! co "resource-A" "worker-A" lease-epoch-1 2000 10500))
+(def lease-epoch-2 (:ok lease-2))
+(check! "renewal rotates the occurrence fence and supersedes the old lease"
+        (and (not= lease-epoch-1 lease-epoch-2)
+             (not (coord/lease-fence-valid? co "resource-A" "worker-A"
+                                            lease-epoch-1 10600))
+             (coord/lease-fence-valid? co "resource-A" "worker-A"
+                                       lease-epoch-2 10600)))
+(check! "stale release cannot cross the occurrence fence"
+        (= :lease-fence-mismatch
+           (:reject (coord/release-lease! co "resource-A" "worker-A"
+                                         lease-epoch-1))))
+(check! "epoch-exact release withdraws the current lease"
+        (and (:ok (coord/release-lease! co "resource-A" "worker-A"
+                                       lease-epoch-2))
+             (nil? (coord/current-lease co "resource-A"))))
+
+(def numeric-result
+  (coord/assert! co (t/triple "measurement" :value (float 1.5)) {}))
+(check! "commit canonicalizes Float atoms before memory and FRAMLOG diverge"
+        (instance? Double
+                   (t/triple-slot2
+                    (kernel/proposition-of
+                     (first (:occurrences numeric-result))))))
+
+(def before-restart (store/dump-term-store (coord/coordinator-store co)))
+(def restarted (coord/open-coordinator! (.getPath log-file) "coord-space"))
+(check! "cold FRAMLOG replay reconstructs the exact TermStore v2 dump"
+        (= before-restart
+           (store/dump-term-store (coord/coordinator-store restarted))))
+(check! "cold replay preserves semantic history and effective projections"
+        (and (= (coord/history co) (coord/history restarted))
+             (= (coord/live-occurrences co)
+                (coord/live-occurrences restarted))))
+
+;; A torn trailing frame is dropped as a whole. Passive readers report it and
+;; cannot append; an authority-holding boot truncates exactly to valid-bytes.
+(with-open [out (java.io.FileOutputStream. log-file true)]
+  (.write out (byte-array [(byte 40) (byte 0) (byte 0) (byte 0)
+                           (byte 1) (byte 2) (byte 3)]))
+  (.force (.getChannel out) true))
+(def passive (coord/open-coordinator! (.getPath log-file) "coord-space"))
+(check! "passive boot drops and reports a torn trailing transaction frame"
+        (and (:torn-tail passive)
+             (= before-restart
+                (store/dump-term-store (coord/coordinator-store passive)))))
+(check! "passive torn generation refuses concatenating a later transaction"
+        (= :torn-tail-repair-required
+           (error-code #(coord/assert! passive nested {}))))
+(def repaired
+  (coord/open-coordinator! (.getPath log-file) "coord-space"
+                           {:repair-torn? true}))
+(check! "authority repair reports and truncates only the torn frame"
+        (and (:recovered-tail repaired)
+             (nil? (:torn-tail (coord/read-triple-log! (.getPath log-file))))))
+(coord/assert! repaired nested {})
+(def after-repair (coord/open-coordinator! (.getPath log-file) "coord-space"))
+(check! "a repaired generation accepts and cold-replays the next whole frame"
+        (some #{nested} (coord/live-propositions after-repair)))
+
+(def legacy-file (java.io.File. scratch "legacy.log"))
+(spit legacy-file "{:tx 1, :op \"assert\", :l \"A\", :p \"p\", :r \"B\"}\n")
+(check! "runtime boot rejects legacy flat bytes with migration-required"
+        (= :migration-required
+           (error-code #(coord/open-coordinator! (.getPath legacy-file)))))
+(def fri-file (java.io.File. scratch "legacy.fri"))
+(spit fri-file "FRAMFRI1cache")
+(check! "runtime boot rejects lossy FRI input as non-authoritative"
+        (= :migration-v2-cache-not-source
+           (error-code #(coord/open-coordinator! (.getPath fri-file)))))
+(def v2-file (java.io.File. scratch "legacy.v2log"))
+(spit v2-file "{:k :fact, :cid 1, :l 2, :p 3, :r 4, :tx 5}\n")
+(check! "runtime boot rejects old v2 row caches as non-authoritative"
+        (= :migration-v2-cache-not-source
+           (error-code #(coord/open-coordinator! (.getPath v2-file)))))
+
+(check! "public write responses expose no cid handle"
+        (not-any? #(and (map? %) (contains? % :cid))
+                  (tree-seq coll? seq first-assertion)))
+
+(let [failures (remove second @checks)]
+  (if (empty? failures)
+    (do
+      (println "\nTermStore coordinator:" (count @checks) "/" (count @checks) "PASS")
+      (shutdown-agents))
+    (do
+      (println "\nTermStore coordinator:" (count failures) "FAILED")
+      (shutdown-agents)
+      (System/exit 1))))

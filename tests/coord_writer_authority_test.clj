@@ -1,9 +1,12 @@
-;; coord_writer_authority_test.clj — blue/green writer-authority prerequisite.
-(require '[clojure.java.io :as io]
+;; Writer authority and narrow TermStore daemon integration.
+;; Daemon subprocesses always use JVM Clojure.
+(require '[babashka.process :as process]
          '[clojure.edn :as edn]
-         '[clojure.string :as str]
-         '[babashka.process :as process])
+         '[clojure.java.io :as io]
+         '[clojure.string :as str])
+
 (load-file "coord_writer_authority.clj")
+(load-file "coord_daemon.clj")
 
 (when (= "hold" (first *command-line-args*))
   (let [[_ log ready] *command-line-args*
@@ -11,8 +14,7 @@
     (try
       (spit ready "ready\n")
       (Thread/sleep 30000)
-      (finally
-        (coord-writer-authority/release! handle))))
+      (finally (coord-writer-authority/release! handle))))
   (System/exit 0))
 
 (def failures (atom []))
@@ -20,122 +22,13 @@
   (println (str (if ok "[PASS] " "[FAIL] ") label))
   (when-not ok (swap! failures conj label)))
 
-(let [dir (.toFile (java.nio.file.Files/createTempDirectory
-                    "fram-writer-authority"
-                    (make-array java.nio.file.attribute.FileAttribute 0)))
-      log (str (io/file dir "coordination.log"))]
-  (spit log "")
-  (check! "nil role preserves active compatibility"
-          (= :active (coord-writer-authority/role-from nil)))
-  (check! "standby role is explicit"
-          (= :standby (coord-writer-authority/role-from "standby")))
-  (check! "unknown role fails closed"
-          (= :invalid-coordinator-role
-             (try
-               (coord-writer-authority/role-from "writer-ish")
-               nil
-               (catch clojure.lang.ExceptionInfo e (:code (ex-data e))))))
-  (let [first (coord-writer-authority/acquire! log)]
-    (try
-      (check! "first generation holds writer authority"
-              (coord-writer-authority/held? first))
-      (check! "overlapping generation cannot acquire the same log"
-              (nil? (coord-writer-authority/try-acquire! log)))
-      (check! "authority is named by canonical log, not deployment"
-              (= (str (.getCanonicalPath (io/file log))
-                      ".writer-authority.lock")
-                 (:path first)))
-      (finally
-        (coord-writer-authority/release! first))))
-  (let [successor (coord-writer-authority/acquire! log)]
-    (try
-      (check! "successor acquires only after predecessor releases"
-              (coord-writer-authority/held? successor))
-      (finally
-        (coord-writer-authority/release! successor))))
-  (check! "released authority is no longer valid"
-          (let [h (coord-writer-authority/acquire! log)]
-            (coord-writer-authority/release! h)
-            (not (coord-writer-authority/held? h))))
-
-  (let [cross-log (str (io/file dir "telemetry.log"))
-        ready (str (io/file dir "child.ready"))
-        child (process/process
-               ["bb" "-cp" "out:."
-                "tests/coord_writer_authority_test.clj"
-                "hold" cross-log ready]
-               {:out :inherit :err :inherit})]
-    (spit cross-log "")
-    (loop [n 0]
-      (cond
-        (.exists (io/file ready)) nil
-        (>= n 100) (throw (ex-info "child lock holder did not become ready" {}))
-        :else (do (Thread/sleep 20) (recur (inc n)))))
-    (try
-      (check! "kernel lock excludes a separate coordinator process"
-              (nil? (coord-writer-authority/try-acquire! cross-log)))
-      (finally
-        (process/destroy-tree child)
-        @child))
-    (let [successor (coord-writer-authority/acquire! cross-log)]
-      (try
-        (check! "kernel releases authority when predecessor process exits"
-                (coord-writer-authority/held? successor))
-        (finally
-          (coord-writer-authority/release! successor))))))
-
-;; Host integration: a standby can serve reads but every canonical mutation
-;; class is rejected before it reaches a log or checkpoint writer.
-(load-file "coord_daemon.clj")
-(let [dir (.toFile (java.nio.file.Files/createTempDirectory
-                    "fram-standby"
-                    (make-array java.nio.file.attribute.FileAttribute 0)))
-      log (str (io/file dir "coordination.log"))]
-  (spit log "")
-  (coord-daemon/boot-flat! log)
-  (with-redefs [coord-daemon/coordinator-role :standby]
-    (check! "standby serves warm reads"
-            (integer? (:version (coord-daemon/handle {:op :version}))))
-    (check! "standby status advertises read-only authority"
-            (let [a (:writer-authority
-                     (coord-daemon/handle {:op :status}))]
-              (and (= :standby (:role a))
-                   (false? (:write-authorized a)))))
-    (doseq [[label req]
-            [["fact mutation" {:op :assert :te "@T" :p "title" :r "x"}]
-             ["lease mutation" {:op :acquire-lease :res "r" :holder "h"
-                                :ttl-ms 1000}]
-             ["text bridge mutation" {:op :write-def :spec {}}]
-             ["graph edit mutation" {:op :edit-min :spec {}}]
-             ["candidate commit mutation" {:op :edit-commit :candidate {}}]
-             ["checkpoint mutation" {:op :snapshot}]]]
-      (check! (str "standby rejects " label)
-              (= :writer-authority-required
-                 (:code (coord-daemon/handle req)))))
-    (check! "fenced standby mutation validates corpus before authority"
-            (= :log-mismatch
-               (:code
-                (coord-daemon/handle
-                 {:op :for-log
-                  :expected-log (str (io/file dir "other.log"))
-                  :request {:op :assert :te "@T" :p "title" :r "x"}}))))
-    (check! "correctly-fenced standby mutation remains read-only"
-            (= :writer-authority-required
-               (:code
-                (coord-daemon/handle
-                 {:op :for-log
-                  :expected-log log
-                  :request {:op :assert :te "@T" :p "title" :r "x"}}))))))
-
 (defn free-port []
-  (with-open [socket (java.net.ServerSocket. 0)]
-    (.getLocalPort socket)))
+  (with-open [socket (java.net.ServerSocket. 0)] (.getLocalPort socket)))
 
 (defn request! [port request]
   (with-open [socket (java.net.Socket.)]
     (.connect socket
-              (java.net.InetSocketAddress. "127.0.0.1" (int port))
-              500)
+              (java.net.InetSocketAddress. "127.0.0.1" (int port)) 500)
     (.setSoTimeout socket 3000)
     (with-open [writer (io/writer (.getOutputStream socket))
                 reader (java.io.PushbackReader.
@@ -145,83 +38,148 @@
       (edn/read reader))))
 
 (defn eventually [f]
-  (loop [n 0]
+  (loop [attempt 0]
     (let [value (try (f) (catch Throwable _ nil))]
-      (cond
-        value value
-        (>= n 200) nil
-        :else (do (Thread/sleep 25) (recur (inc n)))))))
+      (cond value value
+            (>= attempt 240) nil
+            :else (do (Thread/sleep 25) (recur (inc attempt)))))))
 
-;; Real overlapping processes: one active writer, one read-only warm standby,
-;; and a refused second active generation over the same canonical log.
-(let [dir (.toFile (java.nio.file.Files/createTempDirectory
-                    "fram-dual-generation"
-                    (make-array java.nio.file.attribute.FileAttribute 0)))
-      log (str (io/file dir "coordination.log"))
+(def scratch
+  (.toFile
+   (java.nio.file.Files/createTempDirectory
+    "fram-term-authority-"
+    (make-array java.nio.file.attribute.FileAttribute 0))))
+
+(let [log (str (io/file scratch "lock-only.framlog"))]
+  (spit log "")
+  (check! "nil role preserves active default"
+          (= :active (coord-writer-authority/role-from nil)))
+  (check! "standby role is explicit"
+          (= :standby (coord-writer-authority/role-from "standby")))
+  (check! "unknown role fails closed"
+          (= :invalid-coordinator-role
+             (try (coord-writer-authority/role-from "writer-ish") nil
+                  (catch clojure.lang.ExceptionInfo error
+                    (:code (ex-data error))))))
+  (let [first (coord-writer-authority/acquire! log)]
+    (try
+      (check! "first generation holds canonical-log authority"
+              (coord-writer-authority/held? first))
+      (check! "overlapping generation cannot acquire the same log"
+              (nil? (coord-writer-authority/try-acquire! log)))
+      (finally (coord-writer-authority/release! first))))
+  (let [successor (coord-writer-authority/acquire! log)]
+    (check! "successor acquires after predecessor release"
+            (coord-writer-authority/held? successor))
+    (coord-writer-authority/release! successor)))
+
+;; Host-level narrow daemon: authority gates occurrence-native writes before
+;; any transaction frame is appended.
+(let [log (str (io/file scratch "direct.framlog"))]
+  (coord-daemon/boot! log "direct-space" :active)
+  (try
+    (check! "active narrow daemon advertises TermStore v2 authority"
+            (let [status (coord-daemon/handle {:op :status})]
+              (and (= :termstore-v2/framlog (:format status))
+                   (true? (get-in status [:writer-authority :write-authorized]))
+                   (= :occurrence-native/narrow (:surface status)))))
+    (let [result (coord-daemon/handle
+                  {:op :assert :triple ["A" :email "a@example.com"]
+                   :actor "tester"
+                   :recorded-at {:instant [100 7]}})]
+      (check! "active write returns transaction and occurrence coordinates"
+              (and (= ["direct-space" :kernel/tx-sequence 1] (:ok result))
+                   (= [[[["direct-space" :kernel/tx-sequence 1]
+                          :kernel/op-ordinal 0]
+                         :kernel/asserts
+                         ["A" :email "a@example.com"]]]
+                      (:occurrences result))))
+      (check! "wire response contains no physical row handle"
+              (not-any? #(and (map? %) (contains? % :cid))
+                        (tree-seq coll? seq result))))
+    (check! "removed schema/query operation fails explicitly"
+            (= :unsupported-termstore-operation
+               (:code (coord-daemon/handle {:op :query :query []}))))
+    (finally (coord-daemon/shutdown!))))
+
+;; Real overlapping generations: one active JVM writer, one JVM standby, and a
+;; refused second active process over the same canonical FRAMLOG.
+(let [log (str (io/file scratch "shared.framlog"))
       active-port (free-port)
       duplicate-port (free-port)
       standby-port (free-port)
-      base-env {"FRAM_SNAPSHOT_BOOT" "0"}
       active
       (process/process
-       ["bb" "-cp" "out:." "coord_daemon.clj" "serve-flat"
-        (str active-port) log]
+       ["clojure" "-M" "coord_daemon.clj" "serve"
+        (str active-port) log "shared-space"]
        {:out :string :err :string
-        :extra-env (assoc base-env "FRAM_COORD_ROLE" "active")})]
-  (spit log "")
+        :extra-env {"FRAM_COORD_ROLE" "active"
+                    "FRAM_TELEMETRY_LOG" nil}})]
   (try
-    (check! "active generation starts with writer authority"
-            (some?
-             (eventually
-              #(let [a (:writer-authority (request! active-port {:op :status}))]
-                 (when (:write-authorized a) a)))))
+    (check! "active JVM generation starts with writer authority"
+            (some? (eventually
+                    #(let [status (request! active-port {:op :status})]
+                       (when (get-in status [:writer-authority :write-authorized])
+                         status)))))
     (let [duplicate
           (process/process
-           ["bb" "-cp" "out:." "coord_daemon.clj" "serve-flat"
-            (str duplicate-port) log]
+           ["clojure" "-M" "coord_daemon.clj" "serve"
+            (str duplicate-port) log "shared-space"]
            {:out :string :err :string
-            :extra-env (assoc base-env "FRAM_COORD_ROLE" "active")})
+            :extra-env {"FRAM_COORD_ROLE" "active"
+                        "FRAM_TELEMETRY_LOG" nil}})
           exited? (.waitFor ^Process (:proc duplicate)
-                            5 java.util.concurrent.TimeUnit/SECONDS)
+                            6 java.util.concurrent.TimeUnit/SECONDS)
           result (when exited? @duplicate)]
       (when-not exited? (process/destroy-tree duplicate))
-      (check! "second active generation fails closed before serving"
-              (and exited?
-                   (not (zero? (:exit result)))
+      (check! "second active JVM generation fails before serving"
+              (and exited? (not (zero? (:exit result)))
                    (str/includes? (str (:out result) (:err result))
                                   "holds writer authority"))))
     (let [standby
           (process/process
-           ["bb" "-cp" "out:." "coord_daemon.clj" "serve-flat"
-            (str standby-port) log]
+           ["clojure" "-M" "coord_daemon.clj" "serve"
+            (str standby-port) log "shared-space"]
            {:out :string :err :string
-            :extra-env (assoc base-env "FRAM_COORD_ROLE" "standby")})]
+            :extra-env {"FRAM_COORD_ROLE" "standby"
+                        "FRAM_TELEMETRY_LOG" nil}})]
       (try
-        (check! "standby overlaps active on a private endpoint"
-                (some?
-                 (eventually
-                  #(let [a (:writer-authority
-                            (request! standby-port {:op :status}))]
-                     (when (and (= :standby (:role a))
-                                (false? (:write-authorized a)))
-                       a)))))
-        (check! "active remains writable while standby warms"
-                (:ok (request! active-port
-                               {:op :assert :te "@blue-green"
-                                :p "title" :r "visible"})))
-        (check! "standby endpoint refuses the same write"
+        (check! "standby JVM generation serves read-only"
+                (some? (eventually
+                        #(let [status (request! standby-port {:op :status})]
+                           (when (and (= :standby
+                                         (get-in status [:writer-authority :role]))
+                                      (false? (get-in status
+                                                      [:writer-authority
+                                                       :write-authorized])))
+                             status)))))
+        (let [asserted
+              (request! active-port
+                        {:op :assert
+                         :triple ["blue-green" :status "visible"]})]
+          (check! "active JVM generation appends a whole transaction frame"
+                  (vector? (:ok asserted))))
+        (check! "standby rejects the same occurrence-native mutation"
                 (= :writer-authority-required
                    (:code
                     (request! standby-port
-                              {:op :assert :te "@blue-green"
-                               :p "title" :r "forbidden"}))))
-        (check! "standby catches up to the active append"
-                (some?
-                 (eventually
-                  #(let [rows (:rows
-                               (request! standby-port
-                                         {:op :show :te "@blue-green"}))]
-                     (when (some #{["title" "visible"]} rows) rows)))))
+                              {:op :assert
+                               :triple ["blue-green" :status "forbidden"]}))))
+        (check! "standby refresh observes the active generation append"
+                (some? (eventually
+                        #(let [live (:propositions
+                                    (request! standby-port {:op :live}))]
+                           (when (some #{["blue-green" :status "visible"]}
+                                       live)
+                             live)))))
+        (check! "for-log mismatch is rejected before authority routing"
+                (= :log-mismatch
+                   (:code
+                    (request! standby-port
+                              {:op :for-log
+                               :expected-log (str (io/file scratch "other.framlog"))
+                               :request {:op :assert
+                                         :triple ["A" :p "B"]}}))))
         (finally
           (process/destroy-tree standby)
           @standby)))
@@ -233,4 +191,4 @@
   (do
     (println (str "\n" (count @failures) " writer-authority checks failed"))
     (System/exit 1))
-  (println "\nwriter-authority: all checks passed"))
+  (println "\nTermStore writer authority: all checks passed"))

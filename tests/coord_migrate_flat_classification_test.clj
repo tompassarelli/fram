@@ -1,121 +1,84 @@
-;; Regression for graph cold start spending one full predicate-registry scan per
-;; domain fact. The compiled migration map must equal the kernel oracle while
-;; classification work stays bounded by predicate spellings, not fact count.
-(require '[fram.fold :as fold]
-         '[fram.kernel :as ck]
-         '[coord-commit :as cc])
-(load-file "coord_daemon.clj")
+;; Sealed legacy classification stays local to migration and never restores a
+;; runtime schema/store compatibility layer.
+(require '[clojure.string :as str]
+         '[fram.types :as t])
+(load-file "coord.clj")
 
+(def failures (atom []))
 (defn check! [label ok]
   (println (str (if ok "[PASS] " "[FAIL] ") label))
-  (when-not ok
-    (throw (ex-info label {}))))
+  (when-not ok (swap! failures conj label)))
+(defn error-code [f]
+  (try (f) nil
+       (catch clojure.lang.ExceptionInfo error
+         (:fram/code (ex-data error)))))
 
-(def schema-lines
-  [{:tx 1 :op "assert" :l "@edge" :p "predicate_name" :r "edge"}
-   {:tx 2 :op "assert" :l "@edge" :p "predicate_alias" :r "old_edge"}
-   {:tx 3 :op "assert" :l "@edge" :p "value_kind" :r "ref"}
-   {:tx 4 :op "assert" :l "@depends_on" :p "value_kind" :r "literal"}
-   {:tx 5 :op "assert" :l "@title" :p "cardinality" :r "multi"}
-   {:tx 6 :op "assert" :l "@single_note" :p "cardinality" :r "single"}])
+(def scratch
+  (.toFile
+   (java.nio.file.Files/createTempDirectory
+    "fram-migration-classification-"
+    (make-array java.nio.file.attribute.FileAttribute 0))))
+(def legacy-source (java.io.File. scratch "legacy.log"))
+(def migration-target (java.io.File. scratch "history.framlog"))
 
-(def representative-preds
-  ["edge" "old_edge" "depends_on" "title" "single_note"
-   "session_of" "f0" "f1.2~7" "child" "tail" "seg3" "comment4"
-   "ordinary"])
+(def rows
+  [{:tx 1 :op "assert" :l "@contact" :p "predicate_name" :r "email"}
+   {:tx 1 :op "assert" :l "@contact" :p "predicate_alias" :r "mail"}
+   {:tx 1 :op "assert" :l "@tag" :p "predicate_name" :r "tag"}
+   {:tx 2 :op "assert" :l "@contact" :p "cardinality" :r "single"}
+   {:tx 2 :op "assert" :l "@tag" :p "cardinality" :r "multi"}
+   {:tx 3 :op "assert" :l "Alice" :p "email" :r "first@example.com"}
+   {:tx 4 :op "assert" :l "Alice" :p "mail" :r "second@example.com"}
+   {:tx 4 :op "assert" :l "Alice" :p "tag" :r "red"}
+   {:tx 5 :op "assert" :l "Alice" :p "tag" :r "blue"}
+   ;; A single-valued retract may carry a different spelling/value. Its explicit
+   ;; occurrence relation, not proposition equality, preserves the legacy fold.
+   {:tx 6 :op "retract" :l "Alice" :p "email" :r "ignored-value"}])
 
-(def domain-lines
-  (mapv
-   (fn [i]
-     (let [p (nth representative-preds (mod i (count representative-preds)))]
-       {:tx (+ 10 i)
-        :op "assert"
-        :l (str "@subject-" i)
-        :p p
-        :r (if (#{"edge" "old_edge" "depends_on" "session_of"
-                  "f0" "f1.2~7" "child"
-                  "tail" "seg3" "comment4"} p)
-             (str "@target-" i)
-             (str "value-" i))}))
-   (range 4000)))
+(spit legacy-source (str (str/join "\n" (map pr-str rows)) "\n"))
+(coord/migrate-legacy-flat-log! (.getPath legacy-source) "classification-space"
+                                (.getPath migration-target))
+(def runtime (coord/open-coordinator! (.getPath migration-target)
+                                      "classification-space"))
+(def live (set (coord/live-propositions runtime)))
 
-(def raw (into schema-lines domain-lines))
-(def facts (:facts (fold/fold raw)))
-(def metadata-facts
-  (filterv #(#'coord-daemon/schema-writable (:p %)) facts))
-(def legacy-config
-  (#'coord-daemon/legacy-ref-config facts))
-(def schema-plan
-  (cc/migrate-schema-plan
-   (vec (distinct representative-preds))
-   []
-   (set representative-preds)
-   @#'coord-daemon/schema-preds))
+(check! "canonical and alias spellings share one single-valued identity"
+        (and (not (contains? live
+                             (t/triple "Alice" "email" "first@example.com")))
+             (not (contains? live
+                             (t/triple "Alice" "mail" "second@example.com")))))
+(check! "single-valued replacement is recorded as ordinary supersession"
+        (= 1
+           (count
+            (filter #(= :kernel/supersedes (t/triple-slot1 %))
+                    (coord/supersession-triples runtime)))))
+(check! "alias-spelled retract is recorded as an exact withdrawal relation"
+        (some #(= :kernel/withdraws (t/triple-slot1 %))
+              (coord/withdrawal-triples runtime)))
+(check! "explicit multi cardinality preserves distinct proposition values"
+        (and (contains? live (t/triple "Alice" "tag" "red"))
+             (contains? live (t/triple "Alice" "tag" "blue"))))
+(check! "classification metadata itself remains ordinary Triple history"
+        (and (contains? live (t/triple "@contact" "predicate_name" "email"))
+             (contains? live (t/triple "@contact" "predicate_alias" "mail"))
+             (every? t/triple? (coord/history runtime))))
 
-(def oracle
-  (into {}
-        (map (fn [p]
-               (let [configured
-                     (if (#'coord-daemon/code-structural-link-pred? p)
-                       (assoc legacy-config p "ref")
-                       legacy-config)
-                     value-kind
-                     (ck/value-kind-of
-                      facts
-                      (#'coord-daemon/predicate-settings configured)
-                      p)]
-                 [p {:cardinality (ck/cardinality-of facts {} p)
-                     :value-kind value-kind
-                     :link? (= "ref" value-kind)}])))
-        representative-preds))
+(def collision-source (java.io.File. scratch "collision.log"))
+(def collision-target (java.io.File. scratch "collision.framlog"))
+(spit collision-source
+      (str (pr-str {:tx 1 :op "assert" :l "@left"
+                    :p "predicate_name" :r "same"}) "\n"
+           (pr-str {:tx 1 :op "assert" :l "@right"
+                    :p "predicate_alias" :r "same"}) "\n"))
+(check! "predicate spelling collisions fail typed before output installation"
+        (and (= :migration-predicate-spelling-collision
+                (error-code
+                 #(coord/migrate-legacy-flat-log!
+                   (.getPath collision-source) "collision-space"
+                   (.getPath collision-target))))
+             (not (.exists collision-target))))
 
-(def classifications
-  (#'coord-daemon/migrate-predicate-classifications
-   metadata-facts schema-plan legacy-config))
-
-(check! "compiled classifications equal the effective migration oracle"
-        (= oracle classifications))
-(check! "explicit ref applies through canonical name and alias"
-        (every? #(= "ref" (get-in classifications [% :value-kind]))
-                ["edge" "old_edge"]))
-(check! "explicit literal overrides the depends_on ref fallback"
-        (let [classification (get classifications "depends_on")]
-          (and (= "literal" (:value-kind classification))
-               (false? (:link? classification)))))
-(check! "legacy session_of rows preserve their per-predicate reference kind"
-        (= {:value-kind "ref" :link? true}
-           (select-keys (get classifications "session_of")
-                        [:value-kind :link?])))
-(check! "structural code predicates remain links"
-        (every? #(= {:value-kind "ref" :link? true}
-                    (select-keys (get classifications %)
-                                 [:value-kind :link?]))
-                ["f0" "f1.2~7" "child" "tail" "seg3" "comment4"]))
-
-(let [value-kind-calls (atom 0)
-      cardinality-calls (atom 0)
-      original-value-kind ck/value-kind-of
-      original-cardinality ck/cardinality-of
-      migrate #'coord-daemon/migrate-flat->co
-      reader #'coord-daemon/read-logs-merged
-      result
-      (with-redefs [ck/value-kind-of
-                    (fn [fs configured p]
-                      (swap! value-kind-calls inc)
-                      (original-value-kind fs configured p))
-                    ck/cardinality-of
-                    (fn [fs configured p]
-                      (swap! cardinality-calls inc)
-                      (original-cardinality fs configured p))]
-        (with-redefs-fn {reader (fn [_] raw)}
-          #(migrate "unused")))]
-  (check! "migration preserves every representative domain fact"
-          (= 4000
-             (count
-              (remove #(#{":cardinality" ":value-kind"} (:p %))
-                      (#'coord-daemon/reified->facts result)))))
-  (check! "startup classification calls are bounded by predicate spellings"
-          (and (<= @value-kind-calls (count representative-preds))
-               (<= @cardinality-calls (count representative-preds)))))
-
-(println "coord migrate predicate classification — PASS")
+(if (seq @failures)
+  (do (println (str (count @failures) " migration classification failures"))
+      (System/exit 1))
+  (println "sealed migration classification: PASS"))
