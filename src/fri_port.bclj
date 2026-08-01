@@ -2,19 +2,23 @@
 ;; FRI is a disposable acceleration cache over a canonical TermStore/FRAMLOG.
 ;; Its private handles never cross the semantic API boundary.
 (ns fri-port
-  (:require [clojure.edn :as edn]
-            [fram.store :as store]
+  (:require [fram.store :as store]
             [fram.types :as t])
-  (:import [java.io ByteArrayInputStream ByteArrayOutputStream
-            DataInputStream DataOutputStream File FileOutputStream]
-           [java.nio.charset StandardCharsets]
+  (:import [java.io ByteArrayOutputStream File FileOutputStream]
+           [java.nio ByteBuffer ByteOrder CharBuffer]
+           [java.nio.charset CodingErrorAction StandardCharsets]
            [java.nio.file Files StandardCopyOption]
-           [java.security MessageDigest]))
+           [java.security MessageDigest]
+           [java.util Arrays HexFormat]))
 
 (define-mode strict)
 
 (def MAGIC: String "FRAMFRI2")
 (def FMT: Int 2)
+(def FLAGS: Int 0)
+(def PAYLOAD-FLAGS: Int 0)
+(def MAX-TERM-DEPTH: Int 256)
+(def FINGERPRINT-BYTES: Int 32)
 
 ;; The cache is accepted only when its immutable space and exact canonical-log
 ;; prefix match the caller's expectation.
@@ -39,75 +43,208 @@
     (fail "fri: source binding requires SpaceId, sha256, and non-negative valid-byte position"
           :invalid-cache-source)))
 
-(defn- utf8 [value: String] -> Any
-  (.getBytes value StandardCharsets/UTF_8))
-
 (defn- hex [bytes: Any] -> String
   (apply str (map (fn [value: Any] -> String
                     (format "%02x" (bit-and value 255)))
                   bytes)))
 
+(defn- sha256-bytes [bytes: Any] -> Any
+  (.digest (MessageDigest/getInstance "SHA-256") bytes))
+
 (defn- sha256 [bytes: Any] -> String
-  (hex (.digest (MessageDigest/getInstance "SHA-256") bytes)))
+  (hex (sha256-bytes bytes)))
 
-(defn- instant-data [value: Any] -> Any
-  [(t/instant-epoch-seconds value) (t/instant-nanos value)])
+(defn- strict-utf8 [value: String context: String] -> Any
+  (try
+    (let [encoder: Any
+          (doto (.newEncoder StandardCharsets/UTF_8)
+            (.onMalformedInput CodingErrorAction/REPORT)
+            (.onUnmappableCharacter CodingErrorAction/REPORT))
+          buffer: ByteBuffer (.encode encoder (CharBuffer/wrap value))
+          bytes: Any (byte-array (.remaining buffer))]
+      (.get buffer bytes)
+      bytes)
+    (catch java.nio.charset.CharacterCodingException error
+      (fail (str "fri: invalid UTF-8 in " context) :invalid-fri-cache))))
 
-(defn- atom-row-data [row: t/AtomRow] -> Any
-  (let [kind: Keyword (t/atomrow-kind row)]
-    (cond
-      [(= kind :string) [kind (t/atomrow-string-value row)]]
-      [(= kind :int) [kind (t/atomrow-int-value row)]]
-      [(= kind :float) [kind (t/atomrow-float-value row)]]
-      [(= kind :bool) [kind (t/atomrow-bool-value row)]]
-      [(= kind :keyword) [kind (t/atomrow-keyword-value row)]]
-      [(= kind :instant) [kind (instant-data (t/atomrow-instant-value row))]]
-      [:else (fail "fri: AtomRow has an unknown kind" :invalid-fri-cache)])))
+(defn- strict-utf8-string [bytes: Any context: String] -> String
+  (try
+    (let [decoder: Any
+          (doto (.newDecoder StandardCharsets/UTF_8)
+            (.onMalformedInput CodingErrorAction/REPORT)
+            (.onUnmappableCharacter CodingErrorAction/REPORT))]
+      (str (.decode decoder (ByteBuffer/wrap bytes))))
+    (catch java.nio.charset.CharacterCodingException error
+      (fail (str "fri: invalid UTF-8 in " context) :invalid-fri-cache))))
 
-(defn- data-atom-row [entry: Any] -> t/AtomRow
-  (if (not (and (vector? entry) (= 2 (count entry))))
-    (fail "fri: malformed AtomRow" :invalid-fri-cache)
-    (let [kind: Any (nth entry 0)
-          value: Any (nth entry 1)]
+(defn- require-u32 [value: Int context: String] -> Int
+  (if (and (>= value 0) (<= value 4294967295))
+    value
+    (fail (str "fri: " context " exceeds u32") :invalid-fri-cache)))
+
+(defn- require-i64 [value: Int context: String] -> Int
+  (if (and (>= value -9223372036854775808) (<= value 9223372036854775807))
+    value
+    (fail (str "fri: " context " exceeds i64") :invalid-fri-cache)))
+
+(defn- write-u8! [out: Any value: Int] -> Nil
+  (do (.write out (int (bit-and value 255))) nil))
+
+(defn- write-u16-le! [out: Any value: Int] -> Nil
+  (do
+    (doseq [position (range 2)]
+      (write-u8! out (unsigned-bit-shift-right value (* position 8))))
+    nil))
+
+(defn- write-u32-le! [out: Any value: Int context: String] -> Nil
+  (let [checked: Int (require-u32 value context)]
+    (doseq [position (range 4)]
+      (write-u8! out (unsigned-bit-shift-right checked (* position 8))))
+    nil))
+
+(defn- write-i64-le! [out: Any value: Int context: String] -> Nil
+  (let [checked: Int (require-i64 value context)]
+    (doseq [position (range 8)]
+      (write-u8! out (unsigned-bit-shift-right checked (* position 8))))
+    nil))
+
+(defn- ensure-remaining! [buffer: ByteBuffer amount: Int context: String] -> Nil
+  (if (and (>= amount 0) (>= (.remaining buffer) amount))
+    nil
+    (fail (str "fri: truncated " context) :invalid-fri-cache)))
+
+(defn- read-u8! [buffer: ByteBuffer context: String] -> Int
+  (do
+    (ensure-remaining! buffer 1 context)
+    (let [position: Int (.position buffer)
+          value: Any (.get buffer position)]
+      (.position buffer (inc position))
+      (bit-and 255 (int value)))))
+
+(defn- read-u16-le! [buffer: ByteBuffer context: String] -> Int
+  (do (ensure-remaining! buffer 2 context)
+      (bit-and 65535 (int (.getShort buffer)))))
+
+(defn- read-u32-le! [buffer: ByteBuffer context: String] -> Int
+  (do (ensure-remaining! buffer 4 context)
+      (Integer/toUnsignedLong (.getInt buffer))))
+
+(defn- read-i64-le! [buffer: ByteBuffer context: String] -> Int
+  (do (ensure-remaining! buffer 8 context) (.getLong buffer)))
+
+(defn- read-fixed! [buffer: ByteBuffer amount: Int context: String] -> Any
+  (do
+    (ensure-remaining! buffer amount context)
+    (let [bytes: Any (byte-array amount)]
+      (.get buffer bytes)
+      bytes)))
+
+(defn- write-sized-text! [out: Any value: String context: String] -> Nil
+  (let [bytes: Any (strict-utf8 value context)]
+    (write-u32-le! out (alength bytes) context)
+    (.write out bytes)
+    nil))
+
+(defn- read-sized-bytes! [buffer: ByteBuffer context: String] -> Any
+  (let [amount: Int (read-u32-le! buffer context)]
+    (if (> amount 2147483647)
+      (fail (str "fri: " context " length exceeds JVM bounds") :invalid-fri-cache)
+      (read-fixed! buffer amount context))))
+
+(defn- read-sized-text! [buffer: ByteBuffer context: String] -> String
+  (strict-utf8-string (read-sized-bytes! buffer context) context))
+
+;; Extraction seam: this private provider is byte-identical to the coordinator's
+;; TermCodecV1. When the coordinator codec lands on this lineage, both callers
+;; should import one shared text-canonical module; the cross-runtime golden keeps
+;; this temporary copy from acquiring a divergent tag table.
+(declare write-term-v1!)
+
+(defn- write-triple-v1! [out: Any value: Any depth: Int] -> Nil
+  (do
+    (when (not (t/triple? value))
+      (fail "fri: TermCodecV1 expected Triple" :invalid-fri-cache))
+    (when (> depth MAX-TERM-DEPTH)
+      (fail "fri: TermCodecV1 depth exceeds 256" :invalid-fri-cache))
+    (write-u8! out 7)
+    (write-term-v1! out (t/triple-slot0 value) (inc depth))
+    (write-term-v1! out (t/triple-slot1 value) (inc depth))
+    (write-term-v1! out (t/triple-slot2 value) (inc depth))))
+
+(defn- write-term-v1! [out: Any term: Any depth: Int] -> Nil
+  (cond
+    [(t/triple? term) (write-triple-v1! out term depth)]
+    [(string? term)
+     (do (write-u8! out 1) (write-sized-text! out term "String atom"))]
+    [(integer? term)
+     (do (write-u8! out 2) (write-i64-le! out term "Int atom"))]
+    [(and (number? term) (not (integer? term)))
+     (do (write-u8! out 3)
+         (write-i64-le! out (Double/doubleToLongBits (double term)) "Float atom"))]
+    [(false? term) (write-u8! out 4)]
+    [(true? term) (write-u8! out 5)]
+    [(keyword? term)
+     (let [spelling: String (subs (str term) 1)]
+       (when (empty? spelling)
+         (fail "fri: TermCodecV1 Keyword is empty" :invalid-fri-cache))
+       (write-u8! out 6)
+       (write-sized-text! out spelling "Keyword atom"))]
+    [(t/instant? term)
+     (do (write-u8! out 8)
+         (write-i64-le! out (t/instant-epoch-seconds term) "Instant seconds")
+         (write-u32-le! out (t/instant-nanos term) "Instant nanos"))]
+    [:else (fail "fri: value outside TermCodecV1" :invalid-fri-cache)]))
+
+(declare read-term-v1!)
+
+(defn- read-term-v1! [buffer: ByteBuffer depth: Int] -> Any
+  (do
+    (when (> depth MAX-TERM-DEPTH)
+      (fail "fri: TermCodecV1 depth exceeds 256" :invalid-fri-cache))
+    (let [tag: Int (read-u8! buffer "Term tag")]
       (cond
-        [(and (= kind :string) (string? value))
-         (t/->AtomRow :string value nil nil nil nil nil)]
-        [(and (= kind :int) (integer? value))
-         (t/->AtomRow :int nil value nil nil nil nil)]
-        [(and (= kind :float) (and (number? value) (not (integer? value))))
-         (t/->AtomRow :float nil nil value nil nil nil)]
-        [(and (= kind :bool) (boolean? value))
-         (t/->AtomRow :bool nil nil nil value nil nil)]
-        [(and (= kind :keyword) (keyword? value))
-         (t/->AtomRow :keyword nil nil nil nil value nil)]
-        [(and (= kind :instant)
-              (and (vector? value)
-                   (and (= 2 (count value))
-                        (and (integer? (nth value 0))
-                             (integer? (nth value 1))))))
-         (t/->AtomRow :instant nil nil nil nil nil
-                      (t/instant (nth value 0) (nth value 1)))]
-        [:else (fail "fri: malformed AtomRow value" :invalid-fri-cache)]))))
+        [(= tag 1) (read-sized-text! buffer "String atom")]
+        [(= tag 2) (read-i64-le! buffer "Int atom")]
+        [(= tag 3) (Double/longBitsToDouble (read-i64-le! buffer "Float atom"))]
+        [(= tag 4) false]
+        [(= tag 5) true]
+        [(= tag 6)
+         (let [spelling: String (read-sized-text! buffer "Keyword atom")]
+           (if (empty? spelling)
+             (fail "fri: TermCodecV1 Keyword is empty" :invalid-fri-cache)
+             (keyword spelling)))]
+        [(= tag 7)
+         (t/triple (read-term-v1! buffer (inc depth))
+                   (read-term-v1! buffer (inc depth))
+                   (read-term-v1! buffer (inc depth)))]
+        [(= tag 8)
+         (t/instant (read-i64-le! buffer "Instant seconds")
+                    (read-u32-le! buffer "Instant nanos"))]
+        [:else (fail "fri: unknown TermCodecV1 tag" :invalid-fri-cache)]))))
 
-(defn- triple-row-data [row: t/TripleRow] -> Any
-  [(t/triplerow-slot0 row) (t/triplerow-slot1 row) (t/triplerow-slot2 row)])
+(defn- encode-term-v1! [term: Any] -> Any
+  (let [out: ByteArrayOutputStream (ByteArrayOutputStream.)]
+    (write-term-v1! out term 0)
+    (.toByteArray out)))
 
-(defn- data-triple-row [entry: Any] -> t/TripleRow
-  (if (and (vector? entry)
-           (and (= 3 (count entry)) (every? integer? entry)))
-    (t/->TripleRow (nth entry 0) (nth entry 1) (nth entry 2))
-    (fail "fri: malformed TripleRow" :invalid-fri-cache)))
+(defn- decode-term-v1! [bytes: Any] -> Any
+  (let [buffer: ByteBuffer
+        (doto (ByteBuffer/wrap bytes) (.order ByteOrder/LITTLE_ENDIAN))
+        term: Any (read-term-v1! buffer 0)]
+    (if (= 0 (.remaining buffer))
+      term
+      (fail "fri: trailing bytes inside TermCodecV1 row" :invalid-fri-cache))))
 
-(defn- transaction-row-data [row: t/TransactionRow] -> Any
-  [(t/transactionrow-sequence row)
-   (t/transactionrow-first-operation row)
-   (t/transactionrow-operation-count row)])
-
-(defn- data-transaction-row [entry: Any] -> t/TransactionRow
-  (if (and (vector? entry)
-           (and (= 3 (count entry)) (every? integer? entry)))
-    (t/->TransactionRow (nth entry 0) (nth entry 1) (nth entry 2))
-    (fail "fri: malformed TransactionRow" :invalid-fri-cache)))
+(defn- atom-row [value: Any] -> t/AtomRow
+  (cond
+    [(string? value) (t/->AtomRow :string value nil nil nil nil nil)]
+    [(integer? value) (t/->AtomRow :int nil value nil nil nil nil)]
+    [(and (number? value) (not (integer? value)))
+     (t/->AtomRow :float nil nil value nil nil nil)]
+    [(boolean? value) (t/->AtomRow :bool nil nil nil value nil nil)]
+    [(keyword? value) (t/->AtomRow :keyword nil nil nil nil value nil)]
+    [(t/instant? value) (t/->AtomRow :instant nil nil nil nil nil value)]
+    [:else (fail "fri: TermCodecV1 AtomRow contains a Triple" :invalid-fri-cache)]))
 
 (defn- action-code [action: Keyword] -> Int
   (cond
@@ -120,19 +257,6 @@
     [(= code 1) t/assert-action]
     [(= code 2) t/retract-action]
     [:else (fail "fri: operation has an unknown action code" :invalid-fri-cache)]))
-
-(defn- operation-row-data [row: t/OperationRow] -> Any
-  [(t/operationrow-tx-sequence row)
-   (t/operationrow-ordinal row)
-   (action-code (t/operationrow-action row))
-   (t/operationrow-triple-handle row)])
-
-(defn- data-operation-row [entry: Any] -> t/OperationRow
-  (if (and (vector? entry)
-           (and (= 4 (count entry)) (every? integer? entry)))
-    (t/->OperationRow (nth entry 0) (nth entry 1)
-                      (code-action (nth entry 2)) (nth entry 3))
-    (fail "fri: malformed OperationRow" :invalid-fri-cache)))
 
 (defn- atom-handle [position: Int] -> Int (* 2 position))
 (defn- triple-handle [position: Int] -> Int (inc (* 2 position)))
@@ -167,58 +291,148 @@
                         (nth entry 0)])
                      with-handles))) ]))
 
-;; The payload contains only named-row projections and homogeneous row vectors.
-;; It is deterministic and intentionally carries no semantic assertion id.
-(defn- dump-data [dump: t/TermStoreDump] -> Any
-  [(t/termstoredump-space-id dump)
-   (t/termstoredump-next-sequence dump)
-   (mapv atom-row-data (t/termstoredump-atoms dump))
-   (mapv triple-row-data (t/termstoredump-triples dump))
-   (mapv transaction-row-data (t/termstoredump-transactions dump))
-   (mapv operation-row-data (t/termstoredump-operations dump))
-   (index-data (t/termstoredump-triples dump))])
+(declare atom-value resolve-handle)
 
-(defn- valid-index-row? [width: Int entry: Any] -> Bool
-  (and (vector? entry)
-       (and (= width (count entry)) (every? integer? entry))))
+(defn- write-term-row! [out: Any term: Any] -> Nil
+  (let [bytes: Any (encode-term-v1! term)]
+    (write-u32-le! out (alength bytes) "Term row length")
+    (.write out bytes)
+    nil))
 
-(defn- data-cache [value: Any] -> Any
-  (if (not (and (vector? value) (= 7 (count value))))
-    (fail "fri: malformed TermStore payload" :invalid-fri-cache)
-    (let [space-id: Any (nth value 0)
-          next-sequence: Any (nth value 1)
-          atoms: Any (nth value 2)
-          triples: Any (nth value 3)
-          transactions: Any (nth value 4)
-          operations: Any (nth value 5)
-          indexes: Any (nth value 6)]
-      (if (not (and (string? space-id)
-                    (and (integer? next-sequence)
-                         (and (vector? atoms)
-                              (and (vector? triples)
-                                   (and (vector? transactions)
-                                        (and (vector? operations)
-                                             (and (vector? indexes)
-                                                  (= 6 (count indexes))))))))))
-        (fail "fri: malformed TermStore payload fields" :invalid-fri-cache)
-        (let [dump: t/TermStoreDump
-              (t/->TermStoreDump
-               store/term-store-dump-version space-id next-sequence
-               (mapv data-atom-row atoms)
-               (mapv data-triple-row triples)
-               (mapv data-transaction-row transactions)
-               (mapv data-operation-row operations))
-              widths: Any [2 2 2 3 3 3]]
-          (if (not (every? true?
-                           (map-indexed
-                            (fn [position: Int entries: Any] -> Bool
-                              (and (vector? entries)
-                                   (every? (fn [entry: Any] -> Bool
-                                             (valid-index-row? (nth widths position) entry))
-                                           entries)))
-                            indexes)))
-            (fail "fri: malformed slot index" :invalid-fri-cache)
-            (if (not (= indexes (index-data (t/termstoredump-triples dump))))
+(defn- write-payload! [dump: t/TermStoreDump] -> Any
+  (let [out: ByteArrayOutputStream (ByteArrayOutputStream.)
+        atoms: Any (t/termstoredump-atoms dump)
+        triples: Any (t/termstoredump-triples dump)
+        transactions: Any (t/termstoredump-transactions dump)
+        operations: Any (t/termstoredump-operations dump)
+        indexes: Any (index-data triples)]
+    (write-u16-le! out store/term-store-dump-version)
+    (write-u16-le! out PAYLOAD-FLAGS)
+    (write-i64-le! out (t/termstoredump-next-sequence dump) "next sequence")
+    (write-u32-le! out (count atoms) "AtomRow count")
+    (doseq [row atoms] (write-term-row! out (atom-value row)))
+    (write-u32-le! out (count triples) "TripleRow count")
+    (doseq [position (range (count triples))]
+      (write-term-row! out (resolve-handle dump (triple-handle position))))
+    (write-u32-le! out (count transactions) "TransactionRow count")
+    (doseq [row transactions]
+      (write-i64-le! out (t/transactionrow-sequence row) "transaction sequence")
+      (write-i64-le! out (t/transactionrow-first-operation row) "first operation")
+      (write-i64-le! out (t/transactionrow-operation-count row) "operation count"))
+    (write-u32-le! out (count operations) "OperationRow count")
+    (doseq [row operations]
+      (write-i64-le! out (t/operationrow-tx-sequence row) "operation transaction")
+      (write-i64-le! out (t/operationrow-ordinal row) "operation ordinal")
+      (write-u8! out (action-code (t/operationrow-action row)))
+      (write-i64-le! out (t/operationrow-triple-handle row) "operation handle"))
+    (doseq [entries indexes]
+      (write-u32-le! out (count entries) "slot index row count")
+      (doseq [entry entries]
+        (doseq [handle entry]
+          (write-i64-le! out handle "slot index handle"))))
+    (.toByteArray out)))
+
+(defn- read-count! [buffer: ByteBuffer context: String minimum-row: Int] -> Int
+  (let [row-count: Int (read-u32-le! buffer context)]
+    (if (or (> row-count 2147483647)
+            (> (* row-count minimum-row) (.remaining buffer)))
+      (fail (str "fri: impossible " context) :invalid-fri-cache)
+      row-count)))
+
+(defn- read-term-row! [buffer: ByteBuffer] -> Any
+  (decode-term-v1! (read-sized-bytes! buffer "Term row")))
+
+(defn- read-atoms! [buffer: ByteBuffer] -> Any
+  (let [row-count: Int (read-count! buffer "AtomRow count" 5)]
+    (mapv (fn [position: Int] -> t/AtomRow
+            (let [term: Any (read-term-row! buffer)]
+              (if (t/triple? term)
+                (fail "fri: AtomRow decoded as Triple" :invalid-fri-cache)
+                (atom-row term))))
+          (range row-count))))
+
+(defn- initial-handles [atoms: Any] -> Any
+  (into {}
+        (map-indexed (fn [position: Int row: t/AtomRow] -> Any
+                       [(atom-value row) (atom-handle position)])
+                     atoms)))
+
+(defn- required-handle [handles: Any term: Any] -> Int
+  (if (contains? handles term)
+    (get handles term)
+    (fail "fri: TripleRow references a term absent from prior rows"
+          :invalid-fri-cache)))
+
+(defn- read-triples! [buffer: ByteBuffer atoms: Any] -> Any
+  (let [row-count: Int (read-count! buffer "TripleRow count" 8)]
+    (loop [position 0 rows [] handles (initial-handles atoms)]
+      (if (>= position row-count)
+        rows
+        (let [term: Any (read-term-row! buffer)]
+          (if (not (t/triple? term))
+            (fail "fri: TripleRow decoded as Atom" :invalid-fri-cache)
+            (if (contains? handles term)
+              (fail "fri: duplicate structural TripleRow" :invalid-fri-cache)
+              (let [row: t/TripleRow
+                    (t/->TripleRow
+                     (required-handle handles (t/triple-slot0 term))
+                     (required-handle handles (t/triple-slot1 term))
+                     (required-handle handles (t/triple-slot2 term)))]
+                (recur (inc position)
+                       (conj rows row)
+                       (assoc handles term (triple-handle position)))))))))))
+
+(defn- read-transactions! [buffer: ByteBuffer] -> Any
+  (let [row-count: Int (read-count! buffer "TransactionRow count" 24)]
+    (mapv (fn [position: Int] -> t/TransactionRow
+            (t/->TransactionRow
+             (read-i64-le! buffer "transaction sequence")
+             (read-i64-le! buffer "first operation")
+             (read-i64-le! buffer "operation count")))
+          (range row-count))))
+
+(defn- read-operations! [buffer: ByteBuffer] -> Any
+  (let [row-count: Int (read-count! buffer "OperationRow count" 25)]
+    (mapv (fn [position: Int] -> t/OperationRow
+            (t/->OperationRow
+             (read-i64-le! buffer "operation transaction")
+             (read-i64-le! buffer "operation ordinal")
+             (code-action (read-u8! buffer "operation action"))
+             (read-i64-le! buffer "operation handle")))
+          (range row-count))))
+
+(defn- read-index! [buffer: ByteBuffer width: Int] -> Any
+  (let [row-count: Int (read-count! buffer "slot index row count" (* width 8))]
+    (mapv (fn [position: Int] -> Any
+            (mapv (fn [field: Int] -> Int
+                    (read-i64-le! buffer "slot index handle"))
+                  (range width)))
+          (range row-count))))
+
+(defn- read-indexes! [buffer: ByteBuffer] -> Any
+  (mapv (fn [width: Int] -> Any (read-index! buffer width)) [2 2 2 3 3 3]))
+
+(defn- read-payload! [payload: Any space-id: String] -> Any
+  (let [buffer: ByteBuffer
+        (doto (ByteBuffer/wrap payload) (.order ByteOrder/LITTLE_ENDIAN))
+        dump-version: Int (read-u16-le! buffer "TermStoreDump version")
+        payload-flags: Int (read-u16-le! buffer "payload flags")]
+    (if (not (= dump-version store/term-store-dump-version))
+      (fail "fri: legacy TermStore payload requires rebuild" :cache-rebuild-required)
+      (if (not (= payload-flags PAYLOAD-FLAGS))
+        (fail "fri: unsupported payload flags" :invalid-fri-cache)
+        (let [next-sequence: Int (read-i64-le! buffer "next sequence")
+              atoms: Any (read-atoms! buffer)
+              triples: Any (read-triples! buffer atoms)
+              transactions: Any (read-transactions! buffer)
+              operations: Any (read-operations! buffer)
+              indexes: Any (read-indexes! buffer)
+              dump: t/TermStoreDump
+              (t/->TermStoreDump dump-version space-id next-sequence
+                                 atoms triples transactions operations)]
+          (if (not (= 0 (.remaining buffer)))
+            (fail "fri: trailing bytes in binary payload" :invalid-fri-cache)
+            (if (not (= indexes (index-data triples)))
               (fail "fri: slot index does not match TripleRow table"
                     :invalid-fri-cache)
               {:dump dump :indexes indexes})))))))
@@ -257,68 +471,78 @@
   [dump: Any path: String source: CacheSource] -> Any
   (do
     (validate-dump! dump source)
-    (let [payload: Any (utf8 (pr-str (dump-data dump)))
-          header: Any (utf8 (pr-str [(cachesource-space-id source)
-                                     (cachesource-fingerprint source)
-                                     (cachesource-valid-bytes source)
-                                     (sha256 payload)]))
+    (let [payload: Any (write-payload! dump)
+          payload-sha: Any (sha256-bytes payload)
           buffer: ByteArrayOutputStream (ByteArrayOutputStream.)]
-      (with-open [stream (DataOutputStream. buffer)]
-        (.write stream (utf8 MAGIC))
-        (.writeInt stream FMT)
-        (.writeInt stream (alength header))
-        (.write stream header)
-        (.writeLong stream (alength payload))
-        (.write stream payload)
-        (.flush stream))
-      (write-bytes! path (.toByteArray buffer))
-      (->CacheReceipt FMT
-                      (cachesource-space-id source)
-                      (cachesource-fingerprint source)
-                      (cachesource-valid-bytes source)
-                      (sha256 (.toByteArray buffer))))))
+      (.write buffer (strict-utf8 MAGIC "magic"))
+      (write-u16-le! buffer FMT)
+      (write-u16-le! buffer FLAGS)
+      (write-sized-text! buffer (cachesource-space-id source) "SpaceId")
+      (.write buffer (.parseHex (HexFormat/of)
+                                (cachesource-fingerprint source)))
+      (write-i64-le! buffer (cachesource-valid-bytes source) "source position")
+      (.write buffer payload-sha)
+      (write-i64-le! buffer (alength payload) "payload length")
+      (.write buffer payload)
+      (let [bytes: Any (.toByteArray buffer)]
+        (write-bytes! path bytes)
+        (->CacheReceipt FMT
+                        (cachesource-space-id source)
+                        (cachesource-fingerprint source)
+                        (cachesource-valid-bytes source)
+                        (sha256 bytes))))))
 
-(defn- read-sized [stream: DataInputStream n: Int] -> Any
-  (if (or (< n 0) (> n 2147483647))
-    (fail "fri: invalid segment length" :invalid-fri-cache)
-    (let [bytes: Any (byte-array n)]
-      (.readFully stream bytes)
-      bytes)))
+(defn- bytes-prefix? [bytes: Any prefix: Any] -> Bool
+  (and (>= (alength bytes) (alength prefix))
+       (Arrays/equals prefix (Arrays/copyOfRange bytes 0 (alength prefix)))))
 
-(defn- decode-header [bytes: Any] -> Any
-  (let [value: Any (edn/read-string (String. bytes StandardCharsets/UTF_8))]
-    (if (and (vector? value)
-             (and (= 4 (count value))
-                  (and (string? (nth value 0))
-                       (and (string? (nth value 1))
-                            (and (integer? (nth value 2))
-                                 (string? (nth value 3)))))))
-      value
-      (fail "fri: malformed cache header" :invalid-fri-cache))))
-
-(defn- read-envelope [path: String] -> Any
+(defn- read-envelope! [path: String] -> Any
   (try
-    (with-open [stream (DataInputStream.
-                        (ByteArrayInputStream. (Files/readAllBytes (.toPath (File. path)))))]
-      (let [magic-bytes: Any (read-sized stream (count MAGIC))
-            magic: String (String. magic-bytes StandardCharsets/US_ASCII)]
-        (if (= magic "FRAMFRI1")
-          (fail "fri: legacy or unknown cache requires rebuild from canonical FRAMLOG"
-                :cache-rebuild-required)
+    (let [bytes: Any (Files/readAllBytes (.toPath (File. path)))
+          legacy: Any (strict-utf8 "FRAMFRI1" "legacy magic")]
+      (if (bytes-prefix? bytes legacy)
+        (fail "fri: legacy cache requires rebuild from canonical FRAMLOG"
+              :cache-rebuild-required)
+        (let [buffer: ByteBuffer
+              (doto (ByteBuffer/wrap bytes) (.order ByteOrder/LITTLE_ENDIAN))
+              magic: String
+              (strict-utf8-string (read-fixed! buffer (count MAGIC) "cache magic")
+                                  "cache magic")]
           (if (not (= magic MAGIC))
             (fail "fri: invalid cache magic" :invalid-fri-cache)
-            (let [format: Int (.readInt stream)]
+            (let [format: Int (read-u16-le! buffer "cache format")
+                  flags: Int (read-u16-le! buffer "cache flags")]
               (if (= format 1)
-              (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG"
-                    :cache-rebuild-required)
+                (fail "fri: legacy cache format requires rebuild from canonical FRAMLOG"
+                      :cache-rebuild-required)
                 (if (not (= format FMT))
                   (fail "fri: unsupported cache format" :invalid-fri-cache)
-                  (let [header: Any (decode-header (read-sized stream (.readInt stream)))
-                        payload-length: Int (.readLong stream)
-                        payload: Any (read-sized stream payload-length)]
-                    (if (not (= 0 (.available stream)))
-                      (fail "fri: cache has trailing bytes" :invalid-fri-cache)
-                      {:header header :payload payload})))))))))
+                  (if (not (= flags FLAGS))
+                    (fail "fri: unsupported cache flags" :invalid-fri-cache)
+                    (let [space-id: String (read-sized-text! buffer "SpaceId")
+                          fingerprint: String
+                          (hex (read-fixed! buffer FINGERPRINT-BYTES
+                                            "source fingerprint"))
+                          source-position: Int
+                          (read-i64-le! buffer "source position")
+                          payload-sha: Any
+                          (read-fixed! buffer FINGERPRINT-BYTES "payload checksum")
+                          payload-length: Int
+                          (read-i64-le! buffer "payload length")]
+                      (if (or (< source-position 0)
+                              (or (< payload-length 0)
+                                  (> payload-length 2147483647)))
+                        (fail "fri: invalid source position or payload length"
+                              :invalid-fri-cache)
+                        (let [payload: Any
+                              (read-fixed! buffer payload-length "cache payload")]
+                          (if (not (= 0 (.remaining buffer)))
+                            (fail "fri: cache has trailing bytes" :invalid-fri-cache)
+                            {:space-id space-id
+                             :fingerprint fingerprint
+                             :source-position source-position
+                             :payload-sha payload-sha
+                             :payload payload}))))))))))))
     (catch clojure.lang.ExceptionInfo error
       (throw error))
     (catch Throwable error
@@ -326,23 +550,22 @@
                       {:type :invalid-fri-cache :cause (str error)})))))
 
 (defn open-fri! [path: String source: CacheSource] -> Any
-  (let [envelope: Any (read-envelope path)
-        header: Any (:header envelope)
+  (let [envelope: Any (read-envelope! path)
         payload: Any (:payload envelope)
-        stored-space: Any (nth header 0)
-        stored-fingerprint: Any (nth header 1)
-        stored-position: Any (nth header 2)
-        stored-sha: Any (nth header 3)]
+        stored-space: Any (:space-id envelope)
+        stored-fingerprint: Any (:fingerprint envelope)
+        stored-position: Any (:source-position envelope)
+        stored-sha: Any (:payload-sha envelope)]
     (if (not (= stored-space (cachesource-space-id source)))
       (fail "fri: cache belongs to a different SpaceId" :cache-space-mismatch)
       (if (not (and (= stored-fingerprint (cachesource-fingerprint source))
                     (= stored-position (cachesource-valid-bytes source))))
         (fail "fri: cache does not match the canonical FRAMLOG prefix"
               :cache-source-mismatch)
-        (if (not (= stored-sha (sha256 payload)))
+        (if (not (Arrays/equals stored-sha (sha256-bytes payload)))
           (fail "fri: cache payload checksum mismatch" :invalid-fri-cache)
           (let [cache-data: Any
-                (data-cache (edn/read-string (String. payload StandardCharsets/UTF_8)))
+                (read-payload! payload stored-space)
                 dump: t/TermStoreDump (:dump cache-data)
                 ctx: Any (validate-dump! dump source)]
             (->CacheImage source dump (:indexes cache-data) ctx)))))))

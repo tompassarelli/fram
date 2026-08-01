@@ -11,6 +11,9 @@
     nil
     (catch clojure.lang.ExceptionInfo error (:type (ex-data error)))))
 
+(defn hex [bytes]
+  (apply str (map #(format "%02x" (bit-and (int %) 255)) bytes)))
+
 (def path "/tmp/fram-fri-cache-v2.fri")
 (def path-two "/tmp/fram-fri-cache-v2-second.fri")
 (def legacy-path "/tmp/fram-fri-cache-v1.fri")
@@ -45,7 +48,17 @@
 (def stale-position (fri/source-binding "fri-space" fingerprint 4095))
 (def runtime-source
   (str/join "\n" (map slurp ["fri.clj" "rotations.clj"
-                              "src/fri.bclj" "src/fri_port.bclj"])))
+                              "src/fri.bclj" "src/fri_port.bclj"
+                              "out/fri.clj" "out/fri_port.clj"])))
+(def encode-term-v1! (deref (ns-resolve 'fri-port 'encode-term-v1!)))
+(def decode-term-v1! (deref (ns-resolve 'fri-port 'decode-term-v1!)))
+(def framlog-golden-term (t/triple "Alice" :email "alice@example.com"))
+(def framlog-golden-term-hex
+  "070105000000416c6963650605000000656d61696c0111000000616c696365406578616d706c652e636f6d")
+(def malformed-length (byte-array [1 5 0 0 0 65]))
+(def malformed-tag (byte-array [-1]))
+(def excessive-depth (byte-array (repeat 258 7)))
+(def trailing-term-byte (byte-array [4 0]))
 (java.nio.file.Files/copy
  (.toPath (java.io.File. path))
  (.toPath (java.io.File. corrupt-path))
@@ -60,7 +73,20 @@
 
 (def checks
   [["FRI2 magic/version are the only runtime format"
-    (and (= "FRAMFRI2" fri/MAGIC) (= 2 fri/FMT))]
+    (and (= "FRAMFRI2" fri/MAGIC)
+         (= 2 fri/FMT)
+         (= [2 0 0 0]
+            (mapv #(bit-and (int %) 255) (subvec (vec bytes-one) 8 12))))]
+   ["TermCodecV1 bytes equal the committed JVM/Zig FRAMLOG golden"
+    (= framlog-golden-term-hex (hex (encode-term-v1! framlog-golden-term)))]
+   ["TermCodecV1 rejects a truncated sized value"
+    (= :invalid-fri-cache (error-type #(decode-term-v1! malformed-length)))]
+   ["TermCodecV1 rejects an unknown tag"
+    (= :invalid-fri-cache (error-type #(decode-term-v1! malformed-tag)))]
+   ["TermCodecV1 rejects recursion beyond the FRAMLOG depth bound"
+    (= :invalid-fri-cache (error-type #(decode-term-v1! excessive-depth)))]
+   ["TermCodecV1 rejects trailing bytes inside a framed row"
+    (= :invalid-fri-cache (error-type #(decode-term-v1! trailing-term-byte)))]
    ["cache is deterministic for one dump and source prefix"
     (java.util.Arrays/equals bytes-one bytes-two)]
    ["cache binds immutable SpaceId and canonical-log prefix"
@@ -109,7 +135,9 @@
    ["FRI1 is never opened or migrated in the cache path"
     (= :cache-rebuild-required (error-type #(fri/open-fri! legacy-path cache-source)))]
    ["FRI runtime contains no legacy assertion-id or four-ary query vocabulary"
-    (nil? (re-find #"(?i)\\bcid\\b|fact-id|StoredFact|StoredTxOf" runtime-source))]] )
+    (nil? (re-find #"(?i)\\bcid\\b|fact-id|StoredFact|StoredTxOf" runtime-source))]
+   ["FRI runtime has no EDN parser or printer in its persistence spine"
+    (nil? (re-find #"clojure\\.edn|pr-str|read-string" runtime-source))]] )
 
 (fri/close-fri! image)
 (doseq [p [path path-two legacy-path corrupt-path]] (.delete (java.io.File. p)))
