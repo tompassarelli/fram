@@ -1773,28 +1773,30 @@
     (whole-corpus-projection (:facts snapshot))
     (rotations/datalog-projection (:idx snapshot))))
 
-(defn- whole-facts-page-query? [query]
-  (and (map? query)
-       (string? (:find query))
-       (not (contains? query :strata))
-       (vector? (:rules query))
-       (= 1 (count (:rules query)))
-       (let [rule (first (:rules query))
-             head (:head rule)
-             body (:body rule)
-             literal (when (= 1 (count body)) (first body))
-             args (:args literal)
-             vars (when (vector? args) (mapv :var args))]
-         (and (map? rule)
-              (vector? body)
-              (map? literal)
-              (= "triple" (:rel literal))
-              (not (:neg literal))
-              (= 3 (count args))
-              (every? var-term? args)
-              (= 3 (count (set vars)))
-              (= (:find query) (:rel head))
-              (= args (:args head))))))
+(defn- one-triple-page-pattern [query]
+  (let [query (q/canon-q query)
+        rules (:rules query)
+        rule (when (and (vector? rules) (= 1 (count rules))) (first rules))
+        head (:head rule)
+        body (:body rule)
+        literal (when (and (vector? body) (= 1 (count body))) (first body))
+        arguments (:args literal)
+        head-arguments (:args head)]
+    (when (and (map? query)
+               (string? (:find query))
+               (not (contains? query :strata))
+               (map? rule)
+               (map? head)
+               (vector? head-arguments)
+               (map? literal)
+               (= "fact" (:rel literal))
+               (not (:neg literal))
+               (vector? arguments)
+               (= 3 (count arguments))
+               (= (:find query) (:rel head)))
+      {:query query
+       :arguments arguments
+       :head-arguments head-arguments})))
 
 (defn- build-ordered-facts [snapshot]
   (let [keyed
@@ -1814,6 +1816,27 @@
               (let [ordered (build-ordered-facts snapshot)]
                 (reset! slot ordered)
                 ordered))))))
+
+(defn- unrestricted-triple-pattern? [{:keys [arguments head-arguments]}]
+  (let [variables (mapv #(when (var-term? %) (:var %)) arguments)]
+    (and (= head-arguments arguments)
+         (every? some? variables)
+         (= 3 (count (set variables))))))
+
+(defn- one-triple-page-rows [snapshot pattern]
+  (let [ordered (ordered-facts snapshot)]
+    (if (unrestricted-triple-pattern? pattern)
+      ordered
+      (let [rows
+            (persistent!
+             (reduce (fn [acc row]
+                       (if-let [bindings (unify-tuple (:arguments pattern) row {})]
+                         (conj! acc (ground-head (:head-arguments pattern) bindings))
+                         acc))
+                     (transient #{})
+                     ordered))]
+        (query-check)
+        (vec (sort-by pr-str rows))))))
 
 (defn- page-start [ordered after]
   (if (nil? after)
@@ -1869,11 +1892,11 @@
              (q/page-cursor (nth rows (dec n))))
      :more more}))
 
-(defn- run-whole-facts-page [snapshot query limit after]
-  (let [errors (q/validate query)]
+(defn- run-one-triple-page [snapshot pattern limit after]
+  (let [errors (q/validate (:query pattern))]
     (if (seq errors)
       {:error errors}
-      (let [ordered (ordered-facts snapshot)
+      (let [ordered (one-triple-page-rows snapshot pattern)
             start (page-start ordered after)]
         (if (map? start)
           start
@@ -1999,6 +2022,8 @@
                      (string? (:find (:query req)))
                      (simple-query? (:query req)))
         engine (if use-idx "index" "scan")
+        one-triple-pattern (when (= :query-page (:op req))
+                             (one-triple-page-pattern (:query req)))
         version (if (and (= :query-page (:op req))
                          (integer? (:at-version req))
                          (not (neg? (:at-version req))))
@@ -2028,13 +2053,13 @@
                                  (idx-run (:idx snapshot) (:query req))
                                  (q/run-projected (snapshot-projection snapshot (:query req))
                                                   (:query req)))
-                        :query-page (if (and (whole-facts-page-query? (:query req))
+                        :query-page (if (and one-triple-pattern
                                              (integer? (:limit req))
                                              (<= 1 (:limit req) q/max-page-limit)
                                              (or (nil? (:after req))
                                                  (string? (:after req))))
-                                      (run-whole-facts-page
-                                       snapshot (:query req) (:limit req) (:after req))
+                                      (run-one-triple-page
+                                       snapshot one-triple-pattern (:limit req) (:after req))
                                       (q/run-page-projected
                                        (snapshot-projection snapshot (:query req))
                                        (:query req) (:limit req) (:after req)))

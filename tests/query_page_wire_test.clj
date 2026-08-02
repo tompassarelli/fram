@@ -42,6 +42,25 @@
             :body [{:rel "fact"
                     :args [{:var "x"} "page" {:var "v"}]}]}]})
 
+(def constant-predicate-q
+  {:find "page-pair"
+   :rules [{:head {:rel "page-pair"
+                   :args [{:var "subject"} {:var "value"}]}
+            :body [{:rel "triple"
+                    :args [{:var "subject"} "page" {:var "value"}]}]}]})
+
+(def repeated-variable-q
+  {:find "self-row"
+   :rules [{:head {:rel "self-row" :args [{:var "value"}]}
+            :body [{:rel "triple"
+                    :args [{:var "value"} "same" {:var "value"}]}]}]})
+
+(def no-match-q
+  {:find "missing-row"
+   :rules [{:head {:rel "missing-row" :args [{:var "value"}]}
+            :body [{:rel "triple"
+                    :args ["@absent" "page" {:var "value"}]}]}]})
+
 (defn json-request [port request]
   (with-open [socket (java.net.Socket.)]
     (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 1000)
@@ -77,7 +96,11 @@
       log (io/file dir "facts.log")
       _ (spit log "")
       daemon (proc/process
-              {:dir root :out :string :err :string}
+              {:dir root :out :string :err :string
+               :env (dissoc (into {} (System/getenv))
+                            "FRAM_TELEMETRY_LOG"
+                            "NORTH_TELEMETRY_PARTITION"
+                            "NORTH_TELEMETRY_PORT")}
               "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
               (str port) (.getPath log))]
   (try
@@ -128,6 +151,64 @@
       (check! "terminal stamped page has no continuation"
               (and (not (:more remaining))
                    (nil? (:next remaining)))))
+
+    (let [_ (rt/coord-assert-for-log
+             port (.getPath log) "@same" "same" "@same"
+             (rt/coord-version-for-log port (.getPath log)))
+          _ (rt/coord-assert-for-log
+             port (.getPath log) "@not-same" "same" "@different"
+             (rt/coord-version-for-log port (.getPath log)))
+          constant-page
+          (rt/coord-query-page-for-log
+           port (.getPath log) constant-predicate-q 100 nil)
+          repeated-page
+          (rt/coord-query-page-for-log
+           port (.getPath log) repeated-variable-q 100 nil)
+          missing-page
+          (rt/coord-query-page-for-log
+           port (.getPath log) no-match-q 100 nil)]
+      (check! "constant-predicate page preserves projected bindings and order"
+              (= (vec (sort-by pr-str
+                               (mapv (fn [subject] [subject "yes"])
+                                     ["@z" "@a" "@m" "@🐢" "@10" "@2"])))
+                 (:ok constant-page)))
+      (check! "repeated-variable page unifies equal positions"
+              (= [["@same"]] (:ok repeated-page)))
+      (check! "constant no-match page returns the empty relation"
+              (and (= [] (:ok missing-page))
+                   (not (:more missing-page))
+                   (nil? (:next missing-page)))))
+
+    (let [reference
+          (rt/coord-query-page-for-log
+           port (.getPath log) constant-predicate-q 100 nil)
+          first-page
+          (rt/coord-query-page-for-log
+           port (.getPath log) constant-predicate-q 2 nil)
+          pinned-version (:version first-page)
+          _ (rt/coord-assert-for-log
+             port (.getPath log) "@zz-late" "page" "yes"
+             (rt/coord-version-for-log port (.getPath log)))
+          pinned-request
+          {:op :for-log
+           :expected-log (.getCanonicalPath log)
+           :fmt :json
+           :request {:op :query-page
+                     :query constant-predicate-q
+                     :limit 100
+                     :after (:next first-page)
+                     :at-version pinned-version}}
+          pinned-rest (:response (json-request port pinned-request))
+          pinned-rows (vec (concat (:ok first-page) (:ok pinned-rest)))
+          fresh
+          (rt/coord-query-page-for-log
+           port (.getPath log) constant-predicate-q 100 nil)]
+      (check! "constant-predicate cursor stays on its immutable version across write"
+              (and (= pinned-version (:version pinned-rest))
+                   (= (:ok reference) pinned-rows)
+                   (not (some #{["@zz-late" "yes"]} pinned-rows))))
+      (check! "fresh constant-predicate page sees the later write"
+              (some #{["@zz-late" "yes"]} (:ok fresh))))
 
     (let [request
           {:op :for-log
