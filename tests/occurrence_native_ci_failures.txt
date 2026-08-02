@@ -9,6 +9,7 @@ vocab-residue	bin/fram-code-status
 vocab-residue	build/generated-targets.d/00-current.tsv
 vocab-residue	coord_daemon.clj
 vocab-residue	deploy/cloudflare/PROCEDURE.md
+vocab-residue	docs/WHY_FRAM_EXISTS.md
 vocab-residue	docs/architecture.md
 vocab-residue	docs/archive/measurements.md
 vocab-residue	flake.nix
@@ -16,3 +17,4 @@ vocab-residue	integrations/north/hooks/code-upstream-guard.sh
 vocab-residue	integrations/north/hooks/code-upstream-guard.test.sh
 vocab-residue	integrations/north/skills/fact-modeling/SKILL.md
 vocab-residue	tests/daemon_read_cli_test.clj
+vocab-residue	tests/docs_semantics_ratchet.sh

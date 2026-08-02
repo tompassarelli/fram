@@ -10,6 +10,7 @@ canonical_docs=(
   docs/architecture.md
   docs/concurrency-and-writes.md
   docs/coordinator-bind-and-wire.md
+  docs/glossary.md
   docs/isolation-and-deployment.md
   docs/naming.md
   docs/query-reference.md
