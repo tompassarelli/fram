@@ -53,8 +53,8 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | I1 | One active coordinator per `SpaceId`; accepted transactions serialize under a single lock | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
-| I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises | UNBACKED | port of the K=8 socket-writer + durable-log-byte verification pattern (dead `store_write_conc_test.clj`) — planned |
-| I4 | Ack latency is bounded under contention (no lock convoy) | UNBACKED | port of the injected-delay ≤250 ms pattern (dead `coord_lock_convoy_test.clj`) — planned |
+| I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame verification |
+| I4 | Ack latency is bounded under contention: a lone write during a 2 s slow read acks ≤ 250 ms; ten concurrent writes stay within delay-relative and baseline-relative bounds (writes serialize per-commit fsync — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
 
 ## Ordering and recovery
 
@@ -91,6 +91,11 @@ engine and must not be quoted for head. The envelope work is:
   latency, durable write throughput (single and batch), and sustained
   write-under-read;
 - restart cost is O(full log) at head (no checkpoint); the bound is unmeasured;
+- writes serialize through one per-commit fsync under the coordinator lock
+  (~35 ms/commit observed on local disk → tens of committed tx/s serialized;
+  batches amortize). Group commit does not exist. Every operation except
+  `:rpc/query` also executes inside that lock, so a slow non-query op stalls
+  writers 1:1 — a structural exposure, measured and recorded, not yet gated;
 - overload behavior is **unspecified**: the head daemon currently has no
   admission control (unbounded connection futures). Until bounded admission
   lands, nothing can be promised about behavior at saturation — that is a

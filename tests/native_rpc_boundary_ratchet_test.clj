@@ -44,7 +44,7 @@
   (check! "daemon serves only the closed thirteen-op FRAMRPC set"
           (= 13 (count (re-seq #":rpc/[a-z-]+" (between daemon
                                                        "(def native-rpc-operations"
-                                                       "(defn- daemon-fail!"))))
+                                                       "(def paged-rpc-operations"))))
           nil))
 
 (let [runtime (file-source "src/fram/rt.clj")
