@@ -36,10 +36,10 @@ Two runtime surfaces exist until cluster migration completes:
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | D1 | An acked commit is durable: one FRAMLOG frame is appended, flushed, and `force(true)`-synced before the new head is published | PARTIAL | mechanism `coord.clj` `append-frame-durable!`; no gate asserts the sync ordering — torn-sweep + crash-kill work in flight |
-| D2 | A torn trailing frame never corrupts state: authority boot truncates to `:valid-bytes`; exactly the longest committed prefix survives, at every possible cut offset | PARTIAL | one scenario gated in [`../tests/coord_test.clj`](../tests/coord_test.clj); exhaustive byte-cut sweep `tests/framlog_torn_sweep_test.clj` in flight |
-| D3 | A standby (no writer authority) reports a torn tail and never rewrites the log | PARTIAL | single scenario in `coord_test.clj`; sweep passive arm in flight |
+| D2 | A torn trailing frame never corrupts state: authority boot truncates to `:valid-bytes`; exactly the longest committed prefix survives, at every possible cut offset | BACKED | [`../tests/framlog_torn_sweep_test.clj`](../tests/framlog_torn_sweep_test.clj) — every-byte cut sweep, 3,984 boots, exact-image oracle with negative control; plus `coord_test.clj` |
+| D3 | A standby (no writer authority) reports a torn tail and never rewrites the log | BACKED | sweep passive arm asserts byte-identical file at every cut; plus `coord_test.clj` |
 | D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:coordinator-corrupt`); writes are refused until restart | PARTIAL | `coord_test.clj` fault injection at three points on `append-frame-durable!` |
-| D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | UNBACKED | corrupt-tail arm of the sweep in flight; per-frame checksum is future work |
+| D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | BACKED | sweep flip arm — 3,968 single-bit/high-bit flips: every one detected by CRC or repaired-to-prefix, zero divergent images. Residual (named, unswept): multi-byte garbage tails; header-region corruption is gated separately in `coord_test.clj` |
 
 ## Atomicity
 
