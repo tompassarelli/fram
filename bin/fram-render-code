@@ -29,8 +29,6 @@
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc]
-         '[fram.store :as c]
-         '[fram.schema :as s]
          '[fram.rt :as rt])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
@@ -97,6 +95,8 @@
     (System/exit 0)))
 
 ;; ===== COLD path (only reached when NOT --port) — load the heavy machinery now. =====
+(require '[fram.store :as c]
+         '[fram.schema :as s])
 (load-file (str fram-home "/coord_daemon.clj"))   ; migrate-flat->co + the warm-store machinery
 (load-file resolve-clj)                       ; extract-file! / resolve-warm-store! / out-path
 
