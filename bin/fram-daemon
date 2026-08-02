@@ -6,6 +6,11 @@
 # store-only Java classpath.
 #   fram-daemon [serve] [port] [framlog] [space-id]   (mode defaults to serve)
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
+#   FRAM_DAEMON_XMX=4g         max heap; empty disables the flag (JVM ergonomics)
+#   FRAM_DAEMON_G1_REGION=32m  G1 region size; empty disables the flag
+#   FRAM_DAEMON_LOG=<path>     request log file (default stderr)
+#   FRAM_DAEMON_QUIET=1        log only slow requests
+#   FRAM_SLOW_MS=1000          slow-request threshold, always logged
 #   TLS termination belongs at the authenticated gateway until the sealed native
 #   TLS listener is restored; these public data sockets are plaintext/private.
 # cd $HERE so the daemon's relative load-file assets resolve.
@@ -52,6 +57,16 @@ fi
 daemon_args=(coord_daemon.clj "$mode" "${1:-7977}" "$log_path")
 if [[ -n "$space_id" ]]; then daemon_args+=("$space_id"); fi
 
+# Heap and G1 region size are bound together: shrinking the heap also shrinks the
+# ergonomic region, which LOWERS the humongous-allocation threshold.
+heap_flags=()
+xmx="${FRAM_DAEMON_XMX-4g}"
+if [[ -n "$xmx" ]]; then heap_flags+=("-Xmx$xmx"); fi
+g1_region="${FRAM_DAEMON_G1_REGION-32m}"
+if [[ -n "$g1_region" ]]; then
+  heap_flags+=(-XX:+UseG1GC "-XX:G1HeapRegionSize=$g1_region")
+fi
+
 if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
   if [[ -z "${FRAM_JAVA:-}" || -z "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
     echo "fram-daemon: FRAM_JAVA and FRAM_DAEMON_CLASSPATH_FILE must be set together" >&2
@@ -71,7 +86,7 @@ if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
     exit 2
   fi
   cd "$HERE"
-  jvm_args=()
+  jvm_args=("${heap_flags[@]}")
   if [[ -n "${FRAM_LISTEN_FD:-}" ]]; then
     jvm_args+=(
       --add-exports=java.base/sun.nio.ch=ALL-UNNAMED
@@ -84,6 +99,7 @@ fi
 
 cd "$HERE"
 clojure_jvm_args=()
+for flag in "${heap_flags[@]}"; do clojure_jvm_args+=("-J$flag"); done
 if [[ -n "${FRAM_LISTEN_FD:-}" ]]; then
   clojure_jvm_args+=(
     -J--add-exports=java.base/sun.nio.ch=ALL-UNNAMED

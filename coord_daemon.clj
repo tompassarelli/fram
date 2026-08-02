@@ -12,9 +12,10 @@
             [fram.store :as term-store]
             [fram.types :as t])
   (:import [java.net ServerSocket Socket]
-           [java.io ByteArrayOutputStream InputStream OutputStream]
+           [java.io ByteArrayOutputStream InputStream OutputStream Writer]
            [java.nio ByteBuffer ByteOrder]
-           [java.security MessageDigest]))
+           [java.security MessageDigest]
+           [java.time Instant]))
 
 (load-file "coord.clj")
 (load-file "coord_writer_authority.clj")
@@ -27,6 +28,86 @@
 (def active-requests (atom {}))
 (def ^:private query-page-snapshot-limit 4)
 (def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
+
+;; Request observability: the slow threshold is checked before the quiet gate,
+;; so a stalled request still leaves a trace under FRAM_DAEMON_QUIET.
+
+(defn- env-string [name]
+  (not-empty (System/getenv name)))
+
+(defn- env-long [name fallback]
+  (or (when-let [raw (env-string name)]
+        (try (Long/parseLong (.trim ^String raw)) (catch Throwable _ nil)))
+      fallback))
+
+(def request-log-path (env-string "FRAM_DAEMON_LOG"))
+(def request-log-quiet? (= "1" (System/getenv "FRAM_DAEMON_QUIET")))
+(def slow-request-ms (env-long "FRAM_SLOW_MS" 1000))
+
+(def request-stats
+  (atom {:requests 0 :errors 0 :slow 0 :ops {} :max-ms 0 :last-ms 0 :last nil}))
+
+(def ^:private request-log-writer (atom nil))
+
+(defn- request-log-sink []
+  (when request-log-path
+    (or @request-log-writer
+        (swap! request-log-writer
+               #(or % (try (io/writer (io/file request-log-path) :append true)
+                           (catch Throwable _ nil)))))))
+
+(defn- emit-log-line! [line]
+  ;; System/err rather than *err*: a daemon thread must not inherit whatever
+  ;; dynamic binding happened to be live when the connection thread forked.
+  (if-let [^Writer writer (request-log-sink)]
+    (locking request-log-writer
+      (.write writer ^String line)
+      (.write writer "\n")
+      (.flush writer))
+    (.println System/err line)))
+
+(defn- close-request-log! []
+  (locking request-log-writer
+    (when-let [^Writer writer @request-log-writer]
+      (try (.close writer) (catch Throwable _ nil)))
+    (reset! request-log-writer nil)))
+
+(defn record-request!
+  "Account one served request and log it. `elapsed-ns` covers daemon-side work
+   only — decode to response-written — so client send time never reads as
+   coordinator latency."
+  [operation elapsed-ns outcome code response-bytes]
+  (let [ms (quot (long elapsed-ns) 1000000)
+        slow? (>= ms slow-request-ms)]
+    (swap! request-stats
+           (fn [stats]
+             (cond-> stats
+               true (update :requests inc)
+               (= :error outcome) (update :errors inc)
+               slow? (update :slow inc)
+               true (update-in [:ops (or operation :unknown)] (fnil inc 0))
+               true (update :max-ms max ms)
+               true (assoc :last-ms ms
+                           :last {:op operation :ms ms
+                                  :outcome outcome :code code}))))
+    (when (or slow? (not request-log-quiet?))
+      (emit-log-line!
+       (str "fram-rpc ts=" (Instant/now)
+            " op=" (or operation :unknown)
+            " ms=" ms
+            " outcome=" (name outcome)
+            (when code (str " code=" code))
+            (when response-bytes (str " bytes=" response-bytes))
+            (when slow? " slow=1"))))
+    ms))
+
+(defn- response-outcome
+  "Errors reach the client as a response field, not a thrown exception, so the
+   only place an error code is observable is the encoded response frame."
+  [frame]
+  (if-let [error (some-> frame t/rpcframev1-response t/rpcresponse-error)]
+    [:error (t/rpcerror-code error)]
+    [:ok nil]))
 
 (def native-rpc-operations
   #{:rpc/version :rpc/status :rpc/assert :rpc/retract :rpc/batch :rpc/scan
@@ -76,6 +157,7 @@
   (reset! coordinator nil)
   (reset! coordinator-role nil)
   (reset! listener nil)
+  (close-request-log!)
   nil)
 
 (defn boot!
@@ -1119,8 +1201,9 @@
               (wire/encode-rpc-frame-v1!
                (wire/rpc-response-frame
                 (t/rpcframev1-request-id frame) fallback)))))]
-    (.write output bytes))
-  (.flush output))
+    (.write output bytes)
+    (.flush output)
+    (alength ^bytes bytes)))
 
 (defn- cancellation-state []
   {:cancelled (atom false) :query-control (atom nil)})
@@ -1155,23 +1238,42 @@
   (with-open [socket socket]
     (let [input (.getInputStream socket)
           output (.getOutputStream socket)
-          frame (read-rpc-frame! input)]
-      (when frame
-        (if (= :cancel (t/rpcframev1-kind frame))
-          (handle-rpc-frame! frame (cancellation-state))
-          (let [request-id (t/rpcframev1-request-id frame)
-                cancellation (cancellation-state)]
-            (register-request! request-id cancellation)
-            (future
-              (try
-                (when (neg? (.read input))
-                  (cancel-state! cancellation :client-disconnected))
-                (catch Throwable _
-                  (cancel-state! cancellation :client-disconnected))))
-            (try
-              (write-rpc-frame! output (handle-rpc-frame! frame cancellation))
-              (finally
-                (swap! active-requests dissoc request-id)))))))))
+          opened (System/nanoTime)]
+      (try
+        (let [frame (read-rpc-frame! input)
+              started (System/nanoTime)]
+          (when frame
+            (if (= :cancel (t/rpcframev1-kind frame))
+              (let [result (handle-rpc-frame! frame (cancellation-state))]
+                (record-request! :rpc/cancel (- (System/nanoTime) started)
+                                 :ok nil nil)
+                result)
+              (let [request-id (t/rpcframev1-request-id frame)
+                    operation (t/rpcrequest-op (t/rpcframev1-request frame))
+                    cancellation (cancellation-state)]
+                (register-request! request-id cancellation)
+                (future
+                  (try
+                    (when (neg? (.read input))
+                      (cancel-state! cancellation :client-disconnected))
+                    (catch Throwable _
+                      (cancel-state! cancellation :client-disconnected))))
+                (try
+                  (let [response (handle-rpc-frame! frame cancellation)
+                        response-bytes (write-rpc-frame! output response)
+                        [outcome code] (response-outcome response)]
+                    (record-request! operation (- (System/nanoTime) started)
+                                     outcome code response-bytes))
+                  (finally
+                    (swap! active-requests dissoc request-id)))))))
+        (catch Throwable error
+          ;; Frame-level failures never reach handle-rpc-request!, so without
+          ;; this arm a malformed or duplicated request is served invisibly.
+          (let [data (ex-data error)
+                code (or (:fram/code data) (:code data) (:type data)
+                         :rpc/internal-error)]
+            (record-request! nil (- (System/nanoTime) opened) :error code nil))
+          (throw error))))))
 
 (defn serve!
   "Serve FRAMRPC v1 requests. The default bind is loopback; an authenticated
@@ -1187,6 +1289,15 @@
                   " space=" (coord/coordinator-space @coordinator)
                   " role=" (name @coordinator-role)))
     (flush)
+    (emit-log-line!
+     (str "fram-rpc ts=" (Instant/now) " op=daemon/listen"
+          " bind=" bind-host ":" port
+          " space=" (coord/coordinator-space @coordinator)
+          " role=" (name @coordinator-role)
+          " slow-ms=" slow-request-ms
+          " quiet=" (if request-log-quiet? 1 0)
+          " log=" (or request-log-path "stderr")
+          " max-heap-mb=" (quot (.maxMemory (Runtime/getRuntime)) 1048576)))
     (try
       (while (not @stopping?)
         (try
