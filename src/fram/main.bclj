@@ -1,15 +1,12 @@
 #lang beagle/clj
 (ns fram.main
-  "Engine CLI: generic fact operations over the log — import/export, show, set,
-  merge, tell/retract (coordinator write; `untell` is an accepted alias for
-  `retract`), validate, watch. The life domain
+  "Engine CLI: generic fact operations over the log — tell/retract (coordinator
+  write; `untell` is an accepted alias for `retract`), validate, query. The life domain
   (lifecycle projections, clock, capture conventions) lives in North."
   (:gen-class))
 
 (require fram.kernel :as k)
 (require fram.fold :as fold)
-(require fram.import :as imp)
-(require fram.export :as exp)
 (require clojure.string :as str)
 (require fram.tools :as tl)
 (require fram.query :as q)
@@ -74,61 +71,12 @@
 
 ;; --- commands ---------------------------------------------------------------
 
-;; SAFETY (concurrent agents): import rewrites the log FROM the files, so it would
-;; drop any facts in the log that aren't in the files — i.e. pending coordinator
-;; writes. Refuse if that would lose data; `export` first, or `--force` to overwrite.
-(defn cmd-import [threads-dir :- String log :- String force :- Bool] :- Nil
+;; SAFETY (concurrent agents): validation reads the folded log without mutation.
+(defn cmd-validate [log :- String] :- Nil
   ;; vGUARD floor law: a generation-managed corpus (any @log:gen generation
   ;; line — a vR flip's control record) must NEVER be wholesale-rewritten by
   ;; this binary; pre-flip rewrite semantics could resurrect dead values.
   ;; Unconditional — --force does not override the floor.
-  (if (fram.rt/generation-managed? log)
-    (println (str "REFUSING import: corpus is generation-managed; use fram >= vR or `fram split` first"))
-    (let [as (imp/load-corpus threads-dir)
-          file-sigs (sig-member-map (:facts (fold/fold as)))
-          lost (pending-coord-count log file-sigs)]
-      (if (and (> lost 0) (not force))
-        (println (str "REFUSING import: " lost " coordinator write(s) in the log are not in the "
-                      "files (would be lost). Run `export` first, or `import --force`."))
-        (do (fram.rt/write-log log as)
-            (println (str "imported -> " (count as) " facts -> " log)))))))
-
-;; Inverse of import: fold the log -> write each thread as markdown into out-dir.
-;; SAFETY: refuse if threads/ holds edits not yet in the log (would clobber).
-(defn cmd-export [threads-dir :- String log :- String out-dir :- String force :- Bool] :- Nil
-  (let [log-facts (:facts (fold/fold (fram.rt/read-log log)))
-        file-facts (:facts (fold/fold (imp/load-corpus threads-dir)))
-        log-sigs (sig-member-map log-facts)
-        ;; file-ahead = a thread .md holds a fact the log LACKS (a hand edit) — the
-        ;; ONLY thing export could clobber. Log-ahead (facts in the log not yet in
-        ;; files) is the normal case export EXISTS to flush, NEVER a reason to refuse.
-        ;; (The old guard demanded full set-equality, so it refused on log-ahead and
-        ;; deadlocked with import — each refused, pointing at the other.)
-        file-ahead (filterv (fn [c :- k/Fact] :- Bool (nil? (get log-sigs (fact-sig c)))) file-facts)]
-    (if (and (not (empty? file-ahead)) (not force))
-      (println (str "REFUSING export: " (count file-ahead) " file fact(s) are not in the log "
-                    "(a thread .md was hand-edited). Merge them via the coordinator (`tell`), or "
-                    "`export <dir> --force` to regenerate files FROM the log (discards those edits)."))
-      (let [idx (k/build-index log-facts)
-            predicate-subjects
-            (mapv (fn [c :- k/Fact] :- String (:l c))
-                  (filterv (fn [c :- k/Fact] :- Bool
-                             (or (= (:p c) "predicate_name")
-                                 (= (:p c) "predicate_alias")))
-                           log-facts))
-            tes (vec (distinct (concat (k/thread-ids-i idx)
-                                       predicate-subjects)))]
-        (fram.rt/ensure-dir out-dir)
-        (doseq [te tes]
-          (let [title (k/one-i idx te "title")
-                ;; strip the @ sigil only if present — a bare id (e.g. concern-…) must keep its first char
-                id (if (str/starts-with? te "@") (subs te 1) te)
-                fname (str id "-"
-                           (fram.rt/slugify (if (some? title) title "untitled")) ".md")]
-            (fram.rt/spit-file (str out-dir "/" fname) (exp/thread-md log-facts te))))
-        (println (str "exported " (count tes) " threads -> " out-dir))))))
-
-(defn cmd-validate [log :- String] :- Nil
   (let [idx (k/build-index (:facts (fold/fold (fram.rt/read-log log))))
         problems (reduce
                   (fn [acc :- (Vec String) te :- String] :- (Vec String)
@@ -505,40 +453,11 @@
 (defn dispatch! [args :- (Vec String) threads-dir :- String log :- String] :- Nil
   (let [cmd (if (empty? args) "" (first args))]
     (cond
-      [(= cmd "import")
-       (cmd-import threads-dir log (and (> (count args) 1) (= (nth args 1) "--force")))]
-      [(= cmd "export")
-       (if (> (count args) 1)
-         (cmd-export threads-dir log (nth args 1)
-                     (and (> (count args) 2) (= (nth args 2) "--force")))
-         (println "usage: export <out-dir> [--force]"))]
       [(= cmd "validate") (cmd-validate log)]
-      [(= cmd "watch")    (cmd-watch log)]
-      [(= cmd "doctor")   (cmd-doctor! log)]
-      [(= cmd "show")
-       (cmd-show log (if (> (count args) 1) (nth args 1) "")
-                 (and (> (count args) 2) (= (nth args 2) "--provenance")))]
-      [(= cmd "history")
-       (if (> (count args) 1)
-         (fram.rt/history log (nth args 1))
-         (println "usage: history <id>"))]
-      [(= cmd "tools")    (cmd-tools log)]
       [(= cmd "query")
        (if (> (count args) 1)
          (cmd-query log (nth args 1))
          (println "usage: query '<edn>'  e.g. '{:find \"reaches\" :rules [...]}'"))]
-      [(= cmd "call")
-       (if (>= (count args) 3)
-         (cmd-call log (nth args 1) (nth args 2))
-         (println "usage: call <tool> '<edn-args>'   (run `tools` for the catalog)"))]
-      [(= cmd "set")
-       (if (>= (count args) 4)
-         (cmd-set log (nth args 1) (nth args 2) (nth args 3))
-         (println "usage: set <id> <pred> <value>"))]
-      [(= cmd "merge")
-       (if (>= (count args) 3)
-         (cmd-merge log (nth args 1) (nth args 2))
-         (println "usage: merge <from-entity> <to-entity>"))]
       [(= cmd "tell")
        (if (>= (count args) 4)
          (cmd-tell log "assert" (nth args 1) (nth args 2) (nth args 3))
@@ -549,7 +468,7 @@
        (if (>= (count args) 4)
          (cmd-tell log "retract" (nth args 1) (nth args 2) (nth args 3))
          (println (str "usage: " cmd " <id> <pred> <value>")))]
-      [:else (println "fram (engine) usage: import | export <out-dir> | show <id> | history <id> | validate | watch | doctor | set <id> <pred> <value> | tell <id> <pred> <value> | retract <id> <pred> <value> (alias: untell) | merge <from> <to> | tools | query <edn> | call <tool> <edn> | selfcheck --deep")])))
+      [:else (println "fram (engine) usage: validate | tell <id> <pred> <value> | retract <id> <pred> <value> (alias: untell) | query <edn> | selfcheck --deep")])))
 
 (defn -main [& args] :- Nil
   (dispatch! (vec args) (fram.rt/threads-dir) (fram.rt/log-path)))
