@@ -52,6 +52,32 @@ right word for the coordination layer's performative rows, and
 "proposition" is the right word for content. The old fights were one
 layer's word being applied to the whole substrate.
 
+## Perspective: two attributions, never confused
+
+Every statement is held by someone, and the holder lives in one of two
+places depending on what is meant.
+
+*The act.* Every assertion is already attributed for free: its occurrence
+records who asserted it (`:kernel/asserted-by`) and exactly when in logical
+history. When the perspective-holder is simply whoever wrote the data,
+nothing more is needed — "to Tom, this interest is a hobby" is fully
+captured by Tom's recorded act of asserting `(p, category, hobby)`. The
+commitment lives in the act, not the content.
+
+*The content.* The two come apart when perspective becomes subject-matter:
+Alice records that *Tom* holds the categorization. Then the asserter is
+Alice (act layer, automatic) and Tom must appear in the content —
+`(tom, holds, (p, category, hobby))` — whose own occurrence still records
+Alice as its writer. Nesting is native: a report of a belief about a view
+is just another wrap, each layer keeping its act-level attribution
+underneath.
+
+The discipline: holder-in-content only when the perspective is what the
+statement is *about*; otherwise the act layer already says it, and
+repeating it in content is denormalization in the other direction. An
+unattributed category statement pretends to objectivity; attribution — at
+the right layer — is what keeps it honest.
+
 ## Nodes and edges are roles, not kinds
 
 There is no intrinsic difference between an edge and a node. Occupying a
