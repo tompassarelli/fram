@@ -25,6 +25,8 @@
 (def listener (atom nil))
 (def stopping? (atom false))
 (def active-requests (atom {}))
+(def ^:private query-page-snapshot-limit 4)
+(def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
 
 (def native-rpc-operations
   #{:rpc/version :rpc/status :rpc/assert :rpc/retract :rpc/batch :rpc/scan
@@ -66,6 +68,7 @@
     (when-let [control @(:query-control cancellation)]
       (datalog/cancel-query! control :daemon-shutdown)))
   (reset! active-requests {})
+  (reset! query-page-snapshots {:order [] :by-version {}})
   (coord-writer-authority/release! @writer-authority)
   (reset! writer-authority nil)
   (reset! coordinator nil)
@@ -479,6 +482,72 @@
        :propositions (term-store/live-propositions context)
        :occurrences (term-store/operation-occurrences context)})))
 
+(defn- all-triples-page-plan? [plan]
+  (let [find (query/queryplan-find plan)
+        strata (query/queryplan-strata plan)
+        rules (when (= 1 (count strata)) (first strata))
+        rule (when (= 1 (count rules)) (first rules))
+        body (when rule (datalog/rule-body rule))
+        literal (when (= 1 (count body)) (first body))
+        head-arguments (when rule (datalog/rule-head-arguments rule))
+        arguments (when literal (datalog/literal-arguments literal))
+        variables (when arguments
+                    (mapv datalog/queryterm-variable arguments))]
+    (and (some? rule)
+         (some? literal)
+         (not (query/aggregate-find? find))
+         (= (query/findspec-relation find)
+            (datalog/rule-head-relation rule))
+         (= :relation (datalog/literal-kind literal))
+         (= datalog/triple-relation (datalog/literal-relation literal))
+         (not (datalog/literal-negated literal))
+         (= 3 (count arguments))
+         (= head-arguments arguments)
+         (every? some? variables)
+         (= 3 (count (set variables))))))
+
+(defn- cached-query-page-rows [version]
+  (get-in @query-page-snapshots [:by-version version]))
+
+(defn- retain-query-page-rows! [version rows]
+  (let [{:keys [order by-version]} @query-page-snapshots
+        order (conj (vec (remove #{version} order)) version)
+        evict-count (max 0 (- (count order) query-page-snapshot-limit))
+        evicted (take evict-count order)
+        retained (vec (drop evict-count order))]
+    (reset! query-page-snapshots
+            {:order retained
+             :by-version (reduce dissoc
+                                 (assoc by-version version rows)
+                                 evicted)})
+    rows))
+
+(defn- build-ordered-triple-rows [propositions cancellation]
+  (let [rows
+        (persistent!
+         (reduce (fn [acc proposition]
+                   (cancelled! cancellation)
+                   (conj! acc [(t/triple-slot0 proposition)
+                               (t/triple-slot1 proposition)
+                               (t/triple-slot2 proposition)]))
+                 (transient #{})
+                 propositions))
+        keyed (mapv (fn [row] [(query/row-key row) row]) rows)]
+    (cancelled! cancellation)
+    (mapv second (sort-by first keyed))))
+
+(defn- ordered-query-page-rows! [version propositions cancellation]
+  (or (cached-query-page-rows version)
+      (locking query-page-snapshots
+        (or (cached-query-page-rows version)
+            (retain-query-page-rows!
+             version (build-ordered-triple-rows propositions cancellation))))))
+
+(defn- snapshot-propositions! [co version]
+  (if (= version (current-version co))
+    (term-store/live-propositions (coord/coordinator-store co))
+    (:propositions (snapshot-image! co version))))
+
 (defn- term-sha256 [term]
   (let [out (ByteArrayOutputStream.)]
     (wire/write-term-codec-v1! out term wire/rpc-v1-max-string-bytes
@@ -565,29 +634,48 @@
         page (t/rpcrequest-page request)
         cursor-value (some-> page t/rpc-page-request-cursor-value)
         cursor (when cursor-value (parse-query-cursor! cursor-value))
-        image
+        direct-page? (and page (all-triples-page-plan? plan))
+        snapshot-data
         (locking (:lock @coordinator)
           (require-expected! @coordinator
                              (t/rpcrequest-expected-version request))
           (let [version (requested-snapshot-version!
                          snapshot cursor (current-version @coordinator))]
-            (snapshot-image! @coordinator version)))
+            (if direct-page?
+              {:version version
+               :rows (cached-query-page-rows version)
+               :propositions (when-not (cached-query-page-rows version)
+                               (snapshot-propositions! @coordinator version))}
+              (snapshot-image! @coordinator version))))
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
         control (datalog/query-control 10000000 timeout)]
-    (reset! (:query-control cancellation) control)
-    (when @(:cancelled cancellation)
-      (datalog/cancel-query! control :request-cancelled))
-    (try
-      (let [projection (query/project-with-occurrences
-                        (:propositions image) (:occurrences image))
-            result (binding [query/*query-control* control]
-                     (query/run-plan-projected! projection plan))
-            rows (result-rows! result)
-            paged (paged-query-result! rows page query-digest (:version image))]
+    (if direct-page?
+      (let [rows (or (:rows snapshot-data)
+                     (ordered-query-page-rows!
+                      (:version snapshot-data)
+                      (:propositions snapshot-data)
+                      cancellation))
+            paged (paged-query-result!
+                   rows page query-digest (:version snapshot-data))]
         (cancelled! cancellation)
-        (assoc paged :served (:version image)))
-      (finally
-        (reset! (:query-control cancellation) nil)))))
+        (assoc paged :served (:version snapshot-data)))
+      (do
+        (reset! (:query-control cancellation) control)
+        (when @(:cancelled cancellation)
+          (datalog/cancel-query! control :request-cancelled))
+        (try
+          (let [projection (query/project-with-occurrences
+                            (:propositions snapshot-data)
+                            (:occurrences snapshot-data))
+                result (binding [query/*query-control* control]
+                         (query/run-plan-projected! projection plan))
+                rows (result-rows! result)
+                paged (paged-query-result!
+                       rows page query-digest (:version snapshot-data))]
+            (cancelled! cancellation)
+            (assoc paged :served (:version snapshot-data)))
+          (finally
+            (reset! (:query-control cancellation) nil)))))))
 
 (defn- lease-mutation-guard! [request cancellation]
   (require-writer!)
