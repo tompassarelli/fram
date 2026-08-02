@@ -93,7 +93,7 @@
 (def ^:dynamic CTOR nil)    ; a `->Name` auto-constructor ref: render `->` + the type's name
 (def ^:dynamic ACC  nil)    ; a synth field accessor `<lower(Name)>-<field>`: stores the field
 ;; --- read-time path-selection: the "default-main view" -----------------------
-;; Fram is view-relative (docs/VIEWS_AND_BRANCHES.md): a node's live (l,p) group MAY hold
+;; Fram is view-relative (docs/archive/VIEWS_AND_BRANCHES.md): a node's live (l,p) group MAY hold
 ;; more than one fact, and choosing one is a VIEW decision. Today there is exactly one view —
 ;; default-main — and its policy is "first live". `select-main-1` is THE explicit selection
 ;; point: it does NOT prove uniqueness, it SELECTS the default-main member of a possibly-multi

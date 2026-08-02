@@ -10,7 +10,7 @@ description: >-
 
 # Claim modeling — building on the Fram engine (facts + Datalog)
 
-The thesis (ADR 0001 in `fram:docs/adr/`): **the program/app/work IS a fact
+The thesis (ADR 0001, archived in `fram:docs/archive/`): **the program/app/work IS a fact
 graph.** Data, logic, and structure live as facts, so each is *reasoned* (Datalog:
 blast radius, transitive closure) and *repaired* (graph edits) the same uniform way.
 Text and SQL are projections, never the truth. For **greenfield**, facts are the

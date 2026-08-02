@@ -1,10 +1,14 @@
 # Coordinator blue/green cutover contract
 
-**Status:** Current deployed-v0.3 operator contract. Keep using this protocol
-until each cluster has migrated to the recursive native runtime. Its EDN control
-requests, flat-store/log vocabulary, and marker fields are version-scoped
-deployment mechanics; they do not define the source-head Term/Triple kernel or
-FRAMRPC v1 public data surface.
+**Status:** Current deployed-v0.3 operator contract, pinned to v0.3 runtimes.
+Keep using this protocol on a cluster that has not migrated to the recursive
+native runtime. **The blue/green controller described here no longer runs on the
+current host:** that host selects a generation with systemd socket activation
+and a generation symlink, so nothing below describes how it switches
+generations. What is retained here is the protocol contract for the pinned v0.3
+runtime only. Its EDN control requests, flat-store/log vocabulary, and marker
+fields are version-scoped deployment mechanics; they do not define the
+source-head Term/Triple kernel or FRAMRPC v1 public data surface.
 
 Protocol: `fram-coordinator-cutover/v1`
 

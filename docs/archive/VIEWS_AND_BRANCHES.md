@@ -1,9 +1,16 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+
 # Views & Branches — conflict is the shadow of a cardinality axiom
 
 **Status: historical pre-recursive-kernel design note. Not a current runtime
 reference.** Its `[today]` labels describe the repository snapshot at which this
 note was written, not source head. Preserve its terminology as design evidence;
-use [WHY_FRAM_EXISTS.md](WHY_FRAM_EXISTS.md) for the current model.
+use [WHY_FRAM_EXISTS.md](../WHY_FRAM_EXISTS.md) for the current model.
 
 ---
 
@@ -27,7 +34,7 @@ Use these words precisely — they are what make the rest of this note unambiguo
 >
 > ⚠️ **"Fact" here means exactly one of the two precise senses above (Datalog ground tuple, or
 > a fact accepted-true in a view) — never a loose synonym for "fact."** Canonical rule:
-> [README → Terminology](../README.md).
+> [README → Terminology](../../README.md).
 
 ---
 

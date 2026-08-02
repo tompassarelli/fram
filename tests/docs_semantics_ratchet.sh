@@ -23,15 +23,21 @@ scoped_v030_docs=(
   docs/coordinator-cutover.md
 )
 
+# Historical documents are quarantined by location AND by banner; the policy
+# note is the one file in the archive that is not itself archived material.
+archive_dir=docs/archive
+archive_policy_doc="$archive_dir/README.md"
+archive_banner='> **HISTORICAL — design provenance only.**'
+
 historical_docs=(
-  bridge/README.md
-  codegraph/README.md
-  docs/VIEWS_AND_BRANCHES.md
-  docs/adr/0001-claims-as-universal-substrate.md
-  docs/beagle-dogfood-findings.md
-  docs/claims-design.md
-  docs/measurements.md
-  docs/pull-reference.md
+  docs/archive/VIEWS_AND_BRANCHES.md
+  docs/archive/adr-0001-claims-as-universal-substrate.md
+  docs/archive/beagle-dogfood-findings.md
+  docs/archive/bridge-README.md
+  docs/archive/claims-design.md
+  docs/archive/codegraph-README.md
+  docs/archive/measurements.md
+  docs/archive/pull-reference.md
 )
 
 fail() {
@@ -48,9 +54,38 @@ for path in "${scoped_v030_docs[@]}"; do
     fail "$path lacks a current-v0.3 scope banner"
 done
 
+[[ -f "$archive_policy_doc" ]] ||
+  fail "missing archive policy note $archive_policy_doc (explain what the archive is)"
+
+# (a) every archived document opens with the standard banner.
 for path in "${historical_docs[@]}"; do
-  head -n 12 "$path" | grep -Eqi 'Status:.*historical' ||
-    fail "$path lacks a historical banner"
+  head -n 1 "$path" | grep -Fq "$archive_banner" ||
+    fail "$path lacks the archive banner as its first line — prepend '$archive_banner' (see $archive_policy_doc)"
+  head -n 14 "$path" | grep -Eqi 'Status:.*historical' ||
+    fail "$path lacks a historical status line"
+done
+
+# (b) nothing classified historical may sit outside the archive.
+for path in "${historical_docs[@]}"; do
+  [[ "$path" == "$archive_dir/"* ]] ||
+    fail "$path is classified historical but lives outside $archive_dir/ — git mv it into $archive_dir/ and update this list"
+done
+
+# (c) location and classification agree in the other direction too: every file
+# in the archive is classified historical, and no current document hides there.
+for path in "$archive_dir"/*.md; do
+  if [[ "$path" == "$archive_policy_doc" ]]; then continue; fi
+  listed=0
+  for known in "${historical_docs[@]}"; do
+    if [[ "$path" == "$known" ]]; then listed=1; break; fi
+  done
+  (( listed )) ||
+    fail "$path sits in $archive_dir/ but is not classified historical — add it to historical_docs in ${BASH_SOURCE[0]##*/} or move it back out"
+done
+
+for path in "${canonical_docs[@]}" "${scoped_v030_docs[@]}"; do
+  [[ "$path" != "$archive_dir/"* ]] ||
+    fail "$path is a current document but lives in $archive_dir/ — move it out of the archive"
 done
 
 # The naming ledger deliberately quotes rejected vocabulary. Scan the other
@@ -93,7 +128,7 @@ grep -Fq 'occurrence(coordinate, action, proposition)' docs/query-reference.md |
   fail 'query reference lacks the occurrence base relation'
 grep -Fq 'FRAMRPC v1' docs/coordinator-bind-and-wire.md ||
   fail 'wire reference lacks FRAMRPC v1'
-grep -Fq 'does not implement `rpc/pull`' docs/pull-reference.md ||
+grep -Fq 'does not implement `rpc/pull`' docs/archive/pull-reference.md ||
   fail 'legacy pull reference does not state the missing runtime surface'
 grep -Fq 'architecture prior, never a primitive' docs/naming.md ||
   fail 'naming ledger lacks the Turtle boundary'
@@ -124,6 +159,6 @@ if rg -n 'bin/fram (import|export|tools|call)' README.md; then
   fail 'README quickstart regressed to a local legacy command'
 fi
 
-printf 'docs semantics: PASS — %d canonical / %d current-v0.3 / %d historical; README %d native commands match fixtures\n' \
+printf 'docs semantics: PASS — %d canonical / %d current-v0.3 / %d historical (all banner-marked in %s/); README %d native commands match fixtures\n' \
   "${#canonical_docs[@]}" "${#scoped_v030_docs[@]}" "${#historical_docs[@]}" \
-  "${#expected_verbs[@]}"
+  "$archive_dir" "${#expected_verbs[@]}"

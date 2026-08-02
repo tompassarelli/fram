@@ -65,11 +65,15 @@ expect_sha LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d
 expect_sha codegraph/LICENSE 361f8dc2cdf2e37f8ec56468127d0f54d679b78f450ca72ac0b226a46cccc3de
 expect_sha codegraph/LICENSE-APACHE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 expect_sha codegraph/LICENSE-MIT 51adc9bf9e72be82d08c2a694bcca11a6ac1b9e520bb537e1100a158d7d0d06d
-for readme in README.md codegraph/README.md; do
-  expect_text "$readme" '[MIT License](LICENSE-MIT)'
-  expect_text "$readme" '[Apache License, Version 2.0](LICENSE-APACHE)'
-  expect_text "$readme" '`MIT OR Apache-2.0`'
-done
+expect_text README.md '[MIT License](LICENSE-MIT)'
+expect_text README.md '[Apache License, Version 2.0](LICENSE-APACHE)'
+expect_text README.md '`MIT OR Apache-2.0`'
+# The Codegraph README is archived under docs/archive/; its license links point
+# back at the retained codegraph/ subtree, which still holds the license texts.
+CG_README=docs/archive/codegraph-README.md
+expect_text "$CG_README" '[MIT License](../../codegraph/LICENSE-MIT)'
+expect_text "$CG_README" '[Apache License, Version 2.0](../../codegraph/LICENSE-APACHE)'
+expect_text "$CG_README" '`MIT OR Apache-2.0`'
 expect_text README.md 'license-MIT_OR_Apache--2.0-blue.svg'
 expect_text deploy/cloudflare/package.json '"license": "MIT OR Apache-2.0"'
 expect_text flake.nix 'license = with licenses; [ mit asl20 ];'

@@ -10,7 +10,7 @@
 1	codegraph/test/faith.rkt
 4	coord.clj
 99	coord_daemon.clj
-41	docs/claims-design.md
+41	docs/archive/claims-design.md
 9	docs/naming.md
 1	out/coord_daemon_wire.clj
 28	out/fram/claims.clj

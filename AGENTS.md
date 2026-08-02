@@ -1,5 +1,17 @@
 # FRAM repository instructions
 
+## `docs/archive/**` is historical provenance only
+
+Everything under `docs/archive/` documents a removed architecture generation.
+Never cite it as current behavior, never derive an implementation, procedure, or
+test expectation from it, and never repair a live surface to agree with it — if
+it disagrees with the engine, the archive is the stale side. The current
+contract surface is exactly the "Current documentation" list in `README.md`;
+start at `docs/architecture.md` and `docs/guarantees.md`. Retiring a document
+means moving it into `docs/archive/` with the standard banner, not editing it in
+place; `tests/docs_semantics_ratchet.sh` enforces both the banner and the
+location.
+
 ## Reference material and licenses
 
 Before using any external or `~/code/reference/` repository, re-check its

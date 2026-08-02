@@ -1,8 +1,15 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+
 # fram.claims — assertion under verification
 
 **Status: historical pre-recursive-kernel design draft. Not a current runtime
 reference.** The old contract remains executable as evidence:
-[`tests/claims_spec_test.clj`](../tests/claims_spec_test.clj) — 90 bars, 13 green
+[`tests/claims_spec_test.clj`](../../tests/claims_spec_test.clj) — 90 bars, 13 green
 (the substrate self-check) and 77 red by absence. The module does not exist yet;
 the bars define it. Run it from the repo root:
 
@@ -140,7 +147,7 @@ The daemon bridge over them lives in `coord_daemon.clj`.)*
 
 The substrate atom is a **fact** — an immutable `(subject predicate object)`
 triple recording what was *asserted*, not what is true
-([docs/naming.md](naming.md)). "Claim" is not banished; it is *reserved*, and this
+([docs/naming.md](../naming.md)). "Claim" is not banished; it is *reserved*, and this
 is the reservation being spent: the right name for an assertion-under-verification
 lifecycle, and the wrong name for the stored triple. The word therefore lives only
 in this module's namespace and its own predicate names — `fram.claims`,

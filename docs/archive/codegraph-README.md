@@ -1,3 +1,12 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+> Archived from `codegraph/README.md`; unqualified paths below are relative to
+> the retained `codegraph/` subtree.
+
 # Codegraph
 
 **Status: historical Codegraph experiment documentation. Not a current
@@ -57,7 +66,7 @@ bb -cp ~/code/fram/main/out:src:~/code/fram/main  -m codegraph  build/gjoa.facts
 
 ## What it proves (and doesn't)
 
-See **[RESULTS.md](RESULTS.md)** for the measured verdict. In short: on the live
+See **[RESULTS.md](../../codegraph/RESULTS.md)** for the measured verdict. In short: on the live
 gjoa corpus the graph answers two questions the incumbent cannot — **scope-correct
 callers** (perfect precision where bare-symbol match is 33–67% wrong) and
 **transitive blast radius** (the keystone a one-hop tool structurally can't
@@ -77,11 +86,11 @@ Two projections, two jobs (both derived from the same source):
 Built and validated in stages: projection → leverage benchmark → lossless
 round-trip → graph-native rename → a shadow-correct lexical resolver →
 rename-correct comments. Headline gates hold at **1100/1100 forms, 97/97 files**.
-Measured results are in **[RESULTS.md](RESULTS.md)**; the stage-by-stage build
-log is in **[docs/build-log.md](docs/build-log.md)**.
+Measured results are in **[RESULTS.md](../../codegraph/RESULTS.md)**; the stage-by-stage build
+log is in **[docs/build-log.md](../../codegraph/docs/build-log.md)**.
 
 ## License
 
-Codegraph is dual-licensed under your choice of the [MIT License](LICENSE-MIT)
-or the [Apache License, Version 2.0](LICENSE-APACHE)
+Codegraph is dual-licensed under your choice of the [MIT License](../../codegraph/LICENSE-MIT)
+or the [Apache License, Version 2.0](../../codegraph/LICENSE-APACHE)
 (`MIT OR Apache-2.0`).

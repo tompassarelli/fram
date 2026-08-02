@@ -1,6 +1,6 @@
 ;; claims_spec_test.clj — EXECUTABLE SPECIFICATION for the claims module
 ;; (fram.claims), thread 019f9cf2-0bf6-725c-8bc4-63995db4332f, design
-;; docs/claims-design.md.
+;; docs/archive/claims-design.md.
 ;;
 ;;   bb -cp out tests/claims_spec_test.clj        # from the repo ROOT
 ;;
@@ -15,7 +15,7 @@
 ;; verification discipline expressed as MORE FACTS. There is no claim atom, no
 ;; marker predicate and no engine change: the module is a predicate vocabulary,
 ;; a set of Datalog rules, and the views mechanics the engine already has
-;; ((view selects @cid) — docs/VIEWS_AND_BRANCHES.md §8, coord.clj select!).
+;; ((view selects @cid) — docs/archive/VIEWS_AND_BRANCHES.md §8, coord.clj select!).
 ;; The word "claim" is legal ONLY in this module's namespace (docs/naming.md:
 ;; the substrate atom is a FACT; tests/vocab_ratchet_test.sh polices the border).
 ;;
@@ -54,11 +54,11 @@
 ;;
 ;; `views` is {:verified <view-name> :rejected <view-name>}; a view name matches
 ;; ITSELF and its ":"-scoped children (the family). Status is view-relative —
-;; the substrate has no view-free settled facts (docs/VIEWS_AND_BRANCHES.md §0).
+;; the substrate has no view-free settled facts (docs/archive/VIEWS_AND_BRANCHES.md §0).
 ;;
 ;; SCOPE. Verification MACHINERY — queues, outboxes, citation policy, the
 ;; material a human verifier reads — stays app-side and is specified nowhere
-;; here (docs/claims-design.md, the mapping table). This file touches no socket
+;; here (docs/archive/claims-design.md, the mapping table). This file touches no socket
 ;; and no daemon; it writes one scratch log under /tmp.
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.datalog :as d]
          '[fram.world :as w] '[clojure.string :as str])

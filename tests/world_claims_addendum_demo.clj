@@ -1,6 +1,6 @@
 ;; world_claims_addendum_demo.clj — the INCREMENTAL INGESTION story, executable.
-;; Thread 019f9dfb-6da7-79c2-bad3-7197da27247f. Worlds: docs/adr + world_kernel /
-;; world_persistence / world_vertical_slice. Claims: docs/claims-design.md +
+;; Thread 019f9dfb-6da7-79c2-bad3-7197da27247f. Worlds: docs/archive/adr-0001 + world_kernel /
+;; world_persistence / world_vertical_slice. Claims: docs/archive/claims-design.md +
 ;; tests/claims_spec_test.clj.
 ;;
 ;;   bb -cp out tests/world_claims_addendum_demo.clj     # from the repo ROOT
@@ -60,7 +60,7 @@
 ;; /tmp. Nothing here is a new engine surface: every write uses coord.clj verbs
 ;; that shipped, and every read is fram.claims/fram.world as published. The
 ;; verification MACHINERY (queues, outboxes, what a human reads) stays app-side,
-;; per docs/claims-design.md; this file only proves the substrate answers.
+;; per docs/archive/claims-design.md; this file only proves the substrate answers.
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.datalog :as d]
          '[fram.world :as w] '[fram.claims :as cl]
          '[clojure.string :as str] '[clojure.set :as set])

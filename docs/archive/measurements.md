@@ -1,3 +1,10 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+
 # Measurements
 
 **Status: historical benchmark and incident evidence. Not a current semantic or
@@ -13,13 +20,13 @@ therefore not reproducible from a committed Fram sha.
 
 `bench/propagation/` is a Fram-local perf-regression gate, run in CI by
 `bb -cp out bench/propagation/check-budget.clj`
-([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)). It reproduces the
+([`../../.github/workflows/ci.yml`](../../.github/workflows/ci.yml)). It reproduces the
 *shape* of the propagation thesis — graph propagation flat in K, a git
 merge-queue climbing — and enforces a budget against this repo's own build.
 
 The budget is ratio-based so it is machine-independent, with generous absolute
 ceilings as catastrophe-catchers
-([`../bench/propagation/perf-budget.edn`](../bench/propagation/perf-budget.edn)):
+([`../../bench/propagation/perf-budget.edn`](../../bench/propagation/perf-budget.edn)):
 
 | Budget | Value | Meaning |
 |---|---|---|

@@ -1,3 +1,11 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+> Archived from `bridge/README.md`; the retained code sits in `bridge/`.
+
 # Fram world ⇄ Git bridge
 
 **Status: historical Worlds compatibility adapter. Not a current recursive-kernel

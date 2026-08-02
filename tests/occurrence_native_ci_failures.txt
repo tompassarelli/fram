@@ -10,7 +10,7 @@ vocab-residue	build/generated-targets.d/00-current.tsv
 vocab-residue	coord_daemon.clj
 vocab-residue	deploy/cloudflare/PROCEDURE.md
 vocab-residue	docs/architecture.md
-vocab-residue	docs/measurements.md
+vocab-residue	docs/archive/measurements.md
 vocab-residue	flake.nix
 vocab-residue	integrations/north/hooks/code-upstream-guard.sh
 vocab-residue	integrations/north/hooks/code-upstream-guard.test.sh

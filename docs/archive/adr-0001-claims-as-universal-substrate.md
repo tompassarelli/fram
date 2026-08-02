@@ -1,3 +1,10 @@
+> **HISTORICAL — design provenance only.**
+> This document describes a removed architecture generation and is retained
+> as evidence of how the design evolved. Nothing in it is a current runtime
+> reference. For the live contract start at
+> [`docs/architecture.md`](../architecture.md) and
+> [`docs/guarantees.md`](../guarantees.md).
+
 # ADR 0001 — Facts are the universal substrate; SQL is optional interop
 
 **Status: historical, superseded by the recursive Term/Triple kernel on

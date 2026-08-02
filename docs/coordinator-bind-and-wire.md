@@ -55,10 +55,12 @@ deployment controls have separate authority boundaries.
 to the JVM coordinator. It does not change the FRAMRPC codec or add public
 operations. Writer authority remains a separate per-log lock.
 
-The deployed v0.3 blue/green controller still uses its own versioned private
-protocol. Its operational contract is
-[`coordinator-cutover.md`](coordinator-cutover.md); it must not be inferred from
-FRAMRPC v1.
+A pinned v0.3 deployment still runs a blue/green controller with its own
+versioned private protocol; the current host does not — it selects a generation
+with systemd socket activation and a generation symlink. That controller's
+operational contract is
+[`coordinator-cutover.md`](coordinator-cutover.md), retained for the pinned v0.3
+runtime only; it must not be inferred from FRAMRPC v1.
 
 ## Probes
 

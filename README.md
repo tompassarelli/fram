@@ -53,11 +53,14 @@ type. See the [naming ledger](docs/naming.md).
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 - [Thread format](THREAD-FORMAT.md) — the current v0.3 Markdown
   import/export compatibility projection.
-- [Coordinator cutover](docs/coordinator-cutover.md) — the live, versioned v0.3
-  blue/green operator contract retained until cluster migration.
+- [Coordinator cutover](docs/coordinator-cutover.md) — the versioned v0.3
+  blue/green operator contract, pinned to the v0.3 runtime; the controller it
+  describes no longer runs on the current host.
 
-The old pull, Worlds, claims, and Codegraph documents are retained as explicitly
-historical design evidence. They are not recursive-kernel runtime references.
+The old pull, Worlds, claims, and Codegraph documents live under
+[`docs/archive/`](docs/archive/README.md). Each one carries a `HISTORICAL`
+banner, is retained as design evidence only, and is never a recursive-kernel
+runtime reference.
 
 ## Quickstart
 
