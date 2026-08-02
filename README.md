@@ -46,6 +46,8 @@ type. See the [naming ledger](docs/naming.md).
 - [Architecture](docs/architecture.md) — semantic kernel, physical rows, log, coordinator, and projections.
 - [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
 - [Concurrency and writes](docs/concurrency-and-writes.md) — one writer, exact OCC, occurrence receipts, and replay.
+- [Guarantees](docs/guarantees.md) — every guarantee, its gate, and its status; failures land on a named line.
+- [Workload contract](docs/workload-contract.md) — the reference workload envelope and the client obligations it assumes.
 - [Coordinator wire](docs/coordinator-bind-and-wire.md) — binary FRAMRPC v1 and the private-network boundary.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
