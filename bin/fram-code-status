@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # fram-code-status <dir> — flip-level detection for the graceful ladder (L0-L3).
-# Prints ONE machine-readable line on stdout and always exits 0. FAST (<100ms):
-# filesystem + a loopback port probe only — never racket/clojure/network.
+# Prints ONE machine-readable line on stdout and always exits 0. It uses the
+# FRAMLOG header and a bounded native :rpc/status request; it never parses rows.
 #
 # The ladder (documented in ~/code/STACK.md, announced by the session-start hook):
-#   level=3  flipped + warm coordinator ALIVE — graph-native authoring is live
-#   level=2  flipped (.fram/code.log + .mcp.json) but coordinator dead
-#            (fram-code-on <dir> re-warms it)
+#   level=3  native corpus + sealed graph-control authoring (N2.6b)
+#   level=2  native corpus + public data MCP; coord= reports daemon liveness
 #   level=1  Beagle sources present, not flipped (fram-code-on turns it on)
 #   level=0  no Beagle sources
 #
 # Output line (key=value, stable order):
-#   level=N src=<beagle file count> log=<code.log|-> facts=<n> mcp=present|absent
-#   port=<n|-> coord=alive|dead|- canonical=<adopted graph-upstream files under dir>
+#   level=N src=<beagle file count> log=<code.log|-> triples=<n|->
+#   mcp=present|absent space=<id|-> port=<n|-> coord=alive|dead|-
+#   canonical=<adopted graph-upstream files under dir>
 set -uo pipefail
 
-fallback() { echo "level=0 src=0 log=- facts=0 mcp=absent port=- coord=- canonical=0"; exit 0; }
+fallback() { echo "level=0 src=0 log=- triples=0 mcp=absent space=- port=- coord=- canonical=0"; exit 0; }
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="${1:-$PWD}"
 DIR="$(cd "$DIR" 2>/dev/null && pwd)" || fallback
 [ -n "$DIR" ] || fallback
@@ -45,36 +46,40 @@ SRC_COUNT="${#SOURCE_FILES[@]}"
 
 # --- flip artifacts -----------------------------------------------------------
 CODE_LOG="$DIR/.fram/code.log"
-LOG="-" FACTS=0
-if [ -f "$CODE_LOG" ]; then
+LOG="-" TRIPLES=0 NATIVE_LOG=false
+if [ -f "$CODE_LOG" ] && \
+   [ "$(od -An -tx1 -N8 "$CODE_LOG" 2>/dev/null | tr -d ' \n')" = "4652414d4c4f4700" ]; then
   LOG="$CODE_LOG"
-  FACTS="$(wc -l <"$CODE_LOG" 2>/dev/null)" || FACTS=0
+  TRIPLES="-"
+  NATIVE_LOG=true
 fi
 MCP=absent
-# .mcp.json counts only if it actually wires the fram graph-edit server.
+# .mcp.json counts only if it actually wires the Fram server.
 [ -f "$DIR/.mcp.json" ] && grep -q '"fram"' "$DIR/.mcp.json" 2>/dev/null && MCP=present
 
 # --- coordinator port + liveness (probe only; no connection state kept) -------
-PORT="-" COORD="-"
+SPACE_ID="-" PORT="-" COORD="-"
 if [ "$MCP" = present ]; then
+  SPACE_ID="$(grep -oE '"FRAM_SPACE_ID"[^\"]*"[^\"]+"' "$DIR/.mcp.json" 2>/dev/null \
+              | sed -E 's/.*"([^\"]+)"$/\1/' | head -1)" || true
+  [ -n "${SPACE_ID:-}" ] || SPACE_ID="-"
   PORT="$(grep -oE '"FRAM_CODE_PORT"[^0-9]*[0-9]+' "$DIR/.mcp.json" 2>/dev/null \
           | grep -oE '[0-9]+$' | head -1)" || true
+  if [ -z "${PORT:-}" ]; then
+    PORT="$(grep -oE '"FRAM_PORT"[^0-9]*[0-9]+' "$DIR/.mcp.json" 2>/dev/null \
+            | grep -oE '[0-9]+$' | head -1)" || true
+  fi
   [ -n "${PORT:-}" ] || PORT="-"
 fi
-port_listening() {
-  if command -v ss >/dev/null 2>&1; then
-    ss -ltn 2>/dev/null | grep -q ":$1 "
-  else
-    timeout 0.2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null
-  fi
-}
-if [ -f "$CODE_LOG" ]; then
+if [ "$NATIVE_LOG" = true ]; then
   COORD=dead
-  if [ "$PORT" != "-" ]; then
-    port_listening "$PORT" && COORD=alive
-  else
-    # no port on record (hand-run daemon): fall back to the precise process match
-    pgrep -f "coord_daemon.clj serve-flat .*$CODE_LOG" >/dev/null 2>&1 && COORD=alive
+  if [ "$PORT" != "-" ] && [ "$SPACE_ID" != "-" ]; then
+    STATUS="$(FRAM_PORT="$PORT" FRAM_SPACE_ID="$SPACE_ID" FRAM_LOG="$CODE_LOG" \
+      timeout 2 "$HERE/bin/fram" status 2>/dev/null)" || STATUS=""
+    if [[ "$STATUS" =~ ^up\|[0-9]+\|([0-9]+)\|ready\|jvm$ ]]; then
+      COORD=alive
+      TRIPLES="${BASH_REMATCH[1]}"
+    fi
   fi
 fi
 
@@ -176,11 +181,11 @@ PY
 
 # --- level --------------------------------------------------------------------
 LEVEL=0
-if [ -f "$CODE_LOG" ] && [ "$MCP" = present ]; then
-  if [ "$COORD" = alive ]; then LEVEL=3; else LEVEL=2; fi
+if [ "$NATIVE_LOG" = true ] && [ "$MCP" = present ]; then
+  LEVEL=2
 elif [ "${SRC_COUNT:-0}" -gt 0 ]; then
   LEVEL=1
 fi
 
-echo "level=$LEVEL src=$SRC_COUNT log=$LOG facts=$FACTS mcp=$MCP port=$PORT coord=$COORD canonical=$CANON"
+echo "level=$LEVEL src=$SRC_COUNT log=$LOG triples=$TRIPLES mcp=$MCP space=$SPACE_ID port=$PORT coord=$COORD canonical=$CANON"
 exit 0

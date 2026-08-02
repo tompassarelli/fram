@@ -1,228 +1,125 @@
 #!/usr/bin/env bash
 # ============================================================================
-# fram-code-on — THE FLIP. Turn the graph stack ON for a code directory.
-#   fram-code-on <dir> [port] [--src <subdir>]
+# fram-code-on — build and serve a native code corpus for a directory.
+#   fram-code-on <dir> [port] --space-id <id> [--src <subdir>]
 # --src scopes ingest+corpus to the SOURCE subtree (default: <dir>) while .fram/
 # and .mcp.json stay at <dir> — repos whose tree also holds build artifacts /
 # vendored copies (gjoa: gitignored engine/ mirrors src/) must not ingest those.
 # Does the whole incantation in one shot:
-#   1. ingest <dir> -> .fram/code.log  (the code becomes facts)
-#   2. boot the WARM coordinator on that log (sole-writer, in-memory graph)
-#   3. write <dir>/.mcp.json so Claude Code gets the fram MCP with graph-edit
-#      verbs (add-def/set-body/rename-def/insert-after) authoring INTO the graph
-#      (warm :edit-min, no re-fold) + the repair loop (typed Beagle errors).
-# After it prints ON: (re)start Claude Code in <dir>. To reason over the code
-# graph (blast-radius / who-calls), run the callgraph command it prints.
+#   1. ingest <dir> -> .fram/code.log (native FRAMLOG)
+#   2. boot the native coordinator on that log
+#   3. wire the public Fram data MCP to that SpaceId
+# Graph-control authoring is a separate sealed service and is not enabled here.
 # Turn OFF: fram-code-off <dir>  (kills the coordinator; remove .mcp.json).
 # ============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # fram repo root
 BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 BEAGLE_HOME="$(cd "$BEAGLE_HOME" && pwd)"
-BEAGLE_RACKET_INIT="$BEAGLE_HOME/bin/_beagle-racket"
-[[ -f "$BEAGLE_RACKET_INIT" ]] || {
-  echo "fram-code-on: missing Beagle Racket resolver: $BEAGLE_RACKET_INIT" >&2
-  exit 1
-}
-source "$BEAGLE_RACKET_INIT"
-[[ -n "${_BEAGLE_RACKET:-}" ]] || {
-  echo "fram-code-on: Beagle's pinned Racket could not be resolved" >&2
-  exit 1
-}
-PINNED_RACKET="$(readlink -f -- "$_BEAGLE_RACKET")"
-EDIT_VERIFIER="$(readlink -f -- "$HERE/bin/fram-edit-verifier")"
-WORLD_CHECK="$(readlink -f -- "$BEAGLE_HOME/beagle-lib/private/facts-check-world.rkt")"
-[[ -x "$PINNED_RACKET" ]] || {
-  echo "fram-code-on: pinned Racket is not executable: $PINNED_RACKET" >&2
-  exit 1
-}
-[[ -f "$EDIT_VERIFIER" && -x "$EDIT_VERIFIER" ]] || {
-  echo "fram-code-on: edit verifier is not a regular executable: $EDIT_VERIFIER" >&2
-  exit 1
-}
-[[ -f "$WORLD_CHECK" ]] || {
-  echo "fram-code-on: coherent-world checker is not a regular file: $WORLD_CHECK" >&2
-  exit 1
-}
-DIR="${1:?usage: fram-code-on <dir> [port] [--src <subdir>]}"; DIR="$(cd "$DIR" && pwd)"; shift
-PORT="" SRC="$DIR"
+DIR="${1:?usage: fram-code-on <dir> [port] --space-id <id> [--src <subdir>]}"; DIR="$(cd "$DIR" && pwd)"; shift
+PORT="" SRC="$DIR" SPACE_ID=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --src) SRC="${2:?--src needs a dir}"; shift 2;;
-    *)     PORT="$1"; shift;;
+    --space-id) SPACE_ID="${2:?--space-id needs an id}"; shift 2;;
+    --*) echo "fram-code-on: unknown option $1" >&2; exit 2;;
+    *)
+      if [[ -n "$PORT" ]]; then
+        echo "fram-code-on: unexpected argument $1" >&2
+        exit 2
+      fi
+      PORT="$1"; shift;;
   esac
 done
+[[ -n "$SPACE_ID" ]] || {
+  echo "fram-code-on: --space-id is required and must be nonempty" >&2
+  exit 2
+}
 SRC="$(cd "$SRC" && pwd)"
 PORT="${PORT:-$(( (RANDOM % 20000) + 30000 ))}"
 CODE_LOG="$DIR/.fram/code.log"
 mkdir -p "$DIR/.fram"
 
-echo "fram-code-on: $DIR (port $PORT; src $SRC)"
+echo "fram-code-on: $DIR (space $SPACE_ID; port $PORT; src $SRC)"
 
-doctor_line() {
-  FRAM_PORT="$PORT" FRAM_LOG="$CODE_LOG" "$HERE/bin/fram" doctor 2>/dev/null |
-    head -n 1
+native_status_line() {
+  FRAM_PORT="$PORT" FRAM_SPACE_ID="$SPACE_ID" FRAM_LOG="$CODE_LOG" \
+    timeout 5 "$HERE/bin/fram" status 2>/dev/null
 }
 
-coordinator_matches_code_log() {
+verify_native_coordinator() {
   local status
-  status="$(doctor_line || true)"
-  [[ "$status" =~ ^coordinator\ UP\ on\ 127\.0\.0\.1:${PORT}\ \(v[0-9]+\)$ ]]
-}
-
-# Managed graph-authoring daemons fail closed on every unwrapped socket request.
-# Probe the wire boundary itself so an old permissive daemon cannot be silently
-# reused merely because it happens to serve the right file.
-coordinator_requires_fence() {
-  local code
-  code="$(
-    FRAM_PROBE_PORT="$PORT" timeout 3 bb -e '
-      (require (quote [clojure.java.io :as io])
-               (quote [clojure.edn :as edn]))
-      (with-open [s (java.net.Socket.)]
-        (.connect s (java.net.InetSocketAddress.
-                     "127.0.0.1"
-                     (Integer/parseInt (System/getenv "FRAM_PROBE_PORT")))
-                  1000)
-        (.setSoTimeout s 2000)
-        (let [w (io/writer (.getOutputStream s))
-              r (io/reader (.getInputStream s))]
-          (.write w "{:op :version}\n")
-          (.flush w)
-          (print (some-> (.readLine r) edn/read-string :code name))))' 2>/dev/null || true
-  )"
-  [[ "$code" == "log-fence-required" ]]
-}
-
-coordinator_edit_protocol() {
-  FRAM_PROBE_PORT="$PORT" FRAM_PROBE_LOG="$CODE_LOG" \
-    timeout 5 bb -cp "$HERE/out" -e '
-      (require (quote [fram.rt :as rt]))
-      (let [response
-            (rt/coord-request-for-log
-             (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
-             (System/getenv "FRAM_PROBE_LOG")
-             {:op :edit-protocol})]
-        (print
-         (pr-str
-          [(:protocol response)
-           (get-in response [:verifier :state])])))' 2>/dev/null
-}
-
-coordinator_configured_log_identity() {
-  FRAM_PROBE_PORT="$PORT" FRAM_PROBE_LOG="$CODE_LOG" \
-    timeout 5 bb -cp "$HERE/out" -e '
-      (require (quote [fram.rt :as rt]))
-      (let [expected (.getCanonicalPath
-                      (java.io.File. (System/getenv "FRAM_PROBE_LOG")))
-            response
-            (rt/coord-request-for-log
-             (Integer/parseInt (System/getenv "FRAM_PROBE_PORT"))
-             expected
-             {:op :edit-protocol})
-            configured (:configured-logs response)]
-        (if (and (= expected (:coordination configured))
-                 (nil? (:telemetry configured)))
-          (print "exact-single-log")
-          (print
-           (pr-str
-            {:expected {:coordination expected :telemetry nil}
-             :configured configured}))))' 2>/dev/null
-}
-
-verify_managed_coordinator() {
-  local status protocol configured
-  status="$(doctor_line || true)"
-  if ! coordinator_matches_code_log; then
-    echo "        coordinator identity check FAILED: ${status:-no fenced response}" >&2
-    echo "        expected exact corpus: $(readlink -f "$CODE_LOG")" >&2
+  status="$(native_status_line || true)"
+  if [[ ! "$status" =~ ^up\|[0-9]+\|[0-9]+\|ready\|jvm$ ]]; then
+    echo "        native :rpc/status check FAILED: ${status:-no native response}" >&2
+    echo "        expected SpaceId $SPACE_ID on :$PORT" >&2
     return 1
   fi
-  if ! coordinator_requires_fence; then
-    echo "        coordinator policy check FAILED: :$PORT accepts legacy unwrapped requests" >&2
-    echo "        stop that daemon and rerun fram-code-on so strict log fencing is enabled" >&2
-    return 1
-  fi
-  protocol="$(coordinator_edit_protocol || true)"
-  if [[ "$protocol" != '["graph-edit-candidate-v2" :ready]' ]]; then
-    echo "        coordinator verifier check FAILED: ${protocol:-no fenced :edit-protocol response}" >&2
-    echo "        stop that daemon and rerun fram-code-on with the launch-sealed verifier" >&2
-    return 1
-  fi
-  configured="$(coordinator_configured_log_identity || true)"
-  if [[ "$configured" != "exact-single-log" ]]; then
-    echo "        coordinator configured-log check FAILED: ${configured:-no configured-log identity}" >&2
-    echo "        refusing reuse: graph authoring requires the exact code log with no telemetry overlay" >&2
-    return 1
-  fi
+  printf '%s\n' "$status"
 }
 
-# 1. ingest the code into facts (deterministic, no LLM) — recurse for ANY Beagle source.
+# 1. ingest the code into propositions (deterministic, no LLM) — recurse for ANY Beagle source.
 #    The extension only picks the emit target (.bclj->clj .bcljs->cljs .bjs->js .bnix->nix
 #    .bgl->neutral .bodin->odin); the parsed AST is target-independent, so ingest is too.
 #    fram-ingest-code is non-recursive, so we find + feed it every Beagle file here.
 #
-#    EXCLUDE docs/private/ — it is gitignored scratch (agent notes, status dumps,
-#    handoffs, recovery snapshots), definitionally NOT source. A recovery dump of a
-#    vendored beagle checkout landed there and contributed 229 of the 280 files this
-#    glob was feeding in, against 51 real modules: the code graph grew to 264MB /
-#    1.03M facts, and since every fram-edit-code operation and every MCP read folds
-#    the whole log, one --no-commit edit ran over twenty minutes where the same
-#    command against a 36MB clone finished in under one. Test fixtures and fuzz
-#    repros are not the corpus; ingesting them made the authoring loop unusable.
-echo "  [1/3] ingesting code -> facts …"
+#    EXCLUDE docs/private/, vendored copies, tests, and fuzz repros: none are
+#    members of the authoring corpus.
+if pgrep -f "coord_daemon.clj serve [0-9]+ $CODE_LOG( |$)" >/dev/null 2>&1; then
+  echo "fram-code-on: a coordinator already owns $CODE_LOG; run fram-code-off first" >&2
+  exit 1
+fi
+if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
+  echo "fram-code-on: port $PORT is already in use" >&2
+  exit 1
+fi
+
+echo "  [1/3] ingesting code -> native FRAMLOG …"
 mapfile -t SRCS < <(find "$SRC" -regextype posix-extended -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' -not -path '*/.fram/*' -not -path '*/docs/private/*' -not -path '*/test/*' -not -path '*/tests/*' | sort)
 [ "${#SRCS[@]}" -eq 0 ] && { echo "        no Beagle source (.bclj/.bcljs/.bjs/.bnix/.bgl/.bodin) under $SRC"; exit 1; }
-( cd "$HERE" && BEAGLE_HOME="$BEAGLE_HOME" bin/fram-ingest-code "${SRCS[@]}" --root "$SRC" --out "$CODE_LOG" ) \
-  && echo "        ${#SRCS[@]} modules, $(wc -l <"$CODE_LOG") facts -> $CODE_LOG"
+( cd "$HERE" && BEAGLE_HOME="$BEAGLE_HOME" bin/fram-ingest-code "${SRCS[@]}" \
+    --root "$SRC" --out "$CODE_LOG" --space-id "$SPACE_ID" ) \
+  && echo "        ${#SRCS[@]} module transactions -> $CODE_LOG"
 
 # 1b. resolve AST -> reference graph (corpus) for REASONING. code.log is the editing
 #     AST (tree); the corpus is the resolved who-calls/blast-radius GRAPH (callgraph needs it).
 CORPUS="$DIR/.fram/corpus.facts"
 echo "  [1b]  resolving -> reference graph (for who-calls/blast-radius) …"
 ( cd "$HERE/codegraph" && BEAGLE_HOME="$BEAGLE_HOME" bin/emit-corpus "$SRC" "$CORPUS" >/dev/null 2>&1 ) \
-  && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) facts -> $CORPUS" \
-  || echo "        (corpus skipped — authoring still works; reasoning needs emit-corpus)"
+  && echo "        corpus: $(wc -l <"$CORPUS" 2>/dev/null) reference rows -> $CORPUS" \
+  || echo "        (reference corpus skipped — native AST corpus is still available)"
 
-# 2. boot the warm coordinator (detached — survives this shell)
-if ss -ltn 2>/dev/null | grep -q ":$PORT "; then
-  echo "  [2/3] coordinator already on :$PORT; verifying corpus + strict policy …"
-  verify_managed_coordinator
-  echo "        verified exact code log + strict log fence + ready edit verifier (reusing)"
-else
-  echo "  [2/3] booting warm coordinator on :$PORT …"
-  ( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG \
-    BEAGLE_HOME="$BEAGLE_HOME" \
-    FRAM_EDIT_VERIFIER="$EDIT_VERIFIER" \
-    FRAM_EDIT_VERIFIER_ARGS='[]' \
-    FRAM_EDIT_VERIFIER_RACKET="$PINNED_RACKET" \
-    FRAM_EDIT_VERIFIER_WORLD_CHECK="$WORLD_CHECK" \
-    FRAM_REQUIRE_LOG_FENCE=1 \
-    setsid nohup bin/fram-daemon serve-flat "$PORT" "$CODE_LOG" \
-      >"$DIR/.fram/coord-$PORT.log" 2>&1 ) &
-  DAEMON_PID=$!
-  # boot time scales with the log (gjoa: 429k facts ≈ 11 min — index! dedupe is
-  # quadratic today). Generous cap; the loop exits the moment the daemon listens.
-  for _ in $(seq 1 2400); do
-    sleep 0.5
-    grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break
-    if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
-      echo "        FAILED to boot — coordinator exited; see $DIR/.fram/coord-$PORT.log" >&2
-      tail -n 8 "$DIR/.fram/coord-$PORT.log" >&2 || true
-      exit 1
-    fi
-  done
-  if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
-    verify_managed_coordinator
-    echo "        coordinator up (sole-writer, loopback, exact log, strict fence, verifier ready)"
-  else
-    echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"
+# 2. boot the native coordinator (detached — survives this shell)
+echo "  [2/3] booting native coordinator on :$PORT …"
+( cd "$HERE" && exec env -u FRAM_TELEMETRY_LOG \
+  BEAGLE_HOME="$BEAGLE_HOME" \
+  setsid nohup bin/fram-daemon serve "$PORT" "$CODE_LOG" "$SPACE_ID" \
+    >"$DIR/.fram/coord-$PORT.log" 2>&1 ) &
+DAEMON_PID=$!
+for _ in $(seq 1 2400); do
+  sleep 0.5
+  grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null && break
+  if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+    echo "        FAILED to boot — coordinator exited; see $DIR/.fram/coord-$PORT.log" >&2
+    tail -n 8 "$DIR/.fram/coord-$PORT.log" >&2 || true
     exit 1
   fi
+done
+if grep -q "listening on" "$DIR/.fram/coord-$PORT.log" 2>/dev/null; then
+  if NATIVE_STATUS="$(verify_native_coordinator)"; then
+    echo "        coordinator up ($NATIVE_STATUS)"
+  else
+    kill "$DAEMON_PID" 2>/dev/null || true
+    exit 1
+  fi
+else
+  echo "        FAILED to boot — see $DIR/.fram/coord-$PORT.log"
+  kill "$DAEMON_PID" 2>/dev/null || true
+  exit 1
 fi
 
 # 3. write .mcp.json (Claude Code) + .codex/config.toml [mcp_servers.fram] (Codex)
-#    so BOTH pick up the fram graph-edit MCP for this dir. MERGE, never clobber —
+#    so BOTH pick up the public Fram data MCP for this corpus. MERGE, never clobber —
 #    an existing .mcp.json / config.toml may carry unrelated servers/projects.
 echo "  [3/3] wiring $DIR/.mcp.json + $DIR/.codex/config.toml …"
 FRAM_SERVER_JSON=$(cat <<JSON
@@ -230,23 +127,10 @@ FRAM_SERVER_JSON=$(cat <<JSON
   "command": "$HERE/bin/fram-mcp",
   "args": [],
   "env": {
-    "FRAM_FLIP": "1",
-    "FRAM_GRAPH_EDIT": "1",
+    "FRAM_SPACE_ID": "$SPACE_ID",
     "FRAM_PORT": "$PORT",
-    "FRAM_CODE_PORT": "$PORT",
-    "FRAM_CODE_LOG": "$CODE_LOG",
-    "_comment_read_timeout": "edit-prepare over a large code log costs seconds, above fram.rt's 2000ms default read deadline — without this, EVERY MCP edit verb fails with a prepare-deadline REJECTED that reads like a semantic rejection (learning, thread 019f9cf1-d746). This template is REWRITTEN on every fram-code-on: the line must live HERE or it is dropped (thread 019f9d7d).",
     "FRAM_COORD_READ_TIMEOUT_MS": "180000",
-    "_comment_fram_log": "read verbs (show/ask/validate) bind FRAM_LOG, the EDIT verbs bind FRAM_CODE_LOG. Omitting FRAM_LOG made rt/log-path fall back to \$PWD/coordination.log — a file that does not exist here — so every read answered [] for a graph with facts, instead of refusing. Same value the doctor probe above already uses.",
-    "FRAM_LOG": "$CODE_LOG",
-    "FRAM_SRC": "$SRC",
-    "FRAM_OUT": "$HERE/out",
-    "FRAM_BIN": "$HERE/bin",
-    "FRAM_RESOLVE": "$HERE/out/resolve.clj",
-    "FRAM_BEAGLE": "$BEAGLE_HOME/bin/beagle",
-    "FRAM_CHECK_EMIT": "$BEAGLE_HOME/beagle-lib/private/facts-check-emit.rkt",
-    "FRAM_BUILD_ALL": "$BEAGLE_HOME/bin/beagle-build-all",
-    "BEAGLE_HOME": "$BEAGLE_HOME"
+    "FRAM_LOG": "$CODE_LOG"
   }
 }
 JSON
@@ -254,21 +138,22 @@ JSON
 "$HERE/bin/fram-code-wire" on "$DIR" "$FRAM_SERVER_JSON"
 
 # The transport wiring and coordinator boot are separate steps. Prove the
-# user-visible stack is complete before reporting success.
+# user-visible native stack is complete before reporting success. Level 3 stays
+# reserved for the separate graph-control plane.
 STACK_STATUS="$("$HERE/bin/fram-code-status" "$DIR")"
-if [[ ! "$STACK_STATUS" =~ ^level=3\  ]] || \
-   [[ "$STACK_STATUS" != *"mcp=present port=$PORT coord=alive"* ]] || \
+if [[ ! "$STACK_STATUS" =~ ^level=2\  ]] || \
+   [[ "$STACK_STATUS" != *"mcp=present space=$SPACE_ID port=$PORT coord=alive"* ]] || \
    ! grep -q '^\[mcp_servers\.fram\]$' "$DIR/.codex/config.toml"; then
-  echo "fram-code-on: FAILED final graph stack postcondition: $STACK_STATUS" >&2
+  echo "fram-code-on: FAILED final native stack postcondition: $STACK_STATUS" >&2
   exit 1
 fi
 
 cat <<EOF
 
-=== STACK ON ===
-Authoring: (re)start Claude Code in $DIR — you now have mcp__fram__add-def /
-  set-body / rename-def / insert-after, authoring INTO the fact graph (warm,
-  no re-fold; edits type-checked + pointed Beagle errors returned for repair).
+=== NATIVE CODE CORPUS ON ===
+FRAMLOG + coordinator: $NATIVE_STATUS
+The public Fram data MCP is wired to SpaceId $SPACE_ID.
+Graph-control authoring is not enabled here; that is the separate N2.6b seam.
 Reason over the code graph (blast-radius / who-calls), any time:
   bb -cp $HERE/out $HERE/out/callgraph.clj $CORPUS
 Or race it vs grep on any function:

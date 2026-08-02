@@ -99,11 +99,22 @@
           nil))
 
 (let [launcher (file-source "bin/fram-daemon")
-      migration (file-source "bin/fram-migrate-triple-log")]
-  (check! "flat serving is a rejection plus one-shot migration, never a daemon mode"
+      migration (file-source "bin/fram-migrate-triple-log")
+      code-on (file-source "bin/fram-code-on")
+      ingest (file-source "bin/fram-ingest-code")
+      status (file-source "bin/fram-code-status")]
+  (check! "flat serving is migration-only; code ingest and launch are native"
           (and (str/includes? launcher "serve-flat was removed")
                (str/includes? migration "migrate-triple-log")
-               (= 2 (count (re-seq #"serve-flat" launcher))))
+               (= 2 (count (re-seq #"serve-flat" launcher)))
+               (str/includes? code-on "bin/fram-daemon serve")
+               (str/includes? code-on "--space-id \"$SPACE_ID\"")
+               (absent? code-on ["serve-flat" "edn/read" ":edit-protocol"])
+               (every? #(str/includes? ingest %)
+                       ["coord/create-triple-log!" "coord/open-coordinator!"
+                        "coord/commit!" "replace-atomically!"])
+               (str/includes? status "\"$HERE/bin/fram\" status")
+               (absent? status ["wc -l" "serve-flat"]))
           nil))
 
 (let [failures (remove second @checks)]
