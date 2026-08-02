@@ -66,6 +66,13 @@ g1_region="${FRAM_DAEMON_G1_REGION-32m}"
 if [[ -n "$g1_region" ]]; then
   heap_flags+=(-XX:+UseG1GC "-XX:G1HeapRegionSize=$g1_region")
 fi
+# A capped heap must die loudly, not thrash: the supervisor restarts it and
+# the dump names the culprit. FRAM_DAEMON_NO_OOM_EXIT=1 opts out.
+if [[ -z "${FRAM_DAEMON_NO_OOM_EXIT:-}" && -n "$xmx" ]]; then
+  oom_dump="${FRAM_DAEMON_LOG:+$FRAM_DAEMON_LOG.heap.hprof}"
+  heap_flags+=(-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError
+    "-XX:HeapDumpPath=${oom_dump:-/tmp/fram-daemon-oom.hprof}")
+fi
 
 if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
   if [[ -z "${FRAM_JAVA:-}" || -z "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
