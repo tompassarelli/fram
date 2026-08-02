@@ -138,10 +138,12 @@
           (rt/rpc-record-fields! (rt/native-payload response)
                                  :rpc/validation 2)
           values (rt/rpc-list-values! violations)]
+      (doseq [violation values]
+        (println (str (if valid "advisory: " "violation: ")
+                      (render-term violation))))
       (if valid
         (println "valid")
-        (doseq [violation values]
-          (println (str "violation: " (render-term violation)))))
+        nil)
       valid)))
 
 (defn- scan! [arguments]

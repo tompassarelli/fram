@@ -125,6 +125,20 @@ through that door before the contract binds. The circularity is real and it
 is closed deliberately, in one place, kept as small as the normalization
 principle above demands.
 
+The executable observe-mode shape uses the current space identifier as its
+subject and `:kernel/profile` as that one predicate:
+
+```text
+(space-id, :kernel/profile, (profile-id, "relational", "observe"))
+(profile-id, "includes", "R1")
+...
+(profile-id, "includes", "R4")
+```
+
+Only the anchoring proposition is bootstrap-exempt. The header, rule links,
+profile identifier, mode, and rule names are ordinary Terms and propositions;
+no spelling namespace receives special treatment.
+
 ## Paradigm is a profile, never a kernel fork
 
 "Relational typed triples," freeform structures, positional records — these

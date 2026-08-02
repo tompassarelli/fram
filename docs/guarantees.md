@@ -81,6 +81,20 @@ Two runtime surfaces exist until cluster migration completes:
 | Q3 | Budgets: step budget 10,000,000; timeout `min(60000, requested else 5000)` ms | UNBACKED | numbers live in source only; no gate exercises the limits |
 | Q4 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, version, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_daemon_test.clj` exercises one evaluator run for two concurrent misses, version separation, historical reuse, bounds, counters, and restart reset |
 
+## Profiles
+
+The relational profile is advisory at this slice. Its declared rules are R1:
+all slots are Atoms; R2: slot0 is a non-blank String or Keyword; R3: slot1 is
+a non-blank String or Keyword; R4: slot2 is a non-nil Atom (the blank String is
+valid). Only the exact `:kernel/profile` anchoring proposition is exempt.
+
+| # | Guarantee | Status | Gate |
+|---|---|---|---|
+| P1 | A space without a complete profile declaration retains current freeform write behavior | BACKED | [`../tests/profile_lint_test.clj`](../tests/profile_lint_test.clj) undeclared arm; observe logic is not called from the commit path |
+| P2 | Enforce mode rejects a violating operation before append, atomically for a batch | UNBACKED | enforce mode is outside the observe-only slice |
+| P3 | The prospective admission verdict and advisory lint verdict agree for R1-R4 | BACKED | `profile_lint_test.clj` differential corpus, including one negative per rule and the former namespace-carve-out shape |
+| P4 | Tightening a profile preserves committed occurrences and reports older violations by occurrence coordinate | UNBACKED | evolution and occurrence-addressed reporting are outside the observe-only slice |
+
 ## Capacity and performance envelope — the open rungs
 
 **The first current-engine numbers exist (2026-08-02, 3,000 live triples,

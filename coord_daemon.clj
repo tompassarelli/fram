@@ -1247,9 +1247,15 @@
   (try
     (let [co (coord/store-view @coordinator (:root snapshot))
           dump (term-store/dump-term-store (coord/coordinator-store co))
-          copy (term-store/new-term-store (coord/coordinator-space co))]
+          space-id (coord/coordinator-space co)
+          copy (term-store/new-term-store space-id)
+          profile-violations
+          (kernel/lint-declared-profile (coord/live-propositions co) space-id)]
       (term-store/load-term-store! copy dump)
-      (wire/rpc-validation! true []))
+      (wire/rpc-validation!
+       true
+       (mapv #(wire/rpc-violation! :rpc/profile-violation %)
+             profile-violations)))
     (catch Throwable error
       (let [code (or (:fram/code (ex-data error))
                      (:type (ex-data error)) :rpc/validation-failed)]

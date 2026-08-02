@@ -447,6 +447,38 @@
                    (every? #(<= % 8) (vals version-counts))
                    (<= bytes (* 64 1024 1024)))))
 
+    (let [profile-id "relational-v1"
+          declaration (kernel/relational-profile-declaration space profile-id)
+          profile-facts (into [declaration]
+                              (mapv #(kernel/profile-rule profile-id %)
+                                    kernel/relational-profile-rules))
+          _ (doseq [proposition profile-facts]
+              (request! port space :rpc/assert
+                        (wire/rpc-write! proposition wire/rpc-subject-any nil)))
+          violating (t/triple "profile-observe"
+                              "nested-value"
+                              (t/triple "still" "commits" true))
+          write-response (request! port space :rpc/assert
+                                   (wire/rpc-write!
+                                    violating wire/rpc-subject-any nil))
+          validated (request! port space :rpc/validate wire/rpc-unit)
+          [valid violations] (fields (payload validated) :rpc/validation 2)
+          advisories (values-list violations)]
+      (check! "observe profile commits a violating write and validate reports it"
+              (and valid
+                   (nil? (error-code write-response))
+                   (some (fn [advisory]
+                           (let [[code detail]
+                                 (fields advisory :rpc/violation 2)]
+                             (and (= :rpc/profile-violation code)
+                                  (= violating (t/triple-slot0 detail)))))
+                         advisories)
+                   (not-any? (fn [advisory]
+                               (let [[_ detail]
+                                     (fields advisory :rpc/violation 2)]
+                                 (= declaration (t/triple-slot0 detail))))
+                             advisories))))
+
     (let [predicate :page-fixture
           fixture-count 400
           scan-payload (wire/rpc-triple-pattern! nil predicate nil)
