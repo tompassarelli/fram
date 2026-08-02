@@ -12,6 +12,7 @@
 99	coord_daemon.clj
 41	docs/archive/claims-design.md
 9	docs/naming.md
+2	docs/ontology.md
 1	out/coord_daemon_wire.clj
 28	out/fram/claims.clj
 1	out/fram/rt.clj

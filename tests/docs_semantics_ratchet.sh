@@ -13,6 +13,7 @@ canonical_docs=(
   docs/glossary.md
   docs/isolation-and-deployment.md
   docs/naming.md
+  docs/ontology.md
   docs/query-reference.md
   docs/semantic-hints.md
   docs/tool-catalog.md
