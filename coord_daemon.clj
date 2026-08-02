@@ -116,7 +116,7 @@
           {:pins 0 :hits 0 :expired 0 :evictions 0}))
 
 (defn- retain-query-page-snapshot! [snapshot]
-  (let [snapshot (select-keys snapshot [:facts :idx :version])
+  (let [snapshot (select-keys snapshot [:facts :idx :version :ordered-facts])
         version (:version snapshot)]
     (locking query-page-snapshots
       (let [{:keys [order by-version]} @query-page-snapshots
@@ -1674,6 +1674,7 @@
   (let [history-store (atom (:store-root roots))
         c (query-cache-for-roots roots)]
     {:facts (:facts c) :idx (:idx c) :version (:version roots)
+     :ordered-facts (atom nil)
      :history-co {:store history-store}
      :history-store history-store}))
 
@@ -1771,6 +1772,74 @@
   (if (mentions-fact-id? q)
     (whole-corpus-projection (:facts snapshot))
     (rotations/datalog-projection (:idx snapshot))))
+
+(defn- whole-facts-page-query? [query]
+  (and (map? query)
+       (string? (:find query))
+       (not (contains? query :strata))
+       (vector? (:rules query))
+       (= 1 (count (:rules query)))
+       (let [rule (first (:rules query))
+             head (:head rule)
+             body (:body rule)
+             literal (when (= 1 (count body)) (first body))
+             args (:args literal)
+             vars (when (vector? args) (mapv :var args))]
+         (and (map? rule)
+              (vector? body)
+              (map? literal)
+              (= "triple" (:rel literal))
+              (not (:neg literal))
+              (= 3 (count args))
+              (every? var-term? args)
+              (= 3 (count (set vars)))
+              (= (:find query) (:rel head))
+              (= args (:args head))))))
+
+(defn- build-ordered-facts [snapshot]
+  (let [keyed
+        (persistent!
+         (reduce (fn [acc row]
+                   (query-check)
+                   (conj! acc [(pr-str row) row]))
+                 (transient [])
+                 (:tuples (:idx snapshot))))]
+    (mapv second (sort-by first keyed))))
+
+(defn- ordered-facts [snapshot]
+  (let [slot (:ordered-facts snapshot)]
+    (or @slot
+        (locking slot
+          (or @slot
+              (let [ordered (build-ordered-facts snapshot)]
+                (reset! slot ordered)
+                ordered))))))
+
+(defn- page-start [ordered after]
+  (if (nil? after)
+    0
+    (let [decoded (q/decode-page-cursor after)]
+      (if-let [error (:error decoded)]
+        {:error [error]}
+        (let [key (:ok decoded)]
+          (loop [lo 0 hi (count ordered)]
+            (if (>= lo hi)
+              lo
+              (let [mid (quot (+ lo hi) 2)
+                    row-key (pr-str (nth ordered mid))]
+                (if (pos? (compare row-key key))
+                  (recur lo mid)
+                  (recur (inc mid) hi))))))))))
+
+(defn- run-whole-facts-page [snapshot query limit after]
+  (let [ordered (ordered-facts snapshot)
+        start (page-start ordered after)]
+    (if (map? start)
+      start
+      (let [end (min (count ordered) (+ start limit 1))
+            window (subvec ordered start end)
+            projection (rotations/datalog-projection (rotations/build window))]
+        (q/run-page-projected projection query limit after)))))
 
 (defn- query-abort-response [t version engine]
   (let [data (ex-data t)
@@ -1912,9 +1981,16 @@
                                  (idx-run (:idx snapshot) (:query req))
                                  (q/run-projected (snapshot-projection snapshot (:query req))
                                                   (:query req)))
-                        :query-page (q/run-page-projected
-                                     (snapshot-projection snapshot (:query req))
-                                     (:query req) (:limit req) (:after req))
+                        :query-page (if (and (whole-facts-page-query? (:query req))
+                                             (integer? (:limit req))
+                                             (<= 1 (:limit req) q/max-page-limit)
+                                             (or (nil? (:after req))
+                                                 (string? (:after req))))
+                                      (run-whole-facts-page
+                                       snapshot (:query req) (:limit req) (:after req))
+                                      (q/run-page-projected
+                                       (snapshot-projection snapshot (:query req))
+                                       (:query req) (:limit req) (:after req)))
                         :pull (let [errs (pull/validate (:root req) (:pattern req) req)]
                                 (if (seq errs)
                                   {:error errs}
