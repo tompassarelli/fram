@@ -54,7 +54,7 @@ Two runtime surfaces exist until cluster migration completes:
 | I1 | One active coordinator per `SpaceId`; accepted transactions serialize under a single lock | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
 | I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame verification |
-| I4 | Ack latency is bounded under contention: a lone write during a 2 s slow read acks ≤ 250 ms; ten concurrent writes stay within delay-relative and baseline-relative bounds (writes serialize per-commit fsync — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
+| I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (writes serialize per-commit fsync — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
 
 ## Ordering and recovery
 
@@ -104,9 +104,9 @@ writes/s) must not be quoted for head. Remaining envelope work:
   seconds-expensive near it; a known characteristic, not yet optimized;
 - writes serialize through one per-commit fsync under the coordinator lock
   (~35 ms/commit observed on local disk → tens of committed tx/s serialized;
-  batches amortize). Group commit does not exist. Every operation except
-  `:rpc/query` also executes inside that lock, so a slow non-query op stalls
-  writers 1:1 — a structural exposure, measured and recorded, not yet gated;
+  batches amortize). Group commit does not exist. The seven read-only FRAMRPC
+  operations run against pinned immutable roots outside that lock; mutations
+  retain synchronous per-frame forcing;
 - overload behavior is **unspecified**: the head daemon currently has no
   admission control (unbounded connection futures). Until bounded admission
   lands, nothing can be promised about behavior at saturation — that is a

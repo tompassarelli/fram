@@ -26,6 +26,7 @@
 (def listener (atom nil))
 (def stopping? (atom false))
 (def active-requests (atom {}))
+(def published-snapshot (atom nil))
 (def ^:private query-page-snapshot-limit 4)
 (def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
 
@@ -116,6 +117,11 @@
 
 (def paged-rpc-operations #{:rpc/query :rpc/scan :rpc/occurrences})
 
+(def read-only-rpc-operations
+  (apply disj native-rpc-operations
+         [:rpc/assert :rpc/retract :rpc/batch :rpc/lease-acquire
+          :rpc/lease-renew :rpc/lease-release]))
+
 (defn- daemon-fail! [code message data]
   (throw (ex-info message (assoc data :type code :fram/code code :code code))))
 
@@ -142,6 +148,16 @@
   (boolean (and (writer-lock-held?)
                 (coord/mutation-ready? @coordinator))))
 
+(defn- snapshot-of [co]
+  (let [root @(coord/coordinator-store co)]
+    {:version (dec (t/termstore-next-sequence root))
+     :root root}))
+
+(defn- publish-snapshot! [co]
+  (let [snapshot (snapshot-of co)]
+    (reset! published-snapshot snapshot)
+    snapshot))
+
 (defn shutdown! []
   (reset! stopping? true)
   (when-let [^ServerSocket server @listener]
@@ -152,6 +168,7 @@
       (datalog/cancel-query! control :daemon-shutdown)))
   (reset! active-requests {})
   (reset! query-page-snapshots {:order [] :by-version {}})
+  (reset! published-snapshot nil)
   (coord-writer-authority/release! @writer-authority)
   (reset! writer-authority nil)
   (reset! coordinator nil)
@@ -183,6 +200,7 @@
        (let [opened (coord/open-coordinator!
                      canonical expected-space {:repair-torn? (= :active role)})]
          (reset! coordinator opened)
+         (publish-snapshot! opened)
          (reset! coordinator-role role)
          (reset! writer-authority authority)
          opened)
@@ -192,9 +210,11 @@
 
 (defn- refresh-standby! []
   (when (= :standby @coordinator-role)
-    (let [current @coordinator]
-      (reset! coordinator
-              (coord/open-coordinator! (:log current) (:space-id current))))))
+    (locking coordinator
+      (let [current @coordinator
+            opened (coord/open-coordinator! (:log current) (:space-id current))]
+        (reset! coordinator opened)
+        (publish-snapshot! opened)))))
 
 (defn native-op-disposition [operation]
   (if (contains? native-rpc-operations operation) :supported :unsupported))
@@ -255,9 +275,12 @@
                   "active writer authority is required" {}))
   (coord/require-mutation-ready! @coordinator))
 
-(defn- require-expected! [co expected]
-  (when (and (some? expected) (not= expected (current-version co)))
+(defn- require-version-expected! [version expected]
+  (when (and (some? expected) (not= expected version))
     (daemon-fail! :rpc/conflict "expected-version does not match current version" {})))
+
+(defn- require-expected! [co expected]
+  (require-version-expected! (current-version co) expected))
 
 (defn- occurrence-epoch [coordinate]
   (t/triple-slot2 (t/triple-slot0 coordinate)))
@@ -875,22 +898,22 @@
               result))
           [] source))
 
-(defn- page-snapshot! [page]
-  (let [co @coordinator
+(defn- page-snapshot! [snapshot page]
+  (let [co (coord/store-view @coordinator (:root snapshot))
         cursor (some-> page t/rpc-page-request-cursor-value parse-query-cursor!)
-        version (or (:snapshot-version cursor) (current-version co))
+        version (or (:snapshot-version cursor) (:version snapshot))
         root (or (when page (cached-query-page-root version))
                  (replayed-store-root! co version))]
     (when page (retain-query-page-root! version root))
     {:version version :view (coord/store-view co root)}))
 
-(defn- handle-scan! [request cancellation]
+(defn- handle-scan! [request cancellation snapshot]
   (let [payload (t/rpc-request-payload-value request)
         [slot0-option slot1-option slot2-option]
         (record-fields! payload :rpc/triple-pattern 3)
         options (mapv option-value! [slot0-option slot1-option slot2-option])
         page (t/rpcrequest-page request)
-        {:keys [version view]} (page-snapshot! page)
+        {:keys [version view]} (page-snapshot! snapshot page)
         rows (collect-rows (coord/live-propositions view)
                            #(scan-match? options %)
                            (when-not page unpaged-row-cutoff)
@@ -899,10 +922,10 @@
                           triples-page-shape)
            :served version)))
 
-(defn- handle-occurrences! [request cancellation]
+(defn- handle-occurrences! [request cancellation snapshot]
   (require-unit! (t/rpc-request-payload-value request))
   (let [page (t/rpcrequest-page request)
-        {:keys [version view]} (page-snapshot! page)
+        {:keys [version view]} (page-snapshot! snapshot page)
         rows (collect-rows (coord/history view)
                            kernel/operation-occurrence?
                            (when-not page unpaged-row-cutoff)
@@ -911,8 +934,8 @@
                           occurrences-page-shape)
            :served version)))
 
-(defn- handle-query! [request cancellation]
-  (let [[plan-term snapshot]
+(defn- handle-query! [request cancellation published]
+  (let [[plan-term requested-snapshot]
         (record-fields! (t/rpc-request-payload-value request) :query/request 2)
         plan (parse-query-plan! plan-term)
         query-digest (term-sha256 plan-term)
@@ -922,20 +945,18 @@
         direct-pattern (one-triple-pattern plan)
         direct? (some? direct-pattern)
         snapshot-data
-        (locking (:lock @coordinator)
-          (require-expected! @coordinator
-                             (t/rpcrequest-expected-version request))
-          (let [version (requested-snapshot-version!
-                         snapshot cursor (current-version @coordinator))
-                data
-                (if direct?
-                  {:version version
-                   :store-root (or (when page (cached-query-page-root version))
-                                   (replayed-store-root! @coordinator version))}
-                  (snapshot-image! @coordinator version))]
-            (when (and direct? page)
-              (retain-query-page-root! version (:store-root data)))
-            data))
+        (let [co (coord/store-view @coordinator (:root published))
+              version (requested-snapshot-version!
+                       requested-snapshot cursor (:version published))
+              data
+              (if direct?
+                {:version version
+                 :store-root (or (when page (cached-query-page-root version))
+                                 (replayed-store-root! co version))}
+                (snapshot-image! co version))]
+          (when (and direct? page)
+            (retain-query-page-root! version (:store-root data)))
+          data)
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
         control (datalog/query-control 10000000 timeout)]
     (if direct?
@@ -1025,22 +1046,22 @@
                         @coordinator resource holder occurrence)]
             (wire/rpc-lease-released! (boolean (:ok result)))))))))
 
-(defn- handle-lease-check! [payload cancellation]
+(defn- handle-lease-check! [payload cancellation snapshot]
   (let [[resource holder epoch] (parse-fence! payload)]
     (cancelled! cancellation)
-    (locking (:lock @coordinator)
-      (let [[current-holder current-epoch _ expires-ms]
-            (or (current-fence @coordinator resource) [nil nil nil nil])
-            matching (and (= holder current-holder) (= epoch current-epoch))
-            valid (and matching (> expires-ms (System/currentTimeMillis)))]
-        (wire/rpc-lease-check!
-         (boolean valid) (when matching (millis->instant expires-ms)))))))
+    (let [view (coord/store-view @coordinator (:root snapshot))
+          [current-holder current-epoch _ expires-ms]
+          (or (current-fence view resource) [nil nil nil nil])
+          matching (and (= holder current-holder) (= epoch current-epoch))
+          valid (and matching (> expires-ms (System/currentTimeMillis)))]
+      (wire/rpc-lease-check!
+       (boolean valid) (when matching (millis->instant expires-ms))))))
 
-(defn- handle-validate! [payload cancellation]
+(defn- handle-validate! [payload cancellation snapshot]
   (require-unit! payload)
   (cancelled! cancellation)
   (try
-    (let [co @coordinator
+    (let [co (coord/store-view @coordinator (:root snapshot))
           dump (term-store/dump-term-store (coord/coordinator-store co))
           copy (term-store/new-term-store (coord/coordinator-space co))]
       (term-store/load-term-store! copy dump)
@@ -1053,28 +1074,28 @@
                  (if (keyword? code) code :rpc/validation-failed)
                  (or (.getMessage error) "validation failed"))])))))
 
-(defn- status-payload []
-  (let [co @coordinator
+(defn- status-payload [snapshot]
+  (let [co (coord/store-view @coordinator (:root snapshot))
         state (:status (coord/coordinator-recovery-state co))]
     (wire/rpc-status! state (count (coord/live-propositions co)) :rpc/jvm)))
 
-(defn- dispatch-request! [request cancellation]
+(defn- dispatch-request! [request cancellation snapshot]
   (let [operation (t/rpcrequest-op request)
         payload (t/rpc-request-payload-value request)]
     (case operation
       :rpc/version (do (require-unit! payload) {:payload wire/rpc-unit})
-      :rpc/status (do (require-unit! payload) {:payload (status-payload)})
+      :rpc/status (do (require-unit! payload) {:payload (status-payload snapshot)})
       :rpc/assert {:payload (handle-write! request :rpc/assert cancellation)}
       :rpc/retract {:payload (handle-write! request :rpc/retract cancellation)}
       :rpc/batch {:payload (handle-batch! request cancellation)}
-      :rpc/scan (handle-scan! request cancellation)
-      :rpc/query (handle-query! request cancellation)
-      :rpc/occurrences (handle-occurrences! request cancellation)
+      :rpc/scan (handle-scan! request cancellation snapshot)
+      :rpc/query (handle-query! request cancellation snapshot)
+      :rpc/occurrences (handle-occurrences! request cancellation snapshot)
       :rpc/lease-acquire {:payload (handle-lease-acquire! request cancellation)}
       :rpc/lease-renew {:payload (handle-lease-renew! request cancellation)}
       :rpc/lease-release {:payload (handle-lease-release! request cancellation)}
-      :rpc/lease-check {:payload (handle-lease-check! payload cancellation)}
-      :rpc/validate {:payload (handle-validate! payload cancellation)}
+      :rpc/lease-check {:payload (handle-lease-check! payload cancellation snapshot)}
+      :rpc/validate {:payload (handle-validate! payload cancellation snapshot)}
       (daemon-fail! :rpc/unsupported-operation
                     "operation is not part of FRAMRPC v1" {}))))
 
@@ -1083,11 +1104,12 @@
     :query-work-limit :durability-ambiguous})
 
 (defn- response-version []
-  (if-let [co @coordinator] (current-version co) 0))
+  (or (:version @published-snapshot) 0))
 
 (defn handle-rpc-request! [request cancellation]
   (let [space (t/rpcrequest-space request)
-        operation (t/rpcrequest-op request)]
+        operation (t/rpcrequest-op request)
+        served-version (volatile! nil)]
     (try
       (when-not @coordinator
         (daemon-fail! :rpc/not-booted "coordinator is not booted" {}))
@@ -1107,17 +1129,22 @@
         (daemon-fail! :rpc/unexpected-timeout
                       "timeout-ms is supported only by rpc/query" {}))
       (let [result
-            (if (= operation :rpc/query)
-              (dispatch-request! request cancellation)
+            (if (contains? read-only-rpc-operations operation)
+              (let [{:keys [version] :as snapshot} @published-snapshot]
+                (vreset! served-version version)
+                (require-version-expected!
+                 version (t/rpcrequest-expected-version request))
+                (let [dispatched (dispatch-request! request cancellation snapshot)]
+                  (assoc dispatched :served (or (:served dispatched) version))))
               (locking (:lock @coordinator)
                 (require-expected! @coordinator
                                    (t/rpcrequest-expected-version request))
-                (let [dispatched (dispatch-request! request cancellation)]
-                  (assoc dispatched :served
-                         (or (:served dispatched)
-                             (current-version @coordinator))))))
+                (let [dispatched (dispatch-request! request cancellation nil)
+                      snapshot (publish-snapshot! @coordinator)]
+                  (vreset! served-version (:version snapshot))
+                  (assoc dispatched :served (:version snapshot)))))
             {:keys [payload page served]} result]
-        (wire/rpc-response! space operation (or served (response-version))
+        (wire/rpc-response! space operation served
                             page nil payload))
       (catch Throwable error
         (let [data (ex-data error)
@@ -1125,7 +1152,7 @@
                        :rpc/internal-error)
               code (if (keyword? code) code :rpc/internal-error)]
           (wire/rpc-response!
-           space operation (response-version) nil
+           space operation (or @served-version (response-version)) nil
            (wire/rpc-error! code (contains? retryable-error-codes code)
                             (or (.getMessage error) "native RPC request failed") nil)
            nil))))))

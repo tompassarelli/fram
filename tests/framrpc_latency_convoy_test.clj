@@ -217,28 +217,35 @@
                         post-ms solo-bound-ms)
                 (and (nil? (error-code response)) (<= post-ms solo-bound-ms))))))
 
-  ;; ---- C. the in-lock read path stays live under a slow O(corpus) read ------
+  ;; ---- C. O(corpus) validation must not convoy writers ---------------------
   (let [original store/dump-term-store
-        entered (promise)]
+        entered (promise)
+        pinned-version (t/rpcresponse-served-version
+                        (request! port space :rpc/version wire/rpc-unit))]
     (with-redefs [store/dump-term-store (fn [& arguments]
                                           (deliver entered true)
                                           (Thread/sleep delay-ms)
                                           (apply original arguments))]
       (let [slow (future (elapsed-ms #(request! port space :rpc/validate wire/rpc-unit)))]
-        (deref entered 10000 nil)
-        (let [[write-ms response] (elapsed-ms #(write! "during-validate" 0))
-              [validate-ms validated] @slow]
-          (check! (format "C: a write during a %dms in-lock validate still commits (%.1fms)"
-                          delay-ms write-ms)
-                  (and (nil? (error-code response))
-                       (<= write-ms (+ delay-ms 500.0))))
-          (check! (format "C: the slow validate itself completes (%.1fms)" validate-ms)
-                  (nil? (error-code validated)))
-          (println
-           (str "  [OBSERVED] rpc/validate holds the coordinator lock for its whole "
-                "O(corpus) pass: the concurrent write waited "
-                (format "%.1f" write-ms) "ms of the " delay-ms
-                "ms delay. Only rpc/query runs outside that lock."))))))
+        (check! "C: the two-second validate delay is observably in flight"
+                (deref entered 10000 nil))
+        (let [[solo-ms solo] (elapsed-ms #(write! "during-validate-solo" 0))]
+          (check! (format "C: a lone write acks in %.1fms during the %dms validate (<=%.0fms)"
+                          solo-ms delay-ms solo-bound-ms)
+                  (and (nil? (error-code solo)) (<= solo-ms solo-bound-ms))))
+        (let [{:keys [latencies responses]} (fan-writes "during-validate")]
+          (check! (str "C: all " fan-out " concurrent writes commit during validate")
+                  (every? #(nil? (error-code %)) responses))
+          (check! (str "C: every validate-overlapped ack lands within "
+                       (long fan-bound-ms) "ms; observed "
+                       (pr-str (shown latencies)) "ms")
+                  (every? #(<= % fan-bound-ms) latencies)))
+        (let [[validate-ms validated] @slow]
+          (check! (format "C: the slow validate completes from its pinned snapshot (%.1fms)"
+                          validate-ms)
+                  (and (nil? (error-code validated))
+                       (= pinned-version (t/rpcresponse-served-version validated))
+                       (>= validate-ms (- delay-ms 100))))))))
 
   (finally
     (future-cancel watchdog)
