@@ -70,7 +70,7 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | N1 | Closed 13-operation FRAMRPC v1; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_daemon_test.clj`, boundary ratchet |
 | N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate; per-page fold cost is still O(corpus) — index-driven paging is the open follow-on |
+| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate; per-page fold cost is still O(corpus) — index-driven paging is the open follow-on |
 
 ## Query
 
@@ -82,14 +82,21 @@ Two runtime surfaces exist until cluster migration completes:
 
 ## Capacity and performance envelope — the open rungs
 
-**No current-engine performance number is published today.** The 2026-07-28
-in-class receipts (500–551 durable writes/s, etc.) measured the removed flat
-engine and must not be quoted for head. The envelope work is:
+**The first current-engine numbers exist (2026-08-02, 3,000 live triples,
+paired runs, golden-ratcheted) and they are honest, not flattering:**
+boot-to-serving 370 ms; cold two-relation join 7.4 s; write-under-read
+66 ops/s; mixed 1W/3R 0.128 ops/s. The dominant mechanism is named: a
+non-direct (multi-relation) query re-runs the whole-corpus Datalog
+projection from scratch on every page — the per-page snapshot cache serves
+only direct one-triple reads — so a five-page join at 3k costs ~1.5 s per
+page. At the reference workload's scale this query shape is unusable; the
+gate (`bench/in-class/golden.edn`, receipt
+`bench/in-class/results/2026-08-02-framrpc-main.*`) pins today's floor so
+the fix is measurable. The 2026-07-28 flat-engine receipts (500–551
+writes/s) must not be quoted for head. Remaining envelope work:
 
-- re-baseline `bench/in-class` through a FRAMRPC adapter and re-accept the
-  golden ratchet against head — this pins boot-to-serving, targeted-read
-  latency, durable write throughput (single and batch), and sustained
-  write-under-read;
+- the 30k-scale arm was deliberately skipped (extrapolated hours per run —
+  evidence in the receipt); it lands with the projection fix, not before;
 - restart cost is O(full log) at head (no checkpoint); the bound is unmeasured;
 - committing or projecting a deeply nested recursive Term costs O(depth²)
   (measured via the generative harness: seed runtime 5.1 s at depth 8, 7.9 s
