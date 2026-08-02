@@ -69,16 +69,35 @@ and composition is nothing more than the record's entity appearing as a term
 inside further assertions. Neither projection is the true one; profiles
 (below) let a space declare which one it speaks.
 
+## Structure hidden inside an atom is structure the store cannot see
+
+This is the normalization principle. A namespaced keyword packs a grouping
+relation into spelling: `:space/profile` asserts, in syntax, that something
+called "space" exists and that this predicate belongs to it — and neither
+assertion is in the store. The slash is a join the query engine cannot
+take. The same disease wears other coats: structured payloads smuggled as
+opaque strings into slot2, and compound subject spellings that pack a kind
+and an id into one atom. The normalized form is always the same move — the
+compound decomposes into assertions about a first-class term, exactly as a
+coordinate decomposes into its named relations.
+
+The regress this implies ends deliberately, not accidentally: the engine's
+own occurrence vocabulary is *primitive* — given, minimal, documented, and
+self-anchoring in the performative sense (the engine mints those predicates
+in its own assertions about its own acts). The discipline for everything
+else: a vocabulary earns its structure by assertion, never by spelling.
+
 ## Meaning needs one anchoring assertion
 
 A store of bare values means nothing — numbers alone do not say what they
 are *for*. Interpretation is anchored by at least one relational assertion
 that says how to read the rest. In Fram this bootstrap is concrete: a
-space's profile declaration is itself a triple in the space
-(`:space/*` vocabulary, per the space-profiles design), and the admission
-gate always accepts profile vocabulary precisely so the anchoring assertion
-can exist before the contract it declares begins to bind. The circularity is
-real and it is closed deliberately, in one place.
+space's profile declaration is itself a triple in the space, admitted
+through a single primitive anchoring predicate — the smallest possible
+given — and the rest of the profile vocabulary is declared relationally
+through that door before the contract binds. The circularity is real and it
+is closed deliberately, in one place, kept as small as the normalization
+principle above demands.
 
 ## Paradigm is a profile, never a kernel fork
 
