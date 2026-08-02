@@ -27,8 +27,25 @@
 (def stopping? (atom false))
 (def active-requests (atom {}))
 (def published-snapshot (atom nil))
+(def daemon-generation (atom 0))
 (def ^:private query-page-snapshot-limit 4)
 (def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
+(def ^:private query-result-version-limit 4)
+(def ^:private query-result-per-version-limit 8)
+(def ^:private query-result-byte-limit (* 64 1024 1024))
+
+(defn- empty-query-result-cache [generation]
+  {:generation generation
+   :entries {}
+   :lru []
+   :version-lru []
+   :in-flight {}
+   :bytes 0
+   :hits 0
+   :misses 0
+   :evictions 0})
+
+(def query-result-cache (atom (empty-query-result-cache 0)))
 
 ;; Request observability: the slow threshold is checked before the quiet gate,
 ;; so a stalled request still leaves a trace under FRAM_DAEMON_QUIET.
@@ -150,13 +167,24 @@
 
 (defn- snapshot-of [co]
   (let [root @(coord/coordinator-store co)]
-    {:version (dec (t/termstore-next-sequence root))
+    {:generation @daemon-generation
+     :space (coord/coordinator-space co)
+     :version (dec (t/termstore-next-sequence root))
      :root root}))
 
 (defn- publish-snapshot! [co]
   (let [snapshot (snapshot-of co)]
     (reset! published-snapshot snapshot)
     snapshot))
+
+(defn- drop-query-caches! []
+  (reset! query-page-snapshots {:order [] :by-version {}})
+  (reset! query-result-cache
+          (empty-query-result-cache @daemon-generation)))
+
+(defn- advance-daemon-generation! []
+  (swap! daemon-generation inc)
+  (drop-query-caches!))
 
 (defn shutdown! []
   (reset! stopping? true)
@@ -167,7 +195,7 @@
     (when-let [control @(:query-control cancellation)]
       (datalog/cancel-query! control :daemon-shutdown)))
   (reset! active-requests {})
-  (reset! query-page-snapshots {:order [] :by-version {}})
+  (drop-query-caches!)
   (reset! published-snapshot nil)
   (coord-writer-authority/release! @writer-authority)
   (reset! writer-authority nil)
@@ -199,6 +227,7 @@
          (coord/create-triple-log! canonical expected-space))
        (let [opened (coord/open-coordinator!
                      canonical expected-space {:repair-torn? (= :active role)})]
+         (advance-daemon-generation!)
          (reset! coordinator opened)
          (publish-snapshot! opened)
          (reset! coordinator-role role)
@@ -213,6 +242,7 @@
     (locking coordinator
       (let [current @coordinator
             opened (coord/open-coordinator! (:log current) (:space-id current))]
+        (advance-daemon-generation!)
         (reset! coordinator opened)
         (publish-snapshot! opened)))))
 
@@ -570,9 +600,8 @@
             sequence (mapv event-operation (get grouped sequence)))))
         @context))))
 
-(defn- snapshot-image! [co version]
-  (let [root (replayed-store-root! co version)
-        context (atom root)]
+(defn- snapshot-image [version root]
+  (let [context (atom root)]
     {:version version
      :store-root root
      :propositions (term-store/live-propositions context)
@@ -782,6 +811,142 @@
                           (.toByteArray out))]
       (apply str (map #(format "%02x" (bit-and 255 (int %))) digest)))))
 
+(defn- term-codec-v1-bytes [term]
+  (let [out (ByteArrayOutputStream.)]
+    (wire/write-term-codec-v1! out term wire/rpc-v1-max-string-bytes
+                               wire/rpc-v1-max-term-nodes
+                               wire/rpc-v1-max-term-depth)
+    (.size out)))
+
+(defn- result-weight [rows shape]
+  (+ 32 (* 8 (count rows))
+     (reduce (fn [total row]
+               (+ total (term-codec-v1-bytes ((:cache-term shape) row))))
+             0 rows)))
+
+(defn- result-snapshot-key [snapshot]
+  [(:generation snapshot) (:space snapshot) (:version snapshot)])
+
+(defn- touch-result-entry [state key]
+  (let [snapshot-key (first key)]
+    (-> state
+        (update :lru #(conj (vec (remove #{key} %)) key))
+        (update :version-lru
+                #(conj (vec (remove #{snapshot-key} %)) snapshot-key)))))
+
+(defn- remove-result-entries [state candidate-keys]
+  (let [evicted-keys (set (filter #(contains? (:entries state) %)
+                                  candidate-keys))
+        removed-bytes (reduce + 0
+                              (map #(get-in state [:entries % :bytes])
+                                   evicted-keys))
+        entries (reduce dissoc (:entries state) evicted-keys)
+        retained-versions (set (map first (keys entries)))]
+    (-> state
+        (assoc :entries entries)
+        (update :lru #(vec (remove evicted-keys %)))
+        (update :version-lru
+                #(vec (filter retained-versions %)))
+        (update :bytes - removed-bytes)
+        (update :evictions + (count evicted-keys)))))
+
+(defn- enforce-result-cache-bounds [state snapshot-key]
+  (let [version-keys (filterv #(= snapshot-key (first %)) (:lru state))
+        state (remove-result-entries
+               state
+               (take (max 0 (- (count version-keys)
+                               query-result-per-version-limit))
+                     version-keys))
+        evicted-versions
+        (set (take (max 0 (- (count (:version-lru state))
+                            query-result-version-limit))
+                   (:version-lru state)))
+        state (remove-result-entries
+               state
+               (filterv #(contains? evicted-versions (first %))
+                        (:lru state)))]
+    (loop [bounded state]
+      (if (and (> (:bytes bounded) query-result-byte-limit)
+               (seq (:lru bounded)))
+        (recur (remove-result-entries bounded [(first (:lru bounded))]))
+        bounded))))
+
+(defn- retain-result-entry [state key rows bytes]
+  (let [snapshot-key (first key)
+        state (-> state
+                  (assoc-in [:entries key] {:rows rows :bytes bytes})
+                  (update :bytes + bytes)
+                  (touch-result-entry key))]
+    (enforce-result-cache-bounds state snapshot-key)))
+
+(defn- begin-result-access! [key]
+  (locking query-result-cache
+    (let [state @query-result-cache]
+      (if-let [entry (get-in state [:entries key])]
+        (do
+          (reset! query-result-cache
+                  (-> state (update :hits inc) (touch-result-entry key)))
+          {:kind :hit :rows (:rows entry)})
+        (if-let [flight (get-in state [:in-flight key])]
+          (do
+            (reset! query-result-cache (update state :hits inc))
+            {:kind :wait :flight flight})
+          (let [flight (promise)]
+            (reset! query-result-cache
+                    (-> state
+                        (assoc-in [:in-flight key] flight)
+                        (update :misses inc)))
+            {:kind :build :flight flight}))))))
+
+(defn- complete-result-flight! [key flight rows bytes]
+  (locking query-result-cache
+    (let [state @query-result-cache
+          generation (ffirst key)
+          state (update state :in-flight dissoc key)]
+      (reset! query-result-cache
+              (if (= generation (:generation state))
+                (retain-result-entry state key rows bytes)
+                state))))
+  (deliver flight {:rows rows}))
+
+(defn- fail-result-flight! [key flight error]
+  (locking query-result-cache
+    (swap! query-result-cache update :in-flight dissoc key))
+  (deliver flight {:error error}))
+
+(def ^:private result-wait-pending (Object.))
+
+(defn- wait-result-flight! [flight cancellation deadline-ns]
+  (loop []
+    (cancelled! cancellation)
+    (let [remaining-ms (when deadline-ns
+                         (quot (- deadline-ns (System/nanoTime)) 1000000))]
+      (when (and remaining-ms (<= remaining-ms 0))
+        (daemon-fail! :query-time-limit "query exceeded its time limit" {}))
+      (let [wait-ms (long (if remaining-ms (min 25 remaining-ms) 25))
+            outcome (deref flight wait-ms result-wait-pending)]
+        (if (identical? result-wait-pending outcome)
+          (recur)
+          (if-let [error (:error outcome)]
+            (throw error)
+            (:rows outcome)))))))
+
+(defn- cached-result! [snapshot operation digest shape cancellation deadline-ns build]
+  (let [key [(result-snapshot-key snapshot) operation digest]
+        {:keys [kind rows flight]} (begin-result-access! key)]
+    (case kind
+      :hit (do (cancelled! cancellation) rows)
+      :wait (wait-result-flight! flight cancellation deadline-ns)
+      :build
+      (try
+        (let [rows (vec (build))
+              bytes (result-weight rows shape)]
+          (complete-result-flight! key flight rows bytes)
+          rows)
+        (catch Throwable error
+          (fail-result-flight! key flight error)
+          (throw error))))))
+
 (defn- parse-query-row! [value]
   (let [[values] (record-fields! value :query/row 1)]
     (mapv #(require-term! % "query row value") (list-values! values))))
@@ -844,12 +1009,14 @@
 (def ^:private query-page-shape
   {:payload (fn [rows] (wire/rpc-query-rows! (mapv wire/rpc-query-row! rows)))
    :cursor-row (fn [_ row] row)
-   :locate query-cursor-position!})
+   :locate query-cursor-position!
+   :cache-term wire/rpc-query-row!})
 
 (def ^:private triples-page-shape
   {:payload wire/rpc-triples!
    :cursor-row (fn [position row] [position row])
-   :locate indexed-cursor-position!})
+   :locate indexed-cursor-position!
+   :cache-term identity})
 
 (def ^:private occurrences-page-shape
   (assoc triples-page-shape :payload wire/rpc-occurrences!))
@@ -898,14 +1065,10 @@
               result))
           [] source))
 
-(defn- page-snapshot! [snapshot page]
-  (let [co (coord/store-view @coordinator (:root snapshot))
-        cursor (some-> page t/rpc-page-request-cursor-value parse-query-cursor!)
-        version (or (:snapshot-version cursor) (:version snapshot))
-        root (or (when page (cached-query-page-root version))
-                 (replayed-store-root! co version))]
-    (when page (retain-query-page-root! version root))
-    {:version version :view (coord/store-view co root)}))
+(defn- page-version [snapshot page]
+  (or (some-> page t/rpc-page-request-cursor-value parse-query-cursor!
+              :snapshot-version)
+      (:version snapshot)))
 
 (defn- handle-scan! [request cancellation snapshot]
   (let [payload (t/rpc-request-payload-value request)
@@ -913,24 +1076,48 @@
         (record-fields! payload :rpc/triple-pattern 3)
         options (mapv option-value! [slot0-option slot1-option slot2-option])
         page (t/rpcrequest-page request)
-        {:keys [version view]} (page-snapshot! snapshot page)
-        rows (collect-rows (coord/live-propositions view)
-                           #(scan-match? options %)
-                           (when-not page unpaged-row-cutoff)
-                           cancellation)]
-    (assoc (paged-result! rows page (term-sha256 payload) version
+        version (page-version snapshot page)
+        cache-snapshot (assoc (select-keys snapshot [:generation :space])
+                              :version version)
+        build #(let [co (coord/store-view @coordinator (:root snapshot))
+                     root (or (when page (cached-query-page-root version))
+                              (replayed-store-root! co version))
+                     _ (when page (retain-query-page-root! version root))
+                     view (coord/store-view co root)]
+                 (collect-rows (coord/live-propositions view)
+                               (fn [row] (scan-match? options row))
+                               (when-not page unpaged-row-cutoff)
+                               cancellation))
+        digest (term-sha256 payload)
+        rows (if page
+               (cached-result! cache-snapshot :rpc/scan digest
+                               triples-page-shape cancellation nil build)
+               (build))]
+    (assoc (paged-result! rows page digest version
                           triples-page-shape)
            :served version)))
 
 (defn- handle-occurrences! [request cancellation snapshot]
   (require-unit! (t/rpc-request-payload-value request))
   (let [page (t/rpcrequest-page request)
-        {:keys [version view]} (page-snapshot! snapshot page)
-        rows (collect-rows (coord/history view)
-                           kernel/operation-occurrence?
-                           (when-not page unpaged-row-cutoff)
-                           cancellation)]
-    (assoc (paged-result! rows page (term-sha256 wire/rpc-unit) version
+        version (page-version snapshot page)
+        cache-snapshot (assoc (select-keys snapshot [:generation :space])
+                              :version version)
+        build #(let [co (coord/store-view @coordinator (:root snapshot))
+                     root (or (when page (cached-query-page-root version))
+                              (replayed-store-root! co version))
+                     _ (when page (retain-query-page-root! version root))
+                     view (coord/store-view co root)]
+                 (collect-rows (coord/history view)
+                               kernel/operation-occurrence?
+                               (when-not page unpaged-row-cutoff)
+                               cancellation))
+        digest (term-sha256 wire/rpc-unit)
+        rows (if page
+               (cached-result! cache-snapshot :rpc/occurrences digest
+                               occurrences-page-shape cancellation nil build)
+               (build))]
+    (assoc (paged-result! rows page digest version
                           occurrences-page-shape)
            :served version)))
 
@@ -944,47 +1131,44 @@
         cursor (when cursor-value (parse-query-cursor! cursor-value))
         direct-pattern (one-triple-pattern plan)
         direct? (some? direct-pattern)
-        snapshot-data
-        (let [co (coord/store-view @coordinator (:root published))
-              version (requested-snapshot-version!
-                       requested-snapshot cursor (:version published))
-              data
-              (if direct?
-                {:version version
-                 :store-root (or (when page (cached-query-page-root version))
-                                 (replayed-store-root! co version))}
-                (snapshot-image! co version))]
-          (when (and direct? page)
-            (retain-query-page-root! version (:store-root data)))
-          data)
+        co (coord/store-view @coordinator (:root published))
+        version (requested-snapshot-version!
+                 requested-snapshot cursor (:version published))
+        cache-snapshot {:generation (:generation published)
+                        :space (:space published)
+                        :version version}
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
-        control (datalog/query-control 10000000 timeout)]
-    (if direct?
-      (let [rows (one-triple-query-rows
-                  (:store-root snapshot-data) direct-pattern cancellation)
-            paged (paged-result!
-                   rows page query-digest (:version snapshot-data)
-                   query-page-shape)]
-        (cancelled! cancellation)
-        (assoc paged :served (:version snapshot-data)))
-      (do
-        (reset! (:query-control cancellation) control)
-        (when @(:cancelled cancellation)
-          (datalog/cancel-query! control :request-cancelled))
-        (try
-          (let [projection (query/project-with-occurrences
-                            (:propositions snapshot-data)
-                            (:occurrences snapshot-data))
-                result (binding [query/*query-control* control]
-                         (query/run-plan-projected! projection plan))
-                rows (result-rows! result)
-                paged (paged-result!
-                       rows page query-digest (:version snapshot-data)
-                       query-page-shape)]
-            (cancelled! cancellation)
-            (assoc paged :served (:version snapshot-data)))
-          (finally
-            (reset! (:query-control cancellation) nil)))))))
+        deadline-ns (+ (System/nanoTime) (* timeout 1000000))
+        control (datalog/query-control 10000000 timeout)
+        build
+        (if direct?
+          #(let [root (or (when page (cached-query-page-root version))
+                          (replayed-store-root! co version))]
+             (when page (retain-query-page-root! version root))
+             (one-triple-query-rows root direct-pattern cancellation))
+          #(do
+             (reset! (:query-control cancellation) control)
+             (when @(:cancelled cancellation)
+               (datalog/cancel-query! control :request-cancelled))
+             (try
+               (let [root (or (when page (cached-query-page-root version))
+                              (replayed-store-root! co version))
+                     _ (when page (retain-query-page-root! version root))
+                     snapshot-data (snapshot-image version root)
+                     projection (query/project-with-occurrences
+                                 (:propositions snapshot-data)
+                                 (:occurrences snapshot-data))
+                     result (binding [query/*query-control* control]
+                              (query/run-plan-projected! projection plan))]
+                 (result-rows! result))
+               (finally
+                 (reset! (:query-control cancellation) nil)))))
+        rows (cached-result! cache-snapshot :rpc/query query-digest
+                             query-page-shape cancellation deadline-ns build)
+        paged (paged-result! rows page query-digest version
+                             query-page-shape)]
+    (cancelled! cancellation)
+    (assoc paged :served version)))
 
 (defn- lease-mutation-guard! [request cancellation]
   (require-writer!)
@@ -1076,8 +1260,12 @@
 
 (defn- status-payload [snapshot]
   (let [co (coord/store-view @coordinator (:root snapshot))
-        state (:status (coord/coordinator-recovery-state co))]
-    (wire/rpc-status! state (count (coord/live-propositions co)) :rpc/jvm)))
+        state (:status (coord/coordinator-recovery-state co))
+        {:keys [hits misses bytes evictions]} @query-result-cache
+        cache (wire/rpc-record! :rpc/result-cache
+                                [hits misses bytes evictions])]
+    (wire/rpc-status! state (count (coord/live-propositions co))
+                      :rpc/jvm cache)))
 
 (defn- dispatch-request! [request cancellation snapshot]
   (let [operation (t/rpcrequest-op request)

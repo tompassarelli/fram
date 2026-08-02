@@ -1321,8 +1321,9 @@
   (rpc-record! :rpc/triple-pattern
                [(rpc-option! slot0) (rpc-option! slot1) (rpc-option! slot2)]))
 
-(defn rpc-status! [state: Keyword live-count: Int engine: Keyword] -> t/Triple
-  (rpc-record! :rpc/status [state live-count engine]))
+(defn rpc-status!
+  [state: Keyword live-count: Int engine: Keyword cache: t/Triple] -> t/Triple
+  (rpc-record! :rpc/status [state live-count engine cache]))
 
 (defn rpc-triples! [values: (Vec Any)] -> t/Triple
   (rpc-record! :rpc/triples [(rpc-list! values)]))

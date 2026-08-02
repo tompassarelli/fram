@@ -182,7 +182,10 @@ wire-byte limits.
 
 Nonaggregate results have deterministic Term ordering. Page cursors encode the
 last row key, and the coordinator pins continuation reads to the same snapshot.
-A cursor is opaque to clients.
+A cursor is opaque to clients. The coordinator caches each complete ordered
+result by daemon generation, SpaceId, snapshot version, operation, and canonical
+request digest; a continuation slices that vector rather than rerunning the
+plan. Cache eviction changes execution cost, not the pinned answer.
 
 The executable contract is
 [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native

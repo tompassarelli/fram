@@ -70,33 +70,35 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | N1 | Closed 13-operation FRAMRPC v1; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_daemon_test.clj`, boundary ratchet |
 | N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate; per-page fold cost is still O(corpus) — index-driven paging is the open follow-on |
+| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate |
 
 ## Query
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | Q1 | Query semantics per [`query-reference.md`](query-reference.md) | BACKED | [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj), aggregate/projection tests |
-| Q2 | A page cursor pins its snapshot across intervening commits | PARTIAL | gated for one loop; snapshot retention limit is 4 pinned pages and eviction behavior is unspecified |
+| Q2 | A page cursor pins its snapshot across intervening commits; eviction may recompute from the pinned immutable root without changing rows | PARTIAL | gated for query, scan, and occurrence loops; retained-root and ordered-result envelopes each cover four versions |
 | Q3 | Budgets: step budget 10,000,000; timeout `min(60000, requested else 5000)` ms | UNBACKED | numbers live in source only; no gate exercises the limits |
+| Q4 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, version, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_daemon_test.clj` exercises one evaluator run for two concurrent misses, version separation, historical reuse, bounds, counters, and restart reset |
 
 ## Capacity and performance envelope — the open rungs
 
 **The first current-engine numbers exist (2026-08-02, 3,000 live triples,
 paired runs, golden-ratcheted) and they are honest, not flattering:**
 boot-to-serving 370 ms; cold two-relation join 7.4 s; write-under-read
-66 ops/s; mixed 1W/3R 0.128 ops/s. The dominant mechanism is named: a
-non-direct (multi-relation) query re-runs the whole-corpus Datalog
-projection from scratch on every page — the per-page snapshot cache serves
-only direct one-triple reads — so a five-page join at 3k costs ~1.5 s per
-page. At the reference workload's scale this query shape is unusable; the
-gate (`bench/in-class/golden.edn`, receipt
+66 ops/s; mixed 1W/3R 0.128 ops/s. The accepted floor predates ordered-result
+reuse: a non-direct (multi-relation) query formerly re-ran the whole-corpus
+Datalog projection from scratch on every page. The daemon now evaluates one
+miss per immutable snapshot and request digest, then slices the cached ordered
+vector for repeats and pages. A new snapshot still pays the unchanged scan
+evaluator cost; indexed evaluation remains open. The gate
+(`bench/in-class/golden.edn`, receipt
 `bench/in-class/results/2026-08-02-framrpc-main.*`) pins today's floor so
 the fix is measurable. The 2026-07-28 flat-engine receipts (500–551
 writes/s) must not be quoted for head. Remaining envelope work:
 
 - the 30k-scale arm was deliberately skipped (extrapolated hours per run —
-  evidence in the receipt); it lands with the projection fix, not before;
+  evidence in the receipt); it remains open for indexed evaluation;
 - restart cost is O(full log) at head (no checkpoint); the bound is unmeasured;
 - committing or projecting a deeply nested recursive Term costs O(depth²)
   (measured via the generative harness: seed runtime 5.1 s at depth 8, 7.9 s

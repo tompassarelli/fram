@@ -126,8 +126,8 @@
 (defn- show-status! []
   (let [response (rt/native-call! (coord-port) :rpc/status wire/rpc-unit)]
     (rt/require-native-success! response)
-    (let [[state live-count engine]
-          (rt/rpc-record-fields! (rt/native-payload response) :rpc/status 3)]
+    (let [[state live-count engine _]
+          (rt/rpc-record-fields! (rt/native-payload response) :rpc/status 4)]
       (println (str "up|" (t/rpcresponse-served-version response)
                     "|" live-count "|" (name state) "|" (name engine))))))
 

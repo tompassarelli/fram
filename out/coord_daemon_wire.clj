@@ -866,8 +866,8 @@
 (defn rpc-triple-pattern! [slot0 slot1 slot2]
   (rpc-record! :rpc/triple-pattern [(rpc-option! slot0) (rpc-option! slot1) (rpc-option! slot2)]))
 
-(defn rpc-status! [state live-count engine]
-  (rpc-record! :rpc/status [state live-count engine]))
+(defn rpc-status! [state live-count engine cache]
+  (rpc-record! :rpc/status [state live-count engine cache]))
 
 (defn rpc-triples! [values]
   (rpc-record! :rpc/triples [(rpc-list! values)]))

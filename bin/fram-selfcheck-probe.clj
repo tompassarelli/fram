@@ -49,7 +49,7 @@
     (section "socket"
       #(let [version (request! :rpc/version wire/rpc-unit)
              status (request! :rpc/status wire/rpc-unit)
-             [state live-count engine] (fields (payload status) :rpc/status 3)]
+             [state live-count engine _] (fields (payload status) :rpc/status 4)]
          [(and (= 0 (terms/rpcresponse-served-version version))
                (= :ready state) (= 0 live-count) (= :rpc/jvm engine))
           "version/status typed round-trip"]))

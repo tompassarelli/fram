@@ -43,7 +43,8 @@ The native daemon accepts exactly thirteen operations:
 `rpc/query`, `rpc/scan`, and `rpc/occurrences` accept a page cursor; only
 `rpc/query` accepts the timeout control. Mutations may carry an
 expected logical version. Read responses report the logical version they
-served.
+served. `rpc/status` also reports ordered-result cache hits, misses, weighted
+bytes, and evictions for the current daemon generation.
 
 There is no native `rpc/pull`, import/export, graph-edit, deployment, or cutover
 operation. Import/export and legacy projections are local utilities. Graph and

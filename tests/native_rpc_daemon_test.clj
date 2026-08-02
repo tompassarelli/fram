@@ -142,9 +142,11 @@
                  (= wire/rpc-unit (payload response)))))
 
   (let [response (request! port space :rpc/status wire/rpc-unit)
-        [state live-count engine] (fields (payload response) :rpc/status 3)]
+        [state live-count engine cache] (fields (payload response) :rpc/status 4)
+        [hits misses bytes evictions] (fields cache :rpc/result-cache 4)]
     (check! "rpc/status is a typed record"
-            (and (= :ready state) (= 0 live-count) (= :rpc/jvm engine))))
+            (and (= :ready state) (= 0 live-count) (= :rpc/jvm engine)
+                 (= [0 0 0 0] [hits misses bytes evictions]))))
 
   (let [bad (request! port space :status wire/rpc-unit)]
     (check! "legacy and unknown operations fail as typed unsupported requests"
@@ -377,10 +379,73 @@
       (check! "one-triple reads bypass the whole-corpus query projection"
               (false? @projection-used)))
 
-    (let [validated (request! port space :rpc/validate wire/rpc-unit)
+    (let [subject (wire/rpc-query-variable! "cache-subject")
+          value (wire/rpc-query-variable! "cache-value")
+          arguments [subject (wire/rpc-query-constant! :value) value]
+          plan (wire/rpc-query-plan!
+                (wire/rpc-query-find-relation! "single-flight-values")
+                [(wire/rpc-query-stratum!
+                  [(wire/rpc-query-rule!
+                    (wire/rpc-query-head!
+                     "single-flight-values" [subject value])
+                    [(wire/rpc-query-relation! "triple" arguments false)
+                     (wire/rpc-query-relation! "triple" arguments false)])])])
+          query-payload (wire/rpc-query-request! plan wire/query-current)
+          row-builder (ns-resolve 'fram.query 'run-plan-projected!)
+          original-builder (var-get row-builder)
+          builds (atom 0)
+          [first-read second-read advanced current-read historical-read]
+          (with-redefs-fn
+            {row-builder
+             (fn [& args]
+               (swap! builds inc)
+               (Thread/sleep 100)
+               (apply original-builder args))}
+            #(let [a (future (request! port space :rpc/query query-payload))
+                   b (future (request! port space :rpc/query query-payload))
+                   first-read @a
+                   second-read @b
+                   pinned-version (t/rpcresponse-served-version first-read)
+                   advanced
+                   (request! port space :rpc/assert
+                             (wire/rpc-write!
+                              (t/triple "cache-version" :value 99)
+                              wire/rpc-subject-any nil))
+                   current-read (request! port space :rpc/query query-payload)
+                   historical-read
+                   (request!
+                    port space :rpc/query
+                    (wire/rpc-query-request!
+                     plan (wire/rpc-query-as-of! pinned-version)))]
+               [first-read second-read advanced current-read historical-read]))
+          _ (doseq [index (range 9)]
+              (request!
+               port space :rpc/query
+               (wire/rpc-query-request!
+                (one-triple-plan
+                 (str "cache-bound-" index) [subject value]
+                 [subject (wire/rpc-query-constant! :value) value])
+                wire/query-current)))
+          status (request! port space :rpc/status wire/rpc-unit)
+          [_ _ _ cache] (fields (payload status) :rpc/status 4)
+          [hits misses bytes evictions] (fields cache :rpc/result-cache 4)
+          cache-state @coord-daemon/query-result-cache
+          version-counts (frequencies (map first (keys (:entries cache-state))))
+          validated (request! port space :rpc/validate wire/rpc-unit)
           [valid violations] (fields (payload validated) :rpc/validation 2)]
-      (check! "rpc/validate round-trips the portable store dump"
-              (and valid (empty? (values-list violations)))))
+      (check! "rpc/validate round-trips the store and result cache stays bounded"
+              (and valid (empty? (values-list violations))
+                   (= 2 @builds)
+                   (= (query-rows first-read) (query-rows second-read))
+                   (= (inc (t/rpcresponse-served-version first-read))
+                      (t/rpcresponse-served-version advanced))
+                   (not= (query-rows first-read) (query-rows current-read))
+                   (= (query-rows first-read) (query-rows historical-read))
+                   (pos? hits) (pos? misses) (pos? bytes) (pos? evictions)
+                   (= bytes (:bytes cache-state))
+                   (<= (count version-counts) 4)
+                   (every? #(<= % 8) (vals version-counts))
+                   (<= bytes (* 64 1024 1024)))))
 
     (let [predicate :page-fixture
           fixture-count 400
@@ -548,11 +613,15 @@
   (try
     (let [version (eventually #(request! restart-port space :rpc/version wire/rpc-unit))
           scan (request! restart-port space :rpc/scan
-                         (wire/rpc-triple-pattern! "later" :value 3))]
+                         (wire/rpc-triple-pattern! "later" :value 3))
+          status (request! restart-port space :rpc/status wire/rpc-unit)
+          [_ _ _ cache] (fields (payload status) :rpc/status 4)
+          cache-stats (fields cache :rpc/result-cache 4)]
       (check! "restart replays native RPC mutations from FRAMLOG"
               (and (pos? (t/rpcresponse-served-version version))
                    (= [(t/triple "later" :value 3)]
-                      (triples-result scan :rpc/triples)))))
+                      (triples-result scan :rpc/triples))
+                   (= [0 0 0 0] cache-stats))))
     (finally
       (coord-daemon/shutdown!)
       (deref restarted 3000 nil))))
