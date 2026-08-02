@@ -72,6 +72,18 @@
       (let [line (.readLine ^java.io.BufferedReader reader)]
         {:line line :response (json/parse-string line true)}))))
 
+(defn fenced-json-request [port log request]
+  (:response
+   (json-request
+    port {:op :for-log
+          :expected-log (.getCanonicalPath (io/file log))
+          :fmt :json
+          :request request})))
+
+(defn query-cache-build-count [port log]
+  (get-in (fenced-json-request port log {:op :status})
+          [:queries :cache-builds :builds]))
+
 (defn start-one-shot-server [response]
   (let [server (java.net.ServerSocket. 0)
         worker
@@ -209,6 +221,41 @@
                    (not (some #{["@zz-late" "yes"]} pinned-rows))))
       (check! "fresh constant-predicate page sees the later write"
               (some #{["@zz-late" "yes"]} (:ok fresh))))
+
+    (let [builds-before (query-cache-build-count port log)
+          acquired (fenced-json-request
+                    port log {:op :acquire-lease
+                              :res "query-page-wire"
+                              :holder "query-page-test"
+                              :ttl-ms 120000})
+          after-acquire (rt/coord-query-for-log
+                         port (.getPath log) constant-predicate-q)
+          renewed (fenced-json-request
+                   port log {:op :renew-lease
+                             :res "query-page-wire"
+                             :holder "query-page-test"
+                             :epoch (:epoch acquired)
+                             :ttl-ms 120000})
+          write-result (rt/coord-assert-for-log
+                        port (.getPath log) "@after-write" "page" "yes"
+                        (rt/coord-version-for-log port (.getPath log)))
+          after-writes (rt/coord-query-for-log
+                        port (.getPath log) constant-predicate-q)
+          page-after-writes (rt/coord-query-page-for-log
+                             port (.getPath log) constant-predicate-q 100 nil)
+          builds-after (query-cache-build-count port log)]
+      (check! "one-triple query reads through lease acquisition"
+              (and (:ok acquired)
+                   (some #{["@zz-late" "yes"]} (:ok after-acquire))))
+      (check! "one-triple query reads through lease renewal and ordinary write"
+              (and (:ok renewed)
+                   (.startsWith ^String write-result "ok:")
+                   (some #{["@after-write" "yes"]} (:ok after-writes))))
+      (check! "one-triple query and page agree after writes"
+              (= (vec (sort-by pr-str (:ok after-writes)))
+                 (:ok page-after-writes)))
+      (check! "lease and ordinary writes do not force a one-triple cache build"
+              (= builds-before builds-after)))
 
     (let [request
           {:op :for-log

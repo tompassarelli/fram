@@ -116,7 +116,8 @@
           {:pins 0 :hits 0 :expired 0 :evictions 0}))
 
 (defn- retain-query-page-snapshot! [snapshot]
-  (let [snapshot (select-keys snapshot [:facts :idx :version :ordered-facts])
+  (let [snapshot (select-keys snapshot [:facts :idx :version
+                                        :store-root :schema-root])
         version (:version snapshot)]
     (locking query-page-snapshots
       (let [{:keys [order by-version]} @query-page-snapshots
@@ -1674,11 +1675,24 @@
   (let [history-store (atom (:store-root roots))
         c (query-cache-for-roots roots)]
     {:facts (:facts c) :idx (:idx c) :version (:version roots)
-     :ordered-facts (atom nil)
+     :store-root (:store-root roots) :schema-root (:schema-root roots)
      :history-co {:store history-store}
      :history-store history-store}))
 
-(defn- query-snapshot-for-request [req roots]
+(defn- root-query-snapshot [roots]
+  (let [history-store (atom (:store-root roots))]
+    {:version (:version roots)
+     :store-root (:store-root roots) :schema-root (:schema-root roots)
+     :history-co {:store history-store}
+     :history-store history-store}))
+
+(defn- ensure-materialized-query-snapshot [snapshot]
+  (if (and (:facts snapshot) (:idx snapshot))
+    snapshot
+    (materialize-query-snapshot
+     (select-keys snapshot [:version :store-root :schema-root]))))
+
+(defn- query-snapshot-for-request [req roots materialize]
   (if (and (= :query-page (:op req)) (contains? req :at-version))
     (let [pin (:at-version req)]
       (cond
@@ -1695,14 +1709,14 @@
           ;; first page retained it. Once the head advances, absence is expiry.
           (if (= pin (:version roots))
             {:snapshot (retain-query-page-snapshot!
-                        (materialize-query-snapshot roots))}
+                        (materialize roots))}
             (do
               (swap! query-page-snapshot-stats update :expired inc)
               {:rejection {:reject ["query-page snapshot is no longer retained"]
                            :code :snapshot-expired
                            :at-version pin
                            :version (:version roots)}})))))
-    (let [snapshot (materialize-query-snapshot roots)]
+    (let [snapshot (materialize roots)]
       (when (= :query-page (:op req))
         (retain-query-page-snapshot! snapshot))
       {:snapshot snapshot})))
@@ -1773,7 +1787,7 @@
     (whole-corpus-projection (:facts snapshot))
     (rotations/datalog-projection (:idx snapshot))))
 
-(defn- one-triple-page-pattern [query]
+(defn- one-triple-pattern [query]
   (let [query (q/canon-q query)
         rules (:rules query)
         rule (when (and (vector? rules) (= 1 (count rules))) (first rules))
@@ -1798,45 +1812,67 @@
        :arguments arguments
        :head-arguments head-arguments})))
 
-(defn- build-ordered-facts [snapshot]
-  (let [keyed
-        (persistent!
-         (reduce (fn [acc row]
-                   (query-check)
-                   (conj! acc [(pr-str row) row]))
-                 (transient [])
-                 (:tuples (:idx snapshot))))]
-    (mapv second (sort-by first keyed))))
+(defn- store-object-ids [st value]
+  (cond-> #{}
+    (some? (c/value-id st value))
+    (conj (c/value-id st value))
 
-(defn- ordered-facts [snapshot]
-  (let [slot (:ordered-facts snapshot)]
-    (or @slot
-        (locking slot
-          (or @slot
-              (let [ordered (build-ordered-facts snapshot)]
-                (reset! slot ordered)
-                ordered))))))
+    (and (string? value) (some? (s/resolve-name st value)))
+    (conj (s/resolve-name st value))))
 
-(defn- unrestricted-triple-pattern? [{:keys [arguments head-arguments]}]
-  (let [variables (mapv #(when (var-term? %) (:var %)) arguments)]
-    (and (= head-arguments arguments)
-         (every? some? variables)
-         (= 3 (count (set variables))))))
+(defn- one-triple-domain-cids [snapshot arguments]
+  (let [st (atom (:store-root snapshot))
+        subject (nth arguments 0)
+        predicate (nth arguments 1)
+        object (nth arguments 2)
+        subject-bound? (not (var-term? subject))
+        predicate-bound? (not (var-term? predicate))
+        object-bound? (not (var-term? object))
+        sid (when (and subject-bound? (string? subject))
+              (s/resolve-name st subject))
+        pid (when (and predicate-bound? (string? predicate))
+              (s/resolve-predicate st predicate))
+        oids (when object-bound? (store-object-ids st object))]
+    (cond
+      (and subject-bound? (nil? sid)) []
+      (and predicate-bound? (nil? pid)) []
+      (and object-bound? (empty? oids)) []
+      (and sid pid) (c/by-lp st sid pid)
+      (and pid object-bound?)
+      (into #{} (mapcat #(c/by-pr st pid %) oids))
+      sid (c/by-l st sid)
+      pid (c/by-p st pid)
+      object-bound? (into #{} (mapcat #(c/by-r st %) oids))
+      :else (c/current-facts st))))
+
+(defn- one-triple-source-rows [snapshot pattern]
+  (let [st (atom (:store-root snapshot))
+        domain (keep #(fact->triple st %)
+                     (one-triple-domain-cids snapshot (:arguments pattern)))
+        schema (map (fn [fact] [(:l fact) (:p fact) (:r fact)])
+                    (vals (:schema-root snapshot)))]
+    (concat domain schema)))
+
+(defn- one-triple-row-set [snapshot pattern]
+  (persistent!
+   (reduce (fn [rows source-row]
+             (if-let [bindings (unify-tuple
+                                (:arguments pattern) source-row {})]
+               (conj! rows (ground-head (:head-arguments pattern) bindings))
+               rows))
+           (transient #{})
+           (one-triple-source-rows snapshot pattern))))
 
 (defn- one-triple-page-rows [snapshot pattern]
-  (let [ordered (ordered-facts snapshot)]
-    (if (unrestricted-triple-pattern? pattern)
-      ordered
-      (let [rows
-            (persistent!
-             (reduce (fn [acc row]
-                       (if-let [bindings (unify-tuple (:arguments pattern) row {})]
-                         (conj! acc (ground-head (:head-arguments pattern) bindings))
-                         acc))
-                     (transient #{})
-                     ordered))]
-        (query-check)
-        (vec (sort-by pr-str rows))))))
+  (let [rows (one-triple-row-set snapshot pattern)]
+    (query-check)
+    (vec (sort-by pr-str rows))))
+
+(defn- run-one-triple-query [snapshot pattern]
+  (let [errors (q/validate (:query pattern))]
+    (if (seq errors)
+      {:error errors}
+      {:ok (vec (one-triple-row-set snapshot pattern))})))
 
 (defn- page-start [ordered after]
   (if (nil? after)
@@ -2022,8 +2058,15 @@
                      (string? (:find (:query req)))
                      (simple-query? (:query req)))
         engine (if use-idx "index" "scan")
-        one-triple-pattern (when (= :query-page (:op req))
-                             (one-triple-page-pattern (:query req)))
+        one-triple-pattern (when (contains? #{:query :query-page} (:op req))
+                             (one-triple-pattern (:query req)))
+        direct-query? (and (= :query (:op req)) use-idx one-triple-pattern)
+        direct-page? (and (= :query-page (:op req))
+                          one-triple-pattern
+                          (integer? (:limit req))
+                          (<= 1 (:limit req) q/max-page-limit)
+                          (or (nil? (:after req)) (string? (:after req))))
+        direct-one-triple? (or direct-query? direct-page?)
         version (if (and (= :query-page (:op req))
                          (integer? (:at-version req))
                          (not (neg? (:at-version req))))
@@ -2040,8 +2083,16 @@
         (query-check)
         (let [t0 (System/nanoTime)
               a0 (thread-allocated-bytes)
-              snapshot-choice (query-snapshot-for-request req roots)
-              snapshot (:snapshot snapshot-choice)
+              snapshot-choice (query-snapshot-for-request
+                               req roots
+                               (if direct-one-triple?
+                                 root-query-snapshot
+                                 materialize-query-snapshot))
+              captured-snapshot (:snapshot snapshot-choice)
+              snapshot (when captured-snapshot
+                         (if direct-one-triple?
+                           captured-snapshot
+                           (ensure-materialized-query-snapshot captured-snapshot)))
               t1 (System/nanoTime)
               a1 (thread-allocated-bytes)
               _ (query-check)]
@@ -2049,15 +2100,13 @@
             rejection
             (let [snapshot-version (:version snapshot)
                   res (case (:op req)
-                        :query (if use-idx
-                                 (idx-run (:idx snapshot) (:query req))
+                        :query (if direct-query?
+                                 (run-one-triple-query snapshot one-triple-pattern)
+                                 (if use-idx
+                                   (idx-run (:idx snapshot) (:query req))
                                  (q/run-projected (snapshot-projection snapshot (:query req))
-                                                  (:query req)))
-                        :query-page (if (and one-triple-pattern
-                                             (integer? (:limit req))
-                                             (<= 1 (:limit req) q/max-page-limit)
-                                             (or (nil? (:after req))
-                                                 (string? (:after req))))
+                                                    (:query req))))
+                        :query-page (if direct-page?
                                       (run-one-triple-page
                                        snapshot one-triple-pattern (:limit req) (:after req))
                                       (q/run-page-projected
@@ -2109,7 +2158,9 @@
                   t3 (System/nanoTime)
                   a3 (thread-allocated-bytes)]
               (report-query-execution!
-               req engine (count (:facts snapshot))
+               req engine (if (:facts snapshot)
+                            (count (:facts snapshot))
+                            (count (:facts (:store-root snapshot))))
                t0 a0 t1 a1 t2 a2 t3 a3)
               response))))
       (catch clojure.lang.ExceptionInfo t
