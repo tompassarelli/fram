@@ -46,6 +46,11 @@ The shape a coordination client actually imposes, as measured:
 | Restart | replay is O(full log) at head; readiness is probed (`:rpc/status`), never assumed; boot cost bound *TBD* per 100k triples |
 | Overload | **unspecified** until bounded admission lands ([`guarantees.md`](guarantees.md), capacity section); until then saturation behavior is explicitly outside the contract |
 
+The TBD restart and durable-write bounds must use the capacity receipt's boot
+and write-curve inputs: live-triple count, seed duration, restart-to-serving
+time, single-fact commit rate, and batch size. Until those inputs are measured
+at the target corpus sizes and gated, the restart and write bounds remain TBD.
+
 ## Anti-patterns — observed in the wild, excluded from the contract
 
 Each of these was implicated in a real incident. Fram does not commit to

@@ -97,17 +97,23 @@ valid). Only the exact `:kernel/profile` anchoring proposition is exempt.
 
 ## Capacity and performance envelope — the open rungs
 
-**The first current-engine numbers exist (2026-08-02, 3,000 live triples,
-paired runs, golden-ratcheted) and they are honest, not flattering:**
-boot-to-serving 370 ms; cold two-relation join 7.4 s; write-under-read
-66 ops/s; mixed 1W/3R 0.128 ops/s. The accepted floor predates ordered-result
+**Current head capacity points (2026-08-02 receipt):**
+
+| Live triples | Result |
+|---:|---|
+| 999 | Seed and query complete; no capacity failure observed. |
+| 3,000 | Paired receipt: boot-to-serving 370 ms; cold two-relation join 7.4 s; write-under-read 66 ops/s; mixed 1W/3R 0.128 ops/s. |
+| 9,999 | Functional failure: `:query-work-limit` during the capacity query. |
+| 30,000 | Seed exceeded the 15-min timeout; no capacity result was accepted. |
+
+The 7.4 s cold two-relation join is the historical pre-cache floor, not a current head capacity number. The accepted floor predates ordered-result
 reuse: a non-direct (multi-relation) query formerly re-ran the whole-corpus
 Datalog projection from scratch on every page. The daemon now evaluates one
 miss per immutable snapshot and request digest, then slices the cached ordered
 vector for repeats and pages. A new snapshot still pays the unchanged scan
 evaluator cost; indexed evaluation remains open. The gate
 (`bench/in-class/golden.edn`, receipt
-`bench/in-class/results/2026-08-02-framrpc-main.*`) pins today's floor so
+[`bench/in-class/results/2026-08-02-framrpc-main.md`](../bench/in-class/results/2026-08-02-framrpc-main.md)) pins today's floor so
 the fix is measurable. The 2026-07-28 flat-engine receipts (500–551
 writes/s) must not be quoted for head. Remaining envelope work:
 
@@ -127,9 +133,8 @@ writes/s) must not be quoted for head. Remaining envelope work:
   admission control (unbounded connection futures). Until bounded admission
   lands, nothing can be promised about behavior at saturation — that is a
   gap, stated as one;
-- the daemon currently emits no runtime telemetry and sets no heap bounds. A
-  performance guarantee without observability is unfalsifiable in production,
-  so the observability floor gates every envelope entry.
+- W5 landed runtime telemetry and heap bounds. The observability floor still
+  gates every envelope entry.
 
 ## Explicit non-guarantees
 
