@@ -16,6 +16,8 @@ run-bb	current-model	tests/fold_occurrence_test.clj	-
 run-bb	current-model	tests/fram_promotion_test.clj	-
 run-bb	current-model	tests/fram_rpc_v1_test.clj	-
 run-bb	current-model	tests/framlog_torn_sweep_test.clj	-
+run-bb	current-model	tests/framrpc_latency_convoy_test.clj	-
+run-bb	current-model	tests/framrpc_write_conc_test.clj	-
 run-bb	current-model	tests/fri_cache_v2_test.clj	-
 run-bb	current-model	tests/kernel_classify_test.clj	-
 run-bb	current-model	tests/log_split_readiness_dead_child_test.clj	-
