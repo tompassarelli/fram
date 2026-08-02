@@ -270,7 +270,7 @@ Authoring: (re)start Claude Code in $DIR — you now have mcp__fram__add-def /
   set-body / rename-def / insert-after, authoring INTO the fact graph (warm,
   no re-fold; edits type-checked + pointed Beagle errors returned for repair).
 Reason over the code graph (blast-radius / who-calls), any time:
-  bb -cp $HERE/out:$HERE/codegraph/src $HERE/codegraph/src/callgraph.clj $CORPUS
+  bb -cp $HERE/out $HERE/out/callgraph.clj $CORPUS
 Or race it vs grep on any function:
   $HERE/../after-text/experiments/authoring-bakeoff/race/reason-race.sh <fn>
 Turn OFF: $HERE/bin/fram-code-off $DIR
