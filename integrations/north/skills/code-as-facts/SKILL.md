@@ -1,15 +1,23 @@
 ---
 name: code-as-facts
 description: >-
-  Use when editing a Beagle source file whose UPSTREAM is the fact GRAPH (code-as-facts) — one listed in the
-  graph-upstream registry or whose leading comment block carries
-  `;; @upstream:graph`. Its text is a regenerable view of the Fram fact
-  graph: author by GRAPH EDIT via the mcp__fram__* tools, never
-  Edit/Write/MultiEdit (a PreToolUse guard refuses text edits). NOT for
-  ordinary Beagle files or non-adopted modules.
+  Use for CODE AS A FACT GRAPH, two faculties. (1) EDITING a Beagle source file
+  whose UPSTREAM is the fact GRAPH — one listed in the graph-upstream registry
+  or whose leading comment block carries `;; @upstream:graph`. Its text is a
+  regenerable view of the Fram fact graph: author by GRAPH EDIT via the
+  mcp__fram__* tools, never Edit/Write/MultiEdit (a PreToolUse guard refuses
+  text edits). (2) ASKING relational questions about a Beagle tree —
+  scope-correct "who calls THIS x", transitive blast radius, the real call
+  graph — as Datalog over the projected AST instead of grep. NOT for editing
+  ordinary text-upstream Beagle files, non-Beagle repos, or a single-file /
+  plain-string lookup (grep wins there).
 ---
 
-# Graph-native authoring — the graph is the editing surface
+# Code as facts — the graph is both the editing surface and the query surface
+
+One substrate, two faculties: §0–§3 are the **write** side (authoring a
+graph-upstream file), §4 is the **read** side (relational code-intelligence over
+a Beagle tree). Either one may be why you are here.
 
 Most Beagle files are text-canonical: you Edit/Write the text and the compiler
 reads it. A **graph-upstream** file is the inverse (the move-3 flip): its source
@@ -92,7 +100,57 @@ must first **de-adopt** it (remove its path from `$GRAPH_UPSTREAM_REGISTRY` and
 drop the `;; @upstream:graph` sentinel). That is a workflow decision, not a
 per-edit escape hatch — make it explicitly, then the guard allows text edits again.
 
-The family: Beagle text edits → beagle-authoring · graph-upstream files
-(graph edit channel) → code-as-facts · relational code queries
-(blast zone / who-calls) → codegraph · building apps on the engine →
-fact-modeling. Loop vocabulary: `beagle:docs/authoring-loops.md`.
+## 4. Relational code queries — the blast-zone faculty
+
+The same graph, read instead of written: project a Beagle tree's AST into Fram
+and *derive* the answer with Datalog. Reach for it when the question is
+**relational** — who calls *this* `red` when two modules each define one,
+dependents, transitive blast radius, the call graph — and consult it BEFORE
+proposing a change. Grep and one-hop `beagle callers` are scope-blind (they
+merge the two `red`s; the graph knows lexical binding, text match doesn't) and
+structurally cannot compute a transitive closure.
+
+```
+*.bclj/.bjs/.bnix ──beagle-facts──▶ [subj "pred" obj] ──fold──▶ Fram store ──Datalog──▶ callers / blast radius
+   (AST, any #lang)                  EDN triples                (interned graph)      (transitive closure)
+```
+
+Current entry points (`bb fram:bin/fram-primer` prints the live cheatsheet):
+
+```sh
+# turn the stack on for a project dir — also writes <dir>/.fram/corpus.facts
+fram:bin/fram-code-on <dir>
+# who-calls + transitive blast radius over that corpus (JSON: defns/edges/blast)
+bb -cp fram:out fram:out/callgraph.clj <dir>/.fram/corpus.facts
+# no corpus, straight off lossless AST EDN: the engine resolver's callgraph mode
+bb -cp fram:out fram:out/resolve.clj callgraph <file.edn> …
+```
+
+Ad-hoc queries against a live instance go through the Fram MCP data edge
+(`fram:bin/fram-mcp`), which advertises exactly `tell` / `retract` / `show` /
+`ask` / `validate`; `ask` is the validated typed recursive query. Graph
+authoring is NOT on that edge — it is the sealed control surface behind §1's verbs.
+
+Honest scope:
+
+- **Beagle source only.** `beagle:bin/beagle-facts` reflects `.bclj`/`.bjs`/`.bnix`
+  ASTs (ignoring each file's `#lang`). This is not a general multi-language indexer.
+- **Two projections, two jobs.** The *query* projection (`beagle-facts`) is compact
+  and good for leverage but lossy (drops types/params); the *truth* projection
+  (`facts-roundtrip.rkt --emit-edn`, §2) round-trips the program losslessly and is
+  what the edit verbs ride. Query projection for code-intelligence, truth
+  projection for graph-native edits/rename.
+- **`fram:codegraph/` is the retained analysis surface of the experiment that proved
+  this bet** (folded into fram per ADR 0001; measured verdict in
+  `fram:codegraph/RESULTS.md`, archived README in `fram:docs/archive/codegraph-README.md`).
+  Treat it as historical: prefer the entry points above, and read its own records
+  before reviving anything inside it.
+- Do not spin any of this up for "find the string `foo`" or a single-file read.
+
+The bet, shared with North: a flat text-and-grep view rots and cannot compute
+relational questions; the graph is always current and answers them for free.
+
+The family: Beagle text edits → beagle-authoring · graph-upstream files and
+relational code queries (edit channel + blast zone) → code-as-facts · building
+apps on the engine → fram-modeling. Loop vocabulary:
+`beagle:docs/authoring-loops.md`.

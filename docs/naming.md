@@ -74,7 +74,10 @@ verbs naturally ("fork a world"). Try `reality.sealed` with a straight face.
 **Current scope:** historical experiment and sealed-consumer vocabulary, not a
 public data primitive. The retained Codegraph code and receipts may project
 recursive Triples for analysis, but they do not enlarge the five-tool MCP edge
-or the thirteen-operation FRAMRPC boundary.
+or the thirteen-operation FRAMRPC boundary. **Partly superseded 2026-08-02:** the
+agent skill named `codegraph` is retired and its read-side faculty now lives in
+`code-as-facts` (see the skill-names entry below). The revealed-preference argument
+here still decides what the *subsystem* is called; it no longer names a live skill.
 
 The thing: the code-intelligence surface. Point the engine at a Beagle source tree,
 project it to facts, and *derive* the answers — scope-correct who-calls, transitive
@@ -154,6 +157,50 @@ records for finite storage. Those are private representations of the one recursi
 model, not semantic identity. Accordingly, code uses `Term`, `Triple`, `TripleRow`, and
 `slot0`/`slot1`/`slot2`; names such as `TurtleRow`, `turtle-id`, and “turtle log” are
 category errors.
+
+## agent skill names — fram-modeling, code-as-facts — chosen 2026-08-02
+
+The ruling in one line: **the kernel substrate is the typed Triple** — an asserted
+Triple *is* a proposition — and **"fact" is the coordination layer's word**, the one
+North's rows speak. Agent-facing skill names are chosen against that split, not
+against whichever layer's vocabulary happened to be current when the skill was
+written. Two consequences, both applied here:
+
+- **`fact-modeling` → `fram-modeling`.** The skill teaches how to model data and
+  logic *in Fram*: rent the engine, assert, supersede, query the live view, derive
+  with Datalog. Naming it after a layer's word for the stored thing had already
+  dated it twice (`fact-authoring` → `fact-modeling`), and the recursive-Triple cut
+  would have dated it a third time. Name the **tool**, which does not move.
+- **The `codegraph` skill is retired into `code-as-facts`.** They were one surface
+  described twice: `code-as-facts` taught the write side of the code graph (the
+  graph-edit verbs behind the upstream guard) and `codegraph` taught the read side
+  (who-calls, blast radius) of the same projected AST in the same store. Two skill
+  files over one substrate is a routing coin-flip for a model, and the read side
+  was pinned to a subsystem this ledger already scoped as historical. One skill,
+  two faculties, and the stale entry points (`codegraph/src/*.clj`, experiment-era
+  gate numbers) dropped rather than carried forward.
+
+The rejected bench:
+
+- **code-as-triples** — the accurate *kernel* word, rejected deliberately. This name
+  is a live coordination-layer identifier, not prose: North's composer requires a
+  skill's frontmatter `name:` to equal its directory, and the code-upstream-guard's
+  denial text, `bin/fram-primer`, and the profile's greenfield rule all send agents
+  to **code-as-facts** by that exact string. Renaming the coordination-facing handle
+  to the kernel's word would break every one of those and buy nothing: at that layer
+  "fact" is the correct word, and this skill is the thing an agent opts into, not a
+  storage contract.
+- **codegraph** (as the merged skill's name) — names the module, not the faculty, and
+  the module is a retained historical analysis surface. A live skill named after it
+  routes the model into `codegraph/` instead of the engine entry points.
+- **fram-authoring** — collides head-on with `beagle-authoring` and with the
+  graph-edit authoring channel that `code-as-facts` owns.
+- **fram-data** — undersells the half that earns the engine its keep: Datalog
+  derivation, not storage.
+
+The discipline this leaves behind: a skill is named for the **tool** it teaches
+(`fram-modeling`, `beagle-authoring`) or for the **bet** an agent is opting into
+(`code-as-facts`) — never for the layer-of-the-month word for the stored thing.
 
 ## Appending an entry
 

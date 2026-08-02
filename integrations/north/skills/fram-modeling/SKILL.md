@@ -1,14 +1,14 @@
 ---
-name: fact-modeling
+name: fram-modeling
 description: >-
-  Use when BUILDING a program, app, or tool on the Fram fact engine —
-  modeling data/logic as facts (subject predicate object) + Datalog instead of
+  Use when BUILDING a program, app, or tool on the Fram engine — modeling
+  data/logic as Triples (subject predicate object) + Datalog instead of
   SQL/records/imperative state. Covers assert vs supersede (update), live-view
-  queries, and Datalog derivation. Formerly named fact-authoring. NOT for
+  queries, and Datalog derivation. Formerly named fact-modeling. NOT for
   one-off fact reads — just rent the store and call by-lp.
 ---
 
-# Claim modeling — building on the Fram engine (facts + Datalog)
+# Fram modeling — building on the Fram engine (facts + Datalog)
 
 The thesis (ADR 0001, archived in `fram:docs/archive/`): **the program/app/work IS a fact
 graph.** Data, logic, and structure live as facts, so each is *reasoned* (Datalog:
@@ -28,7 +28,7 @@ bb fram:bin/fram-primer        # generated FROM src/fram/*.bclj — always curre
 
 It prints: the live `fram.cnf` / `fram.datalog` / `fram.schema` signatures, plus the
 five idioms below with pointers to where each is proven. Read it at the start of any
-fact-modeling task instead of guessing the API.
+fram-modeling task instead of guessing the API.
 
 ## 1. The operating model (this does not churn)
 
@@ -59,7 +59,7 @@ fact-modeling task instead of guessing the API.
   — the gen-store CRUD seam, every op a fact op; the canonical add / update-as-supersede / tombstone / reaches gate.
 - **App-level blast radius (scope-correct closure):** `~/code/wake/web/spike/app-blast-radius/cascade.clj`.
 - **Stratified lifecycle (ready/blocked as rules) + the tax it can be:** `north:cnf_lifecycle_test.clj`.
-- **Reason/repair over code:** `fram:resolve.clj` (refers_to, rename/delete/callgraph) — and the **codegraph** skill for querying.
+- **Reason/repair over code:** `fram:out/resolve.clj` (refers_to, rename/delete/callgraph) — and the **code-as-facts** skill for querying a Beagle tree relationally.
 
 ## 3. Discipline (the smell tests)
 - If you reach for a mutable map/atom of records as the app's data model, stop — that
@@ -70,7 +70,7 @@ fact-modeling task instead of guessing the API.
 - `value!` returns a fresh-looking id but interns; never assume id→string without your
   own reverse map. Verify a round-trip on real data, like the spike's gate does.
 
-The family: Beagle text edits → beagle-authoring · graph-upstream files
-(graph edit channel) → code-as-facts · relational code queries
-(blast zone / who-calls) → codegraph · building apps on the engine →
-fact-modeling. Loop vocabulary: `beagle:docs/authoring-loops.md`.
+The family: Beagle text edits → beagle-authoring · graph-upstream files and
+relational code queries (edit channel + blast zone) → code-as-facts · building
+apps on the engine → fram-modeling. Loop vocabulary:
+`beagle:docs/authoring-loops.md`.
