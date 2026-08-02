@@ -443,6 +443,12 @@
 
 (defn coordinator-space [co] (:space-id co))
 
+(defn store-view
+  "Read-only coordinator over an immutable TermStore root: every read accessor
+   below works against the pinned root instead of the live store."
+  [co root]
+  (assoc co :term-store (atom root)))
+
 (defn current-transaction [co]
   (t/transaction-coordinate
    (coordinator-space co)

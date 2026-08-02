@@ -33,6 +33,8 @@
     :rpc/query :rpc/occurrences :rpc/lease-acquire :rpc/lease-renew
     :rpc/lease-release :rpc/lease-check :rpc/validate})
 
+(def paged-rpc-operations #{:rpc/query :rpc/scan :rpc/occurrences})
+
 (defn- daemon-fail! [code message data]
   (throw (ex-info message (assoc data :type code :fram/code code :code code))))
 
@@ -304,39 +306,20 @@
                        (when fence-present (require-triple! fence "batch fence"))
                        cancellation)))
 
-(defn- handle-scan! [request cancellation]
-  (let [[slot0-option slot1-option slot2-option]
-        (record-fields! (t/rpc-request-payload-value request) :rpc/triple-pattern 3)
-        options (mapv option-value! [slot0-option slot1-option slot2-option])
-        matches
-        (reduce
-         (fn [result proposition]
-           (cancelled! cancellation)
-           (if (every? identity
-                       (map-indexed
-                        (fn [index [present value]]
-                          (or (not present)
-                              (= value ((case index
-                                          0 t/triple-slot0
-                                          1 t/triple-slot1
-                                          t/triple-slot2)
-                                        proposition))))
-                        options))
-             (conj result proposition) result))
-         [] (coord/live-propositions @coordinator))]
-    (wire/rpc-triples! matches)))
+(defn- scan-match? [options proposition]
+  (every? identity
+          (map-indexed
+           (fn [index [present value]]
+             (or (not present)
+                 (= value ((case index
+                             0 t/triple-slot0
+                             1 t/triple-slot1
+                             t/triple-slot2)
+                           proposition))))
+           options)))
 
 (defn- operation-occurrences [co]
   (filterv kernel/operation-occurrence? (coord/history co)))
-
-(defn- handle-occurrences! [payload cancellation]
-  (require-unit! payload)
-  (let [values
-        (reduce (fn [result occurrence]
-                  (cancelled! cancellation)
-                  (conj result occurrence))
-                [] (operation-occurrences @coordinator))]
-    (wire/rpc-occurrences! values)))
 
 (defn- query-record-tag [value]
   (when (and (t/triple? value) (= :rpc/record (t/triple-slot2 value)))
@@ -728,40 +711,123 @@
     (daemon-fail! (query/error-code error) (query/error-message error) {}))
   (query/result-rows result))
 
-(defn- paged-query-result! [rows page query-digest snapshot-version]
+(defn- query-cursor-position! [rows after-row]
+  (let [position (first (keep-indexed
+                         (fn [index row]
+                           (when (= row after-row) index))
+                         rows))]
+    (when (nil? position)
+      (daemon-fail! :query-cursor-mismatch
+                    "query cursor row is absent from its snapshot" {}))
+    position))
+
+;; Scan rows are a multiset — equal propositions may be live twice — so the
+;; cursor carries the snapshot position alongside the row it must still hold.
+(defn- indexed-cursor-position! [rows after-row]
+  (let [[position value] after-row]
+    (when-not (and (= 2 (count after-row))
+                   (integer? position)
+                   (< -1 position (count rows))
+                   (= value (nth rows position)))
+      (daemon-fail! :query-cursor-mismatch
+                    "page cursor row is absent from its snapshot" {}))
+    position))
+
+;; A page shape adapts one operation's rows to the shared :query/cursor record:
+;; :payload encodes a row vector, :cursor-row builds the cursor row for the last
+;; served row, and :locate finds that row again in a re-read snapshot.
+(def ^:private query-page-shape
+  {:payload (fn [rows] (wire/rpc-query-rows! (mapv wire/rpc-query-row! rows)))
+   :cursor-row (fn [_ row] row)
+   :locate query-cursor-position!})
+
+(def ^:private triples-page-shape
+  {:payload wire/rpc-triples!
+   :cursor-row (fn [position row] [position row])
+   :locate indexed-cursor-position!})
+
+(def ^:private occurrences-page-shape
+  (assoc triples-page-shape :payload wire/rpc-occurrences!))
+
+(defn- paged-result! [rows page digest snapshot-version shape]
   (if (nil? page)
-    {:payload (wire/rpc-query-rows! (mapv wire/rpc-query-row! rows))
+    {:payload ((:payload shape) rows)
      :page nil}
     (let [limit (t/rpcpagerequest-limit page)
           cursor-value (t/rpc-page-request-cursor-value page)
           cursor (when cursor-value (parse-query-cursor! cursor-value))]
       (when (or (< limit 1) (> limit query/max-page-limit))
         (daemon-fail! :query-page-limit "query page limit must be from 1 through 4096" {}))
-      (when (and cursor (not= query-digest (:query-sha256 cursor)))
+      (when (and cursor (not= digest (:query-sha256 cursor)))
         (daemon-fail! :query-cursor-mismatch
                       "query cursor belongs to a different query" {}))
       (let [ordinal (or (:next-page-ordinal cursor) 0)
-            start
-            (if cursor
-              (let [position (first (keep-indexed
-                                     (fn [index row]
-                                       (when (= row (:after-row cursor)) index))
-                                     rows))]
-                (when (nil? position)
-                  (daemon-fail! :query-cursor-mismatch
-                                "query cursor row is absent from its snapshot" {}))
-                (inc position))
-              0)
+            start (if cursor
+                    (inc ((:locate shape) rows (:after-row cursor)))
+                    0)
             selected (vec (take limit (drop start rows)))
             next-position (+ start (count selected))
             done (>= next-position (count rows))
             next-cursor
             (when-not done
               (wire/rpc-query-cursor!
-               snapshot-version query-digest (inc ordinal)
-               (wire/rpc-query-row! (peek selected))))]
-        {:payload (wire/rpc-query-rows! (mapv wire/rpc-query-row! selected))
+               snapshot-version digest (inc ordinal)
+               (wire/rpc-query-row!
+                ((:cursor-row shape) (dec next-position) (peek selected)))))]
+        {:payload ((:payload shape) selected)
          :page (wire/rpc-page-response! ordinal next-cursor done)}))))
+
+;; An RPC list nests one Triple per row, so a response carrying max-term-depth
+;; rows can never encode: an unpaged read stops there and still fails typed
+;; instead of folding the whole corpus first.
+(def ^:private unpaged-row-cutoff wire/rpc-v1-max-term-depth)
+
+(defn- collect-rows [source keep? cutoff cancellation]
+  (reduce (fn [result value]
+            (cancelled! cancellation)
+            (if (keep? value)
+              (let [result (conj result value)]
+                (if (and cutoff (>= (count result) cutoff))
+                  (reduced result)
+                  result))
+              result))
+          [] source))
+
+(defn- page-snapshot! [page]
+  (let [co @coordinator
+        cursor (some-> page t/rpc-page-request-cursor-value parse-query-cursor!)
+        version (or (:snapshot-version cursor) (current-version co))
+        root (or (when page (cached-query-page-root version))
+                 (replayed-store-root! co version))]
+    (when page (retain-query-page-root! version root))
+    {:version version :view (coord/store-view co root)}))
+
+(defn- handle-scan! [request cancellation]
+  (let [payload (t/rpc-request-payload-value request)
+        [slot0-option slot1-option slot2-option]
+        (record-fields! payload :rpc/triple-pattern 3)
+        options (mapv option-value! [slot0-option slot1-option slot2-option])
+        page (t/rpcrequest-page request)
+        {:keys [version view]} (page-snapshot! page)
+        rows (collect-rows (coord/live-propositions view)
+                           #(scan-match? options %)
+                           (when-not page unpaged-row-cutoff)
+                           cancellation)]
+    (assoc (paged-result! rows page (term-sha256 payload) version
+                          triples-page-shape)
+           :served version)))
+
+(defn- handle-occurrences! [request cancellation]
+  (require-unit! (t/rpc-request-payload-value request))
+  (let [page (t/rpcrequest-page request)
+        {:keys [version view]} (page-snapshot! page)
+        rows (collect-rows (coord/history view)
+                           kernel/operation-occurrence?
+                           (when-not page unpaged-row-cutoff)
+                           cancellation)]
+    (assoc (paged-result! rows page (term-sha256 wire/rpc-unit) version
+                          occurrences-page-shape)
+           :served version)))
 
 (defn- handle-query! [request cancellation]
   (let [[plan-term snapshot]
@@ -793,8 +859,9 @@
     (if direct?
       (let [rows (one-triple-query-rows
                   (:store-root snapshot-data) direct-pattern cancellation)
-            paged (paged-query-result!
-                   rows page query-digest (:version snapshot-data))]
+            paged (paged-result!
+                   rows page query-digest (:version snapshot-data)
+                   query-page-shape)]
         (cancelled! cancellation)
         (assoc paged :served (:version snapshot-data)))
       (do
@@ -808,8 +875,9 @@
                 result (binding [query/*query-control* control]
                          (query/run-plan-projected! projection plan))
                 rows (result-rows! result)
-                paged (paged-query-result!
-                       rows page query-digest (:version snapshot-data))]
+                paged (paged-result!
+                       rows page query-digest (:version snapshot-data)
+                       query-page-shape)]
             (cancelled! cancellation)
             (assoc paged :served (:version snapshot-data)))
           (finally
@@ -917,9 +985,9 @@
       :rpc/assert {:payload (handle-write! request :rpc/assert cancellation)}
       :rpc/retract {:payload (handle-write! request :rpc/retract cancellation)}
       :rpc/batch {:payload (handle-batch! request cancellation)}
-      :rpc/scan {:payload (handle-scan! request cancellation)}
+      :rpc/scan (handle-scan! request cancellation)
       :rpc/query (handle-query! request cancellation)
-      :rpc/occurrences {:payload (handle-occurrences! payload cancellation)}
+      :rpc/occurrences (handle-occurrences! request cancellation)
       :rpc/lease-acquire {:payload (handle-lease-acquire! request cancellation)}
       :rpc/lease-renew {:payload (handle-lease-renew! request cancellation)}
       :rpc/lease-release {:payload (handle-lease-release! request cancellation)}
@@ -948,9 +1016,11 @@
       (when (= :unsupported (native-op-disposition operation))
         (daemon-fail! :rpc/unsupported-operation
                       "operation is not part of FRAMRPC v1" {}))
-      (when (and (not= operation :rpc/query) (t/rpcrequest-page request))
+      (when (and (not (contains? paged-rpc-operations operation))
+                 (t/rpcrequest-page request))
         (daemon-fail! :rpc/unexpected-page
-                      "paging is supported only by rpc/query" {}))
+                      "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences"
+                      {}))
       (when (and (not= operation :rpc/query) (t/rpcrequest-timeout-ms request))
         (daemon-fail! :rpc/unexpected-timeout
                       "timeout-ms is supported only by rpc/query" {}))

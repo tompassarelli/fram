@@ -70,7 +70,7 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | N1 | Closed 13-operation FRAMRPC v1; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_daemon_test.clj`, boundary ratchet |
 | N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan` and `:rpc/occurrences` accept no page cursor, and their cons-list response encoding hits the TermCodecV1 depth bound (256) long before the frame cap — measured 2026-08-02: scan fails past 253 rows, occurrences past 251, as a typed `:term-depth-exceeded` rejection with the daemon healthy. The failure is expensive: the full corpus/history fold runs before the encode fails, superlinearly in corpus size (28.8 s at 3,700 facts) | UNBACKED — measured defect | pagination via the `:rpc/query` page machinery in flight; the bound gets its pinning test with it |
+| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate; per-page fold cost is still O(corpus) — index-driven paging is the open follow-on |
 
 ## Query
 

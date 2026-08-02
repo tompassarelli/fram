@@ -70,6 +70,26 @@
             {:error nil :rows all-rows}
             (recur next-cursor all-rows)))))))
 
+(defn paged-read
+  "Drain one paged read into its rows and the versions each page served."
+  ([port space operation payload limit tag]
+   (paged-read port space operation payload limit tag nil))
+  ([port space operation payload limit tag start-cursor]
+   (loop [cursor start-cursor rows [] versions []]
+     (let [response (request! port space operation payload
+                              :page (wire/rpc-page-request! limit cursor))
+           page (t/rpcresponse-page response)]
+       (if (or (error-code response) (nil? page))
+         {:error (or (error-code response) :missing-page)
+          :rows rows :versions versions}
+         (let [all-rows (into rows (triples-result response tag))
+               all-versions (conj versions
+                                  (t/rpcresponse-served-version response))]
+           (if (t/rpcpageresponse-done page)
+             {:error nil :rows all-rows :versions all-versions}
+             (recur (t/rpc-page-response-cursor-value page)
+                    all-rows all-versions))))))))
+
 (defn one-triple-plan [relation head-terms body-terms]
   (wire/rpc-query-plan!
    (wire/rpc-query-find-relation! relation)
@@ -361,6 +381,140 @@
           [valid violations] (fields (payload validated) :rpc/validation 2)]
       (check! "rpc/validate round-trips the portable store dump"
               (and valid (empty? (values-list violations)))))
+
+    (let [predicate :page-fixture
+          fixture-count 400
+          scan-payload (wire/rpc-triple-pattern! nil predicate nil)
+          scan-reference (fn []
+                           (filterv #(= predicate (t/triple-slot1 %))
+                                    (coord/live-propositions
+                                     @coord-daemon/coordinator)))
+          occurrence-reference (fn []
+                                 (filterv kernel/operation-occurrence?
+                                          (coord/history
+                                           @coord-daemon/coordinator)))]
+      (doseq [batch (partition-all 100 (range fixture-count))]
+        (request! port space :rpc/batch
+                  (wire/rpc-batch!
+                   (mapv (fn [index]
+                           (wire/rpc-action!
+                            :rpc/assert
+                            (t/triple (str "fixture-" index) predicate index)
+                            wire/rpc-subject-any))
+                         batch)
+                   nil)))
+
+      (let [scan-rows (scan-reference)
+            occurrences (occurrence-reference)
+            paged-scan (paged-read port space :rpc/scan scan-payload
+                                   100 :rpc/triples)
+            paged-occurrences (paged-read port space :rpc/occurrences
+                                          wire/rpc-unit 100 :rpc/occurrences)
+            unpaged-scan (request! port space :rpc/scan scan-payload)
+            unpaged-occurrences (request! port space :rpc/occurrences
+                                          wire/rpc-unit)]
+        (check! "paged scan reassembles the corpus the unpaged reply cannot carry"
+                (and (= fixture-count (count scan-rows))
+                     (nil? (:error paged-scan))
+                     (= scan-rows (:rows paged-scan))))
+        (check! "paged occurrences reassemble the history past 251 events"
+                (and (< 251 (count occurrences))
+                     (nil? (:error paged-occurrences))
+                     (= occurrences (:rows paged-occurrences))))
+        (check! "unpaged scan and occurrences past the depth bound still fail typed"
+                (and (= :term-depth-exceeded (error-code unpaged-scan))
+                     (= :term-depth-exceeded (error-code unpaged-occurrences)))))
+
+      (let [visited (atom 0)
+            live coord/live-propositions
+            bounded (with-redefs [coord/live-propositions
+                                  (fn [co]
+                                    (map (fn [proposition]
+                                           (swap! visited inc)
+                                           proposition)
+                                         (live co)))]
+                      (request! port space :rpc/scan scan-payload))]
+        (check! "unpaged scan stops folding once the depth bound is unreachable"
+                (and (= :term-depth-exceeded (error-code bounded))
+                     (< @visited (count (scan-reference))))))
+
+      (let [reference (scan-reference)
+            first-page (request! port space :rpc/scan scan-payload
+                                 :page (wire/rpc-page-request! 1 nil))
+            pinned-version (t/rpcresponse-served-version first-page)
+            cursor (t/rpc-page-response-cursor-value
+                    (t/rpcresponse-page first-page))
+            later (request! port space :rpc/assert
+                            (wire/rpc-write!
+                             (t/triple "fixture-later" predicate 4000)
+                             wire/rpc-subject-any nil))
+            rest-pages (paged-read port space :rpc/scan scan-payload
+                                   100 :rpc/triples cursor)
+            pinned (into (triples-result first-page :rpc/triples)
+                         (:rows rest-pages))]
+        (check! "scan cursor pins its snapshot across an intervening commit"
+                (and (nil? (:error rest-pages))
+                     (= (inc pinned-version)
+                        (t/rpcresponse-served-version later))
+                     (every? #(= pinned-version %) (:versions rest-pages))
+                     (= reference pinned))))
+
+      (let [reference (occurrence-reference)
+            first-page (request! port space :rpc/occurrences wire/rpc-unit
+                                 :page (wire/rpc-page-request! 1 nil))
+            pinned-version (t/rpcresponse-served-version first-page)
+            cursor (t/rpc-page-response-cursor-value
+                    (t/rpcresponse-page first-page))
+            later (request! port space :rpc/assert
+                            (wire/rpc-write!
+                             (t/triple "occurrence-later" predicate 4001)
+                             wire/rpc-subject-any nil))
+            rest-pages (paged-read port space :rpc/occurrences wire/rpc-unit
+                                   100 :rpc/occurrences cursor)
+            pinned (into (triples-result first-page :rpc/occurrences)
+                         (:rows rest-pages))]
+        (check! "occurrences cursor pins its snapshot across an intervening commit"
+                (and (nil? (:error rest-pages))
+                     (= (inc pinned-version)
+                        (t/rpcresponse-served-version later))
+                     (every? #(= pinned-version %) (:versions rest-pages))
+                     (= reference pinned))))
+
+      (let [duplicated (t/triple "duplicated" :page-dup 0)
+            dup-payload (wire/rpc-triple-pattern! nil :page-dup nil)]
+        (doseq [proposition [duplicated
+                             (t/triple "between" :page-dup 1)
+                             duplicated
+                             (t/triple "tail" :page-dup 2)]]
+          (request! port space :rpc/assert
+                    (wire/rpc-write! proposition wire/rpc-subject-any nil)))
+        (let [reference (filterv #(= :page-dup (t/triple-slot1 %))
+                                 (coord/live-propositions
+                                  @coord-daemon/coordinator))
+              paged (paged-read port space :rpc/scan dup-payload
+                                3 :rpc/triples)]
+          (check! "scan pages resume by position, not by row value"
+                  (and (= 4 (count reference))
+                       (= 2 (count (filter #{duplicated} reference)))
+                       (nil? (:error paged))
+                       (= reference (:rows paged))))))
+
+      (let [fixture-cursor (t/rpc-page-response-cursor-value
+                            (t/rpcresponse-page
+                             (request! port space :rpc/scan scan-payload
+                                       :page (wire/rpc-page-request! 1 nil))))
+            mismatched (request! port space :rpc/scan
+                                 (wire/rpc-triple-pattern! nil :value nil)
+                                 :page (wire/rpc-page-request! 1 fixture-cursor))
+            over-limit (request! port space :rpc/scan scan-payload
+                                 :page (wire/rpc-page-request!
+                                        (inc query/max-page-limit) nil))
+            unpaged-op (request! port space :rpc/status wire/rpc-unit
+                                 :page (wire/rpc-page-request! 1 nil))]
+        (check! "scan cursors stay bound to their pattern, limit, and operation"
+                (and (= :query-cursor-mismatch (error-code mismatched))
+                     (= :query-page-limit (error-code over-limit))
+                     (= :rpc/unexpected-page (error-code unpaged-op))))))
 
     (let [before (t/rpcresponse-served-version
                   (request! port space :rpc/version wire/rpc-unit))

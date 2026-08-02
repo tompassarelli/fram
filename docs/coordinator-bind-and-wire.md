@@ -40,7 +40,8 @@ The native daemon accepts exactly thirteen operations:
 - fencing: `rpc/lease-acquire`, `rpc/lease-renew`, `rpc/lease-release`,
   `rpc/lease-check`.
 
-Only `rpc/query` accepts paging and timeout controls. Mutations may carry an
+`rpc/query`, `rpc/scan`, and `rpc/occurrences` accept a page cursor; only
+`rpc/query` accepts the timeout control. Mutations may carry an
 expected logical version. Read responses report the logical version they
 served.
 
