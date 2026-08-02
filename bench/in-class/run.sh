@@ -33,7 +33,9 @@ run_adapter() {
   local adapter="$1" size="$2" run="$3" raw row
   case "$adapter" in
     fram)
-      raw="$(cd "$ROOT" && bb -cp out "$HERE/adapters/fram.clj" "$size" "$run")"
+      # JVM, not bb: coord_daemon.clj is explicitly a JVM-only server (see its
+      # header comment); bb's interpreter overhead swamps op timings.
+      raw="$(cd "$ROOT" && clojure -M "$HERE/adapters/fram.clj" "$size" "$run")"
       ;;
     sqlite)
       raw="$(python3 "$HERE/adapters/sqlite.py" "$size" "$run")"

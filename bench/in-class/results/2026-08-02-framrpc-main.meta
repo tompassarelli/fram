@@ -1,0 +1,13 @@
+started_utc=2026-08-02T12:36:11Z
+revision=e90e93d639e33db5b299b5a1a4f690d4f79569fa
+kernel=Linux 6.18.38 x86_64 GNU/Linux
+nproc=24
+cpu_model=AMD Ryzen AI 9 HX 370 w/ Radeon 890M
+mem_total=98653400 kB
+python=Python 3.13.13
+sqlite=3.51.2 2026-01-09 17:27:48 b270f8339eb13b504d0b2ba154ebca966b7dde08e40c3ed7d559749818cbalt1 (64-bit)
+start_load=4.43 4.32 4.57 8/2164 3142797
+sizes=3000
+runs=2
+ended_utc=2026-08-02T13:22:01Z
+end_load=2.81 4.13 5.64 4/2111 136712
