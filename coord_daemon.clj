@@ -482,7 +482,7 @@
        :propositions (term-store/live-propositions context)
        :occurrences (term-store/operation-occurrences context)})))
 
-(defn- all-triples-page-plan? [plan]
+(defn- one-triple-page-pattern [plan]
   (let [find (query/queryplan-find plan)
         strata (query/queryplan-strata plan)
         rules (when (= 1 (count strata)) (first strata))
@@ -490,21 +490,17 @@
         body (when rule (datalog/rule-body rule))
         literal (when (= 1 (count body)) (first body))
         head-arguments (when rule (datalog/rule-head-arguments rule))
-        arguments (when literal (datalog/literal-arguments literal))
-        variables (when arguments
-                    (mapv datalog/queryterm-variable arguments))]
-    (and (some? rule)
-         (some? literal)
-         (not (query/aggregate-find? find))
-         (= (query/findspec-relation find)
-            (datalog/rule-head-relation rule))
-         (= :relation (datalog/literal-kind literal))
-         (= datalog/triple-relation (datalog/literal-relation literal))
-         (not (datalog/literal-negated literal))
-         (= 3 (count arguments))
-         (= head-arguments arguments)
-         (every? some? variables)
-         (= 3 (count (set variables))))))
+        arguments (when literal (datalog/literal-arguments literal))]
+    (when (and (some? rule)
+               (some? literal)
+               (not (query/aggregate-find? find))
+               (= (query/findspec-relation find)
+                  (datalog/rule-head-relation rule))
+               (= :relation (datalog/literal-kind literal))
+               (= datalog/triple-relation (datalog/literal-relation literal))
+               (not (datalog/literal-negated literal))
+               (= 3 (count arguments)))
+      {:arguments arguments :head-arguments head-arguments})))
 
 (defn- cached-query-page-rows [version]
   (get-in @query-page-snapshots [:by-version version]))
@@ -542,6 +538,51 @@
         (or (cached-query-page-rows version)
             (retain-query-page-rows!
              version (build-ordered-triple-rows propositions cancellation))))))
+
+(defn- match-query-row [arguments row]
+  (loop [position 0 bindings {}]
+    (if (>= position (count arguments))
+      bindings
+      (let [term (nth arguments position)
+            value (nth row position)
+            variable (datalog/queryterm-variable term)]
+        (if (some? variable)
+          (if (contains? bindings variable)
+            (when (= (get bindings variable) value)
+              (recur (inc position) bindings))
+            (recur (inc position) (assoc bindings variable value)))
+          (when (= (datalog/queryterm-value term) value)
+            (recur (inc position) bindings)))))))
+
+(defn- ground-query-row [arguments bindings]
+  (mapv (fn [term]
+          (if-let [variable (datalog/queryterm-variable term)]
+            (get bindings variable)
+            (datalog/queryterm-value term)))
+        arguments))
+
+(defn- unrestricted-triple-pattern? [{:keys [arguments head-arguments]}]
+  (let [variables (mapv datalog/queryterm-variable arguments)]
+    (and (= head-arguments arguments)
+         (every? some? variables)
+         (= 3 (count (set variables))))))
+
+(defn- one-triple-query-page-rows
+  [ordered-triples pattern cancellation]
+  (if (unrestricted-triple-pattern? pattern)
+    ordered-triples
+    (let [rows
+          (persistent!
+           (reduce (fn [acc row]
+                     (cancelled! cancellation)
+                     (if-let [bindings (match-query-row (:arguments pattern) row)]
+                       (conj! acc (ground-query-row
+                                   (:head-arguments pattern) bindings))
+                       acc))
+                   (transient #{})
+                   ordered-triples))]
+      (cancelled! cancellation)
+      (vec (sort-by query/row-key rows)))))
 
 (defn- snapshot-propositions! [co version]
   (if (= version (current-version co))
@@ -634,7 +675,8 @@
         page (t/rpcrequest-page request)
         cursor-value (some-> page t/rpc-page-request-cursor-value)
         cursor (when cursor-value (parse-query-cursor! cursor-value))
-        direct-page? (and page (all-triples-page-plan? plan))
+        direct-pattern (when page (one-triple-page-pattern plan))
+        direct-page? (some? direct-pattern)
         snapshot-data
         (locking (:lock @coordinator)
           (require-expected! @coordinator
@@ -650,11 +692,14 @@
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
         control (datalog/query-control 10000000 timeout)]
     (if direct-page?
-      (let [rows (or (:rows snapshot-data)
-                     (ordered-query-page-rows!
-                      (:version snapshot-data)
-                      (:propositions snapshot-data)
-                      cancellation))
+      (let [ordered-triples
+            (or (:rows snapshot-data)
+                (ordered-query-page-rows!
+                 (:version snapshot-data)
+                 (:propositions snapshot-data)
+                 cancellation))
+            rows (one-triple-query-page-rows
+                  ordered-triples direct-pattern cancellation)
             paged (paged-query-result!
                    rows page query-digest (:version snapshot-data))]
         (cancelled! cancellation)

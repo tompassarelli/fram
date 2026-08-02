@@ -56,6 +56,27 @@
           (let [[values] (fields row :query/row 1)] (values-list values)))
         (triples-result response :query/rows)))
 
+(defn paged-query-rows [port space query-payload]
+  (loop [cursor nil rows []]
+    (let [response (request! port space :rpc/query query-payload
+                             :page (wire/rpc-page-request! 1 cursor))
+          page (t/rpcresponse-page response)
+          next-cursor (when page (t/rpc-page-response-cursor-value page))]
+      (if (or (error-code response) (nil? page))
+        {:error (error-code response) :rows rows}
+        (let [all-rows (into rows (query-rows response))]
+          (if (t/rpcpageresponse-done page)
+            {:error nil :rows all-rows}
+            (recur next-cursor all-rows)))))))
+
+(defn one-triple-plan [relation head-terms body-terms]
+  (wire/rpc-query-plan!
+   (wire/rpc-query-find-relation! relation)
+   [(wire/rpc-query-stratum!
+     [(wire/rpc-query-rule!
+       (wire/rpc-query-head! relation head-terms)
+       [(wire/rpc-query-relation! "triple" body-terms false)])])]))
+
 (defn all-triples-plan []
   (let [slot0 (wire/rpc-query-variable! "slot0")
         slot1 (wire/rpc-query-variable! "slot1")
@@ -209,6 +230,77 @@
         (check! "stale expected-version fails OCC without version movement"
                 (and (= :rpc/conflict (error-code stale))
                      (= 3 (t/rpcresponse-served-version head)))))
+
+      (let [same (t/triple "same" :same "same")
+            asserted-same (request! port space :rpc/assert
+                                    (wire/rpc-write! same wire/rpc-subject-any nil))
+            patterns
+            [["constant predicate and reordered distinct bindings"
+              (let [subject (wire/rpc-query-variable! "subject")
+                    value (wire/rpc-query-variable! "value")]
+                (one-triple-plan
+                 "values" [value subject value]
+                 [subject (wire/rpc-query-constant! :value) value]))]
+             ["repeated body variable unifies equal slots"
+              (let [value (wire/rpc-query-variable! "value")]
+                (one-triple-plan
+                 "self" [value]
+                 [value (wire/rpc-query-constant! :same) value]))]
+             ["constant subject projects one binding"
+              (let [value (wire/rpc-query-variable! "value")]
+                (one-triple-plan
+                 "one-value" [value]
+                 [(wire/rpc-query-constant! "other")
+                  (wire/rpc-query-constant! :value)
+                  value]))]
+             ["constant-only match grounds a constant head"
+              (one-triple-plan
+               "constant-match" [(wire/rpc-query-constant! :matched)]
+               [(wire/rpc-query-constant! "same")
+                (wire/rpc-query-constant! :same)
+                (wire/rpc-query-constant! "same")])]
+             ["repeated body variable rejects unequal slots"
+              (let [value (wire/rpc-query-variable! "value")]
+                (one-triple-plan
+                 "not-self" [value]
+                 [value (wire/rpc-query-constant! :value) value]))]]]
+        (check! "one-triple fixture assertion advances one version"
+                (= 4 (t/rpcresponse-served-version asserted-same)))
+        (doseq [[label plan] patterns]
+          (let [query-payload (wire/rpc-query-request! plan wire/query-current)
+                reference (request! port space :rpc/query query-payload)
+                paged (paged-query-rows port space query-payload)]
+            (check! (str "paged one-triple path matches Datalog: " label)
+                    (and (nil? (error-code reference))
+                         (nil? (:error paged))
+                         (= (query-rows reference) (:rows paged)))))))
+
+      (let [subject (wire/rpc-query-variable! "subject")
+            value (wire/rpc-query-variable! "value")
+            plan (one-triple-plan
+                  "pinned-values" [subject value]
+                  [subject (wire/rpc-query-constant! :value) value])
+            query-payload (wire/rpc-query-request! plan wire/query-current)
+            reference (request! port space :rpc/query query-payload)
+            first-page (request! port space :rpc/query query-payload
+                                 :page (wire/rpc-page-request! 1 nil))
+            snapshot-version (t/rpcresponse-served-version first-page)
+            cursor (t/rpc-page-response-cursor-value
+                    (t/rpcresponse-page first-page))
+            asserted-new (request!
+                          port space :rpc/assert
+                          (wire/rpc-write! (t/triple "new-value" :value 4)
+                                           wire/rpc-subject-any nil))
+            second-page (request! port space :rpc/query query-payload
+                                  :page (wire/rpc-page-request! 4096 cursor))
+            pinned-rows (into (query-rows first-page) (query-rows second-page))]
+        (check! "selective one-triple cursor retains its immutable snapshot"
+                (and (= snapshot-version
+                        (t/rpcresponse-served-version second-page))
+                     (= (inc snapshot-version)
+                        (t/rpcresponse-served-version asserted-new))
+                     (= (query-rows reference) pinned-rows)
+                     (not-any? #(= ["new-value" 4] %) pinned-rows))))
 
     (let [acquired (request! port space :rpc/lease-acquire
                              (wire/rpc-lease-acquire! :resource "holder" 60000))
