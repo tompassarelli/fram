@@ -1831,15 +1831,62 @@
                   (recur lo mid)
                   (recur (inc mid) hi))))))))))
 
+(defn- query-page-utf8-size [value]
+  (count (.getBytes ^String (str value) "UTF-8")))
+
+(defn- query-page-envelope-size [rows-size next more]
+  (+ (query-page-utf8-size "{:ok ")
+     rows-size
+     (query-page-utf8-size " :next ")
+     (query-page-utf8-size (pr-str next))
+     (query-page-utf8-size " :more ")
+     (query-page-utf8-size (pr-str more))
+     (query-page-utf8-size "}")))
+
+(defn- fitting-query-page-prefix [window wanted]
+  (loop [i 0 rows-size 2 best 0]
+    (if (>= i wanted)
+      best
+      (let [row (nth window i)
+            n (inc i)
+            rows-size2 (+ rows-size
+                          (if (zero? i) 0 1)
+                          (query-page-utf8-size (pr-str row)))
+            more (> (count window) n)
+            next (when more (q/page-cursor row))
+            fits (and (or (nil? next)
+                          (<= (query-page-utf8-size next)
+                              q/max-page-cursor-bytes))
+                      (<= (query-page-envelope-size rows-size2 next more)
+                          q/max-page-payload-bytes))]
+        (recur n rows-size2 (if fits n best))))))
+
+(defn- query-page-envelope [window n]
+  (let [rows (subvec window 0 n)
+        more (> (count window) n)]
+    {:ok rows
+     :next (when (and more (pos? n))
+             (q/page-cursor (nth rows (dec n))))
+     :more more}))
+
 (defn- run-whole-facts-page [snapshot query limit after]
-  (let [ordered (ordered-facts snapshot)
-        start (page-start ordered after)]
-    (if (map? start)
-      start
-      (let [end (min (count ordered) (+ start limit 1))
-            window (subvec ordered start end)
-            projection (rotations/datalog-projection (rotations/build window))]
-        (q/run-page-projected projection query limit after)))))
+  (let [errors (q/validate query)]
+    (if (seq errors)
+      {:error errors}
+      (let [ordered (ordered-facts snapshot)
+            start (page-start ordered after)]
+        (if (map? start)
+          start
+          (let [end (min (count ordered) (+ start limit 1))
+                window (subvec ordered start end)
+                wanted (min limit (count window))]
+            (if (zero? wanted)
+              (query-page-envelope window 0)
+              (let [n (fitting-query-page-prefix window wanted)]
+                (if (zero? n)
+                  {:error ["query page contains a row too large for the bounded wire response"]
+                   :max-bytes q/max-page-wire-bytes}
+                  (query-page-envelope window n))))))))))
 
 (defn- query-abort-response [t version engine]
   (let [data (ex-data t)
