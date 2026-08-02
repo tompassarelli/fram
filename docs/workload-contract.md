@@ -39,7 +39,7 @@ The shape a coordination client actually imposes, as measured:
 | Dimension | Commitment |
 |---|---|
 | Request size | body ≤ 1 MiB; oversize is rejected from the header, typed |
-| Response size | frames ≤ 1 MiB; bulk reads MUST paginate (`:rpc/query` pages, ≤ 4096 rows) — see the scan/occurrences cliff, [`guarantees.md`](guarantees.md) N3 |
+| Response size | frames ≤ 1 MiB; bulk reads MUST paginate (`:rpc/query` pages, ≤ 4096 rows). `:rpc/scan` and `:rpc/occurrences` are bounded to ~250 rows by the term-depth cap until their pagination lands — [`guarantees.md`](guarantees.md) N3 |
 | Targeted read latency | p95 ≤ *TBD* at 500k triples with ≤ 8 concurrent clients |
 | Durable write throughput | ≥ *TBD* single-fact tx/s sustained; batches amortize to one frame + one fsync per batch |
 | OCC conflicts | `:rpc/conflict` is contract behavior under contention, not an error; the client retries with a fresh base |
