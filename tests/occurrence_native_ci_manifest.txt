@@ -22,6 +22,7 @@ run-bb	current-model	tests/log_split_readiness_dead_child_test.clj	-
 run-bb	current-model	tests/mcp_test.clj	-
 run-bb	current-model	tests/native_rpc_boundary_ratchet_test.clj	-
 run-bb	current-model	tests/native_rpc_daemon_test.clj	-
+run-bb	current-model	tests/provider_host_test.clj	-
 run-bb	current-model	tests/query_aggregate_test.clj	-
 run-bb	current-model	tests/query_projection_test.clj	-
 run-bb	current-model	tests/rotations_v2_test.clj	-
@@ -31,6 +32,7 @@ run-bb	current-model	tests/store_test.clj	-
 run-bb	current-model	tests/triple_kernel_test.clj	-
 run-bb	current-model	tests/triple_log_migration_test.clj	-
 run-bb	current-model	tests/triple_query_test.clj	-
+run-bb	current-model	tests/worlds_provider_test.clj	-
 run-clojure	current-model	tests/store_defcheck_untyped_test.clj	-
 baseline-bb	catalog-drift	tests/catalog_current_test.clj	tests/catalog_current_test.clj#catalog_current_test:.*FAIL.*DRIFTED
 
