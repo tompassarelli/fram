@@ -47,6 +47,9 @@ proposition content is already live. Equal propositions are structural equals,
 but their assertion occurrences remain distinct.
 
 Retracting an exact proposition withdraws its latest live equal occurrence.
+Liveness here is store liveness: the newest equal occurrence the store still
+holds live, including one that supersession has already suppressed from the
+effective projection.
 The semantic history records both the retraction and its exact withdrawal
 target. Retracting a proposition with no live match is an explicit no-op: its
 receipt says unchanged and the logical version does not move.

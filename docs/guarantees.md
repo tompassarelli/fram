@@ -91,6 +91,10 @@ engine and must not be quoted for head. The envelope work is:
   latency, durable write throughput (single and batch), and sustained
   write-under-read;
 - restart cost is O(full log) at head (no checkpoint); the bound is unmeasured;
+- committing or projecting a deeply nested recursive Term costs O(depth²)
+  (measured via the generative harness: seed runtime 5.1 s at depth 8, 7.9 s
+  at 60, 46.2 s at 240) — functional to the 256 depth bound but
+  seconds-expensive near it; a known characteristic, not yet optimized;
 - writes serialize through one per-commit fsync under the coordinator lock
   (~35 ms/commit observed on local disk → tens of committed tx/s serialized;
   batches amortize). Group commit does not exist. Every operation except
