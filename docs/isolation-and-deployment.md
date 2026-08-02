@@ -61,9 +61,12 @@ source is quiescent. The native daemon refuses the removed flat-serving mode.
 - the Cloudflare shim/Worker is an optional authenticated JSON edge.
 
 Compiled Clojure is committed under `out/`. Beagle is required to regenerate
-source projections, not to start a released daemon. The Zig daemon is replacing
-the JVM implementation behind the same semantic and FRAMRPC contracts; a
-cluster moves only after its required operations and oracle gates are complete.
+source projections, not to start a released daemon. A second daemon
+implementation in Zig serves the same semantic and FRAMRPC contracts and is held
+at that closed thirteen-operation boundary as a compatibility, rollback, and
+differential-oracle implementation — not as a scheduled replacement of the JVM
+coordinator. Its source ratchet runs in CI; its bootstrap and oracle suites are
+toolchain-owned aggregates that `ci.yml` does not itself execute.
 
 ## Deployment handoff
 

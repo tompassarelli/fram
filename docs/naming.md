@@ -108,15 +108,18 @@ The rejected bench:
   prose and as the skill's tagline; too long and too hyphenated to be a directory.
 
 The same move split the directory: `resolve.clj` — the lexical resolver and the
-minimal-op AST edit verbs the coordinator daemon `load-file`s — was never
+minimal-op AST edit verbs the graph-authoring commands `load-file` — was never
 code-intelligence. It is tier-3 engine code that happened to be born in the experiment's
-folder, so it was promoted to the engine root beside `coord.clj`, where its address now
-says what it is. `codegraph/` keeps only the analysis surface.
+folder, so it was promoted out of `codegraph/` into the engine's own source set, where
+its address says what it is. (Superseded in detail, not in ruling: the root
+`resolve.clj` shim is gone; the resolver is now the Beagle modules
+`src/resolve_*.bclj`, built to `out/resolve.clj`.) `codegraph/` keeps only the analysis
+surface.
 
 One honest sentence for keeping "chartroom" nowhere load-bearing: an experiment earns a
 verdict, not a permanent namespace, and the only places the old name survives are the
-records that would be lies without it — ADR 0001, the benchmark `RESULTS.md`, and this
-entry.
+records that would be lies without it — ADR 0001, the codegraph experiment's own
+retained records, the skill line that says which repo got folded in, and this entry.
 
 ## Turtle — an architecture prior, never a primitive — chosen 2026-08-01
 

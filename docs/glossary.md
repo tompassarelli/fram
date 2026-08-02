@@ -18,9 +18,9 @@
 
 **fold-boot** — A fold-boot starts a Fram server by folding its complete authoritative log history into memory instead of starting from a checkpoint.
 
-**snapshot boot** — A snapshot boot restores a validated checkpoint and replays only the later log tail, falling back to a fold-boot if the checkpoint cannot be proved to match the logs and fold logic.
+**snapshot boot (v0.3 sense)** — A snapshot boot restores a validated checkpoint and replays only the later log tail, falling back to a fold-boot if the checkpoint cannot be proved to match the logs and fold logic; the recursive-Term coordinator implements no checkpoint path and always fold-boots.
 
-**checkpoint** — A checkpoint is an on-disk image of the folded store at one logical version, with log identities and byte offsets that identify the later records still needing replay.
+**checkpoint (v0.3 sense)** — A checkpoint is an on-disk image of the folded store at one logical version, with log identities and byte offsets that identify the later records still needing replay.
 
 **rotation** — A rotation is a disposable index of live assertion occurrences by individual Triple slots and slot pairs, so many queries can find matches without scanning the whole live set.
 

@@ -12,9 +12,11 @@
 | `ask` | run one validated structured query |
 | `validate` | report structural integrity |
 
-That list is closed. Missing arguments and unknown names fail at the boundary.
-The public process does not link or advertise graph-authoring verbs. Those
-belong to a separate sealed control service.
+That advertised list is closed. Missing arguments and unknown names fail at the
+boundary; dispatch additionally answers two unadvertised spellings of verbs
+already in the list — `untell` for `retract`, and `query` as the internal name
+`ask` normalizes to. The public process does not link or advertise
+graph-authoring verbs. Those belong to a separate sealed control service.
 
 ## Current MCP value boundary
 

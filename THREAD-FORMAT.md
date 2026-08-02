@@ -2,7 +2,10 @@
 
 **Status:** Current v0.3 Markdown import/export compatibility projection. This
 document describes that projection's domain vocabulary and validation, not the
-recursive kernel's neutral slots or native FRAMRPC surface.
+recursive kernel's neutral slots or native FRAMRPC surface. The projection is
+served by the deployed v0.3 runtime; the recursive-Term cut removed the flat-fact
+kernel it calls, so the utilities below no longer load against this repository's
+committed `out/` build.
 
 A **thread** is one Markdown file in `threads/`: a header of projected triples, a
 `---` separator, then a free Markdown body. The filename is
@@ -13,9 +16,10 @@ To this projection there is no "thread" type — a thread is simply an entity id
 that has a `title` row. A "project" isn't a separate type either; it is a thread
 other threads point at with `part_of`. The local `import` utility folds these
 files into the v0.3 compatibility graph; `export` regenerates them
-**fact-identically**
-(`roundtrip_test.clj`), so the files are a *view*, not a competing source of
-truth.
+**fact-identically**, so the files are a *view*, not a competing source of
+truth. `tests/roundtrip_test.clj` recorded that round trip and is now
+dispositioned `exclude` / `removed-flat-store` in
+`tests/occurrence_native_ci_manifest.txt`; nothing in CI pins the property today.
 
 ## File shape
 
@@ -97,7 +101,10 @@ remaining domain defaults being genericized — see the README.)
 | `relates_to` | a non-blocking association (e.g. a `@topic-*` thread) |
 
 `depends_on` and `part_of` must both be **acyclic**, and every `@`-ref must
-resolve — `fram validate` rejects cycles and dangling refs.
+resolve — the projection's own `validate` command rejects cycles and dangling
+refs. Note that `bin/fram validate` now routes to the native FRAMRPC
+`rpc/validate`, which reports store structural integrity, not thread-graph
+violations.
 
 ## How it becomes projected triples
 

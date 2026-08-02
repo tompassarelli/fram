@@ -16,13 +16,21 @@ provenance line before quoting any of them: most of these receipts were produced
 **outside this repository**, against builds that are not the current one, and are
 therefore not reproducible from a committed Fram sha.
 
-## The one CI-enforced gate that lives here
+## The Fram-local perf gate that lives here — not currently enforced
 
-`bench/propagation/` is a Fram-local perf-regression gate, run in CI by
-`bb -cp out bench/propagation/check-budget.clj`
-([`../../.github/workflows/ci.yml`](../../.github/workflows/ci.yml)). It reproduces the
+`bench/propagation/` is a Fram-local perf-regression gate,
+`bb -cp out bench/propagation/check-budget.clj`. It reproduces the
 *shape* of the propagation thesis — graph propagation flat in K, a git
 merge-queue climbing — and enforces a budget against this repo's own build.
+
+**The machinery exists; CI does not run it.**
+[`../tests/occurrence_native_ci_manifest.txt`](../tests/occurrence_native_ci_manifest.txt)
+dispositions `check-budget.clj` as `exclude-gate` in the `removed-flat-store`
+class, and [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml) executes
+only `run-*` entries. The harness still targets the removed flat-store API — its
+sweep requires `fram.schema`, which no longer loads against the committed `out/`
+build — so the budget below is the contract this gate would enforce once its
+harness is ported, not one enforced on every push today.
 
 The budget is ratio-based so it is machine-independent, with generous absolute
 ceilings as catastrophe-catchers
@@ -39,7 +47,8 @@ ceilings as catastrophe-catchers
 **Its absolute numbers are its own.** They are not the external EXP-007 figures
 below and should never be quoted as them.
 
-Regenerate: `bb -cp out bench/propagation/sweep.clj` (with `SWEEP_KS=1,2,4,8`).
+Regenerate: `bb -cp out bench/propagation/sweep.clj` (with `SWEEP_KS=1,2,4,8`) —
+blocked on the same flat-store port as the gate above.
 
 ## External receipts — not reproducible from this repo
 
