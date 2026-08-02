@@ -464,25 +464,33 @@
     (term-store/assert-operation (kernel/proposition-of event))
     (term-store/retract-operation (kernel/proposition-of event))))
 
-(defn- snapshot-image! [co version]
+(defn- replayed-store-root! [co version]
   (let [head (current-version co)]
     (when (or (neg? version) (> version head))
       (daemon-fail! :query-invalid-snapshot
                     "query snapshot is outside available history" {}))
-    (let [context (term-store/new-term-store (coord/coordinator-space co))
-          grouped (group-by occurrence-sequence
-                            (filterv #(<= (occurrence-sequence %) version)
-                                     (operation-occurrences co)))]
-      (doseq [sequence (sort (keys grouped))]
-        (term-store/replay-transaction!
-         context
-         (term-store/transaction-frame
-          sequence (mapv event-operation (get grouped sequence)))))
-      {:version version
-       :propositions (term-store/live-propositions context)
-       :occurrences (term-store/operation-occurrences context)})))
+    (if (= version head)
+      @(coord/coordinator-store co)
+      (let [context (term-store/new-term-store (coord/coordinator-space co))
+            grouped (group-by occurrence-sequence
+                              (filterv #(<= (occurrence-sequence %) version)
+                                       (operation-occurrences co)))]
+        (doseq [sequence (sort (keys grouped))]
+          (term-store/replay-transaction!
+           context
+           (term-store/transaction-frame
+            sequence (mapv event-operation (get grouped sequence)))))
+        @context))))
 
-(defn- one-triple-page-pattern [plan]
+(defn- snapshot-image! [co version]
+  (let [root (replayed-store-root! co version)
+        context (atom root)]
+    {:version version
+     :store-root root
+     :propositions (term-store/live-propositions context)
+     :occurrences (term-store/operation-occurrences context)}))
+
+(defn- one-triple-pattern [plan]
   (let [find (query/queryplan-find plan)
         strata (query/queryplan-strata plan)
         rules (when (= 1 (count strata)) (first strata))
@@ -502,42 +510,139 @@
                (= 3 (count arguments)))
       {:arguments arguments :head-arguments head-arguments})))
 
-(defn- cached-query-page-rows [version]
+(defn- cached-query-page-root [version]
   (get-in @query-page-snapshots [:by-version version]))
 
-(defn- retain-query-page-rows! [version rows]
-  (let [{:keys [order by-version]} @query-page-snapshots
-        order (conj (vec (remove #{version} order)) version)
-        evict-count (max 0 (- (count order) query-page-snapshot-limit))
-        evicted (take evict-count order)
-        retained (vec (drop evict-count order))]
-    (reset! query-page-snapshots
-            {:order retained
-             :by-version (reduce dissoc
-                                 (assoc by-version version rows)
-                                 evicted)})
-    rows))
+(defn- retain-query-page-root! [version root]
+  (locking query-page-snapshots
+    (let [{:keys [order by-version]} @query-page-snapshots
+          order (conj (vec (remove #{version} order)) version)
+          evict-count (max 0 (- (count order) query-page-snapshot-limit))
+          evicted (take evict-count order)
+          retained (vec (drop evict-count order))]
+      (reset! query-page-snapshots
+              {:order retained
+               :by-version (reduce dissoc
+                                   (assoc by-version version root)
+                                   evicted)})
+      root)))
 
-(defn- build-ordered-triple-rows [propositions cancellation]
-  (let [rows
-        (persistent!
-         (reduce (fn [acc proposition]
-                   (cancelled! cancellation)
-                   (conj! acc [(t/triple-slot0 proposition)
-                               (t/triple-slot1 proposition)
-                               (t/triple-slot2 proposition)]))
-                 (transient #{})
-                 propositions))
-        keyed (mapv (fn [row] [(query/row-key row) row]) rows)]
-    (cancelled! cancellation)
-    (mapv second (sort-by first keyed))))
+(defn- native-term-slot [value width]
+  (mod (hash value) width))
 
-(defn- ordered-query-page-rows! [version propositions cancellation]
-  (or (cached-query-page-rows version)
-      (locking query-page-snapshots
-        (or (cached-query-page-rows version)
-            (retain-query-page-rows!
-             version (build-ordered-triple-rows propositions cancellation))))))
+(defn- native-index-position [rows slots value]
+  (let [positions (t/termbucket-positions
+                   (nth slots (native-term-slot value (count slots))))]
+    (some (fn [position]
+            (when (= value (nth rows position)) position))
+          positions)))
+
+(defn- native-atom-row [value]
+  (cond
+    (string? value) (t/->AtomRow :string value nil nil nil nil nil)
+    (integer? value) (t/->AtomRow :int nil value nil nil nil nil)
+    (number? value) (t/->AtomRow :float nil nil value nil nil nil)
+    (boolean? value) (t/->AtomRow :bool nil nil nil value nil nil)
+    (keyword? value) (t/->AtomRow :keyword nil nil nil nil value nil)
+    (t/instant? value) (t/->AtomRow :instant nil nil nil nil nil value)))
+
+(declare native-term-handle)
+
+(defn- native-term-handle [root value]
+  (if (t/triple? value)
+    (let [slot0 (native-term-handle root (t/triple-slot0 value))
+          slot1 (native-term-handle root (t/triple-slot1 value))
+          slot2 (native-term-handle root (t/triple-slot2 value))]
+      (when (every? some? [slot0 slot1 slot2])
+        (when-let [position
+                   (native-index-position
+                    (t/termstore-triples root)
+                    (t/termstore-triple-slots root)
+                    (t/->TripleRow slot0 slot1 slot2))]
+          (inc (* 2 position)))))
+    (let [row (native-atom-row value)]
+      (when row
+        (when-let [position
+                   (native-index-position
+                    (t/termstore-atoms root)
+                    (t/termstore-atom-slots root) row)]
+          (* 2 position))))))
+
+(defn- native-atom-value [row]
+  (case (t/atomrow-kind row)
+    :string (t/atomrow-string-value row)
+    :int (t/atomrow-int-value row)
+    :float (t/atomrow-float-value row)
+    :bool (t/atomrow-bool-value row)
+    :keyword (t/atomrow-keyword-value row)
+    :instant (t/atomrow-instant-value row)))
+
+(defn- native-resolve-handle [root handle]
+  (let [position (quot handle 2)]
+    (if (zero? (mod handle 2))
+      (native-atom-value (nth (t/termstore-atoms root) position))
+      (let [row (nth (t/termstore-triples root) position)]
+        (t/triple
+         (native-resolve-handle root (t/triplerow-slot0 row))
+         (native-resolve-handle root (t/triplerow-slot1 row))
+         (native-resolve-handle root (t/triplerow-slot2 row)))))))
+
+(defn- native-active-handle? [root handle]
+  (let [slots (t/termstore-active-slots root)
+        buckets (t/termstore-active-buckets root)
+        positions (t/termbucket-positions
+                   (nth slots (native-term-slot handle (count slots))))]
+    (boolean
+     (some (fn [position]
+             (let [bucket (nth buckets position)]
+               (and (= handle (t/activebucket-triple-handle bucket))
+                    (seq (t/activebucket-positions bucket)))))
+           positions))))
+
+(def ^:private native-unbound ::native-unbound)
+(def ^:private native-missing ::native-missing)
+
+(defn- native-pattern-handles [root arguments]
+  (mapv (fn [argument]
+          (if (some? (datalog/queryterm-variable argument))
+            native-unbound
+            (or (native-term-handle root (datalog/queryterm-value argument))
+                native-missing)))
+        arguments))
+
+(defn- native-row-matches-handles? [expected row]
+  (every? identity
+          (map (fn [wanted actual]
+                 (or (= native-unbound wanted) (= wanted actual)))
+               expected
+               [(t/triplerow-slot0 row)
+                (t/triplerow-slot1 row)
+                (t/triplerow-slot2 row)])))
+
+(defn- native-candidate-handles [root arguments cancellation]
+  (let [expected (native-pattern-handles root arguments)]
+    (cond
+      (some #{native-missing} expected) []
+      (not-any? #{native-unbound} expected)
+      (let [row (apply t/->TripleRow expected)
+            position (native-index-position
+                      (t/termstore-triples root)
+                      (t/termstore-triple-slots root) row)
+            handle (when (some? position) (inc (* 2 position)))]
+        (if (and handle (native-active-handle? root handle)) [handle] []))
+      :else
+      (persistent!
+       (reduce (fn [handles bucket]
+                 (cancelled! cancellation)
+                 (let [handle (t/activebucket-triple-handle bucket)]
+                   (if (and (seq (t/activebucket-positions bucket))
+                            (native-row-matches-handles?
+                             expected
+                             (nth (t/termstore-triples root) (quot handle 2))))
+                     (conj! handles handle)
+                     handles)))
+               (transient [])
+               (t/termstore-active-buckets root))))))
 
 (defn- match-query-row [arguments row]
   (loop [position 0 bindings {}]
@@ -561,33 +666,24 @@
             (datalog/queryterm-value term)))
         arguments))
 
-(defn- unrestricted-triple-pattern? [{:keys [arguments head-arguments]}]
-  (let [variables (mapv datalog/queryterm-variable arguments)]
-    (and (= head-arguments arguments)
-         (every? some? variables)
-         (= 3 (count (set variables))))))
-
-(defn- one-triple-query-page-rows
-  [ordered-triples pattern cancellation]
-  (if (unrestricted-triple-pattern? pattern)
-    ordered-triples
-    (let [rows
-          (persistent!
-           (reduce (fn [acc row]
-                     (cancelled! cancellation)
+(defn- one-triple-query-rows [root pattern cancellation]
+  (let [rows
+        (persistent!
+         (reduce (fn [acc handle]
+                   (cancelled! cancellation)
+                   (let [proposition (native-resolve-handle root handle)
+                         row [(t/triple-slot0 proposition)
+                              (t/triple-slot1 proposition)
+                              (t/triple-slot2 proposition)]]
                      (if-let [bindings (match-query-row (:arguments pattern) row)]
                        (conj! acc (ground-query-row
                                    (:head-arguments pattern) bindings))
-                       acc))
-                   (transient #{})
-                   ordered-triples))]
-      (cancelled! cancellation)
-      (vec (sort-by query/row-key rows)))))
-
-(defn- snapshot-propositions! [co version]
-  (if (= version (current-version co))
-    (term-store/live-propositions (coord/coordinator-store co))
-    (:propositions (snapshot-image! co version))))
+                       acc)))
+                 (transient #{})
+                 (native-candidate-handles
+                  root (:arguments pattern) cancellation)))]
+    (cancelled! cancellation)
+    (vec (sort-by query/row-key rows))))
 
 (defn- term-sha256 [term]
   (let [out (ByteArrayOutputStream.)]
@@ -675,31 +771,28 @@
         page (t/rpcrequest-page request)
         cursor-value (some-> page t/rpc-page-request-cursor-value)
         cursor (when cursor-value (parse-query-cursor! cursor-value))
-        direct-pattern (when page (one-triple-page-pattern plan))
-        direct-page? (some? direct-pattern)
+        direct-pattern (one-triple-pattern plan)
+        direct? (some? direct-pattern)
         snapshot-data
         (locking (:lock @coordinator)
           (require-expected! @coordinator
                              (t/rpcrequest-expected-version request))
           (let [version (requested-snapshot-version!
-                         snapshot cursor (current-version @coordinator))]
-            (if direct-page?
-              {:version version
-               :rows (cached-query-page-rows version)
-               :propositions (when-not (cached-query-page-rows version)
-                               (snapshot-propositions! @coordinator version))}
-              (snapshot-image! @coordinator version))))
+                         snapshot cursor (current-version @coordinator))
+                data
+                (if direct?
+                  {:version version
+                   :store-root (or (when page (cached-query-page-root version))
+                                   (replayed-store-root! @coordinator version))}
+                  (snapshot-image! @coordinator version))]
+            (when (and direct? page)
+              (retain-query-page-root! version (:store-root data)))
+            data))
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
         control (datalog/query-control 10000000 timeout)]
-    (if direct-page?
-      (let [ordered-triples
-            (or (:rows snapshot-data)
-                (ordered-query-page-rows!
-                 (:version snapshot-data)
-                 (:propositions snapshot-data)
-                 cancellation))
-            rows (one-triple-query-page-rows
-                  ordered-triples direct-pattern cancellation)
+    (if direct?
+      (let [rows (one-triple-query-rows
+                  (:store-root snapshot-data) direct-pattern cancellation)
             paged (paged-query-result!
                    rows page query-digest (:version snapshot-data))]
         (cancelled! cancellation)

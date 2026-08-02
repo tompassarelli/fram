@@ -4,6 +4,7 @@
          '[clojure.string :as str]
          '[coord-daemon-wire :as wire]
          '[fram.kernel :as kernel]
+         '[fram.query :as query]
          '[fram.types :as t])
 
 (load-file "coord_daemon.clj")
@@ -302,9 +303,17 @@
                      (= (query-rows reference) pinned-rows)
                      (not-any? #(= ["new-value" 4] %) pinned-rows))))
 
-    (let [acquired (request! port space :rpc/lease-acquire
+    (let [subject (wire/rpc-query-variable! "subject")
+          value (wire/rpc-query-variable! "value")
+          values-plan (one-triple-plan
+                       "values-after-writes" [subject value]
+                       [subject (wire/rpc-query-constant! :value) value])
+          values-payload (wire/rpc-query-request! values-plan wire/query-current)
+          before-lease (request! port space :rpc/query values-payload)
+          acquired (request! port space :rpc/lease-acquire
                              (wire/rpc-lease-acquire! :resource "holder" 60000))
           [fence _] (fields (payload acquired) :lease/grant 2)
+          after-acquire (request! port space :rpc/query values-payload)
           checked (request! port space :rpc/lease-check fence)
           fenced-write (request!
                         port space :rpc/assert
@@ -319,6 +328,14 @@
                                         wire/rpc-subject-any fence))
           old-check (request! port space :rpc/lease-check fence)
           released (request! port space :rpc/lease-release next-fence)
+          projection-used (atom false)
+          direct-reads
+          (with-redefs [query/project-with-occurrences
+                        (fn [& _]
+                          (reset! projection-used true)
+                          (throw (ex-info "whole-corpus projection used" {})))]
+            {:query (request! port space :rpc/query values-payload)
+             :paged (paged-query-rows port space values-payload)})
           [valid _] (fields (payload checked) :lease/check 2)
           [old-valid _] (fields (payload old-check) :lease/check 2)
           [released?] (fields (payload released) :lease/released 1)]
@@ -326,7 +343,19 @@
               (and valid (not old-valid) released? (not= fence next-fence)))
       (check! "write fencing accepts the current epoch and rejects the stale one"
               (and (nil? (error-code fenced-write))
-                   (= :rpc/lease-fence-mismatch (error-code stale-fence)))))
+                   (= :rpc/lease-fence-mismatch (error-code stale-fence))))
+      (check! "one-triple query reads through lease acquisition"
+              (and (nil? (error-code before-lease))
+                   (nil? (error-code after-acquire))
+                   (= (query-rows before-lease) (query-rows after-acquire))))
+      (check! "one-triple query and page see the ordinary write after lease writes"
+              (let [direct-rows (query-rows (:query direct-reads))]
+                (and (nil? (error-code (:query direct-reads)))
+                     (nil? (get-in direct-reads [:paged :error]))
+                     (some #{["fenced" true]} direct-rows)
+                     (= direct-rows (get-in direct-reads [:paged :rows])))))
+      (check! "one-triple reads bypass the whole-corpus query projection"
+              (false? @projection-used)))
 
     (let [validated (request! port space :rpc/validate wire/rpc-unit)
           [valid violations] (fields (payload validated) :rpc/validation 2)]
