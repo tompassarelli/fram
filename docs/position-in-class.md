@@ -1,10 +1,10 @@
-# Competitive position
+# Position in the Datalog database class
 
-**Status:** assessment at v0.3.4 (`dd4aff2`, 2026-08-03). This is a
-positioning record, not a replacement for the guarantee contract. A feature is
+**Status:** assessment at v0.3.4 (`dd4aff2`, 2026-08-03). These are engineering notes situating Fram among immutable Datalog
+stores, not a replacement for the guarantee contract. A feature is
 only as strong as the gate or receipt cited below.
 
-## Where Fram matches the Datalog database class
+## Shared properties with the class
 
 Fram is in the Datomic/Datahike class for the following kernel and query
 properties:
@@ -36,7 +36,7 @@ results. The earlier capacity receipt remains historical context, not a
 substitute measurement for this evaluator
 ([`bench/in-class/results/2026-08-02-framrpc-main.md`](../bench/in-class/results/2026-08-02-framrpc-main.md)).
 
-## Fram-specific strengths
+## Properties specific to Fram
 
 - The fast Datalog path has a retained differential oracle, so generated
   programs must produce the same least fixpoint as the scan implementation
@@ -57,9 +57,8 @@ substitute measurement for this evaluator
 
 1. **Time-travel query surface.** The kernel and native query path already
    support logical `as-of`; the missing work is the complete, supported
-   time-travel surface. W24 design is in flight on North thread
-   `019fc229-b7a4-776f-b6ee-cbf8b0709a97`.
-2. **Full-text search.** W25 design is in flight on the same thread. Version
+   time-travel surface. A supported surface is in design.
+2. **Full-text search.** A design is in progress. Version
    zero is word-match, not a relevance engine.
 3. **Hash joins for large intermediates.** Defer this until measurements show
    that indexed nested joins, rather than another boundary, dominate.
@@ -91,8 +90,6 @@ from those projects.
 
 ## Sources and limits
 
-Current implementation and contract sources are linked inline. The release
-measurement and W24/W25 priority are additionally recorded in North thread
-`019fc229-b7a4-776f-b6ee-cbf8b0709a97`; `dd4aff2` is the v0.3.4 release commit.
+Current implementation and contract sources are linked inline. `dd4aff2` is the v0.3.4 release commit.
 No cross-engine benchmark, license compatibility decision, or claim of feature
 parity beyond the named properties is made here.
