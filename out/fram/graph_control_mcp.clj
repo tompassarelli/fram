@@ -7,6 +7,7 @@
             [coord-daemon-wire :as wire]
             [fram.code-commit-gate :as gate]
             [fram.code-reader :as code-reader]
+            [fram.program-inspection :as program]
             [fram.projection-lifecycle :as lifecycle]
             [fram.rt :as rt]
             [fram.types :as t])
@@ -287,21 +288,24 @@
                       (:outcome publication))
        :value (edit-response outcome publication)})))
 
+(def ^:private edit-tool
+  {:name tool-name
+   :description "Atomically replace the bodies of 2..32 definitions in one native module, sealed-check the candidate, and publish its checked projection."
+   :inputSchema
+   {:type "object"
+    :additionalProperties false
+    :properties
+    {:module {:type "string"}
+     :edits {:type "array" :minItems 2 :maxItems 32
+             :items {:type "object" :additionalProperties false
+                     :properties {:name {:type "string"}
+                                  :body {:type "string"
+                                         :description "Exactly one EDN datum."}}
+                     :required ["name" "body"]}}}
+    :required ["module" "edits"]}})
+
 (def ^:private tools
-  [{:name tool-name
-    :description "Atomically replace the bodies of 2..32 definitions in one native module, sealed-check the candidate, and publish its checked projection."
-    :inputSchema
-    {:type "object"
-     :additionalProperties false
-     :properties
-     {:module {:type "string"}
-      :edits {:type "array" :minItems 2 :maxItems 32
-              :items {:type "object" :additionalProperties false
-                      :properties {:name {:type "string"}
-                                   :body {:type "string"
-                                          :description "Exactly one EDN datum."}}
-                      :required ["name" "body"]}}}
-     :required ["module" "edits"]}}])
+  (conj (vec program/tool-descriptors) edit-tool))
 
 (defn- reply! [id result]
   (println (json/generate-string {:jsonrpc "2.0" :id id :result result}))
@@ -315,8 +319,15 @@
 
 (defn- tool-result [context tool arguments]
   (try
-    (if (= tool-name tool)
+    (cond
+      (program/program-tool? tool)
+      {:isError false
+       :value (program/invoke-path! (:program-corpus context) tool arguments)}
+
+      (= tool-name tool)
       (edit-module! context arguments)
+
+      :else
       {:isError true :value {:type "unknown-tool"
                              :message (str "unknown tool: " tool)}})
     (catch Throwable error
@@ -333,7 +344,7 @@
         (reply! id {:protocolVersion "2024-11-05"
                     :capabilities {:tools {}}
                     :serverInfo {:name server-name :version "1"}
-                    :instructions "Sealed native graph control. Use multi-set-body for atomic checked edits."})
+                    :instructions "Sealed graph session. Use the named program reads before multi-set-body; use text for literal search and rendered bodies."})
 
         "tools/list" (reply! id {:tools tools})
 
@@ -349,10 +360,14 @@
 
 (defn- service-context! []
   (let [preflight (preflight!)
-        code-log (required-env! "FRAM_CODE_LOG")]
+        code-log (required-env! "FRAM_CODE_LOG")
+        checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
+                                       "checkout root")]
     {:preflight preflight
-     :checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
-                                     "checkout root")
+     :checkout-root checkout-root
+     :program-corpus (canonical-path!
+                      (str (io/file checkout-root ".fram" "corpus.facts"))
+                      "program corpus")
      :port (port!)
      :space (space-id! code-log)
      :beagle (required-env! "FRAM_BEAGLE")}))

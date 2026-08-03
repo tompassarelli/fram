@@ -91,6 +91,7 @@
 (def source-root (io/file scratch "src"))
 (def source-path (io/file source-root "fixture.bclj"))
 (def code-log (str (io/file scratch ".fram/code.log")))
+(def program-corpus (str (io/file scratch ".fram/corpus.facts")))
 (def space "graph-control-e2e")
 (def port (free-port))
 (def beagle
@@ -116,6 +117,19 @@
             "--out" code-log "--space-id" space
             :env (assoc (into {} (System/getenv)) "FRAM_BEAGLE" beagle)
             :dir checkout-root))
+(spit program-corpus
+      (str "@file src/fixture.bclj\n"
+           "[1 \"form-kind\" \"defn\"]\n"
+           "[1 \"name\" \"alpha\"]\n"
+           "[2 \"form-kind\" \"seq\"]\n"
+           "[3 \"form-kind\" \"call\"]\n"
+           "[3 \"calls\" \"beta\"]\n"
+           "[2 \"child\" 3]\n"
+           "[1 \"child\" 2]\n"
+           "[10 \"form-kind\" \"defn\"]\n"
+           "[10 \"name\" \"beta\"]\n"
+           "[11 \"form-kind\" \"seq\"]\n"
+           "[10 \"child\" 11]\n"))
 (def server
   (when (zero? (:exit ingest))
     (future (coord-daemon/serve! port code-log space :active))))
@@ -161,13 +175,35 @@
                runtime launch-env
                [{:jsonrpc "2.0" :id 1 :method "tools/list"}
                 {:jsonrpc "2.0" :id 2 :method "tools/call"
+                 :params {:name "read_definition"
+                          :arguments {:semanticIdentity
+                                      "src/fixture.bclj#10"}}}
+                {:jsonrpc "2.0" :id 3 :method "tools/call"
+                 :params
+                 {:name "inspect_program"
+                  :arguments
+                  {:requests
+                   [{:tag "definition" :request "read_definition"
+                     :arguments {:semanticIdentity "src/fixture.bclj#10"}}
+                    {:tag "references" :request "find_references"
+                     :arguments {:semanticIdentity "src/fixture.bclj#10"
+                                 :direction "inbound"}}
+                    {:tag "impact" :request "trace_impact"
+                     :arguments {:semanticIdentity "src/fixture.bclj#10"
+                                 :direction "inbound"}}
+                    {:tag "history" :request "occurrence_history"
+                     :arguments {:semanticIdentity
+                                 "src/fixture.bclj#10"}}]}}}
+                {:jsonrpc "2.0" :id 4 :method "tools/call"
                  :params {:name "multi-set-body"
                           :arguments
                           {:module "fixture"
                            :edits [{:name "alpha" :body "42"}
                                    {:name "beta" :body "(+ 40 2)"}]}}}])
           replies (parse-replies (:out run))
-          result (call-value (get replies 2))
+          read-result (call-value (get replies 2))
+          batch-result (call-value (get replies 3))
+          result (call-value (get replies 4))
           after-snapshot (code-reader/read-module-snapshot!
                           port space checkout-root "fixture")
           after (gate/transformer-snapshot after-snapshot)
@@ -178,11 +214,25 @@
           rendered (code-reader/render-module! beagle after-snapshot)]
       (when-not (zero? (:exit run))
         (binding [*out* *err*] (println (:err run))))
-      (check! "sealed MCP serves only the multi-set-body graph-control tool"
-              (= ["multi-set-body"]
+      (check! "sealed session MCP serves the five inspection tools plus graph control"
+              (= ["read_definition" "find_references" "trace_impact"
+                  "occurrence_history" "inspect_program" "multi-set-body"]
                  (mapv :name (get-in replies [1 :result :tools]))))
+      (check! "named read carries exact identity, structural anchor, and version"
+              (and (= "src/fixture.bclj#10"
+                      (:semanticIdentity read-result))
+                   (= [{:file "src/fixture.bclj" :nodeId 10
+                        :kind "definition"}]
+                      (:sourceAnchors read-result))
+                   (str/starts-with? (:logicalVersion read-result) "sha256:")))
+      (check! "MCP batch preserves ordered tags and one logical snapshot"
+              (and (= [["definition" "ok"] ["references" "ok"]
+                       ["impact" "ok"] ["history" "ok"]]
+                      (mapv (juxt :tag :outcome) (:children batch-result)))
+                   (= #{(:logicalVersion batch-result)}
+                      (set (map :logicalVersion (:children batch-result))))))
       (check! "multi-set-body completes commit and checked publication"
-              (and (not (get-in replies [2 :result :isError]))
+              (and (not (get-in replies [4 :result :isError]))
                    (= "committed-projection-published" (:outcome result))))
       (check! "committed triples match the MCP candidate delta"
               (and (= candidate-asserts actual-asserts)
@@ -199,13 +249,13 @@
           bytes-before (java.nio.file.Files/readAllBytes (.toPath source-path))
           run (run-control
                runtime launch-env
-               [{:jsonrpc "2.0" :id 3 :method "tools/call"
+               [{:jsonrpc "2.0" :id 5 :method "tools/call"
                  :params {:name "multi-set-body"
                           :arguments
                           {:module "fixture"
                            :edits [{:name "alpha" :body "\"bad\""}
                                    {:name "beta" :body "\"worse\""}]}}}])
-          reply (get (parse-replies (:out run)) 3)
+          reply (get (parse-replies (:out run)) 5)
           result (call-value reply)
           version-after (version! port space)
           facts-after (:facts

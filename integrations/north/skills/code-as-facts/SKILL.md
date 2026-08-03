@@ -119,17 +119,37 @@ Current entry points (`bb fram:bin/fram-primer` prints the live cheatsheet):
 
 ```sh
 # turn the stack on for a project dir — also writes <dir>/.fram/corpus.facts
-fram:bin/fram-code-on <dir>
+fram:bin/fram-code-on <dir> --space-id <id>
 # who-calls + transitive blast radius over that corpus (JSON: defns/edges/blast)
 bb -cp fram:out fram:out/callgraph.clj <dir>/.fram/corpus.facts
 # no corpus, straight off lossless AST EDN: the engine resolver's callgraph mode
 bb -cp fram:out fram:out/resolve.clj callgraph <file.edn> …
 ```
 
-Ad-hoc queries against a live instance go through the Fram MCP data edge
-(`fram:bin/fram-mcp`), which advertises exactly `tell` / `retract` / `show` /
-`ask` / `validate`; `ask` is the validated typed recursive query. Graph
-authoring is NOT on that edge — it is the sealed control surface behind §1's verbs.
+In a graph session, use the named program reads on the sealed session MCP before
+inventing Datalog:
+
+1. `read_definition {name, file}` resolves the natural selector to one exact
+   `semanticIdentity` and structural source anchor at a pinned logical version.
+2. `find_references {semanticIdentity, direction}` returns direct resolved
+   inbound/outbound call sites for that identity.
+3. `trace_impact {semanticIdentity, direction, maxDepth}` follows the transitive
+   blast path with a depth on every result.
+
+Use `occurrence_history` for the definition and its resolved reference sites in
+snapshot source order. It is not cross-version edit history. When the identities
+are already known, `inspect_program` batches an ordered vector of these requests;
+every child keeps its tag and outcome and runs against the same logical version.
+
+This is a strict division of labor, not a claim that graphs replace source text:
+use text search for literal strings, and read the rendered source for exact bodies,
+comments, and local formatting. Use the named graph reads for identity, scope,
+relationships, and transitive impact.
+
+The public Fram MCP data edge (`fram:bin/fram-mcp`) remains exactly `tell` /
+`retract` / `show` / `ask` / `validate`; `ask` is available for genuinely ad-hoc
+typed recursive queries. Program inspection and graph authoring are session tools,
+not additions to that closed public catalog.
 
 Honest scope:
 

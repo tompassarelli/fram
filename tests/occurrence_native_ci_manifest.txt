@@ -24,6 +24,7 @@ run-bb	current-model	tests/log_split_readiness_dead_child_test.clj	-
 run-bb	current-model	tests/mcp_test.clj	-
 run-bb	current-model	tests/model_generative_test.clj	-
 run-bb	current-model	tests/profile_lint_test.clj	-
+run-bb	current-model	tests/program_inspection_test.clj	-
 run-bb	current-model	tests/native_rpc_boundary_ratchet_test.clj	-
 run-bb	current-model	tests/native_rpc_daemon_test.clj	-
 run-bb	current-model	tests/provider_host_test.clj	-
