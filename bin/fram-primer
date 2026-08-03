@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 ;; fram-primer — GENERATED reference for fram, from fram's own source. Two modes:
 ;;
-;;   bb bin/fram-primer                  # human cheatsheet (fact-authoring primer)
+;;   bb bin/fram-primer                  # human cheatsheet (v0.3 store-authoring primer)
 ;;   bb bin/fram-primer --beagle-catalog # the typed fram API as a beagle stdlib catalog
 ;;
 ;; Both EXTRACT from src/fram/*.bclj so they never go stale (the beagle-authoring
@@ -88,9 +88,11 @@
       (println (str "  " sig (when doc (str "\n      ; " doc)))))))
 
 (defn emit-cheatsheet []
-  (println "# Fram fact-authoring primer (GENERATED from src/fram/*.bclj — `bb bin/fram-primer`)")
-  (println "\nThe program/app/work IS a fact graph (subject predicate object). You DON'T mutate —")
-  (println "you assert; an update is a SUPERSEDING fact (old value stays, marked not-live);")
+  (println "# Fram v0.3 store-authoring primer (GENERATED from src/fram/*.bclj — `bb bin/fram-primer`)")
+  (println "\nThe program/app/work IS a graph of triples. You DON'T mutate —")
+  (println "you assert; an update is a SUPERSEDING triple (old value stays, marked not-live);")
+  (println "('fact' below is this deployed v0.3 API's word for a stored triple — fact!, by-lp,")
+  (println " fact-of. Current kernel ontology is Triple/proposition/occurrence: docs/ontology.md.)")
   (println "you reason with Datalog (relational/recursive), not imperative walks. Rent from bb:")
   (println "  bb -cp \"$FRAM_OUT\" your-script.clj      # FRAM_OUT defaults to ~/code/fram/out")
   (println "  (require '[fram.store :as c] '[fram.datalog :as d] '[fram.schema :as s])")

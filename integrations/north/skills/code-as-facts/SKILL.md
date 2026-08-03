@@ -15,6 +15,10 @@ description: >-
 
 # Code as facts — the graph is both the editing surface and the query surface
 
+"Facts" here is the view-level sense (fram:docs/ontology.md): the selected live
+triples constitute the current program. The kernel stores recursive Triples and
+assertion occurrences; nothing stored is a `Fact` type.
+
 One substrate, two faculties: §0–§3 are the **write** side (authoring a
 graph-upstream file), §4 is the **read** side (relational code-intelligence over
 a Beagle tree). Either one may be why you are here.

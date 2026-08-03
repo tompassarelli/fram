@@ -2,20 +2,22 @@
 name: fram-modeling
 description: >-
   Use when BUILDING a program, app, or tool on the Fram engine — modeling
-  data/logic as Triples (subject predicate object) + Datalog instead of
-  SQL/records/imperative state. Covers assert vs supersede (update), live-view
-  queries, and Datalog derivation. Formerly named fact-modeling. NOT for
-  one-off fact reads — just rent the store and call by-lp.
+  data/logic as recursive Triples + Datalog instead of SQL/records/imperative
+  state. Covers assert vs supersede (update), live-view queries, and Datalog
+  derivation. Formerly named fact-modeling. NOT for one-off store reads —
+  just rent the store and call by-lp.
 ---
 
-# Fram modeling — building on the Fram engine (facts + Datalog)
+# Fram modeling — building on the Fram engine (triples + Datalog)
 
-The thesis (ADR 0001, archived in `fram:docs/archive/`): **the program/app/work IS a fact
-graph.** Data, logic, and structure live as facts, so each is *reasoned* (Datalog:
-blast radius, transitive closure) and *repaired* (graph edits) the same uniform way.
-Text and SQL are projections, never the truth. For **greenfield**, facts are the
-backend — not SQL (persisting to SQL then rebuilding a graph to ask relational
-questions reintroduces the reconstruction tax the engine exists to kill).
+The thesis (ADR 0001, archived in `fram:docs/archive/`): **the program/app/work IS a
+graph of triples.** Data, logic, and structure live as triples, so each is *reasoned*
+(Datalog: blast radius, transitive closure) and *repaired* (graph edits) the same
+uniform way. Text and SQL are projections, never the truth. For **greenfield**, the
+triple store is the backend — not SQL (persisting to SQL then rebuilding a graph to
+ask relational questions reintroduces the reconstruction tax the engine exists to
+kill). The deployed v0.3 store API says "fact" for a stored triple (`fact!`,
+`by-lp`, `fact-of`) — API vocabulary, not kernel ontology (`fram:docs/ontology.md`).
 
 ## 0. The surface is GENERATED — never trust a static list
 
