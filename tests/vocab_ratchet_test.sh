@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # vocab_ratchet_test.sh — a SUBSET RATCHET on "claim" residue.
 #
-# Fram's substrate atom is a FACT (README.md "Terminology — it's a *fact*"). The
-# claims->facts rename is finished in the substrate vocabulary; what remains is
-# plain-English "claim" (an assertion), dated historical records, and license
-# text. This gate does not forbid the word — it forbids REGROWTH: every file may
+# The substrate vocabulary is Triple/proposition/occurrence; "fact" is a
+# view-level status (docs/ontology.md). What remains of "claim" is plain-English
+# use (an assertion), dated historical records, and license text. This gate does not forbid the word — it forbids REGROWTH: every file may
 # carry at most as many `claim` lines as the baseline records, and a file absent
 # from the baseline must carry none. Decreases always pass, so deleting residue
 # never requires touching the baseline; only `--regen` (a deliberate act) may
@@ -84,8 +83,8 @@ done < <(scan)
 
 if [ "$offenders" -gt 0 ]; then
   echo "vocab ratchet: FAIL — $offenders file(s) grew 'claim' residue." >&2
-  echo "  Fram's substrate atom is a FACT: use fact/facts for the stored triple," >&2
-  echo "  the store, and tool/file/API names. Plain-English 'claim' (an assertion)" >&2
+  echo "  The substrate vocabulary is Triple/proposition/occurrence; 'fact' is a" >&2
+  echo "  view-level status (docs/ontology.md). Plain-English 'claim' (an assertion)" >&2
   echo "  is fine — if that is what you added, run --regen and say so in the commit." >&2
   exit 1
 fi

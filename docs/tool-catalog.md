@@ -44,7 +44,7 @@ plan and sent over FRAMRPC; it is not a string query language.
     {
       "head": {"rel": "titles", "args": [{"var": "item"}, {"var": "title"}]},
       "body": [
-        {"rel": "triple", "args": [{"var": "item"}, ":document/title", {"var": "title"}]}
+        {"rel": "triple", "args": [{"var": "item"}, ":title", {"var": "title"}]}
       ]
     }
   ]

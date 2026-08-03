@@ -76,7 +76,8 @@ export FRAM_SPACE_ID=fram-demo
 export FRAM_LOG=/tmp/fram-demo.framlog
 bin/fram-up
 bin/fram version
-bin/fram tell Alice :contact/email alice@example.com
+bin/fram tell :email :grouped-under :contact
+bin/fram tell Alice :email alice@example.com
 bin/fram occurrences
 ```
 

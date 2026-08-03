@@ -6,6 +6,10 @@ re-derive it. The executable side of every statement here lives in
 [`guarantees.md`](guarantees.md); naming decisions and their rejected
 alternatives live in [`naming.md`](naming.md).
 
+**One-definition rule:** vocabulary and the canonical examples are defined
+here, once. Every other current document links here instead of restating
+them — a document that restates is a document that drifts.
+
 ## The kernel holds exactly one hard opinion
 
 Three slots. Each slot holds any Term — a typed Atom from a closed set, or
@@ -106,6 +110,33 @@ opaque strings into slot2, and compound subject spellings that pack a kind
 and an id into one atom. The normalized form is always the same move — the
 compound decomposes into assertions about a first-class term, exactly as a
 coordinate decomposes into its named relations.
+
+The normalized form, complete enough to copy:
+
+```text
+(:email, :grouped-under, :contact)       ; the grouping the slash smuggled, now stored
+("Alice", :email, "alice@example.com")   ; the proposition — still one triple
+```
+
+Two rules ride along. *Spelling is a comment.* Once the grouping is
+asserted, `:email` is an opaque identifier; keyword versus string is a type
+choice with no semantic weight, and an identifier whose spelling implies
+structure the store does not assert is the defect — never the punctuation
+itself. *Normalization never demands an intermediate entity.* The
+proposition stays one triple, because annotation targets the proposition
+directly — a Triple is a Term:
+
+```text
+(("Alice", :email, "alice@example.com"), :verified-by, "mail-checker-1")
+```
+
+and who/when already live on the assertion occurrence. Reifying the value
+into an entity of its own — `("Alice", :has, email-1)` plus
+`(email-1, :value, ...)` — is the workaround stores without recursion need
+for statement metadata; here it only dilutes the middle slot into a generic
+verb and triples the join count. Give a value its own Term when the domain
+gives it identity (a mailbox two people share), never to satisfy
+normalization.
 
 The regress this implies ends deliberately, not accidentally: the engine's
 own occurrence vocabulary is *primitive* — given, minimal, documented, and

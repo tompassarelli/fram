@@ -85,7 +85,7 @@ This derives every email relation from the live Triple projection:
  [{:head {:rel "emails"
           :args [{:var "who"} {:var "email"}]}
    :body [{:rel "triple"
-           :args [{:var "who"} :contact/email {:var "email"}]}]}]}
+           :args [{:var "who"} :email {:var "email"}]}]}]}
 ```
 
 `:find` names a derived relation. `:rules` supplies one stratum. A rule has one

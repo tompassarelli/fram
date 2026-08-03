@@ -18,13 +18,17 @@ score. If an explicit hub describes the domain honestly, model the hub first.
 ## 2. Represent a genuine hint as a proposition
 
 Some affinity is not co-reference. In that case, make the suggested relation an
-ordinary proposition and attach provenance to its assertion occurrence:
+ordinary proposition and attach provenance to its assertion occurrence. The
+hint vocabulary is declared like any other — grouping asserted, never spelled
+(see the normalization principle in [`ontology.md`](ontology.md)):
 
 ```text
-hint := (left, :semantic/similar-to, right)
+(:similar-to, :grouped-under, :semantic-hints)
+
+hint := (left, :similar-to, right)
 (op, :kernel/asserts, hint)
-(op, :semantic/score, 0.86)
-(op, :semantic/model, model-run)
+(op, :similarity-score, 0.86)
+(op, :scored-by, model-run)
 ```
 
 The score and model run describe one assertion occurrence, not all equal

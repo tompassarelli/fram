@@ -111,7 +111,10 @@ for pattern in \
   'accepted as an alias for `fact`' \
   'append-only `subject predicate object`' \
   'engine-terminated.*mTLS' \
-  'coordination\.log'; do
+  'coordination\.log' \
+  ':contact/email' \
+  ':document/title' \
+  ':semantic/'; do
   if rg -ni "$pattern" "${scan_docs[@]}"; then
     fail "superseded ontology phrase matched: $pattern"
   fi
@@ -140,12 +143,12 @@ grep -Fq '**Current scope:** historical experiment and sealed-consumer vocabular
   fail 'naming ledger leaves Codegraph vocabulary unscoped'
 
 mapfile -t readme_launchers < <(sed -n 's/^\$ \(bin\/[^ ]*\).*/\1/p' README.md)
-expected_launchers=(bin/fram-up bin/fram bin/fram bin/fram bin/fram bin/fram)
+expected_launchers=(bin/fram-up bin/fram bin/fram bin/fram bin/fram bin/fram bin/fram)
 [[ "${readme_launchers[*]}" == "${expected_launchers[*]}" ]] ||
   fail "README launchers drifted: ${readme_launchers[*]}"
 
 mapfile -t readme_verbs < <(sed -n 's/^\$ bin\/fram \([^ ]*\).*/\1/p' README.md)
-expected_verbs=(tell show query occurrences validate)
+expected_verbs=(tell tell show query occurrences validate)
 [[ "${readme_verbs[*]}" == "${expected_verbs[*]}" ]] ||
   fail "README native commands drifted: ${readme_verbs[*]}"
 

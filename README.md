@@ -22,13 +22,19 @@ A proposition is one Triple. Its place in history is another Triple, not a
 fourth field attached to the proposition:
 
 ```text
-tx         := ("demo-space", :kernel/tx-sequence, 1)
-occurrence := (tx, :kernel/op-ordinal, 0)
-proposition := ("Alice", :contact/email, "alice@example.com")
+vocabulary  := (:email, :grouped-under, :contact)
+proposition := ("Alice", :email, "alice@example.com")
+tx          := ("demo-space", :kernel/tx-sequence, 1)
+occurrence  := (tx, :kernel/op-ordinal, 0)
 
 (occurrence, :kernel/asserts, proposition)
 (tx, :kernel/recorded-at, Instant(...))
 ```
+
+Domain vocabulary earns its structure by assertion: the grouping a
+namespaced spelling would smuggle into a slash is stored as an ordinary
+Triple instead, where the query engine can join on it. The canonical
+normalized example lives in the [ontology](docs/ontology.md).
 
 Equal propositions can have distinct assertion occurrences. Retractions and
 withdrawals are ordinary Triples too. Logical transaction order is intrinsic to
@@ -46,7 +52,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Architecture](docs/architecture.md) — semantic kernel, physical rows, log, coordinator, and projections.
 - [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
 - [Concurrency and writes](docs/concurrency-and-writes.md) — one writer, exact OCC, occurrence receipts, and replay.
-- [Ontology](docs/ontology.md) — what the stored things are: triple, proposition, occurrence, and where "fact" is honest.
+- [Ontology](docs/ontology.md) — what the stored things are: triple, proposition, occurrence, the one canonical normalized example, and where "fact" is honest.
 - [Guarantees](docs/guarantees.md) — every guarantee, its gate, and its status; failures land on a named line.
 - [Workload contract](docs/workload-contract.md) — the reference workload envelope and the client obligations it assumes.
 - [Coordinator wire](docs/coordinator-bind-and-wire.md) — binary FRAMRPC v1 and the private-network boundary.
@@ -74,9 +80,10 @@ $ git clone https://github.com/Autonymy/fram && cd fram
 $ export FRAM_SPACE_ID=fram-demo
 $ export FRAM_LOG=/tmp/fram-demo.framlog
 $ bin/fram-up
-$ bin/fram tell Alice :contact/email alice@example.com
+$ bin/fram tell :email :grouped-under :contact
+$ bin/fram tell Alice :email alice@example.com
 $ bin/fram show Alice
-$ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :contact/email {:var "email"}]}]}]}'
+$ bin/fram query '{:find "emails" :rules [{:head {:rel "emails" :args [{:var "who"} {:var "email"}]} :body [{:rel "triple" :args [{:var "who"} :email {:var "email"}]}]}]}'
 $ bin/fram occurrences
 $ bin/fram validate
 ```

@@ -146,11 +146,14 @@ by kernel position. A transaction coordinate such as
 `(space, kernel/tx-sequence, 1842)` is therefore a Triple, not a transaction primitive.
 A Triple can occupy any slot of another Triple.
 
-Atoms honestly terminate the recursion. Namespaced atoms such as `plangrep/page` are
-grounding vocabulary; `/` carries no kernel semantics and does not privilege the
-middle slot. Use an atom when a value is genuinely atomic. When its components need to
-be queried or described, represent that structure with more Triples rather than hiding
-it in an opaque compound string.
+Atoms honestly terminate the recursion. `/` carries no kernel semantics and does not
+privilege the middle slot. (**Reconciled 2026-08-03:** the original entry offered
+`plangrep/page` as acceptable "grounding vocabulary"; the normalization principle in
+[`ontology.md`](ontology.md) supersedes that clause — a grouping that a namespaced
+spelling implies must be asserted as a Triple, or the spelling is hiding a join. The
+rest of this paragraph already said so.) Use an atom when a value is genuinely atomic.
+When its components need to be queried or described, represent that structure with
+more Triples rather than hiding it in an opaque compound string.
 
 Physical implementations may use tagged term handles, atom tables, and `TripleRow`
 records for finite storage. Those are private representations of the one recursive
@@ -201,6 +204,41 @@ The rejected bench:
 The discipline this leaves behind: a skill is named for the **tool** it teaches
 (`fram-modeling`, `beagle-authoring`) or for the **bet** an agent is opting into
 (`code-as-facts`) — never for the layer-of-the-month word for the stored thing.
+
+## the normalized example — settled 2026-08-03
+
+The thing: one canonical worked example of normalized vocabulary, defined in
+[`ontology.md`](ontology.md) and linked from everywhere else. The contamination
+vector it closes: `:contact/email` entered the README and rationale as a positive
+example on 2026-08-01 (5c4499e); the normalization principle landed 2026-08-02
+(1853c72) without repairing the earlier examples; and every reader — human and
+model — copied the concrete positive example over the abstract negative rule.
+A prohibition without a copyable replacement loses to the prior every time; this
+is the same law as the rule at the top of this file, applied to examples instead
+of names.
+
+The ruling: current documents carry exactly one canonical normalized example.
+Domain vocabulary in examples is unnamespaced (`:email`), and its grouping is
+asserted — `(:email, :grouped-under, :contact)` — never spelled. The engine's
+`:kernel/*` occurrence vocabulary stays primitive-exempt, as the ontology's
+regress rule already records. Closed wire tags (`:rpc/*`) are protocol syntax,
+not domain vocabulary. Physical rotation names (`SPO`/`POS`/`OSP` tries) are
+private storage mechanics in the same category as `TripleRow`, never kernel
+vocabulary.
+
+The rejected bench:
+
+- **`:contact-email`** (re-spell without the slash) — hides the same structure
+  behind different punctuation; the defect was never the `/`, it was the
+  grouping that existed only in spelling.
+- **value reification** (`("Alice", :has, email-1)` plus `(email-1, :value, ...)`)
+  — the workaround stores without recursion need for statement metadata. Fram's
+  recursion annotates the proposition directly and the occurrence already
+  carries who/when; the intermediate entity only dilutes the middle slot into a
+  generic verb and triples the join count. Give a value its own Term when the
+  domain gives it identity, never to satisfy normalization.
+- **prohibition-only documentation** — the state this entry repairs; a negative
+  rule with no positive example is a bug with a delay on it.
 
 ## Appending an entry
 

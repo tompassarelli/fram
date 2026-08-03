@@ -2,7 +2,9 @@
 
 **Status:** Current, load-bearing rationale. The executable model is
 [`src/fram/types.bclj`](../src/fram/types.bclj) and
-[`tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj).
+[`tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj). Vocabulary
+and the canonical normalized example are defined once in
+[`ontology.md`](ontology.md); this document defers to it.
 
 ## Verdict
 
@@ -28,7 +30,7 @@ separate.
 This Triple is proposition content:
 
 ```text
-("Alice", :contact/email, "alice@example.com")
+("Alice", :email, "alice@example.com")
 ```
 
 An assertion of it is located by ordinary Triples:
@@ -38,7 +40,7 @@ tx := ("people", :kernel/tx-sequence, 1842)
 op := (tx, :kernel/op-ordinal, 7)
 
 (op, :kernel/asserts,
-     ("Alice", :contact/email, "alice@example.com"))
+     ("Alice", :email, "alice@example.com"))
 ```
 
 The same proposition can be asserted again at another coordinate. A retraction
