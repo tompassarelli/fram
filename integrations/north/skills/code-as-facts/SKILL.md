@@ -41,12 +41,10 @@ A file is graph-upstream iff EITHER:
   landing just after the regenerated `(define-target clj)` header).
 
 If neither holds, this skill does NOT apply — use the **beagle-authoring** skill
-and ordinary Edit/Write. (Adoption of a **brownfield/text-upstream** file is
-per-file and opt-in — there is no blanket "all .bclj" rule; **greenfield** new
-Beagle work defaults graph-native at inception per
-`~/.agents/AGENTS.md` "New code", so opt-in language
-does not apply there. The honest line: code *can* be graph-upstream — see
-`beagle:bin/test/code-as-facts/README.md` "Capability vs adoption".)
+and ordinary Edit/Write. Adoption is explicit and per-file for both new and
+existing source; there is no blanket "all .bclj" rule. The honest line: code
+*can* be graph-upstream — see `beagle:bin/test/code-as-facts/README.md`
+"Capability vs adoption".
 
 ## 1. The graph-edit verbs (use these instead of Edit/Write)
 

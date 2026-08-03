@@ -31,7 +31,13 @@
 
 (require clojure.string :as str)
 
-(defrecord Row [name :- String file :- String graph-p :- Double incumbent-p :- Double gn :- Int in :- Int])
+(defrecord Row
+  [name :- String
+   file :- String
+   graph-p :- Double
+   incumbent-p :- Double
+   gn :- Int
+   in :- Int])
 
 ;; ---- fact parsing + the scope-correct call graph: RENTED from callgraph.clj ----
 ;; parse-corpus / derive-block / build-graph live there ONCE (the shared Layer-2
@@ -40,16 +46,22 @@
 ;; boundary here. Below: the in-process closure that is the truth oracle for the
 ;; Fram Datalog closure.
 (defn rev-adj [edges :- (Vec (Vec (Vec Any)))] :- (Map (Vec Any) (Set (Vec Any)))
-  (reduce (fn [m :- (Map (Vec Any) (Set (Vec Any))) e :- (Vec (Vec Any))] :- (Map (Vec Any) (Set (Vec Any))) (let [a (nth e 0) b (nth e 1)] (assoc m b (conj (get m b #{}) a))))
+  (reduce (fn
+            [m :- (Map (Vec Any) (Set (Vec Any)))
+             e :- (Vec (Vec Any))] :- (Map (Vec Any) (Set (Vec Any))) (let [a (nth e 0) b (nth e 1)] (assoc m b (conj (get m b #{}) a))))
     {}
     edges))
 
 (defn fwd-adj [edges :- (Vec (Vec (Vec Any)))] :- (Map (Vec Any) (Set (Vec Any)))
-  (reduce (fn [m :- (Map (Vec Any) (Set (Vec Any))) e :- (Vec (Vec Any))] :- (Map (Vec Any) (Set (Vec Any))) (let [a (nth e 0) b (nth e 1)] (assoc m a (conj (get m a #{}) b))))
+  (reduce (fn
+            [m :- (Map (Vec Any) (Set (Vec Any)))
+             e :- (Vec (Vec Any))] :- (Map (Vec Any) (Set (Vec Any))) (let [a (nth e 0) b (nth e 1)] (assoc m a (conj (get m a #{}) b))))
     {}
     edges))
 
-(defn transitive [adj :- (Map (Vec Any) (Set (Vec Any))) n :- (Vec Any)] :- (Set (Vec Any))
+(defn transitive
+  [adj :- (Map (Vec Any) (Set (Vec Any)))
+   n :- (Vec Any)] :- (Set (Vec Any))
   (loop [seen :- (Set (Vec Any)) #{} frontier :- (Vec (Vec Any)) (vec (get adj n #{}))]
     (if (empty? frontier)
       seen
@@ -60,14 +72,22 @@
 
 ;; ---- stats helpers ----------------------------------------------------------
 (defn avg-ranks [v :- (Vec Double)] :- (Vec Double)
-  (let [idx (vec (map-indexed (fn [i :- Int x :- Double] :- (Vec Any) [i x]) v)) sorted (vec (sort-by (fn [p :- (Vec Any)] :- Any (nth p 1)) idx)) groups (vec (partition-by (fn [p :- (Vec Any)] :- Any (nth p 1)) sorted)) acc (loop [gs :- (Vec (Vec (Vec Any))) groups start :- Int 1 acc :- (Map Any Double) {}] (if (empty? gs) acc (let [g (vec (nth gs 0)) n (count g) r (/ (+ (* 2.0 start) (dec n)) 2.0)] (recur (vec (rest gs)) (+ start n) (reduce (fn [a :- (Map Any Double) p :- (Vec Any)] :- (Map Any Double) (assoc a (nth p 0) r)) acc g)))))]
+  (let [idx (vec (map-indexed (fn
+                                [i :- Int
+                                 x :- Double] :- (Vec Any) [i x]) v)) sorted (vec (sort-by (fn [p :- (Vec Any)] :- Any (nth p 1)) idx)) groups (vec (partition-by (fn [p :- (Vec Any)] :- Any (nth p 1)) sorted)) acc (loop [gs :- (Vec (Vec (Vec Any))) groups start :- Int 1 acc :- (Map Any Double) {}] (if (empty? gs) acc (let [g (vec (nth gs 0)) n (count g) r (/ (+ (* 2.0 start) (dec n)) 2.0)] (recur (vec (rest gs)) (+ start n) (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                      [a :- (Map Any Double)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                       p :- (Vec Any)] :- (Map Any Double) (assoc a (nth p 0) r)) acc g)))))]
     (mapv (fn [i :- Int] :- Double (get acc i 0.0)) (vec (range (count v))))))
 
-(defn pearson [xs :- (Vec Double) ys :- (Vec Double)] :- Double
+(defn pearson
+  [xs :- (Vec Double)
+   ys :- (Vec Double)] :- Double
   (let [n (count xs) mx (/ (reduce + xs) n) my (/ (reduce + ys) n) cov (reduce + (mapv (fn [i :- Int] :- Double (* (- (nth xs i) mx) (- (nth ys i) my))) (vec (range n)))) sx (Math/sqrt (reduce + (mapv (fn [x :- Double] :- Double (let [dd (- x mx)] (* dd dd))) xs))) sy (Math/sqrt (reduce + (mapv (fn [y :- Double] :- Double (let [dd (- y my)] (* dd dd))) ys)))]
     (if (or (zero? sx) (zero? sy)) 0.0 (/ cov (* sx sy)))))
 
-(defn spearman [xs :- (Vec Double) ys :- (Vec Double)] :- Double
+(defn spearman
+  [xs :- (Vec Double)
+   ys :- (Vec Double)] :- Double
   (pearson (avg-ranks xs) (avg-ranks ys)))
 
 (defn fmt3 [x :- Double] :- String (format "%.3f" (double x)))
@@ -78,17 +98,27 @@
 (defn defn-keys-of [defns :- (Vec (Map Keyword Any))] :- (Vec (Vec Any))
   (mapv (fn [dd :- (Map Keyword Any)] :- (Vec Any) (get dd :key)) defns))
 
-(defn count-adj [defn-keys :- (Vec (Vec Any)) adj :- (Map (Vec Any) (Set (Vec Any)))] :- (Map (Vec Any) Int)
-  (reduce (fn [m :- (Map (Vec Any) Int) k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (count (get adj k #{}))))
+(defn count-adj
+  [defn-keys :- (Vec (Vec Any))
+   adj :- (Map (Vec Any) (Set (Vec Any)))] :- (Map (Vec Any) Int)
+  (reduce (fn
+            [m :- (Map (Vec Any) Int)
+             k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (count (get adj k #{}))))
     {}
     defn-keys))
 
-(defn count-transitive [defn-keys :- (Vec (Vec Any)) adj :- (Map (Vec Any) (Set (Vec Any)))] :- (Map (Vec Any) Int)
-  (reduce (fn [m :- (Map (Vec Any) Int) k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (count (transitive adj k))))
+(defn count-transitive
+  [defn-keys :- (Vec (Vec Any))
+   adj :- (Map (Vec Any) (Set (Vec Any)))] :- (Map (Vec Any) Int)
+  (reduce (fn
+            [m :- (Map (Vec Any) Int)
+             k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (count (transitive adj k))))
     {}
     defn-keys))
 
-(defn name-of [defns :- (Vec (Map Keyword Any)) k :- (Vec Any)] :- String
+(defn name-of
+  [defns :- (Vec (Map Keyword Any))
+   k :- (Vec Any)] :- String
   (let [hits (filterv (fn [dd :- (Map Keyword Any)] :- Boolean (= (get dd :key) k)) defns)]
     (if (empty? hits) "" (str (get (nth hits 0) :name)))))
 
@@ -97,12 +127,22 @@
 
 ;; per target defn D: graph callers = the direct callers of D (all same-file);
 ;; the incumbent (bare symbol N) returns the callers of ANY defn named N.
-(defn scored-rows [by-name :- (Map String (Vec (Map Keyword Any))) collisions :- (Vec String) radj :- (Map (Vec Any) (Set (Vec Any)))] :- (Vec Row)
+(defn scored-rows
+  [by-name :- (Map String (Vec (Map Keyword Any)))
+   collisions :- (Vec String)
+   radj :- (Map (Vec Any) (Set (Vec Any)))] :- (Vec Row)
   (filterv (fn [r :- Row] :- Boolean (pos? (:gn r)))
-    (vec (mapcat (fn [nm :- String] :- (Vec Row) (let [ds (get by-name nm) incumbent (reduce (fn [acc :- (Set (Vec Any)) dd :- (Map Keyword Any)] :- (Set (Vec Any)) (into acc (get radj (get dd :key) #{}))) #{} ds)] (if (pos? (count incumbent)) (mapv (fn [dd :- (Map Keyword Any)] :- Row (let [g (get radj (get dd :key) #{})] (Row. nm (short-file (get dd :key)) 1.0 (/ (count g) (double (count incumbent))) (count g) (count incumbent)))) ds) []))) collisions))))
+    (vec (mapcat (fn [nm :- String] :- (Vec Row) (let [ds (get by-name nm) incumbent (reduce (fn
+                                                                                               [acc :- (Set (Vec Any))
+                                                                                                dd :- (Map Keyword Any)] :- (Set (Vec Any)) (into acc (get radj (get dd :key) #{}))) #{} ds)] (if (pos? (count incumbent)) (mapv (fn [dd :- (Map Keyword Any)] :- Row (let [g (get radj (get dd :key) #{})] (Row. nm (short-file (get dd :key)) 1.0 (/ (count g) (double (count incumbent))) (count g) (count incumbent)))) ds) []))) collisions))))
 
-(defn closure-line! [edges :- (Vec (Vec (Vec Any))) defn-keys :- (Vec (Vec Any)) fadj :- (Map (Vec Any) (Set (Vec Any)))] :- Nil
-  (let [ctx (c/new-store) tx (c/begin-tx! ctx "code") EDGE (c/value! ctx "calls-defn") nodes (vec (distinct (vec (mapcat (fn [e :- (Vec (Vec Any))] :- (Vec (Vec Any)) e) edges)))) k->id (reduce (fn [m :- (Map (Vec Any) Int) k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (c/entity! ctx))) {} nodes) _ (doseq [e edges] (c/fact! ctx (get k->id (nth e 0) 0) EDGE (get k->id (nth e 1) 0) tx)) t0 (System/currentTimeMillis) db (d/run-rules ctx [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])]) (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)]) (d/lit "reaches" [(d/v :y) (d/v :z)])])]) dl-reaches (set (d/facts db "reaches")) t1 (System/currentTimeMillis) truth (reduce + (mapv (fn [k :- (Vec Any)] :- Int (count (transitive fadj k))) defn-keys))]
+(defn closure-line!
+  [edges :- (Vec (Vec (Vec Any)))
+   defn-keys :- (Vec (Vec Any))
+   fadj :- (Map (Vec Any) (Set (Vec Any)))] :- Nil
+  (let [ctx (c/new-store) tx (c/begin-tx! ctx "code") EDGE (c/value! ctx "calls-defn") nodes (vec (distinct (vec (mapcat (fn [e :- (Vec (Vec Any))] :- (Vec (Vec Any)) e) edges)))) k->id (reduce (fn
+                                                                                                                                                                                                    [m :- (Map (Vec Any) Int)
+                                                                                                                                                                                                     k :- (Vec Any)] :- (Map (Vec Any) Int) (assoc m k (c/entity! ctx))) {} nodes) _ (doseq [e edges] (c/fact! ctx (get k->id (nth e 0) 0) EDGE (get k->id (nth e 1) 0) tx)) t0 (System/currentTimeMillis) db (d/run-rules ctx [(d/rule "reaches" [(d/v :x) (d/v :y)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)])]) (d/rule "reaches" [(d/v :x) (d/v :z)] [(d/lit "triple" [(d/v :x) EDGE (d/v :y)]) (d/lit "reaches" [(d/v :y) (d/v :z)])])]) dl-reaches (set (d/facts db "reaches")) t1 (System/currentTimeMillis) truth (reduce + (mapv (fn [k :- (Vec Any)] :- Int (count (transitive fadj k))) defn-keys))]
     (println (str "\nFram Datalog transitive closure: " (count dl-reaches) " reaches-pairs in " (- t1 t0) " ms" "  (in-process closure: " truth " pairs — " (if (= (count dl-reaches) truth) "MATCH" "DIVERGE") ")"))))
 
 ;; MACRO delta = mean of per-target precision deltas (each collision target weighted
@@ -113,7 +153,9 @@
 ;; The PASS line is the project's documented kill line (RESULTS.md): delta <
 ;; +0.20 fails. 0.50 was an optimistic target the 2-way-split floor structurally
 ;; caps — not the gate.
-(defn bench-a! [by-name :- (Map String (Vec (Map Keyword Any))) radj :- (Map (Vec Any) (Set (Vec Any)))] :- Nil
+(defn bench-a!
+  [by-name :- (Map String (Vec (Map Keyword Any)))
+   radj :- (Map (Vec Any) (Set (Vec Any)))] :- Nil
   (println "\n================ BENCHMARK A — caller precision on collisions ================")
   (println "(oracle = module-local scope: a call binds the defn in its own file)")
   (let [collisions (collision-names by-name) rows (scored-rows by-name collisions radj) mean-delta (if (empty? rows) 0.0 (/ (reduce + (mapv (fn [r :- Row] :- Double (- (:graph-p r) (:incumbent-p r))) rows)) (count rows))) tot-g (reduce + (mapv (fn [r :- Row] :- Int (:gn r)) rows)) tot-in (reduce + (mapv (fn [r :- Row] :- Int (:in r)) rows)) micro-incumbent-p (if (pos? tot-in) (/ tot-g (double tot-in)) 1.0) micro-delta (- 1.0 micro-incumbent-p) wrong (count (filterv (fn [r :- Row] :- Boolean (< (:incumbent-p r) 1.0)) rows))]
@@ -131,7 +173,11 @@
       (if (>= mean-delta 0.2) "✅" "—"))))
 
 ;; ---- BENCHMARK B: transitive leverage / keystones -----------------------------
-(defn bench-b! [defns :- (Vec (Map Keyword Any)) defn-keys :- (Vec (Vec Any)) direct :- (Map (Vec Any) Int) blast :- (Map (Vec Any) Int)] :- Nil
+(defn bench-b!
+  [defns :- (Vec (Map Keyword Any))
+   defn-keys :- (Vec (Vec Any))
+   direct :- (Map (Vec Any) Int)
+   blast :- (Map (Vec Any) Int)] :- Nil
   (println "\n================ BENCHMARK B — transitive leverage (keystones) ================")
   (let [called (filterv (fn [k :- (Vec Any)] :- Boolean (pos? (get blast k 0))) defn-keys) xs (mapv (fn [k :- (Vec Any)] :- Double (double (get direct k 0))) called) ys (mapv (fn [k :- (Vec Any)] :- Double (double (get blast k 0))) called) rho (spearman xs ys) top-direct (set (vec (take 10 (sort-by (fn [k :- (Vec Any)] :- Int (get direct k 0)) > defn-keys)))) top-blast (vec (take 5 (sort-by (fn [k :- (Vec Any)] :- Int (get blast k 0)) > defn-keys))) hidden (filterv (fn [k :- (Vec Any)] :- Boolean (not (contains? top-direct k))) top-blast) ratio-3x (filterv (fn [k :- (Vec Any)] :- Boolean (and (pos? (get direct k 0)) (>= (/ (get blast k 0) (double (get direct k 0))) 3))) defn-keys)]
     (println "called defns:" (count called) " (ranked)")

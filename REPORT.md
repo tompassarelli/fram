@@ -185,13 +185,13 @@ failure set.
 
 ### Bar 4: pinned Beagle check and byte-stable projections
 
-Repair-loop handshake:
+Authoring-loop handshake:
 
 ```sh
 /home/tom/code/beagle/main/bin/beagle doctor --deep
 ```
 
-Observed: `Repair loop: ok`, all functional canaries healthy, exit 0.
+Observed: `Authoring loop: ok`, all functional canaries healthy, exit 0.
 
 Compiler identity probes:
 

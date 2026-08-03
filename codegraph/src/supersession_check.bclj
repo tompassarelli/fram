@@ -23,25 +23,45 @@
 
 (require clojure.string :as str)
 
-(defn ent! [ctx :- Any cache :- (Atom (Map Any Any)) lid :- Any] :- Int
+(defn ent!
+  [ctx :- Any
+   cache :- (Atom (Map Any Any))
+   lid :- Any] :- Int
   (let [hit (get (deref cache) lid)]
     (if (nil? hit)
       (let [e (c/entity! ctx)] (swap! cache assoc lid e) e)
       (int hit))))
 
-(defn load-line! [ctx :- Any tx :- Int cache :- (Atom (Map Any Any)) line :- String] :- Nil
+(defn load-line!
+  [ctx :- Any
+   tx :- Int
+   cache :- (Atom (Map Any Any))
+   line :- String] :- Nil
   (let [trip (edn/read-string line) s (nth trip 0) p (nth trip 1) o (nth trip 2) L (ent! ctx cache s) P (c/value! ctx p) R (if (integer? o) (ent! ctx cache o) (c/value! ctx o))]
     (c/fact! ctx L P R tx)
     nil))
 
-(defn sym? [ctx :- Any kindp :- Int symv :- Int e :- Int] :- Bool
+(defn sym?
+  [ctx :- Any
+   kindp :- Int
+   symv :- Int
+   e :- Int] :- Bool
   (pos? (count (filterv (fn [cid :- Int] :- Bool (= symv (get (c/fact-of ctx cid) :r))) (c/by-lp ctx e kindp)))))
 
-(defn fact-l [ctx :- Any cid :- Int] :- Int (int (get (c/fact-of ctx cid) :l)))
+(defn fact-l
+  [ctx :- Any
+   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :l)))
 
-(defn fact-r [ctx :- Any cid :- Int] :- Int (int (get (c/fact-of ctx cid) :r)))
+(defn fact-r
+  [ctx :- Any
+   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :r)))
 
-(defn first-sym-fact [ctx :- Any vp :- Int kindp :- Int symv :- Int oldv :- Int] :- Int
+(defn first-sym-fact
+  [ctx :- Any
+   vp :- Int
+   kindp :- Int
+   symv :- Int
+   oldv :- Int] :- Int
   (let [hits (filterv (fn [cid :- Int] :- Bool (sym? ctx kindp symv (fact-l ctx cid))) (vec (c/by-pr ctx vp oldv)))]
     (if (empty? hits) 0 (nth hits 0))))
 

@@ -43,15 +43,21 @@
 (require resolve :as rsv)
 
 (defn parse-corpus [path :- String] :- (Vec (Map Keyword Any))
-  (let [skips :- (Atom Int) (atom 0) lines (str/split-lines (slurp path)) acc (reduce (fn [st :- (Map Keyword Any) l :- String] :- (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (let [t (try (edn/read-string l) (catch Exception e nil))] (if (nil? t) (let [_ (swap! skips inc)] st) (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) t))))) st))) {:cur {} :out []} lines) blocks (if (empty? (get acc :cur)) (vec (get acc :out)) (conj (vec (get acc :out)) (get acc :cur)))]
+  (let [skips :- (Atom Int) (atom 0) lines (str/split-lines (slurp path)) acc (reduce (fn
+                                                                                        [st :- (Map Keyword Any)
+                                                                                         l :- String] :- (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (let [t (try (edn/read-string l) (catch Exception e nil))] (if (nil? t) (let [_ (swap! skips inc)] st) (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) t))))) st))) {:cur {} :out []} lines) blocks (if (empty? (get acc :cur)) (vec (get acc :out)) (conj (vec (get acc :out)) (get acc :cur)))]
     (if (pos? (deref skips))
       (binding [*out* *err*]
         (println "  (skipped" (deref skips) "EDN-unparseable leaf literals)"))
       nil)
     (vec blocks)))
 
-(defn index-by [pred :- String triples :- (Vec Any)] :- (Map Any Any)
-  (reduce (fn [m :- (Map Any Any) t :- Any] :- (Map Any Any) (if (= pred (nth t 1)) (assoc m (nth t 0) (nth t 2)) m))
+(defn index-by
+  [pred :- String
+   triples :- (Vec Any)] :- (Map Any Any)
+  (reduce (fn
+            [m :- (Map Any Any)
+             t :- Any] :- (Map Any Any) (if (= pred (nth t 1)) (assoc m (nth t 0) (nth t 2)) m))
     {}
     triples))
 
@@ -62,10 +68,17 @@
       "")))
 
 (defn derive-block [block :- (Map Keyword Any)] :- (Map Keyword Any)
-  (let [ts (vec (get block :triples)) file (str (get block :file)) fk (index-by "form-kind" ts) names (index-by "name" ts) calls (index-by "calls" ts) kids (reduce (fn [m :- (Map Any Any) t :- Any] :- (Map Any Any) (if (= "child" (nth t 1)) (assoc m (nth t 0) (conj (vec (get m (nth t 0) [])) (nth t 2))) m)) {} ts) childset (reduce (fn [s :- (Set Any) t :- Any] :- (Set Any) (if (= "child" (nth t 1)) (conj s (nth t 2)) s)) #{} ts) ordered-keys (vec (sort (set (keys fk)))) roots (filterv (fn [k :- Any] :- Bool (not (contains? childset k))) ordered-keys) defns (mapv (fn [s :- Any] :- (Map Keyword Any) {:key [file s] :name (get names s) :file file :module (module-of file)}) (filterv (fn [s :- Any] :- Bool (= "defn" (get fk s))) ordered-keys)) mentions (loop [stack :- (Vec (Vec Any)) (mapv (fn [r :- Any] :- (Vec Any) [r nil]) roots) ms :- (Vec Any) []] (if (empty? stack) ms (let [top (peek stack) st (pop stack) node (nth top 0) cd (nth top 1) cd2 (if (= "defn" (get fk node)) node cd) ms2 (if (and (= "call" (get fk node)) (and (not (nil? cd2)) (not (nil? (get calls node))))) (conj ms [[file cd2] (get calls node)]) ms)] (recur (into st (mapv (fn [k :- Any] :- (Vec Any) [k cd2]) (vec (get kids node [])))) ms2))))]
+  (let [ts (vec (get block :triples)) file (str (get block :file)) fk (index-by "form-kind" ts) names (index-by "name" ts) calls (index-by "calls" ts) kids (reduce (fn
+                                                                                                                                                                      [m :- (Map Any Any)
+                                                                                                                                                                       t :- Any] :- (Map Any Any) (if (= "child" (nth t 1)) (assoc m (nth t 0) (conj (vec (get m (nth t 0) [])) (nth t 2))) m)) {} ts) childset (reduce (fn
+                                                                                                                                                                                                                                                                                                                          [s :- (Set Any)
+                                                                                                                                                                                                                                                                                                                           t :- Any] :- (Set Any) (if (= "child" (nth t 1)) (conj s (nth t 2)) s)) #{} ts) ordered-keys (vec (sort (set (keys fk)))) roots (filterv (fn [k :- Any] :- Bool (not (contains? childset k))) ordered-keys) defns (mapv (fn [s :- Any] :- (Map Keyword Any) {:key [file s] :name (get names s) :file file :module (module-of file)}) (filterv (fn [s :- Any] :- Bool (= "defn" (get fk s))) ordered-keys)) mentions (loop [stack :- (Vec (Vec Any)) (mapv (fn [r :- Any] :- (Vec Any) [r nil]) roots) ms :- (Vec Any) []] (if (empty? stack) ms (let [top (peek stack) st (pop stack) node (nth top 0) cd (nth top 1) cd2 (if (= "defn" (get fk node)) node cd) ms2 (if (and (= "call" (get fk node)) (and (not (nil? cd2)) (not (nil? (get calls node))))) (conj ms [[file cd2] (get calls node)]) ms)] (recur (into st (mapv (fn [k :- Any] :- (Vec Any) [k cd2]) (vec (get kids node [])))) ms2))))]
     {:file file :defns defns :mentions mentions}))
 
-(defn resolve-call [by-name :- Any caller-key :- (Vec Any) callname :- Any] :- Any
+(defn resolve-call
+  [by-name :- Any
+   caller-key :- (Vec Any)
+   callname :- Any] :- Any
   (let [cands (vec (get by-name callname [])) cfile (nth caller-key 0) same (filterv (fn [d :- Any] :- Bool (= cfile (nth (get d :key) 0))) cands)]
     (if (pos? (count same))
       (get (nth same 0) :key)
