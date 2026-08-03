@@ -54,6 +54,14 @@
       (fail! :invalid-sealed-path (str field " is not canonicalizable")
              {:field field :path value :cause cause}))))
 
+(defn- beagle-facts-command! [beagle]
+  (let [command (io/file (.getParentFile (io/file beagle)) "beagle-facts")]
+    (when-not (and (.isFile command) (.canExecute command))
+      (fail! :missing-sealed-binding
+             "FRAM_BEAGLE must have an executable beagle-facts sibling"
+             {:beagle beagle}))
+    (.getCanonicalPath command)))
+
 (defn- space-id! [code-log]
   (let [bytes (Files/readAllBytes (.toPath (io/file code-log)))]
     (when (< (alength bytes) 16)
@@ -250,6 +258,16 @@
 (defn- sorted-delta [rows]
   (mapv vec (sort-by pr-str rows)))
 
+(defn- committed-affected-definitions [outcome]
+  (let [delta (concat (get-in outcome [:committed-delta :asserts])
+                      (get-in outcome [:committed-delta :retracts]))
+        nodes (into #{} (mapcat (fn [[subject _ object]] [subject object])) delta)]
+    (filterv (fn [{:keys [form definition]}]
+               (or (contains? nodes form)
+                   (contains? nodes definition)
+                   (and (nil? form) (nil? definition) (seq delta))))
+             (get-in outcome [:candidate :definition-identities]))))
+
 (defn- edit-response [outcome publication]
   (cond->
    {:outcome (name (:outcome publication))
@@ -268,10 +286,14 @@
             :retracts (sorted-delta (get-in outcome [:committed-delta :retracts]))})
     (:projection publication)
     (assoc :projection (:projection publication))
+    (:program-view publication)
+    (assoc :programView (:program-view publication))
     (:rejection outcome)
     (assoc :rejection (:rejection outcome))))
 
-(defn- edit-module! [{:keys [checkout-root port space beagle]} arguments]
+(defn- edit-module!
+  [{:keys [checkout-root port space beagle program-corpus
+           program-facts-command]} arguments]
   (when-not (and (map? arguments)
                  (= #{:module :edits} (set (keys arguments)))
                  (string? (:module arguments))
@@ -302,7 +324,11 @@
            {:commit-outcome outcome
             :registered-root checkout-root
             :registered-path (:root checked-value)
-            :checked-bytes (:bytes checked-value)})]
+            :checked-bytes (:bytes checked-value)
+            :program-corpus program-corpus
+            :program-facts-command program-facts-command
+            :affected-definitions
+            (committed-affected-definitions outcome)})]
       {:isError (not= :committed-projection-published
                       (:outcome publication))
        :value (edit-response outcome publication)})))
@@ -434,7 +460,9 @@
                                      "checkout root")
      :port (port!)
      :space (space-id! code-log)
-     :beagle (required-env! "FRAM_BEAGLE")}))
+     :beagle (required-env! "FRAM_BEAGLE")
+     :program-facts-command
+     (beagle-facts-command! (required-env! "FRAM_BEAGLE"))}))
 
 (defn- serve! []
   (let [context (service-context!)]

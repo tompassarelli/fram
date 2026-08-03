@@ -2,7 +2,8 @@
   "Confined, atomic publication of checked graph projections."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [fram.code-reader :as code-reader])
+            [fram.code-reader :as code-reader]
+            [fram.program-inspection :as program])
   (:import [java.nio ByteBuffer]
            [java.nio.channels FileChannel]
            [java.nio.charset StandardCharsets]
@@ -14,6 +15,10 @@
 (def ^:dynamic *before-atomic-move*
   "Test seam invoked after the complete temp file is forced and before rename."
   (fn [_] nil))
+
+(def ^:dynamic *resolve-program-slice*
+  "Test seam for the one-file resolved analysis projection."
+  program/resolve-corpus-slice!)
 
 (def ^:private byte-array-class (Class/forName "[B"))
 (def ^:private no-links (make-array LinkOption 0))
@@ -136,15 +141,18 @@
                 :observed-version :conflicts]))
 
 (defn- stale-outcome [commit-outcome cause]
-  (let [result
+  (let [repair (or (:repair (ex-data cause))
+                   {:verb :repair-projection :module (:module commit-outcome)})
+        result
         {:outcome :committed-projection-stale
          :graph-state :committed
          :graph-version (:committed-version commit-outcome)
          :projection-state :repair-needed
          :repair-needed? true
          :automatic-retry? false
-         :retry :repair-projection-only
-         :repair {:verb :repair-projection :module (:module commit-outcome)}
+         :retry (if (= :repair-program-view (:verb repair))
+                  :repair-program-view-only :repair-projection-only)
+         :repair repair
          :commit (commit-summary commit-outcome)
          :commit-receipt (:proof commit-outcome)
          :cause (exception-summary cause)}]
@@ -160,7 +168,8 @@
    filesystem. A :committed outcome atomically publishes the already-checked
    bytes. Any postcommit failure is a loud, repair-only state and is never an
    ordinary retry signal."
-  [{:keys [commit-outcome registered-root registered-path checked-bytes]}]
+  [{:keys [commit-outcome registered-root registered-path checked-bytes
+           program-corpus program-facts-command affected-definitions]}]
   (case (:type commit-outcome)
     :precommit-rejection
     {:outcome :precommit-rejected
@@ -193,17 +202,46 @@
         (lifecycle-fail! :invalid-module
                          "committed projection requires a module" {}))
       (let [target (resolve-projection-path! registered-root registered-path)
-            published (atomic-publish! target checked-bytes)]
-        {:outcome :committed-projection-published
-         :graph-state :committed
-         :graph-version (:committed-version commit-outcome)
-         :projection-state :published
-         :repair-needed? false
-         :automatic-retry? false
-         :retry :never
-         :commit (commit-summary commit-outcome)
-         :commit-receipt (:proof commit-outcome)
-         :projection published})
+            published (atomic-publish! target checked-bytes)
+            _ (when (and program-corpus
+                         (or (str/blank? (str program-facts-command))
+                             (empty? affected-definitions)))
+                (lifecycle-fail! :invalid-program-materialization
+                                 "program materialization requires its resolver and affected identities"
+                                 {:module (:module commit-outcome)}))
+            program-view
+            (when program-corpus
+              (try
+                (program/materialize-committed-view!
+                 {:path program-corpus
+                  :registered-root registered-root
+                  :registered-path registered-path
+                  :resolved-slice
+                  (*resolve-program-slice* program-facts-command
+                                           registered-root target)
+                  :affected-definitions affected-definitions
+                  :committed-version (:committed-version commit-outcome)})
+                (catch Throwable cause
+                  (throw
+                   (ex-info
+                    "committed program view requires incremental repair"
+                    {:type :program-view-publication-failed
+                     :repair {:verb :repair-program-view
+                              :module (:module commit-outcome)
+                              :affectedDefinitions affected-definitions}}
+                    cause)))))]
+        (cond->
+         {:outcome :committed-projection-published
+          :graph-state :committed
+          :graph-version (:committed-version commit-outcome)
+          :projection-state :published
+          :repair-needed? false
+          :automatic-retry? false
+          :retry :never
+          :commit (commit-summary commit-outcome)
+          :commit-receipt (:proof commit-outcome)
+          :projection published}
+          program-view (assoc :program-view program-view)))
       (catch Throwable cause
         (stale-outcome commit-outcome cause)))
 
