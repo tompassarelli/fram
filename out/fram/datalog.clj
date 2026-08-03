@@ -1,14 +1,15 @@
 (ns fram.datalog
   (:require [fram.kernel :as kernel]
-            [fram.types :as t]))
+            [fram.types :as t]
+            [fram.text-index :as text-index]))
 
-(defrecord QueryTerm [variable value])
+^{:line 13 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord QueryTerm [variable value])
 
 (defn queryterm-variable [r] (:variable r))
 
 (defn queryterm-value [r] (:value r))
 
-(defrecord Literal [kind relation arguments negated operator binding])
+^{:line 14 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord Literal [kind relation arguments negated operator binding])
 
 (defn literal-kind [r] (:kind r))
 
@@ -22,7 +23,7 @@
 
 (defn literal-binding [r] (:binding r))
 
-(defrecord Rule [head-relation head-arguments body])
+^{:line 17 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord Rule [head-relation head-arguments body])
 
 (defn rule-head-relation [r] (:head-relation r))
 
@@ -30,7 +31,7 @@
 
 (defn rule-body [r] (:body r))
 
-(defrecord QueryControl [steps cancelled max-steps deadline-ns timeout-ms])
+^{:line 19 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord QueryControl [steps cancelled max-steps deadline-ns timeout-ms])
 
 (defn querycontrol-steps [r] (:steps r))
 
@@ -42,7 +43,7 @@
 
 (defn querycontrol-timeout-ms [r] (:timeout-ms r))
 
-(defrecord CandidateSource [rows positions spo pos osp])
+^{:line 32 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord CandidateSource [rows positions spo pos osp selector resolver])
 
 (defn candidatesource-rows [r] (:rows r))
 
@@ -54,385 +55,453 @@
 
 (defn candidatesource-osp [r] (:osp r))
 
-(def ^String triple-relation "triple")
+(defn candidatesource-selector [r] (:selector r))
 
-(def ^String occurrence-relation "occurrence")
+(defn candidatesource-resolver [r] (:resolver r))
 
-(def base-relations #{triple-relation occurrence-relation})
+^{:line 36 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defrecord VirtualCandidateSource [indexed scan])
 
-(def comparison-operators #{:eq :ne :lt :le :gt :ge})
+(defn virtualcandidatesource-indexed [r] (:indexed r))
 
-(def subtract-operator (keyword "-"))
+(defn virtualcandidatesource-scan [r] (:scan r))
 
-(def builtin-operators #{:+ subtract-operator :* :/ :mod})
+^{:line 42 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def ^String triple-relation "triple")
 
-(def ^:dynamic *query-control* nil)
+^{:line 43 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def ^String occurrence-relation "occurrence")
 
-(defn ^QueryControl query-control [max-steps timeout-ms]
-  (if (and (> max-steps 0) (>= timeout-ms 0)) (->QueryControl (atom 0) (atom nil) max-steps (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms) (throw (ex-info "fram: query limits must be positive steps and non-negative milliseconds" {:type :invalid-query-control}))))
+^{:line 44 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def ^String text-match-relation "text-match")
 
-(defn cancel-query! [^QueryControl control reason]
-  (reset! (querycontrol-cancelled control) reason)
+^{:line 45 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def base-relations ^{:line 46 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{triple-relation occurrence-relation text-match-relation})
+
+^{:line 47 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def comparison-operators ^{:line 47 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{:eq :ne :lt :le :gt :ge})
+
+^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def subtract-operator ^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (keyword "-"))
+
+^{:line 49 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def builtin-operators ^{:line 50 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{:+ subtract-operator :* :/ :mod})
+
+^{:line 52 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (def ^:dynamic *query-control* nil)
+
+^{:line 54 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^QueryControl query-control [max-steps timeout-ms]
+  ^{:line 55 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 55 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 55 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (> max-steps 0) ^{:line 55 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= timeout-ms 0)) ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->QueryControl ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (atom 0) ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (atom nil) max-steps ^{:line 57 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (+ ^{:line 57 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (System/nanoTime) ^{:line 57 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (* timeout-ms 1000000)) timeout-ms) ^{:line 58 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 58 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info "fram: query limits must be positive steps and non-negative milliseconds" ^{:line 59 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :invalid-query-control}))))
+
+^{:line 61 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn cancel-query! [^QueryControl control reason]
+  ^{:line 62 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reset! ^{:line 62 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-cancelled control) reason)
   nil)
 
-(defn query-steps [^QueryControl control]
-  (deref (querycontrol-steps control)))
+^{:line 65 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn query-steps [^QueryControl control]
+  ^{:line 66 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (deref ^{:line 66 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-steps control)))
 
-(defn- query-check! []
-  (let [control *query-control*]
-  (if (nil? control) nil (let [steps (swap! (querycontrol-steps control) inc)
-   now (System/nanoTime)
-   cancelled (deref (querycontrol-cancelled control))
-   code (cond
-  (some? cancelled) :query-cancelled
-  (> steps (querycontrol-max-steps control)) :query-work-limit
-  (>= now (querycontrol-deadline-ns control)) :query-time-limit
+^{:line 68 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- query-check! []
+  ^{:line 69 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [control *query-control*]
+  ^{:line 70 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 70 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? control) nil ^{:line 72 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [steps ^{:line 72 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (swap! ^{:line 72 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-steps control) inc)
+   now ^{:line 73 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (System/nanoTime)
+   cancelled ^{:line 74 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (deref ^{:line 74 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-cancelled control))
+   code ^{:line 75 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 76 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? cancelled) :query-cancelled
+  ^{:line 77 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (> steps ^{:line 77 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-max-steps control)) :query-work-limit
+  ^{:line 78 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= now ^{:line 78 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-deadline-ns control)) :query-time-limit
   :else nil)]
-  (if (nil? code) nil (throw (ex-info (str "query evaluation stopped: " (name code)) {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps (querycontrol-max-steps control) :timeout-ms (querycontrol-timeout-ms control)})))))))
+  ^{:line 80 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 80 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? code) nil ^{:line 82 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 82 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info ^{:line 82 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (str "query evaluation stopped: " ^{:line 82 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (name code)) ^{:line 83 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :fram-query-abort :code code :reason cancelled :steps steps :max-steps ^{:line 83 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-max-steps control) :timeout-ms ^{:line 83 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (querycontrol-timeout-ms control)})))))))
 
-(defn ^QueryTerm variable [^String name]
-  (if (pos? (count name)) (->QueryTerm name nil) (throw (ex-info "fram: query variable name must be non-empty" {:type :invalid-query-variable}))))
+^{:line 90 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^QueryTerm variable [^String name]
+  ^{:line 91 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 91 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (pos? ^{:line 91 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count name)) ^{:line 92 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->QueryTerm name nil) ^{:line 93 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 93 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info "fram: query variable name must be non-empty" ^{:line 94 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :invalid-query-variable}))))
 
-(defn ^QueryTerm constant [value]
-  (if (t/term? value) (->QueryTerm nil value) (throw (ex-info "fram: query constant must be a Term" {:type :invalid-query-constant}))))
+^{:line 96 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^QueryTerm constant [value]
+  ^{:line 97 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 97 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (t/term? value) ^{:line 98 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->QueryTerm nil value) ^{:line 99 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 99 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info "fram: query constant must be a Term" ^{:line 100 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :invalid-query-constant}))))
 
-(defn ^Boolean query-term? [value]
-  (and (instance? QueryTerm value) (if (some? (queryterm-variable value)) (and (pos? (count (queryterm-variable value))) (nil? (queryterm-value value))) (t/term? (queryterm-value value)))))
+^{:line 102 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Boolean query-term? [value]
+  ^{:line 103 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 103 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (instance? QueryTerm value) ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-variable value)) ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (pos? ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-variable value))) ^{:line 106 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? ^{:line 106 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-value value))) ^{:line 107 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (t/term? ^{:line 107 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-value value)))))
 
-(defn ^Literal relation-literal [^String relation arguments]
-  (->Literal :relation relation arguments false :none ""))
+^{:line 109 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Literal relation-literal [^String relation arguments]
+  ^{:line 111 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->Literal :relation relation arguments false :none ""))
 
-(defn ^Literal negated-literal [^String relation arguments]
-  (->Literal :relation relation arguments true :none ""))
+^{:line 113 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Literal negated-literal [^String relation arguments]
+  ^{:line 115 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->Literal :relation relation arguments true :none ""))
 
-(defn ^Literal comparison-literal [operator arguments]
-  (->Literal :comparison "" arguments false operator ""))
+^{:line 117 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Literal comparison-literal [operator arguments]
+  ^{:line 119 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->Literal :comparison "" arguments false operator ""))
 
-(defn ^Literal builtin-literal [operator arguments ^String binding]
-  (->Literal :builtin "" arguments false operator binding))
+^{:line 121 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Literal builtin-literal [operator arguments ^String binding]
+  ^{:line 123 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->Literal :builtin "" arguments false operator binding))
 
-(defn ^Rule rule [^String head-relation head-arguments body]
-  (->Rule head-relation head-arguments body))
+^{:line 125 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Rule rule [^String head-relation head-arguments body]
+  ^{:line 127 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->Rule head-relation head-arguments body))
 
-(defn- triple-row [value]
-  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
+^{:line 129 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- triple-row [value]
+  ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (t/triple-slot0 value) ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (t/triple-slot1 value) ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (t/triple-slot2 value)])
 
-(defn- rows [triples]
-  (reduce (fn [acc value] (conj acc (triple-row value))) #{} triples))
+^{:line 132 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- rows [triples]
+  ^{:line 133 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 133 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 134 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 134 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (triple-row value))) ^{:line 135 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} triples))
 
-(defn edb [propositions]
-  {triple-relation (rows propositions)})
+^{:line 139 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn edb [propositions]
+  ^{:line 140 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {triple-relation ^{:line 140 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rows propositions)})
 
-(defn edb-with-occurrences [propositions occurrences]
-  (let [checked (reduce (fn [acc value] (if (kernel/operation-occurrence? value) (conj acc value) (throw (ex-info "fram: occurrence relation accepts only operation occurrences" {:type :invalid-operation-occurrence})))) [] occurrences)]
-  {triple-relation (rows propositions) occurrence-relation (rows checked)}))
+^{:line 142 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn edb-with-occurrences [propositions occurrences]
+  ^{:line 144 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [checked ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 146 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 146 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (kernel/operation-occurrence? value) ^{:line 147 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc value) ^{:line 148 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 148 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info "fram: occurrence relation accepts only operation occurrences" ^{:line 149 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :invalid-operation-occurrence})))) ^{:line 150 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] occurrences)]
+  ^{:line 151 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {triple-relation ^{:line 151 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rows propositions) occurrence-relation ^{:line 151 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rows checked)}))
 
-(defn- term-value [^QueryTerm term subst]
-  (let [name (queryterm-variable term)]
-  (if (some? name) (get subst name) (queryterm-value term))))
+^{:line 154 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- term-value [^QueryTerm term subst]
+  ^{:line 155 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [name ^{:line 155 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-variable term)]
+  ^{:line 156 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 156 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? name) ^{:line 156 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get subst name) ^{:line 156 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-value term))))
 
-(defn- unify [^QueryTerm term value subst]
-  (let [name (queryterm-variable term)]
-  (if (some? name) (if (contains? subst name) (if (= (get subst name) value) subst nil) (assoc subst name value)) (if (= (queryterm-value term) value) subst nil))))
+^{:line 158 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- unify [^QueryTerm term value subst]
+  ^{:line 160 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [name ^{:line 160 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-variable term)]
+  ^{:line 161 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 161 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? name) ^{:line 162 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 162 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? subst name) ^{:line 163 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 163 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= ^{:line 163 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get subst name) value) subst nil) ^{:line 164 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc subst name value)) ^{:line 165 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 165 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= ^{:line 165 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-value term) value) subst nil))))
 
-(defn- unify-arguments! [arguments tuple subst]
-  (query-check!)
-  (if (not (= (count arguments) (count tuple))) nil (loop [position 0
+^{:line 167 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- unify-arguments! [arguments tuple subst]
+  ^{:line 169 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (query-check!)
+  ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count arguments) ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count tuple))) nil ^{:line 172 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [position 0
    current subst]
-  (if (or (nil? current) (>= position (count arguments))) current (recur (+ position 1) (unify (nth arguments position) (nth tuple position) current))))))
+  ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? current) ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= position ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count arguments))) current ^{:line 175 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 175 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (+ position 1) ^{:line 176 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify ^{:line 176 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments position) ^{:line 177 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth tuple position) current))))))
 
-(defn- ground [arguments subst]
-  (mapv (fn [term] (let [value (term-value term subst)]
-  (if (some? value) value (throw (ex-info "fram: unbound query variable reached evaluation" {:type :unbound-query-variable}))))) arguments))
+^{:line 180 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ground [arguments subst]
+  ^{:line 181 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (mapv ^{:line 181 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [term] ^{:line 182 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [value ^{:line 182 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (term-value term subst)]
+  ^{:line 183 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 183 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? value) value ^{:line 185 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 185 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info "fram: unbound query variable reached evaluation" ^{:line 186 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :unbound-query-variable}))))) arguments))
 
-(defn- integer-value [value]
-  (cond
-  (integer? value) value
-  (string? value) (parse-long value)
+^{:line 189 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- integer-value [value]
+  ^{:line 190 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 191 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (integer? value) value
+  ^{:line 192 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (string? value) ^{:line 192 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (parse-long value)
   :else nil))
 
-(defn- numeric-value [value]
-  (cond
-  (integer? value) (double value)
-  (number? value) (double value)
-  (string? value) (let [integer-result (parse-long value)]
-  (if (some? integer-result) (double integer-result) (parse-double value)))
+^{:line 195 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- numeric-value [value]
+  ^{:line 196 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 197 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (integer? value) ^{:line 197 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (double value)
+  ^{:line 198 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (number? value) ^{:line 198 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (double value)
+  ^{:line 199 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (string? value) ^{:line 200 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [integer-result ^{:line 200 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (parse-long value)]
+  ^{:line 201 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 201 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? integer-result) ^{:line 202 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (double integer-result) ^{:line 203 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (parse-double value)))
   :else nil))
 
-(defn- ^Boolean comparison-result [^Literal literal subst]
-  (let [arguments (literal-arguments literal)
-   left (term-value (nth arguments 0) subst)
-   right (term-value (nth arguments 1) subst)
-   operator (literal-operator literal)]
-  (if (or (nil? left) (nil? right)) false (cond
-  (= operator :eq) (= left right)
-  (= operator :ne) (not (= left right))
-  :else (let [left-number (numeric-value left)
-   right-number (numeric-value right)]
-  (if (or (nil? left-number) (nil? right-number)) false (cond
-  (= operator :lt) (< left-number right-number)
-  (= operator :le) (<= left-number right-number)
-  (= operator :gt) (> left-number right-number)
-  (= operator :ge) (>= left-number right-number)
+^{:line 206 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^Boolean comparison-result [^Literal literal subst]
+  ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [arguments ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-arguments literal)
+   left ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (term-value ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 0) subst)
+   right ^{:line 209 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (term-value ^{:line 209 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 1) subst)
+   operator ^{:line 210 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-operator literal)]
+  ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left) ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right)) false ^{:line 213 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 214 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :eq) ^{:line 214 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= left right)
+  ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :ne) ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= left right))
+  :else ^{:line 217 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [left-number ^{:line 217 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (numeric-value left)
+   right-number ^{:line 218 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (numeric-value right)]
+  ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left-number) ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right-number)) false ^{:line 221 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 222 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :lt) ^{:line 222 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (< left-number right-number)
+  ^{:line 223 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :le) ^{:line 223 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (<= left-number right-number)
+  ^{:line 224 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :gt) ^{:line 224 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (> left-number right-number)
+  ^{:line 225 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :ge) ^{:line 225 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= left-number right-number)
   :else false)))))))
 
-(defn- builtin-value [operator left right]
-  (let [left-int (integer-value left)
-   right-int (integer-value right)
-   left-number (numeric-value left)
-   right-number (numeric-value right)]
-  (cond
-  (= operator :mod) (if (or (nil? left-int) (nil? right-int) (= right-int 0)) nil (mod left-int right-int))
-  (= operator :/) (if (or (nil? left-number) (nil? right-number) (= right-number 0.0)) nil (/ left-number right-number))
-  (or (= operator :+) (or (= operator subtract-operator) (= operator :*))) (if (and (some? left-int) (some? right-int)) (cond
-  (= operator :+) (+ left-int right-int)
-  (= operator subtract-operator) (- left-int right-int)
-  :else (* left-int right-int)) (if (or (nil? left-number) (nil? right-number)) nil (cond
-  (= operator :+) (+ left-number right-number)
-  (= operator subtract-operator) (- left-number right-number)
-  :else (* left-number right-number))))
+^{:line 228 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- builtin-value [operator left right]
+  ^{:line 229 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [left-int ^{:line 229 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (integer-value left)
+   right-int ^{:line 230 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (integer-value right)
+   left-number ^{:line 231 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (numeric-value left)
+   right-number ^{:line 232 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (numeric-value right)]
+  ^{:line 233 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 234 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :mod) ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left-int) ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right-int) ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= right-int 0)) nil ^{:line 237 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (mod left-int right-int))
+  ^{:line 238 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :/) ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left-number) ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right-number) ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= right-number 0.0)) nil ^{:line 241 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (/ left-number right-number))
+  ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :+) ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :*))) ^{:line 243 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 243 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 243 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? left-int) ^{:line 243 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? right-int)) ^{:line 244 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 245 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :+) ^{:line 245 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (+ left-int right-int)
+  ^{:line 246 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 246 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (- left-int right-int)
+  :else ^{:line 247 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (* left-int right-int)) ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left-number) ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right-number)) nil ^{:line 250 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 251 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator :+) ^{:line 251 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (+ left-number right-number)
+  ^{:line 252 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= operator subtract-operator) ^{:line 252 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (- left-number right-number)
+  :else ^{:line 253 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (* left-number right-number))))
   :else nil)))
 
-(defn- builtin-results [^Literal literal subst]
-  (let [arguments (literal-arguments literal)
-   left (term-value (nth arguments 0) subst)
-   right (term-value (nth arguments 1) subst)]
-  (if (or (nil? left) (nil? right)) [] (let [result (builtin-value (literal-operator literal) left right)]
-  (if (nil? result) [] [(assoc subst (literal-binding literal) result)])))))
+^{:line 256 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- builtin-results [^Literal literal subst]
+  ^{:line 258 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [arguments ^{:line 258 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-arguments literal)
+   left ^{:line 259 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (term-value ^{:line 259 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 0) subst)
+   right ^{:line 260 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (term-value ^{:line 260 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 1) subst)]
+  ^{:line 261 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 261 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 261 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? left) ^{:line 261 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? right)) ^{:line 262 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [result ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (builtin-value ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-operator literal) left right)]
+  ^{:line 264 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 264 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? result) ^{:line 265 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc subst ^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-binding literal) result)])))))
 
-(defn- relation-results! [db ^Literal literal subst]
-  (let [relation (literal-relation literal)
-   arguments (literal-arguments literal)]
-  (if (literal-negated literal) (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst]) (reduce (fn [acc tuple] (let [matched (unify-arguments! arguments tuple subst)]
-  (if (some? matched) (conj acc matched) acc))) [] (vec (get db relation #{}))))))
+^{:line 268 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- unify-tuples! [arguments tuples subst]
+  ^{:line 271 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 271 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc tuple] ^{:line 272 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [matched ^{:line 272 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
+  ^{:line 273 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 273 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? matched) ^{:line 273 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 274 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] tuples))
 
-(defn- literal-results! [db ^Literal literal subst]
-  (query-check!)
-  (cond
-  (= :relation (literal-kind literal)) (relation-results! db literal subst)
-  (= :comparison (literal-kind literal)) (if (comparison-result literal subst) [subst] [])
-  (= :builtin (literal-kind literal)) (builtin-results literal subst)
-  :else []))
+^{:line 276 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- virtual-source-rows! [^VirtualCandidateSource source ^Boolean indexed arguments subst]
+  ^{:line 279 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [rows-fn ^{:line 279 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if indexed ^{:line 280 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (virtualcandidatesource-indexed source) ^{:line 281 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (virtualcandidatesource-scan source))]
+  ^{:line 282 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rows-fn arguments subst)))
 
-(defn- body-results! [db body seed]
-  (reduce (fn [substitutions literal] (reduce (fn [acc subst] (vec (concat acc (literal-results! db literal subst)))) [] substitutions)) [seed] body))
+^{:line 284 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- missing-candidate-source! [^String relation]
+  ^{:line 285 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (throw ^{:line 285 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ex-info ^{:line 285 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (str "candidate source is unavailable for relation '" relation "'") ^{:line 286 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {:type :fram-query-abort :code :query-text-index-unavailable})))
 
-(defn- derive-rule! [db ^Rule value]
-  (reduce (fn [acc subst] (conj acc (ground (rule-head-arguments value) subst))) #{} (body-results! db (rule-body value) {})))
+^{:line 289 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- relation-results! [db sources ^Literal literal subst]
+  ^{:line 292 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 292 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-relation literal)
+   arguments ^{:line 293 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-arguments literal)
+   source ^{:line 294 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get sources relation)]
+  ^{:line 295 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 295 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal) ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground arguments subst)) ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 296 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [subst]) ^{:line 297 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 298 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (instance? VirtualCandidateSource source) ^{:line 299 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 300 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (virtual-source-rows! source false arguments subst) subst)
+  ^{:line 302 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 302 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= relation text-match-relation) ^{:line 302 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? source)) ^{:line 303 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (missing-candidate-source! relation)
+  :else ^{:line 304 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 304 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 304 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 304 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})) subst)))))
 
-(defn- rule-head-relations [rules]
-  (vec (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} rules)))
+^{:line 306 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- literal-results! [db sources ^Literal literal subst]
+  ^{:line 309 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (query-check!)
+  ^{:line 310 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 311 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 311 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 312 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (relation-results! db sources literal subst)
+  ^{:line 313 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :comparison ^{:line 313 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (comparison-result literal subst) ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [subst] ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [])
+  ^{:line 315 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :builtin ^{:line 315 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 315 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (builtin-results literal subst)
+  :else ^{:line 316 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []))
 
-(defn- derive-round! [db rules]
-  (reduce (fn [acc value] (let [relation (rule-head-relation value)
-   derived (derive-rule! db value)]
-  (update acc relation (fn [current] (reduce (fn [rows-value row] (conj rows-value row)) (or current #{}) derived))))) db rules))
+^{:line 318 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- body-results! [db sources body seed]
+  ^{:line 321 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 322 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [substitutions literal] ^{:line 323 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 323 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 324 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 324 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (concat acc ^{:line 324 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-results! db sources literal subst)))) ^{:line 325 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] substitutions)) ^{:line 326 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [seed] body))
 
-(defn- ^Boolean relations-stable? [before after relations]
-  (loop [remaining relations]
-  (if (empty? remaining) true (let [relation (first remaining)]
-  (if (= (get before relation #{}) (get after relation #{})) (recur (rest remaining)) false)))))
+^{:line 328 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- derive-rule! [db sources ^Rule value]
+  ^{:line 330 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 330 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 331 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 331 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground ^{:line 331 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-arguments value) subst))) ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (body-results! db sources ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-body value) ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})))
 
-(defn- fixpoint-oracle! [db0 rules]
-  (let [relations (rule-head-relations rules)]
-  (loop [db db0]
-  (let [next (derive-round! db rules)]
-  (if (relations-stable? db next relations) next (recur next))))))
+^{:line 334 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- rule-head-relations [rules]
+  ^{:line 335 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 335 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 335 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 336 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 336 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relation value))) ^{:line 337 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} rules)))
 
-(defn- append-handle [index key handle]
-  (update index key (fn [current] (conj (or current []) handle))))
+^{:line 339 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- derive-round! [db sources rules]
+  ^{:line 341 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 342 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 343 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 343 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relation value)
+   derived ^{:line 344 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (derive-rule! db sources value)]
+  ^{:line 345 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (update acc relation ^{:line 346 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current] ^{:line 347 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 347 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [rows-value row] ^{:line 348 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj rows-value row)) ^{:line 349 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or current ^{:line 349 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) derived))))) db rules))
 
-(defn- add-position-handles [index tuple handle]
-  (loop [position 0
+^{:line 352 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^Boolean relations-stable? [before after relations]
+  ^{:line 353 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [remaining relations]
+  ^{:line 354 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 354 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining) true ^{:line 356 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 356 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining)]
+  ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get before relation ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get after relation ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})) ^{:line 358 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 358 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining)) false)))))
+
+^{:line 361 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn fixpoint-oracle-with-candidates! [db0 rules sources]
+  ^{:line 363 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relations ^{:line 363 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relations rules)]
+  ^{:line 364 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [db db0]
+  ^{:line 365 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [next ^{:line 365 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (derive-round! db sources rules)]
+  ^{:line 366 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 366 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (relations-stable? db next relations) next ^{:line 368 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur next))))))
+
+^{:line 370 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- fixpoint-oracle! [db0 rules]
+  ^{:line 371 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fixpoint-oracle-with-candidates! db0 rules ^{:line 371 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {}))
+
+^{:line 373 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- append-handle [index key handle]
+  ^{:line 375 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (update index key ^{:line 376 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current] ^{:line 377 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj ^{:line 377 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or current ^{:line 377 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []) handle))))
+
+^{:line 379 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- add-position-handles [index tuple handle]
+  ^{:line 381 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [position 0
    current index]
-  (if (>= position (count tuple)) current (let [bucket (get current position {})]
-  (recur (inc position) (assoc current position (append-handle bucket (nth tuple position) handle)))))))
+  ^{:line 382 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 382 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= position ^{:line 382 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count tuple)) current ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [bucket ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get current position ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})]
+  ^{:line 385 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 385 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (inc position) ^{:line 386 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc current position ^{:line 387 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (append-handle bucket ^{:line 387 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth tuple position) handle)))))))
 
-(defn- trie-add [trie tuple order handle]
-  (let [first-key (nth tuple (nth order 0))
-   second-key (nth tuple (nth order 1))
-   third-key (nth tuple (nth order 2))
-   first-node (get trie first-key {})
-   second-node (get first-node second-key {})
-   leaf (get second-node third-key [])]
-  (assoc trie first-key (assoc first-node second-key (assoc second-node third-key (conj leaf handle))))))
+^{:line 389 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- trie-add [trie tuple order handle]
+  ^{:line 391 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [first-key ^{:line 391 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth tuple ^{:line 391 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth order 0))
+   second-key ^{:line 392 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth tuple ^{:line 392 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth order 1))
+   third-key ^{:line 393 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth tuple ^{:line 393 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth order 2))
+   first-node ^{:line 394 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get trie first-key ^{:line 394 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})
+   second-node ^{:line 395 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get first-node second-key ^{:line 395 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})
+   leaf ^{:line 396 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get second-node third-key ^{:line 396 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [])]
+  ^{:line 397 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc trie first-key ^{:line 398 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc first-node second-key ^{:line 399 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc second-node third-key ^{:line 399 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj leaf handle))))))
 
-(defn- trie-node-handles [node]
-  (cond
-  (nil? node) []
-  (vector? node) node
-  (map? node) (reduce (fn [handles child] (into handles (trie-node-handles child))) [] (vec (vals node)))
-  :else []))
+^{:line 401 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- trie-node-handles [node]
+  ^{:line 402 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 403 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? node) ^{:line 403 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []
+  ^{:line 404 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vector? node) node
+  ^{:line 405 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (map? node) ^{:line 406 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 406 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [handles child] ^{:line 407 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (into handles ^{:line 407 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-node-handles child))) ^{:line 408 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 408 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 408 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vals node)))
+  :else ^{:line 409 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []))
 
-(defn- trie-probe [trie prefix]
-  (loop [node trie
+^{:line 411 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- trie-probe [trie prefix]
+  ^{:line 412 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [node trie
    remaining prefix]
-  (if (or (nil? node) (empty? remaining)) (trie-node-handles node) (recur (get node (first remaining)) (rest remaining)))))
+  ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? node) ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining)) ^{:line 414 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-node-handles node) ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get node ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining)) ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining)))))
 
-(defn- ^CandidateSource empty-candidate-source []
-  (->CandidateSource [] {} {} {} {}))
+^{:line 417 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^CandidateSource empty-candidate-source []
+  ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->CandidateSource ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 418 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} nil nil))
 
-(defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]
-  (let [handle (count (candidatesource-rows source))
-   with-row (assoc source :rows (conj (candidatesource-rows source) tuple))]
-  (if (and (= relation triple-relation) (= 3 (count tuple))) (assoc with-row :spo (trie-add (candidatesource-spo source) tuple [0 1 2] handle) :pos (trie-add (candidatesource-pos source) tuple [1 2 0] handle) :osp (trie-add (candidatesource-osp source) tuple [2 0 1] handle)) (assoc with-row :positions (add-position-handles (candidatesource-positions source) tuple handle)))))
+^{:line 420 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^CandidateSource external-candidate-source [selector resolver]
+  ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->CandidateSource ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} ^{:line 422 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} selector resolver))
 
-(defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
-  (reduce (fn [current tuple] (candidate-source-add relation current tuple)) source tuples))
+^{:line 424 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^CandidateSource candidate-source-add [^String relation ^CandidateSource source tuple]
+  ^{:line 426 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [handle ^{:line 426 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count ^{:line 426 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-rows source))
+   with-row ^{:line 428 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc source :rows ^{:line 428 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj ^{:line 428 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-rows source) tuple))]
+  ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= relation triple-relation) ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= 3 ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count tuple))) ^{:line 430 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc with-row :spo ^{:line 431 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-add ^{:line 431 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-spo source) tuple ^{:line 431 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [0 1 2] handle) :pos ^{:line 432 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-add ^{:line 432 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-pos source) tuple ^{:line 432 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [1 2 0] handle) :osp ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-add ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-osp source) tuple ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [2 0 1] handle)) ^{:line 434 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc with-row :positions ^{:line 435 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (add-position-handles ^{:line 436 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-positions source) tuple handle)))))
 
-(defn- build-candidate-sources [db relations]
-  (reduce (fn [sources relation] (assoc sources relation (candidate-source-add-rows relation (empty-candidate-source) (get db relation #{})))) {} relations))
+^{:line 438 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^CandidateSource candidate-source-add-rows [^String relation ^CandidateSource source tuples]
+  ^{:line 440 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 440 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current tuple] ^{:line 441 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidate-source-add relation current tuple)) source tuples))
 
-(defn- add-delta-sources [sources delta relations]
-  (reduce (fn [current relation] (let [tuples (get delta relation #{})]
-  (if (empty? tuples) current (assoc current relation (candidate-source-add-rows relation (get current relation (empty-candidate-source)) tuples))))) sources relations))
+^{:line 444 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- build-candidate-sources [db relations seed]
+  ^{:line 446 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 446 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [sources relation] ^{:line 447 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 447 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? sources relation) sources ^{:line 449 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc sources relation ^{:line 450 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidate-source-add-rows relation ^{:line 451 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty-candidate-source) ^{:line 451 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 451 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}))))) seed relations))
 
-(defn- bound-term-value [^QueryTerm term subst]
-  (let [name (queryterm-variable term)]
-  (if (some? name) (if (contains? subst name) (get subst name) nil) (queryterm-value term))))
+^{:line 454 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- add-delta-sources [sources delta relations]
+  ^{:line 456 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 456 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current relation] ^{:line 457 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [tuples ^{:line 457 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get delta relation ^{:line 457 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})
+   existing ^{:line 458 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get current relation)
+   base ^{:line 460 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 460 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (instance? CandidateSource existing) existing ^{:line 462 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty-candidate-source))]
+  ^{:line 463 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 463 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? tuples) current ^{:line 465 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc current relation ^{:line 466 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidate-source-add-rows relation base tuples))))) sources relations))
 
-(defn- bound-prefix [arguments order subst]
-  (loop [remaining order
-   prefix []]
-  (if (empty? remaining) prefix (let [value (bound-term-value (nth arguments (first remaining)) subst)]
-  (if (nil? value) prefix (recur (rest remaining) (conj prefix value)))))))
+^{:line 470 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- bound-term-value [^QueryTerm term subst]
+  ^{:line 471 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [name ^{:line 471 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-variable term)]
+  ^{:line 472 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 472 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? name) ^{:line 473 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 473 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? subst name) ^{:line 473 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get subst name) nil) ^{:line 474 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (queryterm-value term))))
 
-(defn- triple-prefix-handles [^CandidateSource source arguments subst]
-  (let [spo-key (bound-prefix arguments [0 1 2] subst)
-   pos-key (bound-prefix arguments [1 2 0] subst)
-   osp-key (bound-prefix arguments [2 0 1] subst)
-   spo-count (count spo-key)
-   pos-count (count pos-key)
-   osp-count (count osp-key)]
-  (cond
-  (and (= 0 spo-count) (and (= 0 pos-count) (= 0 osp-count))) nil
-  (and (>= spo-count pos-count) (>= spo-count osp-count)) (trie-probe (candidatesource-spo source) spo-key)
-  (>= pos-count osp-count) (trie-probe (candidatesource-pos source) pos-key)
-  :else (trie-probe (candidatesource-osp source) osp-key))))
+^{:line 476 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn ^Boolean text-needle-valid? [needle]
+  ^{:line 477 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (text-index/text-needle-valid? needle))
 
-(defn- positional-handles [^CandidateSource source arguments subst]
-  (loop [position 0
+^{:line 481 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn text-candidate-sources [source]
+  ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {text-match-relation ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (->VirtualCandidateSource ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [arguments subst] ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (text-index/indexed-rows source ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-term-value ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 2) subst))) ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [arguments subst] ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (text-index/scan-rows source ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-term-value ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments 2) subst))))})
+
+^{:line 492 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn build-text-candidates [propositions]
+  ^{:line 494 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (text-candidate-sources ^{:line 495 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (text-index/build-source propositions text-index/text-index-max-bytes)))
+
+^{:line 497 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- bound-prefix [arguments order subst]
+  ^{:line 500 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [remaining order
+   prefix ^{:line 500 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []]
+  ^{:line 501 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 501 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining) prefix ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [value ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-term-value ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining)) subst)]
+  ^{:line 504 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 504 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? value) prefix ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining) ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj prefix value)))))))
+
+^{:line 508 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- triple-prefix-handles [^CandidateSource source arguments subst]
+  ^{:line 511 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [spo-key ^{:line 511 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 511 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [0 1 2] subst)
+   pos-key ^{:line 512 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 512 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [1 2 0] subst)
+   osp-key ^{:line 513 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-prefix arguments ^{:line 513 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [2 0 1] subst)
+   spo-count ^{:line 514 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count spo-key)
+   pos-count ^{:line 515 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count pos-key)
+   osp-count ^{:line 516 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count osp-key)]
+  ^{:line 517 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= 0 spo-count) ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= 0 pos-count) ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= 0 osp-count))) nil
+  ^{:line 519 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 519 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= spo-count pos-count) ^{:line 519 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= spo-count osp-count)) ^{:line 520 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-probe ^{:line 520 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-spo source) spo-key)
+  ^{:line 521 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= pos-count osp-count) ^{:line 522 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-probe ^{:line 522 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-pos source) pos-key)
+  :else ^{:line 523 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (trie-probe ^{:line 523 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-osp source) osp-key))))
+
+^{:line 525 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- positional-handles [^CandidateSource source arguments subst]
+  ^{:line 528 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [position 0
    best nil
    found false]
-  (if (>= position (count arguments)) (if found best nil) (let [value (bound-term-value (nth arguments position) subst)]
-  (if (nil? value) (recur (inc position) best found) (let [candidate (get (get (candidatesource-positions source) position {}) value [])]
-  (recur (inc position) (if (or (not found) (< (count candidate) (count best))) candidate best) true)))))))
+  ^{:line 529 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 529 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= position ^{:line 529 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count arguments)) ^{:line 530 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if found best nil) ^{:line 531 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [value ^{:line 531 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-term-value ^{:line 531 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth arguments position) subst)]
+  ^{:line 532 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 532 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? value) ^{:line 533 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 533 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (inc position) best found) ^{:line 534 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [candidate ^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get ^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get ^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-positions source) position ^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {}) value ^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [])]
+  ^{:line 536 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 536 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (inc position) ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not found) ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (< ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count candidate) ^{:line 537 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count best))) candidate best) true)))))))
 
-(defn- source-handles [^CandidateSource source ^String relation arguments subst]
-  (if (and (= relation triple-relation) (= 3 (count arguments))) (triple-prefix-handles source arguments subst) (positional-handles source arguments subst)))
+^{:line 541 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- source-handles [^CandidateSource source ^String relation arguments subst]
+  ^{:line 544 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [selector ^{:line 544 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-selector source)]
+  ^{:line 545 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 545 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? selector) ^{:line 546 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (selector ^{:line 546 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (mapv ^{:line 546 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [term] ^{:line 547 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (bound-term-value term subst)) arguments)) ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= relation triple-relation) ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= 3 ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count arguments))) ^{:line 550 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (triple-prefix-handles source arguments subst) ^{:line 551 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (positional-handles source arguments subst)))))
 
-(defn- relation-results-indexed! [db sources ^Literal literal subst]
-  (let [relation (literal-relation literal)
-   arguments (literal-arguments literal)]
-  (if (literal-negated literal) (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst]) (let [source (get sources relation)]
-  (if (nil? source) (reduce (fn [acc tuple] (let [matched (unify-arguments! arguments tuple subst)]
-  (if (some? matched) (conj acc matched) acc))) [] (vec (get db relation #{}))) (let [rows-value (candidatesource-rows source)
-   handles (source-handles source relation arguments subst)]
-  (if (nil? handles) (reduce (fn [acc tuple] (let [matched (unify-arguments! arguments tuple subst)]
-  (if (some? matched) (conj acc matched) acc))) [] rows-value) (reduce (fn [acc handle] (let [tuple (nth rows-value handle)
-   matched (unify-arguments! arguments tuple subst)]
-  (if (some? matched) (conj acc matched) acc))) [] handles))))))))
+^{:line 553 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- source-row [^CandidateSource source handle]
+  ^{:line 554 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [resolver ^{:line 554 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-resolver source)]
+  ^{:line 555 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 555 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? resolver) ^{:line 556 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (resolver handle) ^{:line 557 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth ^{:line 557 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-rows source) handle))))
 
-(defn- literal-results-indexed! [db sources ^Literal literal subst]
-  (query-check!)
-  (cond
-  (= :relation (literal-kind literal)) (relation-results-indexed! db sources literal subst)
-  (= :comparison (literal-kind literal)) (if (comparison-result literal subst) [subst] [])
-  (= :builtin (literal-kind literal)) (builtin-results literal subst)
-  :else []))
+^{:line 559 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^Boolean source-contains? [^CandidateSource source ^String relation arguments subst]
+  ^{:line 562 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [wanted ^{:line 562 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground arguments subst)
+   handles ^{:line 563 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (source-handles source relation arguments subst)]
+  ^{:line 564 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? ^{:line 564 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some ^{:line 564 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [handle] ^{:line 565 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 565 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= wanted ^{:line 565 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (source-row source handle)) ^{:line 565 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (do
+  handle))) ^{:line 566 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or handles ^{:line 566 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [])))))
 
-(defn- body-results-indexed! [db sources body seed]
-  (reduce (fn [substitutions literal] (reduce (fn [acc subst] (into acc (literal-results-indexed! db sources literal subst))) [] substitutions)) [seed] body))
+^{:line 568 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- relation-results-indexed! [db sources ^Literal literal subst]
+  ^{:line 571 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 571 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-relation literal)
+   arguments ^{:line 572 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-arguments literal)
+   source ^{:line 573 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get sources relation)]
+  ^{:line 574 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 574 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal) ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (instance? CandidateSource source) ^{:line 576 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (source-contains? source relation arguments subst) ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground arguments subst))) ^{:line 578 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 578 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [subst]) ^{:line 579 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 580 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (instance? VirtualCandidateSource source) ^{:line 581 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-tuples! arguments ^{:line 582 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (virtual-source-rows! source true arguments subst) subst)
+  ^{:line 584 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? source) ^{:line 585 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 585 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= relation text-match-relation) ^{:line 586 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (missing-candidate-source! relation) ^{:line 587 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 587 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc tuple] ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [matched ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
+  ^{:line 589 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 589 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? matched) ^{:line 589 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}))))
+  :else ^{:line 592 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [rows-value ^{:line 592 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (candidatesource-rows source)
+   handles ^{:line 593 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (source-handles source relation arguments subst)]
+  ^{:line 594 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 594 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nil? handles) ^{:line 595 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-tuples! arguments rows-value subst) ^{:line 596 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 597 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc handle] ^{:line 598 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [tuple ^{:line 598 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (source-row source handle)
+   matched ^{:line 599 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (unify-arguments! arguments tuple subst)]
+  ^{:line 600 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 600 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (some? matched) ^{:line 600 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc matched) acc))) ^{:line 601 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] handles)))))))
 
-(defn- derive-rule-indexed! [db sources ^Rule value]
-  (reduce (fn [acc subst] (conj acc (ground (rule-head-arguments value) subst))) #{} (body-results-indexed! db sources (rule-body value) {})))
+^{:line 603 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- literal-results-indexed! [db sources ^Literal literal subst]
+  ^{:line 606 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (query-check!)
+  ^{:line 607 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 608 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 608 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 609 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (relation-results-indexed! db sources literal subst)
+  ^{:line 610 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :comparison ^{:line 610 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (comparison-result literal subst) ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [subst] ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [])
+  ^{:line 612 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :builtin ^{:line 612 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 612 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (builtin-results literal subst)
+  :else ^{:line 613 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []))
 
-(defn- delta-relation-positions [body delta-relations]
-  (loop [position 0
+^{:line 615 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- body-results-indexed! [db sources body seed]
+  ^{:line 618 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 619 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [substitutions literal] ^{:line 620 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 620 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 621 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (into acc ^{:line 621 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-results-indexed! db sources literal subst))) ^{:line 622 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] substitutions)) ^{:line 623 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [seed] body))
+
+^{:line 625 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- derive-rule-indexed! [db sources ^Rule value]
+  ^{:line 627 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 627 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 628 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 628 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground ^{:line 628 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-arguments value) subst))) ^{:line 629 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} ^{:line 629 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (body-results-indexed! db sources ^{:line 629 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-body value) ^{:line 629 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})))
+
+^{:line 631 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- delta-relation-positions [body delta-relations]
+  ^{:line 633 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [position 0
    remaining body
-   positions []]
-  (if (empty? remaining) positions (let [literal (first remaining)]
-  (recur (inc position) (rest remaining) (if (and (= :relation (literal-kind literal)) (not (literal-negated literal)) (contains? delta-relations (literal-relation literal))) (conj positions position) positions))))))
+   positions ^{:line 633 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []]
+  ^{:line 634 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 634 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining) positions ^{:line 636 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [literal ^{:line 636 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining)]
+  ^{:line 637 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 637 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (inc position) ^{:line 637 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining) ^{:line 638 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 638 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 638 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 638 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 639 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 639 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal)) ^{:line 640 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? delta-relations ^{:line 640 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-relation literal))) ^{:line 641 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj positions position) positions))))))
 
-(defn- positive-relation-names [rules]
-  (vec (sort (reduce (fn [relations value] (reduce (fn [current literal] (if (and (= :relation (literal-kind literal)) (not (literal-negated literal))) (conj current (literal-relation literal)) current)) relations (rule-body value))) #{} rules))))
+^{:line 644 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- positive-relation-names [rules]
+  ^{:line 645 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 646 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (sort ^{:line 647 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 648 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [relations value] ^{:line 649 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 649 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current literal] ^{:line 650 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 650 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 650 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 650 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 651 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 651 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal))) ^{:line 652 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj current ^{:line 652 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-relation literal)) current)) relations ^{:line 654 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-body value))) ^{:line 655 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} rules))))
 
-(defn- body-results-pinned! [db sources delta delta-sources body pin]
-  (loop [position 0
+^{:line 657 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- body-results-pinned! [db sources delta delta-sources body pin]
+  ^{:line 660 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [position 0
    remaining body
-   substitutions [{}]]
-  (if (empty? remaining) substitutions (let [literal (first remaining)
-   pinned (and (= position pin) (= :relation (literal-kind literal)) (not (literal-negated literal)))
-   read-db (if pinned delta db)
-   read-sources (if pinned delta-sources sources)
-   next-substitutions (reduce (fn [acc subst] (into acc (literal-results-indexed! read-db read-sources literal subst))) [] substitutions)]
-  (recur (inc position) (rest remaining) next-substitutions)))))
+   substitutions ^{:line 660 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [^{:line 660 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {}]]
+  ^{:line 661 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 661 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining) substitutions ^{:line 663 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [literal ^{:line 663 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining)
+   pinned ^{:line 664 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 664 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= position pin) ^{:line 665 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 665 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 666 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 666 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal)))
+   read-db ^{:line 667 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if pinned delta db)
+   read-sources ^{:line 668 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if pinned delta-sources sources)
+   next-substitutions ^{:line 670 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 671 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc subst] ^{:line 672 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (into acc ^{:line 673 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-results-indexed! read-db read-sources literal subst))) ^{:line 675 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] substitutions)]
+  ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (inc position) ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining) next-substitutions)))))
 
-(defn- derive-rule-delta! [db sources delta delta-sources delta-relations ^Rule value]
-  (let [head (rule-head-arguments value)
-   body (rule-body value)]
-  (reduce (fn [derived pin] (reduce (fn [current subst] (conj current (ground head subst))) derived (body-results-pinned! db sources delta delta-sources body pin))) #{} (delta-relation-positions body delta-relations))))
+^{:line 678 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- derive-rule-delta! [db sources delta delta-sources delta-relations ^Rule value]
+  ^{:line 681 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [head ^{:line 681 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-arguments value)
+   body ^{:line 682 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-body value)]
+  ^{:line 683 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 684 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [derived pin] ^{:line 685 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 685 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current subst] ^{:line 686 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj current ^{:line 686 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (ground head subst))) derived ^{:line 688 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (body-results-pinned! db sources delta delta-sources body pin))) ^{:line 689 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} ^{:line 689 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (delta-relation-positions body delta-relations))))
 
-(defn- db-new-only [candidate db relations]
-  (reduce (fn [delta relation] (let [new-tuples (reduce (fn [rows-value tuple] (if (contains? (get db relation #{}) tuple) rows-value (conj rows-value tuple))) #{} (get candidate relation #{}))]
-  (if (empty? new-tuples) delta (assoc delta relation new-tuples)))) {} relations))
+^{:line 691 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- db-new-only [candidate db relations]
+  ^{:line 692 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 693 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [delta relation] ^{:line 694 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [new-tuples ^{:line 695 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 695 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 696 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 696 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? ^{:line 696 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 696 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) tuple) rows-value ^{:line 698 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj rows-value tuple))) ^{:line 699 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} ^{:line 699 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get candidate relation ^{:line 699 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}))]
+  ^{:line 700 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 700 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? new-tuples) delta ^{:line 700 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (assoc delta relation new-tuples)))) ^{:line 701 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} relations))
 
-(defn- db-merge-delta [db delta relations]
-  (reduce (fn [current relation] (let [new-tuples (get delta relation #{})]
-  (if (empty? new-tuples) current (update current relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) new-tuples)))))) db relations))
+^{:line 703 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- db-merge-delta [db delta relations]
+  ^{:line 704 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 705 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current relation] ^{:line 706 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [new-tuples ^{:line 706 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get delta relation ^{:line 706 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})]
+  ^{:line 707 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 707 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? new-tuples) current ^{:line 709 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (update current relation ^{:line 710 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [known] ^{:line 711 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 711 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 712 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 713 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or known ^{:line 713 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) new-tuples)))))) db relations))
 
-(defn- ^Boolean delta-empty? [delta relations]
-  (loop [remaining relations]
-  (if (empty? remaining) true (if (empty? (get delta (first remaining) #{})) (recur (rest remaining)) false))))
+^{:line 716 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- ^Boolean delta-empty? [delta relations]
+  ^{:line 717 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [remaining relations]
+  ^{:line 718 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 718 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? remaining) true ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (empty? ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get delta ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (first remaining) ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})) ^{:line 721 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 721 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rest remaining)) false))))
 
-(defn- derive-delta! [db sources delta rules relations delta-relations]
-  (let [delta-set (set delta-relations)
-   delta-sources (build-candidate-sources delta delta-relations)
-   candidate (reduce (fn [current value] (let [relation (rule-head-relation value)
-   derived (derive-rule-delta! db sources delta delta-sources delta-set value)]
-  (update current relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) derived))))) {} rules)]
-  (db-new-only candidate db relations)))
+^{:line 724 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- derive-delta! [db sources delta rules relations delta-relations]
+  ^{:line 727 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [delta-set ^{:line 727 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (set delta-relations)
+   delta-sources ^{:line 728 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (build-candidate-sources delta delta-relations ^{:line 728 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {})
+   candidate ^{:line 730 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 731 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [current value] ^{:line 732 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 732 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relation value)
+   derived ^{:line 734 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (derive-rule-delta! db sources delta delta-sources delta-set value)]
+  ^{:line 736 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (update current relation ^{:line 737 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [known] ^{:line 738 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 738 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 739 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 740 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or known ^{:line 740 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) derived))))) ^{:line 741 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {} rules)]
+  ^{:line 742 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (db-new-only candidate db relations)))
 
-(defn fixpoint! [db0 rules]
-  (let [relations (rule-head-relations rules)
-   read-relations (positive-relation-names rules)
-   head-set (set relations)
-   delta-relations (vec (filter (fn [relation] (contains? head-set relation)) read-relations))
-   initial-sources (build-candidate-sources db0 read-relations)
-   seeded (reduce (fn [db value] (let [relation (rule-head-relation value)
-   derived (derive-rule-indexed! db0 initial-sources value)]
-  (update db relation (fn [known] (reduce (fn [rows-value tuple] (conj rows-value tuple)) (or known #{}) derived))))) db0 rules)
-   delta0 (db-new-only seeded db0 relations)
-   seeded-sources (add-delta-sources initial-sources delta0 read-relations)]
-  (loop [db seeded
+^{:line 744 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn fixpoint-with-candidates! [db0 rules candidates]
+  ^{:line 746 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relations ^{:line 746 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relations rules)
+   read-relations ^{:line 747 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (positive-relation-names rules)
+   head-set ^{:line 748 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (set relations)
+   delta-relations ^{:line 750 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 750 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (filter ^{:line 750 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [relation] ^{:line 751 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? head-set relation)) read-relations))
+   initial-sources ^{:line 753 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (build-candidate-sources db0 read-relations candidates)
+   seeded ^{:line 755 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 756 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [db value] ^{:line 757 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [relation ^{:line 757 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relation value)
+   derived ^{:line 758 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (derive-rule-indexed! db0 initial-sources value)]
+  ^{:line 759 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (update db relation ^{:line 760 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [known] ^{:line 761 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 761 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [rows-value tuple] ^{:line 762 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj rows-value tuple)) ^{:line 763 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (or known ^{:line 763 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{}) derived))))) db0 rules)
+   delta0 ^{:line 765 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (db-new-only seeded db0 relations)
+   seeded-sources ^{:line 766 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (add-delta-sources initial-sources delta0 read-relations)]
+  ^{:line 767 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [db seeded
    sources seeded-sources
    delta delta0]
-  (if (delta-empty? delta delta-relations) db (let [next-delta (derive-delta! db sources delta rules relations delta-relations)]
-  (recur (db-merge-delta db next-delta relations) (add-delta-sources sources next-delta read-relations) next-delta))))))
+  ^{:line 768 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 768 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (delta-empty? delta delta-relations) db ^{:line 770 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [next-delta ^{:line 771 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (derive-delta! db sources delta rules relations delta-relations)]
+  ^{:line 773 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 773 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (db-merge-delta db next-delta relations) ^{:line 774 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (add-delta-sources sources next-delta read-relations) next-delta))))))
 
-(defn run-rules! [propositions rules]
-  (fixpoint! (edb propositions) rules))
+^{:line 777 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn fixpoint! [db0 rules]
+  ^{:line 778 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fixpoint-with-candidates! db0 rules ^{:line 778 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {}))
 
-(defn run-strata-db! [db0 strata]
-  (reduce (fn [db stratum] (fixpoint! db stratum)) db0 strata))
+^{:line 780 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn fixpoint-sourced! [db0 registered rules]
+  ^{:line 782 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fixpoint-with-candidates! db0 rules registered))
 
-(defn run-strata! [propositions strata]
-  (run-strata-db! (edb propositions) strata))
+^{:line 784 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn run-rules! [propositions rules]
+  ^{:line 785 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fixpoint! ^{:line 785 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (edb propositions) rules))
 
-(defn- negated-relations [stratum]
-  (reduce (fn [acc value] (reduce (fn [relations literal] (if (and (= :relation (literal-kind literal)) (literal-negated literal)) (conj relations (literal-relation literal)) relations)) acc (rule-body value))) [] stratum))
+^{:line 787 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn run-strata-db-with-candidates! [db0 strata candidates]
+  ^{:line 789 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 789 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [db stratum] ^{:line 790 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fixpoint-with-candidates! db stratum candidates)) db0 strata))
 
-(defn strata-violations [strata]
-  (loop [index 0
+^{:line 793 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn run-strata-db! [db0 strata]
+  ^{:line 794 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (run-strata-db-with-candidates! db0 strata ^{:line 794 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} {}))
+
+^{:line 796 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn run-strata-db-sourced! [db0 sources strata]
+  ^{:line 798 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (run-strata-db-with-candidates! db0 strata sources))
+
+^{:line 800 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn run-strata! [propositions strata]
+  ^{:line 802 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (run-strata-db! ^{:line 802 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (edb propositions) strata))
+
+^{:line 804 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn- negated-relations [stratum]
+  ^{:line 805 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 806 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 807 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 807 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [relations literal] ^{:line 808 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 808 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (and ^{:line 808 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (= :relation ^{:line 808 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-kind literal)) ^{:line 809 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-negated literal)) ^{:line 810 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj relations ^{:line 810 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (literal-relation literal)) relations)) acc ^{:line 812 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-body value))) ^{:line 813 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} [] stratum))
+
+^{:line 815 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn strata-violations [strata]
+  ^{:line 816 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (loop [index 0
    lower base-relations
-   problems []]
-  (if (>= index (count strata)) problems (let [stratum (nth strata index)
-   heads (reduce (fn [acc value] (conj acc (rule-head-relation value))) #{} stratum)
-   problems2 (reduce (fn [acc relation] (cond
-  (contains? heads relation) (conj acc (str "stratum " index ": negated '" relation "' is also derived in the same stratum"))
-  (not (contains? lower relation)) (conj acc (str "stratum " index ": negated '" relation "' is not a base or lower-stratum relation"))
-  :else acc)) problems (negated-relations stratum))]
-  (recur (+ index 1) (reduce (fn [acc relation] (conj acc relation)) lower heads) problems2)))))
+   problems ^{:line 816 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} []]
+  ^{:line 817 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (if ^{:line 817 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (>= index ^{:line 817 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (count strata)) problems ^{:line 819 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (let [stratum ^{:line 819 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (nth strata index)
+   heads ^{:line 821 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 821 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc value] ^{:line 822 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 822 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (rule-head-relation value))) ^{:line 823 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{} stratum)
+   problems2 ^{:line 825 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 826 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc relation] ^{:line 827 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (cond
+  ^{:line 828 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? heads relation) ^{:line 829 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 829 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (str "stratum " index ": negated '" relation "' is also derived in the same stratum"))
+  ^{:line 831 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (not ^{:line 831 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (contains? lower relation)) ^{:line 832 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc ^{:line 832 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (str "stratum " index ": negated '" relation "' is not a base or lower-stratum relation"))
+  :else acc)) problems ^{:line 835 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (negated-relations stratum))]
+  ^{:line 836 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (recur ^{:line 836 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (+ index 1) ^{:line 837 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (reduce ^{:line 837 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (fn [acc relation] ^{:line 838 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (conj acc relation)) lower heads) problems2)))))
 
-(defn facts [db ^String relation]
-  (vec (get db relation #{})))
+^{:line 842 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (defn facts [db ^String relation]
+  ^{:line 843 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (vec ^{:line 843 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} (get db relation ^{:line 843 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/datalog.bclj"} #{})))

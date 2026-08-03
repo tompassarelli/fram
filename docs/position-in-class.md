@@ -22,6 +22,9 @@ properties:
   version, operation, and canonical request digest. Snapshot version is thus a
   structural invalidation key, rather than a TTL guess
   ([`query-reference.md`](query-reference.md)).
+- Full-text word match is an additive virtual relation backed by an immutable
+  snapshot index. It shares the same structural version identity and has no
+  TTL or scan fallback ([`query-reference.md`](query-reference.md)).
 - Rule bodies are ordered vectors. Fram does not reorder clauses with a query
   planner ([`query-reference.md`](query-reference.md)); this is the same
   explicit-clause-order stance associated with Datomic and DataScript, not a
@@ -60,15 +63,13 @@ substitute measurement for this evaluator
 1. **Time-travel query surface.** The kernel and native query path already
    support logical `as-of`; the missing work is the complete, supported
    time-travel surface. A supported surface is in design.
-2. **Full-text search.** A design is in progress. Version
-   zero is word-match, not a relevance engine.
-3. **Hash joins for large intermediates.** Defer this until measurements show
+2. **Hash joins for large intermediates.** Defer this until measurements show
    that indexed nested joins, rather than another boundary, dominate.
-4. **Aggregates and pull polish.** Aggregates exist in the query contract, but
+3. **Aggregates and pull polish.** Aggregates exist in the query contract, but
    the projection surface remains partial; native `rpc/pull` is not part of
    the current wire contract ([`query-reference.md`](query-reference.md),
    [`coordinator-bind-and-wire.md`](coordinator-bind-and-wire.md)).
-5. **Parsed-plan cache.** This is a minor efficiency gap. Ordered-result reuse
+4. **Parsed-plan cache.** This is a minor efficiency gap. Ordered-result reuse
    is already structural; parsed-plan reuse is not yet claimed.
 
 ## Deliberate non-goals

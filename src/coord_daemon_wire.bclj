@@ -1404,6 +1404,9 @@
 (defn rpc-query-as-of! [version: Int] -> t/Triple
   (rpc-record! :query/as-of [version]))
 
+(defn rpc-query-since! [lower-exclusive: Int upper: Any] -> t/Triple
+  (rpc-record! :query/since [lower-exclusive upper]))
+
 (defn rpc-query-request! [plan: t/Triple snapshot: Any] -> t/Triple
   (rpc-record! :query/request [plan snapshot]))
 

@@ -225,6 +225,28 @@
       (throw (ex-info "fram: operation handle does not resolve to Triple"
                       {:type :invalid-operation-handle})))))
 
+(defn known-term-handle [store: t/TermStore term: Any] -> Int?
+  (if (not (t/term? term))
+    nil
+    (if (t/triple? term)
+      (let [slot0 (known-term-handle store (t/triple-slot0 term))
+            slot1 (known-term-handle store (t/triple-slot1 term))
+            slot2 (known-term-handle store (t/triple-slot2 term))]
+        (if (every? some? [slot0 slot1 slot2])
+          (let [position
+                (find-triple-position
+                 (t/termstore-triples store) (t/termstore-triple-slots store)
+                 (t/->TripleRow (if (some? slot0) slot0 0)
+                                (if (some? slot1) slot1 0)
+                                (if (some? slot2) slot2 0)))]
+            (when (>= position 0) (triple-handle position)))
+          nil))
+      (let [position
+            (find-atom-position
+             (t/termstore-atoms store) (t/termstore-atom-slots store)
+             (atom-row term))]
+        (when (>= position 0) (atom-handle position))))))
+
 (defn intern-term! [ctx: (Atom t/TermStore) term: Any] -> Any
   (let [handle (intern-handle! ctx term)]
     (resolve-handle (deref ctx) handle)))

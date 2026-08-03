@@ -5,6 +5,7 @@
 (define-mode strict)
 (require fram.kernel :as kernel)
 (require fram.types :as t)
+(require fram.text-index :as text-index)
 
 ;; Query syntax adapters compile to this IR. QueryTerm.value stays Any because
 ;; Beagle cannot consume a recursive Dyn through generic equality; constant and
@@ -24,16 +25,25 @@
 (defalias HandleBucket (Map Any (Vec Int)))
 (defalias PositionIndex (Map Int HandleBucket))
 (defalias HandleTrie (Map Any Any))
+(defalias SourceSelector [(Vec Any) -> (Vec Int)])
+(defalias SourceResolver [Int -> Tuple])
 
 ;; Candidate handles are private positions in one immutable relation vector.
 (defrecord CandidateSource
   [rows: (Vec Tuple) positions: PositionIndex
-   spo: HandleTrie pos: HandleTrie osp: HandleTrie])
-(defalias CandidateSources (Map String CandidateSource))
+   spo: HandleTrie pos: HandleTrie osp: HandleTrie
+   selector: SourceSelector? resolver: SourceResolver?])
+(defrecord VirtualCandidateSource
+  [indexed: [(Vec QueryTerm) Substitution -> (Vec Tuple)]
+   scan: [(Vec QueryTerm) Substitution -> (Vec Tuple)]])
+(defalias CandidateSourceValue (U CandidateSource VirtualCandidateSource))
+(defalias CandidateSources (Map String CandidateSourceValue))
 
 (def triple-relation: String "triple")
 (def occurrence-relation: String "occurrence")
-(def base-relations: (Set String) #{triple-relation occurrence-relation})
+(def text-match-relation: String "text-match")
+(def base-relations: (Set String)
+  #{triple-relation occurrence-relation text-match-relation})
 (def comparison-operators: (Set Keyword) #{:eq :ne :lt :le :gt :ge})
 (def subtract-operator: Keyword (keyword "-"))
 (def builtin-operators: (Set Keyword)
@@ -255,51 +265,83 @@
           []
           [(assoc subst (literal-binding literal) result)])))))
 
+(defn- unify-tuples!
+  [arguments: (Vec QueryTerm) tuples: (Vec Tuple)
+   subst: Substitution] -> (Vec Substitution)
+  (reduce (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
+            (let [matched (unify-arguments! arguments tuple subst)]
+              (if (some? matched) (conj acc matched) acc)))
+          [] tuples))
+
+(defn- virtual-source-rows!
+  [source: VirtualCandidateSource indexed: Bool
+   arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+  (let [rows-fn (if indexed
+                  (virtualcandidatesource-indexed source)
+                  (virtualcandidatesource-scan source))]
+    (rows-fn arguments subst)))
+
+(defn- missing-candidate-source! [relation: String] -> Any
+  (throw (ex-info (str "candidate source is unavailable for relation '" relation "'")
+                  {:type :fram-query-abort
+                   :code :query-text-index-unavailable})))
+
 (defn- relation-results!
-  [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
+  [db: Db sources: CandidateSources literal: Literal
+   subst: Substitution] -> (Vec Substitution)
   (let [relation (literal-relation literal)
-        arguments (literal-arguments literal)]
+        arguments (literal-arguments literal)
+        source (get sources relation)]
     (if (literal-negated literal)
       (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst])
-      (reduce (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
-                (let [matched (unify-arguments! arguments tuple subst)]
-                  (if (some? matched) (conj acc matched) acc)))
-              [] (vec (get db relation #{}))))))
+      (cond
+        [(instance? VirtualCandidateSource source)
+         (unify-tuples! arguments
+                        (virtual-source-rows! source false arguments subst)
+                        subst)]
+        [(and (= relation text-match-relation) (nil? source))
+         (missing-candidate-source! relation)]
+        [:else (unify-tuples! arguments (vec (get db relation #{})) subst)]))))
 
 (defn- literal-results!
-  [db: Db literal: Literal subst: Substitution] -> (Vec Substitution)
+  [db: Db sources: CandidateSources literal: Literal
+   subst: Substitution] -> (Vec Substitution)
   (query-check!)
   (cond
-    [(= :relation (literal-kind literal)) (relation-results! db literal subst)]
+    [(= :relation (literal-kind literal))
+     (relation-results! db sources literal subst)]
     [(= :comparison (literal-kind literal))
      (if (comparison-result literal subst) [subst] [])]
     [(= :builtin (literal-kind literal)) (builtin-results literal subst)]
     [:else []]))
 
 (defn- body-results!
-  [db: Db body: (Vec Literal) seed: Substitution] -> (Vec Substitution)
+  [db: Db sources: CandidateSources body: (Vec Literal)
+   seed: Substitution] -> (Vec Substitution)
   (reduce
    (fn [substitutions: (Vec Substitution) literal: Literal] -> (Vec Substitution)
      (reduce (fn [acc: (Vec Substitution) subst: Substitution] -> (Vec Substitution)
-               (vec (concat acc (literal-results! db literal subst))))
+               (vec (concat acc (literal-results! db sources literal subst))))
              [] substitutions))
    [seed] body))
 
-(defn- derive-rule! [db: Db value: Rule] -> (Set Tuple)
+(defn- derive-rule!
+  [db: Db sources: CandidateSources value: Rule] -> (Set Tuple)
   (reduce (fn [acc: (Set Tuple) subst: Substitution] -> (Set Tuple)
             (conj acc (ground (rule-head-arguments value) subst)))
-          #{} (body-results! db (rule-body value) {})))
+          #{} (body-results! db sources (rule-body value) {})))
 
 (defn- rule-head-relations [rules: (Vec Rule)] -> (Vec String)
   (vec (reduce (fn [acc: (Set String) value: Rule] -> (Set String)
                  (conj acc (rule-head-relation value)))
                #{} rules)))
 
-(defn- derive-round! [db: Db rules: (Vec Rule)] -> Db
+(defn- derive-round!
+  [db: Db sources: CandidateSources rules: (Vec Rule)] -> Db
   (reduce
    (fn [acc: Db value: Rule] -> Db
      (let [relation (rule-head-relation value)
-           derived (derive-rule! db value)]
+           derived (derive-rule! db sources value)]
        (update acc relation
                (fn [current: (U (Set Tuple) Nil)] -> (Set Tuple)
                  (reduce (fn [rows-value: (Set Tuple) row: Tuple] -> (Set Tuple)
@@ -316,13 +358,17 @@
           (recur (rest remaining))
           false)))))
 
-(defn- fixpoint-oracle! [db0: Db rules: (Vec Rule)] -> Db
+(defn fixpoint-oracle-with-candidates!
+  [db0: Db rules: (Vec Rule) sources: CandidateSources] -> Db
   (let [relations (rule-head-relations rules)]
     (loop [db db0]
-      (let [next (derive-round! db rules)]
+      (let [next (derive-round! db sources rules)]
         (if (relations-stable? db next relations)
           next
           (recur next))))))
+
+(defn- fixpoint-oracle! [db0: Db rules: (Vec Rule)] -> Db
+  (fixpoint-oracle-with-candidates! db0 rules {}))
 
 (defn- append-handle
   [index: HandleBucket key: Any handle: Int] -> HandleBucket
@@ -369,7 +415,11 @@
       (recur (get node (first remaining)) (rest remaining)))))
 
 (defn- empty-candidate-source [] -> CandidateSource
-  (->CandidateSource [] {} {} {} {}))
+  (->CandidateSource [] {} {} {} {} nil nil))
+
+(defn external-candidate-source
+  [selector: SourceSelector resolver: SourceResolver] -> CandidateSource
+  (->CandidateSource [] {} {} {} {} selector resolver))
 
 (defn- candidate-source-add
   [relation: String source: CandidateSource tuple: Tuple] -> CandidateSource
@@ -392,24 +442,29 @@
           source tuples))
 
 (defn- build-candidate-sources
-  [db: Db relations: (Vec String)] -> CandidateSources
+  [db: Db relations: (Vec String) seed: CandidateSources] -> CandidateSources
   (reduce (fn [sources: CandidateSources relation: String] -> CandidateSources
-            (assoc sources relation
-                   (candidate-source-add-rows
-                    relation (empty-candidate-source) (get db relation #{}))))
-          {} relations))
+            (if (contains? sources relation)
+              sources
+              (assoc sources relation
+                     (candidate-source-add-rows
+                      relation (empty-candidate-source) (get db relation #{})))))
+          seed relations))
 
 (defn- add-delta-sources
   [sources: CandidateSources delta: Db relations: (Vec String)] -> CandidateSources
   (reduce (fn [current: CandidateSources relation: String] -> CandidateSources
-            (let [tuples (get delta relation #{})]
+            (let [tuples (get delta relation #{})
+                  existing (get current relation)
+                  base: CandidateSource
+                  (if (instance? CandidateSource existing)
+                    existing
+                    (empty-candidate-source))]
               (if (empty? tuples)
                 current
                 (assoc current relation
                        (candidate-source-add-rows
-                        relation
-                        (get current relation (empty-candidate-source))
-                        tuples)))))
+                        relation base tuples)))))
           sources relations))
 
 (defn- bound-term-value [term: QueryTerm subst: Substitution] -> Any
@@ -417,6 +472,27 @@
     (if (some? name)
       (if (contains? subst name) (get subst name) nil)
       (queryterm-value term))))
+
+(defn text-needle-valid? [needle: Any] -> Bool
+  (text-index/text-needle-valid? needle))
+
+;; Virtual relations register independently so adjacent candidate sources can
+;; append without changing the physical relation index.
+(defn text-candidate-sources
+  [source: text-index/TextCandidateSource] -> CandidateSources
+  {text-match-relation
+   (->VirtualCandidateSource
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-index/indexed-rows
+       source (bound-term-value (nth arguments 2) subst)))
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-index/scan-rows
+       source (bound-term-value (nth arguments 2) subst))))})
+
+(defn build-text-candidates
+  [propositions: (Vec t/Triple)] -> CandidateSources
+  (text-candidate-sources
+   (text-index/build-source propositions text-index/text-index-max-bytes)))
 
 (defn- bound-prefix
   [arguments: (Vec QueryTerm) order: (Vec Int)
@@ -465,37 +541,64 @@
 (defn- source-handles
   [source: CandidateSource relation: String arguments: (Vec QueryTerm)
    subst: Substitution] -> (U (Vec Int) Nil)
-  (if (and (= relation triple-relation) (= 3 (count arguments)))
-    (triple-prefix-handles source arguments subst)
-    (positional-handles source arguments subst)))
+  (let [selector (candidatesource-selector source)]
+    (if (some? selector)
+      (selector (mapv (fn [term: QueryTerm] -> Any
+                        (bound-term-value term subst))
+                      arguments))
+      (if (and (= relation triple-relation) (= 3 (count arguments)))
+        (triple-prefix-handles source arguments subst)
+        (positional-handles source arguments subst)))))
+
+(defn- source-row [source: CandidateSource handle: Int] -> Tuple
+  (let [resolver (candidatesource-resolver source)]
+    (if (some? resolver)
+      (resolver handle)
+      (nth (candidatesource-rows source) handle))))
+
+(defn- source-contains?
+  [source: CandidateSource relation: String arguments: (Vec QueryTerm)
+   subst: Substitution] -> Bool
+  (let [wanted (ground arguments subst)
+        handles (source-handles source relation arguments subst)]
+    (some? (some (fn [handle: Int] -> Any
+                   (when (= wanted (source-row source handle)) handle))
+                 (or handles [])))))
 
 (defn- relation-results-indexed!
   [db: Db sources: CandidateSources literal: Literal
    subst: Substitution] -> (Vec Substitution)
   (let [relation (literal-relation literal)
-        arguments (literal-arguments literal)]
+        arguments (literal-arguments literal)
+        source (get sources relation)]
     (if (literal-negated literal)
-      (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst])
-      (let [source (get sources relation)]
-        (if (nil? source)
+      (if (if (instance? CandidateSource source)
+            (source-contains? source relation arguments subst)
+            (contains? (get db relation #{}) (ground arguments subst)))
+        [] [subst])
+      (cond
+        [(instance? VirtualCandidateSource source)
+         (unify-tuples! arguments
+                        (virtual-source-rows! source true arguments subst)
+                        subst)]
+        [(nil? source)
+         (if (= relation text-match-relation)
+           (missing-candidate-source! relation)
           (reduce (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
                     (let [matched (unify-arguments! arguments tuple subst)]
                       (if (some? matched) (conj acc matched) acc)))
-                  [] (vec (get db relation #{})))
-          (let [rows-value (candidatesource-rows source)
-                handles (source-handles source relation arguments subst)]
-            (if (nil? handles)
-              (reduce
-               (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
-                 (let [matched (unify-arguments! arguments tuple subst)]
-                   (if (some? matched) (conj acc matched) acc)))
-               [] rows-value)
-              (reduce
-               (fn [acc: (Vec Substitution) handle: Int] -> (Vec Substitution)
-                 (let [tuple (nth rows-value handle)
-                       matched (unify-arguments! arguments tuple subst)]
-                   (if (some? matched) (conj acc matched) acc)))
-               [] handles))))))))
+                  [] (vec (get db relation #{}))))]
+        [:else
+         (let [rows-value (candidatesource-rows source)
+               handles (source-handles source relation arguments subst)]
+           (if (nil? handles)
+             (unify-tuples! arguments rows-value subst)
+             (reduce
+              (fn [acc: (Vec Substitution) handle: Int] -> (Vec Substitution)
+                (let [tuple (source-row source handle)
+                      matched (unify-arguments! arguments tuple subst)]
+                  (if (some? matched) (conj acc matched) acc)))
+              [] handles)))]))))
 
 (defn- literal-results-indexed!
   [db: Db sources: CandidateSources literal: Literal
@@ -622,7 +725,7 @@
   [db: Db sources: CandidateSources delta: Db rules: (Vec Rule)
    relations: (Vec String) delta-relations: (Vec String)] -> Db
   (let [delta-set (set delta-relations)
-        delta-sources (build-candidate-sources delta delta-relations)
+        delta-sources (build-candidate-sources delta delta-relations {})
         candidate
         (reduce
          (fn [current: Db value: Rule] -> Db
@@ -638,7 +741,8 @@
          {} rules)]
     (db-new-only candidate db relations)))
 
-(defn fixpoint! [db0: Db rules: (Vec Rule)] -> Db
+(defn fixpoint-with-candidates!
+  [db0: Db rules: (Vec Rule) candidates: CandidateSources] -> Db
   (let [relations (rule-head-relations rules)
         read-relations (positive-relation-names rules)
         head-set (set relations)
@@ -646,7 +750,7 @@
         (vec (filter (fn [relation: String] -> Bool
                        (contains? head-set relation))
                      read-relations))
-        initial-sources (build-candidate-sources db0 read-relations)
+        initial-sources (build-candidate-sources db0 read-relations candidates)
         seeded
         (reduce
          (fn [db: Db value: Rule] -> Db
@@ -670,12 +774,28 @@
                  (add-delta-sources sources next-delta read-relations)
                  next-delta))))))
 
+(defn fixpoint! [db0: Db rules: (Vec Rule)] -> Db
+  (fixpoint-with-candidates! db0 rules {}))
+
+(defn fixpoint-sourced!
+  [db0: Db registered: CandidateSources rules: (Vec Rule)] -> Db
+  (fixpoint-with-candidates! db0 rules registered))
+
 (defn run-rules! [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
   (fixpoint! (edb propositions) rules))
 
-(defn run-strata-db! [db0: Db strata: (Vec (Vec Rule))] -> Db
-  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db (fixpoint! db stratum))
+(defn run-strata-db-with-candidates!
+  [db0: Db strata: (Vec (Vec Rule)) candidates: CandidateSources] -> Db
+  (reduce (fn [db: Db stratum: (Vec Rule)] -> Db
+            (fixpoint-with-candidates! db stratum candidates))
           db0 strata))
+
+(defn run-strata-db! [db0: Db strata: (Vec (Vec Rule))] -> Db
+  (run-strata-db-with-candidates! db0 strata {}))
+
+(defn run-strata-db-sourced!
+  [db0: Db sources: CandidateSources strata: (Vec (Vec Rule))] -> Db
+  (run-strata-db-with-candidates! db0 strata sources))
 
 (defn run-strata!
   [propositions: (Vec t/Triple) strata: (Vec (Vec Rule))] -> Db

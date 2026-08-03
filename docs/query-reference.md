@@ -25,17 +25,20 @@ retain their types; numbers are not coerced into strings.
 
 ## Base relations
 
-There are exactly two kernel base relations:
+There are two materialized kernel base relations and one positive virtual
+relation:
 
 ```text
 triple(slot0, slot1, slot2)
 occurrence(coordinate, action, proposition)
+text-match(entity, attribute, needle)
 ```
 
 | Relation | Arity | Rows |
 |---|---:|---|
 | `triple` | 3 | live proposition `slot0`, `slot1`, `slot2` |
 | `occurrence` | 3 | occurrence coordinate, action, proposition |
+| `text-match` | 3 | entity and attribute whose live string value contains every token in `needle` |
 
 Every cell is a Term. A recursive Triple can therefore be matched in any
 position. Ordinary current-state queries use `triple`. `occurrence` is an
@@ -43,6 +46,34 @@ explicit history projection; it is not an implicit fourth column on `triple`.
 
 There are no `fact`, `fact-id`, `predicate`, or row-handle compatibility base
 relations in the recursive query kernel.
+
+## Full-text word match
+
+`text-match` searches the third slot of live propositions whose value is a
+String. The needle must be a string constant or a string variable bound by an
+earlier positive clause. The relation is positive-only; `:neg true`, an
+unbound needle variable, and an empty or punctuation-only needle are rejected.
+
+```edn
+{:find "matching-title"
+ :rules
+ [{:head {:rel "matching-title" :args [{:var "entity"}]}
+   :body [{:rel "text-match"
+           :args [{:var "entity"} :title "Quick FOX"]}]}]}
+```
+
+Tokenizer v0 takes maximal Unicode Letter/DecimalDigit runs, applies
+locale-independent lowercase, and treats punctuation, whitespace, `_`, and
+`-` as delimiters. Numeric tokens remain searchable. Repeated query tokens are
+deduplicated, and multiple tokens are an unordered conjunction. There is no
+stemming, ranking, scoring, or substring match.
+
+Each immutable snapshot has an inverted token-to-triple-handle index. The
+coordinator builds it lazily, single-flights concurrent cold readers, and
+caches exact `(daemon generation, SpaceId, version)` entries. The LRU holds at
+most four versions and 64 MiB; a single index over that budget fails with
+`:query-text-index-limit`. Version identity is the invalidation rule—there is
+no TTL or scan fallback.
 
 ## Smallest query
 
@@ -196,8 +227,8 @@ are not pageable.
 
 Compilation rejects malformed terms, unknown relations, arity disagreement,
 undefined derived relations, unbound head/filter/negation variables, invalid
-strata, and recursive arithmetic. Execution has step, time, result-count, and
-wire-byte limits.
+strata, recursive arithmetic, and invalid `text-match` needles or polarity.
+Execution has step, time, result-count, and wire-byte limits.
 
 Nonaggregate results have deterministic Term ordering. Page cursors encode the
 last row key, and the coordinator pins continuation reads to the same snapshot.
@@ -219,3 +250,7 @@ The executable contract is
 [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native
 lowering and paging are covered by
 [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj).
+Full-text semantics, snapshot residency, differential agreement, and the
+memory/latency bars are covered by `text_match_test.clj`,
+`text_index_cache_test.clj`, `datalog_diff_test.clj`, and
+`text_index_perf_test.clj` in the same directory.

@@ -1,0 +1,90 @@
+#lang beagle/clj
+
+;; @upstream:graph
+(ns fram.text-index)
+
+(define-mode strict)
+
+(require fram.types :as t)
+
+(declare-extern java.util.Locale/ROOT Any)
+
+(def text-index-max-bytes: Int (* 64 1024 1024))
+
+(defrecord TextCandidateSource [rows: (Vec t/Triple) postings: (Map String (Vec Int)) bytes: Int])
+
+(defn source-weight [source: TextCandidateSource] -> Int
+  (textcandidatesource-bytes source))
+
+(defn- token-set [value: String] -> (Set String)
+  (let [matches: (Vec String) (vec (re-seq #"[\p{L}\p{Nd}]+" value)) folded: (Vec String) (mapv (fn [token: String] -> String (.toLowerCase token java.util.Locale/ROOT)) matches)]
+    (set folded)))
+
+(defn tokenize [value: String] -> (Vec String)
+  (vec (sort (vec (token-set value)))))
+
+(defn text-needle-valid? [needle: Any] -> Bool
+  (and (string? needle) (not (empty? (tokenize needle)))))
+
+(defn- postings-weight [postings: (Map String (Vec Int))] -> Int
+  (reduce (fn [total: Int entry: Any] -> Int (let [token: String (nth entry 0) handles: (Vec Int) (nth entry 1)] (+ total 48 (* 2 (count token)) (* 24 (count handles)))))
+    0
+    (vec postings)))
+
+(defn- index-limit [weight: Int maximum: Int] -> Nil
+  (if (> weight maximum)
+    (throw (ex-info "text index exceeds the snapshot cache budget" {:type :query-text-index-limit :fram/code :query-text-index-limit :bytes weight :maximum maximum}))
+    nil))
+
+(defn build-source [propositions: Any maximum: Int] -> TextCandidateSource
+  (let [rows: (Vec t/Triple) (vec propositions) postings: (Map String (Vec Int)) (loop [handle 0 current: Any {}] (if (>= handle (count rows)) current (let [proposition: t/Triple (nth rows handle) value: Any (t/triple-slot2 proposition) next-postings: Any (if (string? value) (reduce (fn [index: Any token: String] -> Any (assoc index token (conj (get index token []) handle))) current (token-set value)) current)] (recur (inc handle) next-postings)))) weight: Int (+ 64 (* 8 (count rows)) (postings-weight postings))]
+    (index-limit weight maximum)
+    (->TextCandidateSource rows postings weight)))
+
+(defn- needle-error [message: String] -> Any
+  (throw (ex-info message {:type :fram-query-abort :code :query-text-invalid-needle})))
+
+(defn- needle-tokens [needle: Any] -> (Vec String)
+  (if (string? needle)
+    (let [tokens: (Vec String) (tokenize needle)]
+      (if (empty? tokens)
+        (needle-error "text-match needle must contain at least one word token")
+        tokens))
+    (needle-error "text-match needle must be a string")))
+
+(defn- shortest-posting [posting-vectors: (Vec (Vec Int))] -> (Vec Int)
+  (loop [position 0 best: (U (Vec Int) Nil) nil]
+    (if (>= position (count posting-vectors))
+      (or best [])
+      (let [candidate: (Vec Int) (nth posting-vectors position)]
+        (recur (inc position)
+          (if (or (nil? best) (< (count candidate) (count best)))
+            candidate
+            best))))))
+
+(defn indexed-handles [source: TextCandidateSource needle: Any] -> (Vec Int)
+  (let [tokens: (Vec String) (needle-tokens needle) postings: (Map String (Vec Int)) (textcandidatesource-postings source) posting-vectors: (Vec (Vec Int)) (mapv (fn [token: String] -> (Vec Int) (get postings token [])) tokens) seed: (Vec Int) (shortest-posting posting-vectors)]
+    (if (or (empty? seed) (= 1 (count posting-vectors)))
+      seed
+      (let [posting-sets: (Vec (Set Int)) (mapv (fn [handles: (Vec Int)] -> (Set Int) (set handles)) posting-vectors)]
+        (filterv (fn [handle: Int] -> Bool (every? (fn [handles: (Set Int)] -> Bool (contains? handles handle)) posting-sets))
+          seed)))))
+
+(defn scan-handles [source: TextCandidateSource needle: Any] -> (Vec Int)
+  (let [tokens: (Vec String) (needle-tokens needle) rows: (Vec t/Triple) (textcandidatesource-rows source)]
+    (loop [handle 0 matches: (Vec Int) []]
+      (if (>= handle (count rows))
+        matches
+        (let [value: Any (t/triple-slot2 (nth rows handle)) matched: Bool (if (string? value) (let [haystack: (Set String) (token-set value)] (every? (fn [token: String] -> Bool (contains? haystack token)) tokens)) false)]
+          (recur (inc handle) (if matched (conj matches handle) matches)))))))
+
+(defn- rows-for-handles [source: TextCandidateSource needle: Any handles: (Vec Int)] -> (Vec (Vec Any))
+  (let [rows: (Vec t/Triple) (textcandidatesource-rows source)]
+    (mapv (fn [handle: Int] -> (Vec Any) (let [proposition: t/Triple (nth rows handle)] [(t/triple-slot0 proposition) (t/triple-slot1 proposition) needle]))
+      handles)))
+
+(defn indexed-rows [source: TextCandidateSource needle: Any] -> (Vec (Vec Any))
+  (rows-for-handles source needle (indexed-handles source needle)))
+
+(defn scan-rows [source: TextCandidateSource needle: Any] -> (Vec (Vec Any))
+  (rows-for-handles source needle (scan-handles source needle)))

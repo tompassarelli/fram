@@ -76,7 +76,7 @@ not acquire the sequencer lock.
 
 ## Query projection
 
-The Datalog engine projects two exact base relations:
+The Datalog engine projects two exact materialized base relations:
 
 ```text
 triple(slot0, slot1, slot2)
@@ -84,7 +84,9 @@ occurrence(coordinate, action, proposition)
 ```
 
 `triple` contains live propositions. `occurrence` contains explicit operation
-history and is included only when that projection is requested. Both relations
+history and is included only when that projection is requested. A positive
+virtual `text-match(entity, attribute, needle)` relation is served from a lazy
+snapshot-scoped inverted index over live string values. All three relations
 have arity three and every cell is a Term. There is no compatibility relation
 that exposes a semantic row id.
 

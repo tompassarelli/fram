@@ -10,6 +10,7 @@
             [fram.kernel :as kernel]
             [fram.query :as query]
             [fram.store :as term-store]
+            [fram.text-index :as text-index]
             [fram.types :as t]
             [fri-port :as fri])
   (:import [java.net ServerSocket Socket]
@@ -45,6 +46,8 @@
 (def ^:private query-archive-coordinators (atom {}))
 (def ^:private query-archive-magic
   (.getBytes "FRAMQAR1" java.nio.charset.StandardCharsets/UTF_8))
+(def ^:private text-index-version-limit 4)
+(def ^:private text-index-byte-limit (* 64 1024 1024))
 
 (defn- empty-query-result-cache [generation]
   {:generation generation
@@ -58,6 +61,18 @@
    :evictions 0})
 
 (def query-result-cache (atom (empty-query-result-cache 0)))
+
+(defn- empty-text-index-cache [generation]
+  {:generation generation
+   :entries {}
+   :lru []
+   :in-flight {}
+   :bytes 0
+   :hits 0
+   :misses 0
+   :evictions 0})
+
+(def text-index-cache (atom (empty-text-index-cache 0)))
 
 (declare start-write-sequencer! stop-write-sequencer! sequence-mutation!
          response-version read-query-archive-manifest!)
@@ -197,7 +212,9 @@
 (defn- drop-query-caches! []
   (reset! query-page-snapshots {:order [] :by-version {}})
   (reset! query-result-cache
-          (empty-query-result-cache @daemon-generation)))
+          (empty-query-result-cache @daemon-generation))
+  (reset! text-index-cache
+          (empty-text-index-cache @daemon-generation)))
 
 (defn- advance-daemon-generation! []
   (swap! daemon-generation inc)
@@ -850,8 +867,18 @@
   (let [context (atom root)]
     {:version version
      :store-root root
-     :propositions (term-store/live-propositions context)
-     :occurrences (term-store/operation-occurrences context)}))
+     :propositions (term-store/live-propositions context)}))
+
+(defn- occurrence-candidate-source [root lower-exclusive upper-inclusive]
+  (let [postings (atom nil)]
+    (datalog/external-candidate-source
+     (fn [values]
+       (let [known (or @postings
+                       (reset! postings (term-store/operation-postings root)))]
+         (term-store/operation-candidate-positions
+          root lower-exclusive upper-inclusive
+          (nth values 0 nil) (nth values 2 nil) known)))
+     (fn [position] (term-store/occurrence-tuple-at root position)))))
 
 (defn- one-triple-pattern [plan]
   (let [find (query/queryplan-find plan)
@@ -872,6 +899,29 @@
                (not (datalog/literal-negated literal))
                (= 3 (count arguments)))
       {:arguments arguments :head-arguments head-arguments})))
+
+(defn- plan-uses-text-match? [plan]
+  (boolean
+   (some (fn [stratum]
+           (some (fn [rule]
+                   (some #(and (= :relation (datalog/literal-kind %))
+                               (= datalog/text-match-relation
+                                  (datalog/literal-relation %)))
+                         (datalog/rule-body rule)))
+                 stratum))
+         (query/queryplan-strata plan))))
+
+(defn- plan-uses-only-text-base? [plan]
+  (not
+   (some (fn [stratum]
+           (some (fn [rule]
+                   (some #(and (= :relation (datalog/literal-kind %))
+                               (contains? #{datalog/triple-relation
+                                            datalog/occurrence-relation}
+                                          (datalog/literal-relation %)))
+                         (datalog/rule-body rule)))
+                 stratum))
+         (query/queryplan-strata plan))))
 
 (defn- cached-query-page-root [version]
   (get-in @query-page-snapshots [:by-version version]))
@@ -1071,7 +1121,98 @@
              0 rows)))
 
 (defn- result-snapshot-key [snapshot]
-  [(:generation snapshot) (:space snapshot) (:version snapshot)])
+  [(:generation snapshot) (:space snapshot) (:version snapshot)
+   (:lower-exclusive snapshot -1)])
+
+(defn- remove-text-index-entry [state key]
+  (if-let [entry (get-in state [:entries key])]
+    (-> state
+        (update :entries dissoc key)
+        (update :lru #(vec (remove #{key} %)))
+        (update :bytes - (:bytes entry))
+        (update :evictions inc))
+    state))
+
+(defn- retain-text-index-entry [state key source]
+  (let [bytes (text-index/source-weight source)]
+    (loop [bounded (-> state
+                       (assoc-in [:entries key]
+                                 {:source source :bytes bytes})
+                       (update :bytes + bytes)
+                       (update :lru #(conj (vec (remove #{key} %)) key)))]
+      (if (and (seq (:lru bounded))
+               (or (> (count (:entries bounded)) text-index-version-limit)
+                   (> (:bytes bounded) text-index-byte-limit)))
+        (recur (remove-text-index-entry bounded (first (:lru bounded))))
+        bounded))))
+
+(defn- begin-text-index-access! [key]
+  (locking text-index-cache
+    (let [state @text-index-cache]
+      (if-let [entry (get-in state [:entries key])]
+        (do
+          (reset! text-index-cache
+                  (-> state
+                      (update :hits inc)
+                      (update :lru #(conj (vec (remove #{key} %)) key))))
+          {:kind :hit :source (:source entry)})
+        (if-let [flight (get-in state [:in-flight key])]
+          (do
+            (reset! text-index-cache (update state :hits inc))
+            {:kind :wait :flight flight})
+          (let [flight (promise)]
+            (reset! text-index-cache
+                    (-> state
+                        (assoc-in [:in-flight key] flight)
+                        (update :misses inc)))
+            {:kind :build :flight flight}))))))
+
+(defn- complete-text-index-flight! [key flight source]
+  (locking text-index-cache
+    (let [state (update @text-index-cache :in-flight dissoc key)]
+      (reset! text-index-cache
+              (if (= (first key) (:generation state))
+                (retain-text-index-entry state key source)
+                state))))
+  (deliver flight {:source source}))
+
+(defn- fail-text-index-flight! [key flight error]
+  (locking text-index-cache
+    (swap! text-index-cache update :in-flight dissoc key))
+  (deliver flight {:error error}))
+
+(def ^:private text-index-wait-pending (Object.))
+
+(defn- wait-text-index-flight! [flight cancellation deadline-ns]
+  (loop []
+    (cancelled! cancellation)
+    (let [remaining-ms (quot (- deadline-ns (System/nanoTime)) 1000000)]
+      (when (<= remaining-ms 0)
+        (daemon-fail! :query-time-limit "query exceeded its time limit" {}))
+      (let [outcome (deref flight (long (min 25 remaining-ms))
+                           text-index-wait-pending)]
+        (if (identical? text-index-wait-pending outcome)
+          (recur)
+          (if-let [error (:error outcome)]
+            (throw error)
+            (:source outcome)))))))
+
+(defn- cached-text-index!
+  [snapshot cancellation deadline-ns propositions]
+  (let [key (result-snapshot-key snapshot)
+        {:keys [kind source flight]} (begin-text-index-access! key)]
+    (case kind
+      :hit (do (cancelled! cancellation) source)
+      :wait (wait-text-index-flight! flight cancellation deadline-ns)
+      :build
+      (try
+        (let [source (text-index/build-source
+                      (vec (propositions)) text-index-byte-limit)]
+          (complete-text-index-flight! key flight source)
+          source)
+        (catch Throwable error
+          (fail-text-index-flight! key flight error)
+          (throw error))))))
 
 (defn- touch-result-entry [state key]
   (let [snapshot-key (first key)]
@@ -1210,17 +1351,34 @@
      :next-page-ordinal next-page-ordinal
      :after-row (parse-query-row! after-row)}))
 
-(defn- requested-snapshot-version! [snapshot cursor head]
+(defn- upper-snapshot-version! [snapshot cursor head]
+  (cond
+    (= snapshot wire/query-current) (or (:snapshot-version cursor) head)
+    (= :query/as-of (query-record-tag snapshot))
+    (let [[version] (record-fields! snapshot :query/as-of 1)]
+      (require-int! version "query snapshot version"))
+    :else
+    (daemon-fail! :query-invalid-snapshot
+                  "query upper snapshot must be current or as-of" {})))
+
+(defn- requested-query-view! [snapshot cursor head]
   (let [cursor-version (:snapshot-version cursor)
-        requested
-        (if (= snapshot wire/query-current)
-          (or cursor-version head)
-          (let [[version] (record-fields! snapshot :query/as-of 1)]
-            (require-int! version "query snapshot version")))]
+        [lower-exclusive requested]
+        (if (= :query/since (query-record-tag snapshot))
+          (let [[lower upper] (record-fields! snapshot :query/since 2)
+                lower (require-int! lower "query since lower bound")]
+            (when (neg? lower)
+              (daemon-fail! :query-invalid-snapshot
+                            "query since lower bound must be non-negative" {}))
+            [lower (upper-snapshot-version! upper cursor head)])
+          [-1 (upper-snapshot-version! snapshot cursor head)])]
     (when (and cursor-version (not= cursor-version requested))
       (daemon-fail! :query-cursor-mismatch
                     "query cursor belongs to a different snapshot" {}))
-    requested))
+    (when (> lower-exclusive requested)
+      (daemon-fail! :query-invalid-snapshot
+                    "query since lower bound exceeds its upper snapshot" {}))
+    {:version requested :lower-exclusive lower-exclusive}))
 
 (defn- result-rows! [result]
   (when-let [error (first (query/result-errors result))]
@@ -1371,19 +1529,23 @@
   (let [[plan-term requested-snapshot]
         (record-fields! (t/rpc-request-payload-value request) :query/request 2)
         plan (parse-query-plan! plan-term)
-        query-digest (term-sha256 plan-term)
         page (t/rpcrequest-page request)
         cursor-value (some-> page t/rpc-page-request-cursor-value)
         cursor (when cursor-value (parse-query-cursor! cursor-value))
         direct-pattern (one-triple-pattern plan)
         direct? (some? direct-pattern)
         co (coord/store-view @coordinator (:root published))
-        version (requested-snapshot-version!
-                 requested-snapshot cursor (:version published))
+        view (requested-query-view!
+              requested-snapshot cursor (:version published))
+        version (:version view)
+        lower-exclusive (:lower-exclusive view)
+        query-digest
+        (term-sha256 (t/triple plan-term lower-exclusive version))
         _ (vreset! served-version version)
         cache-snapshot {:generation (:generation published)
                         :space (:space published)
-                        :version version}
+                        :version version
+                        :lower-exclusive lower-exclusive}
         timeout (min 60000 (or (t/rpcrequest-timeout-ms request) 5000))
         deadline-ns (+ (System/nanoTime) (* timeout 1000000))
         control (datalog/query-control 10000000 timeout)
@@ -1401,10 +1563,27 @@
                (let [root (or (cached-query-page-root version)
                               (retain-query-page-root!
                                version (replayed-store-root! co version)))
-                     snapshot-data (snapshot-image version root)
-                     projection (query/project-with-occurrences
-                                 (:propositions snapshot-data)
-                                 (:occurrences snapshot-data))
+                     text? (plan-uses-text-match? plan)
+                     only-text? (and text? (plan-uses-only-text-base? plan))
+                     source
+                     (when text?
+                       (cached-text-index!
+                        cache-snapshot cancellation deadline-ns
+                        (fn [] (term-store/live-propositions (atom root)))))
+                     candidates
+                     (cond->
+                      {datalog/occurrence-relation
+                       (occurrence-candidate-source
+                        root lower-exclusive version)}
+                       source (merge (datalog/text-candidate-sources source)))
+                     snapshot-data (when-not only-text?
+                                     (snapshot-image version root))
+                     projection
+                     (query/->Projection
+                       (if only-text?
+                         {}
+                         (datalog/edb (:propositions snapshot-data)))
+                       candidates)
                      result (binding [query/*query-control* control]
                               (query/run-plan-projected! projection plan))]
                  (result-rows! result))

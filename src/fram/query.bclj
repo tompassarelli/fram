@@ -13,7 +13,7 @@
   [relation: String grouping: (Vec Int)
    aggregates: (Vec AggregateSpec) having: (Vec HavingClause)])
 (defrecord QueryPlan [find: FindSpec strata: (Vec (Vec d/Rule))])
-(defrecord Projection [edb: d/Db])
+(defrecord Projection [edb: d/Db candidates: d/CandidateSources])
 (defrecord QueryError [code: Keyword message: String])
 (defrecord CompileResult [plan: QueryPlan? errors: (Vec QueryError)])
 (defrecord QueryResult
@@ -27,8 +27,9 @@
 (def ^:dynamic *query-control*: Any nil)
 
 (def base-rel-arities: (Map String Int)
-  {d/triple-relation 3 d/occurrence-relation 3})
-(def base-relations: (Set String) #{d/triple-relation d/occurrence-relation})
+  {d/triple-relation 3 d/occurrence-relation 3 d/text-match-relation 3})
+(def base-relations: (Set String)
+  #{d/triple-relation d/occurrence-relation d/text-match-relation})
 (def aggregate-operators: (Set Keyword)
   #{:count :count-distinct :sum :avg :min :max})
 (def aggregate-argument-operators: (Set Keyword)
@@ -103,12 +104,22 @@
 (defn- wire-failure-page [error-value: QueryError maximum: Int] -> QueryPage
   (->QueryPage [] nil false [error-value] maximum))
 
+(defn project-with-candidates
+  [propositions: (Vec t/Triple) candidates: d/CandidateSources] -> Projection
+  (->Projection (d/edb propositions) candidates))
+
+(defn project-with-source
+  [propositions: (Vec t/Triple) relation: String
+   source: d/CandidateSourceValue] -> Projection
+  (project-with-candidates propositions {relation source}))
+
 (defn project [propositions: (Vec t/Triple)] -> Projection
-  (->Projection (d/edb propositions)))
+  (project-with-candidates propositions (d/build-text-candidates propositions)))
 
 (defn project-with-occurrences
   [propositions: (Vec t/Triple) occurrences: (Vec t/Triple)] -> Projection
-  (->Projection (d/edb-with-occurrences propositions occurrences)))
+  (->Projection (d/edb-with-occurrences propositions occurrences)
+                (d/build-text-candidates propositions)))
 
 (defn- set-union [left: (Set String) right: (Set String)] -> (Set String)
   (reduce (fn [acc: (Set String) value: String] -> (Set String) (conj acc value))
@@ -226,6 +237,31 @@
     [(= :builtin (d/literal-kind literal)) #{(d/literal-binding literal)}]
     [:else #{}]))
 
+(defn- text-literal-errors
+  [literal: d/Literal bound: (Set String)] -> (Vec QueryError)
+  (if (and (= :relation (d/literal-kind literal))
+           (= d/text-match-relation (d/literal-relation literal)))
+    (let [arguments (d/literal-arguments literal)]
+      (cond
+        [(d/literal-negated literal)
+         [(query-error :query-text-negative
+                       "text-match is available only as a positive relation")]]
+        [(not (= 3 (count arguments))) []]
+        [:else
+         (let [needle (nth arguments 2)
+               variable (d/queryterm-variable needle)]
+           (cond
+             [(some? variable)
+              (if (contains? bound variable)
+                []
+                [(query-error :query-text-unbound-needle
+                              "text-match needle must be constant or already bound")])]
+             [(d/text-needle-valid? (d/queryterm-value needle)) []]
+             [:else
+              [(query-error :query-text-invalid-needle
+                            "text-match needle must contain at least one word token")]]))]))
+    []))
+
 (defn- rule-errors
   [rule: d/Rule known: (Set String) arities: (Map String Int)] -> (Vec QueryError)
   (let [head-relation (d/rule-head-relation rule)
@@ -249,7 +285,10 @@
         (let [literal (first remaining)]
           (recur (rest remaining)
                  (set-union bound (literal-bindings literal))
-                 (vec (concat errors (literal-errors literal known arities bound)))))))))
+                 (vec
+                  (concat errors
+                          (concat (literal-errors literal known arities bound)
+                                  (text-literal-errors literal bound))))))))))
 
 (defn- arity-errors [rules: (Vec d/Rule)] -> (Vec QueryError)
   (let [arities (head-arities rules)]
@@ -672,7 +711,10 @@
 
 (defn- evaluate-plan! [projection: Projection plan: QueryPlan] -> d/Db
   (binding [d/*query-control* *query-control*]
-    (d/run-strata-db! (projection-edb projection) (queryplan-strata plan))))
+    (d/run-strata-db-with-candidates!
+     (projection-edb projection)
+     (queryplan-strata plan)
+     (projection-candidates projection))))
 
 (defn- abort-result [problem: Any] -> QueryResult
   (let [data (ex-data problem)]
