@@ -1,59 +1,133 @@
 (ns resolve-read
   (:require [fram.types :as t]
             [fram.store :as c]
+            [fram.schema :as schema]
+            [fram.rotation :as rot]
+            [fram.txn :as txn]
             [resolve-core :as rc]))
 
 (def SEG-RE (re-pattern "seg\\d+"))
 
-(defrecord OrdPair [key child])
+(defrecord Context [session builder shadow shadow-view])
+
+(defn context-session [r] (:session r))
+
+(defn context-builder [r] (:builder r))
+
+(defn context-shadow [r] (:shadow r))
+
+(defn context-shadow-view [r] (:shadow-view r))
+
+(defrecord OrdPair [key event child])
 
 (defn ordpair-key [r] (:key r))
 
+(defn ordpair-event [r] (:event r))
+
 (defn ordpair-child [r] (:child r))
 
-(defrecord SegPair [idx child])
+(defrecord SegPair [idx event child])
 
 (defn segpair-idx [r] (:idx r))
 
+(defn segpair-event [r] (:event r))
+
 (defn segpair-child [r] (:child r))
 
-(defn view-cids [ctx v cids]
-  (let [SEL (c/value-id ctx "selects")
-   ve (c/value-id ctx v)]
-  (if (or (nil? SEL) (nil? ve)) nil (let [sel (reduce (fn [acc scid] (let [f (c/fact-of ctx scid)]
-  (if (nil? f) acc (conj acc (:r f))))) #{} (c/by-lp ctx ve SEL))]
-  (filterv (fn [cid] (contains? sel cid)) cids)))))
+(defn ^Context context [store]
+  (let [session (schema/session store)
+   shadow (atom (deref store))]
+  (->Context session (txn/open store) shadow (atom (rot/project shadow)))))
 
-(defn- pool-of [ctx view cids]
-  (let [in-view (if (nil? view) nil (view-cids ctx view cids))]
-  (if (or (nil? in-view) (empty? in-view)) cids in-view)))
+(defn store-of [^Context ctx]
+  (schema/store-of (context-session ctx)))
 
-(defn- ^String agent-of [s cid]
-  (let [txid (get (:tx-of s) cid)
-   m (if (nil? txid) nil (get (:txs s) txid))]
-  (if (nil? m) "" (str (:agent m)))))
+(defn builder [^Context ctx]
+  (context-builder ctx))
 
-(defn select-main-1 [ctx view cids]
-  (if (empty? cids) nil (if (nil? ctx) (first cids) (let [s (deref ctx)]
-  (first (sort-by (fn [cid] [cid (agent-of s cid)]) (pool-of ctx view cids)))))))
+(defn current-view [^Context ctx]
+  (deref (context-shadow-view ctx)))
 
-(defn select-causal-1 [ctx view cids]
-  (if (empty? cids) nil (if (nil? ctx) (first cids) (let [s (deref ctx)]
-  (first (sort-by (fn [cid] (let [txid (get (:tx-of s) cid)
-   m (if (nil? txid) nil (get (:txs s) txid))
-   obs (if (nil? m) nil (:observed m))
-   sq (if (nil? m) nil (:seq m))]
-  [(if (nil? obs) (if (nil? sq) 0 sq) obs) cid (if (nil? m) "" (str (:agent m)))])) (pool-of ctx view cids)))))))
+(defn- ^Context stage-appended! [^Context ctx before]
+  (let [operations (txn/operations (builder ctx))
+   appended (subvec operations before (count operations))]
+  (do
+  (if (not (empty? appended)) (do
+  (do
+  (c/commit-transaction! (context-shadow ctx) appended)
+  (reset! (context-shadow-view ctx) (rot/refresh (current-view ctx) (context-shadow ctx))))))
+  ctx)))
 
-(defn- fact-r [ctx cid]
-  (let [f (if (nil? cid) nil (c/fact-of ctx cid))
-   r (if (nil? f) nil (:r f))]
-  (if (int? r) r nil)))
+(defn mint! [^Context ctx]
+  (txn/mint! (builder ctx)))
+
+(defn assert! [^Context ctx subject predicate value]
+  (let [before (txn/operation-count (builder ctx))
+   occurrence (txn/assert! (builder ctx) (t/triple subject predicate value))]
+  (do
+  (stage-appended! ctx before)
+  occurrence)))
+
+(defn update-single! [^Context ctx subject predicate value]
+  (let [before (txn/operation-count (builder ctx))
+   occurrence (txn/update-single! (builder ctx) (current-view ctx) subject predicate value)]
+  (do
+  (stage-appended! ctx before)
+  occurrence)))
+
+(defn retract-event! [^Context ctx event]
+  (let [before (txn/operation-count (builder ctx))
+   occurrence (txn/retract! (builder ctx) (rot/proposition-of event))]
+  (do
+  (stage-appended! ctx before)
+  occurrence)))
+
+(defn commit! [^Context ctx]
+  (if (zero? (txn/operation-count (builder ctx))) nil (let [coordinate (txn/commit! (store-of ctx) (builder ctx))]
+  (do
+  (schema/refresh! (context-session ctx))
+  (reset! (context-builder ctx) (deref (txn/open (store-of ctx))))
+  (reset! (context-shadow ctx) (deref (store-of ctx)))
+  (reset! (context-shadow-view ctx) (schema/view (context-session ctx)))
+  coordinate))))
+
+(defn events-by-subject [^Context ctx subject]
+  (rot/by-slot0 (current-view ctx) subject))
+
+(defn events-by-subject-predicate [^Context ctx subject predicate]
+  (rot/by-slot01 (current-view ctx) subject predicate))
+
+(defn events-by-predicate [^Context ctx predicate]
+  (rot/by-slot1 (current-view ctx) predicate))
+
+(defn event-subject [event]
+  (t/triple-slot0 (rot/proposition-of event)))
+
+(defn event-predicate [event]
+  (t/triple-slot1 (rot/proposition-of event)))
+
+(defn event-value [event]
+  (t/triple-slot2 (rot/proposition-of event)))
+
+(defn view-cids [^Context ctx v events]
+  (let [selected (set (rot/values (rot/by-slot01 (current-view ctx) v "selects")))]
+  (filterv (fn [event] (contains? selected (rot/occurrence-of event))) events)))
+
+(defn- pool-of [^Context ctx view events]
+  (let [in-view (if (nil? view) [] (view-cids ctx view events))]
+  (if (empty? in-view) events in-view)))
+
+(defn select-main-1 [ctx view events]
+  (if (empty? events) nil (if (nil? ctx) (first events) (first (pool-of ctx view events)))))
+
+(defn select-causal-1 [ctx view events]
+  (select-main-1 ctx view events))
+
+(defn- event-r [event]
+  (if (nil? event) nil (event-value event)))
 
 (defn pred-val [ctx view e pname]
-  (if (or (nil? ctx) (nil? e)) nil (let [P (c/value-id ctx pname)]
-  (if (nil? P) nil (let [r (fact-r ctx (select-main-1 ctx view (c/by-lp ctx e P)))]
-  (if (nil? r) nil (c/literal ctx r)))))))
+  (if (or (nil? ctx) (nil? e)) nil (event-r (select-main-1 ctx view (events-by-subject-predicate ctx e pname)))))
 
 (defn kind-of [ctx view e]
   (pred-val ctx view e "kind"))
@@ -62,36 +136,31 @@
   (if (= "symbol" (kind-of ctx view e)) (pred-val ctx view e "v") nil))
 
 (defn ordered-children [ctx e]
-  (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
-   pi (if (nil? f) nil (:p f))
-   k (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)
-   r (fact-r ctx cid)]
-  (if (or (nil? k) (nil? r)) acc (conj acc (->OrdPair k r))))) [] (c/by-l ctx e))]
-  (mapv (fn [pr] (:child pr)) (sort-by (fn [pr] (:key pr)) rc/ord-cmp pairs)))))
+  (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc event] (let [predicate (event-predicate event)
+   key (if (string? predicate) (rc/ord-parse predicate) nil)]
+  (if (nil? key) acc (conj acc (->OrdPair key event (event-value event)))))) [] (events-by-subject ctx e))]
+  (mapv (fn [pair] (ordpair-child pair)) (sort-by (fn [pair] (ordpair-key pair)) rc/ord-cmp pairs)))))
 
 (defn ordered-segs [ctx e]
-  (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
-   pi (if (nil? f) nil (:p f))
-   p (if (int? pi) (c/literal ctx pi) nil)
-   r (fact-r ctx cid)]
-  (if (and (string? p) (some? (re-matches SEG-RE (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))]
-  (if (nil? n) acc (conj acc (->SegPair n r)))) acc))) [] (c/by-l ctx e))]
-  (mapv (fn [pr] (:child pr)) (sort-by (fn [pr] (:idx pr)) pairs)))))
+  (if (or (nil? ctx) (nil? e)) [] (let [pairs (reduce (fn [acc event] (let [predicate (event-predicate event)]
+  (if (and (string? predicate) (some? (re-matches SEG-RE predicate))) (let [idx (parse-long (subs predicate 3))]
+  (if (nil? idx) acc (conj acc (->SegPair idx event (event-value event))))) acc))) [] (events-by-subject ctx e))]
+  (mapv (fn [pair] (segpair-child pair)) (sort-by (fn [pair] (segpair-idx pair)) pairs)))))
 
 (defn head-sym [ctx view e]
   (if (= "list" (kind-of ctx view e)) (sym-val ctx view (first (ordered-children ctx e))) nil))
 
 (defn unwrap-meta [ctx view e]
-  (loop [e e
+  (loop [current e
    n 0]
-  (if (and (some? e) (< n 64) (= "#%meta" (head-sym ctx view e))) (recur (nth (ordered-children ctx e) 2 nil) (inc n)) e)))
+  (if (and (some? current) (< n 64) (= "#%meta" (head-sym ctx view current))) (recur (nth (ordered-children ctx current) 2 nil) (inc n)) current)))
 
-(defn bound-target [ctx view BOUND L]
-  (if (or (nil? ctx) (nil? BOUND) (nil? L)) nil (fact-r ctx (select-main-1 ctx view (c/by-lp ctx L BOUND)))))
+(defn bound-target [ctx view BOUND leaf]
+  (if (or (nil? ctx) (nil? BOUND) (nil? leaf)) nil (event-r (select-main-1 ctx view (events-by-subject-predicate ctx leaf BOUND)))))
 
-(defn refers-target [ctx view BOUND REFERS L]
-  (let [bt (bound-target ctx view BOUND L)]
-  (if (some? bt) bt (if (or (nil? ctx) (nil? REFERS) (nil? L)) nil (fact-r ctx (select-main-1 ctx view (c/by-lp ctx L REFERS)))))))
+(defn refers-target [ctx view BOUND REFERS leaf]
+  (let [bt (bound-target ctx view BOUND leaf)]
+  (if (some? bt) bt (if (or (nil? ctx) (nil? REFERS) (nil? leaf)) nil (event-r (select-main-1 ctx view (events-by-subject-predicate ctx leaf REFERS)))))))
 
 (defn ^Boolean live-node? [ctx KIND e]
-  (if (or (nil? ctx) (nil? KIND) (nil? e)) false (not (empty? (c/by-lp ctx e KIND)))))
+  (if (or (nil? ctx) (nil? KIND) (nil? e)) false (not (empty? (events-by-subject-predicate ctx e KIND)))))

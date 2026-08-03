@@ -1,7 +1,6 @@
 (ns resolve-render
   (:require [clojure.string :as str]
             [fram.types :as t]
-            [fram.store :as c]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]))
@@ -18,7 +17,7 @@
 (defn render-sym [ctx view BOUND REFERS FIXED e]
   (let [v (rr/pred-val ctx view e "v")
    D (rr/refers-target ctx view BOUND REFERS e)]
-  (if (nil? D) v (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (c/by-lp ctx e FIXED))))
+  (if (nil? D) v (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (rr/events-by-subject-predicate ctx e FIXED))))
    qual (rr/pred-val ctx view e "qualifier")
    cpfx (rr/pred-val ctx view e "ctor_prefix")
    afield (rr/pred-val ctx view e "accessor_field")
@@ -33,11 +32,8 @@
   :else nm)))))
 
 (defn ord-edges [ctx n]
-  (if (or (nil? ctx) (nil? n)) [] (let [rows (reduce (fn [acc cid] (let [cl (c/fact-of ctx cid)
-   pi (if (nil? cl) nil (:p cl))
-   p (if (int? pi) (c/literal ctx pi) nil)
-   r (if (nil? cl) nil (:r cl))]
-  (if (and (string? p) (rc/ord-pos? p) (int? r)) (conj acc [(rc/ord-parse p) p cid r]) acc))) [] (c/by-l ctx n))]
+  (if (or (nil? ctx) (nil? n)) [] (let [rows (reduce (fn [acc event] (let [predicate (rr/event-predicate event)]
+  (if (and (string? predicate) (rc/ord-pos? predicate)) (conj acc [(rc/ord-parse predicate) predicate event (rr/event-value event)]) acc))) [] (rr/events-by-subject ctx n))]
   (vec (sort-by (fn [row] (nth row 0)) rc/ord-cmp rows)))))
 
 (defn ^String node->str [ctx view BOUND REFERS FIXED n]

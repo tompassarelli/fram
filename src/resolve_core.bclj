@@ -1,11 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — the code lives in the Fram fact graph; this text is
-;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
-;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
-;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
-;; text; that is a deliberate workflow change. ADOPTED 2026-07-27 (engine core
-;; port link 3: the M1 resolve cuts become graph-authored modules).
 ;; ============================================================================
 ;; resolve-core — the CRDT order-key algebra + the form vocabulary.
 ;; ============================================================================
@@ -31,11 +25,11 @@
 
 (def ORD-STEP :- Int 65536)
 
-(defrecord OrdKey [path :- (Vec Int) tie :- Int])
+(defrecord OrdKey [path :- (Vec Int) tie :- Any])
 
 (defn- digits [s :- String] :- Int (let [v (parse-long s)] (if (nil? v) 0 v)))
 
-(def ORD-RE :- Regex (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+)"))
+(def ORD-RE :- Regex (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+|t[A-Za-z0-9_-]+)"))
 
 (def ORD-DOT-RE :- Regex (re-pattern "\\."))
 
@@ -45,15 +39,19 @@
   (when (string? p)
     (let [m (re-matches ORD-RE (str p))]
       (if (some? m)
-        (->OrdKey (mapv digits (vec (str/split (nth m 1) ORD-DOT-RE)))
-          (digits (nth m 2)))
+        (let [raw-tie (str (nth m 2))]
+          (->OrdKey (mapv digits (vec (str/split (str (nth m 1)) ORD-DOT-RE)))
+            (if (str/starts-with? raw-tie "t") raw-tie (digits raw-tie))))
         (let [d (re-matches ORD-FLAT-RE (str p))]
           (when (some? d) (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))
 
 (defn ord-pos? [p :- Any] :- Bool (some? (ord-parse p)))
 
-(defn ord-str [path :- (Vec Int) tie :- Int] :- String
+(defn ord-str [path :- (Vec Int) tie :- Any] :- String
   (str "f" (str/join "." path) "~" tie))
+
+(defn- tie-key [tie :- Any] :- Any
+  (if (int? tie) [0 tie] [1 (str tie)]))
 
 (defn ord-veccmp [a :- (Vec Int) b :- (Vec Int)] :- Int
   (loop [i 0]
@@ -70,7 +68,7 @@
 
 (defn ord-cmp [x :- OrdKey y :- OrdKey] :- Int
   (let [c (ord-veccmp (:path x) (:path y))]
-    (if (zero? c) (compare (:tie x) (:tie y)) c)))
+    (if (zero? c) (compare (tie-key (:tie x)) (tie-key (:tie y))) c)))
 
 (defn ord-append [last-path :- (U (Vec Int) Nil)] :- (Vec Int)
   (if (or (nil? last-path) (empty? last-path))
@@ -246,9 +244,9 @@
         :else
         nil))))
 
-(defrecord ReuseNode [node :- Int])
+(defrecord ReuseNode [node: Any])
 
-(defn reuse-node-id [datum :- Any] :- Int?
+(defn reuse-node-id [datum: Any] -> Any
   (match datum [(ReuseNode node) node] [_ nil]))
 
 (defn- copy-reader-meta [value :- Any template :- Any] :- Any
@@ -260,7 +258,7 @@
   (let [leaf (if (seq? datum) (first datum) datum)]
     (when (symbol? leaf) (str leaf))))
 
-(defn reuse-logical-datum [datum :- Any node :- Int] :- Any
+(defn reuse-logical-datum [datum: Any node: Any] -> Any
   (if (seq? datum)
     (let [items (vec datum) leaf (first items) marker (copy-reader-meta (->ReuseNode node) leaf) rebuilt (apply list (cons marker (rest items)))]
       (copy-reader-meta rebuilt datum))
@@ -276,7 +274,7 @@
           base
           (range member-start (count items)))))))
 
-(defn reuse-retained-bindings [datum :- Any old-bindings :- (Map Any Int)] :- Any
+(defn reuse-retained-bindings [datum: Any old-bindings: (Map Any Any)] -> Any
   (if (not (seq? datum))
     datum
     (let [items (vec datum) head (str (first items)) name-index (type-name-index head (second items)) replace-one (fn [xs :- (Vec Any) role :- Keyword i :- Int] :- (Vec Any) (let [raw (nth xs i nil) nm (logical-datum-name raw) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn [xs :- (Vec Any) i :- Int] :- (Vec Any) (replace-one xs role i)) with-top (range member-start (count with-top))))]

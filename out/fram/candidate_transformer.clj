@@ -45,10 +45,11 @@
 (defn- position-key [predicate]
   (when (string? predicate)
     (if-let [[_ n] (re-matches #"f([0-9]+)" predicate)]
-      [[(* (inc (parse-long n)) 65536)] 0]
+      [[(* (inc (parse-long n)) 65536)] [0 0]]
       (when-let [[_ path tie]
-                 (re-matches #"f([0-9]+(?:\.[0-9]+)*)~([0-9]+)" predicate)]
-        [(mapv parse-long (str/split path #"\.")) (parse-long tie)]))))
+                 (re-matches #"f([0-9]+(?:\.[0-9]+)*)~([0-9]+|t[A-Za-z0-9_-]+)" predicate)]
+        [(mapv parse-long (str/split path #"\."))
+         (if (str/starts-with? tie "t") [1 tie] [0 (parse-long tie)])]))))
 
 (defn- ordered-edges [facts node]
   (->> facts

@@ -13,7 +13,7 @@
   (let [v (parse-long s)]
   (if (nil? v) 0 v)))
 
-(def ORD-RE (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+)"))
+(def ORD-RE (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+|t[A-Za-z0-9_-]+)"))
 
 (def ORD-DOT-RE (re-pattern "\\."))
 
@@ -22,7 +22,8 @@
 (defn ord-parse [p]
   (if (string? p) (do
   (let [m (re-matches ORD-RE (str p))]
-  (if (some? m) (->OrdKey (mapv digits (vec (str/split (nth m 1) ORD-DOT-RE))) (digits (nth m 2))) (let [d (re-matches ORD-FLAT-RE (str p))]
+  (if (some? m) (let [raw-tie (str (nth m 2))]
+  (->OrdKey (mapv digits (vec (str/split (str (nth m 1)) ORD-DOT-RE))) (if (str/starts-with? raw-tie "t") raw-tie (digits raw-tie)))) (let [d (re-matches ORD-FLAT-RE (str p))]
   (if (some? d) (do
   (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))))
 
@@ -31,6 +32,9 @@
 
 (defn ^String ord-str [path tie]
   (str "f" (str/join "." path) "~" tie))
+
+(defn- tie-key [tie]
+  (if (int? tie) [0 tie] [1 (str tie)]))
 
 (defn ord-veccmp [a b]
   (loop [i 0]
@@ -45,7 +49,7 @@
 
 (defn ord-cmp [^OrdKey x ^OrdKey y]
   (let [c (ord-veccmp (:path x) (:path y))]
-  (if (zero? c) (compare (:tie x) (:tie y)) c)))
+  (if (zero? c) (compare (tie-key (:tie x)) (tie-key (:tie y))) c)))
 
 (defn ord-append [last-path]
   (if (or (nil? last-path) (empty? last-path)) [ORD-STEP] (conj (vec (butlast last-path)) (+ (nth last-path (dec (count last-path))) ORD-STEP))))

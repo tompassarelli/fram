@@ -1,7 +1,6 @@
 (ns resolve-mint
   (:require [clojure.string :as str]
             [fram.types :as t]
-            [fram.store :as c]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]
@@ -9,13 +8,13 @@
 
 (def FN-RE (re-pattern "f\\d+"))
 
-(defrecord Mint [ctx tx SUP KIND Vp ents view BOUND REFERS FIXED])
+(def STRUCTURAL-SEG-RE (re-pattern "seg\\d+"))
+
+(def STRUCTURAL-COMMENT-RE (re-pattern "comment\\d+"))
+
+(defrecord Mint [ctx KIND Vp ents view BOUND REFERS FIXED])
 
 (defn mint-ctx [r] (:ctx r))
-
-(defn mint-tx [r] (:tx r))
-
-(defn mint-SUP [r] (:SUP r))
 
 (defn mint-KIND [r] (:KIND r))
 
@@ -31,11 +30,11 @@
 
 (defn mint-FIXED [r] (:FIXED r))
 
-(defrecord FnEdge [idx cid child])
+(defrecord FnEdge [idx event child])
 
 (defn fnedge-idx [r] (:idx r))
 
-(defn fnedge-cid [r] (:cid r))
+(defn fnedge-event [r] (:event r))
 
 (defn fnedge-child [r] (:child r))
 
@@ -47,11 +46,10 @@
 
 (defn mint-leaf! [^Mint m ^String src kind v]
   (let [ctx (:ctx m)
-   tx (:tx m)
-   e (register! m src (c/entity! ctx))]
+   e (register! m src (rr/mint! ctx))]
   (do
-  (c/fact! ctx e (:KIND m) (c/value! ctx kind) tx)
-  (c/fact! ctx e (:Vp m) (c/value! ctx v) tx)
+  (rr/assert! ctx e (:KIND m) kind)
+  (rr/assert! ctx e (:Vp m) v)
   e)))
 
 (defn- clj-meta->beagle-meta [mt]
@@ -75,17 +73,16 @@
   (char? d) (mint-leaf! m src "char" (str d))
   (number? d) (mint-leaf! m src "number" (str d))
   (or (list? d) (seq? d) (vector? d) (map? d)) (let [ctx (:ctx m)
-   tx (:tx m)
    head (cond
   (vector? d) [(symbol "#%brackets")]
   (map? d) [(symbol "#%map")]
   :else [])
    elems (vec (concat head (if (map? d) (apply concat (seq d)) (seq d))))
-   e (register! m src (c/entity! ctx))]
+   e (register! m src (rr/mint! ctx))]
   (do
-  (c/fact! ctx e (:KIND m) (c/value! ctx "list") tx)
+  (rr/assert! ctx e (:KIND m) "list")
   (doseq [i (range (count elems))]
-  (c/fact! ctx e (c/value! ctx (str "f" i)) (mint-datum! m src (nth elems i)) tx))
+  (rr/assert! ctx e (str "f" i) (mint-datum! m src (nth elems i))))
   e))
   (instance? java.util.regex.Pattern d) (mint-datum! m src (list (symbol "#%regex") (.pattern d)))
   (set? d) (mint-datum! m src (apply list (cons (symbol "#%set") (seq d))))
@@ -93,20 +90,16 @@
 
 (defn fN-facts [^Mint m parent]
   (let [ctx (:ctx m)
-   rows (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
-   pi (if (nil? f) nil (:p f))
-   p (if (int? pi) (c/literal ctx pi) nil)
-   r (if (nil? f) nil (:r f))]
-  (if (and (string? p) (some? (re-matches FN-RE (str p)))) (let [n (parse-long (subs (str p) 1))]
-  (if (nil? n) acc (conj acc (->FnEdge n cid r)))) acc))) [] (c/by-l ctx parent))]
-  (mapv (fn [e] [(:idx e) (:cid e) (:child e)]) (sort-by (fn [e] (:idx e)) rows))))
+   rows (reduce (fn [acc event] (let [predicate (rr/event-predicate event)]
+  (if (and (string? predicate) (some? (re-matches FN-RE predicate))) (let [idx (parse-long (subs predicate 1))]
+  (if (nil? idx) acc (conj acc (->FnEdge idx event (rr/event-value event))))) acc))) [] (rr/events-by-subject ctx parent))]
+  (mapv (fn [e] [(:idx e) (:event e) (:child e)]) (sort-by (fn [e] (:idx e)) rows))))
 
-(defn retire-fact! [^Mint m oldc]
-  (let [ctx (:ctx m)]
-  (c/fact! ctx (c/entity! ctx) (:SUP m) oldc (:tx m))))
+(defn retire-fact! [^Mint m event]
+  (rr/retract-event! (:ctx m) event))
 
 (defn- nn [e]
-  (if (nil? e) -1 e))
+  (if (nil? e) (throw (ex-info "resolve: node identity is required" {:type :missing-node-identity})) e))
 
 (def COLON3 #{":-" ":" ":raises"})
 
@@ -114,7 +107,7 @@
   (into [frame] scope))
 
 (defn- ^Boolean renders-as-tracked-name? [^Mint m node]
-  (and (empty? (c/by-lp (:ctx m) (nn node) (:FIXED m))) (nil? (rr/pred-val (:ctx m) (:view m) node "qualifier"))))
+  (and (empty? (rr/events-by-subject-predicate (:ctx m) (nn node) (:FIXED m))) (nil? (rr/pred-val (:ctx m) (:view m) node "qualifier"))))
 
 (defn capture-refs [^Mint m node scope B newnm]
   (let [ctx (:ctx m)
@@ -225,18 +218,19 @@
 
 (defn emit-deleted-subtree [r] (:deleted-subtree r))
 
-(defn- emit-line [^Emit m wrap e cid]
+(defn- ^Boolean structural-predicate? [predicate]
+  (and (string? predicate) (or (= "child" predicate) (or (= "tail" predicate) (or (rc/ord-pos? predicate) (or (some? (re-matches STRUCTURAL-SEG-RE predicate)) (some? (re-matches STRUCTURAL-COMMENT-RE predicate))))))))
+
+(defn- emit-line [^Emit m id-of wrap e event]
   (let [ctx (:ctx m)
    view (:view m)
-   cl (c/fact-of ctx cid)
-   p (if (nil? cl) nil (:p cl))
-   r (if (nil? cl) nil (:r cl))
-   ps (if (int? p) (c/literal ctx p) nil)]
+   predicate (rr/event-predicate event)
+   value (rr/event-value event)]
   (cond
-  (and (some? wrap) (= e wrap) (string? ps) (rc/ord-pos? ps) (not= ps "f0")) nil
-  (contains? INTERNAL-PREDS (str ps)) nil
-  (and (= ps "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e))) (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
-   fixed? (not (empty? (c/by-lp ctx e (:FIXED m))))
+  (and (some? wrap) (= e wrap) (string? predicate) (rc/ord-pos? predicate) (not= predicate "f0")) nil
+  (contains? INTERNAL-PREDS (str predicate)) nil
+  (and (= predicate "v") (some? (rr/refers-target ctx view (:BOUND m) (:REFERS m) e))) (let [D (rr/refers-target ctx view (:BOUND m) (:REFERS m) e)
+   fixed? (not (empty? (rr/events-by-subject-predicate ctx e (:FIXED m))))
    qual (rr/pred-val ctx view e "qualifier")
    cpfx (rr/pred-val ctx view e "ctor_prefix")
    afield (rr/pred-val ctx view e "accessor_field")
@@ -245,13 +239,13 @@
   (some? cpfx) (str cpfx nm0)
   (some? afield) (str (str/lower-case (str nm0)) "-" afield)
   :else nm0))]
-  (str "[" e " \"v\" " (pr-str (cond
+  (str "[" (id-of e) " \"v\" " (pr-str (cond
   (nil? nm0) (rr/pred-val ctx view e "v")
-  fixed? (c/literal ctx r)
+  fixed? value
   (some? qual) (str qual "/" nm)
   :else nm)) "]"))
-  (c/value-object? ctx r) (str "[" e " " (pr-str ps) " " (pr-str (c/literal ctx r)) "]")
-  :else (str "[" e " " (pr-str ps) " " r "]"))))
+  (structural-predicate? predicate) (str "[" (id-of e) " " (pr-str predicate) " " (id-of value) "]")
+  :else (str "[" (id-of e) " " (pr-str predicate) " " (pr-str value) "]"))))
 
 (defn extract-lines [^Emit m ^String src]
   (let [ctx (:ctx m)
@@ -263,10 +257,13 @@
    root (if (empty? dforms) (wrapf src) nil)
    live (if (some? root) (desc root) nil)
    ents (vec (get (:ents m) src []))
-   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a cid] (let [line (emit-line m wrap e cid)]
-  (if (nil? line) a (conj a line)))) acc (c/by-l ctx e)))) [] ents)
+   ids (zipmap ents (range 1 (inc (count ents))))
+   id-of (fn [node] (let [label (get ids node)]
+  (if (nil? label) (throw (ex-info "resolve: projection references a node outside its file" {:node node :src src})) label)))
+   rows (reduce (fn [acc e] (if (or (contains? dsub e) (and (some? live) (not (contains? live e)))) acc (reduce (fn [a event] (let [line (emit-line m id-of wrap e event)]
+  (if (nil? line) a (conj a line)))) acc (rr/events-by-subject ctx e)))) [] ents)
    forms (if (some? wrap) (vec (remove (fn [f] (contains? dforms f)) (vec (rest (rr/ordered-children ctx wrap))))) [])
-   formlines (mapv (fn [i] (str "[" wrap " \"f" (+ i 1) "\" " (nth forms i) "]")) (vec (range (count forms))))]
+   formlines (mapv (fn [i] (str "[" (id-of wrap) " \"f" (+ i 1) "\" " (id-of (nth forms i)) "]")) (vec (range (count forms))))]
   (into (into [(str "@file " src)] rows) formlines)))
 
 (defn author-emit-lines [op detail srcs outp]
@@ -279,22 +276,16 @@
    fa maccs]
   {:modframe (reduce (fn [acc s] (assoc acc s (fd s))) {} srcs) :typeframe (reduce (fn [acc s] (assoc acc s (ft s))) {} srcs) :accessors (reduce (fn [acc s] (assoc acc s (fa s))) {} srcs)}))
 
-(def STRUCTURAL-SEG-RE (re-pattern "seg\\d+"))
-
-(def STRUCTURAL-COMMENT-RE (re-pattern "comment\\d+"))
-
 (def PATH-SPLIT-RE (re-pattern "/"))
 
 (defn wrapper-of [ctx view ents ^String src]
   (some (fn [e] (if (= "beagle-file" (rr/head-sym ctx view e)) (do
   e))) (vec (get ents src []))))
 
-(defn structural-kids [ctx n]
-  (vec (keep (fn [cid] (let [cl (c/fact-of ctx cid)
-   p (c/literal ctx (:p cl))
-   r (:r cl)]
-  (if (and (int? r) (string? p) (or (rc/ord-pos? p) (re-matches STRUCTURAL-SEG-RE p) (re-matches STRUCTURAL-COMMENT-RE p) (= p "tail"))) (do
-  r)))) (c/by-l ctx n))))
+(defn structural-kids [ctx node]
+  (vec (keep (fn [event] (let [predicate (rr/event-predicate event)]
+  (if (structural-predicate? predicate) (do
+  (rr/event-value event))))) (rr/events-by-subject ctx node))))
 
 (defn structural-descendants [ctx root]
   (loop [seen #{}

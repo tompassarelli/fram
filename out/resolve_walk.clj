@@ -1,19 +1,16 @@
 (ns resolve-walk
   (:require [clojure.string :as str]
             [fram.types :as t]
-            [fram.store :as c]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]
             [resolve-modules :as rm]))
 
-(defrecord Walk [ctx view tx REFERS BOUND FIXED QUAL CTOR ACC nres nunres nxmod ntype ncomment xres tres ares])
+(defrecord Walk [ctx view REFERS BOUND FIXED QUAL CTOR ACC nres nunres nxmod ntype ncomment xres tres ares])
 
 (defn walk-ctx [r] (:ctx r))
 
 (defn walk-view [r] (:view r))
-
-(defn walk-tx [r] (:tx r))
 
 (defn walk-REFERS [r] (:REFERS r))
 
@@ -56,7 +53,7 @@
 (defn corpus-ents [r] (:ents r))
 
 (defn- nn [e]
-  (if (nil? e) -1 e))
+  (if (nil? e) (throw (ex-info "resolve: node identity is required" {:type :missing-node-identity})) e))
 
 (def RET-COLON #{":-" ":" ":raises"})
 
@@ -102,7 +99,7 @@
 
 (defn bind! [^Walk w L target]
   (do
-  (c/fact! (:ctx w) (nn L) (:REFERS w) (nn target) (:tx w))
+  (rr/update-single! (:ctx w) (nn L) (:REFERS w) (nn target))
   (swap! (:nres w) (fn [n] (inc n)))))
 
 (defn bind-xmod! [^Walk w node x]
@@ -111,11 +108,11 @@
   (do
   (bind! w node (:target x))
   (cond
-  (= :fixed mode) (c/fact! (:ctx w) (nn node) (:FIXED w) (c/value! (:ctx w) "1") (:tx w))
-  (= :qual mode) (c/fact! (:ctx w) (nn node) (:QUAL w) (c/value! (:ctx w) (:alias x)) (:tx w))
+  (= :fixed mode) (rr/update-single! (:ctx w) (nn node) (:FIXED w) "1")
+  (= :qual mode) (rr/update-single! (:ctx w) (nn node) (:QUAL w) (:alias x))
   :else nil)
   (if (some? acc) (do
-  (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) acc) (:tx w))))
+  (rr/update-single! (:ctx w) (nn node) (:ACC w) acc)))
   (swap! (:nxmod w) (fn [n] (inc n)))
   true))))
 
@@ -131,13 +128,13 @@
    xacc (:accessor x)]
   (do
   (cond
-  (= :fixed mode) (c/fact! (:ctx w) (nn node) (:FIXED w) (c/value! (:ctx w) "1") (:tx w))
-  (= :qual mode) (c/fact! (:ctx w) (nn node) (:QUAL w) (c/value! (:ctx w) (:alias x)) (:tx w))
+  (= :fixed mode) (rr/update-single! (:ctx w) (nn node) (:FIXED w) "1")
+  (= :qual mode) (rr/update-single! (:ctx w) (nn node) (:QUAL w) (:alias x))
   :else nil)
   (if (some? xacc) (do
-  (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) xacc) (:tx w))))))
-  (and (some? pfx) (or (some? (tr w stripped)) (some? (:target (xr w stripped))))) (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w))
-  (some? acc) (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) (nth acc 1)) (:tx w))
+  (rr/update-single! (:ctx w) (nn node) (:ACC w) xacc)))))
+  (and (some? pfx) (or (some? (tr w stripped)) (some? (:target (xr w stripped))))) (rr/update-single! (:ctx w) (nn node) (:CTOR w) pfx)
+  (some? acc) (rr/update-single! (:ctx w) (nn node) (:ACC w) (nth acc 1))
   :else nil))))
 
 (defn walk-type! [^Walk w node]
@@ -251,17 +248,17 @@
    b (tr w stripped)]
   (if (some? b) (do
   (bind! w node b)
-  (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w))
+  (rr/update-single! (:ctx w) (nn node) (:CTOR w) pfx)
   (swap! (:ntype w) (fn [n] (inc n)))
   true) (if (some? (bind-xmod! w node (xr w stripped))) (do
-  (c/fact! (:ctx w) (nn node) (:CTOR w) (c/value! (:ctx w) pfx) (:tx w))
+  (rr/update-single! (:ctx w) (nn node) (:CTOR w) pfx)
   true) false))))))
 
 (defn- ^Boolean try-accessor! [^Walk w node nm]
   (let [a (ar w nm)]
   (if (nil? a) false (do
   (bind! w node (nth a 0))
-  (c/fact! (:ctx w) (nn node) (:ACC w) (c/value! (:ctx w) (nth a 1)) (:tx w))
+  (rr/update-single! (:ctx w) (nn node) (:ACC w) (nth a 1))
   (swap! (:ntype w) (fn [n] (inc n)))
   true))))
 
@@ -379,7 +376,7 @@
 
 (defn cbind! [^Walk w L target]
   (do
-  (c/fact! (:ctx w) (nn L) (:REFERS w) (nn target) (:tx w))
+  (rr/update-single! (:ctx w) (nn L) (:REFERS w) (nn target))
   (swap! (:ncomment w) (fn [n] (inc n)))))
 
 (defn- def-binding [^Corpus cp src nm]
@@ -399,7 +396,7 @@
   (resolve-comment! w cp e src)))
 
 (defn- ^Walk for-src [^Walk w ^Corpus cp src xres-for]
-  (->Walk (:ctx w) (:view w) (:tx w) (:REFERS w) (:BOUND w) (:FIXED w) (:QUAL w) (:CTOR w) (:ACC w) (:nres w) (:nunres w) (:nxmod w) (:ntype w) (:ncomment w) (xres-for src) (fn [nm] (get (get (:typeframe cp) src) nm)) (fn [nm] (get (get (:accessors cp) src) nm))))
+  (->Walk (:ctx w) (:view w) (:REFERS w) (:BOUND w) (:FIXED w) (:QUAL w) (:CTOR w) (:ACC w) (:nres w) (:nunres w) (:nxmod w) (:ntype w) (:ncomment w) (xres-for src) (fn [nm] (get (get (:typeframe cp) src) nm)) (fn [nm] (get (get (:accessors cp) src) nm))))
 
 (defn run-resolution-over! [^Walk w ^Corpus cp walk-srcs xres-for n-forms walked]
   (doseq [src walk-srcs]
@@ -424,14 +421,9 @@
   (if (empty? e) (rm/module-defs ctx view ents) e)))) :type-exports (by-mod (fn [ents] (rm/module-types ctx view ents))) :accessor-exports (by-mod (fn [ents] (rm/module-accessors ctx view ents)))}))
 
 (defn warm-groups [ctx cache name->module]
-  (let [NAME (c/value-id ctx "name")]
-  (cond
-  (some? cache) cache
-  (some? NAME) (reduce (fn [groups cid] (let [fact (c/fact-of ctx cid)
-   node-name (c/literal ctx (:r fact))
+  (if (some? cache) cache (reduce (fn [groups event] (let [node-name (rr/event-value event)
    module (name->module node-name)]
-  (if (some? module) (update groups module (fnil conj []) (:l fact)) groups))) {} (c/by-p ctx NAME))
-  :else {})))
+  (if (some? module) (update groups module (fnil conj []) (rr/event-subject event)) groups))) {} (rr/events-by-predicate ctx "name"))))
 
 (defn scoped-corpus-tables [ctx view groups scope]
   (let [srcs (vec (keys groups))

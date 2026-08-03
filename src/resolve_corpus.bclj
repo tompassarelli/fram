@@ -1,8 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — the code lives in the Fram fact graph; this text is a
-;; regenerable downstream view.
-;;
 ;; ============================================================================
 ;; resolve-corpus — THE CORPUS/STORE FRAME: install one resolver run's state.
 ;; ============================================================================
@@ -32,15 +29,15 @@
 
 (define-mode strict)
 
-(def MODULE-NAME-RE :- Any (re-pattern "@([^#]+)#\\d+"))
+(def MODULE-NAME-RE :- Any (re-pattern "@([^#]+)#.+"))
 
 (def SLASH-RE :- Any (re-pattern "/"))
 
 ;; GAP: Beagle cannot name the heterogeneous module tables or the host callbacks
 ;; that mutate resolve.clj's thread-local dynamic bindings more precisely than
-;; Any. Store, tx, predicate ids, source vectors, and the binding atom remain
-;; concrete so the unchecked boundary is limited to those two shapes.
-(defrecord CorpusState [ctx :- (Atom t/Store) view :- Any tx :- Int KIND :- Int BOUND :- Int? REFERS :- Int file-ents :- (Atom Any) corpus-cache :- Any corpus-scope :- Any resolve-walk? :- Bool srcs :- (Vec Any) install-srcs :- Any install-tables :- Any install-warm :- Any run-all :- Any run-over :- Any profile :- Any])
+;; Any. The recursive Term alias cannot cross Beagle module calls without
+;; narrowing, so node/predicate fields use Any and are validated by rr/context.
+(defrecord CorpusState [ctx: rr/Context view: Any KIND: Any BOUND: Any REFERS: Any file-ents: (Atom Any) corpus-cache: Any corpus-scope: Any resolve-walk?: Bool srcs: (Vec Any) install-srcs: Any install-tables: Any install-warm: Any run-all: Any run-over: Any profile: Any])
 
 (defrecord CorpusHost [with-state :- Any load-edn :- Any state :- Any])
 
@@ -52,7 +49,7 @@
     (let [hit (re-matches MODULE-NAME-RE nm)] (if (some? hit) (second hit) nil))
     nil))
 
-(defn make-xresolve [ctx :- (Atom t/Store) view :- Any ents-of :- Any exports :- Any type-exports :- Any accessor-exports :- Any src :- Any] :- Any
+(defn make-xresolve [ctx: rr/Context view: Any ents-of: Any exports: Any type-exports: Any accessor-exports: Any src: Any] -> Any
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src []))) xport (fn [m :- Any n :- Any] :- Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn [m :- Any n :- Any] :- Any (get-in accessor-exports [m n]))]
     (fn [nm :- Any] :- Any
       (cond
@@ -89,33 +86,33 @@
         :else
         nil))))
 
-(defn module-export-set [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Any
+(defn module-export-set [ctx: rr/Context view: Any ents-of: Any src: Any] -> Any
   (let [ents (vec (get ents-of src [])) exports (rm/module-exports ctx view ents) value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
     (into #{}
       (concat (keys value-exports)
         (keys (rm/module-types ctx view ents))
         (keys (rm/module-accessors ctx view ents))))))
 
-(defn module-imports [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Any
+(defn module-imports [ctx: rr/Context view: Any ents-of: Any src: Any] -> Any
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
     (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
 
-(defn import-graph [ctx :- (Atom t/Store) view :- Any ents-of :- Any srcs :- (Vec Any)] :- Any
+(defn import-graph [ctx: rr/Context view: Any ents-of: Any srcs: (Vec Any)] -> Any
   (into {}
     (map (fn [src :- Any] :- Any (let [ents (vec (get ents-of src []))] [(rm/module-name ctx view ents) (module-imports ctx view ents-of src)]))
       (filter (fn [src :- Any] :- Bool (some? (rm/module-name ctx view (vec (get ents-of src [])))))
         srcs))))
 
-(defn module-has-macro? [ctx :- (Atom t/Store) view :- Any ents-of :- Any src :- Any] :- Bool
+(defn module-has-macro? [ctx: rr/Context view: Any ents-of: Any src: Any] -> Bool
   (let [ents (vec (get ents-of src []))]
-    (boolean (some (fn [form :- Int] :- Bool (let [def-form (rm/unwrap-def ctx view form) head (first (rr/ordered-children ctx def-form))] (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
+    (boolean (some (fn [form: Any] -> Bool (let [def-form (rm/unwrap-def ctx view form) head (first (rr/ordered-children ctx def-form))] (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
 
-(defn lift-bound-to-refers! [ctx :- (Atom t/Store) tx :- Int KIND :- Int BOUND :- Int? REFERS :- Int] :- Any
+(defn lift-bound-to-refers! [ctx: rr/Context KIND: Any BOUND: Any REFERS: Any] -> Any
   (when (some? BOUND)
-    (doseq [cid (c/by-p ctx BOUND)]
-      (let [fact (c/fact-of ctx cid) leaf (:l fact) target (:r fact)]
-        (when (and (integer? target) (rr/live-node? ctx KIND target) (empty? (c/by-lp ctx leaf REFERS)))
-          (c/fact! ctx leaf REFERS target tx))))))
+    (doseq [event (rr/events-by-predicate ctx BOUND)]
+      (let [leaf (rr/event-subject event) target (rr/event-value event)]
+        (when (and (rr/live-node? ctx KIND target) (empty? (rr/events-by-subject-predicate ctx leaf REFERS)))
+          (rr/assert! ctx leaf REFERS target))))))
 
 (defn corpus-from-store! [state :- CorpusState] :- Any
   (let [t0 (System/nanoTime) groups (rw/warm-groups (:ctx state) (:corpus-cache state) name->module) t-groups (System/nanoTime) tables (rw/scoped-corpus-tables (:ctx state) (:view state) groups (:corpus-scope state)) install (:install-warm state)]
@@ -126,60 +123,40 @@
           (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state))))))
       tables)))
 
-(defn resolve-edn! [host :- CorpusHost edn-paths :- (Vec Any) body :- Any] :- Any
-  (let [store (c/new-store) tx (c/begin-tx! store "resolve") sup (c/value! store "supersedes") with-state (:with-state host)]
-    (do
-      (c/set-supersedes-pred! store sup)
-      (with-state store
-        tx
-        sup
-        (fn [] :- Any
-          (let [state-fn (:state host) load (:load-edn host) loaded (mapv load edn-paths) state (state-fn) install-srcs (:install-srcs state) install-tables (:install-tables state)]
-            (do
-              (install-srcs loaded)
-              (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
+(defn resolve-edn! [host: CorpusHost edn-paths: (Vec Any) body: Any] -> Any
+  (let [context: rr/Context (rr/context (c/new-term-store "resolve")) with-state (:with-state host)]
+    (with-state context
+      (fn [] -> Any
+        (let [state-fn (:state host) load (:load-edn host) loaded (mapv load edn-paths) state (state-fn) install-srcs (:install-srcs state) install-tables (:install-tables state)]
+          (do
+            (install-srcs loaded)
+            (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
+            (let [run-all (:run-all state)] (run-all))
+            (let [result (body)] (do (rr/commit! context) result))))))))
+
+(defn resolve-warm-store! [host: CorpusHost store: (Atom t/TermStore) body: Any] -> Any
+  (let [context: rr/Context (rr/context store) with-state (:with-state host)]
+    (with-state context
+      (fn [] -> Any
+        (let [state-fn (:state host) state (state-fn)]
+          (do
+            (corpus-from-store! state)
+            (when (:resolve-walk? state)
               (let [run-all (:run-all state)] (run-all))
-              (body))))))))
+              (lift-bound-to-refers! (:ctx state) (:KIND state) (:BOUND state) (:REFERS state)))
+            (let [result (body)] (do (rr/commit! context) result))))))))
 
-(defn resolve-warm-store! [host :- CorpusHost store :- (Atom t/Store) body :- Any] :- Any
-  (let [tx (c/begin-tx! store "resolve-warm") sup (or (c/value-id store "supersedes") (c/value! store "supersedes")) with-state (:with-state host)]
-    (do
-      (c/set-supersedes-pred! store sup)
-      (with-state store
-        tx
-        sup
-        (fn [] :- Any
-          (let [state-fn (:state host) state (state-fn)]
-            (do
-              (corpus-from-store! state)
-              (when (:resolve-walk? state)
-                (let [run-all (:run-all state)] (run-all))
-                (lift-bound-to-refers! (:ctx state)
-                  (:tx state)
-                  (:KIND state)
-                  (:BOUND state)
-                  (:REFERS state)))
-              (body))))))))
-
-(defn resolve-modules! [host :- CorpusHost store :- (Atom t/Store) module-set :- Any body :- Any] :- Any
-  (let [tx (c/begin-tx! store "resolve-scoped") sup (or (c/value-id store "supersedes") (c/value! store "supersedes")) with-state (:with-state host)]
-    (do
-      (c/set-supersedes-pred! store sup)
-      (with-state store
-        tx
-        sup
-        (fn [] :- Any
-          (let [state-fn (:state host) state (state-fn)]
-            (do
-              (corpus-from-store! state)
-              (let [fresh (state-fn) run-over (:run-over fresh)]
-                (run-over (filter module-set (:srcs fresh)))
-                (lift-bound-to-refers! (:ctx fresh)
-                  (:tx fresh)
-                  (:KIND fresh)
-                  (:BOUND fresh)
-                  (:REFERS fresh)))
-              (body))))))))
+(defn resolve-modules! [host: CorpusHost store: (Atom t/TermStore) module-set: Any body: Any] -> Any
+  (let [context: rr/Context (rr/context store) with-state (:with-state host)]
+    (with-state context
+      (fn [] -> Any
+        (let [state-fn (:state host) state (state-fn)]
+          (do
+            (corpus-from-store! state)
+            (let [fresh (state-fn) run-over (:run-over fresh)]
+              (run-over (filter module-set (:srcs fresh)))
+              (lift-bound-to-refers! (:ctx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
+            (let [result (body)] (do (rr/commit! context) result))))))))
 
 (defn file-entities [file-ents :- (Atom Any) src :- Any] :- Any
   (get (deref file-ents) src []))
@@ -199,32 +176,34 @@
 
 (defn table-srcs [tables :- Any] :- Any (:srcs tables))
 
-(defn corpus-predicate-ids! [store :- (Atom t/Store)] :- Any
-  {:Vp
-   (c/value! store "v")
-   :KIND
-   (c/value! store "kind")
-   :REFERS
-   (c/value! store "refers_to")
-   :BOUND
-   (c/value! store "bound_to")
-   :FIXED
-   (c/value! store "keep_spelling")
-   :QUAL
-   (c/value! store "qualifier")
-   :CTOR
-   (c/value! store "ctor_prefix")
-   :ACC
-   (c/value! store "accessor_field")})
+(defn corpus-predicate-ids! [context: rr/Context] -> Any
+  {:Vp "v"
+   :KIND "kind"
+   :REFERS "refers_to"
+   :BOUND "bound_to"
+   :FIXED "keep_spelling"
+   :QUAL "qualifier"
+   :CTOR "ctor_prefix"
+   :ACC "accessor_field"})
 
-(defn load-edn! [ctx :- (Atom t/Store) tx :- Int file-ents :- (Atom Any) path :- Any] :- Any
-  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line :- Any] :- Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid :- Any] :- Any (or (get (deref local) lid) (let [e (c/entity! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
+(def REF-PREDICATE-RE: Regex (re-pattern "(?:f|seg|comment)\\d+"))
+
+(defn node-reference-predicate? [predicate: Any] -> Bool
+  (and (string? predicate)
+    (or (= "child" predicate)
+      (or (= "tail" predicate) (some? (re-matches REF-PREDICATE-RE predicate))))))
+
+(defn load-edn! [ctx: rr/Context file-ents: (Atom Any) path: Any] -> Any
+  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line :- Any] :- Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid :- Any] :- Any (or (get (deref local) lid) (let [e (rr/mint! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
     (do
       (doseq [line lines :when (str/starts-with? line "[")]
         (let [[s p o] (read-edn line)]
-          (c/fact! ctx
+          (rr/assert! ctx
             (ent s)
-            (c/value! ctx p)
-            (if (integer? o) (ent o) (c/value! ctx o))
-            tx)))
+            p
+            (if (node-reference-predicate? p)
+              (if (integer? o)
+                (ent o)
+                (throw (ex-info "resolve: structural edge target must be a local integer id" {:predicate p :target o})))
+              o))))
       src)))

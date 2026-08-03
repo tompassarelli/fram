@@ -1,8 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — the code lives in the Fram fact graph; this text is a
-;; regenerable downstream view.
-;;
 ;; ============================================================================
 ;; resolve-verbs — THE AUTHORING VERBS: an edit is a FACT OPERATION.
 ;; ============================================================================
@@ -24,7 +21,7 @@
 ;;
 ;;   1. STATE IS A PARAMETER (Cuts B–G's rule). resolve.clj's ^:dynamic vars
 ;;      cannot change namespace (coord_daemon.clj and tests/coord_*.clj `binding`
-;;      them by qualified name), so the store, view, tx, the predicate value-ids,
+;;      them by qualified name), so the transaction context, view, Term predicates,
 ;;      the corpus tables, the two reject arities and every resolve.clj-local
 ;;      helper the verbs call arrive HERE as one explicit `Verb` record that
 ;;      resolve.clj's `verb-env` builds from the dynamic state at call time.
@@ -91,7 +88,6 @@
 (ns resolve-verbs
   (:require [clojure.string :as str]
     [fram.types :as t]
-    [fram.store :as c]
     [resolve-core :as rc]
     [resolve-read :as rr]
     [resolve-binds :as rb]
@@ -106,7 +102,7 @@
 ;; the dynamic state) or a corpus table keyed by src — the same `Any` boundary Cut
 ;; G's xres/tres/ares sit on. GAP: Beagle cannot name "a Clojure map whose keys are
 ;; arbitrary node ids" or a variadic host fn more precisely than Any.
-(defrecord Verb [ctx :- (Atom t/Store) view :- Any tx :- Int SUP :- Int KIND :- Int Vp :- Int srcs :- (Vec String) capture-only? :- Bool emit-srcs :- (Vec String) reject :- Any reject2 :- Any warn :- Any emit :- Any extract :- Any out-path :- Any def-binding :- Any typeframe :- Any modframe :- Any forms-of :- Any module-name :- Any parse-require :- Any capture-refs :- Any ultimate :- Any BOUND :- Int REFERS :- Int wrapper-of :- Any form-for-victim :- Any descendants :- Any retire :- Any reresolve :- Any ents :- Any mint :- Any register :- Any scope-srcs :- Any fn-facts :- Any FIXED :- Int exit :- Any]) ; (fn [code]) — System/exit, the unknown-op arm's hard stop
+(defrecord Verb [ctx: rr/Context view: Any KIND: Any Vp: Any srcs: (Vec String) capture-only?: Bool emit-srcs: (Vec String) reject: Any reject2: Any warn: Any emit: Any extract: Any out-path: Any def-binding: Any typeframe: Any modframe: Any forms-of: Any module-name: Any parse-require: Any capture-refs: Any ultimate: Any BOUND: Any REFERS: Any wrapper-of: Any form-for-victim: Any descendants: Any retire: Any reresolve: Any ents: Any mint: Any register: Any scope-srcs: Any fn-facts: Any FIXED: Any exit: Any]) ; (fn [code]) — System/exit, the unknown-op arm's hard stop
 
 ;; ---------------------------------------------------------------------------
 ;; rename — every INVARIANT + fact mutation of the old `rename` case arm.
@@ -119,7 +115,7 @@
     (let [c (subs s 0 1)] (and (>= (compare c "A") 0) (<= (compare c "Z") 0)))))
 
 (defn verb-rename! [v :- Verb old :- String new :- String target :- String] :- Any
-  (let [ctx (:ctx v) tx (:tx v) srcs (:srcs v) warn (:warn v) reject (:reject v) dbind (:def-binding v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s target)) srcs)) edits (atom 0)]
+  (let [ctx (:ctx v) srcs (:srcs v) warn (:warn v) reject (:reject v) dbind (:def-binding v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s target)) srcs)) edits (atom 0)]
     (doseq [src :- String target-srcs]
       (when (and (some? (dbind src old)) (some? (dbind src new)))
         (warn (str "REJECTED — `" new "` already names a binding in " src " (rename-doesn't-collide; no facts mutated)."))
@@ -144,8 +140,8 @@
     (doseq [src :- String target-srcs]
       (let [B (dbind src old)]
         (when (some? B)
-          (let [oldc (first (vec (filter (fn [cid :- Int] :- Bool (= (:Vp v) (get (c/fact-of ctx cid) :p))) (c/by-l ctx B)))) nc (c/fact! ctx B (:Vp v) (c/value! ctx new) tx)]
-            (when (some? oldc) (c/fact! ctx nc (:SUP v) oldc tx))
+          (do
+            (rr/update-single! ctx B (:Vp v) new)
             (swap! edits (fn [n :- Int] :- Int (+ n 1)))))))
     (when (= 0 (deref edits))
       (warn (str "REJECTED — no binding named `" old "` found in \"" target "\" (nothing to rename; no facts mutated)."))
@@ -160,19 +156,18 @@
           (warn (str "projected -> " (op src) "   <- " src)))))))
 
 ;; ---------------------------------------------------------------------------
-;; the CRDT tie a verb writes. On the daemon (capture-only) path defer to
-;; "PENDING" — the daemon sets the tie to the new node's ATOMIC name-int, so
-;; concurrent same-path inserts get distinct keys and BOTH land (commute). The
-;; single-writer CLI path has no race -> tie "0".
-;; ord-str* is ord-str with a STRING tie: the sentinel "PENDING" is not an
-;; integer, and ord-str's tie is typed Int (it serves the parsed-key side).
+;; The CRDT tie is an injective URL-safe encoding of the child Term identity.
+;; Legacy numeric ties remain readable, while new authoring never narrows a
+;; transaction-coordinate node back to the removed atomic name-int key.
 ;; ---------------------------------------------------------------------------
-;; nn — the -1 coercion Cut G used, for the two places beagle needs an Int and the
-;; host hands over an Int?: an ABSENT index (`first` over keep-indexed types as
-;; Int? and does not narrow on a some?/nil? test at the use site) and a node id
-;; that arrives from a closure. In both, the nil case is one the verb has already
-;; REJECTED, so -1 is unreachable, not a written value.
-(defn- nn [e :- Int?] :- Int (if (nil? e) -1 e))
+;; Node and order identities are never coerced through an integer sentinel.
+(defn- nn [e: Any] -> Any
+  (if (nil? e)
+    (throw (ex-info "resolve: node or order identity is required" {:type :missing-authoring-identity}))
+    e))
+
+(defn- index-or-negative [index: Int?] -> Int
+  (if (nil? index) -1 index))
 
 ;; a wrap-forms ENTRY is [OrdKey cid child]. The accessors coerce through `vec`
 ;; because the entry arrives from a host closure as Any (and, where the entry is
@@ -184,7 +179,9 @@
 
 (defn- enode [e :- Any] :- Any (nth (vec e) 2))
 
-(defn- ord-tie [v :- Verb] :- String (if (:capture-only? v) "PENDING" "0"))
+(defn- ord-tie [node: Any] -> String
+  (let [encoder (.withoutPadding (. java.util.Base64 getUrlEncoder))]
+    (str "t" (.encodeToString encoder (.getBytes (pr-str node) "UTF-8")))))
 
 (defn- ord-str* [path :- (Vec Int) tie :- String] :- String
   (str "f" (str/join "." path) "~" tie))
@@ -226,13 +223,13 @@
   (and (rc/writable-def-head? (str h))
     (not (contains? (into #{"defmethod"} rc/EXTEND-FORMS) (str h)))))
 
-(defn- node-def-name-leaf [v :- Verb f :- Int?] :- Int?
+(defn- node-def-name-leaf [v: Verb f: Any] -> Any
   (let [ctx (:ctx v) view (:view v) d (rm/unwrap-def ctx view f) children (rr/ordered-children ctx d) head (rr/head-sym ctx view d) name-index (rc/type-name-index head (rr/sym-val ctx view (nth children 1 nil)))]
     (rm/logical-name-leaf ctx view (nth children name-index nil))))
 
 ;; the meta/Params-unwrapped def NAME of a node: peel (#%meta …), and if the name
 ;; slot is itself a list (a metadata-named def) take its first child.
-(defn- node-def-name [v :- Verb f :- Int?] :- Any
+(defn- node-def-name [v: Verb f: Any] -> Any
   (rr/sym-val (:ctx v) (:view v) (node-def-name-leaf v f)))
 
 ;; writable-victim — the existing top-level FORM node this upsert should REPLACE
@@ -251,15 +248,15 @@
     (cond
       (= :defmethod (first key))
       (let [m (str (second key)) dv (nth key 2)]
-        (some (fn [f :- Int] :- Any (let [d (rm/unwrap-def ctx view f) k (rr/ordered-children ctx d)] (when (and (= "defmethod" (rr/head-sym ctx view d)) (= m (rr/sym-val ctx view (second k))) (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil)))) f)))
+        (some (fn [f: Any] -> Any (let [d (rm/unwrap-def ctx view f) k (rr/ordered-children ctx d)] (when (and (= "defmethod" (rr/head-sym ctx view d)) (= m (rr/sym-val ctx view (second k))) (= dv (rv/node->canon ctx view BOUND REFERS FIXED (nth (vec k) 2 nil)))) f)))
           forms))
       (= :extension (first key))
       (let [head (str (second key)) tgt (nth key 2)]
-        (some (fn [f :- Int] :- Any (let [d (rm/unwrap-def ctx view f)] (when (and (= head (rr/head-sym ctx view d)) (= tgt (rv/node->canon ctx view BOUND REFERS FIXED (second (rr/ordered-children ctx d))))) f)))
+        (some (fn [f: Any] -> Any (let [d (rm/unwrap-def ctx view f)] (when (and (= head (rr/head-sym ctx view d)) (= tgt (rv/node->canon ctx view BOUND REFERS FIXED (second (rr/ordered-children ctx d))))) f)))
           forms))
       (= :named (first key))
       (let [nm (str (second key))]
-        (some (fn [f :- Int] :- Any (when (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f))) (= nm (node-def-name v f))) f))
+        (some (fn [f: Any] -> Any (when (and (named-def-head? (rr/head-sym ctx view (rm/unwrap-def ctx view f))) (= nm (node-def-name v f))) f))
           forms))
       :else
       nil)))
@@ -274,7 +271,7 @@
 (defn writable-disp-name [datum :- Any] :- String
   (or (rc/writable-form-display-name datum) ""))
 
-(defn- reuse-retained-binding-datum [v :- Verb old-form :- Int datum :- Any] :- Any
+(defn- reuse-retained-binding-datum [v: Verb old-form: Any datum: Any] -> Any
   (rc/reuse-retained-bindings datum
     (rm/form-binding-leaves (:ctx v) (:view v) old-form)))
 
@@ -285,8 +282,8 @@
 ;; it; it was a closure only because the ord algebra used to live in resolve.clj —
 ;; ord-parse + ord-cmp are Beagle now, so the shape is the same reduce+sort-by
 ;; resolve_render.bclj's ord-edges already uses.
-(defn wrap-forms [v :- Verb parent :- Int] :- Any
-  (let [ctx (:ctx v) rows (reduce (fn [acc :- (Vec Any) cid :- Int] :- (Vec Any) (let [cl (c/fact-of ctx cid) pi :- Any (if (nil? cl) nil (get cl :p)) k (if (int? pi) (rc/ord-parse (c/literal ctx pi)) nil)] (if (nil? k) acc (conj acc [k cid (get cl :r)])))) [] (c/by-l ctx parent))]
+(defn wrap-forms [v: Verb parent: Any] -> Any
+  (let [ctx (:ctx v) rows (reduce (fn [acc: (Vec Any) event: t/Triple] -> (Vec Any) (let [predicate (rr/event-predicate event) key (if (string? predicate) (rc/ord-parse predicate) nil)] (if (nil? key) acc (conj acc [key event (rr/event-value event)])))) [] (rr/events-by-subject ctx parent))]
     (vec (sort-by (fn [row :- Any] :- Any (nth row 0)) rc/ord-cmp rows))))
 
 ;; ---------------------------------------------------------------------------
@@ -299,14 +296,14 @@
 ;; ---------------------------------------------------------------------------
 ;; build the reject candidate for match site `site`, relative to search-root `root`,
 ;; given the OTHER sites (to find the smallest enclosing form that isolates THIS one).
-(defn- reject-candidate [v :- Verb root :- Int site :- Any others :- Any idx :- Int] :- Any
-  (let [ctx (:ctx v) view (:view v) BOUND (:BOUND v) REFERS (:REFERS v) FIXED (:FIXED v) chain (:chain site) breadcrumb (mapv (fn [n :- Int] :- Any (rv/crumb-label ctx view n)) chain) parent (:parent site) other-nodes (into #{} (mapcat (fn [o :- Any] :- Any (:chain o)) others)) within (some (fn [a :- Int] :- Any (when-not (contains? other-nodes a) (let [ac (rv/node->canon ctx view BOUND REFERS FIXED a) s (rv/node->str ctx view BOUND REFERS FIXED a)] (when (and (<= (count s) 800) (= ac (try (datum->canon (edn/read-string s)) (catch Throwable _ nil))) (= 1 (count (rv/anchor-match-sites ctx view BOUND REFERS FIXED root ac)))) s)))) (reverse chain)) ctx-str (let [s (rv/node->str ctx view BOUND REFERS FIXED parent)] (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
+(defn- reject-candidate [v: Verb root: Any site: Any others: Any idx: Int] -> Any
+  (let [ctx (:ctx v) view (:view v) BOUND (:BOUND v) REFERS (:REFERS v) FIXED (:FIXED v) chain (:chain site) breadcrumb (mapv (fn [n: Any] -> Any (rv/crumb-label ctx view n)) chain) parent (:parent site) other-nodes (into #{} (mapcat (fn [o :- Any] :- Any (:chain o)) others)) within (some (fn [a: Any] -> Any (when-not (contains? other-nodes a) (let [ac (rv/node->canon ctx view BOUND REFERS FIXED a) s (rv/node->str ctx view BOUND REFERS FIXED a)] (when (and (<= (count s) 800) (= ac (try (datum->canon (edn/read-string s)) (catch Throwable _ nil))) (= 1 (count (rv/anchor-match-sites ctx view BOUND REFERS FIXED root ac)))) s)))) (reverse chain)) ctx-str (let [s (rv/node->str ctx view BOUND REFERS FIXED parent)] (if (<= (count s) 200) s (str (subs s 0 197) "...")))]
     {:n idx :breadcrumb breadcrumb :within within :context ctx-str}))
 
 ;; assemble the structured disambiguation payload (+ a human-readable :message) the
 ;; daemon threads through *reject!* into `handle`'s reject response. `case` is removed
 ;; surface in beagle, so the two-reason dispatch is a cond — same arms, same strings.
-(defn disambig-payload [v :- Verb reason :- Any name :- String scope :- String root :- Int sites :- Any] :- Any
+(defn disambig-payload [v: Verb reason: Any name: String scope: String root: Any sites: Any] -> Any
   (let [total (count sites) shown (vec (map-indexed (fn [i :- Int s :- Any] :- Any (reject-candidate v root s (concat (take i sites) (drop (+ i 1) sites)) (+ i 1))) (take rc/DISAMBIG-CAP sites))) head (cond (= reason :ambiguous-old) (str "anchor `old` is AMBIGUOUS inside `" name "` in \"" scope "\" (" total " matches; no facts mutated).") :else (str "`within` is AMBIGUOUS inside `" name "` in \"" scope "\" (" total " matches; no facts mutated). It must match exactly one enclosing form.")) lines (map (fn [c :- Any] :- String (str "  [" (:n c) "] " (str/join " > " (:breadcrumb c)) (when (:within c) (str "\n      within: " (:within c))))) shown) remedy (cond (= reason :ambiguous-old) "Retry with :within set to one candidate's `within` form (it isolates that occurrence), or supply a larger :old." :else "Supply a `within` that names exactly one enclosing form (use a larger/more distinctive form).")]
     {:reason
      reason
@@ -379,7 +376,7 @@
 ;; `(reorder X :after Y)` puts X immediately after Y; `:after nil`/"" -> FRONT.
 ;; ---------------------------------------------------------------------------
 (defn verb-reorder! [v :- Verb name :- String scope :- String after-name :- Any] :- Any
-  (let [ctx (:ctx v) tx (:tx v) warn (:warn v) reject (:reject v) dbind (:def-binding v) ffv (:form-for-victim v) wof (:wrapper-of v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+  (let [ctx (:ctx v) warn (:warn v) reject (:reject v) dbind (:def-binding v) ffv (:form-for-victim v) wof (:wrapper-of v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — reorder scope \"" scope "\" matches " (count target-srcs) " files (need 1); no facts mutated."))
       (reject 3))
@@ -399,11 +396,7 @@
       (let [others (vec (remove (fn [e :- Any] :- Bool (= (enode e) mover-form)) forms)) a-pos (if front? -1 (nn (first (vec (keep-indexed (fn [i :- Int e :- Any] :- Any (when (= (enode e) anchor-form) i)) others))))) lo (if (< a-pos 0) nil (:path (ekey (nth others a-pos)))) hi (if (< a-pos 0) (:path (ekey (first others))) (when (< (+ a-pos 1) (count others)) (:path (ekey (nth others (+ a-pos 1))))))]
         (let [retire (:retire v) emit (:emit v)]
           (retire (ecid mover-entry))
-          (c/fact! ctx
-            (nn wrap)
-            (c/value! ctx (ord-str* (rc/ord-between lo hi) (ord-tie v)))
-            (nn mover-form)
-            tx)
+          (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-between lo hi) (ord-tie (nn mover-form))) (nn mover-form))
           (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
           (emit "reorder"
             (str "moved def `"
@@ -421,7 +414,7 @@
 ;; the same path on identical clones -> distinct tie (name-int) -> both land.
 ;; ---------------------------------------------------------------------------
 (defn verb-upsert-form! [v :- Verb scope :- String datum :- Any] :- Any
-  (let [ctx (:ctx v) tx (:tx v) warn (:warn v) reject (:reject v) ssrcs (:scope-srcs v) target-srcs (vec (ssrcs scope))]
+  (let [ctx (:ctx v) warn (:warn v) reject (:reject v) ssrcs (:scope-srcs v) target-srcs (vec (ssrcs scope))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; upsert-form needs exactly one (no facts mutated)."))
       (reject 3))
@@ -436,17 +429,9 @@
         (if (some? victim-entry)
           (let [retire (:retire v)]
             (retire (ecid victim-entry))
-            (c/fact! ctx
-              (nn wrap)
-              (c/value! ctx (ord-str* (:path (ekey victim-entry)) (ord-tie v)))
-              (nn new-root)
-              tx))
+            (rr/assert! ctx (nn wrap) (ord-str* (:path (ekey victim-entry)) (ord-tie (nn new-root))) (nn new-root)))
           (let [last-path (when (> (count forms) 0) (:path (ekey (last forms))))]
-            (c/fact! ctx
-              (nn wrap)
-              (c/value! ctx (ord-str* (rc/ord-append last-path) (ord-tie v)))
-              (nn new-root)
-              tx)))
+            (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-append last-path) (ord-tie (nn new-root))) (nn new-root))))
         (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
         (let [emit (:emit v)]
           (emit "upsert-form"
@@ -464,24 +449,19 @@
 ;; land, ordered by tie (commute) — the thing append-only could not do.
 ;; ---------------------------------------------------------------------------
 (defn verb-insert-form! [v :- Verb scope :- String after-name :- String datum :- Any] :- Any
-  (let [ctx (:ctx v) tx (:tx v) warn (:warn v) reject (:reject v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+  (let [ctx (:ctx v) warn (:warn v) reject (:reject v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — insert-form scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
       (reject 3))
     (when (and (seq? datum) (not (contains? rc/TOPLEVEL-VALUE-DEFS (str (first datum)))))
       (warn (str "REJECTED — insert-form head `" (first datum) "` not a value def."))
       (reject 3))
-    (let [wof (:wrapper-of v) dbind (:def-binding v) ffv (:form-for-victim v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) anchor-bind (dbind src after-name) anchor-form (when (some? anchor-bind) (ffv src anchor-bind)) i (nn (when (some? anchor-form) (first (vec (keep-indexed (fn [n :- Int e :- Any] :- Any (when (= (enode e) anchor-form) n)) forms)))))]
+    (let [wof (:wrapper-of v) dbind (:def-binding v) ffv (:form-for-victim v) src (first target-srcs) wrap (wof src) forms (vec (wrap-forms v (nn wrap))) anchor-bind (dbind src after-name) anchor-form (when (some? anchor-bind) (ffv src anchor-bind)) found (when (some? anchor-form) (first (vec (keep-indexed (fn [n :- Int e :- Any] :- Any (when (= (enode e) anchor-form) n)) forms)))) i (index-or-negative found)]
       (when (< i 0)
         (warn (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\"."))
         (reject 3))
       (let [mint (:mint v) anchor-path (:path (ekey (nth forms i))) next-path (when (< (+ i 1) (count forms)) (:path (ekey (nth forms (+ i 1))))) new-root (mint src datum)]
-        (c/fact! ctx
-          (nn wrap)
-          (c/value! ctx
-            (ord-str* (rc/ord-between anchor-path next-path) (ord-tie v)))
-          (nn new-root)
-          tx)
+        (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-between anchor-path next-path) (ord-tie (nn new-root))) (nn new-root))
         (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
         (let [emit (:emit v)]
           (emit "insert-form"
@@ -502,15 +482,15 @@
 (def COMMENT-RE :- Any (re-pattern "comment\\d+"))
 
 ;; next free commentN slot on a form (0 if none)
-(defn- next-comment-idx [v :- Verb form :- Int] :- Int
+(defn- next-comment-idx [v: Verb form: Any] -> Int
   (let [ctx (:ctx v)]
     (+ 1
       (reduce (fn [acc :- Int n :- Int] :- Int (if (> n acc) n acc))
         -1
-        (vec (keep (fn [cid :- Int] :- Int? (let [cl (c/fact-of ctx cid) p (c/literal ctx (:p cl))] (when (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (parse-long (subs (str p) 7))))) (c/by-l ctx form)))))))
+        (vec (keep (fn [event: t/Triple] -> Int? (let [predicate (rr/event-predicate event)] (when (and (string? predicate) (some? (re-matches COMMENT-RE predicate))) (parse-long (subs predicate 7))))) (rr/events-by-subject ctx form)))))))
 
 (defn verb-insert-comment! [v :- Verb scope :- String anchor-name :- String text :- String placement :- Any] :- Any
-  (let [ctx (:ctx v) tx (:tx v) warn (:warn v) reject (:reject v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
+  (let [ctx (:ctx v) warn (:warn v) reject (:reject v) target-srcs (vec (filter (fn [s :- String] :- Bool (str/includes? s scope)) (:srcs v)))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — insert-comment scope \"" scope "\" matches " (count target-srcs) " files (need 1)."))
       (reject 3))
@@ -521,14 +501,14 @@
       (when (nil? anchor-form)
         (warn (str "REJECTED — insert-comment anchor `" anchor-name "` not found in \"" scope "\"."))
         (reject 3))
-      (let [reg (:register v) emit (:emit v) form (nn anchor-form) k (next-comment-idx v form) cnode (nn (reg src (c/entity! ctx))) seg (nn (reg src (c/entity! ctx)))]
-        (c/fact! ctx cnode (:KIND v) (c/value! ctx "comment") tx)
-        (c/fact! ctx cnode (c/value! ctx "style") (c/value! ctx "line") tx)
-        (c/fact! ctx cnode (c/value! ctx "placement") (c/value! ctx plc) tx)
-        (c/fact! ctx seg (:KIND v) (c/value! ctx "text") tx)
-        (c/fact! ctx seg (:Vp v) (c/value! ctx lex) tx)
-        (c/fact! ctx cnode (c/value! ctx "seg0") seg tx)
-        (c/fact! ctx form (c/value! ctx (str "comment" k)) cnode tx)
+      (let [reg (:register v) emit (:emit v) form (nn anchor-form) k (next-comment-idx v form) cnode (nn (reg src (rr/mint! ctx))) seg (nn (reg src (rr/mint! ctx)))]
+        (rr/assert! ctx cnode (:KIND v) "comment")
+        (rr/assert! ctx cnode "style" "line")
+        (rr/assert! ctx cnode "placement" plc)
+        (rr/assert! ctx seg (:KIND v) "text")
+        (rr/assert! ctx seg (:Vp v) lex)
+        (rr/assert! ctx cnode "seg0" seg)
+        (rr/assert! ctx form (str "comment" k) cnode)
         (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
         (emit "insert-comment"
           (str "added "
@@ -553,7 +533,7 @@
 ;; unauthorable — the duel's F021–F024 failure.)
 ;; ---------------------------------------------------------------------------
 (defn verb-set-body! [v :- Verb name :- String scope :- String datum :- Any] :- Any
-  (let [ctx (:ctx v) view (:view v) tx (:tx v) warn (:warn v) reject (:reject v) ssrcs (:scope-srcs v) target-srcs (vec (ssrcs scope))]
+  (let [ctx (:ctx v) view (:view v) warn (:warn v) reject (:reject v) ssrcs (:scope-srcs v) target-srcs (vec (ssrcs scope))]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; set-body needs exactly one (no facts mutated)."))
       (reject 3))
@@ -567,11 +547,7 @@
           (reject 5))
         (let [retire (:retire v) emit (:emit v)]
           (doseq [e :- Any body-slots] (retire (ecid e)))
-          (c/fact! ctx
-            (nn d)
-            (c/value! ctx (str "f" body-start))
-            (nn new-root)
-            tx)
+          (rr/assert! ctx (nn d) (str "f" body-start) (nn new-root))
           (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
           (emit "set-body"
             (str "replaced body of `"
@@ -602,7 +578,7 @@
 ;; within-datum = nil); here there is one 5-arg function.
 ;; ---------------------------------------------------------------------------
 (defn verb-replace-in-body! [v :- Verb name :- String scope :- String old-datum :- Any new-datum :- Any within-datum :- Any] :- Any
-  (let [ctx (:ctx v) view (:view v) tx (:tx v) warn (:warn v) reject (:reject v) reject2 (:reject2 v) target-srcs ((:scope-srcs v) scope)]
+  (let [ctx (:ctx v) view (:view v) warn (:warn v) reject (:reject v) reject2 (:reject2 v) target-srcs ((:scope-srcs v) scope)]
     (when (not= 1 (count target-srcs))
       (warn (str "REJECTED — scope \"" scope "\" matches " (count target-srcs) " source files; replace-in-body needs exactly one (no facts mutated)."))
       (reject 3))
@@ -657,11 +633,7 @@
           :else
           (let [mint (:mint v) retire (:retire v) emit (:emit v) site (first matches) new-root (mint src new-datum)]
             (retire (:cid site))
-            (c/fact! ctx
-              (nn (:parent site))
-              (c/value! ctx (:pos site))
-              (nn new-root)
-              tx)
+            (rr/assert! ctx (nn (:parent site)) (:pos site) (nn new-root))
             (when-not (:capture-only? v) (let [rr! (:reresolve v)] (rr!)))
             (emit "replace-in-body"
               (str "replaced 1 interior form inside `"
@@ -721,8 +693,6 @@
   (let [reject! (get env :reject!) extract-file (get env :extract-file) out-path (get env :out-path)]
     (->Verb (get env :ctx)
       (get env :view)
-      (get env :tx)
-      (get env :SUP)
       (get env :KIND)
       (get env :Vp)
       (vec (get env :srcs))

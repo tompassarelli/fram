@@ -6,17 +6,15 @@
             [resolve-modules :as rm]
             [resolve-walk :as rw]))
 
-(def MODULE-NAME-RE (re-pattern "@([^#]+)#\\d+"))
+(def MODULE-NAME-RE (re-pattern "@([^#]+)#.+"))
 
 (def SLASH-RE (re-pattern "/"))
 
-(defrecord CorpusState [ctx view tx KIND BOUND REFERS file-ents corpus-cache corpus-scope resolve-walk? srcs install-srcs install-tables install-warm run-all run-over profile])
+(defrecord CorpusState [ctx view KIND BOUND REFERS file-ents corpus-cache corpus-scope resolve-walk? srcs install-srcs install-tables install-warm run-all run-over profile])
 
 (defn corpusstate-ctx [r] (:ctx r))
 
 (defn corpusstate-view [r] (:view r))
-
-(defn corpusstate-tx [r] (:tx r))
 
 (defn corpusstate-KIND [r] (:KIND r))
 
@@ -104,14 +102,13 @@
    head (first (rr/ordered-children ctx def-form))]
   (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
 
-(defn lift-bound-to-refers! [ctx tx KIND BOUND REFERS]
+(defn lift-bound-to-refers! [ctx KIND BOUND REFERS]
   (if (some? BOUND) (do
-  (doseq [cid (c/by-p ctx BOUND)]
-  (let [fact (c/fact-of ctx cid)
-   leaf (:l fact)
-   target (:r fact)]
-  (if (and (integer? target) (rr/live-node? ctx KIND target) (empty? (c/by-lp ctx leaf REFERS))) (do
-  (c/fact! ctx leaf REFERS target tx))))))))
+  (doseq [event (rr/events-by-predicate ctx BOUND)]
+  (let [leaf (rr/event-subject event)
+   target (rr/event-value event)]
+  (if (and (rr/live-node? ctx KIND target) (empty? (rr/events-by-subject-predicate ctx leaf REFERS))) (do
+  (rr/assert! ctx leaf REFERS target))))))))
 
 (defn corpus-from-store! [^CorpusState state]
   (let [t0 (System/nanoTime)
@@ -127,13 +124,9 @@
   tables)))
 
 (defn resolve-edn! [^CorpusHost host edn-paths body]
-  (let [store (c/new-store)
-   tx (c/begin-tx! store "resolve")
-   sup (c/value! store "supersedes")
+  (let [context (rr/context (c/new-term-store "resolve"))
    with-state (:with-state host)]
-  (do
-  (c/set-supersedes-pred! store sup)
-  (with-state store tx sup (fn [] (let [state-fn (:state host)
+  (with-state context (fn [] (let [state-fn (:state host)
    load (:load-edn host)
    loaded (mapv load edn-paths)
    state (state-fn)
@@ -144,39 +137,42 @@
   (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
   (let [run-all (:run-all state)]
   (run-all))
-  (body))))))))
+  (let [result (body)]
+  (do
+  (rr/commit! context)
+  result))))))))
 
 (defn resolve-warm-store! [^CorpusHost host store body]
-  (let [tx (c/begin-tx! store "resolve-warm")
-   sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))
+  (let [context (rr/context store)
    with-state (:with-state host)]
-  (do
-  (c/set-supersedes-pred! store sup)
-  (with-state store tx sup (fn [] (let [state-fn (:state host)
+  (with-state context (fn [] (let [state-fn (:state host)
    state (state-fn)]
   (do
   (corpus-from-store! state)
   (if (:resolve-walk? state) (do
   (let [run-all (:run-all state)]
   (run-all))
-  (lift-bound-to-refers! (:ctx state) (:tx state) (:KIND state) (:BOUND state) (:REFERS state))))
-  (body))))))))
+  (lift-bound-to-refers! (:ctx state) (:KIND state) (:BOUND state) (:REFERS state))))
+  (let [result (body)]
+  (do
+  (rr/commit! context)
+  result))))))))
 
 (defn resolve-modules! [^CorpusHost host store module-set body]
-  (let [tx (c/begin-tx! store "resolve-scoped")
-   sup (or (c/value-id store "supersedes") (c/value! store "supersedes"))
+  (let [context (rr/context store)
    with-state (:with-state host)]
-  (do
-  (c/set-supersedes-pred! store sup)
-  (with-state store tx sup (fn [] (let [state-fn (:state host)
+  (with-state context (fn [] (let [state-fn (:state host)
    state (state-fn)]
   (do
   (corpus-from-store! state)
   (let [fresh (state-fn)
    run-over (:run-over fresh)]
   (run-over (filter module-set (:srcs fresh)))
-  (lift-bound-to-refers! (:ctx fresh) (:tx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
-  (body))))))))
+  (lift-bound-to-refers! (:ctx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
+  (let [result (body)]
+  (do
+  (rr/commit! context)
+  result))))))))
 
 (defn file-entities [file-ents src]
   (get (deref file-ents) src []))
@@ -193,15 +189,20 @@
 (defn table-srcs [tables]
   (:srcs tables))
 
-(defn corpus-predicate-ids! [store]
-  {:Vp (c/value! store "v") :KIND (c/value! store "kind") :REFERS (c/value! store "refers_to") :BOUND (c/value! store "bound_to") :FIXED (c/value! store "keep_spelling") :QUAL (c/value! store "qualifier") :CTOR (c/value! store "ctor_prefix") :ACC (c/value! store "accessor_field")})
+(defn corpus-predicate-ids! [context]
+  {:Vp "v" :KIND "kind" :REFERS "refers_to" :BOUND "bound_to" :FIXED "keep_spelling" :QUAL "qualifier" :CTOR "ctor_prefix" :ACC "accessor_field"})
 
-(defn load-edn! [ctx tx file-ents path]
+(def REF-PREDICATE-RE (re-pattern "(?:f|seg|comment)\\d+"))
+
+(defn ^Boolean node-reference-predicate? [predicate]
+  (and (string? predicate) (or (= "child" predicate) (or (= "tail" predicate) (some? (re-matches REF-PREDICATE-RE predicate))))))
+
+(defn load-edn! [ctx file-ents path]
   (let [lines (str/split-lines (slurp path))
    src (-> (first (filter (fn [line] (str/starts-with? line "@file")) lines)) (subs 6))
    local (atom {})
    read-edn (requiring-resolve 'clojure.edn/read-string)
-   ent (fn [lid] (or (get (deref local) lid) (let [e (c/entity! ctx)]
+   ent (fn [lid] (or (get (deref local) lid) (let [e (rr/mint! ctx)]
   (do
   (swap! local assoc lid e)
   (swap! file-ents update src (fnil conj []) e)
@@ -210,5 +211,5 @@
   (doseq [line lines
    :when (str/starts-with? line "[")]
   (let [[s p o] (read-edn line)]
-  (c/fact! ctx (ent s) (c/value! ctx p) (if (integer? o) (ent o) (c/value! ctx o)) tx)))
+  (rr/assert! ctx (ent s) p (if (node-reference-predicate? p) (if (integer? o) (ent o) (throw (ex-info "resolve: structural edge target must be a local integer id" {:predicate p :target o}))) o))))
   src)))

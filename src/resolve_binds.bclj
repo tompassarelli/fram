@@ -1,11 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — the code lives in the Fram fact graph; this text is
-;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
-;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
-;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
-;; text; that is a deliberate workflow change. ADOPTED 2026-07-27 (engine core
-;; port link 3: the M1 resolve cuts become graph-authored modules).
 ;; ============================================================================
 ;; resolve-binds — what a binding form BINDS.
 ;; ============================================================================
@@ -33,22 +27,22 @@
 
 (define-mode strict)
 
-(defn- sv [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Any
+(defn- sv [ctx :- rr/Context? view :- Any e :- Any] :- Any
   (rr/sym-val ctx view e))
 
 (defn- type-colon? [v :- Any] :- Bool
   (and (string? v) (contains? rc/TYPE-COLON (str v))))
 
-(defn brackets? [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Bool
+(defn brackets? [ctx :- rr/Context? view :- Any e :- Any] :- Bool
   (= "#%brackets" (rr/head-sym ctx view e)))
 
-(defn map-node? [ctx :- (U (Atom t/Store) Nil) view :- Any e :- Int?] :- Bool
+(defn map-node? [ctx :- rr/Context? view :- Any e :- Any] :- Bool
   (= "#%map" (rr/head-sym ctx view e)))
 
-(defn- tail [ctx :- (U (Atom t/Store) Nil) e :- Int?] :- (Vec Int)
+(defn- tail [ctx :- rr/Context? e :- Any] :- (Vec Any)
   (vec (rest (rr/ordered-children ctx e))))
 
-(defn collect-bind-syms [ctx :- (U (Atom t/Store) Nil) view :- Any node :- Int?] :- (Vec Int)
+(defn collect-bind-syms [ctx :- rr/Context? view :- Any node :- Any] :- (Vec Any)
   (if (nil? node)
     []
     (let [n (rr/unwrap-meta ctx view node) v (sv ctx view n)]
@@ -56,11 +50,11 @@
         (some? v)
         (if (contains? #{"_" "&"} (str v)) [] [n])
         (brackets? ctx view n)
-        (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int) (into acc (collect-bind-syms ctx view k)))
+        (reduce (fn [acc :- (Vec Any) k :- Any] :- (Vec Any) (into acc (collect-bind-syms ctx view k)))
           []
           (tail ctx n))
         (map-node? ctx view n)
-        (loop [ks :- (Vec Int) (tail ctx n) acc :- (Vec Int) []]
+        (loop [ks :- (Vec Any) (tail ctx n) acc :- (Vec Any) []]
           (if (empty? ks)
             acc
             (let [k (first ks) kv (sv ctx view k) v2 (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -69,7 +63,7 @@
                 (recur ks2
                   (into acc
                     (if (and (some? v2) (brackets? ctx view v2))
-                      (vec (keep (fn [c :- Int] :- Int? (let [leaf (rr/unwrap-meta ctx view c)] (when (some? (sv ctx view leaf)) leaf))) (tail ctx v2)))
+                      (vec (keep (fn [c :- Any] :- Any (let [leaf (rr/unwrap-meta ctx view c)] (when (some? (sv ctx view leaf)) leaf))) (tail ctx v2)))
                       [])))
                 (= ":as" (str kv))
                 (recur ks2 (into acc (collect-bind-syms ctx view v2)))
@@ -80,7 +74,7 @@
                 :else
                 (recur ks2 (into acc (collect-bind-syms ctx view k)))))))
         (= "list" (rr/kind-of ctx view n))
-        (loop [ks :- (Vec Int) (rr/ordered-children ctx n) acc :- (Vec Int) []]
+        (loop [ks :- (Vec Any) (rr/ordered-children ctx n) acc :- (Vec Any) []]
           (if (empty? ks)
             acc
             (let [k (first ks)]
@@ -91,12 +85,12 @@
         :else
         []))))
 
-(defn collect-or-vals [ctx :- (U (Atom t/Store) Nil) view :- Any node :- Int?] :- (Vec Int)
+(defn collect-or-vals [ctx :- rr/Context? view :- Any node :- Any] :- (Vec Any)
   (if (nil? node)
     []
     (cond
       (map-node? ctx view node)
-      (loop [ks :- (Vec Int) (tail ctx node) acc :- (Vec Int) []]
+      (loop [ks :- (Vec Any) (tail ctx node) acc :- (Vec Any) []]
         (if (empty? ks)
           acc
           (let [k (first ks) kv (sv ctx view k) v2 (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -105,7 +99,7 @@
               (recur ks2
                 (into acc
                   (if (and (some? v2) (map-node? ctx view v2))
-                    (vec (keep-indexed (fn [i :- Int cc :- Int] :- Int? (if (odd? i) cc nil)) (tail ctx v2)))
+                    (vec (keep-indexed (fn [i :- Int cc :- Any] :- Any (if (odd? i) cc nil)) (tail ctx v2)))
                     [])))
               (contains? #{":as" ":keys" ":strs" ":syms"} (str kv))
               (recur ks2 acc)
@@ -114,14 +108,14 @@
               :else
               (recur ks2 (into acc (collect-or-vals ctx view k)))))))
       (brackets? ctx view node)
-      (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int) (into acc (collect-or-vals ctx view k)))
+      (reduce (fn [acc :- (Vec Any) k :- Any] :- (Vec Any) (into acc (collect-or-vals ctx view k)))
         []
         (tail ctx node))
       :else
       [])))
 
-(defn param-binds [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Int)
-  (loop [ks :- (Vec Int) (tail ctx bracket) binds :- (Vec Int) [] skip :- Bool false]
+(defn param-binds [ctx :- rr/Context? view :- Any bracket :- Any] :- (Vec Any)
+  (loop [ks :- (Vec Any) (tail ctx bracket) binds :- (Vec Any) [] skip :- Bool false]
     (if (empty? ks)
       binds
       (let [k (first ks) v (sv ctx view k) ks2 (vec (rest ks))]
@@ -133,8 +127,8 @@
           :else
           (recur ks2 (into binds (collect-bind-syms ctx view k)) false))))))
 
-(defn let-bind-pairs [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Any)
-  (loop [ks :- (Vec Int) (tail ctx bracket) acc :- (Vec Any) []]
+(defn let-bind-pairs [ctx :- rr/Context? view :- Any bracket :- Any] :- (Vec Any)
+  (loop [ks :- (Vec Any) (tail ctx bracket) acc :- (Vec Any) []]
     (if (empty? ks)
       acc
       (let [pat (first ks) after (if (type-colon? (sv ctx view (nth ks 1 nil))) (vec (drop 3 ks)) (vec (rest ks))) val (nth after 0 nil)]
@@ -144,8 +138,8 @@
              val
              (collect-or-vals ctx view pat)]))))))
 
-(defn for-bind-pairs [ctx :- (U (Atom t/Store) Nil) view :- Any bracket :- Int?] :- (Vec Any)
-  (loop [ks :- (Vec Int) (tail ctx bracket) acc :- (Vec Any) []]
+(defn for-bind-pairs [ctx :- rr/Context? view :- Any bracket :- Any] :- (Vec Any)
+  (loop [ks :- (Vec Any) (tail ctx bracket) acc :- (Vec Any) []]
     (if (empty? ks)
       acc
       (let [k (first ks) kv (sv ctx view k) v (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -174,12 +168,12 @@
                v
                (collect-or-vals ctx view k)])))))))
 
-(defn frame-of [ctx :- (U (Atom t/Store) Nil) view :- Any bsyms :- (Vec Int)] :- (Map Any Int)
-  (reduce (fn [acc :- (Map Any Int) b :- Int] :- (Map Any Int) (assoc acc (sv ctx view b) b))
+(defn frame-of [ctx :- rr/Context? view :- Any bsyms :- (Vec Any)] :- (Map Any Any)
+  (reduce (fn [acc :- (Map Any Any) b :- Any] :- (Map Any Any) (assoc acc (sv ctx view b) b))
     {}
     bsyms))
 
-(defn match-pat-binds [ctx :- (U (Atom t/Store) Nil) view :- Any pat :- Int?] :- (Vec Int)
+(defn match-pat-binds [ctx :- rr/Context? view :- Any pat :- Any] :- (Vec Any)
   (if (nil? pat)
     []
     (let [n (rr/unwrap-meta ctx view pat) v (sv ctx view n)]
@@ -187,7 +181,7 @@
         (some? v)
         (if (= "_" (str v)) [] [n])
         (or (= "list" (rr/kind-of ctx view n)) (brackets? ctx view n))
-        (reduce (fn [acc :- (Vec Int) k :- Int] :- (Vec Int) (into acc (match-pat-binds ctx view k)))
+        (reduce (fn [acc :- (Vec Any) k :- Any] :- (Vec Any) (into acc (match-pat-binds ctx view k)))
           []
           (tail ctx n))
         :else
