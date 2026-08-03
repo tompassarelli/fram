@@ -68,11 +68,19 @@
         (recur (dec remaining))
         response))))
 
+;; north (bin/north:694) maps :subject-not-found to exit 3; all other
+;; coordinator rejections stay exit 1 (bin/north has no dedicated case).
+(defn- write-failure-status [response]
+  (if (= :rpc/subject-not-found (rt/native-error-code response))
+    :subject-not-found
+    :rejected))
+
 (defn fast-write! [operation subject predicate value policy]
   (let [proposition (t/triple subject predicate value)
         response (write-retrying! operation proposition policy)]
     (if-let [message (response-error-message response)]
-      (do (println (str "REJECTED by coordinator: " message)) false)
+      (do (println (str "REJECTED by coordinator: " message))
+          (write-failure-status response))
       (let [[[input-index changed occurrences]] (mutation-results! response)]
         (println
          (str (if changed "committed" "no change")
@@ -81,7 +89,7 @@
               (render-term value)
               " [input " input-index ", occurrences "
               (count (rt/rpc-list-values! occurrences)) "]"))
-        true))))
+        :ok))))
 
 (defn fast-show! [subject]
   (let [response
@@ -194,18 +202,29 @@
                   {})))
         (let [assert? (contains? #{"tell" "tell-existing"} command)
               existing? (str/ends-with? command "-existing")
-              ok? (fast-write!
-                   (if assert? :rpc/assert :rpc/retract)
-                   (parse-subject! (nth args 1))
-                   (rt/parse-human-term! (nth args 2))
-                   (rt/parse-human-term! (nth args 3))
-                   (if existing?
-                     wire/rpc-subject-existing
-                     wire/rpc-subject-any))]
-          (when-not ok? (System/exit 1))))
+              status (fast-write!
+                      (if assert? :rpc/assert :rpc/retract)
+                      (parse-subject! (nth args 1))
+                      (rt/parse-human-term! (nth args 2))
+                      (rt/parse-human-term! (nth args 3))
+                      (if existing?
+                        wire/rpc-subject-existing
+                        wire/rpc-subject-any))]
+          (case status
+            :ok nil
+            :subject-not-found (System/exit 3)
+            (System/exit 1))))
       :else
       (throw (ex-info (str "unsupported native data command: " command)
                       {:type :unsupported-command})))))
+
+;; fram.rt raises these :type values when no usable response arrived; north maps to exit 4 (bin/north:698).
+(def ^:private coordinator-unreachable-types
+  #{:rpc-invalid-kind :rpc-request-id-mismatch :rpc-response-mismatch :rpc-truncated})
+
+(defn- coordinator-unreachable? [error]
+  (or (instance? java.io.IOException error)
+      (contains? coordinator-unreachable-types (:type (ex-data error)))))
 
 (when (= *file* (System/getProperty "babashka.file"))
   (try
@@ -213,4 +232,4 @@
     (catch Throwable error
       (binding [*out* *err*]
         (println (str "fram: " (or (.getMessage error) (class error)))))
-      (System/exit 1))))
+      (System/exit (if (coordinator-unreachable? error) 4 1)))))
