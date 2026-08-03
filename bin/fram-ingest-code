@@ -189,8 +189,11 @@
           proposition-count (atom 0)]
       (try
         (coord/create-triple-log! (.getPath sibling) space-id)
-        (let [co (coord/open-coordinator! (.getPath sibling) space-id)]
-          (doseq [path files]
+        (let [co (coord/open-coordinator! (.getPath sibling) space-id)
+              total (count files)]
+          ;; Report each module as it lands: a minutes-long fold with no output
+          ;; is indistinguishable from a hang to any caller with a timeout.
+          (doseq [[index path] (map-indexed vector files)]
             (let [propositions (module->propositions root-segs path)]
               (coord/commit!
                co {:actor "fram-ingest-code"
@@ -199,11 +202,13 @@
                    (mapv (fn [proposition]
                            {:action :assert :proposition proposition})
                          propositions)})
-              (swap! proposition-count + (count propositions)))))
+              (swap! proposition-count + (count propositions))
+              (log! (str "  [" (inc index) "/" total "]")
+                    (module-of root-segs path) "<-" path
+                    (str "(" (count propositions) " propositions)")))))
         (replace-atomically! sibling target)
         (log! "fram-ingest-code: wrote" @proposition-count "AST propositions in"
               (count files) "module transaction(s); ids re-keyed @<mod>#<n>")
-        (doseq [f files] (log! "  +" (module-of root-segs f) "<-" f))
         (log! "DONE — the Beagle source is now downstream of" (.getPath target))
         (finally
           (java.nio.file.Files/deleteIfExists (.toPath sibling)))))))

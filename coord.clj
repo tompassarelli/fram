@@ -515,6 +515,15 @@
 (defn- occurrence-events [co]
   (term-store/operation-occurrences (coordinator-store co)))
 
+;; Ranged: the whole-history operation-occurrences scan costs O(all operations)
+;; per commit, making a corpus fold O(n^2) in propositions.
+(defn- occurrence-events-range [co from to]
+  (let [store @(coordinator-store co)]
+    (mapv (fn [position]
+            (let [slots (term-store/occurrence-tuple-at store position)]
+              (t/triple (nth slots 0) (nth slots 1) (nth slots 2))))
+          (range from to))))
+
 (defn history [co]
   (term-store/semantic-history (coordinator-store co)))
 
@@ -538,6 +547,18 @@
      (term-store/withdrawal-triples (coordinator-store co))
      (filter #(relation-proposition? :kernel/withdraws %)
              (term-store/live-propositions (coordinator-store co)))))))
+
+;; Only the frame just appended can name the occurrence coordinates it minted,
+;; so withdrawal-triples' store-wide live-proposition scan cannot match here.
+(defn- frame-withdrawal-triples [co frame-operations]
+  (vec
+   (distinct
+    (concat
+     (term-store/withdrawal-triples (coordinator-store co))
+     (->> frame-operations
+          (filter #(= t/assert-action (t/commitoperation-action %)))
+          (map t/commitoperation-proposition)
+          (filter #(relation-proposition? :kernel/withdraws %)))))))
 
 (defn- suppressed-occurrences [co]
   (into #{}
@@ -757,12 +778,13 @@
                 before-store @context]
             (try
               (let [committed (append-and-replay! co sequence all-operations)
-                    events (subvec (term-store/operation-occurrences context)
-                                   before (+ before (count source-operations)))
+                    events (occurrence-events-range
+                            co before (+ before (count source-operations)))
                     event-coordinates (into #{} (map kernel/occurrence-of) events)
                     withdrawals (filterv #(contains? event-coordinates
                                                       (t/triple-slot0 %))
-                                         (withdrawal-triples co))]
+                                         (frame-withdrawal-triples
+                                          co all-operations))]
                 {:ok committed
                  :occurrences events
                  :withdrawals withdrawals

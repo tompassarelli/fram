@@ -74,8 +74,10 @@ fi
 if [ "$NATIVE_LOG" = true ]; then
   COORD=dead
   if [ "$PORT" != "-" ] && [ "$SPACE_ID" != "-" ]; then
+    # Same budget fram-code-on's postcondition uses: a corpus-sized store answers
+    # :rpc/status in ~2s, so a tighter cap reports a live coordinator as dead.
     STATUS="$(FRAM_PORT="$PORT" FRAM_SPACE_ID="$SPACE_ID" FRAM_LOG="$CODE_LOG" \
-      timeout 2 "$HERE/bin/fram" status 2>/dev/null)" || STATUS=""
+      timeout 5 "$HERE/bin/fram" status 2>/dev/null)" || STATUS=""
     if [[ "$STATUS" =~ ^up\|[0-9]+\|([0-9]+)\|ready\|jvm$ ]]; then
       COORD=alive
       TRIPLES="${BASH_REMATCH[1]}"
