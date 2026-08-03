@@ -1184,6 +1184,70 @@ const Model = struct {
     }
 };
 
+const LogicalOperation = struct {
+    operation: ModelOperation,
+    triple: log.Triple,
+};
+
+const LogicalTransaction = struct {
+    sequence: i64,
+    operations: []LogicalOperation,
+};
+
+const ObservationModel = struct {
+    allocator: Allocator,
+    live: std.ArrayList(log.Triple) = .empty,
+    transactions: std.ArrayList(LogicalTransaction) = .empty,
+    version: i64 = 0,
+
+    fn deinit(model: *ObservationModel) void {
+        for (model.transactions.items) |transaction|
+            model.allocator.free(transaction.operations);
+        model.transactions.deinit(model.allocator);
+        model.live.deinit(model.allocator);
+        model.* = undefined;
+    }
+
+    fn exactIndex(model: *const ObservationModel, triple: log.Triple) ?usize {
+        for (model.live.items, 0..) |candidate, index| {
+            if (log.tripleEql(candidate, triple)) return index;
+        }
+        return null;
+    }
+
+    fn wouldChange(
+        model: *const ObservationModel,
+        operation: ModelOperation,
+        triple: log.Triple,
+    ) bool {
+        const present = model.exactIndex(triple) != null;
+        return if (operation == .assert) !present else present;
+    }
+
+    fn commit(
+        model: *ObservationModel,
+        operation: ModelOperation,
+        triple: log.Triple,
+    ) !void {
+        const index = model.exactIndex(triple);
+        if (operation == .assert) {
+            if (index != null) return error.ObservationStateMismatch;
+            try model.live.append(model.allocator, triple);
+        } else {
+            if (index == null) return error.ObservationStateMismatch;
+            _ = model.live.orderedRemove(index.?);
+        }
+        model.version += 1;
+        const operations = try model.allocator.alloc(LogicalOperation, 1);
+        errdefer model.allocator.free(operations);
+        operations[0] = .{ .operation = operation, .triple = triple };
+        try model.transactions.append(model.allocator, .{
+            .sequence = model.version,
+            .operations = operations,
+        });
+    }
+};
+
 const ParsedFact = struct {
     predicate: []const u8,
     value: []const u8,
@@ -1238,6 +1302,61 @@ fn parseFacts(
     while (iterator.next()) |token|
         try facts.append(arena, try parseFact(token));
     return facts.toOwnedSlice(arena);
+}
+
+fn hexNibble(byte: u8) !u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'f' => byte - 'a' + 10,
+        'A'...'F' => byte - 'A' + 10,
+        else => error.InvalidHex,
+    };
+}
+
+fn decodeHex(arena: Allocator, encoded: []const u8) ![]u8 {
+    if (encoded.len % 2 != 0) return error.InvalidHex;
+    const bytes = try arena.alloc(u8, encoded.len / 2);
+    for (bytes, 0..) |*byte, index| {
+        byte.* = (try hexNibble(encoded[index * 2])) << 4 |
+            try hexNibble(encoded[index * 2 + 1]);
+    }
+    return bytes;
+}
+
+fn decodeHexTriple(arena: Allocator, encoded: []const u8) !log.Triple {
+    const bytes = try decodeHex(arena, encoded);
+    const term = try log.TermCodecV1.decode(arena, bytes, .{});
+    return tripleValue(term) orelse error.InvalidCorpus;
+}
+
+fn runObservedMutation(
+    arena: Allocator,
+    peer: *Peer,
+    model: *ObservationModel,
+    operation: ModelOperation,
+    triple: log.Triple,
+) !void {
+    const changed = model.wouldChange(operation, triple);
+    const expected_version = model.version + @intFromBool(changed);
+    var frame = try peer.exchange(
+        if (operation == .assert) "rpc/assert" else "rpc/retract",
+        null,
+        null,
+        try writePayload(
+            arena,
+            try tripleTerm(arena, triple.slot0, triple.slot1, triple.slot2),
+            "rpc/subject-any",
+            null,
+        ),
+    );
+    defer frame.deinit();
+    const value = try expectSuccess(&frame, expected_version);
+    try mutationChanged(
+        arena,
+        value.payload orelse return error.ProtocolAssertion,
+        &.{changed},
+    );
+    if (changed) try model.commit(operation, triple);
 }
 
 fn modelActionTerm(
@@ -1567,12 +1686,608 @@ fn verifyModel(
         return error.ProtocolAssertion;
 }
 
+fn verifyObservationModel(
+    arena: Allocator,
+    peer: *Peer,
+    model: *const ObservationModel,
+) !void {
+    var frame = try peer.exchange(
+        "rpc/scan",
+        null,
+        .{ .limit = 4096, .cursor = null },
+        try pattern(arena, null, null, null),
+    );
+    defer frame.deinit();
+    const value = try expectSuccess(&frame, model.version);
+    const fields = try recordFields(
+        arena,
+        value.payload orelse return error.ProtocolAssertion,
+        "rpc/triples",
+        1,
+    );
+    const actual = try collectList(arena, fields[0]);
+    var logical_count: usize = 0;
+    for (actual) |term| {
+        const candidate = tripleValue(term) orelse return error.ProtocolAssertion;
+        if (isKeyword(candidate.slot1, "kernel/recorded-at") or
+            isKeyword(candidate.slot1, "kernel/asserted-by")) continue;
+        logical_count += 1;
+    }
+    if (logical_count != model.live.items.len) return error.ProtocolAssertion;
+    for (model.live.items) |expected| {
+        var found = false;
+        for (actual) |term| {
+            const candidate = tripleValue(term) orelse continue;
+            if (isKeyword(candidate.slot1, "kernel/recorded-at") or
+                isKeyword(candidate.slot1, "kernel/asserted-by")) continue;
+            found = found or log.tripleEql(expected, candidate);
+        }
+        if (!found) return error.ProtocolAssertion;
+    }
+
+    var occurrences = try peer.exchange(
+        "rpc/occurrences",
+        null,
+        .{ .limit = 4096, .cursor = null },
+        keywordTerm("rpc/unit"),
+    );
+    defer occurrences.deinit();
+    const occurrence_response = try expectSuccess(&occurrences, model.version);
+    const occurrence_fields = try recordFields(
+        arena,
+        occurrence_response.payload orelse return error.ProtocolAssertion,
+        "rpc/occurrences",
+        1,
+    );
+    const rows = try collectList(arena, occurrence_fields[0]);
+    for (rows) |term| {
+        const binding = tripleValue(term) orelse return error.ProtocolAssertion;
+        if (!(isKeyword(binding.slot1, "kernel/asserts") or
+            isKeyword(binding.slot1, "kernel/retracts")))
+            return error.ProtocolAssertion;
+    }
+
+    var validation = try peer.exchange(
+        "rpc/validate",
+        null,
+        null,
+        keywordTerm("rpc/unit"),
+    );
+    defer validation.deinit();
+    const validation_response = try expectSuccess(&validation, model.version);
+    const validation_fields = try recordFields(
+        arena,
+        validation_response.payload orelse return error.ProtocolAssertion,
+        "rpc/validation",
+        2,
+    );
+    if (booleanValue(validation_fields[0]) != true)
+        return error.ProtocolAssertion;
+}
+
+const DumpTripleRow = struct {
+    term: log.Triple,
+    handles: [3]i64,
+};
+
+const DumpTransactionRow = struct {
+    sequence: i64,
+    first_operation: i64,
+    operation_count: i64,
+};
+
+const DumpOperationRow = struct {
+    sequence: i64,
+    ordinal: i64,
+    operation: ModelOperation,
+    triple_handle: i64,
+};
+
+const DumpBuilder = struct {
+    allocator: Allocator,
+    atoms: std.ArrayList(log.Term) = .empty,
+    triples: std.ArrayList(DumpTripleRow) = .empty,
+    transactions: std.ArrayList(DumpTransactionRow) = .empty,
+    operations: std.ArrayList(DumpOperationRow) = .empty,
+
+    fn deinit(dump: *DumpBuilder) void {
+        dump.operations.deinit(dump.allocator);
+        dump.transactions.deinit(dump.allocator);
+        dump.triples.deinit(dump.allocator);
+        dump.atoms.deinit(dump.allocator);
+        dump.* = undefined;
+    }
+
+    fn intern(dump: *DumpBuilder, term: log.Term) !i64 {
+        return switch (term) {
+            .atom => {
+                for (dump.atoms.items, 0..) |known, position| {
+                    if (log.termEql(known, term))
+                        return @intCast(position * 2);
+                }
+                const position = dump.atoms.items.len;
+                try dump.atoms.append(dump.allocator, term);
+                return @intCast(position * 2);
+            },
+            .triple => |triple| {
+                const handles = [3]i64{
+                    try dump.intern(triple.slot0),
+                    try dump.intern(triple.slot1),
+                    try dump.intern(triple.slot2),
+                };
+                for (dump.triples.items, 0..) |known, position| {
+                    if (known.handles[0] == handles[0] and
+                        known.handles[1] == handles[1] and
+                        known.handles[2] == handles[2])
+                        return @intCast(position * 2 + 1);
+                }
+                const position = dump.triples.items.len;
+                try dump.triples.append(dump.allocator, .{
+                    .term = triple.*,
+                    .handles = handles,
+                });
+                return @intCast(position * 2 + 1);
+            },
+        };
+    }
+
+    fn collect(
+        dump: *DumpBuilder,
+        model: *const ObservationModel,
+    ) !void {
+        for (model.transactions.items) |transaction| {
+            const first_operation: i64 = @intCast(dump.operations.items.len);
+            for (transaction.operations, 0..) |operation, ordinal| {
+                const handle = try dump.intern(.{ .triple = &operation.triple });
+                try dump.operations.append(dump.allocator, .{
+                    .sequence = transaction.sequence,
+                    .ordinal = @intCast(ordinal),
+                    .operation = operation.operation,
+                    .triple_handle = handle,
+                });
+            }
+            try dump.transactions.append(dump.allocator, .{
+                .sequence = transaction.sequence,
+                .first_operation = first_operation,
+                .operation_count = @intCast(transaction.operations.len),
+            });
+        }
+    }
+};
+
+fn appendLe(writer: *std.Io.Writer, comptime T: type, value: T) !void {
+    var bytes: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &bytes, value, .little);
+    writer.writeAll(&bytes) catch return error.OutOfMemory;
+}
+
+fn appendTermRow(writer: *std.Io.Writer, allocator: Allocator, term: log.Term) !void {
+    const bytes = try log.TermCodecV1.encode(allocator, term);
+    defer allocator.free(bytes);
+    try appendLe(writer, u32, @intCast(bytes.len));
+    writer.writeAll(bytes) catch return error.OutOfMemory;
+}
+
+const IndexRow = struct { values: [3]i64 };
+
+fn indexLess(key_count: usize, left: IndexRow, right: IndexRow) bool {
+    for (0..key_count) |position| {
+        if (left.values[position] < right.values[position]) return true;
+        if (left.values[position] > right.values[position]) return false;
+    }
+    return false;
+}
+
+fn appendIndex(
+    writer: *std.Io.Writer,
+    allocator: Allocator,
+    triples: []const DumpTripleRow,
+    first_slot: usize,
+    second_slot: ?usize,
+) !void {
+    var rows: std.ArrayList(IndexRow) = .empty;
+    defer rows.deinit(allocator);
+    for (triples, 0..) |triple, position| {
+        const triple_handle: i64 = @intCast(position * 2 + 1);
+        try rows.append(allocator, .{ .values = if (second_slot) |slot|
+            .{ triple.handles[first_slot], triple.handles[slot], triple_handle }
+        else
+            .{ triple.handles[first_slot], triple_handle, 0 } });
+    }
+    const key_count: usize = if (second_slot == null) 2 else 3;
+    std.mem.sort(IndexRow, rows.items, key_count, indexLess);
+    try appendLe(writer, u32, @intCast(rows.items.len));
+    for (rows.items) |row| {
+        for (row.values[0..key_count]) |handle|
+            try appendLe(writer, i64, handle);
+    }
+}
+
+fn canonicalDumpPayload(
+    allocator: Allocator,
+    model: *const ObservationModel,
+) ![]u8 {
+    var dump: DumpBuilder = .{ .allocator = allocator };
+    defer dump.deinit();
+    try dump.collect(model);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
+    try appendLe(writer, u16, 2);
+    try appendLe(writer, u16, 0);
+    try appendLe(writer, i64, model.version + 1);
+    try appendLe(writer, u32, @intCast(dump.atoms.items.len));
+    for (dump.atoms.items) |atom| try appendTermRow(writer, allocator, atom);
+    try appendLe(writer, u32, @intCast(dump.triples.items.len));
+    for (dump.triples.items) |triple|
+        try appendTermRow(writer, allocator, .{ .triple = &triple.term });
+    try appendLe(writer, u32, @intCast(dump.transactions.items.len));
+    for (dump.transactions.items) |transaction| {
+        try appendLe(writer, i64, transaction.sequence);
+        try appendLe(writer, i64, transaction.first_operation);
+        try appendLe(writer, i64, transaction.operation_count);
+    }
+    try appendLe(writer, u32, @intCast(dump.operations.items.len));
+    for (dump.operations.items) |operation| {
+        try appendLe(writer, i64, operation.sequence);
+        try appendLe(writer, i64, operation.ordinal);
+        writer.writeByte(if (operation.operation == .assert) 1 else 2) catch
+            return error.OutOfMemory;
+        try appendLe(writer, i64, operation.triple_handle);
+    }
+    try appendIndex(writer, allocator, dump.triples.items, 0, null);
+    try appendIndex(writer, allocator, dump.triples.items, 1, null);
+    try appendIndex(writer, allocator, dump.triples.items, 2, null);
+    try appendIndex(writer, allocator, dump.triples.items, 0, 1);
+    try appendIndex(writer, allocator, dump.triples.items, 1, 2);
+    try appendIndex(writer, allocator, dump.triples.items, 0, 2);
+    return out.toOwnedSlice();
+}
+
+const LogicalEvent = struct {
+    sequence: i64,
+    ordinal: i64,
+    operation: ModelOperation,
+    triple: log.Triple,
+    live: bool,
+    withdrawal_target: ?usize,
+};
+
+fn logicalEvents(
+    allocator: Allocator,
+    model: *const ObservationModel,
+) !std.ArrayList(LogicalEvent) {
+    var events: std.ArrayList(LogicalEvent) = .empty;
+    errdefer events.deinit(allocator);
+    for (model.transactions.items) |transaction| {
+        for (transaction.operations, 0..) |operation, ordinal| {
+            var target: ?usize = null;
+            if (operation.operation == .retract) {
+                var position = events.items.len;
+                while (position != 0) {
+                    position -= 1;
+                    const candidate = events.items[position];
+                    if (candidate.live and candidate.operation == .assert and
+                        log.tripleEql(candidate.triple, operation.triple))
+                    {
+                        target = position;
+                        events.items[position].live = false;
+                        break;
+                    }
+                }
+                if (target == null) return error.ObservationStateMismatch;
+            }
+            try events.append(allocator, .{
+                .sequence = transaction.sequence,
+                .ordinal = @intCast(ordinal),
+                .operation = operation.operation,
+                .triple = operation.triple,
+                .live = operation.operation == .assert,
+                .withdrawal_target = target,
+            });
+        }
+    }
+    return events;
+}
+
+fn eventCoordinate(
+    arena: Allocator,
+    space: []const u8,
+    event: LogicalEvent,
+) !log.Term {
+    const transaction = try tripleTerm(
+        arena,
+        stringTerm(space),
+        keywordTerm("kernel/tx-sequence"),
+        integerTerm(event.sequence),
+    );
+    return tripleTerm(
+        arena,
+        transaction,
+        keywordTerm("kernel/op-ordinal"),
+        integerTerm(event.ordinal),
+    );
+}
+
+fn eventTerm(
+    arena: Allocator,
+    space: []const u8,
+    event: LogicalEvent,
+) !log.Term {
+    return tripleTerm(
+        arena,
+        try eventCoordinate(arena, space, event),
+        keywordTerm(if (event.operation == .assert)
+            "kernel/asserts"
+        else
+            "kernel/retracts"),
+        try tripleTerm(
+            arena,
+            event.triple.slot0,
+            event.triple.slot1,
+            event.triple.slot2,
+        ),
+    );
+}
+
+fn withdrawalTerm(
+    arena: Allocator,
+    space: []const u8,
+    event: LogicalEvent,
+    target: LogicalEvent,
+) !log.Term {
+    return tripleTerm(
+        arena,
+        try eventCoordinate(arena, space, event),
+        keywordTerm("kernel/withdraws"),
+        try eventCoordinate(arena, space, target),
+    );
+}
+
+fn appendHexBytes(writer: *std.Io.Writer, bytes: []const u8) !void {
+    const alphabet = "0123456789abcdef";
+    for (bytes) |byte| {
+        writer.writeByte(alphabet[byte >> 4]) catch return error.OutOfMemory;
+        writer.writeByte(alphabet[byte & 0x0f]) catch return error.OutOfMemory;
+    }
+}
+
+fn appendTermLine(
+    writer: *std.Io.Writer,
+    allocator: Allocator,
+    term: log.Term,
+) !void {
+    const bytes = try log.TermCodecV1.encode(allocator, term);
+    defer allocator.free(bytes);
+    try appendHexBytes(writer, bytes);
+    writer.writeByte('\n') catch return error.OutOfMemory;
+}
+
+const ObservationChannels = struct {
+    history: []u8,
+    live_occurrences: []u8,
+    live_propositions: []u8,
+
+    fn deinit(channels: *ObservationChannels, allocator: Allocator) void {
+        allocator.free(channels.live_propositions);
+        allocator.free(channels.live_occurrences);
+        allocator.free(channels.history);
+        channels.* = undefined;
+    }
+};
+
+fn buildObservationChannels(
+    allocator: Allocator,
+    arena: Allocator,
+    space: []const u8,
+    model: *const ObservationModel,
+) !ObservationChannels {
+    var events = try logicalEvents(allocator, model);
+    defer events.deinit(allocator);
+    var history: std.Io.Writer.Allocating = .init(allocator);
+    errdefer history.deinit();
+    var live_occurrences: std.Io.Writer.Allocating = .init(allocator);
+    errdefer live_occurrences.deinit();
+    var live_propositions: std.Io.Writer.Allocating = .init(allocator);
+    errdefer live_propositions.deinit();
+
+    for (events.items) |event| {
+        try appendTermLine(&history.writer, allocator, try eventTerm(arena, space, event));
+        if (event.withdrawal_target) |target| {
+            try appendTermLine(
+                &history.writer,
+                allocator,
+                try withdrawalTerm(arena, space, event, events.items[target]),
+            );
+        }
+        if (event.live) {
+            try appendTermLine(
+                &live_occurrences.writer,
+                allocator,
+                try eventTerm(arena, space, event),
+            );
+            try appendTermLine(
+                &live_propositions.writer,
+                allocator,
+                try tripleTerm(
+                    arena,
+                    event.triple.slot0,
+                    event.triple.slot1,
+                    event.triple.slot2,
+                ),
+            );
+        }
+    }
+    return .{
+        .history = try history.toOwnedSlice(),
+        .live_occurrences = try live_occurrences.toOwnedSlice(),
+        .live_propositions = try live_propositions.toOwnedSlice(),
+    };
+}
+
+fn validTransactionCoordinate(term: log.Term) bool {
+    const triple = tripleValue(term) orelse return false;
+    const space = stringValue(triple.slot0) orelse return false;
+    const sequence = integerValue(triple.slot2) orelse return false;
+    return space.len != 0 and
+        isKeyword(triple.slot1, "kernel/tx-sequence") and sequence >= 0;
+}
+
+fn validOccurrenceCoordinate(term: log.Term) bool {
+    const triple = tripleValue(term) orelse return false;
+    const ordinal = integerValue(triple.slot2) orelse return false;
+    return validTransactionCoordinate(triple.slot0) and
+        isKeyword(triple.slot1, "kernel/op-ordinal") and ordinal >= 0;
+}
+
+const RejectionChannels = struct {
+    malformed_terms: []u8,
+    invalid_coordinates: []u8,
+
+    fn deinit(channels: *RejectionChannels, allocator: Allocator) void {
+        allocator.free(channels.invalid_coordinates);
+        allocator.free(channels.malformed_terms);
+        channels.* = undefined;
+    }
+};
+
+fn rejectionChannels(
+    allocator: Allocator,
+    arena: Allocator,
+    corpus: []const u8,
+) !RejectionChannels {
+    var malformed: std.Io.Writer.Allocating = .init(allocator);
+    errdefer malformed.deinit();
+    var coordinates: std.Io.Writer.Allocating = .init(allocator);
+    errdefer coordinates.deinit();
+    var lines = std.mem.splitScalar(u8, corpus, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        const fields = try splitFields(arena, line);
+        if (std.mem.eql(u8, fields[0], "malformed-term")) {
+            if (fields.len != 3) return error.InvalidCorpus;
+            const bytes = decodeHex(arena, fields[2]) catch {
+                try appendRejectionRow(&malformed.writer, fields[1]);
+                continue;
+            };
+            _ = log.TermCodecV1.decode(arena, bytes, .{}) catch {
+                try appendRejectionRow(&malformed.writer, fields[1]);
+                continue;
+            };
+            return error.InvalidCorpus;
+        }
+        if (std.mem.eql(u8, fields[0], "invalid-coordinate")) {
+            if (fields.len != 3) return error.InvalidCorpus;
+            const bytes = try decodeHex(arena, fields[2]);
+            const term = try log.TermCodecV1.decode(arena, bytes, .{});
+            if (validOccurrenceCoordinate(term)) return error.InvalidCorpus;
+            try appendRejectionRow(&coordinates.writer, fields[1]);
+        }
+    }
+    return .{
+        .malformed_terms = try malformed.toOwnedSlice(),
+        .invalid_coordinates = try coordinates.toOwnedSlice(),
+    };
+}
+
+fn appendRejectionRow(writer: *std.Io.Writer, label: []const u8) !void {
+    writer.writeAll(label) catch return error.OutOfMemory;
+    writer.writeAll("\trejected\n") catch return error.OutOfMemory;
+}
+
+const Artifact = struct {
+    name: []const u8,
+    bytes: []const u8,
+};
+
+fn writeArtifact(
+    allocator: Allocator,
+    io: Io,
+    output_dir: []const u8,
+    artifact: Artifact,
+) !void {
+    const path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ output_dir, artifact.name },
+    );
+    defer allocator.free(path);
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, artifact.bytes);
+    try file.sync(io);
+}
+
+fn appendDigestRow(
+    writer: *std.Io.Writer,
+    allocator: Allocator,
+    artifact: Artifact,
+) !void {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(artifact.bytes, &digest, .{});
+    const prefix = try std.fmt.allocPrint(
+        allocator,
+        "{s}\t{d}\t",
+        .{ artifact.name, artifact.bytes.len },
+    );
+    defer allocator.free(prefix);
+    writer.writeAll(prefix) catch return error.OutOfMemory;
+    try appendHexBytes(writer, &digest);
+    writer.writeByte('\n') catch return error.OutOfMemory;
+}
+
+fn writeObservation(
+    allocator: Allocator,
+    io: Io,
+    arena: Allocator,
+    output_dir: []const u8,
+    space: []const u8,
+    corpus: []const u8,
+    model: *const ObservationModel,
+) !void {
+    try std.Io.Dir.cwd().createDirPath(io, output_dir);
+    var channels = try buildObservationChannels(
+        allocator,
+        arena,
+        space,
+        model,
+    );
+    defer channels.deinit(allocator);
+    var rejections = try rejectionChannels(allocator, arena, corpus);
+    defer rejections.deinit(allocator);
+    const dump = try canonicalDumpPayload(allocator, model);
+    defer allocator.free(dump);
+    const artifacts = [_]Artifact{
+        .{ .name = "history.hex", .bytes = channels.history },
+        .{ .name = "invalid-coordinate.tsv", .bytes = rejections.invalid_coordinates },
+        .{ .name = "live-occurrences.hex", .bytes = channels.live_occurrences },
+        .{ .name = "live-propositions.hex", .bytes = channels.live_propositions },
+        .{ .name = "malformed-term.tsv", .bytes = rejections.malformed_terms },
+        .{ .name = "term-store-dump.bin", .bytes = dump },
+    };
+    var digests: std.Io.Writer.Allocating = .init(allocator);
+    defer digests.deinit();
+    for (artifacts) |artifact| {
+        try writeArtifact(allocator, io, output_dir, artifact);
+        try appendDigestRow(&digests.writer, allocator, artifact);
+    }
+    const digest_bytes = try digests.toOwnedSlice();
+    defer allocator.free(digest_bytes);
+    try writeArtifact(allocator, io, output_dir, .{
+        .name = "digests.tsv",
+        .bytes = digest_bytes,
+    });
+}
+
 fn oracle(
     allocator: Allocator,
     io: Io,
     port: u16,
     space: []const u8,
     corpus_path: []const u8,
+    output_dir: ?[]const u8,
 ) !void {
     const corpus = try std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -1589,6 +2304,8 @@ fn oracle(
     };
     var model = Model.init(allocator);
     defer model.deinit();
+    var observation = ObservationModel{ .allocator = allocator };
+    defer observation.deinit();
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1598,13 +2315,58 @@ fn oracle(
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0) continue;
-        try oracleLine(arena, &peer, &model, line);
+        const fields = try splitFields(arena, line);
+        if (std.mem.eql(u8, fields[0], "assert-term") or
+            std.mem.eql(u8, fields[0], "retract-term"))
+        {
+            if (output_dir == null or fields.len != 2)
+                return error.InvalidCorpus;
+            runObservedMutation(
+                arena,
+                &peer,
+                &observation,
+                if (std.mem.eql(u8, fields[0], "assert-term")) .assert else .retract,
+                try decodeHexTriple(arena, fields[1]),
+            ) catch |err| {
+                std.debug.print("oracle-observe line {d}: {s}\n", .{
+                    line_count + 1,
+                    @errorName(err),
+                });
+                return err;
+            };
+        } else if (std.mem.eql(u8, fields[0], "malformed-term") or
+            std.mem.eql(u8, fields[0], "invalid-coordinate") or
+            std.mem.eql(u8, fields[0], "dump-reload"))
+        {
+            if (output_dir == null) return error.InvalidCorpus;
+        } else {
+            if (output_dir != null) return error.InvalidCorpus;
+            try oracleLine(arena, &peer, &model, line);
+        }
         line_count += 1;
     }
-    try verifyModel(arena, &peer, &model);
+    if (output_dir) |directory| {
+        try verifyObservationModel(arena, &peer, &observation);
+        try writeObservation(
+            allocator,
+            io,
+            arena,
+            directory,
+            space,
+            corpus,
+            &observation,
+        );
+    } else {
+        try verifyModel(arena, &peer, &model);
+    }
     std.debug.print(
         "oracle {s}: {d} operations, version {d}, {d} live triples\n",
-        .{ corpus_path, line_count, model.version, model.triples.items.len },
+        .{
+            corpus_path,
+            line_count,
+            if (output_dir == null) model.version else observation.version,
+            if (output_dir == null) model.triples.items.len else observation.live.items.len,
+        },
     );
 }
 
@@ -1682,6 +2444,20 @@ fn run(init: std.process.Init) !void {
             port,
             space,
             corpus_path,
+            null,
+        );
+    }
+    if (std.mem.eql(u8, mode, "oracle-observe")) {
+        const corpus_path = args.next() orelse return error.InvalidArguments;
+        const output_dir = args.next() orelse return error.InvalidArguments;
+        if (args.next() != null) return error.InvalidArguments;
+        return oracle(
+            init.gpa,
+            init.io,
+            port,
+            space,
+            corpus_path,
+            output_dir,
         );
     }
     return error.InvalidArguments;
