@@ -258,16 +258,13 @@
        :observed-delta {:asserts actual-asserts
                         :retracts actual-retracts}})))
 
-(defn gate-and-commit!
-  "Read, transform, seal-check, and atomically commit one native code edit.
-
-   A conflict discards the entire candidate and repeats from a fresh snapshot.
-   before-commit is an integration seam for coordinating a concurrent writer."
-  ([port space checkout-root module edits]
-   (gate-and-commit! port space checkout-root module edits {}))
-  ([port space checkout-root module edits
-    {:keys [max-conflicts before-commit] :as options}]
+(defn- gate-candidate-and-commit!
+  [port space checkout-root module transform
+   {:keys [max-conflicts before-commit] :as options}]
    (let [max-conflicts (or max-conflicts default-max-conflicts)]
+     (when-not (fn? transform)
+       (fail! :invalid-native-gate-options
+              "candidate transform must be callable" {}))
      (when-not (and (integer? max-conflicts) (not (neg? max-conflicts)))
        (fail! :invalid-native-gate-options
               "max-conflicts must be a nonnegative integer"
@@ -277,7 +274,7 @@
              (code-reader/read-module-snapshot!
               port space checkout-root module)
              base (transformer-snapshot module-snapshot)
-             candidate (transformer/multi-set-body base edits)
+             candidate (transform base)
              attempts (conj attempts (attempt-summary candidate))
              request (verifier-request module-snapshot candidate)
              check (sealed-check! request options)]
@@ -318,6 +315,27 @@
                  :else
                  (postcommit-outcome
                   port space checkout-root module base candidate response
-                  (:receipt check) conflicts attempts))))))))))
+                  (:receipt check) conflicts attempts)))))))))
+
+(defn gate-and-commit!
+  "Read, transform, seal-check, and atomically commit one native body edit.
+
+   A conflict discards the entire candidate and repeats from a fresh snapshot.
+   before-commit is an integration seam for coordinating a concurrent writer."
+  ([port space checkout-root module edits]
+   (gate-and-commit! port space checkout-root module edits {}))
+  ([port space checkout-root module edits options]
+   (gate-candidate-and-commit!
+    port space checkout-root module
+    #(transformer/multi-set-body % edits) options)))
+
+(defn gate-top-level-and-commit!
+  "Seal and atomically commit one add-only or replace-only top-level definition."
+  ([port space checkout-root module mode form]
+   (gate-top-level-and-commit! port space checkout-root module mode form {}))
+  ([port space checkout-root module mode form options]
+   (gate-candidate-and-commit!
+    port space checkout-root module
+    #(transformer/top-level-def % mode form) options)))
 
 (def edit-module! gate-and-commit!)

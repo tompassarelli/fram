@@ -1,9 +1,8 @@
 (ns fram.candidate-transformer
   (:require [clojure.set :as set]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [resolve-core :as resolve-core]))
 
-(def ^:private value-def-heads
-  #{"def" "def-" "defonce" "defn" "defn-" "defmacro"})
 (def ^:private parameter-heads
   #{"defn" "defn-" "defmacro"})
 (def ^:private type-colons #{":-" ":"})
@@ -95,7 +94,7 @@
                outer)]
     (symbol-value index (unwrap-meta facts index leaf))))
 
-(defn- module-forms [facts module]
+(defn- module-form-edges [facts module]
   (let [index (object-index facts)
         wrappers (->> facts
                       (map first)
@@ -109,23 +108,33 @@
                (str "module " (pr-str module)
                     " must have exactly one beagle-file wrapper")
                {:module module :wrappers wrappers}))
-    (vec (rest (ordered-nodes facts (first wrappers))))))
+    {:wrapper (first wrappers)
+     :forms (vec (rest (ordered-edges facts (first wrappers))))}))
+
+(defn- definition-name [facts index head children]
+  (when (resolve-core/named-def-head? head)
+    (logical-name facts index
+                  (nth children
+                       (resolve-core/type-name-index head
+                                                     (symbol-value index
+                                                      (nth children 1 nil)))
+                       nil))))
+
+(defn- definition-matches [facts module name]
+  (let [index (object-index facts)]
+    (->> (:forms (module-form-edges facts module))
+         (keep
+          (fn [{:keys [fact node]}]
+            (let [definition (unwrap-definition facts index node)
+                  children (ordered-nodes facts definition)
+                  head (head-symbol facts index definition)]
+              (when (= name (definition-name facts index head children))
+                {:form node :definition definition :head head
+                 :children children :wrapper-edge fact}))))
+         vec)))
 
 (defn- definition-match [facts module name]
-  (let [index (object-index facts)
-        matches
-        (->> (module-forms facts module)
-             (keep
-              (fn [form]
-                (let [definition (unwrap-definition facts index form)
-                      children (ordered-nodes facts definition)
-                      head (head-symbol facts index definition)]
-                  (when (and (contains? value-def-heads head)
-                             (= name (logical-name facts index
-                                                   (nth children 1 nil))))
-                    {:form form :definition definition :head head
-                     :children children})))))
-        matches (vec matches)]
+  (let [matches (definition-matches facts module name)]
     (when-not (= 1 (count matches))
       (reject! (if (empty? matches)
                  :definition-not-found :ambiguous-definition)
@@ -289,3 +298,75 @@
      :asserts (set/difference candidate base)
      :retracts (set/difference base candidate)
      :next-node-int (:next-int staged)}))
+
+(defn- top-level-form! [form]
+  (when-not (and (seq? form)
+                 (resolve-core/named-def-head? (str (first form))))
+    (reject! :invalid-top-level-definition
+             "form must be one named writable top-level definition"
+             {:form form}))
+  (let [name (resolve-core/named-form-name form)]
+    (when (str/blank? name)
+      (reject! :invalid-top-level-definition
+               "form must carry one named top-level definition" {:form form}))
+    {:name name :form form}))
+
+(defn- append-position [facts wrapper]
+  (resolve-core/ord-str
+   (resolve-core/ord-append
+    (some-> (last (ordered-edges facts wrapper)) :key first))
+   0))
+
+(defn top-level-def
+  "Build an add-only or replace-only top-level definition candidate."
+  [snapshot mode form]
+  (when-not (map? snapshot)
+    (reject! :invalid-snapshot "snapshot must be a map" {}))
+  (when-not (contains? #{:add :replace} mode)
+    (reject! :invalid-top-level-mode
+             "top-level definition mode must be :add or :replace" {:mode mode}))
+  (let [{:keys [name form]} (top-level-form! form)
+        module (:module snapshot)
+        base (:facts snapshot)]
+    (when (str/blank? (str module))
+      (reject! :invalid-snapshot "snapshot :module is required" {}))
+    (when-not (and (set? base)
+                   (every? #(and (vector? %) (= 3 (count %))) base))
+      (reject! :invalid-snapshot
+               "snapshot :facts must be an immutable set of triple vectors"
+               {:module module}))
+    (let [matches (definition-matches base module name)]
+      (when (and (= :add mode) (seq matches))
+        (reject! :definition-already-exists
+                 (str "definition " (pr-str name) " already exists in module "
+                      (pr-str module))
+                 {:module module :name name}))
+      (when (and (= :replace mode) (empty? matches))
+        (reject! :definition-not-found
+                 (str "definition " (pr-str name) " was not found in module "
+                      (pr-str module))
+                 {:module module :name name}))
+      (when (> (count matches) 1)
+        (reject! :ambiguous-definition
+                 (str "definition " (pr-str name) " in module "
+                      (pr-str module) " matched " (count matches) " forms")
+                 {:module module :name name
+                  :definition-ids (mapv :definition matches)}))
+      (let [{:keys [wrapper]} (module-form-edges base module)
+            victim (first matches)
+            minted (mint-datum module (next-node-int base module) form)
+            old-edge (:wrapper-edge victim)
+            position (if old-edge (second old-edge)
+                         (append-position base wrapper))
+            new-edge [wrapper position (:root minted)]
+            candidate (cond-> (set/union base (:facts minted) #{new-edge})
+                        old-edge (disj old-edge))]
+        {:base-version (:version snapshot)
+         :module module
+         :definition-identities [{:name name
+                                  :form (:form victim)
+                                  :definition (:definition victim)}]
+         :ast candidate
+         :asserts (set/difference candidate base)
+         :retracts (set/difference base candidate)
+         :next-node-int (:next-int minted)}))))

@@ -19,7 +19,9 @@
 
 (def ^:private preflight-contract "fram.graph-control-preflight/v1")
 (def ^:private server-name "fram-graph-control")
-(def ^:private tool-name "multi-set-body")
+(def ^:private multi-tool-name "multi-set-body")
+(def ^:private add-tool-name "add-def")
+(def ^:private replace-tool-name "replace-def")
 (def ^:private framlog-magic
   (.getBytes "FRAMLOG\u0000" StandardCharsets/UTF_8))
 
@@ -152,8 +154,8 @@
         corpus (code-reader/read-corpus-snapshot! port space)
         roots (module-root-rows! checkout-root source-root (:triples corpus))
         selected (:module (first roots))
-        snapshot (code-reader/read-module-snapshot!
-                  port space checkout-root selected)
+        snapshot (code-reader/module-snapshot-from-corpus!
+                  checkout-root selected corpus)
         candidate (unchanged-candidate snapshot)
         request (gate/verifier-request snapshot candidate)
         check (gate/sealed-check! request {})
@@ -220,6 +222,23 @@
               {:index index}))
      {:name (:name edit) :body (parse-body! index (:body edit))})
    (range) value))
+
+(defn- form! [value]
+  (when-not (string? value)
+    (fail! :invalid-edit-form
+           "form must be one EDN datum encoded as a string" {}))
+  (try
+    (with-open [reader (PushbackReader. (StringReader. value))]
+      (let [eof (Object.)
+            datum (edn/read {:eof eof} reader)
+            tail (edn/read {:eof eof} reader)]
+        (when (or (identical? eof datum) (not (identical? eof tail)))
+          (fail! :invalid-edit-form
+                 "form must contain exactly one EDN datum" {}))
+        datum))
+    (catch clojure.lang.ExceptionInfo error (throw error))
+    (catch Throwable cause
+      (fail! :invalid-edit-form "form is not valid EDN" {:cause cause}))))
 
 (defn- candidate-snapshot [snapshot candidate]
   {:module (:module snapshot)
@@ -288,24 +307,78 @@
                       (:outcome publication))
        :value (edit-response outcome publication)})))
 
-(def ^:private edit-tool
-  {:name tool-name
-   :description "Atomically replace the bodies of 2..32 definitions in one native module, sealed-check the candidate, and publish its checked projection."
-   :inputSchema
-   {:type "object"
-    :additionalProperties false
-    :properties
-    {:module {:type "string"}
-     :edits {:type "array" :minItems 2 :maxItems 32
-             :items {:type "object" :additionalProperties false
-                     :properties {:name {:type "string"}
-                                  :body {:type "string"
-                                         :description "Exactly one EDN datum."}}
-                     :required ["name" "body"]}}}
-    :required ["module" "edits"]}})
+(defn- edit-top-level!
+  [{:keys [checkout-root port space beagle]} tool mode arguments]
+  (when-not (and (map? arguments)
+                 (= #{:module :form} (set (keys arguments)))
+                 (string? (:module arguments))
+                 (not (str/blank? (:module arguments))))
+    (fail! :invalid-tool-arguments
+           (str tool " requires exactly module and form") {}))
+  (let [checked (atom nil)
+        outcome
+        (gate/gate-top-level-and-commit!
+         port space checkout-root (:module arguments) mode (form! (:form arguments))
+         {:before-commit
+          (fn [{:keys [snapshot candidate]}]
+            (let [rendered (code-reader/render-module!
+                            beagle (candidate-snapshot snapshot candidate))]
+              (reset! checked
+                      {:candidate candidate
+                       :root (get-in snapshot [:snapshot :root])
+                       :bytes (.getBytes ^String (:source rendered)
+                                        StandardCharsets/UTF_8)})))})
+        checked-value @checked]
+    (when (and (= :committed (:type outcome))
+               (not= (:candidate outcome) (:candidate checked-value)))
+      (fail! :checked-projection-mismatch
+             "committed candidate differs from the checked projection"
+             {:module (:module outcome)}))
+    (let [publication
+          (lifecycle/publish-checked-projection!
+           {:commit-outcome outcome
+            :registered-root checkout-root
+            :registered-path (:root checked-value)
+            :checked-bytes (:bytes checked-value)})]
+      {:isError (not= :committed-projection-published
+                      (:outcome publication))
+       :value (edit-response outcome publication)})))
 
 (def ^:private tools
-  (conj (vec program/tool-descriptors) edit-tool))
+  ;; Reasoning verbs stay mounted beside the widened edit catalog.
+  (into (vec program/tool-descriptors)
+  [{:name multi-tool-name
+    :description "Atomically replace the bodies of 2..32 definitions in one native module, sealed-check the candidate, and publish its checked projection."
+    :inputSchema
+    {:type "object"
+     :additionalProperties false
+     :properties
+     {:module {:type "string"}
+      :edits {:type "array" :minItems 2 :maxItems 32
+              :items {:type "object" :additionalProperties false
+                      :properties {:name {:type "string"}
+                                   :body {:type "string"
+                                          :description "Exactly one EDN datum."}}
+                      :required ["name" "body"]}}}
+     :required ["module" "edits"]}}
+   {:name add-tool-name
+    :description "Add one new named top-level Beagle definition, sealed-check the candidate, and publish its checked projection. Existing names reject without committing."
+    :inputSchema
+    {:type "object"
+     :additionalProperties false
+     :properties {:module {:type "string"}
+                  :form {:type "string"
+                         :description "Exactly one named writable top-level EDN form."}}
+     :required ["module" "form"]}}
+   {:name replace-tool-name
+    :description "Replace one existing named top-level Beagle definition, sealed-check the candidate, and publish its checked projection. Missing names reject without committing."
+    :inputSchema
+    {:type "object"
+     :additionalProperties false
+     :properties {:module {:type "string"}
+                  :form {:type "string"
+                         :description "Exactly one named writable top-level EDN form."}}
+     :required ["module" "form"]}}]))
 
 (defn- reply! [id result]
   (println (json/generate-string {:jsonrpc "2.0" :id id :result result}))
@@ -319,15 +392,10 @@
 
 (defn- tool-result [context tool arguments]
   (try
-    (cond
-      (program/program-tool? tool)
-      {:isError false
-       :value (program/invoke-path! (:program-corpus context) tool arguments)}
-
-      (= tool-name tool)
-      (edit-module! context arguments)
-
-      :else
+    (case tool
+      "multi-set-body" (edit-module! context arguments)
+      "add-def" (edit-top-level! context tool :add arguments)
+      "replace-def" (edit-top-level! context tool :replace arguments)
       {:isError true :value {:type "unknown-tool"
                              :message (str "unknown tool: " tool)}})
     (catch Throwable error
@@ -344,7 +412,7 @@
         (reply! id {:protocolVersion "2024-11-05"
                     :capabilities {:tools {}}
                     :serverInfo {:name server-name :version "1"}
-                    :instructions "Sealed graph session. Use the named program reads before multi-set-body; use text for literal search and rendered bodies."})
+                    :instructions "Sealed native graph control. Use multi-set-body, add-def, or replace-def for atomic checked edits."})
 
         "tools/list" (reply! id {:tools tools})
 
@@ -360,14 +428,10 @@
 
 (defn- service-context! []
   (let [preflight (preflight!)
-        code-log (required-env! "FRAM_CODE_LOG")
-        checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
-                                       "checkout root")]
+        code-log (required-env! "FRAM_CODE_LOG")]
     {:preflight preflight
-     :checkout-root checkout-root
-     :program-corpus (canonical-path!
-                      (str (io/file checkout-root ".fram" "corpus.facts"))
-                      "program corpus")
+     :checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
+                                     "checkout root")
      :port (port!)
      :space (space-id! code-log)
      :beagle (required-env! "FRAM_BEAGLE")}))

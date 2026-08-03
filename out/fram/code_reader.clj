@@ -7,8 +7,8 @@
             [fram.rt :as rt]
             [fram.types :as t]))
 
-(def ^:private default-page-limit 128)
-(def ^:private maximum-page-limit 200)
+(def ^:private default-page-limit 4096)
+(def ^:private maximum-page-limit 4096)
 
 (defn- invalid! [message data]
   (throw (ex-info message (assoc data :type :invalid-code-snapshot))))
@@ -16,7 +16,7 @@
 (defn- code-page-limit! [value]
   (let [limit (or value default-page-limit)]
     (when-not (and (integer? limit) (<= 1 limit maximum-page-limit))
-      (invalid! "code snapshot page limit must be between 1 and 200"
+      (invalid! "code snapshot page limit must be between 1 and 4096"
                 {:page-limit limit}))
     limit))
 
@@ -106,23 +106,30 @@
            file
            (io/file checkout-root path)))))))
 
+(defn module-snapshot-from-corpus!
+  "Select one exact module from an already pinned whole-corpus snapshot."
+  [checkout-root module {:keys [version pages triples]}]
+  (when (str/blank? module)
+    (invalid! "module name must be nonempty" {:module module}))
+  (when-not (and (integer? version) (integer? pages) (vector? triples))
+    (invalid! "module selection requires a pinned corpus snapshot"
+              {:module module :version version :pages pages}))
+  (let [module-triples (filterv #(module-subject? module (t/triple-slot0 %))
+                                triples)
+        root (registered-root! checkout-root module module-triples)]
+    {:module module
+     :snapshot {:version version :root root}
+     :pages pages
+     :triples module-triples}))
+
 (defn read-module-snapshot!
   "Drain one pinned whole-corpus scan and return one exact module snapshot.
    Every successful result carries the drained {:version :root} citation."
   ([port space checkout-root module]
    (read-module-snapshot! port space checkout-root module nil))
   ([port space checkout-root module page-limit]
-   (when (str/blank? module)
-     (invalid! "module name must be nonempty" {:module module}))
-   (let [{:keys [version pages triples]}
-         (read-corpus-snapshot! port space page-limit)
-         module-triples (filterv #(module-subject? module (t/triple-slot0 %))
-                                 triples)
-         root (registered-root! checkout-root module module-triples)]
-     {:module module
-      :snapshot {:version version :root root}
-      :pages pages
-      :triples module-triples})))
+   (module-snapshot-from-corpus!
+    checkout-root module (read-corpus-snapshot! port space page-limit))))
 
 (defn- local-node-id [module value]
   (when-let [suffix (module-node-suffix module value)]

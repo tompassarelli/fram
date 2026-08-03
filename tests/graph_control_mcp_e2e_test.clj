@@ -91,7 +91,6 @@
 (def source-root (io/file scratch "src"))
 (def source-path (io/file source-root "fixture.bclj"))
 (def code-log (str (io/file scratch ".fram/code.log")))
-(def program-corpus (str (io/file scratch ".fram/corpus.facts")))
 (def space "graph-control-e2e")
 (def port (free-port))
 (def beagle
@@ -117,19 +116,6 @@
             "--out" code-log "--space-id" space
             :env (assoc (into {} (System/getenv)) "FRAM_BEAGLE" beagle)
             :dir checkout-root))
-(spit program-corpus
-      (str "@file src/fixture.bclj\n"
-           "[1 \"form-kind\" \"defn\"]\n"
-           "[1 \"name\" \"alpha\"]\n"
-           "[2 \"form-kind\" \"seq\"]\n"
-           "[3 \"form-kind\" \"call\"]\n"
-           "[3 \"calls\" \"beta\"]\n"
-           "[2 \"child\" 3]\n"
-           "[1 \"child\" 2]\n"
-           "[10 \"form-kind\" \"defn\"]\n"
-           "[10 \"name\" \"beta\"]\n"
-           "[11 \"form-kind\" \"seq\"]\n"
-           "[10 \"child\" 11]\n"))
 (def server
   (when (zero? (:exit ingest))
     (future (coord-daemon/serve! port code-log space :active))))
@@ -175,35 +161,13 @@
                runtime launch-env
                [{:jsonrpc "2.0" :id 1 :method "tools/list"}
                 {:jsonrpc "2.0" :id 2 :method "tools/call"
-                 :params {:name "read_definition"
-                          :arguments {:semanticIdentity
-                                      "src/fixture.bclj#10"}}}
-                {:jsonrpc "2.0" :id 3 :method "tools/call"
-                 :params
-                 {:name "inspect_program"
-                  :arguments
-                  {:requests
-                   [{:tag "definition" :request "read_definition"
-                     :arguments {:semanticIdentity "src/fixture.bclj#10"}}
-                    {:tag "references" :request "find_references"
-                     :arguments {:semanticIdentity "src/fixture.bclj#10"
-                                 :direction "inbound"}}
-                    {:tag "impact" :request "trace_impact"
-                     :arguments {:semanticIdentity "src/fixture.bclj#10"
-                                 :direction "inbound"}}
-                    {:tag "history" :request "occurrence_history"
-                     :arguments {:semanticIdentity
-                                 "src/fixture.bclj#10"}}]}}}
-                {:jsonrpc "2.0" :id 4 :method "tools/call"
                  :params {:name "multi-set-body"
                           :arguments
                           {:module "fixture"
                            :edits [{:name "alpha" :body "42"}
                                    {:name "beta" :body "(+ 40 2)"}]}}}])
           replies (parse-replies (:out run))
-          read-result (call-value (get replies 2))
-          batch-result (call-value (get replies 3))
-          result (call-value (get replies 4))
+          result (call-value (get replies 2))
           after-snapshot (code-reader/read-module-snapshot!
                           port space checkout-root "fixture")
           after (gate/transformer-snapshot after-snapshot)
@@ -214,25 +178,11 @@
           rendered (code-reader/render-module! beagle after-snapshot)]
       (when-not (zero? (:exit run))
         (binding [*out* *err*] (println (:err run))))
-      (check! "sealed session MCP serves the five inspection tools plus graph control"
-              (= ["read_definition" "find_references" "trace_impact"
-                  "occurrence_history" "inspect_program" "multi-set-body"]
+      (check! "sealed MCP serves exactly the widened graph-control catalog"
+              (= ["multi-set-body" "add-def" "replace-def"]
                  (mapv :name (get-in replies [1 :result :tools]))))
-      (check! "named read carries exact identity, structural anchor, and version"
-              (and (= "src/fixture.bclj#10"
-                      (:semanticIdentity read-result))
-                   (= [{:file "src/fixture.bclj" :nodeId 10
-                        :kind "definition"}]
-                      (:sourceAnchors read-result))
-                   (str/starts-with? (:logicalVersion read-result) "sha256:")))
-      (check! "MCP batch preserves ordered tags and one logical snapshot"
-              (and (= [["definition" "ok"] ["references" "ok"]
-                       ["impact" "ok"] ["history" "ok"]]
-                      (mapv (juxt :tag :outcome) (:children batch-result)))
-                   (= #{(:logicalVersion batch-result)}
-                      (set (map :logicalVersion (:children batch-result))))))
       (check! "multi-set-body completes commit and checked publication"
-              (and (not (get-in replies [4 :result :isError]))
+              (and (not (get-in replies [2 :result :isError]))
                    (= "committed-projection-published" (:outcome result))))
       (check! "committed triples match the MCP candidate delta"
               (and (= candidate-asserts actual-asserts)
@@ -240,6 +190,45 @@
                    (= (:candidateDelta result) (:committedDelta result))))
       (check! "projection file is republished byte-correct from committed triples"
               (= (:source rendered) (slurp source-path))))
+
+    (let [run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 10 :method "tools/call"
+                 :params {:name "add-def"
+                          :arguments
+                          {:module "fixture"
+                           :form "(defrecord Point [x :- Int y :- Int])"}}}])
+          reply (get (parse-replies (:out run)) 10)
+          result (call-value reply)
+          after-snapshot (code-reader/read-module-snapshot!
+                          port space checkout-root "fixture")
+          rendered (code-reader/render-module! beagle after-snapshot)]
+      (check! "add-def adds a top-level defrecord through checked publication"
+              (and (not (get-in reply [:result :isError]))
+                   (= "committed-projection-published" (:outcome result))))
+      (check! "add-def republishes the committed defrecord projection"
+              (and (str/includes? (:source rendered) "(defrecord Point")
+                   (= (:source rendered) (slurp source-path)))))
+
+    (let [run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 11 :method "tools/call"
+                 :params {:name "replace-def"
+                          :arguments
+                          {:module "fixture"
+                           :form "(defrecord Point [x :- Int y :- Int label :- String])"}}}])
+          reply (get (parse-replies (:out run)) 11)
+          result (call-value reply)
+          after-snapshot (code-reader/read-module-snapshot!
+                          port space checkout-root "fixture")
+          rendered (code-reader/render-module! beagle after-snapshot)]
+      (check! "replace-def replaces an existing top-level definition through checked publication"
+              (and (not (get-in reply [:result :isError]))
+                   (= "committed-projection-published" (:outcome result))))
+      (check! "replace-def republishes one updated definition at the original position"
+              (and (= 1 (count (re-seq #"\\(defrecord Point" (:source rendered))))
+                   (str/includes? (:source rendered) "label :- String")
+                   (= (:source rendered) (slurp source-path)))))
 
     (let [version-before (version! port space)
           facts-before (:facts
@@ -249,13 +238,42 @@
           bytes-before (java.nio.file.Files/readAllBytes (.toPath source-path))
           run (run-control
                runtime launch-env
-               [{:jsonrpc "2.0" :id 5 :method "tools/call"
+               [{:jsonrpc "2.0" :id 12 :method "tools/call"
+                 :params {:name "add-def"
+                          :arguments
+                          {:module "fixture"
+                           :form "(defrecord Point [x :- Int])"}}}])
+          reply (get (parse-replies (:out run)) 12)
+          result (call-value reply)
+          version-after (version! port space)
+          facts-after (:facts
+                       (gate/transformer-snapshot
+                        (code-reader/read-module-snapshot!
+                         port space checkout-root "fixture")))
+          bytes-after (java.nio.file.Files/readAllBytes (.toPath source-path))]
+      (check! "add-def rejects an existing top-level definition"
+              (and (get-in reply [:result :isError])
+                   (= "definition-already-exists" (:type result))))
+      (check! "failing add-def commits no triples and publishes no bytes"
+              (and (= version-before version-after)
+                   (= facts-before facts-after)
+                   (java.util.Arrays/equals bytes-before bytes-after))))
+
+    (let [version-before (version! port space)
+          facts-before (:facts
+                        (gate/transformer-snapshot
+                         (code-reader/read-module-snapshot!
+                          port space checkout-root "fixture")))
+          bytes-before (java.nio.file.Files/readAllBytes (.toPath source-path))
+          run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 3 :method "tools/call"
                  :params {:name "multi-set-body"
                           :arguments
                           {:module "fixture"
                            :edits [{:name "alpha" :body "\"bad\""}
                                    {:name "beta" :body "\"worse\""}]}}}])
-          reply (get (parse-replies (:out run)) 5)
+          reply (get (parse-replies (:out run)) 3)
           result (call-value reply)
           version-after (version! port space)
           facts-after (:facts
