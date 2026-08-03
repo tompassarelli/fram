@@ -21,6 +21,15 @@
 (defalias Tuple (Vec Any))
 (defalias Db (Map String (Set Tuple)))
 (defalias Substitution (Map String Any))
+(defalias HandleBucket (Map Any (Vec Int)))
+(defalias PositionIndex (Map Int HandleBucket))
+(defalias HandleTrie (Map Any Any))
+
+;; Candidate handles are private positions in one immutable relation vector.
+(defrecord CandidateSource
+  [rows: (Vec Tuple) positions: PositionIndex
+   spo: HandleTrie pos: HandleTrie osp: HandleTrie])
+(defalias CandidateSources (Map String CandidateSource))
 
 (def triple-relation: String "triple")
 (def occurrence-relation: String "occurrence")
@@ -307,13 +316,359 @@
           (recur (rest remaining))
           false)))))
 
-(defn fixpoint! [db0: Db rules: (Vec Rule)] -> Db
+(defn- fixpoint-oracle! [db0: Db rules: (Vec Rule)] -> Db
   (let [relations (rule-head-relations rules)]
     (loop [db db0]
       (let [next (derive-round! db rules)]
         (if (relations-stable? db next relations)
           next
           (recur next))))))
+
+(defn- append-handle
+  [index: HandleBucket key: Any handle: Int] -> HandleBucket
+  (update index key
+          (fn [current: (U (Vec Int) Nil)] -> (Vec Int)
+            (conj (or current []) handle))))
+
+(defn- add-position-handles
+  [index: PositionIndex tuple: Tuple handle: Int] -> PositionIndex
+  (loop [position 0 current index]
+    (if (>= position (count tuple))
+      current
+      (let [bucket (get current position {})]
+        (recur (inc position)
+               (assoc current position
+                      (append-handle bucket (nth tuple position) handle)))))))
+
+(defn- trie-add
+  [trie: HandleTrie tuple: Tuple order: (Vec Int) handle: Int] -> HandleTrie
+  (let [first-key (nth tuple (nth order 0))
+        second-key (nth tuple (nth order 1))
+        third-key (nth tuple (nth order 2))
+        first-node (get trie first-key {})
+        second-node (get first-node second-key {})
+        leaf (get second-node third-key [])]
+    (assoc trie first-key
+           (assoc first-node second-key
+                  (assoc second-node third-key (conj leaf handle))))))
+
+(defn- trie-node-handles [node: Any] -> (Vec Int)
+  (cond
+    [(nil? node) []]
+    [(vector? node) node]
+    [(map? node)
+     (reduce (fn [handles: (Vec Int) child: Any] -> (Vec Int)
+               (into handles (trie-node-handles child)))
+             [] (vec (vals node)))]
+    [:else []]))
+
+(defn- trie-probe [trie: HandleTrie prefix: (Vec Any)] -> (Vec Int)
+  (loop [node: Any trie remaining prefix]
+    (if (or (nil? node) (empty? remaining))
+      (trie-node-handles node)
+      (recur (get node (first remaining)) (rest remaining)))))
+
+(defn- empty-candidate-source [] -> CandidateSource
+  (->CandidateSource [] {} {} {} {}))
+
+(defn- candidate-source-add
+  [relation: String source: CandidateSource tuple: Tuple] -> CandidateSource
+  (let [handle (count (candidatesource-rows source))
+        with-row: CandidateSource
+        (assoc source :rows (conj (candidatesource-rows source) tuple))]
+    (if (and (= relation triple-relation) (= 3 (count tuple)))
+      (assoc with-row
+             :spo (trie-add (candidatesource-spo source) tuple [0 1 2] handle)
+             :pos (trie-add (candidatesource-pos source) tuple [1 2 0] handle)
+             :osp (trie-add (candidatesource-osp source) tuple [2 0 1] handle))
+      (assoc with-row
+             :positions (add-position-handles
+                         (candidatesource-positions source) tuple handle)))))
+
+(defn- candidate-source-add-rows
+  [relation: String source: CandidateSource tuples: (Set Tuple)] -> CandidateSource
+  (reduce (fn [current: CandidateSource tuple: Tuple] -> CandidateSource
+            (candidate-source-add relation current tuple))
+          source tuples))
+
+(defn- build-candidate-sources
+  [db: Db relations: (Vec String)] -> CandidateSources
+  (reduce (fn [sources: CandidateSources relation: String] -> CandidateSources
+            (assoc sources relation
+                   (candidate-source-add-rows
+                    relation (empty-candidate-source) (get db relation #{}))))
+          {} relations))
+
+(defn- add-delta-sources
+  [sources: CandidateSources delta: Db relations: (Vec String)] -> CandidateSources
+  (reduce (fn [current: CandidateSources relation: String] -> CandidateSources
+            (let [tuples (get delta relation #{})]
+              (if (empty? tuples)
+                current
+                (assoc current relation
+                       (candidate-source-add-rows
+                        relation
+                        (get current relation (empty-candidate-source))
+                        tuples)))))
+          sources relations))
+
+(defn- bound-term-value [term: QueryTerm subst: Substitution] -> Any
+  (let [name (queryterm-variable term)]
+    (if (some? name)
+      (if (contains? subst name) (get subst name) nil)
+      (queryterm-value term))))
+
+(defn- bound-prefix
+  [arguments: (Vec QueryTerm) order: (Vec Int)
+   subst: Substitution] -> (Vec Any)
+  (loop [remaining order prefix: (Vec Any) []]
+    (if (empty? remaining)
+      prefix
+      (let [value (bound-term-value (nth arguments (first remaining)) subst)]
+        (if (nil? value)
+          prefix
+          (recur (rest remaining) (conj prefix value)))))))
+
+(defn- triple-prefix-handles
+  [source: CandidateSource arguments: (Vec QueryTerm)
+   subst: Substitution] -> (U (Vec Int) Nil)
+  (let [spo-key (bound-prefix arguments [0 1 2] subst)
+        pos-key (bound-prefix arguments [1 2 0] subst)
+        osp-key (bound-prefix arguments [2 0 1] subst)
+        spo-count (count spo-key)
+        pos-count (count pos-key)
+        osp-count (count osp-key)]
+    (cond
+      [(and (= 0 spo-count) (and (= 0 pos-count) (= 0 osp-count))) nil]
+      [(and (>= spo-count pos-count) (>= spo-count osp-count))
+       (trie-probe (candidatesource-spo source) spo-key)]
+      [(>= pos-count osp-count)
+       (trie-probe (candidatesource-pos source) pos-key)]
+      [:else (trie-probe (candidatesource-osp source) osp-key)])))
+
+(defn- positional-handles
+  [source: CandidateSource arguments: (Vec QueryTerm)
+   subst: Substitution] -> (U (Vec Int) Nil)
+  (loop [position 0 best: (U (Vec Int) Nil) nil found false]
+    (if (>= position (count arguments))
+      (if found best nil)
+      (let [value (bound-term-value (nth arguments position) subst)]
+        (if (nil? value)
+          (recur (inc position) best found)
+          (let [candidate
+                (get (get (candidatesource-positions source) position {}) value [])]
+            (recur (inc position)
+                   (if (or (not found) (< (count candidate) (count best)))
+                     candidate best)
+                   true)))))))
+
+(defn- source-handles
+  [source: CandidateSource relation: String arguments: (Vec QueryTerm)
+   subst: Substitution] -> (U (Vec Int) Nil)
+  (if (and (= relation triple-relation) (= 3 (count arguments)))
+    (triple-prefix-handles source arguments subst)
+    (positional-handles source arguments subst)))
+
+(defn- relation-results-indexed!
+  [db: Db sources: CandidateSources literal: Literal
+   subst: Substitution] -> (Vec Substitution)
+  (let [relation (literal-relation literal)
+        arguments (literal-arguments literal)]
+    (if (literal-negated literal)
+      (if (contains? (get db relation #{}) (ground arguments subst)) [] [subst])
+      (let [source (get sources relation)]
+        (if (nil? source)
+          (reduce (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
+                    (let [matched (unify-arguments! arguments tuple subst)]
+                      (if (some? matched) (conj acc matched) acc)))
+                  [] (vec (get db relation #{})))
+          (let [rows-value (candidatesource-rows source)
+                handles (source-handles source relation arguments subst)]
+            (if (nil? handles)
+              (reduce
+               (fn [acc: (Vec Substitution) tuple: Tuple] -> (Vec Substitution)
+                 (let [matched (unify-arguments! arguments tuple subst)]
+                   (if (some? matched) (conj acc matched) acc)))
+               [] rows-value)
+              (reduce
+               (fn [acc: (Vec Substitution) handle: Int] -> (Vec Substitution)
+                 (let [tuple (nth rows-value handle)
+                       matched (unify-arguments! arguments tuple subst)]
+                   (if (some? matched) (conj acc matched) acc)))
+               [] handles))))))))
+
+(defn- literal-results-indexed!
+  [db: Db sources: CandidateSources literal: Literal
+   subst: Substitution] -> (Vec Substitution)
+  (query-check!)
+  (cond
+    [(= :relation (literal-kind literal))
+     (relation-results-indexed! db sources literal subst)]
+    [(= :comparison (literal-kind literal))
+     (if (comparison-result literal subst) [subst] [])]
+    [(= :builtin (literal-kind literal)) (builtin-results literal subst)]
+    [:else []]))
+
+(defn- body-results-indexed!
+  [db: Db sources: CandidateSources body: (Vec Literal)
+   seed: Substitution] -> (Vec Substitution)
+  (reduce
+   (fn [substitutions: (Vec Substitution) literal: Literal] -> (Vec Substitution)
+     (reduce (fn [acc: (Vec Substitution) subst: Substitution] -> (Vec Substitution)
+               (into acc (literal-results-indexed! db sources literal subst)))
+             [] substitutions))
+   [seed] body))
+
+(defn- derive-rule-indexed!
+  [db: Db sources: CandidateSources value: Rule] -> (Set Tuple)
+  (reduce (fn [acc: (Set Tuple) subst: Substitution] -> (Set Tuple)
+            (conj acc (ground (rule-head-arguments value) subst)))
+          #{} (body-results-indexed! db sources (rule-body value) {})))
+
+(defn- delta-relation-positions
+  [body: (Vec Literal) delta-relations: (Set String)] -> (Vec Int)
+  (loop [position 0 remaining body positions: (Vec Int) []]
+    (if (empty? remaining)
+      positions
+      (let [literal (first remaining)]
+        (recur (inc position) (rest remaining)
+               (if (and (= :relation (literal-kind literal))
+                        (not (literal-negated literal))
+                        (contains? delta-relations (literal-relation literal)))
+                 (conj positions position)
+                 positions))))))
+
+(defn- positive-relation-names [rules: (Vec Rule)] -> (Vec String)
+  (vec
+   (sort
+    (reduce
+     (fn [relations: (Set String) value: Rule] -> (Set String)
+       (reduce (fn [current: (Set String) literal: Literal] -> (Set String)
+                 (if (and (= :relation (literal-kind literal))
+                          (not (literal-negated literal)))
+                   (conj current (literal-relation literal))
+                   current))
+               relations (rule-body value)))
+     #{} rules))))
+
+(defn- body-results-pinned!
+  [db: Db sources: CandidateSources delta: Db delta-sources: CandidateSources
+   body: (Vec Literal) pin: Int] -> (Vec Substitution)
+  (loop [position 0 remaining body substitutions: (Vec Substitution) [{}]]
+    (if (empty? remaining)
+      substitutions
+      (let [literal (first remaining)
+            pinned (and (= position pin)
+                        (= :relation (literal-kind literal))
+                        (not (literal-negated literal)))
+            read-db (if pinned delta db)
+            read-sources (if pinned delta-sources sources)
+            next-substitutions
+            (reduce
+             (fn [acc: (Vec Substitution) subst: Substitution] -> (Vec Substitution)
+               (into acc
+                     (literal-results-indexed!
+                      read-db read-sources literal subst)))
+             [] substitutions)]
+        (recur (inc position) (rest remaining) next-substitutions)))))
+
+(defn- derive-rule-delta!
+  [db: Db sources: CandidateSources delta: Db delta-sources: CandidateSources
+   delta-relations: (Set String) value: Rule] -> (Set Tuple)
+  (let [head (rule-head-arguments value)
+        body (rule-body value)]
+    (reduce
+     (fn [derived: (Set Tuple) pin: Int] -> (Set Tuple)
+       (reduce (fn [current: (Set Tuple) subst: Substitution] -> (Set Tuple)
+                 (conj current (ground head subst)))
+               derived
+               (body-results-pinned! db sources delta delta-sources body pin)))
+     #{} (delta-relation-positions body delta-relations))))
+
+(defn- db-new-only [candidate: Db db: Db relations: (Vec String)] -> Db
+  (reduce
+   (fn [delta: Db relation: String] -> Db
+     (let [new-tuples
+           (reduce (fn [rows-value: (Set Tuple) tuple: Tuple] -> (Set Tuple)
+                     (if (contains? (get db relation #{}) tuple)
+                       rows-value
+                       (conj rows-value tuple)))
+                   #{} (get candidate relation #{}))]
+       (if (empty? new-tuples) delta (assoc delta relation new-tuples))))
+   {} relations))
+
+(defn- db-merge-delta [db: Db delta: Db relations: (Vec String)] -> Db
+  (reduce
+   (fn [current: Db relation: String] -> Db
+     (let [new-tuples (get delta relation #{})]
+       (if (empty? new-tuples)
+         current
+         (update current relation
+                 (fn [known: (U (Set Tuple) Nil)] -> (Set Tuple)
+                   (reduce (fn [rows-value: (Set Tuple) tuple: Tuple] -> (Set Tuple)
+                             (conj rows-value tuple))
+                           (or known #{}) new-tuples))))))
+   db relations))
+
+(defn- delta-empty? [delta: Db relations: (Vec String)] -> Bool
+  (loop [remaining relations]
+    (if (empty? remaining)
+      true
+      (if (empty? (get delta (first remaining) #{}))
+        (recur (rest remaining))
+        false))))
+
+(defn- derive-delta!
+  [db: Db sources: CandidateSources delta: Db rules: (Vec Rule)
+   relations: (Vec String) delta-relations: (Vec String)] -> Db
+  (let [delta-set (set delta-relations)
+        delta-sources (build-candidate-sources delta delta-relations)
+        candidate
+        (reduce
+         (fn [current: Db value: Rule] -> Db
+           (let [relation (rule-head-relation value)
+                 derived
+                 (derive-rule-delta!
+                  db sources delta delta-sources delta-set value)]
+             (update current relation
+                     (fn [known: (U (Set Tuple) Nil)] -> (Set Tuple)
+                       (reduce (fn [rows-value: (Set Tuple) tuple: Tuple] -> (Set Tuple)
+                                 (conj rows-value tuple))
+                               (or known #{}) derived)))))
+         {} rules)]
+    (db-new-only candidate db relations)))
+
+(defn fixpoint! [db0: Db rules: (Vec Rule)] -> Db
+  (let [relations (rule-head-relations rules)
+        read-relations (positive-relation-names rules)
+        head-set (set relations)
+        delta-relations
+        (vec (filter (fn [relation: String] -> Bool
+                       (contains? head-set relation))
+                     read-relations))
+        initial-sources (build-candidate-sources db0 read-relations)
+        seeded
+        (reduce
+         (fn [db: Db value: Rule] -> Db
+           (let [relation (rule-head-relation value)
+                 derived (derive-rule-indexed! db0 initial-sources value)]
+             (update db relation
+                     (fn [known: (U (Set Tuple) Nil)] -> (Set Tuple)
+                       (reduce (fn [rows-value: (Set Tuple) tuple: Tuple] -> (Set Tuple)
+                                 (conj rows-value tuple))
+                               (or known #{}) derived)))))
+         db0 rules)
+        delta0 (db-new-only seeded db0 relations)
+        seeded-sources (add-delta-sources initial-sources delta0 read-relations)]
+    (loop [db seeded sources seeded-sources delta delta0]
+      (if (delta-empty? delta delta-relations)
+        db
+        (let [next-delta
+              (derive-delta!
+               db sources delta rules relations delta-relations)]
+          (recur (db-merge-delta db next-delta relations)
+                 (add-delta-sources sources next-delta read-relations)
+                 next-delta))))))
 
 (defn run-rules! [propositions: (Vec t/Triple) rules: (Vec Rule)] -> Db
   (fixpoint! (edb propositions) rules))

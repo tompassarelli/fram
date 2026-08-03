@@ -1,6 +1,6 @@
 ;; datalog_diff_test.clj — DIFFERENTIAL / PROPERTY test: the indexed evaluator
-;; (d/fixpoint) must produce a SET-IDENTICAL least fixpoint to the retained
-;; scan-join oracle (d/fixpoint-oracle) on every program.
+;; (d/fixpoint!) must produce a SET-IDENTICAL least fixpoint to the retained
+;; scan-join oracle (d/fixpoint-oracle!) on every program.
 ;;
 ;; >=500 DETERMINISTIC generated programs (seeded java.util.Random, fixed seed →
 ;; identical corpus every run). Each program is a random EDB (db0) + random rules
@@ -11,7 +11,7 @@
 ;; frozen relation — exactly the stratified-safe case production enforces — which
 ;; makes the two evaluators' answers order-INdependent and thus directly comparable.
 ;;
-;; Both evaluators take db0 + rules directly (no store needed): fixpoint's public
+;; Both evaluators take db0 + rules directly (no store needed): fixpoint!'s public
 ;; signature is (db0, rules). We compare every relation in the union of both result
 ;; maps as sets. Any divergence is a real bug and fails the run with the program.
 ;;
@@ -20,9 +20,8 @@
 ;;   bb -cp out tests/datalog_diff_test.clj
 (require '[fram.datalog :as d])
 
-;; the retained scan-join oracle is a PRIVATE engine reference (not a public verb);
-;; reach it through its var. `oracle` has the same (db0, rules) signature as d/fixpoint.
-(def oracle #'fram.datalog/fixpoint-oracle)
+;; the retained scan-join oracle is a PRIVATE engine reference (not a public verb).
+(def oracle #'fram.datalog/fixpoint-oracle!)
 
 (def SEED 20260720)
 (def N-PROGRAMS 600)                      ; > the 500 bar
@@ -79,12 +78,26 @@
   (let [rules (vec (for [_ (range (inc (ri 4)))] (gen-rule)))]  ; 1..4 rules
     {:db0 (gen-edb) :rules rules}))
 
+(defn compile-term [value]
+  (if (map? value) (d/variable (:var value)) (d/constant value)))
+
+(defn compile-literal [{:keys [rel args neg]}]
+  ((if neg d/negated-literal d/relation-literal)
+   rel (mapv compile-term args)))
+
+(defn compile-rule [{:keys [head body]}]
+  (d/rule (:rel head) (mapv compile-term (:args head))
+          (mapv compile-literal body)))
+
+(defn compile-rules [rules] (mapv compile-rule rules))
+
 ;; --- differential comparison -------------------------------------------------
 (defn rel-set [db rel] (set (d/facts db rel)))
 
 (defn diff-program [{:keys [db0 rules]}]
-  (let [idx (d/fixpoint db0 rules)
-        ora (oracle db0 rules)
+  (let [typed-rules (compile-rules rules)
+        idx (d/fixpoint! db0 typed-rules)
+        ora (oracle db0 typed-rules)
         rels (into (set (keys idx)) (keys ora))
         mism (filter (fn [rel] (not= (rel-set idx rel) (rel-set ora rel))) rels)]
     {:ok (empty? mism)
@@ -115,9 +128,9 @@
 ;;     unrelated program does not pollute a repeated run.
 (def pgm-a (gen-program))
 (def pgm-b (gen-program))
-(def a1 (d/fixpoint (:db0 pgm-a) (:rules pgm-a)))
-(def _b (d/fixpoint (:db0 pgm-b) (:rules pgm-b)))
-(def a2 (d/fixpoint (:db0 pgm-a) (:rules pgm-a)))
+(def a1 (d/fixpoint! (:db0 pgm-a) (compile-rules (:rules pgm-a))))
+(def _b (d/fixpoint! (:db0 pgm-b) (compile-rules (:rules pgm-b))))
+(def a2 (d/fixpoint! (:db0 pgm-a) (compile-rules (:rules pgm-a))))
 (def leak-free (= a1 a2))
 
 ;; (b) deep recursion: 60-node chain closure = 60*59/2 = 1770 pairs, both agree.
@@ -128,8 +141,9 @@
    {:head {:rel "reach" :args [{:var "x"} {:var "z"}]}
     :body [{:rel "edge" :args [{:var "x"} {:var "y"}] :neg false}
            {:rel "reach" :args [{:var "y"} {:var "z"}] :neg false}]}])
-(def chain-idx (rel-set (d/fixpoint chain-db chain-rules) "reach"))
-(def chain-ora (rel-set (oracle chain-db chain-rules) "reach"))
+(def typed-chain-rules (compile-rules chain-rules))
+(def chain-idx (rel-set (d/fixpoint! chain-db typed-chain-rules) "reach"))
+(def chain-ora (rel-set (oracle chain-db typed-chain-rules) "reach"))
 (def chain-ok (and (= chain-idx chain-ora) (= 1770 (count chain-idx))))
 
 ;; (c) negation finite-complement: node & not(down) → up. Frozen base "down".
@@ -138,8 +152,9 @@
   [{:head {:rel "up" :args [{:var "n"}]}
     :body [{:rel "node" :args [{:var "n"}] :neg false}
            {:rel "down" :args [{:var "n"}] :neg true}]}])
-(def neg-idx (rel-set (d/fixpoint neg-db neg-rules) "up"))
-(def neg-ora (rel-set (oracle neg-db neg-rules) "up"))
+(def typed-neg-rules (compile-rules neg-rules))
+(def neg-idx (rel-set (d/fixpoint! neg-db typed-neg-rules) "up"))
+(def neg-ora (rel-set (oracle neg-db typed-neg-rules) "up"))
 (def neg-ok (and (= neg-idx neg-ora) (= #{["c"] ["d"]} neg-idx)))
 
 (def checks
