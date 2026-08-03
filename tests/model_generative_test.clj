@@ -304,6 +304,30 @@
             (diff :occurrence-resolution event (coord/occurrence co coordinate))))
         (:occurrences receipt)))
 
+(defn compare-temporal-projections [m co]
+  (let [root @(coord/coordinator-store co)
+        current (dec (:next-sequence m))
+        upper (quot current 2)
+        lower (max -1 (- upper 3))
+        context (store/new-term-store space-id)
+        _ (doseq [frame (store/transaction-frames-between root -1 upper)]
+            (store/replay-transaction! context frame))
+        postings (store/operation-postings root)
+        positions (store/operation-candidate-positions
+                   root lower upper nil nil postings)
+        actual-events
+        (mapv (fn [position]
+                (let [[coordinate action proposition]
+                      (store/occurrence-tuple-at root position)]
+                  (t/triple coordinate action proposition)))
+              positions)]
+    (or (diff :as-of-live-propositions
+              (model/store-live-propositions-as-of m upper)
+              (store/live-propositions context))
+        (diff :since-occurrence-events
+              (model/operation-events-between m lower upper)
+              actual-events))))
+
 (defn- guarded [f]
   (try
     {:value (f)}
@@ -342,7 +366,9 @@
         (let [restarted (coord/open-coordinator! (.getPath file) space-id)]
           (if-let [mismatch
                    (or (compare-projections m co true)
+                       (compare-temporal-projections m co)
                        (compare-projections m restarted true)
+                       (compare-temporal-projections m restarted)
                        ;; Replay determinism is byte-exact at the store level,
                        ;; not merely projection-equal.
                        (diff :cold-restart-term-store-dump
@@ -364,6 +390,8 @@
                        (when-not (:threw actual)
                          (or (diff :receipt receipt (:value actual))
                              (compare-projections (:model (:value expected)) co)
+                             (compare-temporal-projections
+                              (:model (:value expected)) co)
                              (compare-occurrence-resolution co receipt))))]
             {:mismatch (assoc mismatch :index index :op op)}
             (recur (inc index) (:model (:value expected))

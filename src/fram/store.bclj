@@ -423,6 +423,123 @@
       (t/assertion-occurrence occurrence proposition)
       (t/retraction-occurrence occurrence proposition))))
 
+(defn- first-transaction-after
+  [transactions: (Vec t/TransactionRow) sequence: Int] -> Int
+  (loop [low 0 high (count transactions)]
+    (if (>= low high)
+      low
+      (let [middle (quot (+ low high) 2)
+            candidate (t/transactionrow-sequence (nth transactions middle))]
+        (if (<= candidate sequence)
+          (recur (inc middle) high)
+          (recur low middle))))))
+
+(defn operation-range-bounds
+  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int] -> (Vec Int)
+  (let [transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
+        operations: (Vec t/OperationRow) (t/termstore-operations store)
+        start-transaction (first-transaction-after transactions lower-exclusive)
+        end-transaction (first-transaction-after transactions upper-inclusive)
+        start (if (>= start-transaction (count transactions))
+                (count operations)
+                (t/transactionrow-first-operation
+                 (nth transactions start-transaction)))
+        end (if (>= end-transaction (count transactions))
+              (count operations)
+              (t/transactionrow-first-operation
+               (nth transactions end-transaction)))]
+    [start end]))
+
+(defn transaction-frames-between
+  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int]
+  -> (Vec t/TransactionFrame)
+  (let [transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
+        first (first-transaction-after transactions lower-exclusive)
+        end (first-transaction-after transactions upper-inclusive)]
+    (mapv
+     (fn [row: t/TransactionRow] -> t/TransactionFrame
+       (let [start (t/transactionrow-first-operation row)
+             stop (+ start (t/transactionrow-operation-count row))]
+         (t/->TransactionFrame
+          (t/transactionrow-sequence row)
+          (mapv
+           (fn [operation: t/OperationRow] -> t/CommitOperation
+             (t/->CommitOperation
+              (t/operationrow-action operation)
+              (resolve-triple-handle
+               store (t/operationrow-triple-handle operation))))
+           (subvec (t/termstore-operations store) start stop)))))
+     (subvec transactions first end))))
+
+(defn operation-postings [store: t/TermStore] -> (Map Int (Vec Int))
+  (loop [position 0 postings: (Map Int (Vec Int)) {}]
+    (if (>= position (count (t/termstore-operations store)))
+      postings
+      (let [handle
+            (t/operationrow-triple-handle
+             (nth (t/termstore-operations store) position))]
+        (recur (inc position)
+               (update postings handle
+                       (fn [known: (U (Vec Int) Nil)] -> (Vec Int)
+                         (conj (or known []) position))))))))
+
+(defn- lower-bound-position [positions: (Vec Int) target: Int] -> Int
+  (loop [low 0 high (count positions)]
+    (if (>= low high)
+      low
+      (let [middle (quot (+ low high) 2)]
+        (if (< (nth positions middle) target)
+          (recur (inc middle) high)
+          (recur low middle))))))
+
+(defn- exact-occurrence-position [store: t/TermStore coordinate: Any] -> Int
+  (if (not (t/occurrence-coordinate? coordinate))
+    -1
+    (let [transaction: t/Triple (t/triple-slot0 coordinate)
+          space: String (t/triple-slot0 transaction)
+          sequence: Int (t/triple-slot2 transaction)
+          ordinal: Int (t/triple-slot2 coordinate)
+          transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
+          position (first-transaction-after transactions (dec sequence))]
+      (if (or (not (= space (t/termstore-space-id store)))
+              (>= position (count transactions)))
+        -1
+        (let [row: t/TransactionRow (nth transactions position)]
+          (if (and (= sequence (t/transactionrow-sequence row))
+                   (< ordinal (t/transactionrow-operation-count row)))
+            (+ (t/transactionrow-first-operation row) ordinal)
+            -1))))))
+
+(defn operation-candidate-positions
+  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int
+   coordinate: Any proposition: Any postings: (Map Int (Vec Int))] -> (Vec Int)
+  (let [[start end] (operation-range-bounds store lower-exclusive upper-inclusive)
+        exact (when (some? coordinate) (exact-occurrence-position store coordinate))
+        proposition-handle
+        (when (some? proposition) (known-term-handle store proposition))
+        posted: (Vec Int)
+        (if (some? proposition-handle) (get postings proposition-handle []) [])
+        from (lower-bound-position posted start)
+        until (lower-bound-position posted end)
+        candidates
+        (cond
+          [(some? exact) (if (and (>= exact start) (< exact end)) [exact] [])]
+          [(some? proposition)
+           (if (some? proposition-handle) (subvec posted from until) [])]
+          [:else (vec (range start end))])]
+    (if (and (some? exact) (some? proposition))
+      (filterv
+       (fn [position: Int] -> Bool
+         (= proposition-handle
+            (t/operationrow-triple-handle
+             (nth (t/termstore-operations store) position))))
+       candidates)
+      candidates)))
+
+(defn occurrence-tuple-at [store: t/TermStore position: Int] -> (Vec Any)
+  (let [event: t/Triple (event-at store position)]
+    [(t/triple-slot0 event) (t/triple-slot1 event) (t/triple-slot2 event)]))
+
 (defn operation-occurrences [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
   (let [store: t/TermStore (deref ctx)]
     (loop [position 0 events: (Vec t/Triple) []]

@@ -10,7 +10,8 @@
             [fram.kernel :as kernel]
             [fram.query :as query]
             [fram.store :as term-store]
-            [fram.types :as t])
+            [fram.types :as t]
+            [fri-port :as fri])
   (:import [java.net ServerSocket Socket]
            [java.io ByteArrayOutputStream InputStream OutputStream Writer]
            [java.nio ByteBuffer ByteOrder]
@@ -40,6 +41,10 @@
 (def ^:private query-result-version-limit 4)
 (def ^:private query-result-per-version-limit 8)
 (def ^:private query-result-byte-limit (* 64 1024 1024))
+(def query-archive-manifest (atom []))
+(def ^:private query-archive-coordinators (atom {}))
+(def ^:private query-archive-magic
+  (.getBytes "FRAMQAR1" java.nio.charset.StandardCharsets/UTF_8))
 
 (defn- empty-query-result-cache [generation]
   {:generation generation
@@ -55,7 +60,7 @@
 (def query-result-cache (atom (empty-query-result-cache 0)))
 
 (declare start-write-sequencer! stop-write-sequencer! sequence-mutation!
-         response-version)
+         response-version read-query-archive-manifest!)
 
 ;; Request observability: the slow threshold is checked before the quiet gate,
 ;; so a stalled request still leaves a trace under FRAM_DAEMON_QUIET.
@@ -71,6 +76,8 @@
 (def request-log-path (env-string "FRAM_DAEMON_LOG"))
 (def request-log-quiet? (= "1" (System/getenv "FRAM_DAEMON_QUIET")))
 (def slow-request-ms (env-long "FRAM_SLOW_MS" 1000))
+(def query-checkpoint-interval
+  (max 1 (env-long "FRAM_QUERY_CHECKPOINT_INTERVAL" 1000)))
 
 (def request-stats
   (atom {:requests 0 :errors 0 :slow 0 :ops {} :max-ms 0 :last-ms 0 :last nil}))
@@ -207,6 +214,8 @@
   (stop-write-sequencer!)
   (reset! active-requests {})
   (drop-query-caches!)
+  (reset! query-archive-manifest [])
+  (reset! query-archive-coordinators {})
   (reset! published-snapshot nil)
   (coord-writer-authority/release! @writer-authority)
   (reset! writer-authority nil)
@@ -240,6 +249,7 @@
                      canonical expected-space {:repair-torn? (= :active role)})]
          (advance-daemon-generation!)
          (reset! coordinator opened)
+         (read-query-archive-manifest! opened)
          (publish-snapshot! opened)
          (reset! coordinator-role role)
          (reset! writer-authority authority)
@@ -602,13 +612,219 @@
       (daemon-fail! (query/error-code error) (query/error-message error) {}))
     plan))
 
-(defn- occurrence-sequence [event]
-  (-> event kernel/occurrence-of t/triple-slot0 t/triple-slot2))
+(defn- query-checkpoint-directory [co]
+  (when-let [log (:log co)]
+    (io/file (str log ".query-checkpoints"))))
 
-(defn- event-operation [event]
-  (if (kernel/assertion-occurrence? event)
-    (term-store/assert-operation (kernel/proposition-of event))
-    (term-store/retract-operation (kernel/proposition-of event))))
+(defn- query-checkpoint-version [^java.io.File file]
+  (some->> (.getName file)
+           (re-matches #"snapshot-([0-9]+)\.fri")
+           second
+           Long/parseLong))
+
+(defn- query-checkpoint-files [co upper-inclusive]
+  (if-let [directory (query-checkpoint-directory co)]
+    (->> (or (.listFiles directory) (make-array java.io.File 0))
+         (keep (fn [file]
+                 (when-let [version (query-checkpoint-version file)]
+                   (when (<= version upper-inclusive) [version file]))))
+         (sort-by first >))
+    []))
+
+(defn- query-checkpoint-source! [co version]
+  (let [{:keys [space-id fingerprint valid-bytes sequence]}
+        (coord/triple-log-prefix-source! (:log co) version)]
+    {:binding (fri/source-binding space-id fingerprint valid-bytes)
+     :sequence sequence}))
+
+(defn- load-query-checkpoint-root! [co upper-inclusive]
+  (some
+   (fn [[version file]]
+     (try
+       (let [{:keys [binding sequence]}
+             (query-checkpoint-source! co version)
+             image (fri/open-fri! (.getPath ^java.io.File file) binding)
+             context (term-store/new-term-store (coord/coordinator-space co))]
+         (fri/restore-store! image context)
+         (let [root @context]
+           (when (= sequence (dec (t/termstore-next-sequence root))) root)))
+       (catch Throwable _ nil)))
+   (query-checkpoint-files co upper-inclusive)))
+
+(defn- prune-query-checkpoints! [co]
+  (doseq [[_ file] (drop query-page-snapshot-limit
+                         (query-checkpoint-files co Long/MAX_VALUE))]
+    (try (.delete ^java.io.File file) (catch Throwable _ nil))))
+
+(defn- write-query-checkpoint! [co version root]
+  (when (and (:log co)
+             (pos? version)
+             (zero? (mod version query-checkpoint-interval)))
+    (try
+      (let [directory (query-checkpoint-directory co)
+            _ (.mkdirs ^java.io.File directory)
+            path (.getPath (io/file directory (str "snapshot-" version ".fri")))
+            {:keys [binding]} (query-checkpoint-source! co version)]
+        (fri/write-fri! (term-store/dump-term-store (atom root)) path binding)
+        (prune-query-checkpoints! co))
+      (catch Throwable _ nil)))
+  root)
+
+(defn- query-archive-directory [co]
+  (io/file (str (:log co) ".query-archives")))
+
+(defn- query-archive-manifest-file [co]
+  (io/file (query-archive-directory co) "ranges.v1"))
+
+(defn- write-archive-text! [^java.io.DataOutputStream output value]
+  (let [bytes (.getBytes (str value) java.nio.charset.StandardCharsets/UTF_8)]
+    (.writeInt output (alength bytes))
+    (.write output bytes)))
+
+(defn- read-archive-text! [^java.io.DataInputStream input]
+  (let [length (.readInt input)]
+    (when (or (neg? length) (> length 1048576))
+      (throw (ex-info "query archive manifest string is invalid"
+                      {:type :query/archive-unavailable})))
+    (let [bytes (byte-array length)]
+      (.readFully input bytes)
+      (String. bytes java.nio.charset.StandardCharsets/UTF_8))))
+
+(defn- write-query-archive-manifest! [co entries]
+  (let [directory (query-archive-directory co)
+        _ (.mkdirs ^java.io.File directory)
+        target (query-archive-manifest-file co)
+        temporary (io/file directory "ranges.v1.tmp")]
+    (with-open [file-output (java.io.FileOutputStream. temporary)
+                output (java.io.DataOutputStream.
+                        (java.io.BufferedOutputStream. file-output))]
+      (.write output query-archive-magic)
+      (.writeInt output (count entries))
+      (doseq [{:keys [lower upper expired path fingerprint]} entries]
+        (.writeLong output lower)
+        (.writeLong output upper)
+        (.writeBoolean output (boolean expired))
+        (write-archive-text! output path)
+        (write-archive-text! output fingerprint))
+      (.flush output)
+      (.force (.getChannel file-output) true))
+    (java.nio.file.Files/move
+     (.toPath temporary) (.toPath target)
+     (into-array java.nio.file.CopyOption
+                 [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                  java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+    (reset! query-archive-manifest entries)
+    entries))
+
+(defn- read-query-archive-manifest! [co]
+  (let [file (query-archive-manifest-file co)]
+    (if-not (.isFile file)
+      (reset! query-archive-manifest [])
+      (with-open [input (java.io.DataInputStream.
+                         (java.io.BufferedInputStream.
+                          (java.io.FileInputStream. file)))]
+        (let [magic (byte-array (alength query-archive-magic))
+              _ (.readFully input magic)
+              count-value (.readInt input)]
+          (when (or (not (java.util.Arrays/equals magic query-archive-magic))
+                    (neg? count-value) (> count-value 100000))
+            (daemon-fail! :query/archive-unavailable
+                          "query archive range manifest is invalid" {}))
+          (reset!
+           query-archive-manifest
+           (mapv (fn [_]
+                   {:lower (.readLong input)
+                    :upper (.readLong input)
+                    :expired (.readBoolean input)
+                    :path (read-archive-text! input)
+                    :fingerprint (read-archive-text! input)})
+                 (range count-value))))))))
+
+(defn seal-query-epoch!
+  "Seal a canonical inclusive prefix and publish its range before cache GC."
+  [upper-inclusive]
+  (let [co @coordinator
+        head (current-version co)]
+    (when (or (neg? upper-inclusive) (> upper-inclusive head))
+      (daemon-fail! :query-invalid-snapshot
+                    "query epoch cut is outside available history" {}))
+    (let [{:keys [valid-bytes fingerprint]}
+          (coord/triple-log-prefix-source! (:log co) upper-inclusive)
+          directory (query-archive-directory co)
+          _ (.mkdirs ^java.io.File directory)
+          target (io/file directory (str "epoch-through-" upper-inclusive ".framlog"))
+          temporary (io/file directory (str ".epoch-through-" upper-inclusive ".tmp"))
+          bytes (java.nio.file.Files/readAllBytes
+                 (.toPath (io/file (:log co))))
+          prefix (java.util.Arrays/copyOfRange bytes 0 valid-bytes)
+          prior (vec (remove #(= upper-inclusive (:upper %))
+                             @query-archive-manifest))
+          lower (if-let [previous (last (sort-by :upper prior))]
+                  (inc (:upper previous)) 0)
+          entry {:lower lower :upper upper-inclusive :expired false
+                 :path (.getCanonicalPath target)
+                 :fingerprint fingerprint}
+          entries (vec (sort-by :lower (conj prior entry)))]
+      (with-open [output (java.io.FileOutputStream. temporary)]
+        (.write output prefix)
+        (.flush output)
+        (.force (.getChannel output) true))
+      (java.nio.file.Files/move
+       (.toPath temporary) (.toPath target)
+       (into-array java.nio.file.CopyOption
+                   [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                    java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+      (write-query-archive-manifest! co entries)
+      (reset! query-archive-coordinators {})
+      (drop-query-caches!)
+      entry)))
+
+(defn expire-query-epoch!
+  "Mark one sealed range unavailable by retention policy; canonical deletion is separate."
+  [upper-inclusive]
+  (let [co @coordinator
+        entries (mapv (fn [entry]
+                        (cond-> entry
+                          (= upper-inclusive (:upper entry))
+                          (assoc :expired true)))
+                      @query-archive-manifest)]
+    (write-query-archive-manifest! co entries)
+    (reset! query-archive-coordinators {})
+    (drop-query-caches!)
+    entries))
+
+(defn- query-archive-entry [version]
+  (some #(when (<= (:lower %) version (:upper %)) %) @query-archive-manifest))
+
+(defn- query-history-coordinator! [active version]
+  (if-let [{:keys [expired path fingerprint upper] :as entry}
+           (query-archive-entry version)]
+    (do
+      (when expired
+        (daemon-fail! :query/snapshot-expired
+                      "query snapshot was removed by explicit retention policy"
+                      {:range [(:lower entry) upper]}))
+      (or (get @query-archive-coordinators [path fingerprint])
+          (try
+            (let [source (coord/triple-log-prefix-source! path upper)]
+              (when-not (= fingerprint (:fingerprint source))
+                (daemon-fail! :query/archive-unavailable
+                              "query archive fingerprint does not match its manifest"
+                              {:range [(:lower entry) upper]}))
+              (let [opened (coord/open-coordinator!
+                            path (coord/coordinator-space active))]
+                (swap! query-archive-coordinators
+                       assoc [path fingerprint] opened)
+                opened))
+            (catch Throwable error
+              (if (contains? #{:query/archive-unavailable
+                               :query/snapshot-expired}
+                             (:fram/code (ex-data error)))
+                (throw error)
+                (daemon-fail! :query/archive-unavailable
+                              "query archive is temporarily unavailable"
+                              {:range [(:lower entry) upper]}))))))
+    active))
 
 (defn- replayed-store-root! [co version]
   (let [head (current-version co)]
@@ -617,16 +833,18 @@
                     "query snapshot is outside available history" {}))
     (if (= version head)
       @(coord/coordinator-store co)
-      (let [context (term-store/new-term-store (coord/coordinator-space co))
-            grouped (group-by occurrence-sequence
-                              (filterv #(<= (occurrence-sequence %) version)
-                                       (operation-occurrences co)))]
-        (doseq [sequence (sort (keys grouped))]
-          (term-store/replay-transaction!
-           context
-           (term-store/transaction-frame
-            sequence (mapv event-operation (get grouped sequence)))))
-        @context))))
+      (let [history-co (query-history-coordinator! co version)
+            head-root @(coord/coordinator-store history-co)
+            base (load-query-checkpoint-root! history-co version)
+            context (if base
+                      (atom base)
+                      (term-store/new-term-store
+                       (coord/coordinator-space history-co)))
+            lower-exclusive (dec (t/termstore-next-sequence @context))]
+        (doseq [frame (term-store/transaction-frames-between
+                       head-root lower-exclusive version)]
+          (term-store/replay-transaction! context frame))
+        (write-query-checkpoint! history-co version @context)))))
 
 (defn- snapshot-image [version root]
   (let [context (atom root)]
@@ -1108,9 +1326,9 @@
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
         build #(let [co (coord/store-view @coordinator (:root snapshot))
-                     root (or (when page (cached-query-page-root version))
-                              (replayed-store-root! co version))
-                     _ (when page (retain-query-page-root! version root))
+                     root (or (cached-query-page-root version)
+                              (retain-query-page-root!
+                               version (replayed-store-root! co version)))
                      view (coord/store-view co root)]
                  (collect-rows (coord/live-propositions view)
                                (fn [row] (scan-match? options row))
@@ -1132,9 +1350,9 @@
         cache-snapshot (assoc (select-keys snapshot [:generation :space])
                               :version version)
         build #(let [co (coord/store-view @coordinator (:root snapshot))
-                     root (or (when page (cached-query-page-root version))
-                              (replayed-store-root! co version))
-                     _ (when page (retain-query-page-root! version root))
+                     root (or (cached-query-page-root version)
+                              (retain-query-page-root!
+                               version (replayed-store-root! co version)))
                      view (coord/store-view co root)]
                  (collect-rows (coord/history view)
                                kernel/operation-occurrence?
@@ -1171,18 +1389,18 @@
         control (datalog/query-control 10000000 timeout)
         build
         (if direct?
-          #(let [root (or (when page (cached-query-page-root version))
-                          (replayed-store-root! co version))]
-             (when page (retain-query-page-root! version root))
+          #(let [root (or (cached-query-page-root version)
+                          (retain-query-page-root!
+                           version (replayed-store-root! co version)))]
              (one-triple-query-rows root direct-pattern cancellation))
           #(do
              (reset! (:query-control cancellation) control)
              (when @(:cancelled cancellation)
                (datalog/cancel-query! control :request-cancelled))
              (try
-               (let [root (or (when page (cached-query-page-root version))
-                              (replayed-store-root! co version))
-                     _ (when page (retain-query-page-root! version root))
+               (let [root (or (cached-query-page-root version)
+                              (retain-query-page-root!
+                               version (replayed-store-root! co version)))
                      snapshot-data (snapshot-image version root)
                      projection (query/project-with-occurrences
                                  (:propositions snapshot-data)
@@ -1442,7 +1660,7 @@
 
 (def ^:private retryable-error-codes
   #{:rpc/conflict :rpc/cancelled :query-cancelled :query-time-limit
-    :query-work-limit :durability-ambiguous})
+    :query-work-limit :query/archive-unavailable :durability-ambiguous})
 
 (defn- response-version []
   (or (:version @published-snapshot) 0))

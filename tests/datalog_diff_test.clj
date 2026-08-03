@@ -18,7 +18,9 @@
 ;; Also probes, explicitly: index lifecycle/no-leak (repeated + interleaved runs are
 ;; identical and independent), deep recursion, and negation finite-complement.
 ;;   bb -cp out tests/datalog_diff_test.clj
-(require '[fram.datalog :as d])
+(require '[fram.datalog :as d]
+         '[fram.store :as store]
+         '[fram.types :as t])
 
 ;; the retained scan-join oracle is a PRIVATE engine reference (not a public verb).
 (def oracle #'fram.datalog/fixpoint-oracle!)
@@ -157,8 +159,72 @@
 (def neg-ora (rel-set (oracle neg-db typed-neg-rules) "up"))
 (def neg-ok (and (= neg-idx neg-ora) (= #{["c"] ["d"]} neg-idx)))
 
+;; The temporal arms compare the same lazy candidate source used by rpc/query
+;; against the retained full-scan oracle without increasing this gate's 7 bars.
+(def temporal-context (store/new-term-store "datalog-time-travel"))
+(def temporal-p (t/triple "subject" "predicate" "value"))
+(def temporal-q (t/triple "other" "predicate" "value"))
+(doseq [frame [(store/transaction-frame
+                1 [(store/assert-operation temporal-p)])
+               (store/transaction-frame
+                2 [(store/assert-operation temporal-q)
+                   (store/retract-operation temporal-p)])
+               (store/transaction-frame
+                4 [(store/assert-operation temporal-p)])]]
+  (store/replay-transaction! temporal-context frame))
+(def temporal-root @temporal-context)
+(def temporal-postings (store/operation-postings temporal-root))
+
+(defn temporal-source [lower upper]
+  (d/external-candidate-source
+   (fn [values]
+     (store/operation-candidate-positions
+      temporal-root lower upper (nth values 0 nil) (nth values 2 nil)
+      temporal-postings))
+   (fn [position] (store/occurrence-tuple-at temporal-root position))))
+
+(defn temporal-rows [lower upper]
+  (into #{}
+        (map #(store/occurrence-tuple-at temporal-root %))
+        (store/operation-candidate-positions
+         temporal-root lower upper nil nil temporal-postings)))
+
+(defn temporal-rule [coordinate action proposition]
+  (let [arguments [(or coordinate (d/variable "c"))
+                   (or action (d/variable "a"))
+                   (or proposition (d/variable "p"))]]
+    (d/rule "temporal-result" arguments
+            [(d/relation-literal d/occurrence-relation arguments)])))
+
+(def temporal-arms
+  [[-1 1 (temporal-rule nil nil nil)]
+   [-1 2 (temporal-rule nil nil (d/constant temporal-p))]
+   [-1 4 (temporal-rule nil (d/constant :kernel/asserts) nil)]
+   [1 4 (temporal-rule nil nil nil)]
+   [2 4 (temporal-rule nil nil (d/constant temporal-p))]
+   [1 2 (temporal-rule nil (d/constant :kernel/retracts) nil)]
+   [-1 4 (temporal-rule
+           (d/constant
+            (t/occurrence-coordinate
+             (t/transaction-coordinate "datalog-time-travel" 2) 1))
+           nil nil)]])
+
+(def temporal-ok
+  (every?
+   (fn [[lower upper rule]]
+     (let [db0 {d/occurrence-relation #{}}
+           indexed (d/fixpoint-sourced!
+                    db0 {d/occurrence-relation (temporal-source lower upper)} [rule])
+           scanned (oracle
+                    {d/occurrence-relation (temporal-rows lower upper)} [rule])]
+       (= (rel-set indexed "temporal-result")
+          (rel-set scanned "temporal-result"))))
+   temporal-arms))
+
 (def checks
-  [[(str "differential: all " N-PROGRAMS " generated programs match the oracle") (empty? fails)]
+  [[(str "differential: all " N-PROGRAMS
+         " generated programs plus as-of/since arms match the oracle")
+    (and (empty? fails) temporal-ok)]
    ["corpus is non-trivial: >=300 programs derive facts"          (>= n-derived 300)]
    ["corpus exercises recursion: >=150 recursive programs"        (>= n-recursive 150)]
    ["corpus exercises negation: >=100 programs with negation"     (>= n-negated 100)]

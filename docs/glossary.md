@@ -28,7 +28,7 @@
 
 **world** — A world is the historical name for a named history that can branch into immutable versions, each deciding which facts a query sees without promising those facts agree; it is not a current kernel primitive or FRAMRPC operation.
 
-**epoch (planned)** — An epoch is a planned archival cut that will keep only the data chosen for retention in smaller active stores while preserving the original logs in a reversible cold archive.
+**epoch** — An epoch is an inclusive transaction-sequence range sealed as a canonical FRAMLOG segment and published through a fingerprinted range manifest. Completed epochs are retained indefinitely by default; active-store compaction remains a separate operational step.
 
 **Fram server** — A Fram server is a long-running process that loads one store, serves its private data protocol, and appends accepted changes only when it holds writer authority.
 

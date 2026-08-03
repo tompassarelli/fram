@@ -1,6 +1,6 @@
 # Query reference
 
-**Status:** Current source-head query contract.
+**Status:** Current source-head and transaction-sequence query contract.
 
 A query is structured data compiled into a closed typed plan. The CLI accepts
 one EDN map; JSON adapters accept the equivalent JSON shape. Both lower Terms,
@@ -107,8 +107,27 @@ The history relation has the same three-cell shape:
 
 `where` is an occurrence-coordinate Triple, `action` is
 `:kernel/asserts` or `:kernel/retracts`, and `value` is the proposition Triple.
-The native query request may select a logical `as-of` sequence. Current-state is
-the default.
+The native query request carries exactly one view selector inside its
+`:rpc/query` payload; FRAMRPC remains a closed 13-operation protocol:
+
+```text
+:query/current
+:query/as-of U
+:query/since L upper       upper := :query/current | :query/as-of U
+```
+
+`:query/current` pins the head sequence `U` at request start. `:query/as-of U`
+reads state after transaction `U`, inclusive. In both views, `triple` is the
+live state at `U` and `occurrence` contains rows whose transaction sequence is
+at most `U`. `:query/since L upper` keeps the same state at the resolved upper
+bound and restricts `occurrence` to the deterministic interval `(L,U]`.
+Transaction sequence is the selector; wall-clock Instants remain metadata.
+
+Negative, future, or reversed bounds fail as `:query-invalid-snapshot`.
+Unavailable sealed history is retryable `:query/archive-unavailable`; history
+removed by an explicit retention decision is non-retryable
+`:query/snapshot-expired`. Completed epochs are retained indefinitely by
+default.
 
 ## Negation
 
@@ -182,10 +201,19 @@ wire-byte limits.
 
 Nonaggregate results have deterministic Term ordering. Page cursors encode the
 last row key, and the coordinator pins continuation reads to the same snapshot.
-A cursor is opaque to clients. The coordinator caches each complete ordered
-result by daemon generation, SpaceId, snapshot version, operation, and canonical
-request digest; a continuation slices that vector rather than rerunning the
-plan. Cache eviction changes execution cost, not the pinned answer.
+A cursor is opaque to clients and binds both the resolved upper sequence and
+the lower-exclusive occurrence bound. The coordinator caches each complete
+ordered result by daemon generation, SpaceId, resolved view, operation, and
+canonical request digest; current and as-of selectors resolved to the same
+view share an entry, while distinct `since` lower bounds do not. A continuation
+slices that vector rather than rerunning the plan. Cache eviction changes
+execution cost, not the pinned answer.
+
+Historical state is reconstructed from the newest FRI2 checkpoint at or before
+`U` whose `{SpaceId, canonical-prefix sha256, valid-bytes}` binding validates,
+then by replaying only its transaction tail. Corrupt, stale, or missing derived
+checkpoints fall back to canonical replay. Sealed epochs use the same exact
+prefix binding through a fingerprinted binary range manifest.
 
 The executable contract is
 [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj); native

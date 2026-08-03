@@ -245,16 +245,18 @@
               _ (.get buffer space-bytes)
               space-id (strict-utf8-string space-bytes "SpaceId")
               header-bytes (.position buffer)]
-          (loop [frames [] valid-bytes header-bytes]
+          (loop [frames [] valid-bytes header-bytes prefix-ends {}]
             (let [offset (.position buffer)
                   remaining (.remaining buffer)]
               (cond
                 (zero? remaining)
                 {:space-id space-id :frames frames :valid-bytes valid-bytes
+                 :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail nil}
 
                 (< remaining 4)
                 {:space-id space-id :frames frames :valid-bytes valid-bytes
+                 :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail {:offset offset :bytes remaining
                              :reason :torn-frame-length}}
 
@@ -265,6 +267,7 @@
                            {:path path :offset offset :length payload-length}))
                   (if (< (.remaining buffer) (+ payload-length 4))
                     {:space-id space-id :frames frames :valid-bytes valid-bytes
+                     :header-bytes header-bytes :prefix-ends prefix-ends
                      :torn-tail {:offset offset :bytes (- (alength bytes) offset)
                                  :reason :torn-transaction-frame}}
                     (let [payload (byte-array (int payload-length))
@@ -277,9 +280,10 @@
                         (fail! :corrupt-triple-log "FRAMLOG frame CRC does not match"
                                {:path path :offset offset
                                 :stored stored-crc :actual actual-crc}))
-                      (recur (conj frames
-                                   (decode-transaction-payload payload offset))
-                             (.position buffer))))))))))
+                      (let [frame (decode-transaction-payload payload offset)
+                            end (.position buffer)]
+                        (recur (conj frames frame) end
+                               (assoc prefix-ends (:tx-seq frame) end)))))))))))
       (catch Throwable error
         (if (instance? clojure.lang.ExceptionInfo error)
           (throw error)
@@ -300,6 +304,27 @@
   "Return the immutable SpaceId of a validated FRAMLOG generation."
   [path]
   (:space-id (read-triple-log! path)))
+
+(defn triple-log-prefix-source!
+  "Bind an inclusive transaction-sequence prefix to its exact canonical bytes."
+  [path upper-inclusive]
+  (let [file (.getCanonicalFile (java.io.File. (str path)))
+        parsed (read-triple-log! (.getPath file))
+        sequence (reduce (fn [known frame]
+                           (let [candidate (:tx-seq frame)]
+                             (if (<= candidate upper-inclusive) candidate known)))
+                         nil (:frames parsed))
+        valid-bytes (if (some? sequence)
+                      (get (:prefix-ends parsed) sequence)
+                      (:header-bytes parsed))
+        bytes (java.nio.file.Files/readAllBytes (.toPath file))
+        prefix (java.util.Arrays/copyOfRange bytes 0 valid-bytes)
+        digest (.digest (java.security.MessageDigest/getInstance "SHA-256") prefix)
+        fingerprint (apply str (map #(format "%02x" (bit-and % 255)) digest))]
+    {:space-id (:space-id parsed)
+     :sequence (or sequence 0)
+     :valid-bytes valid-bytes
+     :fingerprint fingerprint}))
 
 (defn- write-header! [^java.io.OutputStream out space-id]
   (let [space-bytes (strict-utf8-bytes space-id "SpaceId")]

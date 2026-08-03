@@ -261,6 +261,71 @@
    proposition (resolve-triple-handle store (t/operationrow-triple-handle row))]
   (if (= t/assert-action (t/operationrow-action row)) (t/assertion-occurrence occurrence proposition) (t/retraction-occurrence occurrence proposition))))
 
+(defn- first-transaction-after [transactions sequence]
+  (loop [low 0
+   high (count transactions)]
+  (if (>= low high) low (let [middle (quot (+ low high) 2)
+   candidate (t/transactionrow-sequence (nth transactions middle))]
+  (if (<= candidate sequence) (recur (inc middle) high) (recur low middle))))))
+
+(defn operation-range-bounds [store lower-exclusive upper-inclusive]
+  (let [transactions (t/termstore-transactions store)
+   operations (t/termstore-operations store)
+   start-transaction (first-transaction-after transactions lower-exclusive)
+   end-transaction (first-transaction-after transactions upper-inclusive)
+   start (if (>= start-transaction (count transactions)) (count operations) (t/transactionrow-first-operation (nth transactions start-transaction)))
+   end (if (>= end-transaction (count transactions)) (count operations) (t/transactionrow-first-operation (nth transactions end-transaction)))]
+  [start end]))
+
+(defn transaction-frames-between [store lower-exclusive upper-inclusive]
+  (let [transactions (t/termstore-transactions store)
+   first (first-transaction-after transactions lower-exclusive)
+   end (first-transaction-after transactions upper-inclusive)]
+  (mapv (fn [row] (let [start (t/transactionrow-first-operation row)
+   stop (+ start (t/transactionrow-operation-count row))]
+  (t/->TransactionFrame (t/transactionrow-sequence row) (mapv (fn [operation] (t/->CommitOperation (t/operationrow-action operation) (resolve-triple-handle store (t/operationrow-triple-handle operation)))) (subvec (t/termstore-operations store) start stop))))) (subvec transactions first end))))
+
+(defn operation-postings [store]
+  (loop [position 0
+   postings {}]
+  (if (>= position (count (t/termstore-operations store))) postings (let [handle (t/operationrow-triple-handle (nth (t/termstore-operations store) position))]
+  (recur (inc position) (update postings handle (fn [known] (conj (or known []) position))))))))
+
+(defn- lower-bound-position [positions target]
+  (loop [low 0
+   high (count positions)]
+  (if (>= low high) low (let [middle (quot (+ low high) 2)]
+  (if (< (nth positions middle) target) (recur (inc middle) high) (recur low middle))))))
+
+(defn- exact-occurrence-position [store coordinate]
+  (if (not (t/occurrence-coordinate? coordinate)) -1 (let [transaction (t/triple-slot0 coordinate)
+   space (t/triple-slot0 transaction)
+   sequence (t/triple-slot2 transaction)
+   ordinal (t/triple-slot2 coordinate)
+   transactions (t/termstore-transactions store)
+   position (first-transaction-after transactions (dec sequence))]
+  (if (or (not (= space (t/termstore-space-id store))) (>= position (count transactions))) -1 (let [row (nth transactions position)]
+  (if (and (= sequence (t/transactionrow-sequence row)) (< ordinal (t/transactionrow-operation-count row))) (+ (t/transactionrow-first-operation row) ordinal) -1))))))
+
+(defn operation-candidate-positions [store lower-exclusive upper-inclusive coordinate proposition postings]
+  (let [[start end] (operation-range-bounds store lower-exclusive upper-inclusive)
+   exact (if (some? coordinate) (do
+  (exact-occurrence-position store coordinate)))
+   proposition-handle (if (some? proposition) (do
+  (known-term-handle store proposition)))
+   posted (if (some? proposition-handle) (get postings proposition-handle []) [])
+   from (lower-bound-position posted start)
+   until (lower-bound-position posted end)
+   candidates (cond
+  (some? exact) (if (and (>= exact start) (< exact end)) [exact] [])
+  (some? proposition) (if (some? proposition-handle) (subvec posted from until) [])
+  :else (vec (range start end)))]
+  (if (and (some? exact) (some? proposition)) (filterv (fn [position] (= proposition-handle (t/operationrow-triple-handle (nth (t/termstore-operations store) position)))) candidates) candidates)))
+
+(defn occurrence-tuple-at [store position]
+  (let [event (event-at store position)]
+  [(t/triple-slot0 event) (t/triple-slot1 event) (t/triple-slot2 event)]))
+
 (defn operation-occurrences [ctx]
   (let [store (deref ctx)]
   (loop [position 0

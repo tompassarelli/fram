@@ -116,6 +116,15 @@
 (defn all-events [model]
   (mapv #(op-event model %) (range (count (:ops model)))))
 
+(defn operation-events-between [model lower-exclusive upper-inclusive]
+  (into []
+        (comp
+         (filter (fn [position]
+                   (let [sequence (:sequence (nth (:ops model) position))]
+                     (< lower-exclusive sequence (inc upper-inclusive)))))
+         (map #(op-event model %)))
+        (range (count (:ops model)))))
+
 (defn history [model]
   (into []
         (mapcat (fn [position]
@@ -136,6 +145,25 @@
 
 (defn store-live-propositions [model]
   (mapv #(:proposition (nth (:ops model) %)) (live-positions model)))
+
+(defn store-live-propositions-as-of [model upper-inclusive]
+  (let [{:keys [live]}
+        (reduce
+         (fn [{:keys [active live] :as state} position]
+           (let [{:keys [sequence action proposition]} (nth (:ops model) position)]
+             (if (> sequence upper-inclusive)
+               state
+               (let [stack (get active proposition [])]
+                 (if (= :assert action)
+                   {:active (assoc active proposition (conj stack position))
+                    :live (conj live position)}
+                   (if (empty? stack)
+                     state
+                     {:active (assoc active proposition (pop stack))
+                      :live (disj live (peek stack))}))))))
+         {:active {} :live #{}}
+         (range (count (:ops model))))]
+    (mapv #(:proposition (nth (:ops model) %)) (sort live))))
 
 (defn- relation-proposition? [predicate value]
   (and (t/triple? value)

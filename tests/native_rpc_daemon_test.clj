@@ -109,6 +109,18 @@
          (wire/rpc-query-head! "all" [slot0 slot1 slot2])
          [(wire/rpc-query-relation! "triple" [slot0 slot1 slot2] false)])])])))
 
+(defn all-occurrences-plan []
+  (let [coordinate (wire/rpc-query-variable! "coordinate")
+        action (wire/rpc-query-variable! "action")
+        proposition (wire/rpc-query-variable! "proposition")]
+    (wire/rpc-query-plan!
+     (wire/rpc-query-find-relation! "occurrences")
+     [(wire/rpc-query-stratum!
+       [(wire/rpc-query-rule!
+         (wire/rpc-query-head! "occurrences" [coordinate action proposition])
+         [(wire/rpc-query-relation!
+           "occurrence" [coordinate action proposition] false)])])])))
+
 (def scratch
   (.toFile
    (java.nio.file.Files/createTempDirectory
@@ -246,6 +258,108 @@
                      (some #(= [(t/triple "source-file" :plangrep/page 1)
                                 :plangrep/title "Door Schedule"] %)
                            (query-rows historical))))
+        (let [occurrence-plan (all-occurrences-plan)
+              at-one (request!
+                      port space :rpc/query
+                      (wire/rpc-query-request!
+                       occurrence-plan (wire/rpc-query-as-of! 1)))
+              at-two (request!
+                      port space :rpc/query
+                      (wire/rpc-query-request!
+                       occurrence-plan (wire/rpc-query-as-of! 2)))
+              since-one (request!
+                         port space :rpc/query
+                         (wire/rpc-query-request!
+                          occurrence-plan
+                          (wire/rpc-query-since!
+                           1 (wire/rpc-query-as-of! 2))))
+              current-since (request!
+                             port space :rpc/query
+                             (wire/rpc-query-request!
+                              occurrence-plan
+                              (wire/rpc-query-since! 1 wire/query-current)))
+              row-sequence (fn [row]
+                             (-> row first t/triple-slot0 t/triple-slot2))]
+          (check! "query since composes deterministic (L,U] occurrence history"
+                  (and (= 2 (t/rpcresponse-served-version at-two))
+                       (= (set (query-rows at-two))
+                          (into (set (query-rows at-one))
+                                (query-rows since-one)))
+                       (every? #(= 2 (row-sequence %))
+                               (query-rows since-one))
+                       (every? #(< 1 (row-sequence %) 4)
+                               (query-rows current-since))))
+          (let [first-page
+                (request!
+                 port space :rpc/query
+                 (wire/rpc-query-request!
+                  occurrence-plan
+                  (wire/rpc-query-since! 1 wire/query-current))
+                 :page (wire/rpc-page-request! 1 nil))
+                cursor (t/rpc-page-response-cursor-value
+                        (t/rpcresponse-page first-page))
+                mismatched
+                (request!
+                 port space :rpc/query
+                 (wire/rpc-query-request!
+                  occurrence-plan
+                  (wire/rpc-query-since! 0 wire/query-current))
+                 :page (wire/rpc-page-request! 1 cursor))]
+            (check! "query cursor binds the resolved since lower bound"
+                    (= :query-cursor-mismatch (error-code mismatched))))
+          (with-redefs [coord-daemon/query-checkpoint-interval 1]
+            (#'coord-daemon/drop-query-caches!)
+            (let [checkpoint (io/file
+                              (str log-path ".query-checkpoints")
+                              "snapshot-1.fri")
+                  built (request!
+                         port space :rpc/query
+                         (wire/rpc-query-request!
+                          occurrence-plan (wire/rpc-query-as-of! 1)))
+                  _ (spit checkpoint "corrupt-derived-cache")
+                  _ (#'coord-daemon/drop-query-caches!)
+                  rebuilt (request!
+                           port space :rpc/query
+                           (wire/rpc-query-request!
+                            occurrence-plan (wire/rpc-query-as-of! 1)))]
+              (check! "as-of uses prefix-bound FRI2 checkpoints and corrupt cache falls back"
+                      (and (.isFile checkpoint)
+                           (nil? (error-code built))
+                           (nil? (error-code rebuilt))
+                           (= (query-rows built) (query-rows rebuilt))
+                           (> (.length checkpoint) 32)))))
+          (let [before (request!
+                        port space :rpc/query
+                        (wire/rpc-query-request!
+                         occurrence-plan (wire/rpc-query-as-of! 1)))
+                entry (coord-daemon/seal-query-epoch! 1)
+                after (request!
+                       port space :rpc/query
+                       (wire/rpc-query-request!
+                        occurrence-plan (wire/rpc-query-as-of! 1)))
+                _ (.delete (io/file (:path entry)))
+                _ (reset! (var-get #'coord-daemon/query-archive-coordinators) {})
+                _ (#'coord-daemon/drop-query-caches!)
+                unavailable (request!
+                             port space :rpc/query
+                             (wire/rpc-query-request!
+                              occurrence-plan (wire/rpc-query-as-of! 1)))
+                _ (coord-daemon/seal-query-epoch! 1)
+                _ (coord-daemon/expire-query-epoch! 1)
+                expired (request!
+                         port space :rpc/query
+                         (wire/rpc-query-request!
+                          occurrence-plan (wire/rpc-query-as-of! 1)))
+                _ (coord-daemon/seal-query-epoch! 1)]
+            (check! "sealed epoch preserves rows and distinguishes unavailable from expired"
+                    (and (= (query-rows before) (query-rows after))
+                         (= :query/archive-unavailable
+                            (error-code unavailable))
+                         (true? (some-> unavailable t/rpcresponse-error
+                                        t/rpcerror-retryable))
+                         (= :query/snapshot-expired (error-code expired))
+                         (false? (some-> expired t/rpcresponse-error
+                                         t/rpcerror-retryable))))))
         (check! "a read after an acknowledged write sees at least its version"
                 (and (<= (t/rpcresponse-served-version asserted-later)
                          (t/rpcresponse-served-version current-after-ack))

@@ -60,6 +60,12 @@ operations encoded with the recursive Term codec. Replay rebuilds liveness and
 indexes from that history. The one-shot migration converts the legacy flat log
 to FRAMLOG; there is no permanent dual semantic path.
 
+Historical query roots use prefix-bound FRI2 checkpoints plus transaction-tail
+replay. A sealed epoch is a canonical FRAMLOG prefix named by a fingerprinted
+binary range manifest; derived roots and results are bounded caches, while
+completed canonical ranges are retained indefinitely unless an explicit
+retention decision marks one expired.
+
 The active writer owns one `SpaceId` and one history log. A standby can load and
 serve the same durable prefix, but only the active process may append. The
 active daemon orders mutations through one FIFO sequencer. It retains one

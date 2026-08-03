@@ -77,9 +77,11 @@ Two runtime surfaces exist until cluster migration completes:
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
 | Q1 | Query semantics per [`query-reference.md`](query-reference.md) | BACKED | [`../tests/triple_query_test.clj`](../tests/triple_query_test.clj), aggregate/projection tests |
-| Q2 | A page cursor pins its snapshot across intervening commits; eviction may recompute from the pinned immutable root without changing rows | PARTIAL | gated for query, scan, and occurrence loops; retained-root and ordered-result envelopes each cover four versions |
+| Q2 | A page cursor pins its resolved upper sequence and lower-exclusive occurrence bound across intervening commits; eviction may recompute from the pinned immutable root without changing rows | PARTIAL | gated for query, scan, and occurrence loops; retained-root and ordered-result envelopes each cover four versions |
 | Q3 | Budgets: step budget 10,000,000; timeout `min(60000, requested else 5000)` ms | UNBACKED | numbers live in source only; no gate exercises the limits |
-| Q4 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, version, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_daemon_test.clj` exercises one evaluator run for two concurrent misses, version separation, historical reuse, bounds, counters, and restart reset |
+| Q4 | Complete deterministically ordered results are reused by snapshot generation, SpaceId, resolved `{lower-exclusive, upper-inclusive}` view, operation, and canonical request digest; concurrent misses share one computation | PARTIAL | `native_rpc_daemon_test.clj` exercises one evaluator run for two concurrent misses, selector-equivalent historical reuse, lower-bound separation, bounds, counters, and restart reset |
+| Q5 | `current`, inclusive `as-of U`, and `since L upper` compose transaction-exact state plus occurrence history; `(L,U]` never materializes the full occurrence relation | BACKED | `datalog_diff_test.clj` 7/7 including temporal source arms; `model_generative_test.clj` compares as-of state and since events after every generated operation; `native_rpc_daemon_test.clj` covers composition and cursors |
+| Q6 | A historical miss uses the newest valid prefix-bound checkpoint and replays its tail; corrupt derived state falls back to canonical history. Sealed ranges preserve rows, while unavailable and explicitly expired ranges remain distinct | PARTIAL | `native_rpc_daemon_test.clj` covers corrupt FRI fallback, sealed-range parity, manifest reload, and both typed errors; active-log compaction and production retention policy are not yet gated |
 
 ## Profiles
 
