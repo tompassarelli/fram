@@ -14,7 +14,7 @@
 1	docs/architecture.md
 41	docs/archive/claims-design.md
 1	docs/archive/measurements.md
-2	docs/naming.md
+3	docs/naming.md
 2	docs/ontology.md
 3	docs/position-in-class.md
 1	flake.nix

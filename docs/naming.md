@@ -240,6 +240,56 @@ The rejected bench:
 - **prohibition-only documentation** — the state this entry repairs; a negative
   rule with no positive example is a bug with a delay on it.
 
+## Beagle fact projections — identifiers retained; contracts split — chosen 2026-08-03
+
+The thing: Beagle exposes two projections that share the fact layer but do not
+share a fidelity contract. `bin/beagle-facts`, implemented by
+`beagle-lib/private/emit-facts.rkt`, emits a compact analysis view of the parsed
+AST for Datalog queries. Its special-form overlays deliberately omit
+reconstructive detail, so it is lossy. `beagle facts-roundtrip`, backed by
+`beagle-lib/private/facts-roundtrip.rkt`, emits a verbose program view that
+preserves reader-datum identity and can render source. `.fram/corpus.facts`
+materializes the compact analysis view for program-inspection queries.
+
+The ruling: keep `beagle-facts`, `facts-roundtrip`, `emit-facts.rkt`, and the
+`.facts` extension. Here **fact** names projection status: a proposition selected
+into an analysis or live-program view. It does not name Fram's stored structure;
+**Triple** remains the sole structural primitive. The lossless code-as-facts
+projection is also within the boundary because its selected live triples
+constitute the program.
+
+The two projections must not share one descriptive sentence. Current prose uses:
+
+- **compact analysis projection:** "a compact, lossy projection of the parsed AST
+  into CNF analysis facts, represented as three-slot vectors";
+- **program roundtrip projection:** "a verbose, program-lossless source↔fact
+  projection; lossless means reader-datum identity, not byte identity."
+
+The named concession is that `facts` remains a family word across two contracts.
+Every description where both are in scope therefore carries the contract:
+compact/lossy analysis or verbose/program-lossless roundtrip.
+
+The prior that decides it is Datalog and coordination usage: a fact is a
+proposition admitted to the current view. Renaming the family to the kernel word
+would describe row shape while erasing why those rows exist.
+
+The rejected bench:
+
+- **`beagle-triples`, `triples-roundtrip.rkt`, `emit-triples.rkt`,
+  `corpus.triples`** — structurally true but layer-wrong. It names the kernel
+  representation instead of the projection's selected propositions and still
+  fails to distinguish the two fidelity contracts.
+- **`beagle-codegraph` / `emit-codegraph.rkt`** — names one historical consumer
+  and analysis subsystem, not the projection; it misroutes the lossless
+  code-as-facts authoring surface.
+- **`program-roundtrip`** — accurate only for the lossless half and severs the
+  established source↔fact prior without improving the compact analysis half.
+- **"lossless CNF fact-triple projection" for both paths** — rejected because it
+  is observably false for `emit-facts.rkt` and collapses two views into one
+  supposed artifact.
+- **`claims`** — belongs to the occurrence/act layer; neither projection is an
+  assertion event.
+
 ## Appending an entry
 
 When a name fight happens, record: what the thing *is* (its actual semantics, including
