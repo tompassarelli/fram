@@ -319,16 +319,19 @@
       (fail! :checked-projection-mismatch
              "committed candidate differs from the checked projection"
              {:module (:module outcome)}))
-    (let [publication
+    (let [affected (committed-affected-definitions outcome)
+          publication
           (lifecycle/publish-checked-projection!
            {:commit-outcome outcome
             :registered-root checkout-root
             :registered-path (:root checked-value)
             :checked-bytes (:bytes checked-value)
-            :program-corpus program-corpus
+            ;; Materialization needs named identities; without them the corpus
+            ;; must stay untouched instead of turning a clean publish into a
+            ;; repair-needed state.
+            :program-corpus (when (seq affected) program-corpus)
             :program-facts-command program-facts-command
-            :affected-definitions
-            (committed-affected-definitions outcome)})]
+            :affected-definitions affected})]
       {:isError (not= :committed-projection-published
                       (:outcome publication))
        :value (edit-response outcome publication)})))
@@ -406,6 +409,15 @@
                          :description "Exactly one named writable top-level EDN form."}}
      :required ["module" "form"]}}]))
 
+(defn- read-program!
+  "Serve one advertised program-inspection read against the resolved corpus."
+  [{:keys [program-corpus]} tool arguments]
+  (when-not program-corpus
+    (fail! :program-corpus-unavailable
+           "this checkout has no resolved program corpus at .fram/corpus.facts"
+           {:tool tool}))
+  {:isError false :value (program/invoke-path! program-corpus tool arguments)})
+
 (defn- reply! [id result]
   (println (json/generate-string {:jsonrpc "2.0" :id id :result result}))
   (flush))
@@ -422,8 +434,10 @@
       "multi-set-body" (edit-module! context arguments)
       "add-def" (edit-top-level! context tool :add arguments)
       "replace-def" (edit-top-level! context tool :replace arguments)
-      {:isError true :value {:type "unknown-tool"
-                             :message (str "unknown tool: " tool)}})
+      (if (program/program-tool? tool)
+        (read-program! context tool arguments)
+        {:isError true :value {:type "unknown-tool"
+                               :message (str "unknown tool: " tool)}}))
     (catch Throwable error
       {:isError true
        :value {:type (name (or (:type (ex-data error)) :graph-control-error))
@@ -438,7 +452,7 @@
         (reply! id {:protocolVersion "2024-11-05"
                     :capabilities {:tools {}}
                     :serverInfo {:name server-name :version "1"}
-                    :instructions "Sealed native graph control. Use multi-set-body, add-def, or replace-def for atomic checked edits."})
+                    :instructions "Sealed native graph control. Use multi-set-body, add-def, or replace-def for atomic checked edits, and read_definition, find_references, trace_impact, occurrence_history, program_context, or inspect_program for snapshot-pinned program reads."})
 
         "tools/list" (reply! id {:tools tools})
 
@@ -452,15 +466,26 @@
 
         (reply-error! id -32601 (str "method not found: " method))))))
 
+(defn- program-corpus-path
+  "Locate fram-code-on's resolved reference corpus for this checkout.
+
+   Absent until it has been emitted; nil then leaves program reads and view
+   materialization off rather than failing every checked edit."
+  [checkout-root]
+  (let [file (io/file checkout-root ".fram" "corpus.facts")]
+    (when (.isFile file) (.getCanonicalPath file))))
+
 (defn- service-context! []
   (let [preflight (preflight!)
-        code-log (required-env! "FRAM_CODE_LOG")]
+        code-log (required-env! "FRAM_CODE_LOG")
+        checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
+                                       "checkout root")]
     {:preflight preflight
-     :checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
-                                     "checkout root")
+     :checkout-root checkout-root
      :port (port!)
      :space (space-id! code-log)
      :beagle (required-env! "FRAM_BEAGLE")
+     :program-corpus (program-corpus-path checkout-root)
      :program-facts-command
      (beagle-facts-command! (required-env! "FRAM_BEAGLE"))}))
 
