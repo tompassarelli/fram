@@ -16,6 +16,14 @@
     (throw (ex-info "fram: instant nanoseconds must be in [0, 1000000000)"
                     {:type :invalid-instant}))))
 
+;; Instant arithmetic stays on whole seconds: nanoseconds are already canonical
+;; in [0, 1000000000), so shifting by seconds cannot leave that range.
+(defn instant-shift-seconds [at: Instant seconds: Int] -> Instant
+  (->Instant (+ (instant-epoch-seconds at) seconds) (instant-nanos at)))
+
+(defn instant-seconds-between [earlier: Instant later: Instant] -> Int
+  (- (instant-epoch-seconds later) (instant-epoch-seconds earlier)))
+
 ;; Triple fields are Any only because the portable record ABI cannot spell a
 ;; recursive union in-place; term? enforces Term = Atom | Triple at the boundary.
 (defalias Atom (Dyn String Int Float Bool Keyword Instant))
