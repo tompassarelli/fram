@@ -13,7 +13,7 @@
 (def proposition (t/triple "Alice" :email "alice@example.com"))
 (def nested-proposition
   (t/triple (t/triple "Alice" :account "primary")
-            (t/triple :ontology/slot "email" 2)
+            (t/triple :slot "email" 2)
             (t/triple "alice@example.com" :observed-at (t/instant 1785561000 7))))
 
 (def ctx (store/new-term-store "msa-space"))
@@ -68,7 +68,7 @@
 
 (def growth-context (store/new-term-store "growth-space"))
 (def growth-propositions
-  (mapv #(t/triple :growth/entry % (t/triple % :parity (odd? %))) (range 257)))
+  (mapv #(t/triple :entry % (t/triple % :parity (odd? %))) (range 257)))
 (store/commit-transaction! growth-context
                            (mapv store/assert-operation growth-propositions))
 (def growth-live-count (count (store/live-occurrences growth-context)))

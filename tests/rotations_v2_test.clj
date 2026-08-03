@@ -9,8 +9,8 @@
 (def path "/tmp/fram-rotations-v2.fri2")
 (def fingerprint (apply str (repeat 64 "c")))
 (def cache-source (fri/source-binding "rotation-space" fingerprint 8192))
-(def proposition (t/triple (t/triple :building/id "A" 1)
-                           (t/triple :ontology/slot :material 2)
+(def proposition (t/triple (t/triple :id "A" 1)
+                           (t/triple :slot :material 2)
                            (t/triple "steel" :unit :text)))
 (def context (store/new-term-store "rotation-space"))
 (store/commit-transaction!

@@ -15,9 +15,10 @@
 (def proposition-a (t/triple "Alice" :email "alice@example.com"))
 (def proposition-b (t/triple "Alice" :email "alice@example.com"))
 
-;; A Triple may occupy every slot. Namespaced atoms are ordinary grounding
-;; vocabulary; `/` has no kernel behavior.
-(def nested-slot0 (t/triple proposition-a :plangrep/page "slot0"))
+;; A Triple may occupy every slot. `/` inside a keyword is spelling only: it
+;; asserts no grouping and gets no kernel behavior, which is what the probe atom
+;; below is here to hold.
+(def nested-slot0 (t/triple proposition-a :not-a/grouping "slot0"))
 (def nested-slot1 (t/triple "slot1" proposition-a true))
 (def nested-slot2 (t/triple :slot2 42 proposition-a))
 (def nested-all (t/triple nested-slot0 nested-slot1 nested-slot2))
@@ -79,7 +80,7 @@
    ["Triple recursively accepts Triple in slot1" (= proposition-a (t/triple-slot1 nested-slot1))]
    ["Triple recursively accepts Triple in slot2" (= proposition-a (t/triple-slot2 nested-slot2))]
    ["nested Triple remains a Term" (t/term? nested-all)]
-   ["namespaced atoms carry no special slot behavior" (= :plangrep/page (t/triple-slot1 nested-slot0))]
+   ["namespaced atoms carry no special slot behavior" (= :not-a/grouping (t/triple-slot1 nested-slot0))]
    ["equal proposition content is structural identity" (= proposition-a proposition-b)]
    ["transaction coordinate is an ordinary Triple"
     (= tx-1842 (t/triple "msa-space" :kernel/tx-sequence 1842))]

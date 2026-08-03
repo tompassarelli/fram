@@ -81,10 +81,10 @@
 (defn deep-proposition [rand-int depth]
   (loop [term (pick rand-int atom-vocabulary) level 0]
     (if (>= level depth)
-      (t/triple term :deep/chain depth)
-      (recur (t/triple term :deep/link level) (inc level)))))
+      (t/triple term :chain depth)
+      (recur (t/triple term :link level) (inc level)))))
 
-(def actors ["Tom" "reviewer" :agent/lane])
+(def actors ["Tom" "reviewer" :lane])
 (def frames ["model-gen" "batch-frame" ""])
 (def instants [(t/instant 1785560000 1) (t/instant 1785560001 999999999)])
 

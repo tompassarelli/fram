@@ -187,8 +187,8 @@
                  (catch clojure.lang.ExceptionInfo error
                    (:fram/code (ex-data error)))))))
 
-  (let [nested-subject (t/triple "source-file" :plangrep/page 1)
-        proposition (t/triple nested-subject :plangrep/title "Door Schedule")
+  (let [nested-subject (t/triple "source-file" :page 1)
+        proposition (t/triple nested-subject :title "Door Schedule")
         response (request! port space :rpc/assert
                            (wire/rpc-write! proposition wire/rpc-subject-any nil))
         [[input-index changed occurrences]] (action-results response)
@@ -203,7 +203,7 @@
       (check! "slot-addressed scan returns the recursive proposition"
               (= [proposition] (triples-result scan :rpc/triples))))
 
-    (let [replacement (t/triple nested-subject :plangrep/title "Revised Schedule")
+    (let [replacement (t/triple nested-subject :title "Revised Schedule")
           batch (request!
                  port space :rpc/batch
                  (wire/rpc-batch!
@@ -255,8 +255,8 @@
                      (not-any? #(= ["later" :value 3] %) pinned-rows)))
         (check! "query as-of rebuilds the requested logical snapshot"
                 (and (= 1 (t/rpcresponse-served-version historical))
-                     (some #(= [(t/triple "source-file" :plangrep/page 1)
-                                :plangrep/title "Door Schedule"] %)
+                     (some #(= [(t/triple "source-file" :page 1)
+                                :title "Door Schedule"] %)
                            (query-rows historical))))
         (let [occurrence-plan (all-occurrences-plan)
               at-one (request!

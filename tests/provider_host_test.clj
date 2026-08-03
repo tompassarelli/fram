@@ -79,8 +79,8 @@
                          (host/providerviolation-code %))
                      (host/providerboot-violations boot)))))
 
-(let [proposition (t/triple (t/triple "space" :example/entity "one")
-                            :example/value 7)
+(let [proposition (t/triple (t/triple "space" :entity "one")
+                            :value 7)
       action (host/provider-action :rpc/assert proposition :rpc/subject-any)
       batch (host/provider-batch "space" 41 [action])
       request (host/batch-request batch)
@@ -97,7 +97,7 @@
           (throws? #(host/provider-action :rpc/worlds proposition
                                           :rpc/subject-any))))
 
-(let [proposition (t/triple "entity" :example/value 9)
+(let [proposition (t/triple "entity" :value 9)
       action (host/provider-action :rpc/assert proposition :rpc/subject-any)
       plan (host/accepted-plan
             proposition 41 [action]
@@ -126,7 +126,7 @@
       (host/descriptor
        (host/provider-identity worlds "fake-second")
        worlds (host/provider-contract worlds 1) [] :provider/ready)
-      proposition (t/triple "entity" :example/value 10)
+      proposition (t/triple "entity" :value 10)
       plan (host/accepted-plan
             proposition 0
             [(host/provider-action :rpc/assert proposition :rpc/subject-any)]

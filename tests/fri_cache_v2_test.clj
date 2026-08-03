@@ -22,7 +22,7 @@
 (def cache-source (fri/source-binding "fri-space" fingerprint 4096))
 (def proposition
   (t/triple (t/triple "Alice" :account "primary")
-            (t/triple :ontology/slot "email" 2)
+            (t/triple :slot "email" 2)
             (t/triple "alice@example.com" :observed-at (t/instant 1785561000 7))))
 (def ctx (store/new-term-store "fri-space"))
 
@@ -113,10 +113,10 @@
     (and (= [proposition]
             (fri/by-slot01 image
                            (t/triple "Alice" :account "primary")
-                           (t/triple :ontology/slot "email" 2)))
+                           (t/triple :slot "email" 2)))
          (= [proposition]
             (fri/by-slot12 image
-                           (t/triple :ontology/slot "email" 2)
+                           (t/triple :slot "email" 2)
                            (t/triple "alice@example.com" :observed-at
                                      (t/instant 1785561000 7)))))]
    ["as-of projection preserves duplicate assertions before later withdrawal"

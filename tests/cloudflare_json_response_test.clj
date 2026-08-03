@@ -164,14 +164,14 @@
                    (= "0" (get (:json version) "servedVersion"))
                    (= ["keyword" "rpc/unit"] (get (:json version) "payload")))))
 
-    (let [subject (terms/triple "source-file" :plangrep/page 1)
-          values ["Door Schedule" -42 1.5 true :plangrep/door
+    (let [subject (terms/triple "source-file" :page 1)
+          values ["Door Schedule" -42 1.5 true :door
                   (terms/instant 1785580282 123000000)
                   (terms/triple "nested" :kernel/type "triple")]
           actions (mapv (fn [index value]
                           (wire/rpc-action!
                            :rpc/assert
-                           (terms/triple subject (keyword (str "test/value-" index)) value)
+                           (terms/triple subject (keyword (str "value-" index)) value)
                            wire/rpc-subject-any))
                         (range) values)
           asserted

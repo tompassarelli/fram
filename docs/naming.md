@@ -290,6 +290,44 @@ The rejected bench:
 - **`claims`** — belongs to the occurrence/act layer; neither projection is an
   assertion event.
 
+## namespaced vocabulary outside the fixtures — scoped 2026-08-04
+
+The thing: every `ns/name` spelling still standing in the repository once the
+normalized example above is applied. An inventory at `a488892` found 26
+namespaced non-`:kernel/*`/`:rpc/*` families across 692 occurrences and sorted
+them into three piles, not one.
+
+The ruling, per pile:
+
+- **Semantic test fixtures** — `ontology/slot`, `plangrep/*`, `example/*`,
+  `builder/*`, `growth/entry`, `building/id`, `deep/*`, `agent/lane` — are
+  normalized to unnamespaced atoms. None of them exercised a grouping, so no
+  grouping proposition was invented to preserve an accidental namespace. Two
+  namespaced atoms stay on purpose: the kernel probe in `triple_kernel_test.clj`,
+  whose whole subject is that `/` earns no kernel behavior, and the
+  ExceptionInfo type `:test/rejected-plan`, which is an error tag beside
+  `:rpc/conflict` rather than a stored predicate.
+- **Historical code** — `provider/*`, `world/*`, `worlds/*` — is retained as
+  spelled. Worlds is already scoped historical above; re-spelling vocabulary
+  inside a service awaiting retirement rewrites a passing suite and buys no
+  queryable structure. It retires with the service, not before.
+- **Closed wire tags** — `authority/*`, `fram/*`, `fram.defcheck/*`, `lease/*`,
+  `query/*` — are protocol syntax, not domain vocabulary, under the same
+  exemption `:rpc/*` already carries. They are FRAMRPC v1 grammar, projection
+  keys, and ExceptionInfo types: `lease/*` lowers to `:kernel/lease` before
+  anything is stored, and `query/*` only reads snapshots. A spelling change
+  there is a versioned wire migration, not normalization.
+
+What made this a scoping entry instead of a migration: at `a488892` **no
+in-scope family is written verbatim to a configured live store** — every stored
+occurrence is a test fixture or historical Worlds code. Normalization therefore
+touched nine test files and zero stores.
+
+Three observations reopen it, each a replan trigger rather than a judgment call:
+a configured non-test caller of `worlds/invoke-plan-to!`; an external live
+corpus carrying `worlds/*` or `provider/*`; or a proposed FRAMRPC tag rename,
+which enters through wire versioning and not through this ledger.
+
 ## Appending an entry
 
 When a name fight happens, record: what the thing *is* (its actual semantics, including
