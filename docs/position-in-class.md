@@ -45,9 +45,11 @@ substitute measurement for this evaluator
   fields, and trailing bytes are rejected ([`guarantees.md`](guarantees.md),
   N1; [`architecture.md`](architecture.md)).
 - History is queryable as `occurrence(coordinate, action, proposition)`.
-  Retractions and their withdrawal targets are ordinary facts, not deleted
-  rows or tombstones ([`architecture.md`](architecture.md),
-  [`query-reference.md`](query-reference.md)).
+  Retractions and their withdrawal targets are ordinary propositions in the
+  ledger, not deleted rows or tombstones ([`architecture.md`](architecture.md),
+  [`query-reference.md`](query-reference.md)). Fram records assertion history;
+  fact-status belongs to a selected view, never the kernel
+  ([`ontology.md`](ontology.md), [`naming.md`](naming.md)).
 - The native direction is program as data: the same recursive Triple language
   represents propositions, occurrence coordinates, and graph-authored program
   material ([`WHY_FRAM_EXISTS.md`](WHY_FRAM_EXISTS.md),
