@@ -326,6 +326,25 @@
                    (str/includes? (:source rendered) "label :- String")
                    (= (:source rendered) (slurp source-path)))))
 
+    (let [run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 24 :method "tools/call"
+                 :params {:name "add-def"
+                          :arguments
+                          {:module "fixture"
+                           :form "(defn typed-value [value: Int] -> Int value)"}}}])
+          reply (get (parse-replies (:out run)) 24)
+          result (call-value reply)
+          rendered (code-reader/render-module!
+                    beagle
+                    (code-reader/read-module-snapshot!
+                     port space checkout-root "fixture"))]
+      (check! "add-def accepts current name: annotations through the sealed parser"
+              (and (not (get-in reply [:result :isError]))
+                   (= "committed-projection-published" (:outcome result))
+                   (str/includes? (:source rendered)
+                                  "[value: Int] -> Int"))))
+
     (let [version-before (version! port space)
           facts-before (:facts
                         (gate/transformer-snapshot
