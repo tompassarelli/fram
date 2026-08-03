@@ -19,13 +19,18 @@
    "repo" "part_of" "depends_on" "relates_to" "clarifies" "amends" "outcome" "abandoned"])
 
 (defn- distinct-s [xs :- (Vec String)] :- (Vec String)
-  (reduce (fn [acc :- (Vec String) x :- String] :- (Vec String)
+  (reduce (fn
+            [acc :- (Vec String)
+             x :- String] :- (Vec String)
             (if (k/vec-contains? acc x) acc (conj acc x)))
           [] xs))
 
 ;; a ref-pred's value renders as its @id bare; a literal is EDN-quoted whenever
 ;; bare would be ambiguous — whitespace, NEWLINE, empty, or a leading @/".
-(defn- render-obj [facts :- (Vec k/Fact) p :- String v :- String] :- String
+(defn- render-obj
+  [facts :- (Vec k/Fact)
+   p :- String
+   v :- String] :- String
   (if (= "ref" (k/value-kind-of facts [] p))
     (if (str/starts-with? v "@") v (str "@" v))
     (if (or (str/blank? v)
@@ -35,7 +40,9 @@
       (fram.rt/edn-quote v)
       v)))
 
-(defn thread-md [facts :- (Vec k/Fact) te :- String] :- String
+(defn thread-md
+  [facts :- (Vec k/Fact)
+   te :- String] :- String
   (let [reg (k/predicate-registry facts)
         subject-facts (k/q-by-l facts te)
         present (distinct-s (mapv (fn [c :- k/Fact] :- String
@@ -46,7 +53,9 @@
                                     (and (not (k/vec-contains? order p)) (not (= p "body"))))
                                   present)))
         preds (vec (concat ordered extra))
-        lines (reduce (fn [acc :- (Vec String) p :- String] :- (Vec String)
+        lines (reduce (fn
+                        [acc :- (Vec String)
+                         p :- String] :- (Vec String)
                         (let [pid (k/predicate-id reg p)
                               values (mapv (fn [c :- k/Fact] :- String (:r c))
                                            (filterv

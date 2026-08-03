@@ -31,12 +31,16 @@
 
 (def ISO16-RE :- Regex (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}"))
 
-(defn str-index-of [s :- String sub :- String] :- Int? (str/index-of s sub))
+(defn str-index-of
+  [s :- String
+   sub :- String] :- Int? (str/index-of s sub))
 
 (defn split-comma [s :- String] :- (Vec String)
   (vec (remove str/blank? (map str/trim (str/split s COMMA-RE)))))
 
-(defn str-lt? [a :- String b :- String] :- Bool (neg? (compare a b)))
+(defn str-lt?
+  [a :- String
+   b :- String] :- Bool (neg? (compare a b)))
 
 (defn split-kv [line :- String] :- (Vec String)
   (let [t (str/trim line) m (re-find SPLIT-KV-RE t)]
@@ -60,7 +64,9 @@
 (defn is-iso-datetime-16 [s :- String] :- Bool
   (boolean (and (= 16 (count s)) (re-matches ISO16-RE s))))
 
-(defn repeat-str [s :- String n :- Int] :- String
+(defn repeat-str
+  [s :- String
+   n :- Int] :- String
   (apply str (repeat (max 0 (long n)) s)))
 
 (def EDIT-BATCH-ENVELOPE-VERSION :- Int 1)
@@ -96,7 +102,9 @@
 (defn generation-record? [op :- (Map Keyword (Dyn String Int))] :- Bool
   (and (= "@log:gen" (:l op)) (= "generation" (:p op))))
 
-(defn valid-edit-batch-envelope? [record :- (Map Keyword (Dyn String Int)) expected-seal :- String] :- Bool
+(defn valid-edit-batch-envelope?
+  [record :- (Map Keyword (Dyn String Int))
+   expected-seal :- String] :- Bool
   (let [base (:fram-edit-base-version record) final (:fram-edit-final-version record) ops (:fram-edit-ops record) installed (:fram-edit-installed record) lines (:fram-edit-line-count record)]
     (and (map? record)
       (= EDIT-BATCH-ENVELOPE-KEYS (set (keys record)))
@@ -141,7 +149,16 @@
    :fram-edit-line-count
    :fram-edit-batch-sha])
 
-(defn classify-rewrite-crash [coord :- String live-ino :- Int? old-ino :- Int? new-ino :- Int? old-bytes :- Int? old-sha :- String? new-sha1 :- String? live-line1-sha :- String? live-prefix-sha :- String?] :- Keyword
+(defn classify-rewrite-crash
+  [coord :- String
+   live-ino :- Int?
+   old-ino :- Int?
+   new-ino :- Int?
+   old-bytes :- Int?
+   old-sha :- String?
+   new-sha1 :- String?
+   live-line1-sha :- String?
+   live-prefix-sha :- String?] :- Keyword
   :raises
   (U AllocationError RewriteCrashError)
   (cond
@@ -158,7 +175,9 @@
     :else
     (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
 
-(defn log-envelope [canonical-log :- String req :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))))
+(defn log-envelope
+  [canonical-log :- String
+   req :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)))) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Bool Keyword Nil (Vec String) (Vec (Vec String))))))))
   (let [base {:op :for-log :expected-log canonical-log :request req}]
     (if (contains? req :fmt) (assoc base :fmt (:fmt req)) base)))
 
@@ -197,7 +216,9 @@
     :else
     -3))
 
-(defn coord-status-response [port :- Int resp :- (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- String
+(defn coord-status-response
+  [port :- Int
+   resp :- (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String))))))] :- String
   (cond
     (integer? (:version resp))
     (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
@@ -227,4 +248,7 @@
 
 (defunion :throwable
   RewriteCrashError
-  (RewriteCrash [message :- String path :- String doctor-refusal :- Bool]))
+  (RewriteCrash
+    [message :- String
+     path :- String
+     doctor-refusal :- Bool]))

@@ -45,13 +45,17 @@
    "end_time"
    "clockify_id"])
 
-(defn vec-member? [xs :- (Vec String) s :- String] :- Bool
+(defn vec-member?
+  [xs :- (Vec String)
+   s :- String] :- Bool
   (loop [i 0]
     (if (>= i (count xs)) false (if (= (nth xs i) s) true (recur (+ i 1))))))
 
 (defn emoji-single? [p :- String] :- Bool (str/starts-with? p "emoji_"))
 
-(defn configured-single? [configured :- (Vec String) p :- String] :- Bool
+(defn configured-single?
+  [configured :- (Vec String)
+   p :- String] :- Bool
   (vec-member? configured p))
 
 (defn meta-single-seed? [p :- String] :- Bool
@@ -61,30 +65,48 @@
     (= p "acyclic")
     (= p "predicate_name")))
 
-(defn single-eff? [declared-present :- Bool declared-single :- Bool configured :- Bool p :- String] :- Bool
+(defn single-eff?
+  [declared-present :- Bool
+   declared-single :- Bool
+   configured :- Bool
+   p :- String] :- Bool
   (if declared-present
     declared-single
     (or configured (vec-member? fallback-single p) (emoji-single? p))))
 
 (def key-sep :- String "\u0001")
 
-(defn key-of-group [l :- String p :- String] :- String (str l key-sep p))
+(defn key-of-group
+  [l :- String
+   p :- String] :- String (str l key-sep p))
 
-(defn key-of-triple [l :- String p :- String r :- String] :- String
+(defn key-of-triple
+  [l :- String
+   p :- String
+   r :- String] :- String
   (str l key-sep p key-sep r))
 
-(defn normalize-ref-value [value-kind :- String r :- String] :- String
+(defn normalize-ref-value
+  [value-kind :- String
+   r :- String] :- String
   (if (and (= "ref" value-kind) (not (str/starts-with? r "@")) (not (str/blank? r)) (not (has-whitespace? r)))
     (str "@" r)
     r))
 
-(defrecord LeaseParts [holder :- String exp :- Int epoch :- Int valid :- Bool])
+(defrecord LeaseParts
+  [holder :- String
+   exp :- Int
+   epoch :- Int
+   valid :- Bool])
 
 (defn lease-invalid [] :- LeaseParts (->LeaseParts "" 0 0 false))
 
 (defn lease-subject [res :- String] :- String (str "@lease:" res))
 
-(defn lease-encode [holder :- String exp :- Int epoch :- Int] :- String
+(defn lease-encode
+  [holder :- String
+   exp :- Int
+   epoch :- Int] :- String
   (str holder "|" exp "|" epoch))
 
 (defn lease-decode [v :- String] :- LeaseParts

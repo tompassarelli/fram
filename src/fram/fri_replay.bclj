@@ -17,9 +17,13 @@
 (def digit-table: (Vec String) ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"])
 (def no-strings: (Vec String) [])
 
-(defn- char-at [text: String index: Int] -> String (subs text index (+ index 1)))
+(defn- char-at
+  [text: String
+   index: Int] -> String (subs text index (+ index 1)))
 
-(defn- split-on [text: String separator: String] -> (Vec String)
+(defn- split-on
+  [text: String
+   separator: String] -> (Vec String)
   (loop [index: Int 0 start: Int 0 parts: (Vec String) no-strings]
     (if (>= index (count text))
       (conj parts (subs text start index))
@@ -27,13 +31,17 @@
         (recur (+ index 1) (+ index 1) (conj parts (subs text start index)))
         (recur (+ index 1) start parts)))))
 
-(defn- index-of [text: String needle: String] -> Int
+(defn- index-of
+  [text: String
+   needle: String] -> Int
   (loop [index: Int 0]
     (if (>= index (count text))
       -1
       (if (= needle (char-at text index)) index (recur (+ index 1))))))
 
-(defn- last-index-of [text: String needle: String] -> Int
+(defn- last-index-of
+  [text: String
+   needle: String] -> Int
   (loop [index: Int (- (count text) 1)]
     (if (< index 0)
       -1
@@ -57,7 +65,9 @@
             index))]
     (subs text start limit)))
 
-(defn- join-strings [values: (Vec String) separator: String] -> String
+(defn- join-strings
+  [values: (Vec String)
+   separator: String] -> String
   (loop [index: Int 0 result: String ""]
     (if (>= index (count values))
       result
@@ -66,7 +76,9 @@
                (nth values index)
                (str result separator (nth values index)))))))
 
-(defrecord IntParse [ok: Bool value: Int])
+(defrecord IntParse
+  [ok: Bool
+   value: Int])
 
 (defn- digit-value [character: String] -> Int
   (loop [index: Int 0]
@@ -96,10 +108,20 @@
 (def line-invalid: Int 4)
 
 (defrecord ParsedFact
-  [valid: Bool predicate: String value: String base: Int has-base: Bool])
+  [valid: Bool
+   predicate: String
+   value: String
+   base: Int
+   has-base: Bool])
 (defrecord ParsedOp
-  [kind: Int subject: String predicate: String value: String
-   base: Int has-base: Bool facts: (Vec ParsedFact) error: String])
+  [kind: Int
+   subject: String
+   predicate: String
+   value: String
+   base: Int
+   has-base: Bool
+   facts: (Vec ParsedFact)
+   error: String])
 
 (def no-facts: (Vec ParsedFact) [])
 (def invalid-fact: ParsedFact (->ParsedFact false "" "" 0 false))
@@ -142,7 +164,9 @@
       (if (parsedfact-valid (nth facts index)) (recur (+ index 1)) false))))
 
 (defn- parse-mutation
-  [operation: String fields: (Vec String) arity: Int] -> ParsedOp
+  [operation: String
+   fields: (Vec String)
+   arity: Int] -> ParsedOp
   (if (or (< arity 4) (> arity 5))
     (invalid-op (str "invalid field count for " operation))
     (if (and (= operation "assert-at-version") (not (= arity 5)))
@@ -160,7 +184,9 @@
               (invalid-op "base is not an integer"))))))))
 
 (defn- parse-batch
-  [operation: String fields: (Vec String) arity: Int] -> ParsedOp
+  [operation: String
+   fields: (Vec String)
+   arity: Int] -> ParsedOp
   (if (= operation "assert-batch-at-version")
     (if (= arity 4)
       (let [parsed: IntParse (parse-int (nth fields 2))]
@@ -197,11 +223,22 @@
 (def act-assert: Int 1)
 (def act-retract: Int 2)
 
-(defrecord ModelTriple [slot0: String slot1: String slot2: String])
-(defrecord Model [triples: (Vec ModelTriple) version: Int])
+(defrecord ModelTriple
+  [slot0: String
+   slot1: String
+   slot2: String])
+(defrecord Model
+  [triples: (Vec ModelTriple)
+   version: Int])
 (defrecord Action
-  [operation: Int slot0: String slot1: String slot2: String local-base: Bool])
-(defrecord ReplayCommit [action: Int triple: ModelTriple])
+  [operation: Int
+   slot0: String
+   slot1: String
+   slot2: String
+   local-base: Bool])
+(defrecord ReplayCommit
+  [action: Int
+   triple: ModelTriple])
 
 (def no-triples: (Vec ModelTriple) [])
 (def no-actions: (Vec Action) [])
@@ -214,7 +251,10 @@
     text))
 
 (defn- find-exact
-  [triples: (Vec ModelTriple) slot0: String slot1: String slot2: String] -> Int
+  [triples: (Vec ModelTriple)
+   slot0: String
+   slot1: String
+   slot2: String] -> Int
   (loop [index: Int 0]
     (if (>= index (count triples))
       -1
@@ -226,7 +266,9 @@
           (recur (+ index 1)))))))
 
 (defn- find-group
-  [triples: (Vec ModelTriple) slot0: String slot1: String] -> Int
+  [triples: (Vec ModelTriple)
+   slot0: String
+   slot1: String] -> Int
   (loop [index: Int 0]
     (if (>= index (count triples))
       -1
@@ -237,7 +279,8 @@
           (recur (+ index 1)))))))
 
 (defn- remove-at
-  [triples: (Vec ModelTriple) position: Int] -> (Vec ModelTriple)
+  [triples: (Vec ModelTriple)
+   position: Int] -> (Vec ModelTriple)
   (loop [index: Int 0 result: (Vec ModelTriple) no-triples]
     (if (>= index (count triples))
       result
@@ -245,7 +288,8 @@
              (if (= index position) result (conj result (nth triples index)))))))
 
 (defn- single-predicate?
-  [triples: (Vec ModelTriple) predicate: String] -> Bool
+  [triples: (Vec ModelTriple)
+   predicate: String] -> Bool
   (loop [index: Int 0]
     (if (>= index (count triples))
       false
@@ -257,7 +301,9 @@
           (recur (+ index 1)))))))
 
 (defn- subject-predicate-count
-  [triples: (Vec ModelTriple) subject: String predicate: String] -> Int
+  [triples: (Vec ModelTriple)
+   subject: String
+   predicate: String] -> Int
   (loop [index: Int 0 total: Int 0]
     (if (>= index (count triples))
       total
@@ -270,7 +316,9 @@
 
 ;; Declaring a predicate single is refused while any subject still carries more
 ;; than one value under it: the declaration would silently drop live data.
-(defn- collapses? [triples: (Vec ModelTriple) predicate: String] -> Bool
+(defn- collapses?
+  [triples: (Vec ModelTriple)
+   predicate: String] -> Bool
   (loop [index: Int 0]
     (if (>= index (count triples))
       false
@@ -280,17 +328,22 @@
           true
           (recur (+ index 1)))))))
 
-(defn- declaration-collapse? [model: Model action: Action] -> Bool
+(defn- declaration-collapse?
+  [model: Model
+   action: Action] -> Bool
   (and (= act-assert (action-operation action))
        (= "cardinality" (action-slot1 action))
        (= "single" (action-slot2 action))
        (collapses? (model-triples model) (strip-at (action-slot0 action)))))
 
 (defrecord GroupRemoval
-  [triples: (Vec ModelTriple) commits: (Vec ReplayCommit)])
+  [triples: (Vec ModelTriple)
+   commits: (Vec ReplayCommit)])
 
 (defn- remove-group
-  [triples: (Vec ModelTriple) slot0: String slot1: String] -> GroupRemoval
+  [triples: (Vec ModelTriple)
+   slot0: String
+   slot1: String] -> GroupRemoval
   (loop [current: (Vec ModelTriple) triples commits: (Vec ReplayCommit) no-commits]
     (let [position: Int (find-group current slot0 slot1)]
       (if (< position 0)
@@ -300,9 +353,14 @@
                      (->ReplayCommit act-retract (nth current position))))))))
 
 (defrecord ApplyResult
-  [model: Model changed: Bool collapse: Bool commits: (Vec ReplayCommit)])
+  [model: Model
+   changed: Bool
+   collapse: Bool
+   commits: (Vec ReplayCommit)])
 
-(defn- apply-assert [model: Model action: Action] -> ApplyResult
+(defn- apply-assert
+  [model: Model
+   action: Action] -> ApplyResult
   (let [triples: (Vec ModelTriple) (model-triples model)
         slot0: String (action-slot0 action)
         slot1: String (action-slot1 action)
@@ -319,7 +377,9 @@
          true false
          (conj (groupremoval-commits removal) (->ReplayCommit act-assert row)))))))
 
-(defn- apply-retract [model: Model action: Action] -> ApplyResult
+(defn- apply-retract
+  [model: Model
+   action: Action] -> ApplyResult
   (let [triples: (Vec ModelTriple) (model-triples model)
         slot0: String (action-slot0 action)
         slot1: String (action-slot1 action)
@@ -333,7 +393,9 @@
                      (conj no-commits
                            (->ReplayCommit act-retract (nth triples position)))))))
 
-(defn- apply-action [model: Model action: Action] -> ApplyResult
+(defn- apply-action
+  [model: Model
+   action: Action] -> ApplyResult
   (if (declaration-collapse? model action)
     (->ApplyResult model false true no-commits)
     (if (= act-assert (action-operation action))
@@ -351,14 +413,23 @@
 (def reason-cardinality-collapse: String "cardinality-collapse")
 
 (defrecord Outcome
-  [kind: Int batch: Bool version: Int reason: String
-   written: (Vec String) idempotent: (Vec String)])
+  [kind: Int
+   batch: Bool
+   version: Int
+   reason: String
+   written: (Vec String)
+   idempotent: (Vec String)])
 (defrecord MutationResult
-  [model: Model outcome: Outcome commits: (Vec ReplayCommit)])
+  [model: Model
+   outcome: Outcome
+   commits: (Vec ReplayCommit)])
 
 (def no-outcomes: (Vec Outcome) [])
 
-(defn- reject [model: Model batch: Bool reason: String] -> MutationResult
+(defn- reject
+  [model: Model
+   batch: Bool
+   reason: String] -> MutationResult
   (->MutationResult
    model
    (->Outcome kind-reject batch (model-version model) reason no-strings no-strings)
@@ -391,7 +462,9 @@
         (recur (+ index 1))))))
 
 (defn- apply-actions
-  [model: Model actions: (Vec Action) batch: Bool] -> MutationResult
+  [model: Model
+   actions: (Vec Action)
+   batch: Bool] -> MutationResult
   (loop [index: Int 0
          trial: Model model
          commits: (Vec ReplayCommit) no-commits
@@ -425,7 +498,9 @@
 
 ;; Rejection precedence is the oracle contract: base shape, then base agreement,
 ;; then request shape, then the cardinality guard.
-(defn- mutate [model: Model op: ParsedOp] -> MutationResult
+(defn- mutate
+  [model: Model
+   op: ParsedOp] -> MutationResult
   (let [actions: (Vec Action) (op-actions op)
         batch: Bool (= line-batch (parsedop-kind op))]
     (if (and (parsedop-has-base op) (< (parsedop-base op) 0))
@@ -441,10 +516,15 @@
 
 ;; ---------------------------------------------------------------- replay
 
-(defrecord ReplayFrame [sequence: Int commits: (Vec ReplayCommit)])
+(defrecord ReplayFrame
+  [sequence: Int
+   commits: (Vec ReplayCommit)])
 (defrecord ReplayResult
-  [operations: Int model: Model outcomes: (Vec Outcome)
-   frames: (Vec ReplayFrame) error: String])
+  [operations: Int
+   model: Model
+   outcomes: (Vec Outcome)
+   frames: (Vec ReplayFrame)
+   error: String])
 
 (def no-frames: (Vec ReplayFrame) [])
 
@@ -511,7 +591,9 @@
         (recur (+ index 1)
                (conj built (to-transaction-frame (nth frames index))))))))
 
-(defn fold-replay! [space-id: String result: ReplayResult] -> fold/Fold
+(defn fold-replay!
+  [space-id: String
+   result: ReplayResult] -> fold/Fold
   (fold/fold! space-id (transaction-frames result)))
 
 ;; The two Any sites in this module: a fram.types Triple declares its slots Any
@@ -539,7 +621,9 @@
                                              (slot-text (t/triple-slot2 triple))))
                    rows)))))))
 
-(defn- triple-member? [rows: (Vec ModelTriple) row: ModelTriple] -> Bool
+(defn- triple-member?
+  [rows: (Vec ModelTriple)
+   row: ModelTriple] -> Bool
   (>= (find-exact rows
                   (modeltriple-slot0 row)
                   (modeltriple-slot1 row)
@@ -548,7 +632,9 @@
 
 ;; The store is the authority; this only reports whether the working model that
 ;; made the decisions and the folded TermStore ended up saying the same thing.
-(defn store-agrees? [result: ReplayResult facts: (Vec ModelTriple)] -> Bool
+(defn store-agrees?
+  [result: ReplayResult
+   facts: (Vec ModelTriple)] -> Bool
   (let [modelled: (Vec ModelTriple) (model-triples (replayresult-model result))]
     (if (not (= (count modelled) (count facts)))
       false
@@ -561,7 +647,9 @@
 
 ;; ---------------------------------------------------------------- rendering
 
-(defn- outcome-line [index: Int outcome: Outcome] -> String
+(defn- outcome-line
+  [index: Int
+   outcome: Outcome] -> String
   (let [head: String (str index "\t")]
     (if (= kind-version (outcome-kind outcome))
       (str head "version\t" (outcome-version outcome))
@@ -617,7 +705,9 @@
 ;; Byte-identical to the frozen Zig oracle's per-corpus summary line, so the two
 ;; independent replays are diffed as text rather than compared by eye.
 (defn summary-line
-  [path: String result: ReplayResult folded: fold/Fold
+  [path: String
+   result: ReplayResult
+   folded: fold/Fold
    facts: (Vec ModelTriple)] -> String
   (str "oracle " path ": " (replayresult-operations result) " operations, version "
        (fold/fold-version folded) ", " (count facts) " live triples"))

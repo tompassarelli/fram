@@ -36,11 +36,21 @@
 
 (def SEG-RE :- Any (re-pattern "seg\\d+"))
 
-(defrecord Context [session: schema/Session builder: (Atom txn/Builder) shadow: (Atom t/TermStore) shadow-view: (Atom rot/Rotation)])
+(defrecord Context
+  [session: schema/Session
+   builder: (Atom txn/Builder)
+   shadow: (Atom t/TermStore)
+   shadow-view: (Atom rot/Rotation)])
 
-(defrecord OrdPair [key: rc/OrdKey event: t/Triple child: Any])
+(defrecord OrdPair
+  [key: rc/OrdKey
+   event: t/Triple
+   child: Any])
 
-(defrecord SegPair [idx: Int event: t/Triple child: Any])
+(defrecord SegPair
+  [idx: Int
+   event: t/Triple
+   child: Any])
 
 (defn context [store: (Atom t/TermStore)] -> Context
   (let [session: schema/Session (schema/session store)
@@ -55,7 +65,9 @@
 (defn current-view [ctx: Context] -> rot/Rotation
   (deref (context-shadow-view ctx)))
 
-(defn- stage-appended! [ctx: Context before: Int] -> Context
+(defn- stage-appended!
+  [ctx: Context
+   before: Int] -> Context
   (let [operations: (Vec t/CommitOperation) (txn/operations (builder ctx))
         appended: (Vec t/CommitOperation) (subvec operations before (count operations))]
     (do
@@ -69,17 +81,27 @@
 (defn mint! [ctx: Context] -> t/Triple
   (txn/mint! (builder ctx)))
 
-(defn assert! [ctx: Context subject: Any predicate: Any value: Any] -> t/Triple
+(defn assert!
+  [ctx: Context
+   subject: Any
+   predicate: Any
+   value: Any] -> t/Triple
   (let [before (txn/operation-count (builder ctx))
         occurrence: t/Triple (txn/assert! (builder ctx) (t/triple subject predicate value))]
     (do (stage-appended! ctx before) occurrence)))
 
-(defn update-single! [ctx: Context subject: Any predicate: Any value: Any] -> t/Triple
+(defn update-single!
+  [ctx: Context
+   subject: Any
+   predicate: Any
+   value: Any] -> t/Triple
   (let [before (txn/operation-count (builder ctx))
         occurrence: t/Triple (txn/update-single! (builder ctx) (current-view ctx) subject predicate value)]
     (do (stage-appended! ctx before) occurrence)))
 
-(defn retract-event! [ctx: Context event: t/Triple] -> t/Triple
+(defn retract-event!
+  [ctx: Context
+   event: t/Triple] -> t/Triple
   (let [before (txn/operation-count (builder ctx))
         occurrence: t/Triple (txn/retract! (builder ctx) (rot/proposition-of event))]
     (do (stage-appended! ctx before) occurrence)))
@@ -95,13 +117,20 @@
         (reset! (context-shadow-view ctx) (schema/view (context-session ctx)))
         coordinate))))
 
-(defn events-by-subject [ctx: Context subject: Any] -> (Vec t/Triple)
+(defn events-by-subject
+  [ctx: Context
+   subject: Any] -> (Vec t/Triple)
   (rot/by-slot0 (current-view ctx) subject))
 
-(defn events-by-subject-predicate [ctx: Context subject: Any predicate: Any] -> (Vec t/Triple)
+(defn events-by-subject-predicate
+  [ctx: Context
+   subject: Any
+   predicate: Any] -> (Vec t/Triple)
   (rot/by-slot01 (current-view ctx) subject predicate))
 
-(defn events-by-predicate [ctx: Context predicate: Any] -> (Vec t/Triple)
+(defn events-by-predicate
+  [ctx: Context
+   predicate: Any] -> (Vec t/Triple)
   (rot/by-slot1 (current-view ctx) predicate))
 
 (defn event-subject [event: t/Triple] -> Any
@@ -113,43 +142,69 @@
 (defn event-value [event: t/Triple] -> Any
   (t/triple-slot2 (rot/proposition-of event)))
 
-(defn view-cids [ctx: Context v: Any events: (Vec t/Triple)] -> (Vec t/Triple)
+(defn view-cids
+  [ctx: Context
+   v: Any
+   events: (Vec t/Triple)] -> (Vec t/Triple)
   (let [selected: (Set Any) (set (rot/values (rot/by-slot01 (current-view ctx) v "selects")))]
     (filterv (fn [event: t/Triple] -> Bool (contains? selected (rot/occurrence-of event))) events)))
 
-(defn- pool-of [ctx: Context view: Any events: (Vec t/Triple)] -> (Vec t/Triple)
+(defn- pool-of
+  [ctx: Context
+   view: Any
+   events: (Vec t/Triple)] -> (Vec t/Triple)
   (let [in-view: (Vec t/Triple) (if (nil? view) [] (view-cids ctx view events))]
     (if (empty? in-view) events in-view)))
 
-(defn select-main-1 [ctx: Context? view: Any events: (Vec Any)] -> Any
+(defn select-main-1
+  [ctx: Context?
+   view: Any
+   events: (Vec Any)] -> Any
   (if (empty? events)
     nil
     (if (nil? ctx)
       (first events)
       (first (pool-of ctx view events)))))
 
-(defn select-causal-1 [ctx: Context? view: Any events: (Vec Any)] -> Any
+(defn select-causal-1
+  [ctx: Context?
+   view: Any
+   events: (Vec Any)] -> Any
   (select-main-1 ctx view events))
 
 (defn- event-r [event: t/Triple?] -> Any
   (if (nil? event) nil (event-value event)))
 
-(defn pred-val [ctx: Context? view: Any e: Any pname: Any] -> Any
+(defn pred-val
+  [ctx: Context?
+   view: Any
+   e: Any
+   pname: Any] -> Any
   (if (or (nil? ctx) (nil? e))
     nil
     (event-r (select-main-1 ctx view (events-by-subject-predicate ctx e pname)))))
 
-(defn kind-of [ctx: Context? view: Any e: Any] -> Any
+(defn kind-of
+  [ctx: Context?
+   view: Any
+   e: Any] -> Any
   (pred-val ctx view e "kind"))
 
-(defn sym-val [ctx: Context? view: Any e: Any] -> Any
+(defn sym-val
+  [ctx: Context?
+   view: Any
+   e: Any] -> Any
   (if (= "symbol" (kind-of ctx view e)) (pred-val ctx view e "v") nil))
 
-(defn ordered-children [ctx: Context? e: Any] -> (Vec Any)
+(defn ordered-children
+  [ctx: Context?
+   e: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? e))
     []
     (let [pairs: (Vec OrdPair)
-          (reduce (fn [acc: (Vec OrdPair) event: t/Triple] -> (Vec OrdPair)
+          (reduce (fn
+                    [acc: (Vec OrdPair)
+                     event: t/Triple] -> (Vec OrdPair)
                     (let [predicate: Any (event-predicate event)
                           key: rc/OrdKey? (if (string? predicate) (rc/ord-parse predicate) nil)]
                       (if (nil? key) acc (conj acc (->OrdPair key event (event-value event))))))
@@ -158,11 +213,15 @@
       (mapv (fn [pair: OrdPair] -> Any (ordpair-child pair))
         (sort-by (fn [pair: OrdPair] -> rc/OrdKey (ordpair-key pair)) rc/ord-cmp pairs)))))
 
-(defn ordered-segs [ctx: Context? e: Any] -> (Vec Any)
+(defn ordered-segs
+  [ctx: Context?
+   e: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? e))
     []
     (let [pairs: (Vec SegPair)
-          (reduce (fn [acc: (Vec SegPair) event: t/Triple] -> (Vec SegPair)
+          (reduce (fn
+                    [acc: (Vec SegPair)
+                     event: t/Triple] -> (Vec SegPair)
                     (let [predicate: Any (event-predicate event)]
                       (if (and (string? predicate) (some? (re-matches SEG-RE predicate)))
                         (let [idx (parse-long (subs predicate 3))]
@@ -173,23 +232,38 @@
       (mapv (fn [pair: SegPair] -> Any (segpair-child pair))
         (sort-by (fn [pair: SegPair] -> Int (segpair-idx pair)) pairs)))))
 
-(defn head-sym [ctx: Context? view: Any e: Any] -> Any
+(defn head-sym
+  [ctx: Context?
+   view: Any
+   e: Any] -> Any
   (if (= "list" (kind-of ctx view e))
     (sym-val ctx view (first (ordered-children ctx e)))
     nil))
 
-(defn unwrap-meta [ctx: Context? view: Any e: Any] -> Any
+(defn unwrap-meta
+  [ctx: Context?
+   view: Any
+   e: Any] -> Any
   (loop [current: Any e n 0]
     (if (and (some? current) (< n 64) (= "#%meta" (head-sym ctx view current)))
       (recur (nth (ordered-children ctx current) 2 nil) (inc n))
       current)))
 
-(defn bound-target [ctx: Context? view: Any BOUND: Any leaf: Any] -> Any
+(defn bound-target
+  [ctx: Context?
+   view: Any
+   BOUND: Any
+   leaf: Any] -> Any
   (if (or (nil? ctx) (nil? BOUND) (nil? leaf))
     nil
     (event-r (select-main-1 ctx view (events-by-subject-predicate ctx leaf BOUND)))))
 
-(defn refers-target [ctx: Context? view: Any BOUND: Any REFERS: Any leaf: Any] -> Any
+(defn refers-target
+  [ctx: Context?
+   view: Any
+   BOUND: Any
+   REFERS: Any
+   leaf: Any] -> Any
   (let [bt: Any (bound-target ctx view BOUND leaf)]
     (if (some? bt)
       bt
@@ -197,7 +271,10 @@
         nil
         (event-r (select-main-1 ctx view (events-by-subject-predicate ctx leaf REFERS)))))))
 
-(defn live-node? [ctx: Context? KIND: Any e: Any] -> Bool
+(defn live-node?
+  [ctx: Context?
+   KIND: Any
+   e: Any] -> Bool
   (if (or (nil? ctx) (nil? KIND) (nil? e))
     false
     (not (empty? (events-by-subject-predicate ctx e KIND)))))

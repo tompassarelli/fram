@@ -25,7 +25,9 @@
 
 (def ORD-STEP :- Int 65536)
 
-(defrecord OrdKey [path :- (Vec Int) tie :- Any])
+(defrecord OrdKey
+  [path :- (Vec Int)
+   tie :- Any])
 
 (defn- digits [s :- String] :- Int (let [v (parse-long s)] (if (nil? v) 0 v)))
 
@@ -47,13 +49,17 @@
 
 (defn ord-pos? [p :- Any] :- Bool (some? (ord-parse p)))
 
-(defn ord-str [path :- (Vec Int) tie :- Any] :- String
+(defn ord-str
+  [path :- (Vec Int)
+   tie :- Any] :- String
   (str "f" (str/join "." path) "~" tie))
 
 (defn- tie-key [tie :- Any] :- Any
   (if (int? tie) [0 tie] [1 (str tie)]))
 
-(defn ord-veccmp [a :- (Vec Int) b :- (Vec Int)] :- Int
+(defn ord-veccmp
+  [a :- (Vec Int)
+   b :- (Vec Int)] :- Int
   (loop [i 0]
     (let [ae (>= i (count a)) be (>= i (count b))]
       (cond
@@ -66,7 +72,9 @@
         :else
         (let [c (compare (nth a i) (nth b i))] (if (zero? c) (recur (inc i)) c))))))
 
-(defn ord-cmp [x :- OrdKey y :- OrdKey] :- Int
+(defn ord-cmp
+  [x :- OrdKey
+   y :- OrdKey] :- Int
   (let [c (ord-veccmp (:path x) (:path y))]
     (if (zero? c) (compare (tie-key (:tie x)) (tie-key (:tie y))) c)))
 
@@ -76,7 +84,9 @@
     (conj (vec (butlast last-path))
       (+ (nth last-path (dec (count last-path))) ORD-STEP))))
 
-(defn ord-between [lo :- (U (Vec Int) Nil) hi :- (U (Vec Int) Nil)] :- (Vec Int)
+(defn ord-between
+  [lo :- (U (Vec Int) Nil)
+   hi :- (U (Vec Int) Nil)] :- (Vec Int)
   (cond
     (and (nil? lo) (nil? hi))
     [ORD-STEP]
@@ -180,7 +190,9 @@
          :nearest
          (mapv pr-str bad)}))))
 
-(defn type-name-index [head :- Any modifier :- Any] :- Int
+(defn type-name-index
+  [head :- Any
+   modifier :- Any] :- Int
   (if (and (= "defunion" (str head)) (= ":throwable" (str modifier))) 2 1))
 
 (defn named-form-name [datum :- Any] :- (U String Nil)
@@ -249,7 +261,9 @@
 (defn reuse-node-id [datum: Any] -> Any
   (match datum [(ReuseNode node) node] [_ nil]))
 
-(defn- copy-reader-meta [value :- Any template :- Any] :- Any
+(defn- copy-reader-meta
+  [value :- Any
+   template :- Any] :- Any
   (if (instance? clojure.lang.IObj template)
     (with-meta value (meta template))
     value))
@@ -258,7 +272,9 @@
   (let [leaf (if (seq? datum) (first datum) datum)]
     (when (symbol? leaf) (str leaf))))
 
-(defn reuse-logical-datum [datum: Any node: Any] -> Any
+(defn reuse-logical-datum
+  [datum: Any
+   node: Any] -> Any
   (if (seq? datum)
     (let [items (vec datum) leaf (first items) marker (copy-reader-meta (->ReuseNode node) leaf) rebuilt (apply list (cons marker (rest items)))]
       (copy-reader-meta rebuilt datum))
@@ -270,14 +286,23 @@
     (let [items (vec datum) head (str (first items)) name-index (type-name-index head (second items)) top-name (logical-datum-name (nth items name-index nil)) base (if (and (named-def-head? head) (some? top-name)) {[:top top-name] top-name} {}) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member)]
       (if (< member-start 0)
         base
-        (reduce (fn [acc :- (Map Any String) i :- Int] :- (Map Any String) (let [nm (logical-datum-name (nth items i nil))] (if (nil? nm) acc (assoc acc [role nm] nm))))
+        (reduce (fn
+                  [acc :- (Map Any String)
+                   i :- Int] :- (Map Any String) (let [nm (logical-datum-name (nth items i nil))] (if (nil? nm) acc (assoc acc [role nm] nm))))
           base
           (range member-start (count items)))))))
 
-(defn reuse-retained-bindings [datum: Any old-bindings: (Map Any Any)] -> Any
+(defn reuse-retained-bindings
+  [datum: Any
+   old-bindings: (Map Any Any)] -> Any
   (if (not (seq? datum))
     datum
-    (let [items (vec datum) head (str (first items)) name-index (type-name-index head (second items)) replace-one (fn [xs :- (Vec Any) role :- Keyword i :- Int] :- (Vec Any) (let [raw (nth xs i nil) nm (logical-datum-name raw) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn [xs :- (Vec Any) i :- Int] :- (Vec Any) (replace-one xs role i)) with-top (range member-start (count with-top))))]
+    (let [items (vec datum) head (str (first items)) name-index (type-name-index head (second items)) replace-one (fn
+                                                                                                                    [xs :- (Vec Any)
+                                                                                                                     role :- Keyword
+                                                                                                                     i :- Int] :- (Vec Any) (let [raw (nth xs i nil) nm (logical-datum-name raw) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [xs :- (Vec Any)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             i :- Int] :- (Vec Any) (replace-one xs role i)) with-top (range member-start (count with-top))))]
       (copy-reader-meta (apply list rewritten) datum))))
 
 ;; ---------------------------------------------------------------- ord keys ---

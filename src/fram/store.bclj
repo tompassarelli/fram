@@ -28,10 +28,14 @@
       slots
       (recur (conj slots (t/->TermBucket position empty-ids)) (inc position)))))
 
-(defn- term-slot [value: Any width: Int] -> Int (mod (hash value) width))
+(defn- term-slot
+  [value: Any
+   width: Int] -> Int (mod (hash value) width))
 
 (defn- term-slot-add
-  [slots: (Vec t/TermBucket) slot: Int position: Int] -> (Vec t/TermBucket)
+  [slots: (Vec t/TermBucket)
+   slot: Int
+   position: Int] -> (Vec t/TermBucket)
   (assoc slots slot
          (t/->TermBucket slot
                          (conj (t/termbucket-positions (nth slots slot)) position))))
@@ -41,7 +45,8 @@
     (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
 (defn- build-atom-term-slots
-  [atoms: (Vec t/AtomRow) width: Int] -> (Vec t/TermBucket)
+  [atoms: (Vec t/AtomRow)
+   width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
     (if (>= position (count atoms))
       slots
@@ -49,7 +54,8 @@
              (inc position)))))
 
 (defn- build-triple-term-slots
-  [rows: (Vec t/TripleRow) width: Int] -> (Vec t/TermBucket)
+  [rows: (Vec t/TripleRow)
+   width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
     (if (>= position (count rows))
       slots
@@ -57,7 +63,8 @@
              (inc position)))))
 
 (defn- build-active-slots
-  [buckets: (Vec t/ActiveBucket) width: Int] -> (Vec t/TermBucket)
+  [buckets: (Vec t/ActiveBucket)
+   width: Int] -> (Vec t/TermBucket)
   (loop [slots: (Vec t/TermBucket) (fresh-term-slots width) position 0]
     (if (>= position (count buckets))
       slots
@@ -113,7 +120,9 @@
     (and (some? value) (= row (atom-row value)))))
 
 (defn- find-atom-position
-  [atoms: (Vec t/AtomRow) slots: (Vec t/TermBucket) value: t/AtomRow] -> Int
+  [atoms: (Vec t/AtomRow)
+   slots: (Vec t/TermBucket)
+   value: t/AtomRow] -> Int
   (let [positions: (Vec Int)
         (t/termbucket-positions (nth slots (term-slot value (count slots))))]
     (loop [offset 0]
@@ -125,7 +134,9 @@
             (recur (inc offset))))))))
 
 (defn- find-triple-position
-  [rows: (Vec t/TripleRow) slots: (Vec t/TermBucket) value: t/TripleRow] -> Int
+  [rows: (Vec t/TripleRow)
+   slots: (Vec t/TermBucket)
+   value: t/TripleRow] -> Int
   (let [positions: (Vec Int)
         (t/termbucket-positions (nth slots (term-slot value (count slots))))]
     (loop [offset 0]
@@ -137,7 +148,9 @@
             (recur (inc offset))))))))
 
 (defn- index-atom-term!
-  [ctx: (Atom t/TermStore) value: t/AtomRow position: Int] -> t/TermStore
+  [ctx: (Atom t/TermStore)
+   value: t/AtomRow
+   position: Int] -> t/TermStore
   (let [store: t/TermStore
         (swap! ctx update :atom-slots
                (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
@@ -151,7 +164,9 @@
       store)))
 
 (defn- index-triple-term!
-  [ctx: (Atom t/TermStore) value: t/TripleRow position: Int] -> t/TermStore
+  [ctx: (Atom t/TermStore)
+   value: t/TripleRow
+   position: Int] -> t/TermStore
   (let [store: t/TermStore
         (swap! ctx update :triple-slots
                (fn [slots: (Vec t/TermBucket)] -> (Vec t/TermBucket)
@@ -169,7 +184,9 @@
 (defn- atom-handle? [handle: Int] -> Bool (= 0 (mod handle 2)))
 (defn- handle-position [handle: Int] -> Int (quot handle 2))
 
-(defn- intern-handle! [ctx: (Atom t/TermStore) term: Any] -> Int
+(defn- intern-handle!
+  [ctx: (Atom t/TermStore)
+   term: Any] -> Int
   (if (not (t/term? term))
     (throw (ex-info "fram: cannot intern a value outside Term" {:type :invalid-term}))
     (if (t/triple? term)
@@ -201,13 +218,17 @@
             (index-atom-term! ctx value position)
             (atom-handle position)))))))
 
-(defn- valid-handle? [store: t/TermStore handle: Int] -> Bool
+(defn- valid-handle?
+  [store: t/TermStore
+   handle: Int] -> Bool
   (and (>= handle 0)
        (if (atom-handle? handle)
          (< (handle-position handle) (count (t/termstore-atoms store)))
          (< (handle-position handle) (count (t/termstore-triples store))))))
 
-(defn- resolve-handle [store: t/TermStore handle: Int] -> Any
+(defn- resolve-handle
+  [store: t/TermStore
+   handle: Int] -> Any
   (if (not (valid-handle? store handle))
     (throw (ex-info "fram: term handle does not resolve" {:type :invalid-term-handle}))
     (let [position (handle-position handle)]
@@ -218,14 +239,18 @@
                     (resolve-handle store (t/triplerow-slot1 row))
                     (resolve-handle store (t/triplerow-slot2 row))))))))
 
-(defn- resolve-triple-handle [store: t/TermStore handle: Int] -> t/Triple
+(defn- resolve-triple-handle
+  [store: t/TermStore
+   handle: Int] -> t/Triple
   (let [term (resolve-handle store handle)]
     (if (t/triple? term)
       term
       (throw (ex-info "fram: operation handle does not resolve to Triple"
                       {:type :invalid-operation-handle})))))
 
-(defn known-term-handle [store: t/TermStore term: Any] -> Int?
+(defn known-term-handle
+  [store: t/TermStore
+   term: Any] -> Int?
   (if (not (t/term? term))
     nil
     (if (t/triple? term)
@@ -247,11 +272,15 @@
              (atom-row term))]
         (when (>= position 0) (atom-handle position))))))
 
-(defn intern-term! [ctx: (Atom t/TermStore) term: Any] -> Any
+(defn intern-term!
+  [ctx: (Atom t/TermStore)
+   term: Any] -> Any
   (let [handle (intern-handle! ctx term)]
     (resolve-handle (deref ctx) handle)))
 
-(defn replay-terms! [ctx: (Atom t/TermStore) terms: (Vec Any)] -> (Atom t/TermStore)
+(defn replay-terms!
+  [ctx: (Atom t/TermStore)
+   terms: (Vec Any)] -> (Atom t/TermStore)
   (do
     (doseq [term terms] (intern-term! ctx term))
     ctx))
@@ -296,13 +325,16 @@
                operations)))
 
 (defn transaction-frame
-  [sequence: Int operations: (Vec t/CommitOperation)] -> t/TransactionFrame
+  [sequence: Int
+   operations: (Vec t/CommitOperation)] -> t/TransactionFrame
   (if (and (>= sequence 0) (valid-operations? operations))
     (t/->TransactionFrame sequence operations)
     (throw (ex-info "fram: transaction frame requires a non-negative sequence and operations"
                     {:type :invalid-transaction-frame}))))
 
-(defn- find-active-bucket-position [store: t/TermStore handle: Int] -> Int
+(defn- find-active-bucket-position
+  [store: t/TermStore
+   handle: Int] -> Int
   (let [slots: (Vec t/TermBucket) (t/termstore-active-slots store)
         buckets: (Vec t/ActiveBucket) (t/termstore-active-buckets store)
         positions: (Vec Int)
@@ -315,14 +347,18 @@
             position
             (recur (inc offset))))))))
 
-(defn- active-positions [store: t/TermStore handle: Int] -> (Vec Int)
+(defn- active-positions
+  [store: t/TermStore
+   handle: Int] -> (Vec Int)
   (let [position (find-active-bucket-position store handle)]
     (if (>= position 0)
       (t/activebucket-positions (nth (t/termstore-active-buckets store) position))
       empty-ids)))
 
 (defn- set-active-positions
-  [store: t/TermStore handle: Int positions: (Vec Int)] -> t/TermStore
+  [store: t/TermStore
+   handle: Int
+   positions: (Vec Int)] -> t/TermStore
   (let [known (find-active-bucket-position store handle)]
     (if (>= known 0)
       (assoc store :active-buckets
@@ -343,7 +379,9 @@
           store-with-bucket)))))
 
 (defn- apply-operation-state
-  [store: t/TermStore operation-position: Int row: t/OperationRow] -> t/TermStore
+  [store: t/TermStore
+   operation-position: Int
+   row: t/OperationRow] -> t/TermStore
   (let [handle (t/operationrow-triple-handle row)
         action (t/operationrow-action row)
         active: (Vec Int) (active-positions store handle)]
@@ -369,16 +407,20 @@
            (pop active)))))))
 
 (defn- operation-handles!
-  [ctx: (Atom t/TermStore) operations: (Vec t/CommitOperation)] -> (Vec Int)
+  [ctx: (Atom t/TermStore)
+   operations: (Vec t/CommitOperation)] -> (Vec Int)
   (reduce
-   (fn [handles: (Vec Int) operation: t/CommitOperation] -> (Vec Int)
+   (fn
+     [handles: (Vec Int)
+      operation: t/CommitOperation] -> (Vec Int)
      (conj handles
            (intern-handle! ctx (t/commitoperation-proposition operation))))
    empty-ids
    operations))
 
 (defn- append-transaction!
-  [ctx: (Atom t/TermStore) sequence: Int
+  [ctx: (Atom t/TermStore)
+   sequence: Int
    operations: (Vec t/CommitOperation)] -> t/Triple
   (let [before: t/TermStore (deref ctx)]
     (if (not (valid-operations? operations))
@@ -415,11 +457,13 @@
           (t/transaction-coordinate (t/termstore-space-id final-store) sequence))))))
 
 (defn commit-transaction!
-  [ctx: (Atom t/TermStore) operations: (Vec t/CommitOperation)] -> t/Triple
+  [ctx: (Atom t/TermStore)
+   operations: (Vec t/CommitOperation)] -> t/Triple
   (append-transaction! ctx (t/termstore-next-sequence (deref ctx)) operations))
 
 (defn replay-transaction!
-  [ctx: (Atom t/TermStore) frame: t/TransactionFrame] -> t/Triple
+  [ctx: (Atom t/TermStore)
+   frame: t/TransactionFrame] -> t/Triple
   (if (and (t/transaction-frame? frame)
            (and (>= (t/transactionframe-sequence frame) 0)
                 (valid-operations? (t/transactionframe-operations frame))))
@@ -429,14 +473,18 @@
     (throw (ex-info "fram: invalid transaction frame"
                     {:type :invalid-transaction-frame}))))
 
-(defn- occurrence-at [store: t/TermStore operation-position: Int] -> t/Triple
+(defn- occurrence-at
+  [store: t/TermStore
+   operation-position: Int] -> t/Triple
   (let [row: t/OperationRow (nth (t/termstore-operations store) operation-position)]
     (t/occurrence-coordinate
      (t/transaction-coordinate (t/termstore-space-id store)
                                (t/operationrow-tx-sequence row))
      (t/operationrow-ordinal row))))
 
-(defn- event-at [store: t/TermStore operation-position: Int] -> t/Triple
+(defn- event-at
+  [store: t/TermStore
+   operation-position: Int] -> t/Triple
   (let [row: t/OperationRow (nth (t/termstore-operations store) operation-position)
         occurrence: t/Triple (occurrence-at store operation-position)
         proposition: t/Triple
@@ -446,7 +494,8 @@
       (t/retraction-occurrence occurrence proposition))))
 
 (defn- first-transaction-after
-  [transactions: (Vec t/TransactionRow) sequence: Int] -> Int
+  [transactions: (Vec t/TransactionRow)
+   sequence: Int] -> Int
   (loop [low 0 high (count transactions)]
     (if (>= low high)
       low
@@ -457,7 +506,9 @@
           (recur low middle))))))
 
 (defn operation-range-bounds
-  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int] -> (Vec Int)
+  [store: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int] -> (Vec Int)
   (let [transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
         operations: (Vec t/OperationRow) (t/termstore-operations store)
         start-transaction (first-transaction-after transactions lower-exclusive)
@@ -473,8 +524,9 @@
     [start end]))
 
 (defn transaction-frames-between
-  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int]
-  -> (Vec t/TransactionFrame)
+  [store: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int] -> (Vec t/TransactionFrame)
   (let [transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
         first (first-transaction-after transactions lower-exclusive)
         end (first-transaction-after transactions upper-inclusive)]
@@ -505,7 +557,9 @@
                        (fn [known: (U (Vec Int) Nil)] -> (Vec Int)
                          (conj (or known []) position))))))))
 
-(defn- lower-bound-position [positions: (Vec Int) target: Int] -> Int
+(defn- lower-bound-position
+  [positions: (Vec Int)
+   target: Int] -> Int
   (loop [low 0 high (count positions)]
     (if (>= low high)
       low
@@ -514,7 +568,9 @@
           (recur (inc middle) high)
           (recur low middle))))))
 
-(defn- exact-occurrence-position [store: t/TermStore coordinate: Any] -> Int
+(defn- exact-occurrence-position
+  [store: t/TermStore
+   coordinate: Any] -> Int
   (if (not (t/occurrence-coordinate? coordinate))
     -1
     (let [transaction: t/Triple (t/triple-slot0 coordinate)
@@ -533,8 +589,12 @@
             -1))))))
 
 (defn operation-candidate-positions
-  [store: t/TermStore lower-exclusive: Int upper-inclusive: Int
-   coordinate: Any proposition: Any postings: (Map Int (Vec Int))] -> (Vec Int)
+  [store: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int
+   coordinate: Any
+   proposition: Any
+   postings: (Map Int (Vec Int))] -> (Vec Int)
   (let [[start end] (operation-range-bounds store lower-exclusive upper-inclusive)
         exact (when (some? coordinate) (exact-occurrence-position store coordinate))
         proposition-handle
@@ -558,7 +618,9 @@
        candidates)
       candidates)))
 
-(defn occurrence-tuple-at [store: t/TermStore position: Int] -> (Vec Any)
+(defn occurrence-tuple-at
+  [store: t/TermStore
+   position: Int] -> (Vec Any)
   (let [event: t/Triple (event-at store position)]
     [(t/triple-slot0 event) (t/triple-slot1 event) (t/triple-slot2 event)]))
 
@@ -629,13 +691,18 @@
      (t/termstore-transactions store)
      (t/termstore-operations store))))
 
-(defn- valid-prior-handle? [atom-count: Int triple-position: Int handle: Int] -> Bool
+(defn- valid-prior-handle?
+  [atom-count: Int
+   triple-position: Int
+   handle: Int] -> Bool
   (and (>= handle 0)
        (if (atom-handle? handle)
          (< (handle-position handle) atom-count)
          (< (handle-position handle) triple-position))))
 
-(defn- valid-triple-rows? [atom-count: Int rows: (Vec t/TripleRow)] -> Bool
+(defn- valid-triple-rows?
+  [atom-count: Int
+   rows: (Vec t/TripleRow)] -> Bool
   (loop [position 0]
     (if (>= position (count rows))
       true
@@ -647,7 +714,10 @@
           false)))))
 
 (defn- valid-dump-operation?
-  [triple-count: Int sequence: Int ordinal: Int row: t/OperationRow] -> Bool
+  [triple-count: Int
+   sequence: Int
+   ordinal: Int
+   row: t/OperationRow] -> Bool
   (let [handle (t/operationrow-triple-handle row)]
     (and (= sequence (t/operationrow-tx-sequence row))
          (and (= ordinal (t/operationrow-ordinal row))
@@ -658,8 +728,11 @@
                              (< (handle-position handle) triple-count))))))))
 
 (defn- valid-operation-slice?
-  [operations: (Vec t/OperationRow) triple-count: Int sequence: Int
-   first-operation: Int operation-count: Int] -> Bool
+  [operations: (Vec t/OperationRow)
+   triple-count: Int
+   sequence: Int
+   first-operation: Int
+   operation-count: Int] -> Bool
   (loop [ordinal 0]
     (if (>= ordinal operation-count)
       true
@@ -669,8 +742,10 @@
         false))))
 
 (defn- valid-history-rows?
-  [transactions: (Vec t/TransactionRow) operations: (Vec t/OperationRow)
-   triple-count: Int next-sequence-value: Int] -> Bool
+  [transactions: (Vec t/TransactionRow)
+   operations: (Vec t/OperationRow)
+   triple-count: Int
+   next-sequence-value: Int] -> Bool
   (loop [transaction-position 0 operation-position 0 previous-sequence -1]
     (if (>= transaction-position (count transactions))
       (and (= operation-position (count operations))
@@ -708,7 +783,9 @@
           current position (nth (t/termstore-operations current) position))
          (inc position))))))
 
-(defn load-term-store! [ctx: (Atom t/TermStore) data: Any] -> (Atom t/TermStore)
+(defn load-term-store!
+  [ctx: (Atom t/TermStore)
+   data: Any] -> (Atom t/TermStore)
   (if (not (t/term-store-dump? data))
     (throw (ex-info "fram: legacy store dump requires one-shot migration"
                     {:type :migration-required}))

@@ -8,9 +8,13 @@
 ;; Atom is the closed grounding vocabulary for the recursive term model.  An
 ;; Instant is canonical epoch seconds plus nanoseconds; civil-time context is
 ;; expressed by ordinary triples rather than folded into this scalar.
-(defrecord Instant [epoch-seconds: Int nanos: Int])
+(defrecord Instant
+  [epoch-seconds: Int
+   nanos: Int])
 (defn instant? [v: Any] -> Bool (instance? Instant v))
-(defn instant [epoch-seconds: Int nanos: Int] -> Instant
+(defn instant
+  [epoch-seconds: Int
+   nanos: Int] -> Instant
   (if (and (>= nanos 0) (< nanos 1000000000))
     (->Instant epoch-seconds nanos)
     (throw (ex-info "fram: instant nanoseconds must be in [0, 1000000000)"
@@ -18,37 +22,67 @@
 
 ;; Instant arithmetic stays on whole seconds: nanoseconds are already canonical
 ;; in [0, 1000000000), so shifting by seconds cannot leave that range.
-(defn instant-shift-seconds [at: Instant seconds: Int] -> Instant
+(defn instant-shift-seconds
+  [at: Instant
+   seconds: Int] -> Instant
   (->Instant (+ (instant-epoch-seconds at) seconds) (instant-nanos at)))
 
-(defn instant-seconds-between [earlier: Instant later: Instant] -> Int
+(defn instant-seconds-between
+  [earlier: Instant
+   later: Instant] -> Int
   (- (instant-epoch-seconds later) (instant-epoch-seconds earlier)))
 
 ;; Triple fields are Any only because the portable record ABI cannot spell a
 ;; recursive union in-place; term? enforces Term = Atom | Triple at the boundary.
 (defalias Atom (Dyn String Int Float Bool Keyword Instant))
-(defrecord Triple [slot0: Any slot1: Any slot2: Any])
+(defrecord Triple
+  [slot0: Any
+   slot1: Any
+   slot2: Any])
 (defalias Term (Dyn String Int Float Bool Keyword Instant Triple))
 
 ;; FRAMRPC payloads are closed records over the same recursive Term vocabulary.
 ;; A cancel frame carries only its header request-id; event bodies use RpcResponse.
-(defrecord RpcPageRequest [limit: Int cursor: Term?])
-(defrecord RpcPageResponse [ordinal: Int next-cursor: Term? done: Bool])
+(defrecord RpcPageRequest
+  [limit: Int
+   cursor: Term?])
+(defrecord RpcPageResponse
+  [ordinal: Int
+   next-cursor: Term?
+   done: Bool])
 (defrecord RpcError
-  [code: Keyword retryable: Bool message: String detail: Term?])
+  [code: Keyword
+   retryable: Bool
+   message: String
+   detail: Term?])
 (defrecord RpcRequest
-  [space: String op: Keyword expected-version: Int?
-   page: RpcPageRequest? timeout-ms: Int? payload: Term])
+  [space: String
+   op: Keyword
+   expected-version: Int?
+   page: RpcPageRequest?
+   timeout-ms: Int?
+   payload: Term])
 (defrecord RpcResponse
-  [space: String op: Keyword served-version: Int
-   page: RpcPageResponse? error: RpcError? payload: Term?])
+  [space: String
+   op: Keyword
+   served-version: Int
+   page: RpcPageResponse?
+   error: RpcError?
+   payload: Term?])
 (defrecord RpcFrameV1
-  [kind: Keyword flags: Int request-id: Int
-   request: RpcRequest? response: RpcResponse?])
-(defrecord TermCodecMeasure [bytes: Int nodes: Int])
+  [kind: Keyword
+   flags: Int
+   request-id: Int
+   request: RpcRequest?
+   response: RpcResponse?])
+(defrecord TermCodecMeasure
+  [bytes: Int
+   nodes: Int])
 ;; The value field is runtime-checked Term; Beagle cannot pass a recursive Dyn
 ;; across a module boundary without losing its alternatives.
-(defrecord TermCodecDecoded [value: Any nodes: Int])
+(defrecord TermCodecDecoded
+  [value: Any
+   nodes: Int])
 
 (defn triple? [v: Any] -> Bool (instance? Triple v))
 (defn rpc-page-request? [v: Any] -> Bool (instance? RpcPageRequest v))
@@ -71,33 +105,63 @@
 ;; Term handles are private tagged integers.  Only these three structural slots
 ;; cross the store/native boundary; no handle is part of Triple semantics.
 (defrecord AtomRow
-  [kind: Keyword string-value: String? int-value: Int? float-value: Float?
-   bool-value: Bool? keyword-value: Keyword? instant-value: Instant?])
-(defrecord TripleRow [slot0: Int slot1: Int slot2: Int])
-(defrecord TermBucket [key: Int positions: (Vec Int)])
+  [kind: Keyword
+   string-value: String?
+   int-value: Int?
+   float-value: Float?
+   bool-value: Bool?
+   keyword-value: Keyword?
+   instant-value: Instant?])
+(defrecord TripleRow
+  [slot0: Int
+   slot1: Int
+   slot2: Int])
+(defrecord TermBucket
+  [key: Int
+   positions: (Vec Int)])
 
 ;; SpaceId plus the transaction sequence and operation ordinal form an exact
 ;; occurrence coordinate. The handle is only a private content reference.
 (defalias SpaceId String)
 (defrecord TransactionRow
-  [sequence: Int first-operation: Int operation-count: Int])
+  [sequence: Int
+   first-operation: Int
+   operation-count: Int])
 (defrecord OperationRow
-  [tx-sequence: Int ordinal: Int action: Keyword triple-handle: Int])
-(defrecord ActiveBucket [triple-handle: Int positions: (Vec Int)])
-(defrecord CommitOperation [action: Keyword proposition: Triple])
-(defrecord TransactionFrame [sequence: Int operations: (Vec CommitOperation)])
+  [tx-sequence: Int
+   ordinal: Int
+   action: Keyword
+   triple-handle: Int])
+(defrecord ActiveBucket
+  [triple-handle: Int
+   positions: (Vec Int)])
+(defrecord CommitOperation
+  [action: Keyword
+   proposition: Triple])
+(defrecord TransactionFrame
+  [sequence: Int
+   operations: (Vec CommitOperation)])
 (defrecord TermStore
-  [space-id: SpaceId next-sequence: Int
-   atoms: (Vec AtomRow) triples: (Vec TripleRow)
-   transactions: (Vec TransactionRow) operations: (Vec OperationRow)
-   operation-live: (Vec Bool) withdrawal-targets: (Vec Int)
+  [space-id: SpaceId
+   next-sequence: Int
+   atoms: (Vec AtomRow)
+   triples: (Vec TripleRow)
+   transactions: (Vec TransactionRow)
+   operations: (Vec OperationRow)
+   operation-live: (Vec Bool)
+   withdrawal-targets: (Vec Int)
    active-buckets: (Vec ActiveBucket)
-   atom-slots: (Vec TermBucket) triple-slots: (Vec TermBucket)
+   atom-slots: (Vec TermBucket)
+   triple-slots: (Vec TermBucket)
    active-slots: (Vec TermBucket)])
 (defrecord TermStoreDump
-  [version: Int space-id: SpaceId next-sequence: Int
-   atoms: (Vec AtomRow) triples: (Vec TripleRow)
-   transactions: (Vec TransactionRow) operations: (Vec OperationRow)])
+  [version: Int
+   space-id: SpaceId
+   next-sequence: Int
+   atoms: (Vec AtomRow)
+   triples: (Vec TripleRow)
+   transactions: (Vec TransactionRow)
+   operations: (Vec OperationRow)])
 
 (defn commit-operation? [v: Any] -> Bool (instance? CommitOperation v))
 (defn transaction-frame? [v: Any] -> Bool (instance? TransactionFrame v))
@@ -125,13 +189,18 @@
               (term? (triple-slot2 v))))
     (atom? v)))
 
-(defn triple [slot0: Any slot1: Any slot2: Any] -> Triple
+(defn triple
+  [slot0: Any
+   slot1: Any
+   slot2: Any] -> Triple
   (let [value (->Triple slot0 slot1 slot2)]
     (if (term? value)
       value
       (throw (ex-info "fram: triple contains a value outside Term" {:type :invalid-term})))))
 
-(defn transaction-coordinate [space-id: String sequence: Int] -> Triple
+(defn transaction-coordinate
+  [space-id: String
+   sequence: Int] -> Triple
   (if (and (pos? (count space-id)) (>= sequence 0))
     (triple space-id tx-sequence sequence)
     (throw (ex-info "fram: transaction coordinate requires a non-empty space and non-negative sequence"
@@ -145,7 +214,9 @@
                       (and (integer? (triple-slot2 v))
                            (>= (triple-slot2 v) 0)))))))
 
-(defn occurrence-coordinate [tx: Triple ordinal: Int] -> Triple
+(defn occurrence-coordinate
+  [tx: Triple
+   ordinal: Int] -> Triple
   (if (and (transaction-coordinate? tx) (>= ordinal 0))
     (triple tx op-ordinal ordinal)
     (throw (ex-info "fram: occurrence coordinate requires a transaction coordinate and non-negative ordinal"
@@ -158,31 +229,41 @@
                  (and (integer? (triple-slot2 v))
                       (>= (triple-slot2 v) 0))))))
 
-(defn assertion-occurrence [occurrence: Triple proposition: Triple] -> Triple
+(defn assertion-occurrence
+  [occurrence: Triple
+   proposition: Triple] -> Triple
   (if (and (occurrence-coordinate? occurrence) (triple? proposition))
     (triple occurrence asserts proposition)
     (throw (ex-info "fram: assertion requires an occurrence coordinate"
                     {:type :invalid-assertion-occurrence}))))
 
-(defn retraction-occurrence [occurrence: Triple proposition: Triple] -> Triple
+(defn retraction-occurrence
+  [occurrence: Triple
+   proposition: Triple] -> Triple
   (if (and (occurrence-coordinate? occurrence) (triple? proposition))
     (triple occurrence retracts proposition)
     (throw (ex-info "fram: retraction requires an occurrence coordinate"
                     {:type :invalid-retraction-occurrence}))))
 
-(defn withdrawal [retraction: Triple target: Triple] -> Triple
+(defn withdrawal
+  [retraction: Triple
+   target: Triple] -> Triple
   (if (and (occurrence-coordinate? retraction) (occurrence-coordinate? target))
     (triple retraction withdraws target)
     (throw (ex-info "fram: withdrawal requires retraction and target occurrence coordinates"
                     {:type :invalid-withdrawal}))))
 
-(defn recorded-at [source: Triple at: Instant] -> Triple
+(defn recorded-at
+  [source: Triple
+   at: Instant] -> Triple
   (if (and (triple? source) (instant? at))
     (triple source recorded-at-predicate at)
     (throw (ex-info "fram: recorded-at requires a triple source and Instant"
                     {:type :invalid-recorded-at}))))
 
-(defn occurrence-before? [left: Triple right: Triple] -> Bool
+(defn occurrence-before?
+  [left: Triple
+   right: Triple] -> Bool
   (if (and (occurrence-coordinate? left) (occurrence-coordinate? right))
     (let [left-tx: Triple (triple-slot0 left)
           right-tx: Triple (triple-slot0 right)

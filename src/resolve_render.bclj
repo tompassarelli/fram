@@ -43,28 +43,54 @@
 
 (define-mode strict)
 
-(defn ultimate [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any B :- Any] :- Any
+(defn ultimate
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   B :- Any] :- Any
   (loop [b :- Any B n 0]
     (let [tgt (rr/refers-target ctx view BOUND REFERS b)]
       (if (and (some? tgt) (< n 64)) (recur tgt (inc n)) b))))
 
-(defn binding-name [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any B :- Any] :- Any
+(defn binding-name
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   B :- Any] :- Any
   (rr/sym-val ctx view (ultimate ctx view BOUND REFERS B)))
 
-(defn render-sym [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any e :- Any] :- Any
+(defn render-sym
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   e :- Any] :- Any
   (let [v (rr/pred-val ctx view e "v") D (rr/refers-target ctx view BOUND REFERS e)]
     (if (nil? D)
       v
       (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (rr/events-by-subject-predicate ctx e FIXED)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (binding-name ctx view BOUND REFERS D) nm (cond (some? cpfx) (str (str cpfx) (str nm0)) (some? afield) (str (str/lower-case (str nm0)) "-" (str afield)) :else nm0)]
         (cond fixed? v (some? qual) (str (str qual) "/" (str nm)) :else nm)))))
 
-(defn ord-edges [ctx :- rr/Context? n :- Any] :- (Vec Any)
+(defn ord-edges
+  [ctx :- rr/Context?
+   n :- Any] :- (Vec Any)
   (if (or (nil? ctx) (nil? n))
     []
-    (let [rows (reduce (fn [acc :- (Vec Any) event :- t/Triple] :- (Vec Any) (let [predicate (rr/event-predicate event)] (if (and (string? predicate) (rc/ord-pos? predicate)) (conj acc [(rc/ord-parse predicate) predicate event (rr/event-value event)]) acc))) [] (rr/events-by-subject ctx n))]
+    (let [rows (reduce (fn
+                         [acc :- (Vec Any)
+                          event :- t/Triple] :- (Vec Any) (let [predicate (rr/event-predicate event)] (if (and (string? predicate) (rc/ord-pos? predicate)) (conj acc [(rc/ord-parse predicate) predicate event (rr/event-value event)]) acc))) [] (rr/events-by-subject ctx n))]
       (vec (sort-by (fn [row :- Any] :- Any (nth row 0)) rc/ord-cmp rows)))))
 
-(defn node->str [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any n :- Any] :- String
+(defn node->str
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   n :- Any] :- String
   (let [k (rr/kind-of ctx view n)]
     (cond
       (= "list" k)
@@ -91,7 +117,13 @@
       :else
       (str (rr/pred-val ctx view n "v")))))
 
-(defn node->canon [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any n :- Any] :- Any
+(defn node->canon
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   n :- Any] :- Any
   (if (= "list" (rr/kind-of ctx view n))
     (into [:list]
       (mapv (fn [c :- Any] :- Any (node->canon ctx view BOUND REFERS FIXED c))
@@ -100,23 +132,50 @@
       [:leaf "symbol" (render-sym ctx view BOUND REFERS FIXED n)]
       [:leaf (rr/kind-of ctx view n) (rr/pred-val ctx view n "v")])))
 
-(defn- anchor-go [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any n :- Any target :- Any chain :- (Vec Any)] :- (Vec Any)
+(defn- anchor-go
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   n :- Any
+   target :- Any
+   chain :- (Vec Any)] :- (Vec Any)
   (if (= "list" (rr/kind-of ctx view n))
-    (let [chain2 (if (nil? n) chain (conj chain n)) st (reduce (fn [st :- (Vec Any) row :- Any] :- (Vec Any) (let [pos (nth row 1) cid (nth row 2) ch (nth row 3) sub (anchor-go ctx view BOUND REFERS FIXED ch target chain2) cc (nth sub 0) ms (into (nth st 1) (nth sub 1))] [(conj (nth st 0) cc) (if (= cc target) (conj ms {:parent n :pos pos :cid cid :child ch :chain chain2}) ms)])) [[] []] (ord-edges ctx n))]
+    (let [chain2 (if (nil? n) chain (conj chain n)) st (reduce (fn
+                                                                 [st :- (Vec Any)
+                                                                  row :- Any] :- (Vec Any) (let [pos (nth row 1) cid (nth row 2) ch (nth row 3) sub (anchor-go ctx view BOUND REFERS FIXED ch target chain2) cc (nth sub 0) ms (into (nth st 1) (nth sub 1))] [(conj (nth st 0) cc) (if (= cc target) (conj ms {:parent n :pos pos :cid cid :child ch :chain chain2}) ms)])) [[] []] (ord-edges ctx n))]
       [(into [:list] (nth st 0)) (nth st 1)])
     [(if (= "symbol" (rr/kind-of ctx view n))
        [:leaf "symbol" (render-sym ctx view BOUND REFERS FIXED n)]
        [:leaf (rr/kind-of ctx view n) (rr/pred-val ctx view n "v")])
      []]))
 
-(defn anchor-match-sites [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any root :- Any target :- Any] :- (Vec Any)
+(defn anchor-match-sites
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   root :- Any
+   target :- Any] :- (Vec Any)
   (vec (nth (anchor-go ctx view BOUND REFERS FIXED root target []) 1)))
 
-(defn anchor-matches [ctx :- rr/Context? view :- Any BOUND :- Any REFERS :- Any FIXED :- Any root :- Any target :- Any] :- (Vec Any)
+(defn anchor-matches
+  [ctx :- rr/Context?
+   view :- Any
+   BOUND :- Any
+   REFERS :- Any
+   FIXED :- Any
+   root :- Any
+   target :- Any] :- (Vec Any)
   (mapv (fn [s :- Any] :- Any [(get s :parent) (get s :pos) (get s :cid) (get s :child)])
     (anchor-match-sites ctx view BOUND REFERS FIXED root target)))
 
-(defn crumb-label [ctx :- rr/Context? view :- Any n :- Any] :- Any
+(defn crumb-label
+  [ctx :- rr/Context?
+   view :- Any
+   n :- Any] :- Any
   (let [h (rr/head-sym ctx view n)]
     (if (some? h)
       h

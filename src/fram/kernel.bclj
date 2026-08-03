@@ -20,23 +20,31 @@
 (def vocabulary-grouping: Keyword :grouped-under)
 (def kernel-vocabulary-prefix: String ":kernel/")
 
-(defn profile-header [profile-id: Any kind: String mode: String] -> t/Triple
+(defn profile-header
+  [profile-id: Any
+   kind: String
+   mode: String] -> t/Triple
   (t/triple profile-id kind mode))
 
 (defn relational-profile-declaration
-  [space-id: String profile-id: Any] -> t/Triple
+  [space-id: String
+   profile-id: Any] -> t/Triple
   (t/triple space-id profile-anchor
             (profile-header profile-id relational-profile-kind
                             observe-profile-mode)))
 
-(defn profile-rule [profile-id: Any rule: String] -> t/Triple
+(defn profile-rule
+  [profile-id: Any
+   rule: String] -> t/Triple
   (t/triple profile-id profile-includes rule))
 
 (defn- profile-anchor? [value: t/Triple] -> Bool
   (= profile-anchor (t/triple-slot1 value)))
 
 (defn- profile-has-rule?
-  [triples: (Vec t/Triple) profile-id: Any rule: String] -> Bool
+  [triples: (Vec t/Triple)
+   profile-id: Any
+   rule: String] -> Bool
   (not (empty?
         (filterv (fn [value: t/Triple] -> Bool
                    (and (= profile-id (t/triple-slot0 value))
@@ -45,7 +53,8 @@
                  triples))))
 
 (defn declared-relational-profile?
-  [triples: (Vec t/Triple) space-id: String] -> Bool
+  [triples: (Vec t/Triple)
+   space-id: String] -> Bool
   (not
    (empty?
     (filterv
@@ -65,7 +74,9 @@
                                    relational-profile-rules))))))))
      triples))))
 
-(defn- space-profile-ids [triples: (Vec t/Triple) space-id: String] -> (Vec Any)
+(defn- space-profile-ids
+  [triples: (Vec t/Triple)
+   space-id: String] -> (Vec Any)
   (mapv (fn [value: t/Triple] -> Any (t/triple-slot0 (t/triple-slot2 value)))
         (filterv (fn [value: t/Triple] -> Bool
                    (and (= space-id (t/triple-slot0 value))
@@ -74,7 +85,8 @@
                  triples)))
 
 (defn declared-vocabulary-rule?
-  [triples: (Vec t/Triple) space-id: String] -> Bool
+  [triples: (Vec t/Triple)
+   space-id: String] -> Bool
   (not (empty?
         (filterv (fn [profile-id: Any] -> Bool
                    (profile-has-rule? triples profile-id
@@ -89,7 +101,9 @@
          (and (str/includes? spelling "/")
               (not (str/starts-with? spelling kernel-vocabulary-prefix))))))
 
-(defn- grouped-vocabulary? [triples: (Vec t/Triple) term: Any] -> Bool
+(defn- grouped-vocabulary?
+  [triples: (Vec t/Triple)
+   term: Any] -> Bool
   (not (empty?
         (filterv (fn [value: t/Triple] -> Bool
                    (and (= term (t/triple-slot0 value))
@@ -99,7 +113,8 @@
 ;; R5 reads the whole space, so it cannot join R1-R4's per-proposition verdict:
 ;; the grouping that licenses a spelling lives in a sibling proposition.
 (defn vocabulary-lint-errors
-  [triples: (Vec t/Triple) proposition: t/Triple] -> (Vec String)
+  [triples: (Vec t/Triple)
+   proposition: t/Triple] -> (Vec String)
   (let [slot1: Any (t/triple-slot1 proposition)]
     (if (and (namespaced-vocabulary? slot1)
              (not (grouped-vocabulary? triples slot1)))
@@ -111,8 +126,7 @@
       (and (string? value) (> (count value) 0))))
 
 ;; Observe commits must not call this prospective verdict.
-(defn relational-admission-errors
-  [proposition: t/Triple] -> (Vec String)
+(defn relational-admission-errors [proposition: t/Triple] -> (Vec String)
   (let [slot0: Any (t/triple-slot0 proposition)
         slot1: Any (t/triple-slot1 proposition)
         slot2: Any (t/triple-slot2 proposition)]
@@ -128,8 +142,7 @@
       (conj "R4"))))
 
 ;; P3 requires an independent expression rather than a shared verdict helper.
-(defn relational-lint-errors
-  [proposition: t/Triple] -> (Vec String)
+(defn relational-lint-errors [proposition: t/Triple] -> (Vec String)
   (let [slot0: Any (t/triple-slot0 proposition)
         slot1: Any (t/triple-slot1 proposition)
         slot2: Any (t/triple-slot2 proposition)
@@ -147,12 +160,15 @@
       (not r4) (conj "R4"))))
 
 (defn lint-declared-profile
-  [triples: (Vec t/Triple) space-id: String] -> (Vec t/Triple)
+  [triples: (Vec t/Triple)
+   space-id: String] -> (Vec t/Triple)
   (if (not (declared-relational-profile? triples space-id))
     []
     (let [vocabulary?: Bool (declared-vocabulary-rule? triples space-id)]
       (reduce
-       (fn [violations: (Vec t/Triple) proposition: t/Triple] -> (Vec t/Triple)
+       (fn
+         [violations: (Vec t/Triple)
+          proposition: t/Triple] -> (Vec t/Triple)
          (if (profile-anchor? proposition)
            violations
            (let [relational: (Vec String) (relational-lint-errors proposition)
@@ -162,47 +178,63 @@
                          (vocabulary-lint-errors triples proposition))
                    relational)]
              (reduce
-              (fn [rows: (Vec t/Triple) rule: String] -> (Vec t/Triple)
+              (fn
+                [rows: (Vec t/Triple)
+                 rule: String] -> (Vec t/Triple)
                 (conj rows (t/triple proposition profile-violation rule)))
               violations
               rules))))
        []
        triples))))
 
-(defn triple-eq? [left: t/Triple right: t/Triple] -> Bool
+(defn triple-eq?
+  [left: t/Triple
+   right: t/Triple] -> Bool
   (= left right))
 
-(defn by-slot0 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
+(defn by-slot0
+  [triples: (Vec t/Triple)
+   term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot0 value)))
            triples))
 
-(defn by-slot1 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
+(defn by-slot1
+  [triples: (Vec t/Triple)
+   term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot1 value)))
            triples))
 
-(defn by-slot2 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
+(defn by-slot2
+  [triples: (Vec t/Triple)
+   term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot2 value)))
            triples))
 
 (defn by-slot01
-  [triples: (Vec t/Triple) slot0: Any slot1: Any] -> (Vec t/Triple)
+  [triples: (Vec t/Triple)
+   slot0: Any
+   slot1: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (and (= slot0 (t/triple-slot0 value))
                   (= slot1 (t/triple-slot1 value))))
            triples))
 
 (defn by-slot12
-  [triples: (Vec t/Triple) slot1: Any slot2: Any] -> (Vec t/Triple)
+  [triples: (Vec t/Triple)
+   slot1: Any
+   slot2: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (and (= slot1 (t/triple-slot1 value))
                   (= slot2 (t/triple-slot2 value))))
            triples))
 
 (defn by-slot02
-  [triples: (Vec t/Triple) slot0: Any slot2: Any] -> (Vec t/Triple)
+  [triples: (Vec t/Triple)
+   slot0: Any
+   slot2: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (and (= slot0 (t/triple-slot0 value))
                   (= slot2 (t/triple-slot2 value))))

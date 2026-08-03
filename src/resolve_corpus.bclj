@@ -37,11 +37,35 @@
 ;; that mutate resolve.clj's thread-local dynamic bindings more precisely than
 ;; Any. The recursive Term alias cannot cross Beagle module calls without
 ;; narrowing, so node/predicate fields use Any and are validated by rr/context.
-(defrecord CorpusState [ctx: rr/Context view: Any KIND: Any BOUND: Any REFERS: Any file-ents: (Atom Any) corpus-cache: Any corpus-scope: Any resolve-walk?: Bool srcs: (Vec Any) install-srcs: Any install-tables: Any install-warm: Any run-all: Any run-over: Any profile: Any])
+(defrecord CorpusState
+  [ctx: rr/Context
+   view: Any
+   KIND: Any
+   BOUND: Any
+   REFERS: Any
+   file-ents: (Atom Any)
+   corpus-cache: Any
+   corpus-scope: Any
+   resolve-walk?: Bool
+   srcs: (Vec Any)
+   install-srcs: Any
+   install-tables: Any
+   install-warm: Any
+   run-all: Any
+   run-over: Any
+   profile: Any])
 
-(defrecord CorpusHost [with-state :- Any load-edn :- Any state :- Any])
+(defrecord CorpusHost
+  [with-state :- Any
+   load-edn :- Any
+   state :- Any])
 
-(defn walk-corpus [srcs :- (Vec Any) modframe :- Any typeframe :- Any accessors :- Any ents :- Any] :- rw/Corpus
+(defn walk-corpus
+  [srcs :- (Vec Any)
+   modframe :- Any
+   typeframe :- Any
+   accessors :- Any
+   ents :- Any] :- rw/Corpus
   (rw/->Corpus srcs modframe typeframe accessors ents))
 
 (defn name->module [nm :- Any] :- Any
@@ -49,8 +73,19 @@
     (let [hit (re-matches MODULE-NAME-RE nm)] (if (some? hit) (second hit) nil))
     nil))
 
-(defn make-xresolve [ctx: rr/Context view: Any ents-of: Any exports: Any type-exports: Any accessor-exports: Any src: Any] -> Any
-  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src []))) xport (fn [m :- Any n :- Any] :- Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn [m :- Any n :- Any] :- Any (get-in accessor-exports [m n]))]
+(defn make-xresolve
+  [ctx: rr/Context
+   view: Any
+   ents-of: Any
+   exports: Any
+   type-exports: Any
+   accessor-exports: Any
+   src: Any] -> Any
+  (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src []))) xport (fn
+                                                                                                 [m :- Any
+                                                                                                  n :- Any] :- Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn
+                                                                                                                                                                                   [m :- Any
+                                                                                                                                                                                    n :- Any] :- Any (get-in accessor-exports [m n]))]
     (fn [nm :- Any] :- Any
       (cond
         (nil? nm)
@@ -86,28 +121,48 @@
         :else
         nil))))
 
-(defn module-export-set [ctx: rr/Context view: Any ents-of: Any src: Any] -> Any
+(defn module-export-set
+  [ctx: rr/Context
+   view: Any
+   ents-of: Any
+   src: Any] -> Any
   (let [ents (vec (get ents-of src [])) exports (rm/module-exports ctx view ents) value-exports (if (seq exports) exports (rm/module-defs ctx view ents))]
     (into #{}
       (concat (keys value-exports)
         (keys (rm/module-types ctx view ents))
         (keys (rm/module-accessors ctx view ents))))))
 
-(defn module-imports [ctx: rr/Context view: Any ents-of: Any src: Any] -> Any
+(defn module-imports
+  [ctx: rr/Context
+   view: Any
+   ents-of: Any
+   src: Any] -> Any
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src [])))]
     (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
 
-(defn import-graph [ctx: rr/Context view: Any ents-of: Any srcs: (Vec Any)] -> Any
+(defn import-graph
+  [ctx: rr/Context
+   view: Any
+   ents-of: Any
+   srcs: (Vec Any)] -> Any
   (into {}
     (map (fn [src :- Any] :- Any (let [ents (vec (get ents-of src []))] [(rm/module-name ctx view ents) (module-imports ctx view ents-of src)]))
       (filter (fn [src :- Any] :- Bool (some? (rm/module-name ctx view (vec (get ents-of src [])))))
         srcs))))
 
-(defn module-has-macro? [ctx: rr/Context view: Any ents-of: Any src: Any] -> Bool
+(defn module-has-macro?
+  [ctx: rr/Context
+   view: Any
+   ents-of: Any
+   src: Any] -> Bool
   (let [ents (vec (get ents-of src []))]
     (boolean (some (fn [form: Any] -> Bool (let [def-form (rm/unwrap-def ctx view form) head (first (rr/ordered-children ctx def-form))] (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
 
-(defn lift-bound-to-refers! [ctx: rr/Context KIND: Any BOUND: Any REFERS: Any] -> Any
+(defn lift-bound-to-refers!
+  [ctx: rr/Context
+   KIND: Any
+   BOUND: Any
+   REFERS: Any] -> Any
   (when (some? BOUND)
     (doseq [event (rr/events-by-predicate ctx BOUND)]
       (let [leaf (rr/event-subject event) target (rr/event-value event)]
@@ -123,7 +178,10 @@
           (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state))))))
       tables)))
 
-(defn resolve-edn! [host: CorpusHost edn-paths: (Vec Any) body: Any] -> Any
+(defn resolve-edn!
+  [host: CorpusHost
+   edn-paths: (Vec Any)
+   body: Any] -> Any
   (let [context: rr/Context (rr/context (c/new-term-store "resolve")) with-state (:with-state host)]
     (with-state context
       (fn [] -> Any
@@ -134,7 +192,10 @@
             (let [run-all (:run-all state)] (run-all))
             (let [result (body)] (do (rr/commit! context) result))))))))
 
-(defn resolve-warm-store! [host: CorpusHost store: (Atom t/TermStore) body: Any] -> Any
+(defn resolve-warm-store!
+  [host: CorpusHost
+   store: (Atom t/TermStore)
+   body: Any] -> Any
   (let [context: rr/Context (rr/context store) with-state (:with-state host)]
     (with-state context
       (fn [] -> Any
@@ -146,7 +207,11 @@
               (lift-bound-to-refers! (:ctx state) (:KIND state) (:BOUND state) (:REFERS state)))
             (let [result (body)] (do (rr/commit! context) result))))))))
 
-(defn resolve-modules! [host: CorpusHost store: (Atom t/TermStore) module-set: Any body: Any] -> Any
+(defn resolve-modules!
+  [host: CorpusHost
+   store: (Atom t/TermStore)
+   module-set: Any
+   body: Any] -> Any
   (let [context: rr/Context (rr/context store) with-state (:with-state host)]
     (with-state context
       (fn [] -> Any
@@ -158,12 +223,18 @@
               (lift-bound-to-refers! (:ctx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
             (let [result (body)] (do (rr/commit! context) result))))))))
 
-(defn file-entities [file-ents :- (Atom Any) src :- Any] :- Any
+(defn file-entities
+  [file-ents :- (Atom Any)
+   src :- Any] :- Any
   (get (deref file-ents) src []))
 
 (defn file-entity-map [file-ents :- (Atom Any)] :- Any (deref file-ents))
 
-(defn def-binding [modframe :- Any typeframe :- Any src :- Any nm :- Any] :- Any
+(defn def-binding
+  [modframe :- Any
+   typeframe :- Any
+   src :- Any
+   nm :- Any] :- Any
   (or (get (get modframe src) nm) (get (get typeframe src) nm)))
 
 (defn corpus-table-values [tables :- Any] :- Any
@@ -193,7 +264,10 @@
     (or (= "child" predicate)
       (or (= "tail" predicate) (some? (re-matches REF-PREDICATE-RE predicate))))))
 
-(defn load-edn! [ctx: rr/Context file-ents: (Atom Any) path: Any] -> Any
+(defn load-edn!
+  [ctx: rr/Context
+   file-ents: (Atom Any)
+   path: Any] -> Any
   (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line :- Any] :- Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid :- Any] :- Any (or (get (deref local) lid) (let [e (rr/mint! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
     (do
       (doseq [line lines :when (str/starts-with? line "[")]
