@@ -16,6 +16,7 @@ beagle	src/fram/datalog.bclj	out/fram/datalog.clj
 beagle	src/fram/kernel.bclj	out/fram/kernel.clj
 beagle	src/fram/kernel_classify.bclj	out/fram/kernel_classify.clj
 beagle	src/fram/fold.bclj	out/fram/fold.clj
+beagle	src/fram/fri_replay.bclj	out/fram/fri_replay.clj
 beagle	src/fram/import.bclj	out/fram/import.clj
 beagle	src/fram/export.bclj	out/fram/export.clj
 beagle	src/fram/query.bclj	out/fram/query.clj

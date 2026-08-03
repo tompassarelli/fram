@@ -65,6 +65,22 @@ oracle: 12/12 corpora agree
 Until the Zig replay executable exists, `bash tests/zig_occ_oracle_test.sh
 --jvm-only` runs and retains the JVM side alone for deterministic-oracle checks.
 
+## Beagle replay leg
+
+`src/fram/fri_replay.bclj` decides the same twelve corpora and folds the
+accepted transactions through `fram.store`. Its bar is
+
+```sh
+bash tests/fri2_replay_oracle_test.sh
+```
+
+which per corpus diffs the module's summary line against the frozen Zig
+oracle's own byte-for-byte and then compares final state with the FRAMLOG that
+Zig daemon persisted. The two states are equal modulo one stated projection:
+the Zig daemon masks a single-cardinality displacement in its live index and
+leaves the displaced assertion in history, while the Beagle module records the
+displacement as a retraction so the TermStore needs no projection layer.
+
 
 ## Excluded incidental daemon facts (C3 record)
 

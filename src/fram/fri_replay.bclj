@@ -1,0 +1,623 @@
+#lang beagle/clj
+;; @upstream:text-arm — re-ingest into the code graph before editing again.
+;;
+;; FRI2/FRAMLOG oracle replay: decisions are made here, then folded through
+;; fram.store, so the TermStore and not this module's model is the state authority.
+;;
+;; INVARIANT: stays inside the native-lowerable subset — closed records, (Vec T),
+;; String/Int/Bool, no host collections, no regex, no throw, no I/O, no
+;; higher-order fns, no env reads. Any appears only in string-slots?/slot-text.
+(ns fram.fri-replay)
+(define-mode strict)
+(require fram.types :as t)
+(require fram.fold :as fold)
+
+;; ---------------------------------------------------------------- text
+
+(def digit-table: (Vec String) ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"])
+(def no-strings: (Vec String) [])
+
+(defn- char-at [text: String index: Int] -> String (subs text index (+ index 1)))
+
+(defn- split-on [text: String separator: String] -> (Vec String)
+  (loop [index: Int 0 start: Int 0 parts: (Vec String) no-strings]
+    (if (>= index (count text))
+      (conj parts (subs text start index))
+      (if (= separator (char-at text index))
+        (recur (+ index 1) (+ index 1) (conj parts (subs text start index)))
+        (recur (+ index 1) start parts)))))
+
+(defn- index-of [text: String needle: String] -> Int
+  (loop [index: Int 0]
+    (if (>= index (count text))
+      -1
+      (if (= needle (char-at text index)) index (recur (+ index 1))))))
+
+(defn- last-index-of [text: String needle: String] -> Int
+  (loop [index: Int (- (count text) 1)]
+    (if (< index 0)
+      -1
+      (if (= needle (char-at text index)) index (recur (- index 1))))))
+
+(defn- trim-character? [character: String] -> Bool
+  (or (= character " ") (= character "\t") (= character "\r")))
+
+;; The Zig oracle trims " \t\r" from both ends of a corpus line before it splits
+;; fields; a divergence here would shift every field index.
+(defn- trim-line [text: String] -> String
+  (let [limit: Int
+        (loop [index: Int (count text)]
+          (if (and (> index 0) (trim-character? (char-at text (- index 1))))
+            (recur (- index 1))
+            index))
+        start: Int
+        (loop [index: Int 0]
+          (if (and (< index limit) (trim-character? (char-at text index)))
+            (recur (+ index 1))
+            index))]
+    (subs text start limit)))
+
+(defn- join-strings [values: (Vec String) separator: String] -> String
+  (loop [index: Int 0 result: String ""]
+    (if (>= index (count values))
+      result
+      (recur (+ index 1)
+             (if (= index 0)
+               (nth values index)
+               (str result separator (nth values index)))))))
+
+(defrecord IntParse [ok: Bool value: Int])
+
+(defn- digit-value [character: String] -> Int
+  (loop [index: Int 0]
+    (if (>= index (count digit-table))
+      -1
+      (if (= character (nth digit-table index)) index (recur (+ index 1))))))
+
+(defn- parse-int [text: String] -> IntParse
+  (let [negative: Bool (and (> (count text) 0) (= "-" (char-at text 0)))
+        start: Int (if negative 1 0)]
+    (if (>= start (count text))
+      (->IntParse false 0)
+      (loop [index: Int start magnitude: Int 0]
+        (if (>= index (count text))
+          (->IntParse true (if negative (- 0 magnitude) magnitude))
+          (let [value: Int (digit-value (char-at text index))]
+            (if (< value 0)
+              (->IntParse false 0)
+              (recur (+ index 1) (+ (* magnitude 10) value)))))))))
+
+;; ---------------------------------------------------------------- parsing
+
+(def line-version: Int 0)
+(def line-assert: Int 1)
+(def line-retract: Int 2)
+(def line-batch: Int 3)
+(def line-invalid: Int 4)
+
+(defrecord ParsedFact
+  [valid: Bool predicate: String value: String base: Int has-base: Bool])
+(defrecord ParsedOp
+  [kind: Int subject: String predicate: String value: String
+   base: Int has-base: Bool facts: (Vec ParsedFact) error: String])
+
+(def no-facts: (Vec ParsedFact) [])
+(def invalid-fact: ParsedFact (->ParsedFact false "" "" 0 false))
+
+(defn- invalid-op [message: String] -> ParsedOp
+  (->ParsedOp line-invalid "" "" "" 0 false no-facts message))
+
+;; A fact token is P=R or P=R@BASE, where a trailing @ that does not carry an
+;; integer is part of the value rather than a base.
+(defn- parse-fact [token: String] -> ParsedFact
+  (let [equals: Int (index-of token "=")]
+    (if (or (< equals 1) (>= (+ equals 1) (count token)))
+      invalid-fact
+      (let [predicate: String (subs token 0 equals)
+            encoded: String (subs token (+ equals 1) (count token))
+            at: Int (last-index-of encoded "@")]
+        (if (< at 0)
+          (->ParsedFact true predicate encoded 0 false)
+          (if (>= (+ at 1) (count encoded))
+            invalid-fact
+            (let [parsed: IntParse (parse-int (subs encoded (+ at 1) (count encoded)))]
+              (if (intparse-ok parsed)
+                (->ParsedFact true predicate (subs encoded 0 at)
+                              (intparse-value parsed) true)
+                (->ParsedFact true predicate encoded 0 false)))))))))
+
+(defn- parse-facts [encoded: String] -> (Vec ParsedFact)
+  (if (= 0 (count encoded))
+    no-facts
+    (let [tokens: (Vec String) (split-on encoded "|")]
+      (loop [index: Int 0 facts: (Vec ParsedFact) no-facts]
+        (if (>= index (count tokens))
+          facts
+          (recur (+ index 1) (conj facts (parse-fact (nth tokens index)))))))))
+
+(defn- facts-parsed? [facts: (Vec ParsedFact)] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count facts))
+      true
+      (if (parsedfact-valid (nth facts index)) (recur (+ index 1)) false))))
+
+(defn- parse-mutation
+  [operation: String fields: (Vec String) arity: Int] -> ParsedOp
+  (if (or (< arity 4) (> arity 5))
+    (invalid-op (str "invalid field count for " operation))
+    (if (and (= operation "assert-at-version") (not (= arity 5)))
+      (invalid-op "assert-at-version requires a base")
+      (let [kind: Int (if (= operation "retract") line-retract line-assert)
+            subject: String (nth fields 1)
+            predicate: String (nth fields 2)
+            value: String (nth fields 3)]
+        (if (= arity 4)
+          (->ParsedOp kind subject predicate value 0 false no-facts "")
+          (let [parsed: IntParse (parse-int (nth fields 4))]
+            (if (intparse-ok parsed)
+              (->ParsedOp kind subject predicate value
+                          (intparse-value parsed) true no-facts "")
+              (invalid-op "base is not an integer"))))))))
+
+(defn- parse-batch
+  [operation: String fields: (Vec String) arity: Int] -> ParsedOp
+  (if (= operation "assert-batch-at-version")
+    (if (= arity 4)
+      (let [parsed: IntParse (parse-int (nth fields 2))]
+        (if (intparse-ok parsed)
+          (->ParsedOp line-batch (nth fields 1) "" ""
+                      (intparse-value parsed) true
+                      (parse-facts (nth fields 3)) "")
+          (invalid-op "batch base is not an integer")))
+      (invalid-op "assert-batch-at-version takes a subject, a base, and facts"))
+    (if (or (= arity 2) (= arity 3))
+      (->ParsedOp line-batch (nth fields 1) "" "" 0 false
+                  (parse-facts (if (= arity 3) (nth fields 2) "")) "")
+      (invalid-op "invalid field count for assert-batch"))))
+
+(defn- parse-line [line: String] -> ParsedOp
+  (let [fields: (Vec String) (split-on line "\t")
+        operation: String (nth fields 0)
+        arity: Int (count fields)]
+    (if (= operation "version")
+      (if (= arity 1)
+        (->ParsedOp line-version "" "" "" 0 false no-facts "")
+        (invalid-op "version takes no further fields"))
+      (if (or (= operation "assert")
+              (= operation "retract")
+              (= operation "assert-at-version"))
+        (parse-mutation operation fields arity)
+        (if (or (= operation "assert-batch")
+                (= operation "assert-batch-at-version"))
+          (parse-batch operation fields arity)
+          (invalid-op (str "unknown corpus operation " operation)))))))
+
+;; ---------------------------------------------------------------- model
+
+(def act-assert: Int 1)
+(def act-retract: Int 2)
+
+(defrecord ModelTriple [slot0: String slot1: String slot2: String])
+(defrecord Model [triples: (Vec ModelTriple) version: Int])
+(defrecord Action
+  [operation: Int slot0: String slot1: String slot2: String local-base: Bool])
+(defrecord ReplayCommit [action: Int triple: ModelTriple])
+
+(def no-triples: (Vec ModelTriple) [])
+(def no-actions: (Vec Action) [])
+(def no-commits: (Vec ReplayCommit) [])
+(def initial-model: Model (->Model no-triples 0))
+
+(defn- strip-at [text: String] -> String
+  (if (and (> (count text) 0) (= "@" (char-at text 0)))
+    (subs text 1 (count text))
+    text))
+
+(defn- find-exact
+  [triples: (Vec ModelTriple) slot0: String slot1: String slot2: String] -> Int
+  (loop [index: Int 0]
+    (if (>= index (count triples))
+      -1
+      (let [row: ModelTriple (nth triples index)]
+        (if (and (= slot0 (modeltriple-slot0 row))
+                 (= slot1 (modeltriple-slot1 row))
+                 (= slot2 (modeltriple-slot2 row)))
+          index
+          (recur (+ index 1)))))))
+
+(defn- find-group
+  [triples: (Vec ModelTriple) slot0: String slot1: String] -> Int
+  (loop [index: Int 0]
+    (if (>= index (count triples))
+      -1
+      (let [row: ModelTriple (nth triples index)]
+        (if (and (= slot0 (modeltriple-slot0 row))
+                 (= slot1 (modeltriple-slot1 row)))
+          index
+          (recur (+ index 1)))))))
+
+(defn- remove-at
+  [triples: (Vec ModelTriple) position: Int] -> (Vec ModelTriple)
+  (loop [index: Int 0 result: (Vec ModelTriple) no-triples]
+    (if (>= index (count triples))
+      result
+      (recur (+ index 1)
+             (if (= index position) result (conj result (nth triples index)))))))
+
+(defn- single-predicate?
+  [triples: (Vec ModelTriple) predicate: String] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count triples))
+      false
+      (let [row: ModelTriple (nth triples index)]
+        (if (and (= "cardinality" (modeltriple-slot1 row))
+                 (= "single" (modeltriple-slot2 row))
+                 (= predicate (strip-at (modeltriple-slot0 row))))
+          true
+          (recur (+ index 1)))))))
+
+(defn- subject-predicate-count
+  [triples: (Vec ModelTriple) subject: String predicate: String] -> Int
+  (loop [index: Int 0 total: Int 0]
+    (if (>= index (count triples))
+      total
+      (let [row: ModelTriple (nth triples index)]
+        (recur (+ index 1)
+               (if (and (= subject (modeltriple-slot0 row))
+                        (= predicate (modeltriple-slot1 row)))
+                 (+ total 1)
+                 total))))))
+
+;; Declaring a predicate single is refused while any subject still carries more
+;; than one value under it: the declaration would silently drop live data.
+(defn- collapses? [triples: (Vec ModelTriple) predicate: String] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count triples))
+      false
+      (let [row: ModelTriple (nth triples index)]
+        (if (and (= predicate (modeltriple-slot1 row))
+                 (> (subject-predicate-count triples (modeltriple-slot0 row) predicate) 1))
+          true
+          (recur (+ index 1)))))))
+
+(defn- declaration-collapse? [model: Model action: Action] -> Bool
+  (and (= act-assert (action-operation action))
+       (= "cardinality" (action-slot1 action))
+       (= "single" (action-slot2 action))
+       (collapses? (model-triples model) (strip-at (action-slot0 action)))))
+
+(defrecord GroupRemoval
+  [triples: (Vec ModelTriple) commits: (Vec ReplayCommit)])
+
+(defn- remove-group
+  [triples: (Vec ModelTriple) slot0: String slot1: String] -> GroupRemoval
+  (loop [current: (Vec ModelTriple) triples commits: (Vec ReplayCommit) no-commits]
+    (let [position: Int (find-group current slot0 slot1)]
+      (if (< position 0)
+        (->GroupRemoval current commits)
+        (recur (remove-at current position)
+               (conj commits
+                     (->ReplayCommit act-retract (nth current position))))))))
+
+(defrecord ApplyResult
+  [model: Model changed: Bool collapse: Bool commits: (Vec ReplayCommit)])
+
+(defn- apply-assert [model: Model action: Action] -> ApplyResult
+  (let [triples: (Vec ModelTriple) (model-triples model)
+        slot0: String (action-slot0 action)
+        slot1: String (action-slot1 action)
+        slot2: String (action-slot2 action)]
+    (if (>= (find-exact triples slot0 slot1 slot2) 0)
+      (->ApplyResult model false false no-commits)
+      (let [removal: GroupRemoval
+            (if (single-predicate? triples slot1)
+              (remove-group triples slot0 slot1)
+              (->GroupRemoval triples no-commits))
+            row: ModelTriple (->ModelTriple slot0 slot1 slot2)]
+        (->ApplyResult
+         (->Model (conj (groupremoval-triples removal) row) (model-version model))
+         true false
+         (conj (groupremoval-commits removal) (->ReplayCommit act-assert row)))))))
+
+(defn- apply-retract [model: Model action: Action] -> ApplyResult
+  (let [triples: (Vec ModelTriple) (model-triples model)
+        slot0: String (action-slot0 action)
+        slot1: String (action-slot1 action)
+        position: Int (if (single-predicate? triples slot1)
+                        (find-group triples slot0 slot1)
+                        (find-exact triples slot0 slot1 (action-slot2 action)))]
+    (if (< position 0)
+      (->ApplyResult model false false no-commits)
+      (->ApplyResult (->Model (remove-at triples position) (model-version model))
+                     true false
+                     (conj no-commits
+                           (->ReplayCommit act-retract (nth triples position)))))))
+
+(defn- apply-action [model: Model action: Action] -> ApplyResult
+  (if (declaration-collapse? model action)
+    (->ApplyResult model false true no-commits)
+    (if (= act-assert (action-operation action))
+      (apply-assert model action)
+      (apply-retract model action))))
+
+;; ---------------------------------------------------------------- outcomes
+
+(def kind-version: Int 0)
+(def kind-ok: Int 1)
+(def kind-reject: Int 2)
+
+(def reason-invalid-request: String "invalid-request")
+(def reason-conflict: String "conflict")
+(def reason-cardinality-collapse: String "cardinality-collapse")
+
+(defrecord Outcome
+  [kind: Int batch: Bool version: Int reason: String
+   written: (Vec String) idempotent: (Vec String)])
+(defrecord MutationResult
+  [model: Model outcome: Outcome commits: (Vec ReplayCommit)])
+
+(def no-outcomes: (Vec Outcome) [])
+
+(defn- reject [model: Model batch: Bool reason: String] -> MutationResult
+  (->MutationResult
+   model
+   (->Outcome kind-reject batch (model-version model) reason no-strings no-strings)
+   no-commits))
+
+(defn- op-actions [op: ParsedOp] -> (Vec Action)
+  (if (= line-batch (parsedop-kind op))
+    (let [facts: (Vec ParsedFact) (parsedop-facts op)]
+      (loop [index: Int 0 actions: (Vec Action) no-actions]
+        (if (>= index (count facts))
+          actions
+          (let [fact: ParsedFact (nth facts index)]
+            (recur (+ index 1)
+                   (conj actions
+                         (->Action act-assert (parsedop-subject op)
+                                   (parsedfact-predicate fact)
+                                   (parsedfact-value fact)
+                                   (parsedfact-has-base fact))))))))
+    (conj no-actions
+          (->Action (if (= line-retract (parsedop-kind op)) act-retract act-assert)
+                    (parsedop-subject op) (parsedop-predicate op)
+                    (parsedop-value op) false))))
+
+(defn- any-local-base? [actions: (Vec Action)] -> Bool
+  (loop [index: Int 0]
+    (if (>= index (count actions))
+      false
+      (if (action-local-base (nth actions index))
+        true
+        (recur (+ index 1))))))
+
+(defn- apply-actions
+  [model: Model actions: (Vec Action) batch: Bool] -> MutationResult
+  (loop [index: Int 0
+         trial: Model model
+         commits: (Vec ReplayCommit) no-commits
+         written: (Vec String) no-strings
+         idempotent: (Vec String) no-strings
+         collapsed: Bool false]
+    (if (or collapsed (>= index (count actions)))
+      (if collapsed
+        (reject model batch reason-cardinality-collapse)
+        (let [version: Int (if (> (count written) 0)
+                             (+ (model-version model) 1)
+                             (model-version model))]
+          (->MutationResult
+           (->Model (model-triples trial) version)
+           (->Outcome kind-ok batch version "" written idempotent)
+           commits)))
+      (let [action: Action (nth actions index)
+            result: ApplyResult (apply-action trial action)]
+        (if (applyresult-collapse result)
+          (recur (count actions) trial commits written idempotent true)
+          (recur (+ index 1)
+                 (applyresult-model result)
+                 (vec (concat commits (applyresult-commits result)))
+                 (if (applyresult-changed result)
+                   (conj written (action-slot1 action))
+                   written)
+                 (if (applyresult-changed result)
+                   idempotent
+                   (conj idempotent (action-slot1 action)))
+                 false))))))
+
+;; Rejection precedence is the oracle contract: base shape, then base agreement,
+;; then request shape, then the cardinality guard.
+(defn- mutate [model: Model op: ParsedOp] -> MutationResult
+  (let [actions: (Vec Action) (op-actions op)
+        batch: Bool (= line-batch (parsedop-kind op))]
+    (if (and (parsedop-has-base op) (< (parsedop-base op) 0))
+      (reject model batch reason-invalid-request)
+      (if (and (parsedop-has-base op)
+               (not (= (parsedop-base op) (model-version model))))
+        (reject model batch reason-conflict)
+        (if (or (= 0 (count actions))
+                (any-local-base? actions)
+                (not (facts-parsed? (parsedop-facts op))))
+          (reject model batch reason-invalid-request)
+          (apply-actions model actions batch))))))
+
+;; ---------------------------------------------------------------- replay
+
+(defrecord ReplayFrame [sequence: Int commits: (Vec ReplayCommit)])
+(defrecord ReplayResult
+  [operations: Int model: Model outcomes: (Vec Outcome)
+   frames: (Vec ReplayFrame) error: String])
+
+(def no-frames: (Vec ReplayFrame) [])
+
+(defn replay [text: String] -> ReplayResult
+  (let [lines: (Vec String) (split-on text "\n")]
+    (loop [index: Int 0
+           model: Model initial-model
+           outcomes: (Vec Outcome) no-outcomes
+           frames: (Vec ReplayFrame) no-frames
+           error: String ""]
+      (if (or (> (count error) 0) (>= index (count lines)))
+        (->ReplayResult (count outcomes) model outcomes frames error)
+        (let [line: String (trim-line (nth lines index))]
+          (if (= 0 (count line))
+            (recur (+ index 1) model outcomes frames error)
+            (let [op: ParsedOp (parse-line line)]
+              (if (= line-invalid (parsedop-kind op))
+                (recur (+ index 1) model outcomes frames (parsedop-error op))
+                (if (= line-version (parsedop-kind op))
+                  (recur (+ index 1) model
+                         (conj outcomes
+                               (->Outcome kind-version false (model-version model)
+                                          "" no-strings no-strings))
+                         frames error)
+                  (let [result: MutationResult (mutate model op)
+                        next-model: Model (mutationresult-model result)
+                        commits: (Vec ReplayCommit) (mutationresult-commits result)]
+                    (recur (+ index 1)
+                           next-model
+                           (conj outcomes (mutationresult-outcome result))
+                           (if (> (count commits) 0)
+                             (conj frames
+                                   (->ReplayFrame (model-version next-model) commits))
+                             frames)
+                           error)))))))))))
+
+;; ---------------------------------------------------------------- store
+
+(defn- to-triple [row: ModelTriple] -> t/Triple
+  (t/->Triple (modeltriple-slot0 row)
+              (modeltriple-slot1 row)
+              (modeltriple-slot2 row)))
+
+(defn- to-commit-operation [commit: ReplayCommit] -> t/CommitOperation
+  (t/->CommitOperation
+   (if (= act-assert (replaycommit-action commit)) t/assert-action t/retract-action)
+   (to-triple (replaycommit-triple commit))))
+
+(defn- to-transaction-frame [frame: ReplayFrame] -> t/TransactionFrame
+  (let [commits: (Vec ReplayCommit) (replayframe-commits frame)]
+    (t/->TransactionFrame
+     (replayframe-sequence frame)
+     (loop [index: Int 0 operations: (Vec t/CommitOperation) []]
+       (if (>= index (count commits))
+         operations
+         (recur (+ index 1)
+                (conj operations (to-commit-operation (nth commits index)))))))))
+
+(defn transaction-frames [result: ReplayResult] -> (Vec t/TransactionFrame)
+  (let [frames: (Vec ReplayFrame) (replayresult-frames result)]
+    (loop [index: Int 0 built: (Vec t/TransactionFrame) []]
+      (if (>= index (count frames))
+        built
+        (recur (+ index 1)
+               (conj built (to-transaction-frame (nth frames index))))))))
+
+(defn fold-replay! [space-id: String result: ReplayResult] -> fold/Fold
+  (fold/fold! space-id (transaction-frames result)))
+
+;; The two Any sites in this module: a fram.types Triple declares its slots Any
+;; because the portable record ABI cannot spell the recursive union in place.
+(defn- string-slots? [triple: t/Triple] -> Bool
+  (and (string? (t/triple-slot0 triple))
+       (string? (t/triple-slot1 triple))
+       (string? (t/triple-slot2 triple))))
+
+(defn- slot-text [value: Any] -> String (str value))
+
+;; Occurrence provenance (asserted-by, recorded-at) is a triple about a triple;
+;; the oracle alphabet is strings in every slot, so string-slot triples are
+;; exactly the corpus data facts.
+(defn store-facts [folded: fold/Fold] -> (Vec ModelTriple)
+  (let [live: (Vec t/Triple) (fold/fold-live-propositions folded)]
+    (loop [index: Int 0 rows: (Vec ModelTriple) no-triples]
+      (if (>= index (count live))
+        rows
+        (let [triple: t/Triple (nth live index)]
+          (recur (+ index 1)
+                 (if (string-slots? triple)
+                   (conj rows (->ModelTriple (slot-text (t/triple-slot0 triple))
+                                             (slot-text (t/triple-slot1 triple))
+                                             (slot-text (t/triple-slot2 triple))))
+                   rows)))))))
+
+(defn- triple-member? [rows: (Vec ModelTriple) row: ModelTriple] -> Bool
+  (>= (find-exact rows
+                  (modeltriple-slot0 row)
+                  (modeltriple-slot1 row)
+                  (modeltriple-slot2 row))
+      0))
+
+;; The store is the authority; this only reports whether the working model that
+;; made the decisions and the folded TermStore ended up saying the same thing.
+(defn store-agrees? [result: ReplayResult facts: (Vec ModelTriple)] -> Bool
+  (let [modelled: (Vec ModelTriple) (model-triples (replayresult-model result))]
+    (if (not (= (count modelled) (count facts)))
+      false
+      (loop [index: Int 0]
+        (if (>= index (count modelled))
+          true
+          (if (triple-member? facts (nth modelled index))
+            (recur (+ index 1))
+            false))))))
+
+;; ---------------------------------------------------------------- rendering
+
+(defn- outcome-line [index: Int outcome: Outcome] -> String
+  (let [head: String (str index "\t")]
+    (if (= kind-version (outcome-kind outcome))
+      (str head "version\t" (outcome-version outcome))
+      (if (= kind-reject (outcome-kind outcome))
+        (str head "reject\t" (outcome-version outcome)
+             "\treason=" (outcome-reason outcome))
+        (if (outcome-batch outcome)
+          (str head "ok\t" (outcome-version outcome)
+               "\twritten=" (join-strings (outcome-written outcome) ",")
+               "\tidempotent=" (join-strings (outcome-idempotent outcome) ","))
+          (str head "ok\t" (outcome-version outcome)))))))
+
+(defn render-outcomes [result: ReplayResult] -> String
+  (let [outcomes: (Vec Outcome) (replayresult-outcomes result)]
+    (loop [index: Int 0 text: String ""]
+      (if (>= index (count outcomes))
+        text
+        (recur (+ index 1)
+               (str text (outcome-line index (nth outcomes index)) "\n"))))))
+
+(defn render-facts [facts: (Vec ModelTriple)] -> String
+  (loop [index: Int 0 text: String ""]
+    (if (>= index (count facts))
+      text
+      (let [row: ModelTriple (nth facts index)]
+        (recur (+ index 1)
+               (str text "fact\t" (modeltriple-slot0 row)
+                    "\t" (modeltriple-slot1 row)
+                    "\t" (modeltriple-slot2 row) "\n"))))))
+
+(defn render-frames [result: ReplayResult] -> String
+  (let [frames: (Vec ReplayFrame) (replayresult-frames result)]
+    (loop [index: Int 0 text: String ""]
+      (if (>= index (count frames))
+        text
+        (let [frame: ReplayFrame (nth frames index)
+              commits: (Vec ReplayCommit) (replayframe-commits frame)]
+          (recur (+ index 1)
+                 (loop [position: Int 0 body: String text]
+                   (if (>= position (count commits))
+                     body
+                     (let [commit: ReplayCommit (nth commits position)
+                           row: ModelTriple (replaycommit-triple commit)]
+                       (recur (+ position 1)
+                              (str body "tx\t" (replayframe-sequence frame)
+                                   "\t" (if (= act-assert (replaycommit-action commit))
+                                          "assert"
+                                          "retract")
+                                   "\t" (modeltriple-slot0 row)
+                                   "\t" (modeltriple-slot1 row)
+                                   "\t" (modeltriple-slot2 row) "\n")))))))))))
+
+;; Byte-identical to the frozen Zig oracle's per-corpus summary line, so the two
+;; independent replays are diffed as text rather than compared by eye.
+(defn summary-line
+  [path: String result: ReplayResult folded: fold/Fold
+   facts: (Vec ModelTriple)] -> String
+  (str "oracle " path ": " (replayresult-operations result) " operations, version "
+       (fold/fold-version folded) ", " (count facts) " live triples"))
