@@ -4,6 +4,7 @@
 (ns fram.kernel)
 (define-mode strict)
 (require fram.types :as t)
+(require clojure.string :as str)
 
 ;; This is the one bootstrap door. Everything reachable through its slot2
 ;; profile header remains ordinary relational vocabulary.
@@ -13,6 +14,11 @@
 (def profile-includes: String "includes")
 (def profile-violation: String "violates")
 (def relational-profile-rules: (Vec String) ["R1" "R2" "R3" "R4"])
+;; R5 is opt-in: it binds only where a profile lists it, so every space
+;; declared before it keeps its R1-R4 verdicts unchanged.
+(def vocabulary-profile-rule: String "R5")
+(def vocabulary-grouping: Keyword :grouped-under)
+(def kernel-vocabulary-prefix: String ":kernel/")
 
 (defn profile-header [profile-id: Any kind: String mode: String] -> t/Triple
   (t/triple profile-id kind mode))
@@ -59,6 +65,47 @@
                                    relational-profile-rules))))))))
      triples))))
 
+(defn- space-profile-ids [triples: (Vec t/Triple) space-id: String] -> (Vec Any)
+  (mapv (fn [value: t/Triple] -> Any (t/triple-slot0 (t/triple-slot2 value)))
+        (filterv (fn [value: t/Triple] -> Bool
+                   (and (= space-id (t/triple-slot0 value))
+                        (and (profile-anchor? value)
+                             (t/triple? (t/triple-slot2 value)))))
+                 triples)))
+
+(defn declared-vocabulary-rule?
+  [triples: (Vec t/Triple) space-id: String] -> Bool
+  (not (empty?
+        (filterv (fn [profile-id: Any] -> Bool
+                   (profile-has-rule? triples profile-id
+                                      vocabulary-profile-rule))
+                 (space-profile-ids triples space-id)))))
+
+;; The engine's own occurrence vocabulary is primitive-exempt; :rpc/* is wire
+;; syntax and never reaches a stored proposition.
+(defn- namespaced-vocabulary? [value: Any] -> Bool
+  (and (keyword? value)
+       (let [spelling: String (str value)]
+         (and (str/includes? spelling "/")
+              (not (str/starts-with? spelling kernel-vocabulary-prefix))))))
+
+(defn- grouped-vocabulary? [triples: (Vec t/Triple) term: Any] -> Bool
+  (not (empty?
+        (filterv (fn [value: t/Triple] -> Bool
+                   (and (= term (t/triple-slot0 value))
+                        (= vocabulary-grouping (t/triple-slot1 value))))
+                 triples))))
+
+;; R5 reads the whole space, so it cannot join R1-R4's per-proposition verdict:
+;; the grouping that licenses a spelling lives in a sibling proposition.
+(defn vocabulary-lint-errors
+  [triples: (Vec t/Triple) proposition: t/Triple] -> (Vec String)
+  (let [slot1: Any (t/triple-slot1 proposition)]
+    (if (and (namespaced-vocabulary? slot1)
+             (not (grouped-vocabulary? triples slot1)))
+      [vocabulary-profile-rule]
+      [])))
+
 (defn- nonblank-string-or-keyword? [value: Any] -> Bool
   (or (keyword? value)
       (and (string? value) (> (count value) 0))))
@@ -103,17 +150,24 @@
   [triples: (Vec t/Triple) space-id: String] -> (Vec t/Triple)
   (if (not (declared-relational-profile? triples space-id))
     []
-    (reduce
-     (fn [violations: (Vec t/Triple) proposition: t/Triple] -> (Vec t/Triple)
-       (if (profile-anchor? proposition)
-         violations
-         (reduce
-          (fn [rows: (Vec t/Triple) rule: String] -> (Vec t/Triple)
-            (conj rows (t/triple proposition profile-violation rule)))
-          violations
-          (relational-lint-errors proposition))))
-     []
-     triples)))
+    (let [vocabulary?: Bool (declared-vocabulary-rule? triples space-id)]
+      (reduce
+       (fn [violations: (Vec t/Triple) proposition: t/Triple] -> (Vec t/Triple)
+         (if (profile-anchor? proposition)
+           violations
+           (let [relational: (Vec String) (relational-lint-errors proposition)
+                 rules: (Vec String)
+                 (if vocabulary?
+                   (into relational
+                         (vocabulary-lint-errors triples proposition))
+                   relational)]
+             (reduce
+              (fn [rows: (Vec t/Triple) rule: String] -> (Vec t/Triple)
+                (conj rows (t/triple proposition profile-violation rule)))
+              violations
+              rules))))
+       []
+       triples))))
 
 (defn triple-eq? [left: t/Triple right: t/Triple] -> Bool
   (= left right))

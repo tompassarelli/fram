@@ -21,7 +21,7 @@ check('all Atom tags and recursive Triples are exact and canonical', () => {
     client.booleanTerm(true),
     client.keywordTerm('kernel/type'),
     client.instantTerm(-2, 3),
-    client.tripleTerm('Alice', client.keywordTerm('contact/email'), 'alice@example.com'),
+    client.tripleTerm('Alice', client.keywordTerm('email'), 'alice@example.com'),
   ];
   for (const value of values) assert.equal(client.validateTerm(value), value);
   assert.deepEqual(values[1], ['integer', '-42']);
@@ -87,7 +87,7 @@ check('typed query plans and pagination contain no untyped JSON data', async () 
     token: 'secret', space: 'space-a',
     fetch: async (_url, init) => { request = JSON.parse(init.body); return responseFor(request); },
   });
-  await fram.query(client.tripleQuery({ slot1: client.keywordTerm('plangrep/title') }),
+  await fram.query(client.tripleQuery({ slot1: client.keywordTerm('title') }),
     { asOf: 9, timeoutMs: 5000, page: { limit: 100 } });
   assert.equal(request.op, 'rpc/query');
   assert.deepEqual(request.page, { limit: '100' });

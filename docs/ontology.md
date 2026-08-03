@@ -170,6 +170,13 @@ Only the anchoring proposition is bootstrap-exempt. The header, rule links,
 profile identifier, mode, and rule names are ordinary Terms and propositions;
 no spelling namespace receives special treatment.
 
+A space that also lists `R5` asks the engine to hold it to the normalization
+principle above: a predicate spelled `ns/name` is a violation until its
+grouping is stored, `(:email, :grouped-under, :contact)`. The rule is listed,
+never assumed, so declaring a profile never retroactively condemns a space's
+existing vocabulary; the engine's own `:kernel/*` predicates stay exempt for
+the same reason the regress ends there.
+
 ## Paradigm is a profile, never a kernel fork
 
 "Relational typed triples," freeform structures, positional records — these

@@ -1,100 +1,127 @@
 (ns fram.kernel
-  (:require [fram.types :as t]))
+  (:require [fram.types :as t]
+            [clojure.string :as str]))
 
-^{:line 10 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def profile-anchor :kernel/profile)
+(def profile-anchor :kernel/profile)
 
-^{:line 11 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def ^String relational-profile-kind "relational")
+(def ^String relational-profile-kind "relational")
 
-^{:line 12 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def ^String observe-profile-mode "observe")
+(def ^String observe-profile-mode "observe")
 
-^{:line 13 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def ^String profile-includes "includes")
+(def ^String profile-includes "includes")
 
-^{:line 14 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def ^String profile-violation "violates")
+(def ^String profile-violation "violates")
 
-^{:line 15 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (def relational-profile-rules ^{:line 15 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} ["R1" "R2" "R3" "R4"])
+(def relational-profile-rules ["R1" "R2" "R3" "R4"])
 
-^{:line 17 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn profile-header [profile-id ^String kind ^String mode]
-  ^{:line 18 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple profile-id kind mode))
+(def ^String vocabulary-profile-rule "R5")
 
-^{:line 20 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn relational-profile-declaration [^String space-id profile-id]
-  ^{:line 22 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple space-id profile-anchor ^{:line 23 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (profile-header profile-id relational-profile-kind observe-profile-mode)))
+(def vocabulary-grouping :grouped-under)
 
-^{:line 26 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn profile-rule [profile-id ^String rule]
-  ^{:line 27 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple profile-id profile-includes rule))
+(def ^String kernel-vocabulary-prefix ":kernel/")
 
-^{:line 29 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn- ^Boolean profile-anchor? [value]
-  ^{:line 30 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= profile-anchor ^{:line 30 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)))
+(defn profile-header [profile-id ^String kind ^String mode]
+  (t/triple profile-id kind mode))
 
-^{:line 32 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn- ^Boolean profile-has-rule? [triples profile-id ^String rule]
-  ^{:line 34 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 34 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (empty? ^{:line 35 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 35 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 36 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 36 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= profile-id ^{:line 36 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 37 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 37 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= profile-includes ^{:line 37 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)) ^{:line 38 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= rule ^{:line 38 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value))))) triples))))
+(defn relational-profile-declaration [^String space-id profile-id]
+  (t/triple space-id profile-anchor (profile-header profile-id relational-profile-kind observe-profile-mode)))
 
-^{:line 41 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean declared-relational-profile? [triples ^String space-id]
-  ^{:line 43 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 44 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (empty? ^{:line 45 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 46 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 47 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (let [header ^{:line 47 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value)]
-  ^{:line 48 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 48 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= space-id ^{:line 48 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 49 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 49 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (profile-anchor? value) ^{:line 50 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 50 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? header) ^{:line 51 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 51 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= relational-profile-kind ^{:line 52 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 header)) ^{:line 53 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 53 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= observe-profile-mode ^{:line 54 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 header)) ^{:line 55 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (every? ^{:line 56 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [rule] ^{:line 57 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (profile-has-rule? triples ^{:line 58 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 header) rule)) relational-profile-rules)))))))) triples))))
+(defn profile-rule [profile-id ^String rule]
+  (t/triple profile-id profile-includes rule))
 
-^{:line 62 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn- ^Boolean nonblank-string-or-keyword? [value]
-  ^{:line 63 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (or ^{:line 63 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (keyword? value) ^{:line 64 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 64 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (string? value) ^{:line 64 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (> ^{:line 64 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (count value) 0))))
+(defn- ^Boolean profile-anchor? [value]
+  (= profile-anchor (t/triple-slot1 value)))
 
-^{:line 67 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn relational-admission-errors [proposition]
-  ^{:line 69 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (let [slot0 ^{:line 69 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 proposition)
-   slot1 ^{:line 70 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 proposition)
-   slot2 ^{:line 71 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 proposition)]
-  ^{:line 72 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (cond-> ^{:line 72 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} [] ^{:line 73 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 73 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 73 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot0) ^{:line 74 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 74 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot1) ^{:line 74 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot2)))) ^{:line 75 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R1") ^{:line 76 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 76 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (nonblank-string-or-keyword? slot0)) ^{:line 77 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R2") ^{:line 78 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 78 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (nonblank-string-or-keyword? slot1)) ^{:line 79 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R3") ^{:line 80 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 80 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot2)) ^{:line 81 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R4"))))
+(defn- ^Boolean profile-has-rule? [triples profile-id ^String rule]
+  (not (empty? (filterv (fn [value] (and (= profile-id (t/triple-slot0 value)) (and (= profile-includes (t/triple-slot1 value)) (= rule (t/triple-slot2 value))))) triples))))
 
-^{:line 84 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn relational-lint-errors [proposition]
-  ^{:line 86 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (let [slot0 ^{:line 86 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 proposition)
-   slot1 ^{:line 87 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 proposition)
-   slot2 ^{:line 88 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 proposition)
-   r1 ^{:line 89 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 89 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot0) ^{:line 90 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 90 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot1) ^{:line 90 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot2)))
-   r2 ^{:line 91 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (or ^{:line 91 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (keyword? slot0) ^{:line 92 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 92 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (string? slot0) ^{:line 92 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 92 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= "" slot0))))
-   r3 ^{:line 93 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (or ^{:line 93 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (keyword? slot1) ^{:line 94 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 94 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (string? slot1) ^{:line 94 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 94 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= "" slot1))))
-   r4 ^{:line 95 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/atom? slot2)]
-  ^{:line 96 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (cond-> ^{:line 96 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} [] ^{:line 97 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not r1) ^{:line 97 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R1") ^{:line 98 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not r2) ^{:line 98 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R2") ^{:line 99 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not r3) ^{:line 99 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R3") ^{:line 100 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not r4) ^{:line 100 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj "R4"))))
+(defn ^Boolean declared-relational-profile? [triples ^String space-id]
+  (not (empty? (filterv (fn [value] (let [header (t/triple-slot2 value)]
+  (and (= space-id (t/triple-slot0 value)) (and (profile-anchor? value) (and (t/triple? header) (and (= relational-profile-kind (t/triple-slot1 header)) (and (= observe-profile-mode (t/triple-slot2 header)) (every? (fn [rule] (profile-has-rule? triples (t/triple-slot0 header) rule)) relational-profile-rules)))))))) triples))))
 
-^{:line 102 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn lint-declared-profile [triples ^String space-id]
-  ^{:line 104 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 104 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (not ^{:line 104 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (declared-relational-profile? triples space-id)) ^{:line 105 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} [] ^{:line 106 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (reduce ^{:line 107 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [violations proposition] ^{:line 108 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 108 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (profile-anchor? proposition) violations ^{:line 110 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (reduce ^{:line 111 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [rows rule] ^{:line 112 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (conj rows ^{:line 112 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple proposition profile-violation rule))) violations ^{:line 114 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (relational-lint-errors proposition)))) ^{:line 115 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} [] triples)))
+(defn- space-profile-ids [triples ^String space-id]
+  (mapv (fn [value] (t/triple-slot0 (t/triple-slot2 value))) (filterv (fn [value] (and (= space-id (t/triple-slot0 value)) (and (profile-anchor? value) (t/triple? (t/triple-slot2 value))))) triples)))
 
-^{:line 118 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean triple-eq? [left right]
-  ^{:line 119 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= left right))
+(defn ^Boolean declared-vocabulary-rule? [triples ^String space-id]
+  (not (empty? (filterv (fn [profile-id] (profile-has-rule? triples profile-id vocabulary-profile-rule)) (space-profile-ids triples space-id)))))
 
-^{:line 121 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot0 [triples term]
-  ^{:line 122 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 122 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 123 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= term ^{:line 123 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value))) triples))
+(defn- ^Boolean namespaced-vocabulary? [value]
+  (and (keyword? value) (let [spelling (str value)]
+  (and (str/includes? spelling "/") (not (str/starts-with? spelling kernel-vocabulary-prefix))))))
 
-^{:line 126 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot1 [triples term]
-  ^{:line 127 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 127 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 128 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= term ^{:line 128 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value))) triples))
+(defn- ^Boolean grouped-vocabulary? [triples term]
+  (not (empty? (filterv (fn [value] (and (= term (t/triple-slot0 value)) (= vocabulary-grouping (t/triple-slot1 value)))) triples))))
 
-^{:line 131 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot2 [triples term]
-  ^{:line 132 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 132 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 133 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= term ^{:line 133 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value))) triples))
+(defn vocabulary-lint-errors [triples proposition]
+  (let [slot1 (t/triple-slot1 proposition)]
+  (if (and (namespaced-vocabulary? slot1) (not (grouped-vocabulary? triples slot1))) [vocabulary-profile-rule] [])))
 
-^{:line 136 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot01 [triples slot0 slot1]
-  ^{:line 138 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 138 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 139 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 139 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot0 ^{:line 139 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 140 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot1 ^{:line 140 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)))) triples))
+(defn- ^Boolean nonblank-string-or-keyword? [value]
+  (or (keyword? value) (and (string? value) (> (count value) 0))))
 
-^{:line 143 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot12 [triples slot1 slot2]
-  ^{:line 145 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 145 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 146 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 146 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot1 ^{:line 146 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)) ^{:line 147 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot2 ^{:line 147 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value)))) triples))
+(defn relational-admission-errors [proposition]
+  (let [slot0 (t/triple-slot0 proposition)
+   slot1 (t/triple-slot1 proposition)
+   slot2 (t/triple-slot2 proposition)]
+  (cond-> [] (not (and (t/atom? slot0) (and (t/atom? slot1) (t/atom? slot2)))) (conj "R1") (not (nonblank-string-or-keyword? slot0)) (conj "R2") (not (nonblank-string-or-keyword? slot1)) (conj "R3") (not (t/atom? slot2)) (conj "R4"))))
 
-^{:line 150 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn by-slot02 [triples slot0 slot2]
-  ^{:line 152 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (filterv ^{:line 152 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (fn [value] ^{:line 153 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 153 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot0 ^{:line 153 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 154 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= slot2 ^{:line 154 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value)))) triples))
+(defn relational-lint-errors [proposition]
+  (let [slot0 (t/triple-slot0 proposition)
+   slot1 (t/triple-slot1 proposition)
+   slot2 (t/triple-slot2 proposition)
+   r1 (and (t/atom? slot0) (and (t/atom? slot1) (t/atom? slot2)))
+   r2 (or (keyword? slot0) (and (string? slot0) (not (= "" slot0))))
+   r3 (or (keyword? slot1) (and (string? slot1) (not (= "" slot1))))
+   r4 (t/atom? slot2)]
+  (cond-> [] (not r1) (conj "R1") (not r2) (conj "R2") (not r3) (conj "R3") (not r4) (conj "R4"))))
 
-^{:line 157 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean assertion-occurrence? [value]
-  ^{:line 158 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 158 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? value) ^{:line 159 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 159 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/occurrence-coordinate? ^{:line 159 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 160 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 160 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= t/asserts ^{:line 160 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)) ^{:line 161 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? ^{:line 161 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value))))))
+(defn lint-declared-profile [triples ^String space-id]
+  (if (not (declared-relational-profile? triples space-id)) [] (let [vocabulary? (declared-vocabulary-rule? triples space-id)]
+  (reduce (fn [violations proposition] (if (profile-anchor? proposition) violations (let [relational (relational-lint-errors proposition)
+   rules (if vocabulary? (into relational (vocabulary-lint-errors triples proposition)) relational)]
+  (reduce (fn [rows rule] (conj rows (t/triple proposition profile-violation rule))) violations rules)))) [] triples))))
 
-^{:line 163 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean retraction-occurrence? [value]
-  ^{:line 164 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 164 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? value) ^{:line 165 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 165 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/occurrence-coordinate? ^{:line 165 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 166 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 166 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= t/retracts ^{:line 166 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)) ^{:line 167 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? ^{:line 167 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value))))))
+(defn ^Boolean triple-eq? [left right]
+  (= left right))
 
-^{:line 169 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean operation-occurrence? [value]
-  ^{:line 170 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (or ^{:line 170 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (assertion-occurrence? value) ^{:line 170 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (retraction-occurrence? value)))
+(defn by-slot0 [triples term]
+  (filterv (fn [value] (= term (t/triple-slot0 value))) triples))
 
-^{:line 172 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn ^Boolean withdrawal? [value]
-  ^{:line 173 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 173 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple? value) ^{:line 174 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 174 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/occurrence-coordinate? ^{:line 174 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value)) ^{:line 175 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (and ^{:line 175 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (= t/withdraws ^{:line 175 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot1 value)) ^{:line 176 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/occurrence-coordinate? ^{:line 176 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value))))))
+(defn by-slot1 [triples term]
+  (filterv (fn [value] (= term (t/triple-slot1 value))) triples))
 
-^{:line 178 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn occurrence-of [event]
-  ^{:line 179 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 179 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (operation-occurrence? event) ^{:line 180 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 event) ^{:line 181 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (throw ^{:line 181 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (ex-info "fram: value is not an operation occurrence" ^{:line 182 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} {:type :invalid-operation-occurrence}))))
+(defn by-slot2 [triples term]
+  (filterv (fn [value] (= term (t/triple-slot2 value))) triples))
 
-^{:line 184 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn proposition-of [event]
-  ^{:line 185 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 185 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (operation-occurrence? event) ^{:line 186 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 event) ^{:line 187 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (throw ^{:line 187 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (ex-info "fram: value is not an operation occurrence" ^{:line 188 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} {:type :invalid-operation-occurrence}))))
+(defn by-slot01 [triples slot0 slot1]
+  (filterv (fn [value] (and (= slot0 (t/triple-slot0 value)) (= slot1 (t/triple-slot1 value)))) triples))
 
-^{:line 190 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn withdrawal-source [value]
-  ^{:line 191 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 191 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (withdrawal? value) ^{:line 192 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot0 value) ^{:line 193 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (throw ^{:line 193 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (ex-info "fram: value is not a withdrawal" ^{:line 194 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} {:type :invalid-withdrawal}))))
+(defn by-slot12 [triples slot1 slot2]
+  (filterv (fn [value] (and (= slot1 (t/triple-slot1 value)) (= slot2 (t/triple-slot2 value)))) triples))
 
-^{:line 196 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (defn withdrawal-target [value]
-  ^{:line 197 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (if ^{:line 197 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (withdrawal? value) ^{:line 198 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (t/triple-slot2 value) ^{:line 199 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (throw ^{:line 199 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} (ex-info "fram: value is not a withdrawal" ^{:line 200 :file "/tmp/main-lane-lane-msc6gax2-4e0fc05a-02f2-425c-82b4-3c237d434d31/src/fram/kernel.bclj"} {:type :invalid-withdrawal}))))
+(defn by-slot02 [triples slot0 slot2]
+  (filterv (fn [value] (and (= slot0 (t/triple-slot0 value)) (= slot2 (t/triple-slot2 value)))) triples))
+
+(defn ^Boolean assertion-occurrence? [value]
+  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-slot0 value)) (and (= t/asserts (t/triple-slot1 value)) (t/triple? (t/triple-slot2 value))))))
+
+(defn ^Boolean retraction-occurrence? [value]
+  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-slot0 value)) (and (= t/retracts (t/triple-slot1 value)) (t/triple? (t/triple-slot2 value))))))
+
+(defn ^Boolean operation-occurrence? [value]
+  (or (assertion-occurrence? value) (retraction-occurrence? value)))
+
+(defn ^Boolean withdrawal? [value]
+  (and (t/triple? value) (and (t/occurrence-coordinate? (t/triple-slot0 value)) (and (= t/withdraws (t/triple-slot1 value)) (t/occurrence-coordinate? (t/triple-slot2 value))))))
+
+(defn occurrence-of [event]
+  (if (operation-occurrence? event) (t/triple-slot0 event) (throw (ex-info "fram: value is not an operation occurrence" {:type :invalid-operation-occurrence}))))
+
+(defn proposition-of [event]
+  (if (operation-occurrence? event) (t/triple-slot2 event) (throw (ex-info "fram: value is not an operation occurrence" {:type :invalid-operation-occurrence}))))
+
+(defn withdrawal-source [value]
+  (if (withdrawal? value) (t/triple-slot0 value) (throw (ex-info "fram: value is not a withdrawal" {:type :invalid-withdrawal}))))
+
+(defn withdrawal-target [value]
+  (if (withdrawal? value) (t/triple-slot2 value) (throw (ex-info "fram: value is not a withdrawal" {:type :invalid-withdrawal}))))
