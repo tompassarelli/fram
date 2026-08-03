@@ -98,6 +98,72 @@
         (= ["src/b.bclj#1"]
            (mapv :semanticIdentity (:references other-target))))
 
+(def context
+  (inspection/execute-named
+   snapshot "program_context" {:semanticIdentity "src/a.bclj#20"}))
+(check! "program_context carries the definition, direct relationships, and anchored impact summary"
+        (and (= "src/a.bclj#20" (:semanticIdentity context))
+             (= {:name "target" :module "a"}
+                (get-in context [:definition :signature]))
+             (= [[20 "form-kind" "defn"] [20 "name" "target"]
+                 [20 "body" 21] [20 "child" 21]]
+                (get-in context [:definition :bodySlice]))
+             (= [{:semanticIdentity "src/a.bclj#10"
+                  :relation "calls"
+                  :sourceAnchors [{:file "src/a.bclj" :nodeId 12
+                                   :kind "reference"}]
+                  :depth 1}]
+                (get-in context [:relationships :callers :neighbors]))
+             (= [{:semanticIdentity "src/a.bclj#1"
+                  :sourceAnchors [{:file "src/a.bclj" :nodeId 1
+                                   :kind "definition"}]
+                  :depth 2}]
+                (rest (get-in context [:impactSummary :inbound
+                                       :affectedIdentities])))))
+
+(def hub-corpus
+  (str "@file src/hub.bclj\n"
+       (apply str
+              (for [i (range 1 18)
+                    :let [node (* i 10) call (inc node)]]
+                (str "[" node " \"form-kind\" \"defn\"]\n"
+                     "[" node " \"name\" \"caller" i "\"]\n"
+                     "[" call " \"form-kind\" \"call\"]\n"
+                     "[" call " \"calls\" \"hub\"]\n"
+                     "[" node " \"child\" " call "]\n")))
+       "[1000 \"form-kind\" \"defn\"]\n"
+       "[1000 \"name\" \"hub\"]\n"))
+(def hub-file (doto (java.io.File/createTempFile "program-context-hub" ".facts") .deleteOnExit))
+(spit hub-file hub-corpus)
+(def hub-snapshot (inspection/read-snapshot! hub-file))
+(def hub-context
+  (inspection/execute-named hub-snapshot "program_context"
+                             {:semanticIdentity "src/hub.bclj#1000"
+                              :tokenBudget 512}))
+(def hub-full-context
+  (inspection/execute-named hub-snapshot "program_context"
+                             {:semanticIdentity "src/hub.bclj#1000"
+                              :tokenBudget 8192}))
+(check! "program_context deterministically truncates a token-bound hub with narrowing advice"
+        (and (:truncated hub-context)
+             (string? (:narrowingAdvice hub-context))
+             (<= (count (pr-str hub-context)) (* 4 (:tokenBudget hub-context)))
+             (= hub-context
+                (inspection/execute-named hub-snapshot "program_context"
+                                           {:semanticIdentity "src/hub.bclj#1000"
+                                            :tokenBudget 512}))))
+(check! "program_context curtails high-degree callers at the deterministic K"
+        (let [callers (get-in hub-full-context [:relationships :callers])]
+          (and (= 17 (:degree callers))
+               (:suppressed callers)
+               (= 8 (count (:neighbors callers)))
+               (= {:semanticIdentity "src/hub.bclj#10"
+                   :relation "calls"
+                   :sourceAnchors [{:file "src/hub.bclj" :nodeId 11
+                                    :kind "reference"}]
+                   :depth 1}
+                  (first (:neighbors callers))))))
+
 (def batch
   (inspection/inspect-program
    snapshot
@@ -110,6 +176,8 @@
       :arguments {:semanticIdentity "src/a.bclj#20" :direction "inbound"}}
      {:tag "history" :request "occurrence_history"
       :arguments {:semanticIdentity "src/a.bclj#20"}}
+     {:tag "context" :request "program_context"
+      :arguments {:semanticIdentity "src/a.bclj#20"}}
      {:tag "missing" :request "read_definition"
       :arguments {:semanticIdentity "src/a.bclj#999"}}
      {:tag "invalid" :request "trace_impact"
@@ -119,6 +187,7 @@
             ["references" "find_references" "ok"]
             ["impact" "trace_impact" "ok"]
             ["history" "occurrence_history" "ok"]
+            ["context" "program_context" "ok"]
             ["missing" "read_definition" "not-found"]
             ["invalid" "trace_impact" "error"]]
            (mapv (juxt :tag :request :outcome) (:children batch))))

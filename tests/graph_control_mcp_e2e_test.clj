@@ -178,8 +178,10 @@
           rendered (code-reader/render-module! beagle after-snapshot)]
       (when-not (zero? (:exit run))
         (binding [*out* *err*] (println (:err run))))
-      (check! "sealed MCP serves exactly the widened graph-control catalog"
-              (= ["multi-set-body" "add-def" "replace-def"]
+      (check! "sealed MCP preserves inspection tools beside the widened graph-control catalog"
+              (= ["read_definition" "find_references" "trace_impact"
+                  "occurrence_history" "program_context" "inspect_program"
+                  "multi-set-body" "add-def" "replace-def"]
                  (mapv :name (get-in replies [1 :result :tools]))))
       (check! "multi-set-body completes commit and checked publication"
               (and (not (get-in replies [2 :result :isError]))

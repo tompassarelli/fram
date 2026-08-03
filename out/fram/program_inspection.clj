@@ -13,7 +13,8 @@
            [java.util Arrays]))
 
 (def named-tool-names
-  ["read_definition" "find_references" "trace_impact" "occurrence_history"])
+  ["read_definition" "find_references" "trace_impact" "occurrence_history"
+   "program_context"])
 
 (def batch-tool-name "inspect_program")
 
@@ -780,6 +781,88 @@
        (vec (sort (set/difference (set (keys (:definitions program)))
                                   (:invalidated-identities program))))})))
 
+(def ^:private context-default-token-budget 1200)
+(def ^:private context-min-token-budget 512)
+(def ^:private context-max-token-budget 8192)
+(def ^:private context-hub-degree 16)
+(def ^:private context-hub-neighbor-limit 8)
+(def ^:private context-impact-limit 8)
+
+(defn- response-tokens [value]
+  (long (Math/ceil (/ (double (count (pr-str value))) 4.0))))
+
+(defn- context-neighbor [reference]
+  (select-keys reference [:semanticIdentity :relation :sourceAnchors :depth]))
+
+(defn- context-neighbors [references requested-limit]
+  (let [degree (count references)
+        limit (min degree requested-limit
+                   (if (> degree context-hub-degree) context-hub-neighbor-limit degree))]
+    {:degree degree
+     :neighbors (mapv context-neighbor (take limit references))
+     :suppressed (> degree limit)}))
+
+(defn- context-impact [snapshot definition direction requested-limit]
+  (let [traced (trace-nodes snapshot (:key definition) direction 64)
+        total (count traced)
+        limit (min context-impact-limit requested-limit)
+        impacts (take limit traced)]
+    {:count total
+     :affectedIdentities
+     (mapv (fn [[key depth]]
+             (let [target (get-in snapshot [:definitions-by-key key])]
+               {:semanticIdentity (:identity target)
+                :sourceAnchors [(:anchor target)]
+                :depth depth}))
+           impacts)
+     :suppressed (> total limit)}))
+
+(defn- context-packet [snapshot definition token-budget neighbor-limit impact-limit body-slice]
+  (let [identity (:identity definition)
+        inbound (references-for snapshot identity "inbound")
+        outbound (references-for snapshot identity "outbound")
+        base
+        (array-map
+         :tool "program_context"
+         :outcome "ok"
+         :logicalVersion (:logical-version snapshot)
+         :versionKind (:version-kind snapshot)
+         :semanticIdentity identity
+         :querySeed {:semanticIdentity identity :sourceAnchors [(:anchor definition)]}
+         :definition {:signature {:name (:name definition) :module (:module definition)}
+                      :bodySlice body-slice
+                      :sourceAnchors [(:anchor definition)]}
+         :relationships {:callers (context-neighbors inbound neighbor-limit)
+                         :callees (context-neighbors outbound neighbor-limit)}
+         :impactSummary {:inbound (context-impact snapshot definition "inbound" impact-limit)
+                         :outbound (context-impact snapshot definition "outbound" impact-limit)}
+         :tokenBudget token-budget)]
+    base))
+
+(defn- program-context [snapshot arguments]
+  (exact-map! arguments #{:semanticIdentity :tokenBudget} #{:semanticIdentity}
+              "program_context")
+  (let [identity (identity! arguments)
+        token-budget (get arguments :tokenBudget context-default-token-budget)]
+    (when-not (and (integer? token-budget)
+                   (<= context-min-token-budget token-budget context-max-token-budget))
+      (fail! :invalid-token-budget
+             "tokenBudget must be an integer from 512 through 8192"
+             {:tokenBudget token-budget}))
+    (if-let [definition (definition! snapshot identity)]
+      (let [full (context-packet snapshot definition token-budget
+                                 context-hub-neighbor-limit context-impact-limit
+                                 (:root-facts definition))]
+        (if (<= (response-tokens full) token-budget)
+          full
+          (assoc (context-packet snapshot definition token-budget 1 1
+                                 (filterv #(= "body" (nth % 1))
+                                          (:root-facts definition)))
+                 :truncated true
+                 :narrowingAdvice
+                 "Use read_definition, find_references, or trace_impact with one direction to narrow this context.")))
+      (not-found snapshot "program_context" identity "both" 0))))
+
 (defn execute-named
   "Execute one named request against an already-pinned snapshot."
   [snapshot tool arguments]
@@ -796,6 +879,7 @@
       "find_references" (find-references snapshot arguments)
       "trace_impact" (trace-impact snapshot arguments)
       "occurrence_history" (occurrence-history snapshot arguments)
+      "program_context" (program-context snapshot arguments)
       (fail! :unknown-program-tool (str "unknown program inspection tool: " tool)
              {:tool tool}))))
 
@@ -891,6 +975,14 @@
                                  :pattern "^sha256:[0-9a-f]{64}$"}}
    :required ["semanticIdentity" "direction"]})
 
+(def ^:private context-schema
+  {:type "object" :additionalProperties false
+   :properties {:semanticIdentity {:type "string" :minLength 1}
+                :tokenBudget {:type "integer" :minimum 512 :maximum 8192}
+                :logicalVersion {:type "string"
+                                 :pattern "^sha256:[0-9a-f]{64}$"}}
+   :required ["semanticIdentity"]})
+
 (defn- batch-child-schema [request argument-schema]
   {:type "object" :additionalProperties false
    :properties {:tag {:type "string" :minLength 1}
@@ -911,6 +1003,9 @@
    {:name "occurrence_history"
     :description "List the definition and its resolved reference occurrences in deterministic source order for one corpus snapshot."
     :inputSchema identity-schema}
+   {:name "program_context"
+    :description "Return one snapshot-pinned, token-bounded context packet: definition slice, direct callers/callees, and transitive impact summaries. High-degree relationships are curtailed deterministically."
+    :inputSchema context-schema}
    {:name batch-tool-name
     :description "Execute 1..32 ordered named program reads against one immutable corpus version, preserving each child tag and outcome."
     :inputSchema
@@ -924,5 +1019,6 @@
        {:oneOf [(batch-child-schema "read_definition" definition-schema)
                 (batch-child-schema "find_references" reference-schema)
                 (batch-child-schema "trace_impact" impact-schema)
-                (batch-child-schema "occurrence_history" identity-schema)]}}}
+                (batch-child-schema "occurrence_history" identity-schema)
+                (batch-child-schema "program_context" context-schema)]}}}
      :required ["requests"]}}])
