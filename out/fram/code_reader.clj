@@ -8,7 +8,12 @@
             [fram.types :as t]))
 
 (def ^:private default-page-limit 100)
-(def ^:private maximum-page-limit 4096)
+
+;; :rpc/triples record + rpc-list! cons chain: 3 Term-depth levels of fixed
+;; envelope wrap each page's items beyond the wire's term-codec-v1 depth bound.
+(def ^:private page-envelope-depth-overhead 3)
+(def ^:private maximum-page-limit
+  (- wire/term-codec-v1-depth-limit page-envelope-depth-overhead))
 
 (defn- invalid! [message data]
   (throw (ex-info message (assoc data :type :invalid-code-snapshot))))
@@ -16,7 +21,8 @@
 (defn- code-page-limit! [value]
   (let [limit (or value default-page-limit)]
     (when-not (and (integer? limit) (<= 1 limit maximum-page-limit))
-      (invalid! "code snapshot page limit must be between 1 and 4096"
+      (invalid! (str "code snapshot page limit must be between 1 and "
+                     maximum-page-limit)
                 {:page-limit limit}))
     limit))
 

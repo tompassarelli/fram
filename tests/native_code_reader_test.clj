@@ -117,7 +117,20 @@
       (check! "rendered Beagle text preserves its snapshot citation"
               (= citation (:snapshot rendered)))
       (check! "graph projection is byte-identical to the known module source"
-              (= known-source (:source rendered)))))
+              (= known-source (:source rendered)))
+      (check! "reader accepts the derived maximum page limit"
+              (some? (code-reader/read-corpus-snapshot!
+                      port space
+                      (- coord-daemon-wire/term-codec-v1-depth-limit 3))))
+      (check! "reader rejects page limit above the derived maximum"
+              (try
+                (code-reader/read-corpus-snapshot!
+                 port space
+                 (inc (- coord-daemon-wire/term-codec-v1-depth-limit 3)))
+                false
+                (catch clojure.lang.ExceptionInfo e
+                  (and (= :invalid-code-snapshot (:type (ex-data e)))
+                       (str/includes? (.getMessage e) "page limit must be between")))))))
   (finally
     (when server (future-cancel server))
     (delete-tree! scratch)))

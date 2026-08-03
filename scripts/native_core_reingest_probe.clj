@@ -60,8 +60,8 @@
                    (subs s 1 (- (count s) 5))))))
        distinct sort vec))
 
-;; TermCodecV1's depth bound applies to the recursive triple list in one page, so
-;; the reader's advertised 4096 maximum-page-limit is not reachable over the wire.
+;; Cross-check against TermCodecV1's depth bound directly, independent of the
+;; reader's own derived maximum-page-limit.
 (defn- page-limit-accepted? [n]
   (try
     (-> (rt/native-call! port space :rpc/scan
@@ -78,7 +78,7 @@
           lo
           (let [mid (quot (+ lo hi) 2)]
             (if (page-limit-accepted? mid) (recur mid hi) (recur lo mid)))))))
-(println (format "probe: largest page limit the wire accepts = %d (reader advertises 4096)"
+(println (format "probe: largest page limit the wire accepts = %d"
                  effective-page-limit))
 
 (println "probe: draining one pinned whole-corpus snapshot …")
