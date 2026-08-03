@@ -1,0 +1,207 @@
+#lang beagle/clj
+
+;; Covering rotations over the LIVE assertion occurrences of one TermStore: a
+;; disposable projection pinned to (SpaceId, store version), never kernel
+;; semantics and never a second identity — discard on mismatch and rebuild.
+;; Leaves hold occurrences in commit order, so two equal propositions asserted
+;; twice stay two answers. Three rotations cover all eight bound-subsets:
+;;   spo [s] [s p] [s p o]   pos [p] [p o]   osp [o] [o s]   unbound = events.
+(ns fram.rotation)
+
+(define-mode strict)
+
+(require fram.types :as t)
+
+(require fram.store :as store)
+
+(defalias Bucket (Map Any (Vec t/Triple)))
+
+(defrecord Rotation [space-id: String version: Int events: (Vec t/Triple) by-occurrence: (Map Any t/Triple) spo: Bucket pos: Bucket osp: Bucket])
+
+(def empty-events: (Vec t/Triple) [])
+
+(def empty-bucket: Bucket {})
+
+(def empty-occurrences: (Map Any t/Triple) {})
+
+(defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-slot0 event))
+
+(defn proposition-of [event: t/Triple] -> t/Triple (t/triple-slot2 event))
+
+(defn assertion-occurrence? [event: Any] -> Bool
+  (and (t/triple? event)
+    (and (= t/asserts (t/triple-slot1 event))
+      (and (t/occurrence-coordinate? (t/triple-slot0 event))
+        (t/triple? (t/triple-slot2 event))))))
+
+(defn- assertion! [event: t/Triple] -> t/Triple
+  (if (assertion-occurrence? event)
+    event
+    (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
+
+(defn- bucket-add [bucket: Bucket key: Any event: t/Triple] -> Bucket
+  (assoc bucket key (conj (get bucket key empty-events) event)))
+
+(defn- without-event [events: (Vec t/Triple) target: t/Triple] -> (Vec t/Triple)
+  (filterv (fn [event: t/Triple] -> Bool (not (= event target))) events))
+
+(defn- bucket-del [bucket: Bucket key: Any event: t/Triple] -> Bucket
+  (let [remaining: (Vec t/Triple) (without-event (get bucket key empty-events) event)]
+    (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
+
+(defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
+  (let [proposition: t/Triple (proposition-of (assertion! event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+    (->Rotation (rotation-space-id rotation)
+      (rotation-version rotation)
+      (conj (rotation-events rotation) event)
+      (assoc (rotation-by-occurrence rotation) (occurrence-of event) event)
+      (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [slot0] event) [slot0 slot1] event)
+        [slot0 slot1 slot2]
+        event)
+      (bucket-add (bucket-add (rotation-pos rotation) [slot1] event)
+        [slot1 slot2]
+        event)
+      (bucket-add (bucket-add (rotation-osp rotation) [slot2] event)
+        [slot2 slot0]
+        event))))
+
+(defn- rotate-del [rotation: Rotation event: t/Triple] -> Rotation
+  (let [proposition: t/Triple (proposition-of (assertion! event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+    (->Rotation (rotation-space-id rotation)
+      (rotation-version rotation)
+      (without-event (rotation-events rotation) event)
+      (dissoc (rotation-by-occurrence rotation) (occurrence-of event))
+      (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [slot0] event) [slot0 slot1] event)
+        [slot0 slot1 slot2]
+        event)
+      (bucket-del (bucket-del (rotation-pos rotation) [slot1] event)
+        [slot1 slot2]
+        event)
+      (bucket-del (bucket-del (rotation-osp rotation) [slot2] event)
+        [slot2 slot0]
+        event))))
+
+(defn- empty-rotation [space-id: String version: Int] -> Rotation
+  (->Rotation space-id
+    version
+    empty-events
+    empty-occurrences
+    empty-bucket
+    empty-bucket
+    empty-bucket))
+
+(defn space-id [rotation: Rotation] -> String (rotation-space-id rotation))
+
+(defn version [rotation: Rotation] -> Int (rotation-version rotation))
+
+(defn all-occurrences [rotation: Rotation] -> (Vec t/Triple)
+  (rotation-events rotation))
+
+(defn occurrence-count [rotation: Rotation] -> Int
+  (count (rotation-events rotation)))
+
+;; Every bound subset resolves to exactly one bucket key; results stay in commit
+;; order, so `last` is the newest live occurrence of that pattern.
+(defn by-slot0 [rotation: Rotation slot0: Any] -> (Vec t/Triple)
+  (get (rotation-spo rotation) [slot0] empty-events))
+
+(defn by-slot01 [rotation: Rotation slot0: Any slot1: Any] -> (Vec t/Triple)
+  (get (rotation-spo rotation) [slot0 slot1] empty-events))
+
+(defn by-slot1 [rotation: Rotation slot1: Any] -> (Vec t/Triple)
+  (get (rotation-pos rotation) [slot1] empty-events))
+
+(defn by-slot12 [rotation: Rotation slot1: Any slot2: Any] -> (Vec t/Triple)
+  (get (rotation-pos rotation) [slot1 slot2] empty-events))
+
+(defn by-slot2 [rotation: Rotation slot2: Any] -> (Vec t/Triple)
+  (get (rotation-osp rotation) [slot2] empty-events))
+
+(defn by-slot02 [rotation: Rotation slot0: Any slot2: Any] -> (Vec t/Triple)
+  (get (rotation-osp rotation) [slot2 slot0] empty-events))
+
+(defn by-proposition [rotation: Rotation proposition: t/Triple] -> (Vec t/Triple)
+  (get (rotation-spo rotation)
+    [(t/triple-slot0 proposition)
+     (t/triple-slot1 proposition)
+     (t/triple-slot2 proposition)]
+    empty-events))
+
+;; nil in a slot means UNBOUND. This is the semantic entry point; the bucket
+;; layout above is private detail every caller is expected to route through.
+(defn matching [rotation: Rotation slot0: Any slot1: Any slot2: Any] -> (Vec t/Triple)
+  (cond
+    [(and (some? slot0) (and (some? slot1) (some? slot2)))
+     (by-proposition rotation (t/triple slot0 slot1 slot2))]
+    [(and (some? slot0) (some? slot1)) (by-slot01 rotation slot0 slot1)]
+    [(and (some? slot1) (some? slot2)) (by-slot12 rotation slot1 slot2)]
+    [(and (some? slot0) (some? slot2)) (by-slot02 rotation slot0 slot2)]
+    [(some? slot0) (by-slot0 rotation slot0)]
+    [(some? slot1) (by-slot1 rotation slot1)]
+    [(some? slot2) (by-slot2 rotation slot2)]
+    [:else (rotation-events rotation)]))
+
+(defn live-occurrence? [rotation: Rotation occurrence: Any] -> Bool
+  (contains? (rotation-by-occurrence rotation) occurrence))
+
+(defn event-at [rotation: Rotation occurrence: Any] -> t/Triple?
+  (get (rotation-by-occurrence rotation) occurrence))
+
+(defn newest-first [events: (Vec t/Triple)] -> (Vec t/Triple)
+  (vec (reverse events)))
+
+(defn newest [events: (Vec t/Triple)] -> t/Triple?
+  (if (empty? events) nil (last events)))
+
+(defn propositions [events: (Vec t/Triple)] -> (Vec t/Triple)
+  (mapv (fn [event: t/Triple] -> t/Triple (proposition-of event)) events))
+
+(defn subjects [events: (Vec t/Triple)] -> (Vec Any)
+  (mapv (fn [event: t/Triple] -> Any (t/triple-slot0 (proposition-of event)))
+    events))
+
+(defn values [events: (Vec t/Triple)] -> (Vec Any)
+  (mapv (fn [event: t/Triple] -> Any (t/triple-slot2 (proposition-of event)))
+    events))
+
+(defn occurrences [events: (Vec t/Triple)] -> (Vec t/Triple)
+  (mapv (fn [event: t/Triple] -> t/Triple (occurrence-of event)) events))
+
+(defn project [ctx: (Atom t/TermStore)] -> Rotation
+  (reduce (fn [rotation: Rotation event: t/Triple] -> Rotation (rotate-add rotation event))
+    (empty-rotation (store/space-id ctx) (store/current-sequence ctx))
+    (store/live-occurrences ctx)))
+
+;; A retraction withdraws the NEWEST live occurrence of its proposition — the
+;; same choice store/apply-operation-state makes, so the delta cannot drift from
+;; the history it projects.
+(defn- apply-frame [rotation: Rotation space-id: String frame: t/TransactionFrame] -> Rotation
+  (let [coordinate: t/Triple (t/transaction-coordinate space-id (t/transactionframe-sequence frame)) operations: (Vec t/CommitOperation) (t/transactionframe-operations frame)]
+    (loop [current: Rotation rotation ordinal 0]
+      (if (>= ordinal (count operations))
+        current
+        (let [operation: t/CommitOperation (nth operations ordinal) proposition: t/Triple (t/commitoperation-proposition operation)]
+          (if (= t/assert-action (t/commitoperation-action operation))
+            (recur (rotate-add current (t/assertion-occurrence (t/occurrence-coordinate coordinate ordinal) proposition))
+              (inc ordinal))
+            (let [target: t/Triple? (newest (by-proposition current proposition))]
+              (recur (if (some? target) (rotate-del current target) current)
+                (inc ordinal)))))))))
+
+(defn refresh [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
+  (let [space: String (store/space-id ctx) target (store/current-sequence ctx) pinned (rotation-version rotation)]
+    (if (not (= space (rotation-space-id rotation)))
+      (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch}))
+      (if (> pinned target)
+        (throw (ex-info "fram: rotation is ahead of the store it projects" {:type :rotation-ahead-of-store}))
+        (if (= pinned target)
+          rotation
+          (assoc (reduce (fn [current: Rotation frame: t/TransactionFrame] -> Rotation (apply-frame current space frame)) rotation (store/transaction-frames-between (deref ctx) pinned target))
+            :version
+            target))))))
+
+;; The projection must travel with the root it was built from; a caller holding
+;; an unpinned rotation is reading a version that no longer exists.
+(defn pinned? [rotation: Rotation ctx: (Atom t/TermStore)] -> Bool
+  (and (= (store/space-id ctx) (rotation-space-id rotation))
+    (= (store/current-sequence ctx) (rotation-version rotation))))
