@@ -7,7 +7,7 @@
             [fram.rt :as rt]
             [fram.types :as t]))
 
-(def ^:private default-page-limit 4096)
+(def ^:private default-page-limit 100)
 (def ^:private maximum-page-limit 4096)
 
 (defn- invalid! [message data]

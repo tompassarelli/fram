@@ -13,8 +13,8 @@
        (dec (int (Math/ceil (* 0.95 (count values)))))))
 
 (defn heap-used []
-  (.getUsed (.getHeapMemoryUsage
-             (java.lang.management.ManagementFactory/getMemoryMXBean))))
+  (let [runtime (Runtime/getRuntime)]
+    (- (.totalMemory runtime) (.freeMemory runtime))))
 
 (defn collect-heap! []
   (System/gc)

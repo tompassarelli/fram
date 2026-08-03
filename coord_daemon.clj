@@ -1108,11 +1108,10 @@
       (apply str (map #(format "%02x" (bit-and 255 (int %))) digest)))))
 
 (defn- term-codec-v1-bytes [term]
-  (let [out (ByteArrayOutputStream.)]
-    (wire/write-term-codec-v1! out term wire/rpc-v1-max-string-bytes
-                               wire/rpc-v1-max-term-nodes
-                               wire/rpc-v1-max-term-depth)
-    (.size out)))
+  (t/termcodecmeasure-bytes
+   (wire/measure-term-codec-v1! term wire/rpc-v1-max-string-bytes
+                                wire/rpc-v1-max-term-nodes
+                                wire/rpc-v1-max-term-depth)))
 
 (defn- result-weight [rows shape]
   (+ 32 (* 8 (count rows))

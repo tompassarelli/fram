@@ -228,7 +228,7 @@
               (and (not (get-in reply [:result :isError]))
                    (= "committed-projection-published" (:outcome result))))
       (check! "replace-def republishes one updated definition at the original position"
-              (and (= 1 (count (re-seq #"\\(defrecord Point" (:source rendered))))
+              (and (= 1 (count (re-seq #"\(defrecord Point" (:source rendered))))
                    (str/includes? (:source rendered) "label :- String")
                    (= (:source rendered) (slurp source-path)))))
 
