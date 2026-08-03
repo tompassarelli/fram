@@ -5,6 +5,7 @@ copy	src/fram/kernel_host.clj	out/fram/kernel_host.clj
 copy	src/fram/json.clj	out/fram/json.clj
 copy	src/fram/authority_json.clj	out/fram/authority_json.clj
 copy	src/fram/code_reader.clj	out/fram/code_reader.clj
+copy	src/fram/code_commit_gate.clj	out/fram/code_commit_gate.clj
 beagle	src/fram/types.bclj	out/fram/types.clj
 beagle	src/fram/store.bclj	out/fram/store.clj
 beagle	src/fram/schema.bclj	out/fram/schema.clj
