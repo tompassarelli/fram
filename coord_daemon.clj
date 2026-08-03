@@ -15,7 +15,8 @@
            [java.io ByteArrayOutputStream InputStream OutputStream Writer]
            [java.nio ByteBuffer ByteOrder]
            [java.security MessageDigest]
-           [java.time Instant]))
+           [java.time Instant]
+           [java.util.concurrent LinkedBlockingQueue TimeUnit]))
 
 (load-file "coord.clj")
 (load-file "coord_writer_authority.clj")
@@ -28,6 +29,12 @@
 (def active-requests (atom {}))
 (def published-snapshot (atom nil))
 (def daemon-generation (atom 0))
+(def write-sequencer (atom nil))
+(def write-sequencer-stats
+  (atom {:cohorts 0 :frames 0 :barriers 0 :publications 0}))
+(def ^:private write-cohort-max-frames 32)
+(def ^:private write-cohort-max-bytes (* 1024 1024))
+(def ^:private write-cohort-max-wait-ns 1000000)
 (def ^:private query-page-snapshot-limit 4)
 (def ^:private query-page-snapshots (atom {:order [] :by-version {}}))
 (def ^:private query-result-version-limit 4)
@@ -46,6 +53,9 @@
    :evictions 0})
 
 (def query-result-cache (atom (empty-query-result-cache 0)))
+
+(declare start-write-sequencer! stop-write-sequencer! sequence-mutation!
+         response-version)
 
 ;; Request observability: the slow threshold is checked before the quiet gate,
 ;; so a stalled request still leaves a trace under FRAM_DAEMON_QUIET.
@@ -194,6 +204,7 @@
     (reset! (:cancelled cancellation) true)
     (when-let [control @(:query-control cancellation)]
       (datalog/cancel-query! control :daemon-shutdown)))
+  (stop-write-sequencer!)
   (reset! active-requests {})
   (drop-query-caches!)
   (reset! published-snapshot nil)
@@ -232,6 +243,8 @@
          (publish-snapshot! opened)
          (reset! coordinator-role role)
          (reset! writer-authority authority)
+         (when (= :active role)
+           (start-write-sequencer!))
          opened)
        (catch Throwable error
          (coord-writer-authority/release! authority)
@@ -393,42 +406,53 @@
                      operations)
                    (conj decisions [index changed]))))))))
 
-(defn- mutation-payload! [request actions fence cancellation]
-  (let [co @coordinator
-        expected (t/rpcrequest-expected-version request)]
-    (locking (:lock co)
-      (require-writer!)
-      (require-expected! co expected)
-      (require-fence! co fence)
-      (cancelled! cancellation)
-      (let [[operations decisions]
-            (prepare-actions! (coord/live-propositions co) actions)
-            base (when (some? expected)
-                   (t/transaction-coordinate (coord/coordinator-space co) expected))
-            committed
-            (when (seq operations)
-              (cancelled! cancellation)
-              (coord/commit! co {:base base :operations operations}))]
-        (when (:reject committed)
-          (daemon-fail! :rpc/conflict "expected-version lost its commit race" {}))
-        (loop [remaining decisions events (vec (:occurrences committed)) results []]
-          (if (empty? remaining)
-            (wire/rpc-mutation-result! results)
-            (let [[input-index changed] (first remaining)
-                  occurrence (when changed (first events))]
-              (recur (rest remaining) (if changed (subvec events 1) events)
-                     (conj results
-                           (wire/rpc-action-result!
-                            input-index changed (if changed [occurrence] [])))))))))))
+(defn- prepare-actions-on-store! [co actions]
+  (if (every? (fn [[operation _ policy]]
+                (and (= operation :rpc/assert)
+                     (= policy wire/rpc-subject-any)))
+              actions)
+    [(mapv (fn [[_ proposition _]]
+             {:action :assert :proposition proposition})
+           actions)
+     (mapv (fn [index] [index true]) (range (count actions)))]
+    (prepare-actions! (coord/live-propositions co) actions)))
+
+(defn- mutation-payload! [co request actions fence cancellation]
+  (let [expected (t/rpcrequest-expected-version request)]
+    (require-writer!)
+    (require-expected! co expected)
+    (require-fence! co fence)
+    (cancelled! cancellation)
+    (let [[operations decisions] (prepare-actions-on-store! co actions)
+          base (when (some? expected)
+                 (t/transaction-coordinate (coord/coordinator-space co) expected))
+          committed
+          (when (seq operations)
+            (cancelled! cancellation)
+            (coord/commit! co {:base base :operations operations}))]
+      (when (:reject committed)
+        (daemon-fail! :rpc/conflict "expected-version lost its commit race" {}))
+      (loop [remaining decisions events (vec (:occurrences committed)) results []]
+        (if (empty? remaining)
+          (wire/rpc-mutation-result! results)
+          (let [[input-index changed] (first remaining)
+                occurrence (when changed (first events))]
+            (recur (rest remaining) (if changed (subvec events 1) events)
+                   (conj results
+                         (wire/rpc-action-result!
+                          input-index changed (if changed [occurrence] []))))))))))
 
 (defn- handle-write! [request operation cancellation]
   (let [[proposition policy fence-option]
         (record-fields! (t/rpc-request-payload-value request) :rpc/write 3)
         [fence-present fence] (option-value! fence-option)]
-    (mutation-payload!
-     request [[operation (require-triple! proposition "write proposition")
-               (parse-policy! policy)]]
-     (when fence-present (require-triple! fence "write fence")) cancellation)))
+    (sequence-mutation!
+     request cancellation
+     (fn [co]
+       (mutation-payload!
+        co request [[operation (require-triple! proposition "write proposition")
+                     (parse-policy! policy)]]
+        (when fence-present (require-triple! fence "write fence")) cancellation)))))
 
 (defn- handle-batch! [request cancellation]
   (let [[action-list fence-option]
@@ -437,9 +461,13 @@
         [fence-present fence] (option-value! fence-option)]
     (when (empty? actions)
       (daemon-fail! :rpc-invalid-action "batch requires at least one action" {}))
-    (mutation-payload! request actions
-                       (when fence-present (require-triple! fence "batch fence"))
-                       cancellation)))
+    (sequence-mutation!
+     request cancellation
+     (fn [co]
+       (mutation-payload!
+        co request actions
+        (when fence-present (require-triple! fence "batch fence"))
+        cancellation)))))
 
 (defn- scan-match? [options proposition]
   (every? identity
@@ -1121,7 +1149,7 @@
                           occurrences-page-shape)
            :served version)))
 
-(defn- handle-query! [request cancellation published]
+(defn- handle-query! [request cancellation published served-version]
   (let [[plan-term requested-snapshot]
         (record-fields! (t/rpc-request-payload-value request) :query/request 2)
         plan (parse-query-plan! plan-term)
@@ -1134,6 +1162,7 @@
         co (coord/store-view @coordinator (:root published))
         version (requested-snapshot-version!
                  requested-snapshot cursor (:version published))
+        _ (vreset! served-version version)
         cache-snapshot {:generation (:generation published)
                         :space (:space published)
                         :version version}
@@ -1170,9 +1199,9 @@
     (cancelled! cancellation)
     (assoc paged :served version)))
 
-(defn- lease-mutation-guard! [request cancellation]
+(defn- lease-mutation-guard! [co request cancellation]
   (require-writer!)
-  (require-expected! @coordinator (t/rpcrequest-expected-version request))
+  (require-expected! co (t/rpcrequest-expected-version request))
   (cancelled! cancellation))
 
 (defn- handle-lease-acquire! [request cancellation]
@@ -1183,15 +1212,17 @@
         ttl-ms (require-int! ttl-ms "lease ttl-ms")]
     (when-not (pos? ttl-ms)
       (daemon-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
-    (locking (:lock @coordinator)
-      (lease-mutation-guard! request cancellation)
-      (let [result (coord/acquire-lease! @coordinator resource holder ttl-ms
-                                         (System/currentTimeMillis))]
-        (when (:reject result)
-          (daemon-fail! :rpc/lease-held "lease resource is already held" {}))
-        (wire/rpc-lease-grant!
-         (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
-         (millis->instant (:expires-ms result)))))))
+    (sequence-mutation!
+     request cancellation
+     (fn [co]
+       (lease-mutation-guard! co request cancellation)
+       (let [result (coord/acquire-lease! co resource holder ttl-ms
+                                          (System/currentTimeMillis))]
+         (when (:reject result)
+           (daemon-fail! :rpc/lease-held "lease resource is already held" {}))
+         (wire/rpc-lease-grant!
+          (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
+          (millis->instant (:expires-ms result))))))))
 
 (defn- handle-lease-renew! [request cancellation]
   (let [[fence ttl-ms]
@@ -1200,35 +1231,38 @@
         ttl-ms (require-int! ttl-ms "lease ttl-ms")]
     (when-not (pos? ttl-ms)
       (daemon-fail! :rpc-invalid-payload "lease ttl-ms must be positive" {}))
-    (locking (:lock @coordinator)
-      (lease-mutation-guard! request cancellation)
-      (let [[current-holder current-epoch occurrence]
-            (or (current-fence @coordinator resource) [nil nil nil nil])]
-        (when-not (and (= holder current-holder) (= epoch current-epoch))
-          (daemon-fail! :rpc/lease-fence-mismatch
-                        "lease fence does not name the current lease" {}))
-        (let [result (coord/renew-lease!
-                      @coordinator resource holder occurrence ttl-ms
-                      (System/currentTimeMillis))]
-          (when (:reject result)
+    (sequence-mutation!
+     request cancellation
+     (fn [co]
+       (lease-mutation-guard! co request cancellation)
+       (let [[current-holder current-epoch occurrence]
+             (or (current-fence co resource) [nil nil nil nil])]
+         (when-not (and (= holder current-holder) (= epoch current-epoch))
             (daemon-fail! :rpc/lease-fence-mismatch
-                          "lease fence is stale or expired" {}))
-          (wire/rpc-lease-grant!
-           (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
-           (millis->instant (:expires-ms result))))))))
+                          "lease fence does not name the current lease" {}))
+         (let [result (coord/renew-lease!
+                       co resource holder occurrence ttl-ms
+                       (System/currentTimeMillis))]
+           (when (:reject result)
+             (daemon-fail! :rpc/lease-fence-mismatch
+                           "lease fence is stale or expired" {}))
+           (wire/rpc-lease-grant!
+            (wire/rpc-fence! resource holder (occurrence-epoch (:ok result)))
+            (millis->instant (:expires-ms result)))))))))
 
 (defn- handle-lease-release! [request cancellation]
   (let [[resource holder epoch]
         (parse-fence! (t/rpc-request-payload-value request))]
-    (locking (:lock @coordinator)
-      (lease-mutation-guard! request cancellation)
-      (let [[current-holder current-epoch occurrence]
-            (or (current-fence @coordinator resource) [nil nil nil nil])]
-        (if-not (and (= holder current-holder) (= epoch current-epoch))
-          (wire/rpc-lease-released! false)
-          (let [result (coord/release-lease!
-                        @coordinator resource holder occurrence)]
-            (wire/rpc-lease-released! (boolean (:ok result)))))))))
+    (sequence-mutation!
+     request cancellation
+     (fn [co]
+       (lease-mutation-guard! co request cancellation)
+       (let [[current-holder current-epoch occurrence]
+             (or (current-fence co resource) [nil nil nil nil])]
+         (if-not (and (= holder current-holder) (= epoch current-epoch))
+           (wire/rpc-lease-released! false)
+           (let [result (coord/release-lease! co resource holder occurrence)]
+             (wire/rpc-lease-released! (boolean (:ok result))))))))))
 
 (defn- handle-lease-check! [payload cancellation snapshot]
   (let [[resource holder epoch] (parse-fence! payload)]
@@ -1273,21 +1307,134 @@
     (wire/rpc-status! state (count (coord/live-propositions co))
                       :rpc/jvm cache)))
 
-(defn- dispatch-request! [request cancellation snapshot]
+(defn- request-body-bytes [request]
+  (- (alength ^bytes
+              (wire/encode-rpc-frame-v1!
+               (wire/rpc-request-frame 0 request)))
+     wire/rpc-v1-header-bytes))
+
+(defn- take-write-cohort! [^LinkedBlockingQueue queue first-ticket]
+  (let [deadline (+ (:enqueued-ns first-ticket) write-cohort-max-wait-ns)]
+    (loop [tickets [first-ticket] bytes (:bytes first-ticket)]
+      (if (>= (count tickets) write-cohort-max-frames)
+        [tickets nil]
+        (let [ready (.poll queue)
+              remaining (- deadline (System/nanoTime))
+              ticket (or ready
+                         (when (pos? remaining)
+                           (.poll queue remaining TimeUnit/NANOSECONDS)))]
+          (if ticket
+            (if (or (:stop ticket)
+                    (> (+ bytes (:bytes ticket)) write-cohort-max-bytes))
+              [tickets ticket]
+              (recur (conj tickets ticket) (+ bytes (:bytes ticket))))
+            [tickets nil]))))))
+
+(defn- sequencer-stopped-error []
+  (ex-info "write sequencer is not running"
+           {:type :rpc/not-booted :fram/code :rpc/not-booted}))
+
+(defn- deliver-cohort! [tickets]
+  (try
+    (let [co @coordinator
+          committed (coord/commit-cohort! co (mapv :mutation tickets))
+          frame-count (:frame-count committed)
+          _ (swap! write-sequencer-stats
+                   (fn [stats]
+                     (cond-> (-> stats
+                                 (update :cohorts inc)
+                                 (update :frames + frame-count))
+                       (pos? frame-count) (update :barriers inc))))
+          snapshot (if (pos? (:frame-count committed))
+                     (let [published (publish-snapshot! co)]
+                       (swap! write-sequencer-stats update :publications inc)
+                       published)
+                     @published-snapshot)]
+      (doseq [[ticket result] (map vector tickets (:results committed))]
+        (deliver (:completion ticket)
+                 (if-let [error (:error result)]
+                   {:error error :version (:version result)}
+                   {:value (:value result) :version (:version result)
+                    :published-version (:version snapshot)}))))
+    (catch Throwable error
+      (doseq [ticket tickets]
+        (deliver (:completion ticket)
+                 {:error error :version (response-version)})))))
+
+(defn- write-sequencer-loop! [^LinkedBlockingQueue queue]
+  (try
+    (loop [pending nil]
+      (if (identical? queue (:queue @write-sequencer))
+        (let [first-ticket (or pending (.take queue))]
+          (when-not (:stop first-ticket)
+            (let [[tickets next-pending]
+                  (take-write-cohort! queue first-ticket)]
+              (deliver-cohort! tickets)
+              (recur next-pending))))
+        (when-let [completion (:completion pending)]
+          (deliver completion
+                   {:error (sequencer-stopped-error)
+                    :version (response-version)}))))
+    (catch InterruptedException _ nil)
+    (finally
+      (let [error (sequencer-stopped-error)]
+        (loop []
+          (when-let [ticket (.poll queue)]
+            (when-let [completion (:completion ticket)]
+              (deliver completion {:error error :version (response-version)}))
+            (recur)))))))
+
+(defn- start-write-sequencer! []
+  (let [queue (LinkedBlockingQueue.)
+        thread (Thread. #(write-sequencer-loop! queue) "fram-write-sequencer")]
+    (.setDaemon thread true)
+    (reset! write-sequencer-stats
+            {:cohorts 0 :frames 0 :barriers 0 :publications 0})
+    (reset! write-sequencer {:queue queue :thread thread})
+    (.start thread)
+    nil))
+
+(defn- stop-write-sequencer! []
+  (when-let [{:keys [^Thread thread ^LinkedBlockingQueue queue]}
+             @write-sequencer]
+    (reset! write-sequencer nil)
+    (.put queue {:stop true})
+    (when-not (identical? thread (Thread/currentThread))
+      (.join thread 5000)))
+  nil)
+
+(defn- sequence-mutation! [request cancellation mutation]
+  (cancelled! cancellation)
+  (require-writer!)
+  (let [{:keys [^LinkedBlockingQueue queue]} @write-sequencer]
+    (when-not queue
+      (throw (sequencer-stopped-error)))
+    (let [completion (promise)
+          ticket {:mutation mutation
+                  :completion completion
+                  :bytes (request-body-bytes request)
+                  :enqueued-ns (System/nanoTime)}]
+      (.put queue ticket)
+      (let [{:keys [value error version]} @completion]
+        (if error
+          (throw error)
+          {:payload value :served version})))))
+
+(defn- dispatch-request! [request cancellation snapshot served-version]
   (let [operation (t/rpcrequest-op request)
         payload (t/rpc-request-payload-value request)]
     (case operation
       :rpc/version (do (require-unit! payload) {:payload wire/rpc-unit})
       :rpc/status (do (require-unit! payload) {:payload (status-payload snapshot)})
-      :rpc/assert {:payload (handle-write! request :rpc/assert cancellation)}
-      :rpc/retract {:payload (handle-write! request :rpc/retract cancellation)}
-      :rpc/batch {:payload (handle-batch! request cancellation)}
+      :rpc/assert (handle-write! request :rpc/assert cancellation)
+      :rpc/retract (handle-write! request :rpc/retract cancellation)
+      :rpc/batch (handle-batch! request cancellation)
       :rpc/scan (handle-scan! request cancellation snapshot)
-      :rpc/query (handle-query! request cancellation snapshot)
+      :rpc/query (handle-query! request cancellation snapshot served-version)
       :rpc/occurrences (handle-occurrences! request cancellation snapshot)
-      :rpc/lease-acquire {:payload (handle-lease-acquire! request cancellation)}
-      :rpc/lease-renew {:payload (handle-lease-renew! request cancellation)}
-      :rpc/lease-release {:payload (handle-lease-release! request cancellation)}
+      :rpc/lease-acquire (handle-lease-acquire! request cancellation)
+      :rpc/lease-renew (handle-lease-renew! request cancellation)
+      :rpc/lease-release (handle-lease-release! request cancellation)
       :rpc/lease-check {:payload (handle-lease-check! payload cancellation snapshot)}
       :rpc/validate {:payload (handle-validate! payload cancellation snapshot)}
       (daemon-fail! :rpc/unsupported-operation
@@ -1328,15 +1475,13 @@
                 (vreset! served-version version)
                 (require-version-expected!
                  version (t/rpcrequest-expected-version request))
-                (let [dispatched (dispatch-request! request cancellation snapshot)]
+                (let [dispatched (dispatch-request!
+                                  request cancellation snapshot served-version)]
                   (assoc dispatched :served (or (:served dispatched) version))))
-              (locking (:lock @coordinator)
-                (require-expected! @coordinator
-                                   (t/rpcrequest-expected-version request))
-                (let [dispatched (dispatch-request! request cancellation nil)
-                      snapshot (publish-snapshot! @coordinator)]
-                  (vreset! served-version (:version snapshot))
-                  (assoc dispatched :served (:version snapshot)))))
+              (let [dispatched (dispatch-request!
+                                request cancellation nil served-version)]
+                (vreset! served-version (:served dispatched))
+                dispatched))
             {:keys [payload page served]} result]
         (wire/rpc-response! space operation served
                             page nil payload))

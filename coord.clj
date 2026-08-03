@@ -346,6 +346,16 @@
     (.flush out)
     (.force (.getChannel file-out) true)))
 
+(defn- append-frame-cohort-durable! [path frames]
+  (with-open [file-out (java.io.FileOutputStream. (str path) true)
+              out (java.io.BufferedOutputStream. file-out)]
+    (doseq [frame frames]
+      (write-transaction-frame! out frame))
+    (.flush out)
+    (.force (.getChannel file-out) true)))
+
+(def ^:dynamic *deferred-frames* nil)
+
 (defn- frame->store-frame [frame]
   (term-store/transaction-frame
    (:tx-seq frame)
@@ -623,8 +633,10 @@
   (let [frame (term-store/transaction-frame sequence operations)
         serializable {:tx-seq sequence
                       :operations (mapv operation-map (range) operations)}]
-    (when-let [path (:log co)]
-      (append-frame-durable! path serializable))
+    (if *deferred-frames*
+      (swap! *deferred-frames* conj serializable)
+      (when-let [path (:log co)]
+        (append-frame-durable! path serializable)))
     (term-store/replay-transaction! (coordinator-store co) frame)))
 
 (defn- throwable-code [error]
@@ -734,6 +746,48 @@
                 (propagate-ambiguous-commit!
                  (fence-and-reconcile! co before-store error)
                  error)))))))))
+
+(defn commit-cohort!
+  "Run mutation functions in FIFO order against a private store root, append
+   every resulting FRAMLOG frame under one durability barrier, and publish the
+   root atomically. Individual pre-append failures are returned without
+   aborting later functions; a barrier failure fences the whole coordinator."
+  [co mutation-functions]
+  (locking (:lock co)
+    (require-mutation-ready! co)
+    (let [context (coordinator-store co)
+          before-store @context
+          scratch (assoc co
+                         :term-store (atom before-store)
+                         :mutation-state (atom @(:mutation-state co)))
+          frames (atom [])
+          results
+          (binding [*deferred-frames* frames]
+            (mapv (fn [mutation]
+                    (try
+                      (let [value (mutation scratch)]
+                        {:value value
+                         :version (term-store/current-sequence
+                                   (coordinator-store scratch))})
+                      (catch Throwable error
+                        {:error error
+                         :version (term-store/current-sequence
+                                   (coordinator-store scratch))})))
+                  mutation-functions))]
+      (if (empty? @frames)
+        {:results results :frame-count 0 :root before-store
+         :version (term-store/current-sequence context)}
+        (try
+          (when-let [path (:log co)]
+            (append-frame-cohort-durable! path @frames))
+          (let [root @(coordinator-store scratch)]
+            (reset! context root)
+            {:results results :frame-count (count @frames) :root root
+             :version (term-store/current-sequence context)})
+          (catch Throwable error
+            (propagate-ambiguous-commit!
+             (fence-and-reconcile! co before-store error)
+             error)))))))
 
 (defn assert!
   ([co proposition] (assert! co proposition {}))

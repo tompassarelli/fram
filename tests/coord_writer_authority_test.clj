@@ -106,13 +106,13 @@
                    (= proposition (t/triple-slot2 event))))
       (check! "native response contains no physical content handle"
               (not (str/includes? (pr-str response) "cid"))))
-    (let [append-var (ns-resolve 'coord 'append-frame-durable!)
+    (let [append-var (ns-resolve 'coord 'append-frame-cohort-durable!)
           original @append-var
           failure
           (with-redefs-fn
             {append-var
-             (fn [path frame]
-               (original path frame)
+             (fn [path frames]
+               (original path frames)
                (throw (ex-info "injected after force"
                                {:type :injected-post-force})))}
             #(direct-request!

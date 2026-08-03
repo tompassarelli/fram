@@ -61,7 +61,12 @@ indexes from that history. The one-shot migration converts the legacy flat log
 to FRAMLOG; there is no permanent dual semantic path.
 
 The active writer owns one `SpaceId` and one history log. A standby can load and
-serve the same durable prefix, but only the active process may append.
+serve the same durable prefix, but only the active process may append. The
+active daemon orders mutations through one FIFO sequencer. It retains one
+FRAMLOG frame per logical transaction, appends a bounded cohort contiguously,
+forces that cohort once, then atomically publishes its final immutable store
+root before acknowledging any member. Readers use only published roots and do
+not acquire the sequencer lock.
 
 ## Query projection
 

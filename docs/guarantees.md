@@ -35,26 +35,26 @@ Two runtime surfaces exist until cluster migration completes:
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| D1 | An acked commit is durable: one FRAMLOG frame is appended, flushed, and `force(true)`-synced before the new head is published | PARTIAL | mechanism `coord.clj` `append-frame-durable!`; no gate asserts the sync ordering — torn-sweep + crash-kill work in flight |
+| D1 | An acked commit is durable: its FRAMLOG frame is covered by a successful `force(true)` barrier before the cohort's immutable head is published | BACKED | `coord_test.clj` asserts two frames/one barrier and no publication on an injected barrier failure; concurrent gate verifies ack/frame identity |
 | D2 | A torn trailing frame never corrupts state: authority boot truncates to `:valid-bytes`; exactly the longest committed prefix survives, at every possible cut offset | BACKED | [`../tests/framlog_torn_sweep_test.clj`](../tests/framlog_torn_sweep_test.clj) — every-byte cut sweep, 3,984 boots, exact-image oracle with negative control; plus `coord_test.clj` |
 | D3 | A standby (no writer authority) reports a torn tail and never rewrites the log | BACKED | sweep passive arm asserts byte-identical file at every cut; plus `coord_test.clj` |
-| D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:coordinator-corrupt`); writes are refused until restart | PARTIAL | `coord_test.clj` fault injection at three points on `append-frame-durable!` |
+| D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:coordinator-corrupt`); every waiter in a failed cohort is refused and writes stay fenced until restart | BACKED | `coord_test.clj` fault injection covers singleton and cohort barriers before append, after force, and corrupt replay |
 | D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | BACKED | sweep flip arm — 3,968 single-bit/high-bit flips: every one detected by CRC or repaired-to-prefix, zero divergent images. Residual (named, unswept): multi-byte garbage tails; header-region corruption is gated separately in `coord_test.clj` |
 
 ## Atomicity
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| A1 | A batch prepares under one locked snapshot and commits as one transaction frame (one fsync), or fails before any append | PARTIAL | happy path in [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj); no crash-mid-batch gate |
+| A1 | One RPC batch remains one transaction frame; a sequencer cohort prepares FIFO on a private root and publishes all covered frames together after one barrier, or publishes none | BACKED | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) batch path; `coord_test.clj` two-frame cohort success/failure arms |
 
 ## Isolation and concurrency
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| I1 | One active coordinator per `SpaceId`; accepted transactions serialize under a single lock | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj) |
+| I1 | One active coordinator per `SpaceId`; its singleton FIFO sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
-| I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame verification |
-| I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (writes serialize per-commit fsync — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
+| I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
+| I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
 
 ## Ordering and recovery
 
@@ -124,11 +124,14 @@ writes/s) must not be quoted for head. Remaining envelope work:
   (measured via the generative harness: seed runtime 5.1 s at depth 8, 7.9 s
   at 60, 46.2 s at 240) — functional to the 256 depth bound but
   seconds-expensive near it; a known characteristic, not yet optimized;
-- writes serialize through one per-commit fsync under the coordinator lock
-  (~35 ms/commit observed on local disk → tens of committed tx/s serialized;
-  batches amortize). Group commit does not exist. The seven read-only FRAMRPC
-  operations run against pinned immutable roots outside that lock; mutations
-  retain synchronous per-frame forcing;
+- mutations serialize through a FIFO sequencer in cohorts of at most 32
+  frame-bearing transactions, 1 MiB of request bodies, or 1 ms oldest-intent
+  age. A cohort retains one FRAMLOG frame per transaction but shares one
+  durability barrier and one immutable snapshot publication. In the same K=8,
+  200-write concurrency probe on 2026-08-03, throughput moved from 108.2
+  writes/s at `dd4aff2` to 241.2 writes/s with group commit (one run per side;
+  shared-host variance is not characterized). The seven read-only FRAMRPC
+  operations stay entirely on pinned published roots;
 - overload behavior is **unspecified**: the head daemon currently has no
   admission control (unbounded connection futures). Until bounded admission
   lands, nothing can be promised about behavior at saturation — that is a

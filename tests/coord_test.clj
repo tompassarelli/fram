@@ -225,6 +225,60 @@
            (error-code
             #(coord/assert! pre-append-co (t/triple "pre" :state "retry") {}))))
 
+(def append-cohort-var
+  (ns-resolve 'coord 'append-frame-cohort-durable!))
+(def append-cohort-original @append-cohort-var)
+(def cohort-file (java.io.File. scratch "cohort.framlog"))
+(coord/create-triple-log! (.getPath cohort-file) "cohort-space")
+(def cohort-co (coord/open-coordinator! (.getPath cohort-file) "cohort-space"))
+(def cohort-barriers (atom 0))
+(def cohort-result
+  (with-redefs-fn
+    {append-cohort-var
+     (fn [path frames]
+       (swap! cohort-barriers inc)
+       (append-cohort-original path frames))}
+    #(coord/commit-cohort!
+      cohort-co
+      [(fn [co] (coord/assert! co (t/triple "group" :item 1) {}))
+       (fn [co] (coord/assert! co (t/triple "group" :item 2) {}))])))
+(check! "a cohort keeps two logical transaction frames under one barrier"
+        (and (= 1 @cohort-barriers)
+             (= 2 (:frame-count cohort-result))
+             (= [1 2]
+                (mapv :tx-seq
+                      (:frames (coord/read-triple-log! (.getPath cohort-file)))))))
+(check! "a successful cohort publishes its final private root atomically"
+        (and (= (t/transaction-coordinate "cohort-space" 2)
+                (coord/current-transaction cohort-co))
+             (= #{(t/triple "group" :item 1) (t/triple "group" :item 2)}
+                (set (coord/live-propositions cohort-co)))))
+
+(def failed-cohort-file (java.io.File. scratch "failed-cohort.framlog"))
+(coord/create-triple-log! (.getPath failed-cohort-file) "failed-cohort-space")
+(def failed-cohort-co
+  (coord/open-coordinator! (.getPath failed-cohort-file) "failed-cohort-space"))
+(def failed-cohort-error
+  (with-redefs-fn
+    {append-cohort-var
+     (fn [_ _]
+       (throw (ex-info "injected cohort barrier failure"
+                       {:type :injected-cohort-barrier})))}
+    #(error-code
+      (fn []
+        (coord/commit-cohort!
+         failed-cohort-co
+         [(fn [co] (coord/assert! co (t/triple "group" :failed 1) {}))
+          (fn [co] (coord/assert! co (t/triple "group" :failed 2) {}))])))))
+(check! "a cohort barrier failure publishes nothing and fences all retries"
+        (and (= :durability-ambiguous failed-cohort-error)
+             (= :recovery-required
+                (:status (coord/coordinator-recovery-state failed-cohort-co)))
+             (= (t/transaction-coordinate "failed-cohort-space" 0)
+                (coord/current-transaction failed-cohort-co))
+             (empty? (:frames
+                      (coord/read-triple-log! (.getPath failed-cohort-file))))))
+
 (def post-force-file (java.io.File. scratch "post-force-failure.framlog"))
 (coord/create-triple-log! (.getPath post-force-file) "post-force-space")
 (def post-force-co

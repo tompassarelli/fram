@@ -118,6 +118,7 @@
   ;; ---- A. disjoint subjects: 8 socket writers x 25 sequential writes --------
   (let [start (java.util.concurrent.CountDownLatch. 1)
         done (java.util.concurrent.CountDownLatch. writers)
+        started-ns (volatile! 0)
         acks (atom {})
         failures (atom [])]
     (dotimes [w writers]
@@ -133,11 +134,15 @@
             (catch Throwable error
               (swap! failures conj [w (str error)]))
             (finally (.countDown done)))))))
+    (vreset! started-ns (System/nanoTime))
     (.countDown start)
     (.await done)
     (let [issued (* writers per-writer)
+          elapsed-s (/ (- (System/nanoTime) @started-ns) 1.0e9)
           per-writer-acks @acks
           all-acks (mapcat val per-writer-acks)]
+      (println (format "  BENCH A: %.1f writes/s (%d writes, %.3f s, K=%d)"
+                       (/ issued elapsed-s) issued elapsed-s writers))
       (check! "A: no writer thread threw on the socket path" (empty? @failures))
       (check! (str "A: every one of " issued " concurrent writes is acked exactly once")
               (and (= writers (count per-writer-acks))
@@ -167,12 +172,16 @@
       (let [durable (assert-frames log-path)
             noted (filterv #(= :note (t/triple-slot1 (:triple %))) (:asserts durable))
             by-writer (group-by #(t/triple-slot0 (:triple %)) noted)
-            version-of (into {} (map (juxt :proposition :version) all-acks))]
+            version-of (into {} (map (juxt :proposition :version) all-acks))
+            sequencer @coord-daemon/write-sequencer-stats]
         (check! "A: FRAMLOG is a whole, untorn generation of one frame per write"
                 (and (nil? (:torn-tail durable))
                      (= issued (count (:frames durable)))
                      (= (mapv inc (range issued))
-                        (mapv :tx-seq (:frames durable)))))
+                        (mapv :tx-seq (:frames durable)))
+                     (= issued (:frames sequencer))
+                     (< (:barriers sequencer) (:frames sequencer))
+                     (= (:barriers sequencer) (:publications sequencer))))
         (check! "A: the durable log holds each acked fact exactly once"
                 (and (= issued (count noted))
                      (= issued (count (distinct (map :triple noted))))

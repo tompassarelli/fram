@@ -232,7 +232,10 @@
             pinned-rows (into (query-rows first-page) (query-rows second-page))
             historical (request!
                         port space :rpc/query
-                        (wire/rpc-query-request! plan (wire/rpc-query-as-of! 1)))]
+                        (wire/rpc-query-request! plan (wire/rpc-query-as-of! 1)))
+            current-after-ack
+            (request! port space :rpc/scan
+                      (wire/rpc-triple-pattern! "later" :value 3))]
         (check! "query cursor pins snapshot version across later commits"
                 (and (= 2 (t/rpcresponse-served-version first-page))
                      (= 3 (t/rpcresponse-served-version asserted-later))
@@ -242,7 +245,24 @@
                 (and (= 1 (t/rpcresponse-served-version historical))
                      (some #(= [(t/triple "source-file" :plangrep/page 1)
                                 :plangrep/title "Door Schedule"] %)
-                           (query-rows historical))))))
+                           (query-rows historical))))
+        (check! "a read after an acknowledged write sees at least its version"
+                (and (<= (t/rpcresponse-served-version asserted-later)
+                         (t/rpcresponse-served-version current-after-ack))
+                     (= [later]
+                        (triples-result current-after-ack :rpc/triples))))
+        (let [work-limited
+              (with-redefs-fn
+                {#'coord-daemon/cached-result!
+                 (fn [& _]
+                   (throw (ex-info "query evaluation stopped: query-work-limit"
+                                   {:fram/code :query-work-limit})))}
+                #(request!
+                  port space :rpc/query
+                  (wire/rpc-query-request! plan (wire/rpc-query-as-of! 1))))]
+          (check! "an as-of work-limit error reports the snapshot it served"
+                  (and (= :query-work-limit (error-code work-limited))
+                       (= 1 (t/rpcresponse-served-version work-limited)))))))
 
       (let [stale (request!
                    port space :rpc/assert
