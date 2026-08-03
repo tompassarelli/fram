@@ -1384,11 +1384,23 @@
     (daemon-fail! (query/error-code error) (query/error-message error) {}))
   (query/result-rows result))
 
+;; rows come from a Set (no duplicates), ordered by query/row-key: locate by
+;; binary search on that key instead of a linear scan.
 (defn- query-cursor-position! [rows after-row]
-  (let [position (first (keep-indexed
-                         (fn [index row]
-                           (when (= row after-row) index))
-                         rows))]
+  (let [target (query/row-key after-row)
+        n (count rows)
+        lo (loop [lo 0 hi n]
+             (if (>= lo hi)
+               lo
+               (let [mid (quot (+ lo hi) 2)]
+                 (if (neg? (compare (query/row-key (nth rows mid)) target))
+                   (recur (inc mid) hi)
+                   (recur lo mid)))))
+        position (loop [index lo]
+                   (when (and (< index n) (= (query/row-key (nth rows index)) target))
+                     (if (= (nth rows index) after-row)
+                       index
+                       (recur (inc index)))))]
     (when (nil? position)
       (daemon-fail! :query-cursor-mismatch
                     "query cursor row is absent from its snapshot" {}))
