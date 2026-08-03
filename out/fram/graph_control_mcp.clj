@@ -4,6 +4,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [coord-daemon-wire :as wire]
             [fram.code-commit-gate :as gate]
             [fram.code-reader :as code-reader]
@@ -235,18 +236,52 @@
   (when-not (string? value)
     (fail! :invalid-edit-form
            "form must be one EDN datum encoded as a string" {}))
-  (try
-    (with-open [reader (PushbackReader. (StringReader. value))]
-      (let [eof (Object.)
-            datum (edn/read {:eof eof} reader)
-            tail (edn/read {:eof eof} reader)]
-        (when (or (identical? eof datum) (not (identical? eof tail)))
-          (fail! :invalid-edit-form
-                 "form must contain exactly one EDN datum" {}))
-        datum))
-    (catch clojure.lang.ExceptionInfo error (throw error))
-    (catch Throwable cause
-      (fail! :invalid-edit-form "form is not valid EDN" {:cause cause}))))
+  (let [annotation-token (symbol (str "__fram_annotation_" (gensym)))
+        delimiter? #(or (Character/isWhitespace ^Character %)
+                        (contains? #{\( \) \[ \] \{ \} \" \; \,} %))
+        annotation-name? #(boolean (re-matches
+                                     #"[A-Za-z_*+!$%&=<>?][A-Za-z0-9_.*+!$%&=<>?/\\-]*:"
+                                     %))
+        edn-form
+        (loop [chars (seq value) mode :code out (StringBuilder.)]
+          (if-let [ch (first chars)]
+            (case mode
+              :string
+              (do (.append out ch)
+                  (cond
+                    (= ch \\) (if-let [escaped (second chars)]
+                               (do (.append out escaped)
+                                   (recur (nnext chars) :string out))
+                               (recur nil :string out))
+                    (= ch \" ) (recur (next chars) :code out)
+                    :else (recur (next chars) :string out)))
+
+              :comment
+              (do (.append out ch)
+                  (recur (next chars) (if (= ch \newline) :code :comment) out))
+
+              (cond
+                (= ch \") (do (.append out ch) (recur (next chars) :string out))
+                (= ch \;) (do (.append out ch) (recur (next chars) :comment out))
+                (delimiter? ch) (do (.append out ch) (recur (next chars) :code out))
+                :else (let [[token remaining] (split-with (complement delimiter?) chars)]
+                        (.append out (if (annotation-name? (apply str token))
+                                       (str (apply str (butlast token)) " " annotation-token)
+                                       (apply str token)))
+                        (recur remaining :code out))))
+            (.toString out)))]
+    (try
+      (with-open [reader (PushbackReader. (StringReader. edn-form))]
+        (let [eof (Object.)
+              datum (edn/read {:eof eof} reader)
+              tail (edn/read {:eof eof} reader)]
+          (when (or (identical? eof datum) (not (identical? eof tail)))
+            (fail! :invalid-edit-form
+                   "form must contain exactly one EDN datum" {}))
+          (walk/postwalk #(if (= annotation-token %) (symbol "#%:") %) datum)))
+      (catch clojure.lang.ExceptionInfo error (throw error))
+      (catch Throwable cause
+        (fail! :invalid-edit-form "form is not valid EDN" {:cause cause})))))
 
 (defn- candidate-snapshot [snapshot candidate]
   {:module (:module snapshot)
