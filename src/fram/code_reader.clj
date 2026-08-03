@@ -65,6 +65,13 @@
               (recur next-cursor (conj seen next-cursor) next-version
                      next-pages all-triples))))))))
 
+(defn read-corpus-snapshot!
+  "Drain one pinned whole-corpus scan for graph-control preflight."
+  ([port space]
+   (read-corpus-snapshot! port space nil))
+  ([port space page-limit]
+   (drain-corpus! port space (code-page-limit! page-limit))))
+
 (defn- module-node-suffix [module value]
   (when (string? value)
     (let [prefix (str "@" module "#")]
@@ -108,7 +115,7 @@
    (when (str/blank? module)
      (invalid! "module name must be nonempty" {:module module}))
    (let [{:keys [version pages triples]}
-         (drain-corpus! port space (code-page-limit! page-limit))
+         (read-corpus-snapshot! port space page-limit)
          module-triples (filterv #(module-subject? module (t/triple-slot0 %))
                                  triples)
          root (registered-root! checkout-root module module-triples)]

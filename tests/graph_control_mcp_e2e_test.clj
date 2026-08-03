@@ -1,0 +1,234 @@
+(require '[babashka.process :as process]
+         '[cheshire.core :as json]
+         '[clojure.java.io :as io]
+         '[clojure.java.shell :as shell]
+         '[clojure.set :as set]
+         '[clojure.string :as str]
+         '[fram.code-commit-gate :as gate]
+         '[fram.code-reader :as code-reader]
+         '[fram.rt :as rt]
+         '[fram.types :as t])
+
+(def e2e-args *command-line-args*)
+(binding [*command-line-args* []]
+  (load-file "coord_daemon.clj"))
+
+(def checks (atom []))
+(defn check! [label value]
+  (println (str (if value "[PASS] " "[FAIL] ") label))
+  (swap! checks conj [label (boolean value)]))
+
+(defn eventually [f]
+  (loop [attempt 0]
+    (let [value (try (f) (catch Throwable _ nil))]
+      (cond value value
+            (>= attempt 240) nil
+            :else (do (Thread/sleep 25) (recur (inc attempt)))))))
+
+(defn free-port []
+  (with-open [socket (java.net.ServerSocket. 0)]
+    (.getLocalPort socket)))
+
+(defn delete-tree! [root]
+  (doseq [file (reverse (file-seq root))]
+    (io/delete-file file true)))
+
+(defn canonical-source! [beagle source path]
+  (let [raw (str path ".raw")
+        facts (str path ".edn")]
+    (spit raw source)
+    (let [emitted (shell/sh beagle "facts-roundtrip" "--emit-edn" raw)]
+      (when-not (zero? (:exit emitted))
+        (throw (ex-info "fixture emit failed" {:stderr (:err emitted)})))
+      (spit facts (:out emitted)))
+    (let [rendered (shell/sh beagle "facts-roundtrip" "--render" facts)]
+      (when-not (zero? (:exit rendered))
+        (throw (ex-info "fixture render failed" {:stderr (:err rendered)})))
+      (spit path (:out rendered)))
+    (io/delete-file raw true)
+    (io/delete-file facts true)))
+
+(defn parse-replies [output]
+  (into {}
+        (keep (fn [line]
+                (when-not (str/blank? line)
+                  (let [reply (json/parse-string line true)]
+                    (when (contains? reply :id) [(:id reply) reply])))))
+        (str/split-lines output)))
+
+(defn call-value [reply]
+  (json/parse-string (get-in reply [:result :content 0 :text]) true))
+
+(defn run-control [runtime launch-env requests]
+  (let [input (str (str/join "\n" (map json/generate-string requests)) "\n")]
+    (process/shell {:in input :out :string :err :string :continue true
+                    :extra-env launch-env}
+                   runtime "mcp")))
+
+(defn version! [port space]
+  (-> (rt/native-call! port space :rpc/version
+                       coord-daemon-wire/rpc-unit nil nil nil)
+      rt/require-native-success!
+      t/rpcresponse-served-version))
+
+(def runtime
+  (or (first e2e-args)
+      (System/getenv "FRAM_GRAPH_CONTROL_RUNTIME")))
+(when (str/blank? runtime)
+  (binding [*out* *err*]
+    (println "usage: bb -cp out tests/graph_control_mcp_e2e_test.clj /nix/store/.../bin/fram-graph-edit-runtime"))
+  (System/exit 2))
+
+(def root (.getCanonicalPath (io/file ".")))
+(def fram-root
+  (or (System/getenv "FRAM_GRAPH_E2E_FRAM_ROOT") root))
+(def scratch
+  (.toFile
+   (java.nio.file.Files/createTempDirectory
+    "fram-graph-control-e2e-"
+    (make-array java.nio.file.attribute.FileAttribute 0))))
+(def checkout-root (.getCanonicalPath scratch))
+(def source-root (io/file scratch "src"))
+(def source-path (io/file source-root "fixture.bclj"))
+(def code-log (str (io/file scratch ".fram/code.log")))
+(def space "graph-control-e2e")
+(def port (free-port))
+(def beagle
+  (or (System/getenv "FRAM_GRAPH_E2E_BEAGLE")
+      (System/getenv "FRAM_BEAGLE")
+      (str (System/getProperty "user.home") "/code/beagle/main/bin/beagle")))
+(def bb
+  (or (System/getenv "FRAM_GRAPH_E2E_BB") "bb"))
+
+(.mkdirs source-root)
+(canonical-source!
+ beagle
+ (str "#lang beagle/clj\n"
+      "(ns fixture)\n"
+      "(define-mode strict)\n"
+      "(defn alpha [] :- Int 0)\n"
+      "(defn beta [] :- Int 1)\n")
+ (str source-path))
+
+(def ingest
+  (shell/sh bb (str (io/file fram-root "bin/fram-ingest-code"))
+            "src/fixture.bclj" "--root" "src"
+            "--out" code-log "--space-id" space
+            :env (assoc (into {} (System/getenv)) "FRAM_BEAGLE" beagle)
+            :dir checkout-root))
+(def server
+  (when (zero? (:exit ingest))
+    (future (coord-daemon/serve! port code-log space :active))))
+
+(def launch-env
+  {"NORTH_FRAM_AUTHORITY_INSTANCE_ID" "123e4567-e89b-42d3-a456-426614174000"
+   "NORTH_FRAM_AUTHORITY_LEASE_ID" "123e4567-e89b-42d3-b456-426614174001"
+   "NORTH_FRAM_AUTHORITY_LEASE_EPOCH" "7"
+   "NORTH_FRAM_RUNTIME_CLOSURE_DIGEST"
+   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   "NORTH_FRAM_CHECKOUT_ROOT" checkout-root
+   "NORTH_FRAM_SOURCE_ROOT" (.getCanonicalPath source-root)
+   "NORTH_FRAM_CODE_LOG" (.getCanonicalPath (io/file code-log))
+   "NORTH_FRAM_CODE_PORT" (str port)})
+
+(try
+  (when-not (zero? (:exit ingest))
+    (binding [*out* *err*] (println (:err ingest))))
+  (check! "N2.6a ingests the scratch fixture into native FRAMLOG"
+          (zero? (:exit ingest)))
+  (check! "scratch native coordinator serves the ingested corpus"
+          (some? (and server (eventually #(version! port space)))))
+  (when server
+    (spit (io/file scratch ".mcp.json")
+          (json/generate-string
+            {:mcpServers
+            {:fram {:command (str (io/file fram-root "bin/fram-mcp"))
+                    :args []
+                    :env {:FRAM_SPACE_ID space :FRAM_PORT (str port)
+                          :FRAM_LOG code-log}}
+             :fram-graph-control {:command runtime :args ["mcp"]
+                                  :env launch-env}}}))
+    (let [status (shell/sh (str (io/file fram-root "bin/fram-code-status"))
+                           checkout-root)]
+      (check! "real sealed preflight earns fram-code-status Level 3"
+              (and (zero? (:exit status))
+                   (str/starts-with? (:out status) "level=3 "))))
+
+    (let [before (gate/transformer-snapshot
+                  (code-reader/read-module-snapshot!
+                   port space checkout-root "fixture"))
+          run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 1 :method "tools/list"}
+                {:jsonrpc "2.0" :id 2 :method "tools/call"
+                 :params {:name "multi-set-body"
+                          :arguments
+                          {:module "fixture"
+                           :edits [{:name "alpha" :body "42"}
+                                   {:name "beta" :body "(+ 40 2)"}]}}}])
+          replies (parse-replies (:out run))
+          result (call-value (get replies 2))
+          after-snapshot (code-reader/read-module-snapshot!
+                          port space checkout-root "fixture")
+          after (gate/transformer-snapshot after-snapshot)
+          actual-asserts (set/difference (:facts after) (:facts before))
+          actual-retracts (set/difference (:facts before) (:facts after))
+          candidate-asserts (set (get-in result [:candidateDelta :asserts]))
+          candidate-retracts (set (get-in result [:candidateDelta :retracts]))
+          rendered (code-reader/render-module! beagle after-snapshot)]
+      (when-not (zero? (:exit run))
+        (binding [*out* *err*] (println (:err run))))
+      (check! "sealed MCP serves only the multi-set-body graph-control tool"
+              (= ["multi-set-body"]
+                 (mapv :name (get-in replies [1 :result :tools]))))
+      (check! "multi-set-body completes commit and checked publication"
+              (and (not (get-in replies [2 :result :isError]))
+                   (= "committed-projection-published" (:outcome result))))
+      (check! "committed triples match the MCP candidate delta"
+              (and (= candidate-asserts actual-asserts)
+                   (= candidate-retracts actual-retracts)
+                   (= (:candidateDelta result) (:committedDelta result))))
+      (check! "projection file is republished byte-correct from committed triples"
+              (= (:source rendered) (slurp source-path))))
+
+    (let [version-before (version! port space)
+          facts-before (:facts
+                        (gate/transformer-snapshot
+                         (code-reader/read-module-snapshot!
+                          port space checkout-root "fixture")))
+          bytes-before (java.nio.file.Files/readAllBytes (.toPath source-path))
+          run (run-control
+               runtime launch-env
+               [{:jsonrpc "2.0" :id 3 :method "tools/call"
+                 :params {:name "multi-set-body"
+                          :arguments
+                          {:module "fixture"
+                           :edits [{:name "alpha" :body "\"bad\""}
+                                   {:name "beta" :body "\"worse\""}]}}}])
+          reply (get (parse-replies (:out run)) 3)
+          result (call-value reply)
+          version-after (version! port space)
+          facts-after (:facts
+                       (gate/transformer-snapshot
+                        (code-reader/read-module-snapshot!
+                         port space checkout-root "fixture")))
+          bytes-after (java.nio.file.Files/readAllBytes (.toPath source-path))]
+      (check! "failing sealed edit returns a typed precommit rejection"
+              (and (get-in reply [:result :isError])
+                   (= "precommit-rejected" (:outcome result))))
+      (check! "failing edit commits no triples and publishes no bytes"
+              (and (= version-before version-after)
+                   (= facts-before facts-after)
+                   (java.util.Arrays/equals bytes-before bytes-after)))))
+  (finally
+    (when server (future-cancel server))
+    (delete-tree! scratch)))
+
+(let [failures (remove second @checks)]
+  (if (seq failures)
+    (do (println "\ngraph-control MCP E2E:" (count failures)
+                 "FAILED of" (count @checks))
+        (System/exit 1))
+    (do (println "\ngraph-control MCP E2E:" (count @checks) "/"
+                 (count @checks) "PASS")
+        (System/exit 0))))

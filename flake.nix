@@ -222,13 +222,25 @@
       # receipts, and projection lifecycle live in later slices. This output
       # closes the executable/toolchain boundary and refuses to serve until
       # North supplies the future lease and independently computed closure seal.
-      mkGraphEditRuntime = system: pkgs: fram: beaglePkg:
+      mkGraphEditRuntime = system: pkgs: fram: beaglePkg: beagleSource:
         let
           framRoot = fram.runtimeRoot;
           beagleRevision = beagle.rev;
+          sealedBeaglePkg = pkgs.runCommand
+            "beagle-graph-control-${beagleRevision}" {} ''
+            mkdir "$out"
+            cp -r ${beaglePkg}/. "$out/"
+            chmod -R u+w "$out"
+            mkdir -p "$out/self-host"
+            cp -r ${beagleSource}/self-host/seed "$out/self-host/seed"
+            # The upstream wrapper re-enters its original store root. Rebase
+            # only this dispatcher so facts-roundtrip sees the composed seed.
+            cp ${beaglePkg}/bin/.beagle-wrapped "$out/bin/beagle"
+            chmod +x "$out/bin/beagle"
+          '';
           runtimePackages = [
             fram
-            beaglePkg
+            sealedBeaglePkg
             pkgs.babashka
             pkgs.racket
             pkgs.jdk
@@ -253,25 +265,25 @@
             };
             storeRoots = [
               { role = "babashka"; path = "${pkgs.babashka}"; }
-              { role = "beagle"; path = "${beaglePkg}"; }
+              { role = "beagle"; path = "${sealedBeaglePkg}"; }
               { role = "fram"; path = "${fram}"; }
               { role = "jdk"; path = "${pkgs.jdk}"; }
               { role = "racket"; path = "${pkgs.racket}"; }
             ];
             executables = {
               babashka = "${pkgs.babashka}/bin/bb";
-              beagle = "${beaglePkg}/bin/beagle";
+              beagle = "${sealedBeaglePkg}/bin/beagle";
               coordinatorJava = "${pkgs.jdk}/bin/java";
               coordinatorSource = "${framRoot}/coord_daemon.clj";
               editVerifier = "${framRoot}/bin/fram-edit-verifier";
               entrypointRelative = "bin/fram-graph-edit-runtime";
-              mcpSource = "${framRoot}/tests/fram_mcp.clj";
+              mcpSource = "${framRoot}/out/fram/graph_control_mcp.clj";
               racket = "${pkgs.racket}/bin/racket";
             };
             helpers = {
-              beagleBuildAll = "${beaglePkg}/bin/beagle-build-all";
-              factsCheckEmit = "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt";
-              factsCheckWorld = "${beaglePkg}/beagle-lib/private/facts-check-world.rkt";
+              beagleBuildAll = "${sealedBeaglePkg}/bin/beagle-build-all";
+              factsCheckEmit = "${sealedBeaglePkg}/beagle-lib/private/facts-check-emit.rkt";
+              factsCheckWorld = "${sealedBeaglePkg}/beagle-lib/private/facts-check-world.rkt";
               framResolve = "${framRoot}/out/resolve.clj";
             };
             environment = {
@@ -349,14 +361,14 @@
               --set LANG C \
               --set LC_ALL C \
               --set PATH "${runtimePath}" \
-              --set BEAGLE_HOME "${beaglePkg}" \
+              --set BEAGLE_HOME "${sealedBeaglePkg}" \
               --set FRAM_GRAPH_EDIT_SEALED_BASH "${pkgs.bash}/bin/bash" \
               --set FRAM_GRAPH_EDIT_SEALED_BB "${pkgs.babashka}/bin/bb" \
-              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE "${beaglePkg}" \
-              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI "${beaglePkg}/bin/beagle" \
-              --set FRAM_GRAPH_EDIT_SEALED_BUILD_ALL "${beaglePkg}/bin/beagle-build-all" \
+              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE "${sealedBeaglePkg}" \
+              --set FRAM_GRAPH_EDIT_SEALED_BEAGLE_CLI "${sealedBeaglePkg}/bin/beagle" \
+              --set FRAM_GRAPH_EDIT_SEALED_BUILD_ALL "${sealedBeaglePkg}/bin/beagle-build-all" \
               --set FRAM_GRAPH_EDIT_SEALED_CAT "${pkgs.coreutils}/bin/cat" \
-              --set FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT "${beaglePkg}/beagle-lib/private/facts-check-emit.rkt" \
+              --set FRAM_GRAPH_EDIT_SEALED_CHECK_EMIT "${sealedBeaglePkg}/beagle-lib/private/facts-check-emit.rkt" \
               --set FRAM_GRAPH_EDIT_SEALED_EDIT_VERIFIER "${framRoot}/bin/fram-edit-verifier" \
               --set FRAM_GRAPH_EDIT_SEALED_EMPTY_THREADS "$out/share/fram/empty-threads" \
               --set FRAM_GRAPH_EDIT_SEALED_ENV "${pkgs.coreutils}/bin/env" \
@@ -367,7 +379,7 @@
               --set FRAM_GRAPH_EDIT_SEALED_RACKET "${pkgs.racket}/bin/racket" \
               --set FRAM_GRAPH_EDIT_SEALED_REALPATH "${pkgs.coreutils}/bin/realpath" \
               --set FRAM_GRAPH_EDIT_SEALED_RESOLVE "${framRoot}/out/resolve.clj" \
-              --set FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK "${beaglePkg}/beagle-lib/private/facts-check-world.rkt"
+              --set FRAM_GRAPH_EDIT_SEALED_WORLD_CHECK "${sealedBeaglePkg}/beagle-lib/private/facts-check-world.rkt"
             set -u
 
             runHook postInstall
@@ -385,6 +397,14 @@
             FRAM_RUNTIME_TEST_SLEEP="${pkgs.coreutils}/bin/sleep" \
             FRAM_RUNTIME_TEST_SYSTEM="${system}" \
               ${pkgs.bash}/bin/bash ${./tests/package_graph_edit_runtime_smoke.sh} "$out"
+
+            BEAGLE_HOME="${sealedBeaglePkg}" \
+            FRAM_GRAPH_E2E_BB="${pkgs.babashka}/bin/bb" \
+            FRAM_GRAPH_E2E_BEAGLE="${sealedBeaglePkg}/bin/beagle" \
+            FRAM_GRAPH_E2E_FRAM_ROOT="${framRoot}" \
+              ${pkgs.babashka}/bin/bb -cp out \
+                ${./tests/graph_control_mcp_e2e_test.clj} \
+                "$out/bin/fram-graph-edit-runtime"
 
             runHook postInstallCheck
           '';
@@ -404,14 +424,16 @@
           passthru = {
             coreManifest = "${finalAttrs.finalPackage}/share/fram/graph-edit-runtime-core-v1.json";
             framPackage = fram;
-            beaglePackage = beaglePkg;
+            beaglePackage = sealedBeaglePkg;
+            upstreamBeaglePackage = beaglePkg;
           };
         });
     in
     {
       packages = forAll (system: pkgs: rec {
         fram = mkFram pkgs clj-nix.packages.${system};
-        fram-graph-edit-runtime = mkGraphEditRuntime system pkgs fram beagle.packages.${system}.default;
+        fram-graph-edit-runtime = mkGraphEditRuntime system pkgs fram
+          beagle.packages.${system}.default beagle.outPath;
         default = fram;
       });
 

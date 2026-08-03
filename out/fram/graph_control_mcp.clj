@@ -1,0 +1,393 @@
+(ns fram.graph-control-mcp
+  "Sealed stdio MCP composition for native multi-definition graph edits."
+  (:require [cheshire.core :as json]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [coord-daemon-wire :as wire]
+            [fram.code-commit-gate :as gate]
+            [fram.code-reader :as code-reader]
+            [fram.projection-lifecycle :as lifecycle]
+            [fram.rt :as rt]
+            [fram.types :as t])
+  (:import [java.io PushbackReader StringReader]
+           [java.nio ByteBuffer ByteOrder]
+           [java.nio.charset CodingErrorAction StandardCharsets]
+           [java.nio.file Files]
+           [java.util Arrays]))
+
+(def ^:private preflight-contract "fram.graph-control-preflight/v1")
+(def ^:private server-name "fram-graph-control")
+(def ^:private tool-name "multi-set-body")
+(def ^:private framlog-magic
+  (.getBytes "FRAMLOG\u0000" StandardCharsets/UTF_8))
+
+(defn- fail! [type message data]
+  (throw (ex-info message (assoc data :type type))))
+
+(defn- required-env! [name]
+  (let [value (System/getenv name)]
+    (when (str/blank? value)
+      (fail! :missing-sealed-binding
+             (str name " is required") {:binding name}))
+    value))
+
+(defn- port! []
+  (let [raw (required-env! "FRAM_CODE_PORT")]
+    (try
+      (let [value (Long/parseLong raw)]
+        (when-not (<= 1 value 65535)
+          (fail! :invalid-sealed-binding
+                 "FRAM_CODE_PORT is outside the TCP port range" {:port raw}))
+        value)
+      (catch NumberFormatException _
+        (fail! :invalid-sealed-binding
+               "FRAM_CODE_PORT must be a decimal TCP port" {:port raw})))))
+
+(defn- canonical-path! [value field]
+  (try
+    (.getCanonicalPath (io/file value))
+    (catch Throwable cause
+      (fail! :invalid-sealed-path (str field " is not canonicalizable")
+             {:field field :path value :cause cause}))))
+
+(defn- space-id! [code-log]
+  (let [bytes (Files/readAllBytes (.toPath (io/file code-log)))]
+    (when (< (alength bytes) 16)
+      (fail! :invalid-code-log "FRAMLOG header is truncated" {}))
+    (when-not (Arrays/equals framlog-magic (Arrays/copyOfRange bytes 0 8))
+      (fail! :invalid-code-log "code log is not native FRAMLOG" {}))
+    (let [buffer (doto (ByteBuffer/wrap bytes) (.order ByteOrder/LITTLE_ENDIAN))
+          _ (.position buffer 8)
+          version (bit-and 65535 (int (.getShort buffer)))
+          flags (bit-and 65535 (int (.getShort buffer)))
+          length (Integer/toUnsignedLong (.getInt buffer))]
+      (when-not (and (= 1 version) (zero? flags)
+                     (pos? length) (<= length (.remaining buffer)))
+        (fail! :invalid-code-log "FRAMLOG header is invalid"
+               {:version version :flags flags :space-length length}))
+      (try
+        (str (.decode (doto (.newDecoder StandardCharsets/UTF_8)
+                        (.onMalformedInput CodingErrorAction/REPORT)
+                        (.onUnmappableCharacter CodingErrorAction/REPORT))
+                      (ByteBuffer/wrap bytes 16 (int length))))
+        (catch Throwable cause
+          (fail! :invalid-code-log "FRAMLOG SpaceId is not strict UTF-8"
+                 {:cause cause}))))))
+
+(defn- inside? [root path]
+  (let [root-path (.toPath (io/file root))
+        path-value (.toPath (io/file path))]
+    (or (= root-path path-value) (.startsWith path-value root-path))))
+
+(defn- module-root-rows! [checkout-root source-root triples]
+  (let [ast-modules
+        (->> triples
+             (keep (fn [triple]
+                     (when-let [[_ module]
+                                (and (string? (t/triple-slot0 triple))
+                                     (re-matches #"^@(.+)#[0-9]+$"
+                                                 (t/triple-slot0 triple)))]
+                       module)))
+             set)
+        roots
+        (->> triples
+             (keep
+              (fn [triple]
+                (when-let [[_ module]
+                           (and (= "file" (t/triple-slot1 triple))
+                                (string? (t/triple-slot0 triple))
+                                (re-matches #"^@(.+)#root$"
+                                            (t/triple-slot0 triple)))]
+                  [module (t/triple-slot2 triple)])))
+             (group-by first))]
+    (when (empty? ast-modules)
+      (fail! :module-roots-missing
+             "native corpus contains no module AST roots" {}))
+    (when-not (= ast-modules (set (keys roots)))
+      (fail! :module-roots-missing
+             "native corpus module ASTs and registered roots differ"
+             {:ast-modules (sort ast-modules)
+              :root-modules (sort (keys roots))}))
+    (mapv
+     (fn [module]
+       (let [rows (get roots module)
+             values (mapv second rows)]
+         (when-not (and (= 1 (count values)) (string? (first values)))
+           (fail! :module-roots-invalid
+                  "each native module must have one String root"
+                  {:module module :roots values}))
+         (let [raw (io/file (first values))
+               path (canonical-path!
+                     (if (.isAbsolute raw)
+                       raw (io/file checkout-root (first values)))
+                     "module root")]
+           (when-not (and (inside? source-root path)
+                          (.isFile (io/file path)))
+             (fail! :module-root-outside-source
+                    "registered module root must be an existing source file"
+                    {:module module :root path :source-root source-root}))
+           {:module module :root path})))
+     (sort ast-modules))))
+
+(defn- unchanged-candidate [module-snapshot]
+  (let [base (gate/transformer-snapshot module-snapshot)]
+    {:base-version (:version base)
+     :module (:module base)
+     :ast (:facts base)
+     :asserts #{}
+     :retracts #{}}))
+
+(defn preflight!
+  "Prove coordinator reachability, complete module roots, and one sealed green check."
+  []
+  (let [checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
+                                       "checkout root")
+        source-root (canonical-path! (required-env! "FRAM_SOURCE_ROOT")
+                                     "source root")
+        code-log (canonical-path! (required-env! "FRAM_CODE_LOG") "code log")
+        port (port!)
+        space (space-id! code-log)
+        corpus (code-reader/read-corpus-snapshot! port space)
+        roots (module-root-rows! checkout-root source-root (:triples corpus))
+        selected (:module (first roots))
+        snapshot (code-reader/read-module-snapshot!
+                  port space checkout-root selected)
+        candidate (unchanged-candidate snapshot)
+        request (gate/verifier-request snapshot candidate)
+        check (gate/sealed-check! request {})
+        rendered (when (:accepted check)
+                   (code-reader/render-module!
+                    (required-env! "FRAM_BEAGLE") snapshot))
+        version-after
+        (-> (rt/native-call! port space :rpc/version
+                             wire/rpc-unit nil nil nil)
+            rt/require-native-success!
+            t/rpcresponse-served-version)]
+    (when-not (:accepted check)
+      (fail! :sealed-preflight-rejected
+             "sealed coherent-world preflight rejected the current corpus"
+             {:module selected :receipt (:receipt check)}))
+    (when-not (= (:version corpus) version-after)
+      (fail! :preflight-version-drift
+             "native corpus changed during graph-control preflight"
+             {:before (:version corpus) :after version-after}))
+    {:contractVersion preflight-contract
+     :ok true
+     :service {:name server-name :coordinator "reachable"}
+     :corpus {:version (str version-after)
+              :moduleCount (count roots)
+              :modules (mapv :module roots)
+              :rootsPresent true}
+     :check {:green true
+             :module selected
+             :inputDigest (:input-digest request)
+             :projectionBytes (count (.getBytes ^String (:source rendered)
+                                                StandardCharsets/UTF_8))}}))
+
+(defn- parse-body! [index value]
+  (when-not (string? value)
+    (fail! :invalid-edit-body
+           "each edit body must be one EDN datum encoded as a string"
+           {:index index}))
+  (try
+    (with-open [reader (PushbackReader. (StringReader. value))]
+      (let [eof (Object.)
+            datum (edn/read {:eof eof} reader)
+            tail (edn/read {:eof eof} reader)]
+        (when (or (identical? eof datum) (not (identical? eof tail)))
+          (fail! :invalid-edit-body
+                 "each edit body must contain exactly one EDN datum"
+                 {:index index}))
+        datum))
+    (catch clojure.lang.ExceptionInfo error (throw error))
+    (catch Throwable cause
+      (fail! :invalid-edit-body "edit body is not valid EDN"
+             {:index index :cause cause}))))
+
+(defn- edits! [value]
+  (when-not (vector? value)
+    (fail! :invalid-edits "edits must be an array" {}))
+  (mapv
+   (fn [index edit]
+     (when-not (and (map? edit)
+                    (= #{:name :body} (set (keys edit)))
+                    (string? (:name edit))
+                    (not (str/blank? (:name edit))))
+       (fail! :invalid-edit
+              "each edit requires exactly nonblank name and body strings"
+              {:index index}))
+     {:name (:name edit) :body (parse-body! index (:body edit))})
+   (range) value))
+
+(defn- candidate-snapshot [snapshot candidate]
+  {:module (:module snapshot)
+   :snapshot (:snapshot snapshot)
+   :triples (mapv (fn [[slot0 slot1 slot2]]
+                    (t/triple slot0 slot1 slot2))
+                  (:ast candidate))})
+
+(defn- sorted-delta [rows]
+  (mapv vec (sort-by pr-str rows)))
+
+(defn- edit-response [outcome publication]
+  (cond->
+   {:outcome (name (:outcome publication))
+    :module (:module outcome)
+    :graphState (name (:graph-state publication))
+    :projectionState (name (:projection-state publication))
+    :baseVersion (some-> (:base-version outcome) str)
+    :committedVersion (some-> (:committed-version outcome) str)}
+    (:candidate outcome)
+    (assoc :candidateDelta
+           {:asserts (sorted-delta (get-in outcome [:candidate :asserts]))
+            :retracts (sorted-delta (get-in outcome [:candidate :retracts]))})
+    (:committed-delta outcome)
+    (assoc :committedDelta
+           {:asserts (sorted-delta (get-in outcome [:committed-delta :asserts]))
+            :retracts (sorted-delta (get-in outcome [:committed-delta :retracts]))})
+    (:projection publication)
+    (assoc :projection (:projection publication))
+    (:rejection outcome)
+    (assoc :rejection (:rejection outcome))))
+
+(defn- edit-module! [{:keys [checkout-root port space beagle]} arguments]
+  (when-not (and (map? arguments)
+                 (= #{:module :edits} (set (keys arguments)))
+                 (string? (:module arguments))
+                 (not (str/blank? (:module arguments))))
+    (fail! :invalid-tool-arguments
+           "multi-set-body requires exactly module and edits" {}))
+  (let [checked (atom nil)
+        outcome
+        (gate/gate-and-commit!
+         port space checkout-root (:module arguments) (edits! (:edits arguments))
+         {:before-commit
+          (fn [{:keys [snapshot candidate]}]
+            (let [rendered (code-reader/render-module!
+                            beagle (candidate-snapshot snapshot candidate))]
+              (reset! checked
+                      {:candidate candidate
+                       :root (get-in snapshot [:snapshot :root])
+                       :bytes (.getBytes ^String (:source rendered)
+                                        StandardCharsets/UTF_8)})))})
+        checked-value @checked]
+    (when (and (= :committed (:type outcome))
+               (not= (:candidate outcome) (:candidate checked-value)))
+      (fail! :checked-projection-mismatch
+             "committed candidate differs from the checked projection"
+             {:module (:module outcome)}))
+    (let [publication
+          (lifecycle/publish-checked-projection!
+           {:commit-outcome outcome
+            :registered-root checkout-root
+            :registered-path (:root checked-value)
+            :checked-bytes (:bytes checked-value)})]
+      {:isError (not= :committed-projection-published
+                      (:outcome publication))
+       :value (edit-response outcome publication)})))
+
+(def ^:private tools
+  [{:name tool-name
+    :description "Atomically replace the bodies of 2..32 definitions in one native module, sealed-check the candidate, and publish its checked projection."
+    :inputSchema
+    {:type "object"
+     :additionalProperties false
+     :properties
+     {:module {:type "string"}
+      :edits {:type "array" :minItems 2 :maxItems 32
+              :items {:type "object" :additionalProperties false
+                      :properties {:name {:type "string"}
+                                   :body {:type "string"
+                                          :description "Exactly one EDN datum."}}
+                      :required ["name" "body"]}}}
+     :required ["module" "edits"]}}])
+
+(defn- reply! [id result]
+  (println (json/generate-string {:jsonrpc "2.0" :id id :result result}))
+  (flush))
+
+(defn- reply-error! [id code message]
+  (println (json/generate-string
+            {:jsonrpc "2.0" :id id
+             :error {:code code :message message}}))
+  (flush))
+
+(defn- tool-result [context tool arguments]
+  (try
+    (if (= tool-name tool)
+      (edit-module! context arguments)
+      {:isError true :value {:type "unknown-tool"
+                             :message (str "unknown tool: " tool)}})
+    (catch Throwable error
+      {:isError true
+       :value {:type (name (or (:type (ex-data error)) :graph-control-error))
+               :message (or (.getMessage error) (str (class error)))}})))
+
+(defn- handle! [context request]
+  (when (contains? request :id)
+    (let [id (:id request)
+          method (:method request)]
+      (case method
+        "initialize"
+        (reply! id {:protocolVersion "2024-11-05"
+                    :capabilities {:tools {}}
+                    :serverInfo {:name server-name :version "1"}
+                    :instructions "Sealed native graph control. Use multi-set-body for atomic checked edits."})
+
+        "tools/list" (reply! id {:tools tools})
+
+        "tools/call"
+        (let [{:keys [isError value]}
+              (tool-result context (get-in request [:params :name])
+                           (or (get-in request [:params :arguments]) {}))]
+          (reply! id {:content [{:type "text"
+                                :text (json/generate-string value)}]
+                      :isError (boolean isError)}))
+
+        (reply-error! id -32601 (str "method not found: " method))))))
+
+(defn- service-context! []
+  (let [preflight (preflight!)
+        code-log (required-env! "FRAM_CODE_LOG")]
+    {:preflight preflight
+     :checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
+                                     "checkout root")
+     :port (port!)
+     :space (space-id! code-log)
+     :beagle (required-env! "FRAM_BEAGLE")}))
+
+(defn- serve! []
+  (let [context (service-context!)]
+    (binding [*out* *err*]
+      (println "fram-graph-control: sealed preflight PASS; ready on stdio"))
+    (loop []
+      (when-let [line (read-line)]
+        (when-not (str/blank? line)
+          (let [request
+                (try (json/parse-string line true)
+                     (catch Throwable _ ::invalid))]
+            (cond
+              (= ::invalid request)
+              (reply-error! nil -32700 "parse error")
+
+              (not (map? request))
+              (reply-error! nil -32600 "Invalid Request: batches are unsupported")
+
+              :else
+              (try (handle! context request)
+                   (catch Throwable error
+                     (when (contains? request :id)
+                       (reply-error! (:id request) -32603
+                                     (or (.getMessage error)
+                                         "graph-control failure"))))))))
+        (recur)))))
+
+(defn -main [& [command]]
+  (case command
+    "preflight" (println (json/generate-string (preflight!)))
+    "mcp" (serve!)
+    (fail! :invalid-command "expected preflight or mcp" {:command command})))
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))

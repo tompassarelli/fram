@@ -64,9 +64,8 @@ trap cleanup EXIT INT TERM
       (binding [*out* *err*] (println (pr-str m)))
       (System/exit 1)))' "$manifest" "$expected_system"
 
-# The final env -i is the daemon authority boundary. It must bridge the already
-# validated wrapper values under exactly the five FRAM descriptor input names;
-# the daemon must not retain a NORTH_FRAM_* read or ambient-default expression.
+# The final env -i is the graph-control authority boundary. It must bridge the
+# already validated wrapper values under the exact sealed FRAM input names.
 fram_package="$("$python" -c '
 import json, pathlib, sys
 manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
@@ -113,12 +112,6 @@ for name, rhs in sealed_verifier_assignments.items():
 if "NORTH_FRAM_" in final_boundary:
     raise SystemExit("graph-edit runtime smoke: NORTH_FRAM_* crossed final env-i")
 
-daemon_bindings = set(re.findall(r'required-launch-binding! "([^"]+)"', daemon))
-if daemon_bindings != set(expected_assignments):
-    raise SystemExit(
-        "graph-edit runtime smoke: daemon authority binding set differs: "
-        + repr(sorted(daemon_bindings))
-    )
 if "NORTH_FRAM_" in daemon:
     raise SystemExit("graph-edit runtime smoke: daemon retains NORTH_FRAM_* read/fallback")
 PY
@@ -252,37 +245,16 @@ complete_hostile=(
   NORTH_FRAM_AUTHORITY_LEASE_ID="$lease_id"
   NORTH_FRAM_RUNTIME_CLOSURE_DIGEST="$runtime_digest"
 )
-"$env_bin" -i "${complete_hostile[@]}" "$entrypoint" preflight >"$work/preflight.json"
-
-"$bb" -e '
-  (require (quote [cheshire.core :as json]))
-  (let [[path evil digest] *command-line-args*
-        m (json/parse-string (slurp path) true)
-        rendered (pr-str m)
-        stores (concat (vals (:storeExecutables m)) (vals (:storeHelpers m)))]
-    (when-not (and (= "fram.graph-edit-authority-launch/v1" (:contractVersion m))
-                   (= "north" (:verificationOwner m))
-                   (false? (:runtimeDigestVerifiedByEntrypoint m))
-                   (= digest (get-in m [:authority :northSuppliedRuntimeClosureDigest]))
-                   (every? #(clojure.string/starts-with? (str %) "/nix/store/") stores)
-                   (not (clojure.string/includes? rendered evil)))
-      (binding [*out* *err*] (println rendered))
-      (System/exit 1)))' "$work/preflight.json" "$evil" "$runtime_digest"
-
-# Until the separate coordinator authority slice lands, a fully bound launch
-# reaches only the immutable MCP's unknown-profile fence: zero JSON-RPC replies,
-# no coordinator authority implied, and no ambient executable used.
-if "$env_bin" -i "${complete_hostile[@]}" "$entrypoint" mcp \
-     </dev/null >"$work/mcp.out" 2>"$work/mcp.err"; then
-  echo "graph-edit runtime smoke: authority MCP unexpectedly served before profile implementation" >&2
+# A fully shaped launch still fails when its selected coordinator/log are not
+# live native corpus inputs. This is the real preflight fence, not a manifest
+# echo or an unsupported-profile placeholder.
+if "$env_bin" -i "${complete_hostile[@]}" "$entrypoint" preflight \
+     </dev/null >"$work/preflight.out" 2>"$work/preflight.err"; then
+  echo "graph-edit runtime smoke: dead-corpus preflight unexpectedly passed" >&2
   exit 1
 fi
-[[ ! -s "$work/mcp.out" ]] || {
-  echo "graph-edit runtime smoke: dark authority MCP emitted a protocol reply" >&2
-  exit 1
-}
-"$grep_bin" -Fq 'unknown profile' "$work/mcp.err" || {
-  echo "graph-edit runtime smoke: immutable MCP did not reach the authority-profile fence" >&2
+[[ ! -s "$work/preflight.out" ]] || {
+  echo "graph-edit runtime smoke: failed preflight emitted a success receipt" >&2
   exit 1
 }
 [[ ! -e "$marker" ]] || {

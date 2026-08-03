@@ -83,6 +83,64 @@ if [ "$NATIVE_LOG" = true ]; then
   fi
 fi
 
+# --- sealed graph-control preflight -----------------------------------------
+# A configured stdio MCP cannot be probed through the client-owned process.
+# Launch its exact sealed command in preflight mode instead; Level 3 requires
+# that it reach this corpus, find every module root, and pass the real checker.
+GRAPH_CONTROL=false
+if [ "$NATIVE_LOG" = true ] && [ "$MCP" = present ] && [ "$COORD" = alive ] && \
+   [ -f "$DIR/.mcp.json" ]; then
+  if timeout 75 python3 - "$DIR/.mcp.json" "$DIR" "$CODE_LOG" "$PORT" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+config_path, checkout, code_log, port = sys.argv[1:]
+try:
+    with open(config_path, "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    server = config.get("mcpServers", {}).get("fram-graph-control")
+    if not isinstance(server, dict):
+        raise ValueError("graph-control MCP is absent")
+    command = server.get("command")
+    args = server.get("args")
+    configured_env = server.get("env")
+    if (not isinstance(command, str) or not os.path.isabs(command)
+            or not os.access(command, os.X_OK) or args != ["mcp"]
+            or not isinstance(configured_env, dict)
+            or not all(isinstance(k, str) and isinstance(v, str)
+                       for k, v in configured_env.items())):
+        raise ValueError("graph-control MCP launch shape is not sealed")
+    if (os.path.realpath(configured_env.get("NORTH_FRAM_CHECKOUT_ROOT", ""))
+            != os.path.realpath(checkout)
+            or os.path.realpath(configured_env.get("NORTH_FRAM_CODE_LOG", ""))
+            != os.path.realpath(code_log)
+            or configured_env.get("NORTH_FRAM_CODE_PORT") != port):
+        raise ValueError("graph-control MCP is bound to another corpus")
+    environment = os.environ.copy()
+    environment.update(configured_env)
+    result = subprocess.run(
+        [command, "preflight"], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, env=environment, timeout=70,
+        check=False)
+    payload = json.loads(result.stdout)
+    if (result.returncode != 0
+            or payload.get("contractVersion") != "fram.graph-control-preflight/v1"
+            or payload.get("ok") is not True
+            or payload.get("service", {}).get("coordinator") != "reachable"
+            or payload.get("corpus", {}).get("rootsPresent") is not True
+            or payload.get("corpus", {}).get("moduleCount", 0) < 1
+            or payload.get("check", {}).get("green") is not True):
+        raise ValueError("graph-control preflight did not prove Level 3")
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    GRAPH_CONTROL=true
+  fi
+fi
+
 # --- graph-upstream adoption under this dir --------------------------------
 # The guard recognizes either a registry row or an in-band leading-comment
 # sentinel. Count that same contract only over source files present in this tree.
@@ -181,7 +239,9 @@ PY
 
 # --- level --------------------------------------------------------------------
 LEVEL=0
-if [ "$NATIVE_LOG" = true ] && [ "$MCP" = present ]; then
+if [ "$GRAPH_CONTROL" = true ]; then
+  LEVEL=3
+elif [ "$NATIVE_LOG" = true ] && [ "$MCP" = present ]; then
   LEVEL=2
 elif [ "${SRC_COUNT:-0}" -gt 0 ]; then
   LEVEL=1
