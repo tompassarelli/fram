@@ -1,68 +1,7 @@
 #lang beagle/clj
 
-;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
-;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
-;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
-;; text; that is a deliberate workflow change. SEEDED 2026-07-27 (engine core
-;; port stage M0: the hand-Clojure pull.clj becomes a graph-authored Beagle
-;; module) — seed only: the ns/require/extern header, no substantive forms.
-;; ============================================================================
-;; pull — the PULL API: nested-shape projection over the reified store.
-;; ============================================================================
-;; Coordinator-layer. Loaded by coord_daemon.clj right AFTER coord.clj, so
-;; coord.clj's reader vars live in namespace `coord` and resolve here as
-;; `coord/…`. coord.clj is load-file'd into the `coord` namespace and is NOT on
-;; the classpath, so it can only be `declare-extern`'d — it is a HOST SEAM, never
-;; a `require` (the emitted ns form must not name it).
-;;
-;; Two entry points, both pure over the captured store snapshot (no locks, no writes):
-;;   (validate root pattern opts) -> [] | [err-string …]   ; total, never throws
-;;   (run store-atom root pattern opts) -> node-map | [node-maps…] | {:error [..]}
-;;
-;; The store-atom `run` receives is an IMMUTABLE snapshot (the daemon hands it
-;; materialize-query-snapshot's :history-store — an atom over one Store value), so
-;; every read here is a pure fn of that value. `co0 {:store store-atom}` is the shape
-;; coord.clj's readers expect, so live-as-of / live-members / withdrawal-of / agent-of
-;; are reused VERBATIM (identical as-of + withdrawal semantics to the :as-of query op).
-;;   bb -cp out tests/pull_test.clj
-;;
-;; PER-DEF NOTES (the graph-edit datum channel is EDN, so comments cannot ride
-;; inside an authored form; the load-bearing prose lives here instead):
-;;   reserved-preds  predicates NEVER surfaced by :* wildcard (identity/schema/
-;;                   withdrawal bookkeeping, mirroring coord_daemon's read-hidden/
-;;                   schema/reserved sets). :fram/id already carries the subject
-;;                   name, so "name" is redundant too.
-;;   clamp           caps may only LOWER the daemon default (mirrors coord_daemon's
-;;                   query-limit clamping).
-;;   validate        total, never throws. Errors accumulate in SOURCE ORDER as four
-;;                   independent pure segments (root, pattern, caps, as-of)
-;;                   concatenated — the reading order of the original's sequential
-;;                   `err!` calls, with no mutable accumulator to leak purity.
-;;   run             Unknown root: pull is a projection, and an absent subject
-;;                   simply has no facts, so an unresolved root renders as a bare
-;;                   {:fram/id <root>} (no predicate keys) — a sensible empty node,
-;;                   NOT an error. (Chosen over :error so a vector root mixing known
-;;                   + unknown names still returns one node per requested root.)
-;;     flive         restrict a raw cid list to the live view — as-of set membership
-;;                   when historical, else the store's own live filter.
-;;     raw-lp/pr/l   the RAW (unfiltered) index rows; flive does the live filtering,
-;;                   so store's own by-lp/by-pr/by-l (which pre-filter) are not used.
-;;     fwd-cids      provenance surfaces WITHDRAWN members too (add-wins resurrects a
-;;                   cancelled value while a genuine overwrite still hides) — that is
-;;                   what makes :withdrawn/:withdrawn_by meaningful in the current view.
-;;     leaf          a leaf value: literal or (for a ref) the target's name string. In
-;;                   provenance mode each value carries its cid/agent/seq/withdrawn
-;;                   stamp. as-of: a rendered member is live AS OF S, so its withdrawal
-;;                   state at S is false (a value withdrawn after S is still live at S).
-;;                   :ts is the wall-clock of the asserting tx (ISO-8601). DISPLAY-ONLY
-;;                   metadata: :seq stays the causal address, :ts never drives as-of;
-;;                   nil for pre-existing v2 txs whose record predates the :ts field ->
-;;                   the key is OMITTED. :seq falls back to 0 when the fact carries no
-;;                   tx, which is what store/tx-seq itself returns for an unknown tx.
-;;     values        the cardinality FACT drives scalar (single) vs vector (multi).
-;;     subpat->pattern  normalize a subpattern token into a pattern vector for the
-;;                   next level.
-;; ============================================================================
+;; Local nested-shape compatibility projection over an immutable TermStore.
+;; This module does not add a pull operation to the live FRAMRPC surface.
 (ns pull)
 
 (define-mode strict)
@@ -74,18 +13,6 @@
 (require fram.types :as t)
 
 (require clojure.string :as str)
-
-(declare-extern coord/live-as-of [(Map Keyword Any) Int -> (Set Int)])
-
-(declare-extern coord/live-members [(Map Keyword Any) Int Int Keyword -> Any])
-
-(declare-extern coord/withdrawn? [(Map Keyword Any) Int -> Bool])
-
-(declare-extern coord/withdrawal-of [(Map Keyword Any) Int -> Any])
-
-(declare-extern coord/agent-of [(Map Keyword Any) Int -> Any])
-
-(declare-extern coord/ts-of [(Map Keyword Any) Int -> Any])
 
 (def default-max-depth: Int 5)
 
@@ -100,7 +27,8 @@
     "withdrawn_at"
     "cardinality"})
 
-(defn- reserved-pred? [p: Any] -> Bool (contains? reserved-preds p))
+(defn- reserved-pred? [p: Any] -> Bool
+  (contains? reserved-preds p))
 
 (defn- clamp
   [v: Any
@@ -108,60 +36,426 @@
   (if (and (integer? v) (pos? v)) (min v default) default))
 
 (defn- valid-elem? [e: Any] -> Bool
-  (letfn [(valid-subpat? [sp: Any] -> Bool (or (and (vector? sp) (every? (fn [x: Any] -> Bool (elem? x)) sp)) (and (integer? sp) (pos? sp)) (= sp :...))) (elem? [x: Any] -> Bool (cond (= x :*) true (string? x) (not (str/blank? x)) (map? x) (and (seq x) (every? (fn [k: Any] -> Bool (and (string? k) (not (str/blank? k)) (valid-subpat? (get x k)))) (keys x))) :else false))]
+  (letfn [(valid-subpat? [sp: Any] -> Bool
+            (or (and (vector? sp)
+                  (every? (fn [x: Any] -> Bool (elem? x)) sp))
+              (and (integer? sp) (pos? sp))
+              (= sp :...)))
+          (elem? [x: Any] -> Bool
+            (cond
+              (= x :*) true
+              (string? x) (not (str/blank? x))
+              (map? x)
+              (and (seq x)
+                (every?
+                  (fn [k: Any] -> Bool
+                    (and (string? k)
+                      (not (str/blank? k))
+                      (valid-subpat? (get x k))))
+                  (keys x)))
+              :else false))]
     (elem? e)))
 
 (defn validate
   [root: Any
    pattern: Any
    opts: Any] -> (Vec String)
-  (let [e-root (if (or (and (string? root) (not (str/blank? root))) (and (vector? root) (seq root) (every? (fn [x: Any] -> Bool (and (string? x) (not (str/blank? x)))) root))) [] ["root must be a subject-name string or a non-empty vector of name strings"]) e-pat (if-not (vector? pattern) ["pattern must be a vector"] (vec (mapcat (fn [e: Any] -> (Vec String) (if (valid-elem? e) [] [(str "malformed pattern element: " (pr-str e))])) pattern))) e-caps (vec (mapcat (fn [k: Keyword] -> (Vec String) (let [v (get opts k)] (if (and (contains? opts k) (not (and (integer? v) (pos? v)))) [(str k " must be a positive integer")] []))) [:max-depth :max-nodes])) e-asof (let [v (get opts :as-of)] (if (and (contains? opts :as-of) (not (and (integer? v) (>= v 0)))) [":as-of must be a non-negative integer"] []))]
+  (let [e-root
+        (if (or (and (string? root) (not (str/blank? root)))
+              (and (vector? root)
+                (seq root)
+                (every?
+                  (fn [x: Any] -> Bool
+                    (and (string? x) (not (str/blank? x))))
+                  root)))
+          []
+          ["root must be a subject-name string or a non-empty vector of name strings"])
+        e-pat
+        (if-not (vector? pattern)
+          ["pattern must be a vector"]
+          (vec
+            (mapcat
+              (fn [e: Any] -> (Vec String)
+                (if (valid-elem? e)
+                  []
+                  [(str "malformed pattern element: " (pr-str e))]))
+              pattern)))
+        e-caps
+        (vec
+          (mapcat
+            (fn [k: Keyword] -> (Vec String)
+              (let [v (get opts k)]
+                (if (and (contains? opts k)
+                      (not (and (integer? v) (pos? v))))
+                  [(str k " must be a positive integer")]
+                  [])))
+            [:max-depth :max-nodes]))
+        e-asof
+        (let [v (get opts :as-of)]
+          (if (and (contains? opts :as-of)
+                (not (and (integer? v) (>= v 0))))
+            [":as-of must be a non-negative integer"]
+            []))]
     (vec (concat e-root e-pat e-caps e-asof))))
 
 (defn run
-  [store-atom: (Atom t/Store)
+  [store-atom: (Atom t/TermStore)
    root: Any
    pattern: Any
    opts: Any] -> Any
   (let [errs (validate root pattern opts)]
     (if (seq errs)
       {:error errs}
-      (let [st store-atom co0: (Map Keyword Any) {:store store-atom} asof (get opts :as-of) asof-set (if (some? asof) (coord/live-as-of co0 asof) nil) prov? (boolean (get opts :provenance)) max-depth (clamp (get opts :max-depth) default-max-depth) max-nodes (clamp (get opts :max-nodes) default-max-nodes) state: (Atom Int) (atom 0)]
-        (letfn [(pid-of [p: Any] -> Int? (c/value-id st p)) (nm-of [id: Int] -> Any (or (s/name-of st id) id)) (flive [cids: (Vec Int)] -> (Vec Int) (if (some? asof-set) (filterv (fn [x: Int] -> Bool (contains? asof-set x)) cids) (filterv (fn [x: Int] -> Bool (c/live? st x)) cids))) (raw-lp
-                                                                                                                                                                                                                                                                                                        [lid: Int
-                                                                                                                                                                                                                                                                                                         pid: Int] -> (Vec Int) (let [m: t/Store (deref st)] (get (:idx-by-lp m) [lid pid] []))) (raw-pr
-                                                                                                                                                                                                                                                                                                                                                                                                       [pid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                        rid: Int] -> (Vec Int) (let [m: t/Store (deref st)] (get (:idx-by-pr m) [pid rid] []))) (raw-l [lid: Int] -> (Vec Int) (let [m: t/Store (deref st)] (get (:idx-by-l m) lid []))) (fwd-cids
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   [lid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    pid: Int] -> (Vec Int) (cond (some? asof-set) (flive (raw-lp lid pid)) prov? (vec (coord/live-members co0 lid pid :add-wins)) :else (flive (raw-lp lid pid)))) (rev-cids
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       [pid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        rid: Int] -> (Vec Int) (flive (raw-pr pid rid))) (leaf [cid: Int] -> Any (let [cl (c/fact-of st cid) r (get cl :r) v (if (c/value-object? st r) (c/literal st r) (nm-of r))] (if-not prov? v (let [tx (c/fact-tx st cid) wd (if (some? asof) nil (coord/withdrawn? co0 cid)) ts (coord/ts-of co0 cid) base (cond-> {:val v :cid cid :by (coord/agent-of co0 cid) :seq (if (some? tx) (c/tx-seq st tx) 0) :withdrawn (boolean wd)} (some? ts) (assoc :ts ts))] (if wd (let [w (coord/withdrawal-of co0 cid)] (assoc base :withdrawn_by (get w :by) :withdrawn_at (get w :at) :withdrawn_reason (get w :reason))) base))))) (values
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        [pname: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         pid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         lid: Int] -> Any (let [cids (fwd-cids lid pid)] (when (seq cids) (let [vs (mapv (fn [x: Int] -> Any (leaf x)) cids)] (if (= "single" (s/cardinality st pname)) (first vs) vs))))) (subpat->pattern
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 [k: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  sp: Any] -> Any (cond (vector? sp) sp (integer? sp) (if (> sp 1) [{k (dec sp)}] []) (= sp :...) [{k :...}] :else [])) (recur-target
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [tid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             subpat: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             depth: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             visited: (Set Int)] -> Any (if (> (inc depth) max-depth) {:fram/id (nm-of tid) :fram/truncated true} (node tid (nm-of tid) subpat (inc depth) visited))) (elem
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [acc: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           lid: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           depth: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           visited: (Set Int)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           e: Any] -> Any (cond (= e :*) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     [a: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      pid: Int] -> Any (let [pname (c/literal st pid)] (if (reserved-pred? pname) a (let [v (values pname pid lid)] (if (some? v) (assoc a pname v) a))))) acc (distinct (map (fn [x: Int] -> Any (get (c/fact-of st x) :p)) (flive (raw-l lid))))) (and (string? e) (str/starts-with? e "_")) (let [pid (pid-of (subs e 1))] (if (nil? pid) acc (let [ls (mapv (fn [x: Int] -> Any (get (c/fact-of st x) :l)) (rev-cids pid lid))] (assoc acc e (mapv (fn [l: Any] -> Any (node l (nm-of l) [] (inc depth) visited)) ls))))) (string? e) (let [pid (pid-of e)] (if (nil? pid) acc (let [v (values e pid lid)] (if (some? v) (assoc acc e v) acc)))) (map? e) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                [a: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 k: Any] -> Any (let [sp (get e k)] (if (str/starts-with? k "_") (let [pid (pid-of (subs k 1))] (if (nil? pid) a (let [ls (mapv (fn [x: Int] -> Any (get (c/fact-of st x) :l)) (rev-cids pid lid))] (assoc a k (mapv (fn [l: Any] -> Any (recur-target l (subpat->pattern k sp) depth visited)) ls))))) (let [pid (pid-of k)] (if (nil? pid) a (let [cids (fwd-cids lid pid) rendered (mapv (fn [cid: Int] -> Any (let [r (get (c/fact-of st cid) :r)] (if (c/value-object? st r) (c/literal st r) (recur-target r (subpat->pattern k sp) depth visited)))) cids)] (if (seq rendered) (assoc a k (if (= "single" (s/cardinality st k)) (first rendered) rendered)) a))))))) acc (keys e)) :else acc)) (node
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                [rid: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 nm: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 pat: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 depth: Int
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 visited: (Set Int)] -> Any (cond (contains? visited rid) {:fram/id nm :fram/cycle true} (>= (deref state) max-nodes) {:fram/id nm :fram/truncated true} :else (do (swap! state (fn [n: Int] -> Int (inc n))) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [acc: Any
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             e: Any] -> Any (elem acc rid depth (conj visited rid) e)) {:fram/id nm} pat))))]
-          (let [one (fn [r: Any] -> Any (let [rid (s/resolve-name st r)] (if (nil? rid) {:fram/id r} (node rid r pattern 0 #{}))))]
+      (let [schema: s/Session (s/session store-atom)
+            history: (Vec t/Triple) (c/operation-occurrences store-atom)
+            live-now: (Vec t/Triple) (c/live-occurrences store-atom)
+            withdrawals: (Vec t/Triple) (c/withdrawal-triples store-atom)
+            asof: Int?
+            (let [candidate (get opts :as-of)]
+              (if (integer? candidate) candidate nil))
+            prov?: Bool (boolean (get opts :provenance))
+            max-depth: Int
+            (clamp (get opts :max-depth) default-max-depth)
+            max-nodes: Int
+            (clamp (get opts :max-nodes) default-max-nodes)
+            state: (Atom Int) (atom 0)]
+        (letfn [(event-occurrence [event: t/Triple] -> t/Triple
+                  (t/triple-slot0 event))
+                (event-proposition [event: t/Triple] -> t/Triple
+                  (t/triple-slot2 event))
+                (event-sequence [event: t/Triple] -> Int
+                  (let [occurrence: t/Triple (event-occurrence event)
+                        transaction: t/Triple (t/triple-slot0 occurrence)]
+                    (t/triple-slot2 transaction)))
+                (assertion-event? [event: t/Triple] -> Bool
+                  (= t/asserts (t/triple-slot1 event)))
+                (events-at [cutoff: Int] -> (Vec t/Triple)
+                  (reduce
+                    (fn
+                      [active: (Vec t/Triple)
+                       event: t/Triple] -> (Vec t/Triple)
+                      (if (> (event-sequence event) cutoff)
+                        active
+                        (if (assertion-event? event)
+                          (conj active event)
+                          (let [proposition: t/Triple (event-proposition event)
+                                target: t/Triple?
+                                (last
+                                  (filterv
+                                    (fn [candidate: t/Triple] -> Bool
+                                      (= proposition
+                                        (event-proposition candidate)))
+                                    active))]
+                            (if (nil? target)
+                              active
+                              (filterv
+                                (fn [candidate: t/Triple] -> Bool
+                                  (not= (event-occurrence target)
+                                    (event-occurrence candidate)))
+                                active))))))
+                    []
+                    history))
+                (snapshot-events [] -> (Vec t/Triple)
+                  (if (some? asof) (events-at asof) live-now))
+                (live-event? [event: t/Triple] -> Bool
+                  (boolean
+                    (some
+                      (fn [candidate: t/Triple] -> Bool
+                        (= (event-occurrence event)
+                          (event-occurrence candidate)))
+                      live-now)))
+                (withdrawal-for [occurrence: t/Triple] -> t/Triple?
+                  (let [withdrawal: t/Triple?
+                        (first
+                          (filterv
+                            (fn [candidate: t/Triple] -> Bool
+                              (and (= t/withdraws
+                                     (t/triple-slot1 candidate))
+                                (= occurrence
+                                  (t/triple-slot2 candidate))))
+                            withdrawals))]
+                    withdrawal))
+                (metadata-value
+                  [owner: Any
+                   predicate: Keyword] -> Any
+                  (let [event: t/Triple?
+                        (last
+                          (filterv
+                            (fn [candidate: t/Triple] -> Bool
+                              (if-not (assertion-event? candidate)
+                                false
+                                (let [proposition: t/Triple
+                                      (event-proposition candidate)]
+                                  (and (= owner (t/triple-slot0 proposition))
+                                    (= predicate
+                                      (t/triple-slot1 proposition))
+                                    (or (nil? asof)
+                                      (<= (event-sequence candidate) asof))))))
+                            (snapshot-events)))]
+                    (if (nil? event)
+                      nil
+                      (t/triple-slot2 (event-proposition event)))))
+                (agent-of [occurrence: t/Triple] -> Any
+                  (or (metadata-value occurrence :kernel/asserted-by)
+                    (metadata-value (t/triple-slot0 occurrence)
+                      :kernel/asserted-by)))
+                (recorded-at-of [occurrence: t/Triple] -> Any
+                  (or (metadata-value occurrence :kernel/recorded-at)
+                    (metadata-value (t/triple-slot0 occurrence)
+                      :kernel/recorded-at)))
+                (pid-of [p: String] -> Any
+                  (s/resolve-predicate schema p))
+                (nm-of [term: Any] -> Any
+                  (or (s/name-of schema term) term))
+                (fwd-events
+                  [left: Any
+                   predicate: Any] -> (Vec t/Triple)
+                  (let [candidates: (Vec t/Triple)
+                        (cond
+                          (some? asof) (snapshot-events)
+                          prov?
+                          (filterv
+                            (fn [event: t/Triple] -> Bool
+                              (and (assertion-event? event)
+                                (or (live-event? event)
+                                  (some?
+                                    (withdrawal-for
+                                      (event-occurrence event))))))
+                            history)
+                          :else live-now)]
+                    (filterv
+                      (fn [event: t/Triple] -> Bool
+                        (if-not (assertion-event? event)
+                          false
+                          (let [proposition: t/Triple
+                                (event-proposition event)]
+                            (and (= left (t/triple-slot0 proposition))
+                              (= predicate
+                                (t/triple-slot1 proposition))))))
+                      candidates)))
+                (rev-events
+                  [predicate: Any
+                   right: Any] -> (Vec t/Triple)
+                  (filterv
+                    (fn [event: t/Triple] -> Bool
+                      (if-not (assertion-event? event)
+                        false
+                        (let [proposition: t/Triple
+                              (event-proposition event)]
+                          (and (= predicate
+                                 (t/triple-slot1 proposition))
+                            (= right (t/triple-slot2 proposition))))))
+                    (snapshot-events)))
+                (subject-events [left: Any] -> (Vec t/Triple)
+                  (filterv
+                    (fn [event: t/Triple] -> Bool
+                      (and (assertion-event? event)
+                        (= left
+                          (t/triple-slot0 (event-proposition event)))))
+                    (snapshot-events)))
+                (leaf
+                  [predicate: Any
+                   event: t/Triple] -> Any
+                  (let [proposition: t/Triple (event-proposition event)
+                        right: Any (t/triple-slot2 proposition)
+                        value: Any
+                        (if (= s/ref-kind
+                               (s/lookup schema predicate
+                                 s/value-kind-predicate))
+                          (nm-of right)
+                          right)]
+                    (if-not prov?
+                      value
+                      (let [occurrence: t/Triple (event-occurrence event)
+                            withdrawal: t/Triple?
+                            (if (some? asof)
+                              nil
+                              (withdrawal-for occurrence))
+                            recorded-at (recorded-at-of occurrence)
+                            base
+                            (cond->
+                              {:val value
+                               :cid occurrence
+                               :by (agent-of occurrence)
+                               :seq (event-sequence event)
+                               :withdrawn (boolean withdrawal)}
+                              (some? recorded-at)
+                              (assoc :ts recorded-at))]
+                        (if (nil? withdrawal)
+                          base
+                          (let [retraction: t/Triple
+                                (t/triple-slot0 withdrawal)]
+                            (assoc base
+                              :withdrawn_by (agent-of retraction)
+                              :withdrawn_at retraction)))))))
+                (values
+                  [pname: String
+                   predicate: Any
+                   left: Any] -> Any
+                  (let [events: (Vec t/Triple)
+                        (fwd-events left predicate)]
+                    (when (seq events)
+                      (let [rendered: (Vec Any)
+                            (mapv
+                              (fn [event: t/Triple] -> Any
+                                (leaf predicate event))
+                              events)]
+                        (if (= "single" (s/cardinality schema pname))
+                          (last rendered)
+                          rendered)))))
+                (subpat->pattern
+                  [key: String
+                   subpattern: Any] -> Any
+                  (cond
+                    (vector? subpattern) subpattern
+                    (integer? subpattern)
+                    (if (> subpattern 1)
+                      [{key (dec subpattern)}]
+                      [])
+                    (= subpattern :...) [{key :...}]
+                    :else []))
+                (recur-target
+                  [target: Any
+                   subpattern: Any
+                   depth: Int
+                   visited: (Set Any)] -> Any
+                  (if (> (inc depth) max-depth)
+                    {:fram/id (nm-of target) :fram/truncated true}
+                    (node target (nm-of target) subpattern
+                      (inc depth) visited)))
+                (elem
+                  [acc: Any
+                   left: Any
+                   depth: Int
+                   visited: (Set Any)
+                   element: Any] -> Any
+                  (cond
+                    (= element :*)
+                    (reduce
+                      (fn
+                        [result: Any
+                         predicate: Any] -> Any
+                        (let [pname: String
+                              (s/predicate-name schema predicate)]
+                          (if (reserved-pred? pname)
+                            result
+                            (let [value (values pname predicate left)]
+                              (if (nil? value)
+                                result
+                                (assoc result pname value))))))
+                      acc
+                      (distinct
+                        (mapv
+                          (fn [event: t/Triple] -> Any
+                            (t/triple-slot1 (event-proposition event)))
+                          (subject-events left))))
+
+                    (and (string? element)
+                      (str/starts-with? element "_"))
+                    (let [predicate (pid-of (subs element 1))]
+                      (if (nil? predicate)
+                        acc
+                        (let [subjects: (Vec Any)
+                              (mapv
+                                (fn [event: t/Triple] -> Any
+                                  (t/triple-slot0
+                                    (event-proposition event)))
+                                (rev-events predicate left))]
+                          (assoc acc element
+                            (mapv
+                              (fn [subject: Any] -> Any
+                                (node subject (nm-of subject) []
+                                  (inc depth) visited))
+                              subjects)))))
+
+                    (string? element)
+                    (let [predicate (pid-of element)]
+                      (if (nil? predicate)
+                        acc
+                        (let [value (values element predicate left)]
+                          (if (nil? value)
+                            acc
+                            (assoc acc element value)))))
+
+                    (map? element)
+                    (reduce
+                      (fn
+                        [result: Any
+                         key: String] -> Any
+                        (let [subpattern (get element key)]
+                          (if (str/starts-with? key "_")
+                            (let [predicate (pid-of (subs key 1))]
+                              (if (nil? predicate)
+                                result
+                                (let [subjects: (Vec Any)
+                                      (mapv
+                                        (fn [event: t/Triple] -> Any
+                                          (t/triple-slot0
+                                            (event-proposition event)))
+                                        (rev-events predicate left))]
+                                  (assoc result key
+                                    (mapv
+                                      (fn [subject: Any] -> Any
+                                        (recur-target subject
+                                          (subpat->pattern key subpattern)
+                                          depth visited))
+                                      subjects)))))
+                            (let [predicate (pid-of key)]
+                              (if (nil? predicate)
+                                result
+                                (let [rendered: (Vec Any)
+                                      (mapv
+                                        (fn [event: t/Triple] -> Any
+                                          (let [right: Any
+                                                (t/triple-slot2
+                                                  (event-proposition event))
+                                                target-name
+                                                (s/name-of schema right)]
+                                            (if (nil? target-name)
+                                              right
+                                              (recur-target right
+                                                (subpat->pattern key subpattern)
+                                                depth visited))))
+                                        (fwd-events left predicate))]
+                                  (if (seq rendered)
+                                    (assoc result key
+                                      (if (= "single"
+                                             (s/cardinality schema key))
+                                        (first rendered)
+                                        rendered))
+                                    result)))))))
+                      acc
+                      (keys element))
+
+                    :else acc))
+                (node
+                  [subject: Any
+                   name: Any
+                   requested: Any
+                   depth: Int
+                   visited: (Set Any)] -> Any
+                  (cond
+                    (contains? visited subject)
+                    {:fram/id name :fram/cycle true}
+                    (>= (deref state) max-nodes)
+                    {:fram/id name :fram/truncated true}
+                    :else
+                    (do
+                      (swap! state (fn [count: Int] -> Int (inc count)))
+                      (reduce
+                        (fn
+                          [acc: Any
+                           element: Any] -> Any
+                          (elem acc subject depth
+                            (conj visited subject) element))
+                        {:fram/id name}
+                        requested))))]
+          (let [one
+                (fn [name: Any] -> Any
+                  (let [subject (s/resolve-name schema name)]
+                    (if (nil? subject)
+                      {:fram/id name}
+                      (node subject name pattern 0 #{}))))]
             (if (vector? root)
-              (mapv (fn [r: Any] -> Any (one r)) root)
+              (mapv (fn [name: Any] -> Any (one name)) root)
               (one root))))))))
