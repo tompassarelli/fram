@@ -42,6 +42,11 @@ Neither the Worker nor the shim accepts EDN or an untyped raw escape hatch.
 
 ## Start the backend
 
+The coordinator image compiles the Beagle-emitted JVM closure into one static
+Graal executable. This is a release/deployment build; normal coordinator
+development stays on `FRAM_DAEMON_RUNTIME=jvm-dev` and does not run Graal.
+The separate shim image remains Babashka.
+
 From `fram:deploy/cloudflare`:
 
 ```sh

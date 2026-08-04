@@ -91,6 +91,7 @@
 (def request-log-path (env-string "FRAM_DAEMON_LOG"))
 (def request-log-quiet? (= "1" (System/getenv "FRAM_DAEMON_QUIET")))
 (def slow-request-ms (env-long "FRAM_SLOW_MS" 1000))
+(def runtime-engine (atom :rpc/jvm))
 (def query-checkpoint-interval
   (max 1 (env-long "FRAM_QUERY_CHECKPOINT_INTERVAL" 1000)))
 
@@ -1713,7 +1714,7 @@
         cache (wire/rpc-record! :rpc/result-cache
                                 [hits misses bytes evictions])]
     (wire/rpc-status! state (count (coord/live-propositions co))
-                      :rpc/jvm cache)))
+                      @runtime-engine cache)))
 
 (defn- request-body-bytes [request]
   (- (alength ^bytes
@@ -2078,7 +2079,12 @@
           (let [socket (.accept server)]
             (future
               (try (serve-connection! socket)
-                   (catch Throwable _
+                   (catch Throwable error
+                     (let [data (ex-data error)
+                           code (or (:fram/code data) (:code data) (:type data)
+                                    :rpc/internal-error)]
+                       (when (= :rpc/internal-error code)
+                         (.printStackTrace ^Throwable error System/err)))
                      (try (.close socket) (catch Throwable _ nil))))))
           (catch java.net.SocketException error
             (when-not @stopping? (throw error)))))

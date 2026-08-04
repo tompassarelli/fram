@@ -137,7 +137,7 @@
       (check! "Worker client typed JSON contract" (zero? (:exit node))))
 
     (start-daemon!)
-    (check! "real JVM daemon starts on FRAMRPC"
+    (check! "coordinator starts on FRAMRPC"
             (eventually #(= 0 (direct-version daemon-port space))))
     (reset! shim
             (proc/process

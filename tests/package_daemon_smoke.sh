@@ -81,6 +81,21 @@ fi
     exit 1
   }
 
+graal_error="$work/graal-error.out"
+if "$env_bin" -i FRAM_SPACE_ID="$space" FRAM_DAEMON_RUNTIME=graal \
+    "$package_root/bin/fram-daemon" serve "$port" "$log" \
+    >"$graal_error" 2>&1; then
+  echo "fram package smoke: Graal launch silently ran without an artifact" >&2
+  exit 1
+fi
+"$grep_bin" -Fxq \
+  "fram-daemon: FRAM_GRAAL_ARTIFACT is required for FRAM_DAEMON_RUNTIME=graal" \
+  "$graal_error" || {
+    echo "fram package smoke: missing Graal artifact did not fail exactly" >&2
+    sed -n '1,40p' "$graal_error" >&2
+    exit 1
+  }
+
 start_daemon() {
   (
     cd "$work/cwd"

@@ -5,6 +5,8 @@
 #   fram-daemon [serve] [port] [framlog] [space-id]   (mode defaults to serve)
 #   FRAM_DAEMON_RUNTIME=native       production runtime (default)
 #   FRAM_NATIVE_ARTIFACT_DIR=<path>  READY native-build artifact directory
+#   FRAM_DAEMON_RUNTIME=graal        transitional self-contained coordinator
+#   FRAM_GRAAL_ARTIFACT=<path>       absolute Graal coordinator executable
 #   FRAM_DAEMON_RUNTIME=jvm-oracle   sealed Java/classpath differential oracle
 #   FRAM_DAEMON_RUNTIME=jvm-dev      checkout-only Clojure development runtime
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
@@ -91,9 +93,32 @@ case "$runtime" in
     cd "$HERE"
     exec "$native_daemon"
     ;;
+  graal)
+    graal_artifact="${FRAM_GRAAL_ARTIFACT:-}"
+    if [[ -z "$graal_artifact" ]]; then
+      echo "fram-daemon: FRAM_GRAAL_ARTIFACT is required for FRAM_DAEMON_RUNTIME=graal" >&2
+      exit 2
+    fi
+    case "$graal_artifact" in
+      /*) ;;
+      *)
+        echo "fram-daemon: FRAM_GRAAL_ARTIFACT must be absolute: $graal_artifact" >&2
+        exit 2
+        ;;
+    esac
+    if [[ ! -x "$graal_artifact" ]]; then
+      echo "fram-daemon: Graal coordinator executable is unavailable: $graal_artifact" >&2
+      exit 2
+    fi
+    mkdir -p "$(dirname "$log_path")"
+    graal_args=("$mode" "${1:-7977}" "$log_path")
+    if [[ -n "$space_id" ]]; then graal_args+=("$space_id"); fi
+    cd "$HERE"
+    exec "$graal_artifact" "${graal_args[@]}"
+    ;;
   jvm-oracle|jvm-dev) ;;
   *)
-    echo "fram-daemon: unsupported FRAM_DAEMON_RUNTIME '$runtime'; expected native, jvm-oracle, or jvm-dev" >&2
+    echo "fram-daemon: unsupported FRAM_DAEMON_RUNTIME '$runtime'; expected native, graal, jvm-oracle, or jvm-dev" >&2
     exit 2
     ;;
 esac

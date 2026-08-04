@@ -1,24 +1,64 @@
 #!/usr/bin/env bash
-# Build a native fram binary from the beagle-emitted clojure (../out) +
-# fram.rt. fram.main is the entry (beagle emits its (:gen-class)).
+# Build the FRAMRPC coordinator as a GraalVM native image. Domain semantics
+# remain the Beagle-emitted Clojure under ../out; the entry is a platform
+# adapter around coord-daemon/-main.
 # Run under GraalVM CE:
 #   nix shell nixpkgs#graalvmPackages.graalvm-ce -c ./build.sh
-# Deps are minimal (clojure core + java interop only) — no YAML/reflection, so
-# no native-image tracing agent step is needed.
+# Container releases run `aot` and `image` in separate builder stages.
 set -euo pipefail
-cd "$(dirname "$0")"
+native_dir="$(cd "$(dirname "$0")" && pwd)"
+repo_dir="$(cd "$native_dir/.." && pwd)"
+phase="${1:-all}"
+case "$phase" in
+  all|aot|image) ;;
+  *)
+    echo "usage: native/build.sh [all|aot|image]" >&2
+    exit 2
+    ;;
+esac
+cd "$repo_dir"
+# The manifest paths are repository-relative because coord-daemon preserves
+# its file-based host boundary for the JVM development route.
+native_deps="$(<"$native_dir/deps.edn")"
+classpath_file="$native_dir/classpath.txt"
 
-echo "== [1/2] AOT compile fram.main (emitter must be AOT-clean) =="
-rm -rf classes && mkdir -p classes
-clojure -M -e "(compile 'fram.main)"
+if [[ "$phase" != "image" ]]; then
+  echo "== [1/2] AOT compile Fram coordinator =="
+  rm -rf "${native_dir:?}/classes"
+  mkdir -p "$native_dir/classes"
+  clojure -Sdeps "$native_deps" -M -e \
+    "(set! *warn-on-reflection* true) (binding [*compile-path* \"native/classes\"] (compile 'fram.graal-coordinator))"
+  clojure -Sdeps "$native_deps" -Spath >"$classpath_file"
+fi
 
-CP="$(clojure -Spath):classes"
+if [[ "$phase" != "aot" ]]; then
+  if [[ ! -s "$classpath_file" ]]; then
+    echo "native/build.sh: run the aot phase before image" >&2
+    exit 2
+  fi
+  CP="$(<"$classpath_file")"
+  default_init_classes="$(
+    find "$native_dir/classes" -maxdepth 1 -type f -name '*.class' \
+      ! -name '*__init.class' -printf '%f\n' \
+      | sed 's/\.class$//' \
+      | sort \
+      | paste -sd, -
+  )"
+  link_args=()
+  if [[ "${FRAM_GRAAL_STATIC:-0}" == "1" ]]; then
+    link_args=(--static --libc=musl)
+  fi
 
-echo "== [2/2] native-image =="
-time native-image -cp "$CP" \
-  --no-fallback \
-  --features=clj_easy.graal_build_time.InitClojureClasses \
-  -o fram-native \
-  fram.main
+  echo "== [2/2] native-image =="
+  time native-image -cp "$CP" \
+    --no-fallback \
+    "${link_args[@]}" \
+    --features=clj_easy.graal_build_time.InitClojureClasses \
+    "-H:ConfigurationFileDirectories=$native_dir" \
+    "--initialize-at-build-time=$default_init_classes" \
+    -o "$native_dir/fram-daemon-graal" \
+    fram.graal_coordinator
 
-echo "== done -> $(pwd)/fram-native =="; ls -lh fram-native
+  echo "== done -> $native_dir/fram-daemon-graal =="
+  ls -lh "$native_dir/fram-daemon-graal"
+fi
