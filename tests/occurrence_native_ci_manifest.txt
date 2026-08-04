@@ -46,6 +46,7 @@ baseline-bb	catalog-drift	tests/catalog_current_test.clj	tests/catalog_current_t
 
 run-shell	current-boundary	tests/fram_up_readiness_test.sh	-
 run-shell	current-cache	tests/fram_native_build_cache_smoke.sh	-
+run-shell	current-boundary	tests/fram_native_generated_adapter_smoke.sh	-
 run-shell	current-docs	tests/docs_semantics_ratchet.sh	-
 run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
