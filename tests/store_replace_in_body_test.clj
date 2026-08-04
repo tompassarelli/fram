@@ -34,9 +34,9 @@
 ;; handle's ordinal count, and "how many facts did it supersede" is its
 ;; withdrawal count — the store's own retractions, not a supersedes list.
 (defn run-verb [thunk]
-  (let [id0 (ri/minted-count r/ctx) sup0 (ri/withdrawal-count r/ctx)]
+  (let [id0 (ri/minted-count r/rctx) sup0 (ri/withdrawal-count r/rctx)]
     (try (thunk)
-         {:minted (- (ri/minted-count r/ctx) id0) :superseded (- (ri/withdrawal-count r/ctx) sup0)}
+         {:minted (- (ri/minted-count r/rctx) id0) :superseded (- (ri/withdrawal-count r/rctx) sup0)}
          (catch clojure.lang.ExceptionInfo e (or (:data (ex-data e)) (ex-data e))))))
 
 (r/resolve-edn!

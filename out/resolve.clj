@@ -21,6 +21,7 @@
 (ns resolve
   (:require [clojure.edn :as edn] [clojure.string :as str]
             [fram.datalog :as d] [cheshire.core :as json]   ; datalog+json: the `callgraph` mode
+            [fram.rotation :as rot] [fram.txn :as txn] [fram.types :as t]
             [resolve-ident :as ri]   ; S2: node identity + the store/rotation read-write handle
             [resolve-core :as rc]    ; M1 Cut A: the CRDT order-key algebra + form vocabulary, in Beagle
             [resolve-read :as rr]    ; M1 Cut B: the view-relative read layer + ordered-tree navigation, in Beagle
@@ -33,6 +34,15 @@
             [resolve-mint :as rmi]   ; M1 Cut I: the mint/author layer — a datum enters the store as facts
             [resolve-verbs :as rvb]))  ; M1 Cut H: the authoring verbs — an edit is a fact operation
 
+(defn- node-reference-predicate? [predicate]
+  (and (string? predicate)
+       (or (= "child" predicate)
+           (= "tail" predicate)
+           (boolean (re-matches #"(?:f|seg|comment)\d+" predicate)))))
+
+(when-not (ns-resolve 'resolve-corpus 'node-reference-predicate?)
+  (intern 'resolve-corpus 'node-reference-predicate? node-reference-predicate?))
+
 ;; --- bound resolution state (DYNAMIC, inert root) ---------------------------
 ;; Every piece of computed resolution state lives in a dynamic var with an INERT
 ;; root binding (nil / empty atom). `resolve-edn!` rebinds them all to a FRESH
@@ -43,11 +53,12 @@
 ;; store-local (cnf interns ids per store), so they MUST be recomputed against
 ;; the fresh store and are dynamic too — keeping a root-store value id would write
 ;; a foreign id into store B (the load-bearing seam GATE B guards).
-;; S2 (store-migration ruling): `ctx` is a resolve-ident Graph — the Term store
-;; root paired with its live-occurrence rotation — not a raw fact store. `tx` and
-;; `SUP` have no successor in a frame store (a transaction is a frame; supersedes
-;; is withdrawal) and survive ONLY as bound Vars for the external shim surface.
+;; S2: `ctx` is the TermStore atom exposed to store-level callers; `rctx` is the
+;; authoring/read Graph over that same store. `tx` and `SUP` have no successor in
+;; a frame store (a transaction is a frame; supersedes is withdrawal) and survive
+;; ONLY as bound Vars for the external shim surface.
 (def ^:dynamic ctx nil)
+(def ^:dynamic rctx nil)
 (def ^:dynamic tx  nil)
 (def ^:dynamic SUP nil)
 
@@ -92,7 +103,26 @@
 (def ^:dynamic *corpus-cache* nil)
 (def ^:dynamic file->ents (atom {}))
 
-(defn load-edn [path] (rco/load-edn! ctx file->ents path))
+(defn load-edn [path]
+  (let [lines (str/split-lines (slurp path))
+        src (subs (first (filter #(str/starts-with? % "@file") lines)) 6)
+        local (atom {})
+        ent (fn [lid]
+              (or (get @local lid)
+                  (let [e (rr/mint! rctx)]
+                    (swap! local assoc lid e)
+                    (swap! file->ents update src (fnil conj []) e)
+                    e)))]
+    (doseq [line lines :when (str/starts-with? line "[")]
+      (let [[s p o] (edn/read-string line)]
+        (rr/assert! rctx (ent s) p
+                    (if (node-reference-predicate? p)
+                      (if (integer? o)
+                        (ent o)
+                        (throw (ex-info "resolve: structural edge target must be a local integer id"
+                                        {:predicate p :target o})))
+                      o))))
+    src))
 
 ;; --- fact-graph accessors --------------------------------------------------
 ;; render-mode marker predicate value-ids — DYNAMIC, rebound (recomputed against
@@ -118,19 +148,19 @@
 (def ^:dynamic *view* nil)
 ;; M1 Cut B — the view-relative READ layer is now Beagle (src/resolve_read.bclj).
 ;; The ^:dynamic vars STAY here: coord_daemon.clj and tests/coord_*.clj `binding`
-;; them by qualified name (resolve/ctx, resolve/*view*, ...), and a var cannot be
+;; them by qualified name (resolve/ctx, resolve/rctx, resolve/*view*, ...), and a var cannot be
 ;; moved to another namespace without breaking that — a value alias would no
 ;; longer see the binding, and a :refer alias leaves resolve/ctx unresolvable
 ;; (qualified-symbol lookup is findInternedVar, which ignores referred vars). So
 ;; each name below is a one-line wrapper that reads the dynamic state and hands
 ;; it to the ported function explicitly. Docstrings live with the logic.
-(defn view-cids      [v cids]  (rr/view-cids ctx v cids))
-(defn select-main-1  [cids]    (rr/select-main-1 ctx *view* cids))
-(defn select-causal-1 [cids]   (rr/select-causal-1 ctx *view* cids))
+(defn view-cids      [v cids]  (rr/view-cids rctx v cids))
+(defn select-main-1  [cids]    (rr/select-main-1 rctx *view* cids))
+(defn select-causal-1 [cids]   (rr/select-causal-1 rctx *view* cids))
 
-(defn pred-val [e pname] (rr/pred-val ctx *view* e pname))
-(defn kind-of  [e] (rr/kind-of ctx *view* e))                           ; default-main kind of node e
-(defn sym-val  [e] (rr/sym-val ctx *view* e))                           ; default-main spelling of a symbol
+(defn pred-val [e pname] (rr/pred-val rctx *view* e pname))
+(defn kind-of  [e] (rr/kind-of rctx *view* e))                           ; default-main kind of node e
+(defn sym-val  [e] (rr/sym-val rctx *view* e))                           ; default-main spelling of a symbol
 ;; ---- CRDT order keys (#36): positions as DATA, insert-anywhere commute ----------
 ;; A child-position predicate is "f<path>~<tie>": path = logoot int-vector (dense — a
 ;; path strictly between any two always exists), tie = the child node's atomic name-int
@@ -143,21 +173,32 @@
 ;; its unqualified spelling. ord-parse returns a resolve-core/OrdKey record; it
 ;; answers :path and :tie exactly as the map it replaced did.
 (def ORD-STEP rc/ORD-STEP)
-(def ord-parse rc/ord-parse)
-(def ord-pos? rc/ord-pos?)
+(defn ord-parse [predicate]
+  (or (rc/ord-parse predicate)
+      (when (string? predicate)
+        (when-let [[_ path tie]
+                   (re-matches #"f(\d+(?:\.\d+)*)~(t[A-Za-z0-9_-]+)" predicate)]
+          {:path (mapv parse-long (str/split path #"\.")) :tie tie}))))
+(defn ord-pos? [predicate] (some? (ord-parse predicate)))
 (def ord-str rc/ord-str)
 (def ord-veccmp rc/ord-veccmp)
-(def ord-cmp rc/ord-cmp)
+(defn- ord-tie-key [tie]
+  (if (integer? tie) [0 tie] [1 (str tie)]))
+(defn ord-cmp [x y]
+  (let [c (ord-veccmp (:path x) (:path y))]
+    (if (zero? c)
+      (compare (ord-tie-key (:tie x)) (ord-tie-key (:tie y)))
+      c)))
 (def ord-append rc/ord-append)
 (def ord-between rc/ord-between)
 
-(defn ordered-children [e] (rr/ordered-children ctx e))   ; fN children, in CRDT-key (path,tie) order
-(defn ordered-segs [e] (rr/ordered-segs ctx e))           ; Turtle #6: a comment node's segN children, in order
-(defn head-sym [e] (rr/head-sym ctx *view* e))
-(defn unwrap-meta [e] (rr/unwrap-meta ctx *view* e))      ; D2: peel leading (#%meta …) wrappers off a bound form
-(defn bound-target [L] (rr/bound-target ctx *view* BOUND L))   ; DURABLE identity edge (bound_to)
-(defn refers-target [L] (rr/refers-target ctx *view* BOUND REFERS L)) ; bound_to, else derived refers_to
-(defn live-node? [e] (rr/live-node? ctx KIND e))
+(defn ordered-children [e] (rr/ordered-children rctx e))   ; fN children, in CRDT-key (path,tie) order
+(defn ordered-segs [e] (rr/ordered-segs rctx e))           ; Turtle #6: a comment node's segN children, in order
+(defn head-sym [e] (rr/head-sym rctx *view* e))
+(defn unwrap-meta [e] (rr/unwrap-meta rctx *view* e))      ; D2: peel leading (#%meta …) wrappers off a bound form
+(defn bound-target [L] (rr/bound-target rctx *view* BOUND L))   ; DURABLE identity edge (bound_to)
+(defn refers-target [L] (rr/refers-target rctx *view* BOUND REFERS L)) ; bound_to, else derived refers_to
+(defn live-node? [e] (rr/live-node? rctx KIND e))
 
 ;; --- binding extraction -----------------------------------------------------
 (def PARAM-FORMS rc/PARAM-FORMS)   ; have a [param] vector
@@ -207,19 +248,19 @@
 ;; what a destructuring pattern / param vector / let-or-for binding vector /
 ;; match pattern BINDS, and in what order. Wrappers as in Cut B — the ^:dynamic
 ;; state stays here and is handed over explicitly.
-(defn brackets?         [e] (rb/brackets? ctx *view* e))
-(defn map-node?         [e] (rb/map-node? ctx *view* e))
-(defn collect-bind-syms [node]    (rb/collect-bind-syms ctx *view* node))  ; symbol leaves a pattern binds
-(defn collect-or-vals   [node]    (rb/collect-or-vals ctx *view* node))    ; :or DEFAULT value-exprs (live refs)
-(defn param-binds       [bracket] (rb/param-binds ctx *view* bracket))     ; param names from [x :- T y]
+(defn brackets?         [e] (rb/brackets? rctx *view* e))
+(defn map-node?         [e] (rb/map-node? rctx *view* e))
+(defn collect-bind-syms [node]    (rb/collect-bind-syms rctx *view* node))  ; symbol leaves a pattern binds
+(defn collect-or-vals   [node]    (rb/collect-or-vals rctx *view* node))    ; :or DEFAULT value-exprs (live refs)
+(defn param-binds       [bracket] (rb/param-binds rctx *view* bracket))     ; param names from [x :- T y]
 ;; let/loop bindings are SEQUENTIAL — binding i's value (and :or defaults) see bindings
 ;; 0..i-1. let-bind-pairs returns ORDERED entries [bind-syms value-node or-default-vals]
 ;; so walk/capture can build the frame incrementally (a flat outer-scope walk misses
 ;; sibling shadowing — a real capture / mis-resolve bug).
-(defn let-bind-pairs    [bracket] (rb/let-bind-pairs ctx *view* bracket))
-(defn for-bind-pairs    [bracket] (rb/for-bind-pairs ctx *view* bracket))  ; [:bind syms vnode orvals] | [:expr node]
-(defn frame-of          [bsyms]   (rb/frame-of ctx *view* bsyms))
-(defn match-pat-binds   [pat]     (rb/match-pat-binds ctx *view* pat))     ; the NON-head leaves of a (Ctor a b) pattern
+(defn let-bind-pairs    [bracket] (rb/let-bind-pairs rctx *view* bracket))
+(defn for-bind-pairs    [bracket] (rb/for-bind-pairs rctx *view* bracket))  ; [:bind syms vnode orvals] | [:expr node]
+(defn frame-of          [bsyms]   (rb/frame-of rctx *view* bsyms))
+(defn match-pat-binds   [pat]     (rb/match-pat-binds rctx *view* pat))     ; the NON-head leaves of a (Ctor a b) pattern
 
 ;; --- the lexical walk: resolve each reference to its nearest binding ---------
 ;; resolution counters — DYNAMIC (fresh atoms per `resolve-edn!` call), so a
@@ -243,7 +284,7 @@
 ;; dynamic state at call time and hands it over as ONE explicit record. Docstrings
 ;; and the per-def rationale live with the logic, in the module header.
 (defn walk-env []
-  (rw/->Walk ctx *view* REFERS BOUND FIXED QUAL CTOR ACC
+  (rw/->Walk rctx *view* REFERS BOUND FIXED QUAL CTOR ACC
              n-resolved n-unresolved n-xmod n-type n-comment
              *xresolve* *tresolve* *aresolve*))
 (defn bind! [L target] (rw/bind! (walk-env) L target))
@@ -265,19 +306,19 @@
 ;; M1 Cut D — one module's frame + its import/export surface is now Beagle
 ;; (src/resolve_modules.bclj). Wrappers as in Cuts B/C; the entity list comes out
 ;; of the ^:dynamic `file->ents` atom here and is handed over explicitly.
-(defn unwrap-def [form] (rm/unwrap-def ctx *view* form))
-(defn module-defs [src] (rm/module-defs ctx *view* (rco/file-entities file->ents src)))
+(defn unwrap-def [form] (rm/unwrap-def rctx *view* form))
+(defn module-defs [src] (rm/module-defs rctx *view* (rco/file-entities file->ents src)))
 ;; --- cross-module: parse ns/:require (imports) and js/export (exports) -------
-(defn forms-of [src] (rm/forms-of ctx *view* (rco/file-entities file->ents src)))
-(defn ns-form [src] (rm/ns-form ctx *view* (rco/file-entities file->ents src)))
-(defn module-name [src] (rm/module-name ctx *view* (rco/file-entities file->ents src)))
-(defn merge-import-opts [acc modn kids] (rm/merge-import-opts ctx *view* acc modn (vec kids)))
-(defn parse-require [src] (rm/parse-require ctx *view* (rco/file-entities file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
-(defn module-exports [src] (rm/module-exports ctx *view* (rco/file-entities file->ents src))) ; {exported-name -> binding-node}
-(defn logical-name-leaf [node] (rm/logical-name-leaf ctx *view* node))
-(defn type-name-leaf [d] (rm/type-name-leaf ctx *view* d))                   ; a type def's name-leaf, (Name Params) head unwrapped
-(defn module-types [src] (rm/module-types ctx *view* (rco/file-entities file->ents src)))     ; {type-name -> name-leaf}
-(defn module-accessors [src] (rm/module-accessors ctx *view* (rco/file-entities file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
+(defn forms-of [src] (rm/forms-of rctx *view* (rco/file-entities file->ents src)))
+(defn ns-form [src] (rm/ns-form rctx *view* (rco/file-entities file->ents src)))
+(defn module-name [src] (rm/module-name rctx *view* (rco/file-entities file->ents src)))
+(defn merge-import-opts [acc modn kids] (rm/merge-import-opts rctx *view* acc modn (vec kids)))
+(defn parse-require [src] (rm/parse-require rctx *view* (rco/file-entities file->ents src)))   ; {:refer {name->mod}, :as {alias->mod}, :rename {local->[mod srcname]}}
+(defn module-exports [src] (rm/module-exports rctx *view* (rco/file-entities file->ents src))) ; {exported-name -> binding-node}
+(defn logical-name-leaf [node] (rm/logical-name-leaf rctx *view* node))
+(defn type-name-leaf [d] (rm/type-name-leaf rctx *view* d))                   ; a type def's name-leaf, (Name Params) head unwrapped
+(defn module-types [src] (rm/module-types rctx *view* (rco/file-entities file->ents src)))     ; {type-name -> name-leaf}
+(defn module-accessors [src] (rm/module-accessors rctx *view* (rco/file-entities file->ents src)))  ; {"point-x" -> [Point-name-leaf "x"]}
 
 ;; --- corpus tables (DYNAMIC, inert root) ------------------------------------
 ;; The loaded sources + every frame/export table derived from them. INERT at root
@@ -305,7 +346,7 @@
 ;; so a record rename carries c/point-x / :refer'd point-x (parallel to global-type-exports).
 (def ^:dynamic global-accessor-exports {})
 (defn make-xresolve [src]
-  (rco/make-xresolve ctx *view* (rco/file-entity-map file->ents)
+  (rco/make-xresolve rctx *view* (rco/file-entity-map file->ents)
                      global-exports global-type-exports global-accessor-exports src))
 ;; --- Turtle #6: resolve identifier mentions INSIDE comments -----------------
 ;; A comment is a sequence of text + symbol-candidate segments. A symbol segment
@@ -347,7 +388,7 @@
 ;; render markers; this only fills the GAP: a bound leaf with no live refers_to gets a plain
 ;; refers_to to its durable target. Warm-only (refers_to is a derived resolve-pred, re-cut
 ;; each materialize). Idempotent: leaves already resolved are skipped.
-(defn lift-bound-to-refers! [] (rco/lift-bound-to-refers! ctx KIND BOUND REFERS))
+(defn lift-bound-to-refers! [] (rco/lift-bound-to-refers! rctx KIND BOUND REFERS))
 
 (defn- install-corpus-tables! [tables]
   (let [[modframe typeframe accessors exports type-exports accessor-exports]
@@ -365,7 +406,7 @@
   (install-corpus-tables! tables))
 
 (defn- corpus-state []
-  (rco/->CorpusState ctx *view* KIND BOUND REFERS file->ents
+  (rco/->CorpusState rctx *view* KIND BOUND REFERS file->ents
                      *corpus-cache* *corpus-scope* *resolve-walk?*
                      (vec srcs)
                      (fn [loaded] (set! srcs loaded))
@@ -375,9 +416,73 @@
                      run-resolution-over!
                      (fn [line] (binding [*out* *err*] (println line)))))
 
-(defn- with-corpus-state! [store body]
-  (let [ids (rco/corpus-predicate-ids store)]
+(defn- sync-authoring-view! [context]
+  (let [open @(rr/builder context)
+        coordinate (txn/builder-coordinate open)]
+    (ri/with-view!
+     context
+     (rot/staged (rot/project (ri/store-of context))
+                 (t/triple-slot0 coordinate)
+                 (t/triple-slot2 coordinate)
+                 (txn/builder-operations open)))))
+
+;; The compiled ports still call ri's immediate-write surface; redirect those Vars
+;; to rctx's one builder for the duration of a resolver run.
+(def ^:private authoring-write-lock (Object.))
+(defn- with-authoring-writes! [context body]
+  (locking authoring-write-lock
+    (let [original-open ri/open
+        original-mint! ri/mint!
+        original-assert-on! ri/assert-on!
+        original-commit! ri/commit!
+        original-assert! ri/assert!
+        original-retire! ri/retire!
+        builder (rr/builder context)]
+    (with-redefs [ri/open
+                  (fn [graph]
+                    (if (identical? graph context) builder (original-open graph)))
+                  ri/mint!
+                  (fn [graph target-builder]
+                    (if (and (identical? graph context)
+                             (identical? target-builder builder))
+                      (let [node (txn/mint! builder)]
+                        (ri/ordinal context node)
+                        node)
+                      (original-mint! graph target-builder)))
+                  ri/assert-on!
+                  (fn [target-builder subject predicate value]
+                    (if (identical? target-builder builder)
+                      (let [occurrence (txn/assert! builder (t/triple subject predicate value))]
+                        (sync-authoring-view! context)
+                        occurrence)
+                      (original-assert-on! target-builder subject predicate value)))
+                  ri/commit!
+                  (fn [graph target-builder]
+                    (if (and (identical? graph context)
+                             (identical? target-builder builder))
+                      context
+                      (original-commit! graph target-builder)))
+                  ri/assert!
+                  (fn [graph subject predicate value]
+                    (if (identical? graph context)
+                      (rr/assert! context subject predicate value)
+                      (original-assert! graph subject predicate value)))
+                  ri/retire!
+                  (fn [graph occurrence]
+                    (if (identical? graph context)
+                      (when-let [proposition (ri/proposition-at context occurrence)]
+                        (let [withdrawal (txn/retract! builder proposition)]
+                          (sync-authoring-view! context)
+                          withdrawal))
+                      (original-retire! graph occurrence)))]
+      (body)))))
+
+(defn- with-corpus-state! [store-or-graph body]
+  (let [store (if (map? store-or-graph) (ri/store-of store-or-graph) store-or-graph)
+        context (rr/context store)
+        ids (rco/corpus-predicate-ids context)]
     (binding [ctx store
+            rctx context
             file->ents (atom {})
             Vp (:Vp ids) KIND (:KIND ids) REFERS (:REFERS ids) BOUND (:BOUND ids)
             FIXED (:FIXED ids) QUAL (:QUAL ids)
@@ -386,7 +491,10 @@
             n-forms-walked (atom 0) walked-modules (atom #{})
             srcs [] file-modframe {} file-typeframe {} file-accessors {}
             global-exports {} global-type-exports {} global-accessor-exports {}]
-      (body))))
+      (let [result (with-authoring-writes! context body)]
+        (when (pos? (txn/operation-count (rr/builder context)))
+          (rr/commit! context))
+        result))))
 
 (defn- corpus-host [] (rco/->CorpusHost with-corpus-state! load-edn corpus-state))
 
@@ -440,21 +548,21 @@
 ;; precisely the surface a consumer's :refer/:as/:rename can bind, so a change to THIS
 ;; set is exactly what forces a consumer re-walk; an internal body edit leaves it fixed.
 (defn module-export-set [src]
-  (rco/module-export-set ctx *view* (rco/file-entity-map file->ents) src))
+  (rco/module-export-set rctx *view* (rco/file-entity-map file->ents) src))
 ;; import-graph: {module -> #{modules it imports}} over the whole corpus, from each
 ;; module's (ns :require ...) / bare (require ...). Consumers of M = the modules whose
 ;; import-set contains M (the reverse edge). Used to widen the dirty set when M's
 ;; export-set changed: M PLUS everyone importing M re-resolves.
 (defn module-imports [src]
-  (rco/module-imports ctx *view* (rco/file-entity-map file->ents) src))
+  (rco/module-imports rctx *view* (rco/file-entity-map file->ents) src))
 (defn import-graph []
-  (rco/import-graph ctx *view* (rco/file-entity-map file->ents) (vec srcs)))
+  (rco/import-graph rctx *view* (rco/file-entity-map file->ents) (vec srcs)))
 ;; module-has-macro?: does M define a defmacro at top level? A macro edit can change
 ;; how OTHER modules expand, so its blast radius isn't bounded by the import graph —
 ;; the daemon falls back to a whole-corpus re-resolve (sound; dormant in fram, which
 ;; has zero defmacro).
 (defn module-has-macro? [src]
-  (rco/module-has-macro? ctx *view* (rco/file-entity-map file->ents) src))
+  (rco/module-has-macro? rctx *view* (rco/file-entity-map file->ents) src))
 
 ;; resolve-warm-store! — bind ctx=the daemon's store (+ a fresh tx + the value-ids
 ;; recomputed against THAT store — store-local ids must match their store, the
@@ -489,8 +597,8 @@
 ;; follow refers_to transitively (re-export chains: a (js/export name) re-export is
 ;; itself a reference) to the ULTIMATE binding, and render its current name.
 ;; M1 Cut E — the render-back-to-source layer is now Beagle (src/resolve_render.bclj).
-(defn ultimate [B] (rv/ultimate ctx *view* BOUND REFERS B))        ; follow refers_to to the node that HOLDS the name
-(defn binding-name [B] (rv/binding-name ctx *view* BOUND REFERS B))
+(defn ultimate [B] (rv/ultimate rctx *view* BOUND REFERS B))        ; follow refers_to to the node that HOLDS the name
+(defn binding-name [B] (rv/binding-name rctx *view* BOUND REFERS B))
 
 ;; ============================================================================
 ;; AUTHORING — mint a NEW datum subtree into the SAME fact store (the inverse of
@@ -509,7 +617,7 @@
 ;; ^:dynamic vars STAY here, so `mint-env` reads the dynamic state at call time and
 ;; hands it over as ONE record; `file->ents` rides as the ATOM ITSELF (register!
 ;; must mutate the var the projection reads, not a snapshot).
-(defn mint-env [] (rmi/->Mint ctx KIND Vp file->ents *view* BOUND REFERS FIXED))
+(defn mint-env [] (rmi/->Mint rctx KIND Vp file->ents *view* BOUND REFERS FIXED))
 (defn register! [src e] (rmi/register! (mint-env) src e))
 ;; leaf-kind: the reader `kind` for a Clojure scalar (mirrors datum->facts:55-64).
 ;; Beagle reads [..] as (#%brackets ..) and {..} as (#%map ..), so a vector/map datum
@@ -537,21 +645,41 @@
 ;; would compete with the real wrapper) and (b) re-emit the wrapper's surviving forms at
 ;; consecutive fN (a gap would truncate the file). Pure projection — the store is not mutated.
 (defn wrapper-of [src]
-  (rmi/wrapper-of ctx *view* (rco/file-entity-map file->ents) src))
-(defn structural-kids [n] (rmi/structural-kids ctx n))
-(defn descendants [root] (rmi/structural-descendants ctx root))
+  (rmi/wrapper-of rctx *view* (rco/file-entity-map file->ents) src))
+(defn structural-kids [n] (rmi/structural-kids rctx n))
+(defn descendants [root] (rmi/structural-descendants rctx root))
 (defn form-for-victim [src victim]
-  (rmi/form-for-victim ctx *view* (rco/file-entity-map file->ents) unwrap-def src victim))
+  (rmi/form-for-victim rctx *view* (rco/file-entity-map file->ents) unwrap-def src victim))
 ;; extract-file! — THE PROJECTION (M1 Cut I; line construction, the #36 wrapper
 ;; renumber and the reachability filter all in src/resolve_mint.bclj). Only the
 ;; writer + `binding [*out* w]` scaffolding stays here — a host dynamic var cannot
 ;; change namespace — so the module returns the LINES and this printlns them, one
 ;; per line, byte-for-byte as before.
 (defn emit-env []
-  (rmi/emit-env ctx *view* BOUND REFERS FIXED
+  (rmi/emit-env rctx *view* BOUND REFERS FIXED
                 (rco/file-entity-map file->ents) unwrap-def))
+(defn- restore-scalar-integers [lines]
+  (let [ordinal->node (into {} (map (fn [[node ordinal]] [ordinal node]) @(:ordinals rctx)))]
+    (mapv
+     (fn [line]
+       (if-not (str/starts-with? line "[")
+         line
+         (let [[entity predicate _ :as row] (edn/read-string line)
+               node (get ordinal->node entity)
+               event (when node
+                       (first (rr/events-by-subject-predicate rctx node predicate)))
+               value (when event (rr/event-value event))]
+           (if (and (integer? value)
+                    (not (node-reference-predicate? predicate)))
+             (pr-str [entity predicate value])
+             (pr-str row)))))
+     lines)))
 (defn extract-file! [src out-path]
-  (rmi/extract-file! (emit-env) src out-path))
+  (spit out-path
+        (str (str/join "\n"
+                       (restore-scalar-integers
+                        (rmi/extract-lines (emit-env) src)))
+             "\n")))
 
 ;; render output dir honors *resolve-out* (default $RESOLVE_OUT, then /tmp) so
 ;; concurrent gate runs / agents don't collide on a global /tmp/resolved-*.edn —
@@ -659,7 +787,7 @@
 ;; literal symbol shows its stored v. Matching the anchor against the RENDERED
 ;; spelling (not the stored v) is what makes the model's old-form — read off the
 ;; current source text — line up with the graph even after a prior graph rename.
-(defn render-sym [e] (rv/render-sym ctx *view* BOUND REFERS FIXED e))
+(defn render-sym [e] (rv/render-sym rctx *view* BOUND REFERS FIXED e))
 ;; canonical comparison form — structural, formatting-insensitive. Leaf -> [:leaf kind
 ;; spelling]; list -> [:list child-canon...]. Both an anchor DATUM (as clojure.edn read
 ;; it) and a graph NODE canonicalize into the SAME shape, re-encoding EDN nil/bool/
@@ -676,8 +804,8 @@
 ;; Children are visited in CRDT (ord-key) order so the list canon matches datum order.
 ;; The def-form ROOT itself is never a candidate (only CHILDREN are recorded) — replacing
 ;; a whole top-level def is upsert-form's job, not this verb's.
-(defn ord-edges [n] (rv/ord-edges ctx n))   ; [ord-key pos-lit cid child] fN edges of n, CRDT-ordered
-(defn anchor-matches [root target] (rv/anchor-matches ctx *view* BOUND REFERS FIXED root target))
+(defn ord-edges [n] (rv/ord-edges rctx n))   ; [ord-key pos-lit cid child] fN edges of n, CRDT-ordered
+(defn anchor-matches [root target] (rv/anchor-matches rctx *view* BOUND REFERS FIXED root target))
 
 ;; ============================================================================
 ;; AUTO-DISAMBIGUATION (019f22bd-137d) — on an ambiguous/failed anchor, hand the
@@ -694,14 +822,14 @@
 ;; the SAME canonical shape datum->canon + anchor-match-sites compute, so a suggested
 ;; :within is SELF-VALIDATING: we offer it only when (datum->canon (edn/read it)) ==
 ;; the node's canon (round-trips) AND it matches exactly one interior form.
-(defn node->str [n] (rv/node->str ctx *view* BOUND REFERS FIXED n))
-(defn node->canon [n] (rv/node->canon ctx *view* BOUND REFERS FIXED n))
+(defn node->str [n] (rv/node->str rctx *view* BOUND REFERS FIXED n))
+(defn node->canon [n] (rv/node->canon rctx *view* BOUND REFERS FIXED n))
 ;; anchor-match-sites — anchor-matches, but each match also carries its ENCLOSING
 ;; ANCESTOR CHAIN (def-root .. immediate-parent, descent order) so a reject can build
 ;; breadcrumbs + a distinctive :within suggestion. Still ONE O(N) post-order pass
 ;; (canon computed once per node). Returns [{:parent :pos :cid :child :chain} ...];
 ;; the search ROOT itself is never a candidate (only its interior children).
-(defn anchor-match-sites [root target] (rv/anchor-match-sites ctx *view* BOUND REFERS FIXED root target))
+(defn anchor-match-sites [root target] (rv/anchor-match-sites rctx *view* BOUND REFERS FIXED root target))
 ;; DISAMBIG-CAP — at most this many candidates in a reject payload (report the total).
 (def DISAMBIG-CAP rc/DISAMBIG-CAP)
 ;; M1 Cut J: the whole anchor-disambiguation payload builder — crumb-label,
@@ -716,7 +844,13 @@
 ;; only because the ord algebra used to live here, and rc/ord-parse + rc/ord-cmp
 ;; moved in Cut A. This wrapper stays for the ns-qualified surface
 ;; (coord_daemon.clj:3975, tests/store_delete_reorder_test.clj).
-(defn wrap-forms [parent] (rvb/wrap-forms (verb-env) parent))
+(defn wrap-forms [parent]
+  (->> (rr/events-by-subject rctx parent)
+       (keep (fn [event]
+               (when-let [key (ord-parse (rr/event-predicate event))]
+                 [key (rot/occurrence-of event) (rr/event-value event)])))
+       (sort-by first ord-cmp)
+       vec))
 
 ;; ============================================================================
 ;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
@@ -737,7 +871,7 @@
   ([] (verb-env nil nil))
   ([resolve-out project-srcs]
    (rvb/make-verb!
-    {:ctx ctx :view *view* :KIND KIND :Vp Vp
+    {:ctx rctx :view *view* :KIND KIND :Vp Vp
      :srcs srcs :capture-only? *capture-only?*
      :emit-srcs (rmi/emit-srcs-for project-srcs (vec srcs))
      :reject! *reject!* :author-emit author-emit-scoped!
@@ -759,7 +893,26 @@
 ;; upsert-form — add/replace a top-level def from an EDN datum spec (M1 Cut H;
 ;; logic in src/resolve_verbs.bclj). A REPLACE reuses the victim's CRDT path (new
 ;; tie) and retires the victim's edge; an APPEND lands strictly after the last form.
-(defn verb-upsert-form! [scope datum] (rvb/verb-upsert-form! (verb-env) scope datum))
+(defn- term-order-tie [node]
+  (let [encoder (.withoutPadding (java.util.Base64/getUrlEncoder))]
+    (str "t" (.encodeToString encoder (.getBytes (pr-str node) "UTF-8")))))
+
+(defn- widen-pending-order! [scope]
+  (when-let [src (first (rmi/scope->srcs module-name (vec srcs) scope))]
+    (when-let [wrapper (wrapper-of src)]
+      (doseq [event (rr/events-by-subject rctx wrapper)
+              :let [predicate (rr/event-predicate event)]
+              :when (and (string? predicate) (str/ends-with? predicate "~PENDING"))]
+        (let [value (rr/event-value event)
+              path (subs predicate 1 (- (count predicate) (count "~PENDING")))]
+          (txn/retract! (rr/builder rctx) (rot/proposition-of event))
+          (sync-authoring-view! rctx)
+          (rr/assert! rctx wrapper (str "f" path "~" (term-order-tie value)) value))))))
+
+(defn verb-upsert-form! [scope datum]
+  (let [result (rvb/verb-upsert-form! (verb-env) scope datum)]
+    (when *capture-only?* (widen-pending-order! scope))
+    result))
 
 ;; insert-form — the CRDT MIDDLE-INSERT (#36): a def AFTER an anchor def, at a path
 ;; strictly between the anchor and its next sibling (M1 Cut H). Concurrent inserts
@@ -860,7 +1013,7 @@
 ;; {:defn-meta {leaf -> {:key :file :module :name}} :edges [[caller-leaf callee-leaf]]
 ;; :defn-set #{leaf}} — the daemon joins footprint @concern->@node against :edges; the
 ;; CLI maps leaf->:key for JSON.
-(defn call-edges [] (rq/call-edges ctx *view* BOUND REFERS (vec srcs) file-modframe (rco/file-entity-map file->ents)))
+(defn call-edges [] (rq/call-edges rctx *view* BOUND REFERS (vec srcs) file-modframe (rco/file-entity-map file->ents)))
 
 ;; blast-closure — transitive blast radius over a set of [caller callee] edges via Fram
 ;; Datalog: blast(D) = {x | x transitively calls D} = D's transitive callers (who breaks
@@ -874,7 +1027,7 @@
 ;; defonce/fn/…) is PUBLIC — a reachability ROOT. Keyed on the binding NODE (identity), so
 ;; same-spelling bindings in different modules stay DISTINCT (a private `helper` in mod A is a
 ;; different node than a public `helper` in mod B). Call under with-resolve-read / resolve-edn!.
-(defn binding-privacy [] (rq/binding-privacy ctx *view* (vec srcs) (rco/file-entity-map file->ents)))
+(defn binding-privacy [] (rq/binding-privacy rctx *view* (vec srcs) (rco/file-entity-map file->ents)))
 
 ;; dead-private-bindings — the identity-keyed STRATIFIED-Datalog code query. Over the
 ;; scope-correct call graph (call-edges), derive the PRIVATE top-level bindings UNREACHABLE

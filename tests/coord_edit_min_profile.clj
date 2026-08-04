@@ -14,7 +14,7 @@
 (let [t (c/begin-tx! st "prof")
       sup (or (c/value-id st "supersedes") (c/value! st "supersedes"))]
   (c/set-supersedes-pred! st sup)
-  (binding [r/ctx st r/tx t r/SUP sup
+  (binding [r/ctx st r/rctx (r/graph st) r/tx t r/SUP sup
             r/file->ents (atom {})
             r/Vp (c/value! st "v") r/KIND (c/value! st "kind") r/REFERS (c/value! st "refers_to")
             r/FIXED (c/value! st "keep_spelling") r/QUAL (c/value! st "qualifier")

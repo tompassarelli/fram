@@ -29,7 +29,8 @@
 (def grp [c0 c1 c2])
 (defn val-of [cid] (c/literal st (:r (c/fact-of st cid))))
 
-(binding [resolve/ctx st]
+(binding [resolve/ctx st
+          resolve/rctx (resolve/graph st)]
   ;; default-main view (*view*=nil): elect the whole group — earliest cid = the bare base.
   (chk "main (*view* nil): elects earliest-cid bare fact"
        (= "base" (val-of (resolve/select-main-1 grp))))
