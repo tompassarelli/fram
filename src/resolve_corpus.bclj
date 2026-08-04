@@ -29,9 +29,9 @@
 
 (define-mode strict)
 
-(def MODULE-NAME-RE :- Any (re-pattern "@([^#]+)#.+"))
+(def MODULE-NAME-RE: Any (re-pattern "@([^#]+)#.+"))
 
-(def SLASH-RE :- Any (re-pattern "/"))
+(def SLASH-RE: Any (re-pattern "/"))
 
 ;; GAP: Beagle cannot name the heterogeneous module tables or the host callbacks
 ;; that mutate resolve.clj's thread-local dynamic bindings more precisely than
@@ -56,19 +56,19 @@
    profile: Any])
 
 (defrecord CorpusHost
-  [with-state :- Any
-   load-edn :- Any
-   state :- Any])
+  [with-state: Any
+   load-edn: Any
+   state: Any])
 
 (defn walk-corpus
-  [srcs :- (Vec Any)
-   modframe :- Any
-   typeframe :- Any
-   accessors :- Any
-   ents :- Any] :- rw/Corpus
+  [srcs: (Vec Any)
+   modframe: Any
+   typeframe: Any
+   accessors: Any
+   ents: Any] -> rw/Corpus
   (rw/->Corpus srcs modframe typeframe accessors ents))
 
-(defn name->module [nm :- Any] :- Any
+(defn name->module [nm: Any] -> Any
   (if (string? nm)
     (let [hit (re-matches MODULE-NAME-RE nm)] (if (some? hit) (second hit) nil))
     nil))
@@ -82,11 +82,11 @@
    accessor-exports: Any
    src: Any] -> Any
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src []))) xport (fn
-                                                                                                 [m :- Any
-                                                                                                  n :- Any] :- Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn
-                                                                                                                                                                                   [m :- Any
-                                                                                                                                                                                    n :- Any] :- Any (get-in accessor-exports [m n]))]
-    (fn [nm :- Any] :- Any
+                                                                                                 [m: Any
+                                                                                                  n: Any] -> Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn
+                                                                                                                                                                                   [m: Any
+                                                                                                                                                                                    n: Any] -> Any (get-in accessor-exports [m n]))]
+    (fn [nm: Any] -> Any
       (cond
         (nil? nm)
         nil
@@ -105,7 +105,7 @@
         (let [[m source-name] (get rename nm)]
           {:target (xport m source-name) :mode :fixed})
         (str/includes? nm "/")
-        (let [[alias public-name] (str/split nm SLASH-RE 2) module (or (get as alias) (when (some (fn [table :- Any] :- Bool (contains? table alias)) [exports type-exports accessor-exports]) alias))]
+        (let [[alias public-name] (str/split nm SLASH-RE 2) module (or (get as alias) (when (some (fn [table: Any] -> Bool (contains? table alias)) [exports type-exports accessor-exports]) alias))]
           (when module
             (if-let [target (xport module public-name)]
               {:target target :mode :qual :alias alias}
@@ -146,8 +146,8 @@
    ents-of: Any
    srcs: (Vec Any)] -> Any
   (into {}
-    (map (fn [src :- Any] :- Any (let [ents (vec (get ents-of src []))] [(rm/module-name ctx view ents) (module-imports ctx view ents-of src)]))
-      (filter (fn [src :- Any] :- Bool (some? (rm/module-name ctx view (vec (get ents-of src [])))))
+    (map (fn [src: Any] -> Any (let [ents (vec (get ents-of src []))] [(rm/module-name ctx view ents) (module-imports ctx view ents-of src)]))
+      (filter (fn [src: Any] -> Bool (some? (rm/module-name ctx view (vec (get ents-of src [])))))
         srcs))))
 
 (defn module-has-macro?
@@ -169,7 +169,7 @@
         (when (and (rr/live-node? ctx KIND target) (empty? (rr/events-by-subject-predicate ctx leaf REFERS)))
           (rr/assert! ctx leaf REFERS target))))))
 
-(defn corpus-from-store! [state :- CorpusState] :- Any
+(defn corpus-from-store! [state: CorpusState] -> Any
   (let [t0 (System/nanoTime) groups (rw/warm-groups (:ctx state) (:corpus-cache state) name->module) t-groups (System/nanoTime) tables (rw/scoped-corpus-tables (:ctx state) (:view state) groups (:corpus-scope state)) install (:install-warm state)]
     (do
       (install groups tables)
@@ -224,20 +224,20 @@
             (let [result (body)] (do (rr/commit! context) result))))))))
 
 (defn file-entities
-  [file-ents :- (Atom Any)
-   src :- Any] :- Any
+  [file-ents: (Atom Any)
+   src: Any] -> Any
   (get (deref file-ents) src []))
 
-(defn file-entity-map [file-ents :- (Atom Any)] :- Any (deref file-ents))
+(defn file-entity-map [file-ents: (Atom Any)] -> Any (deref file-ents))
 
 (defn def-binding
-  [modframe :- Any
-   typeframe :- Any
-   src :- Any
-   nm :- Any] :- Any
+  [modframe: Any
+   typeframe: Any
+   src: Any
+   nm: Any] -> Any
   (or (get (get modframe src) nm) (get (get typeframe src) nm)))
 
-(defn corpus-table-values [tables :- Any] :- Any
+(defn corpus-table-values [tables: Any] -> Any
   [(:modframe tables)
    (:typeframe tables)
    (:accessors tables)
@@ -245,7 +245,7 @@
    (:type-exports tables)
    (:accessor-exports tables)])
 
-(defn table-srcs [tables :- Any] :- Any (:srcs tables))
+(defn table-srcs [tables: Any] -> Any (:srcs tables))
 
 (defn corpus-predicate-ids! [context: rr/Context] -> Any
   {:Vp "v"
@@ -268,7 +268,7 @@
   [ctx: rr/Context
    file-ents: (Atom Any)
    path: Any] -> Any
-  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line :- Any] :- Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid :- Any] :- Any (or (get (deref local) lid) (let [e (rr/mint! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
+  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line: Any] -> Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid: Any] -> Any (or (get (deref local) lid) (let [e (rr/mint! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
     (do
       (doseq [line lines :when (str/starts-with? line "[")]
         (let [[s p o] (read-edn line)]

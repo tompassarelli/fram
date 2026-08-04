@@ -24,49 +24,49 @@
 (require clojure.string :as str)
 
 (defn ent!
-  [ctx :- Any
-   cache :- (Atom (Map Any Any))
-   lid :- Any] :- Int
+  [ctx: Any
+   cache: (Atom (Map Any Any))
+   lid: Any] -> Int
   (let [hit (get (deref cache) lid)]
     (if (nil? hit)
       (let [e (c/entity! ctx)] (swap! cache assoc lid e) e)
       (int hit))))
 
 (defn load-line!
-  [ctx :- Any
-   tx :- Int
-   cache :- (Atom (Map Any Any))
-   line :- String] :- Nil
+  [ctx: Any
+   tx: Int
+   cache: (Atom (Map Any Any))
+   line: String] -> Nil
   (let [trip (edn/read-string line) s (nth trip 0) p (nth trip 1) o (nth trip 2) L (ent! ctx cache s) P (c/value! ctx p) R (if (integer? o) (ent! ctx cache o) (c/value! ctx o))]
     (c/fact! ctx L P R tx)
     nil))
 
 (defn sym?
-  [ctx :- Any
-   kindp :- Int
-   symv :- Int
-   e :- Int] :- Bool
-  (pos? (count (filterv (fn [cid :- Int] :- Bool (= symv (get (c/fact-of ctx cid) :r))) (c/by-lp ctx e kindp)))))
+  [ctx: Any
+   kindp: Int
+   symv: Int
+   e: Int] -> Bool
+  (pos? (count (filterv (fn [cid: Int] -> Bool (= symv (get (c/fact-of ctx cid) :r))) (c/by-lp ctx e kindp)))))
 
 (defn fact-l
-  [ctx :- Any
-   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :l)))
+  [ctx: Any
+   cid: Int] -> Int (int (get (c/fact-of ctx cid) :l)))
 
 (defn fact-r
-  [ctx :- Any
-   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :r)))
+  [ctx: Any
+   cid: Int] -> Int (int (get (c/fact-of ctx cid) :r)))
 
 (defn first-sym-fact
-  [ctx :- Any
-   vp :- Int
-   kindp :- Int
-   symv :- Int
-   oldv :- Int] :- Int
-  (let [hits (filterv (fn [cid :- Int] :- Bool (sym? ctx kindp symv (fact-l ctx cid))) (vec (c/by-pr ctx vp oldv)))]
+  [ctx: Any
+   vp: Int
+   kindp: Int
+   symv: Int
+   oldv: Int] -> Int
+  (let [hits (filterv (fn [cid: Int] -> Bool (sym? ctx kindp symv (fact-l ctx cid))) (vec (c/by-pr ctx vp oldv)))]
     (if (empty? hits) 0 (nth hits 0))))
 
-(defn -main [& args] :- Nil
-  (let [ctx (c/new-store) tx (c/begin-tx! ctx "author") SUP (c/value! ctx "supersedes") _ (c/set-supersedes-pred! ctx SUP) cache :- (Atom (Map Any Any)) (atom {}) _ (doseq [line (str/split-lines (slurp "/tmp/trap.edn"))] (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil)) Vp (c/value! ctx "v") KIND (c/value! ctx "kind") SYM (c/value! ctx "symbol") OLDv (c/value-id ctx "red") NEWv (c/value! ctx "crimson") old (first-sym-fact ctx Vp KIND SYM (if (nil? OLDv) 0 (int OLDv))) e (fact-l ctx old) new (c/fact! ctx e Vp NEWv tx) sup (c/fact! ctx new SUP old tx)]
+(defn -main [& args] -> Nil
+  (let [ctx (c/new-store) tx (c/begin-tx! ctx "author") SUP (c/value! ctx "supersedes") _ (c/set-supersedes-pred! ctx SUP) cache: (Atom (Map Any Any)) (atom {}) _ (doseq [line (str/split-lines (slurp "/tmp/trap.edn"))] (if (str/starts-with? line "[") (load-line! ctx tx cache line) nil)) Vp (c/value! ctx "v") KIND (c/value! ctx "kind") SYM (c/value! ctx "symbol") OLDv (c/value-id ctx "red") NEWv (c/value! ctx "crimson") old (first-sym-fact ctx Vp KIND SYM (if (nil? OLDv) 0 (int OLDv))) e (fact-l ctx old) new (c/fact! ctx e Vp NEWv tx) sup (c/fact! ctx new SUP old tx)]
     (println "entity (the symbol node):" e)
     (println)
     (println "OLD value-fact  cid="
@@ -96,8 +96,8 @@
     (println "old still retrievable (history preserved)? "
       (some? (c/fact-of ctx old)))
     (println "live view of entity's v-facts (by-l is live-only):"
-      (mapv (fn [cid :- Int] :- String (pr-str (c/literal ctx (fact-r ctx cid))))
-        (filterv (fn [cid :- Int] :- Bool (= Vp (get (c/fact-of ctx cid) :p)))
+      (mapv (fn [cid: Int] -> String (pr-str (c/literal ctx (fact-r ctx cid))))
+        (filterv (fn [cid: Int] -> Bool (= Vp (get (c/fact-of ctx cid) :p)))
           (c/by-l ctx e))))
     (println "=> old red fact EXISTS, marked not-live; new crimson fact is live; same node. Supersession is real:"
       (and (some? (c/fact-of ctx old))

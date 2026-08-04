@@ -28,23 +28,23 @@
 (require clojure.string :as str)
 
 (defn fact-l
-  [ctx :- Any
-   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :l)))
+  [ctx: Any
+   cid: Int] -> Int (int (get (c/fact-of ctx cid) :l)))
 
 (defn fact-p
-  [ctx :- Any
-   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :p)))
+  [ctx: Any
+   cid: Int] -> Int (int (get (c/fact-of ctx cid) :p)))
 
 (defn fact-r
-  [ctx :- Any
-   cid :- Int] :- Int (int (get (c/fact-of ctx cid) :r)))
+  [ctx: Any
+   cid: Int] -> Int (int (get (c/fact-of ctx cid) :r)))
 
 (defn ent!
-  [ctx :- Any
-   local :- (Atom (Map Any Any))
-   file->ents :- (Atom (Map Any Any))
-   src :- String
-   lid :- Any] :- Int
+  [ctx: Any
+   local: (Atom (Map Any Any))
+   file->ents: (Atom (Map Any Any))
+   src: String
+   lid: Any] -> Int
   (let [hit (get (deref local) lid)]
     (if (nil? hit)
       (let [e (c/entity! ctx)]
@@ -54,11 +54,11 @@
       (int hit))))
 
 (defn load-edn!
-  [ctx :- Any
-   tx :- Int
-   file->ents :- (Atom (Map Any Any))
-   path :- String] :- String
-  (let [lines (str/split-lines (slurp path)) heads (filterv (fn [l :- String] :- Bool (str/starts-with? l "@file")) lines) src (subs (nth heads 0) 6) local :- (Atom (Map Any Any)) (atom {})]
+  [ctx: Any
+   tx: Int
+   file->ents: (Atom (Map Any Any))
+   path: String] -> String
+  (let [lines (str/split-lines (slurp path)) heads (filterv (fn [l: String] -> Bool (str/starts-with? l "@file")) lines) src (subs (nth heads 0) 6) local: (Atom (Map Any Any)) (atom {})]
     (doseq [line lines]
       (if (str/starts-with? line "[")
         (let [trip (edn/read-string line) s (nth trip 0) p (nth trip 1) o (nth trip 2) L (ent! ctx local file->ents src s) P (c/value! ctx p) R (if (integer? o) (ent! ctx local file->ents src o) (c/value! ctx o))]
@@ -68,16 +68,16 @@
     src))
 
 (defn symbol-leaf?
-  [ctx :- Any
-   kindp :- Int
-   symv :- Int
-   e :- Int] :- Bool
-  (pos? (count (filterv (fn [cid :- Int] :- Bool (= symv (fact-r ctx cid))) (c/by-lp ctx e kindp)))))
+  [ctx: Any
+   kindp: Int
+   symv: Int
+   e: Int] -> Bool
+  (pos? (count (filterv (fn [cid: Int] -> Bool (= symv (fact-r ctx cid))) (c/by-lp ctx e kindp)))))
 
 (defn field-child
-  [ctx :- Any
-   e :- Int
-   fname :- String] :- Int
+  [ctx: Any
+   e: Int
+   fname: String] -> Int
   (let [P (c/value-id ctx fname)]
     (if (nil? P)
       0
@@ -85,56 +85,56 @@
         (if (empty? cids) 0 (fact-r ctx (nth cids 0)))))))
 
 (defn sym-val
-  [ctx :- Any
-   vp :- Int
-   kindp :- Int
-   symv :- Int
-   e :- Int] :- Any
+  [ctx: Any
+   vp: Int
+   kindp: Int
+   symv: Int
+   e: Int] -> Any
   (if (and (> e 0) (symbol-leaf? ctx kindp symv e))
-    (let [vc (filterv (fn [cid :- Int] :- Bool (= vp (fact-p ctx cid))) (c/by-l ctx e))]
+    (let [vc (filterv (fn [cid: Int] -> Bool (= vp (fact-p ctx cid))) (c/by-l ctx e))]
       (if (empty? vc) nil (c/literal ctx (fact-r ctx (nth vc 0)))))
     nil))
 
 (defn binding-name
-  [ctx :- Any
-   vp :- Int
-   kindp :- Int
-   symv :- Int
-   e :- Int] :- Any
+  [ctx: Any
+   vp: Int
+   kindp: Int
+   symv: Int
+   e: Int] -> Any
   (let [h (sym-val ctx vp kindp symv (field-child ctx e "f0"))]
     (if (and (not (nil? h)) (contains? #{"defn" "definline" "def-" "defonce" "defn-" "def"} h))
       (sym-val ctx vp kindp symv (field-child ctx e "f1"))
       nil)))
 
 (defn module-bindings
-  [ctx :- Any
-   vp :- Int
-   kindp :- Int
-   symv :- Int
-   file->ents :- (Atom (Map Any Any))
-   src :- String] :- (Set Any)
-  (set (filterv (fn [nm :- Any] :- Bool (not (nil? nm))) (mapv (fn [e :- Any] :- Any (binding-name ctx vp kindp symv (int e))) (vec (get (deref file->ents) src []))))))
+  [ctx: Any
+   vp: Int
+   kindp: Int
+   symv: Int
+   file->ents: (Atom (Map Any Any))
+   src: String] -> (Set Any)
+  (set (filterv (fn [nm: Any] -> Bool (not (nil? nm))) (mapv (fn [e: Any] -> Any (binding-name ctx vp kindp symv (int e))) (vec (get (deref file->ents) src []))))))
 
 (defn rename-facts!
-  [ctx :- Any
-   tx :- Int
-   vp :- Int
-   kindp :- Int
-   symv :- Int
-   sup :- Int
-   newv :- Int
-   target-ents :- (Set Any)
-   cids :- (Vec Int)] :- Int
+  [ctx: Any
+   tx: Int
+   vp: Int
+   kindp: Int
+   symv: Int
+   sup: Int
+   newv: Int
+   target-ents: (Set Any)
+   cids: (Vec Int)] -> Int
   (reduce (fn
-            [acc :- Int
-             cid :- Int] :- Int (let [e (fact-l ctx cid)] (if (and (contains? target-ents e) (symbol-leaf? ctx kindp symv e)) (let [ncid (c/fact! ctx e vp newv tx)] (c/fact! ctx ncid sup cid tx) (inc acc)) acc)))
+            [acc: Int
+             cid: Int] -> Int (let [e (fact-l ctx cid)] (if (and (contains? target-ents e) (symbol-leaf? ctx kindp symv e)) (let [ncid (c/fact! ctx e vp newv tx)] (c/fact! ctx ncid sup cid tx) (inc acc)) acc)))
     0
     cids))
 
 (defn project-line
-  [ctx :- Any
-   e :- Int
-   cid :- Int] :- String
+  [ctx: Any
+   e: Int
+   cid: Int] -> String
   (let [p (fact-p ctx cid) r (fact-r ctx cid) ps (c/literal ctx p)]
     (if (= ps "supersedes")
       ""
@@ -143,30 +143,30 @@
         (str "[" e " " (pr-str ps) " " r "]\n")))))
 
 (defn project-file!
-  [ctx :- Any
-   file->ents :- (Atom (Map Any Any))
-   src :- String
-   out-path :- String] :- Nil
+  [ctx: Any
+   file->ents: (Atom (Map Any Any))
+   src: String
+   out-path: String] -> Nil
   (spit out-path
     (str (str "@file " src "\n")
       (str/join ""
-        (mapv (fn [e :- Any] :- String (str/join "" (mapv (fn [cid :- Int] :- String (project-line ctx (int e) cid)) (c/by-l ctx (int e)))))
+        (mapv (fn [e: Any] -> String (str/join "" (mapv (fn [cid: Int] -> String (project-line ctx (int e) cid)) (c/by-l ctx (int e)))))
           (vec (get (deref file->ents) src []))))))
   nil)
 
-(defn out-path [src :- String] :- String
+(defn out-path [src: String] -> String
   (let [parts (str/split src (re-pattern "/"))]
     (str "/tmp/mutated-" (nth parts (dec (count parts))) ".edn")))
 
-(defn -main [& args] :- Nil
-  (let [argv (vec args) old-name (str (nth argv 0)) new-name (str (nth argv 1)) target-substr (str (nth argv 2)) edn-files (vec (drop 3 argv)) ctx (c/new-store) tx (c/begin-tx! ctx "author") SUP (c/value! ctx "supersedes") _ (c/set-supersedes-pred! ctx SUP) file->ents :- (Atom (Map Any Any)) (atom {}) srcs (mapv (fn [p :- Any] :- String (load-edn! ctx tx file->ents (str p))) edn-files) Vp (c/value! ctx "v") KIND (c/value! ctx "kind") SYM (c/value! ctx "symbol") OLDv (c/value-id ctx old-name) NEWv (c/value! ctx new-name) target-modules (filterv (fn [s :- String] :- Bool (str/includes? s target-substr)) srcs) target-ents (set (vec (mapcat (fn [s :- String] :- (Vec Any) (vec (get (deref file->ents) s []))) target-modules))) collisions (filterv (fn [m :- String] :- Bool (contains? (module-bindings ctx Vp KIND SYM file->ents m) new-name)) target-modules)]
+(defn -main [& args] -> Nil
+  (let [argv (vec args) old-name (str (nth argv 0)) new-name (str (nth argv 1)) target-substr (str (nth argv 2)) edn-files (vec (drop 3 argv)) ctx (c/new-store) tx (c/begin-tx! ctx "author") SUP (c/value! ctx "supersedes") _ (c/set-supersedes-pred! ctx SUP) file->ents: (Atom (Map Any Any)) (atom {}) srcs (mapv (fn [p: Any] -> String (load-edn! ctx tx file->ents (str p))) edn-files) Vp (c/value! ctx "v") KIND (c/value! ctx "kind") SYM (c/value! ctx "symbol") OLDv (c/value-id ctx old-name) NEWv (c/value! ctx new-name) target-modules (filterv (fn [s: String] -> Bool (str/includes? s target-substr)) srcs) target-ents (set (vec (mapcat (fn [s: String] -> (Vec Any) (vec (get (deref file->ents) s []))) target-modules))) collisions (filterv (fn [m: String] -> Bool (contains? (module-bindings ctx Vp KIND SYM file->ents m) new-name)) target-modules)]
     (if (pos? (count collisions))
       (let [m (nth collisions 0)]
         (binding [*out* *err*]
           (println (str "REJECTED — `" new-name "` is already a binding in " m ".\n" "  A rename onto an existing binding would shadow/collide; the store refuses the write.\n" "  (Turtle #5 invariant: rename-doesn't-collide. No facts were mutated.)")))
         (System/exit 3))
       nil)
-    (let [cids (if (nil? OLDv) [] (vec (c/by-pr ctx Vp (int OLDv)))) renamed (rename-facts! ctx tx Vp KIND SYM SUP NEWv target-ents cids) preserved (count (filterv (fn [cid :- Int] :- Bool (let [e (fact-l ctx cid)] (and (not (contains? target-ents e)) (symbol-leaf? ctx KIND SYM e)))) cids)) outs (mapv (fn [s :- String] :- String (out-path s)) srcs)]
+    (let [cids (if (nil? OLDv) [] (vec (c/by-pr ctx Vp (int OLDv)))) renamed (rename-facts! ctx tx Vp KIND SYM SUP NEWv target-ents cids) preserved (count (filterv (fn [cid: Int] -> Bool (let [e (fact-l ctx cid)] (and (not (contains? target-ents e)) (symbol-leaf? ctx KIND SYM e)))) cids)) outs (mapv (fn [s: String] -> String (out-path s)) srcs)]
       (doseq [i (range (count srcs))]
         (project-file! ctx file->ents (nth srcs i) (nth outs i)))
       (binding [*out* *err*]

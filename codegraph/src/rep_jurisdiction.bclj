@@ -47,46 +47,46 @@
 
 (require clojure.string :as str)
 
-(defn parse-rep-blocks [path :- String] :- (Vec (Map Keyword Any))
+(defn parse-rep-blocks [path: String] -> (Vec (Map Keyword Any))
   (let [lines (str/split-lines (slurp path)) acc (reduce (fn
-                                                           [st :- (Map Keyword Any)
-                                                            l :- String] :- (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
+                                                           [st: (Map Keyword Any)
+                                                            l: String] -> (Map Keyword Any) (if (str/starts-with? l "@file ") {:cur {:file (subs l 6) :triples []} :out (if (empty? (get st :cur)) (get st :out) (conj (vec (get st :out)) (get st :cur)))} (if (str/starts-with? l "[") (assoc st :cur (assoc (get st :cur) :triples (conj (vec (get (get st :cur) :triples)) (edn/read-string l)))) st))) {:cur {} :out []} lines)]
     (if (empty? (get acc :cur))
       (vec (get acc :out))
       (conj (vec (get acc :out)) (get acc :cur)))))
 
-(defn block->defs [block :- (Map Keyword Any)] :- (Vec (Map Keyword Any))
-  (let [ts (vec (get block :triples)) by-subj (group-by (fn [t :- Any] :- Any (nth t 0)) ts) ms (mapv (fn [s :- Any] :- (Map Any Any) (into {} (mapv (fn [t :- Any] :- (Vec Any) [(nth t 1) (nth t 2)]) (vec (get by-subj s))))) (vec (keys by-subj)))]
-    (mapv (fn [m :- (Map Any Any)] :- (Map Keyword Any) {:name (get m "name") :regime (get m "rep-regime") :native (get m "native-sites") :hamt (get m "hamt-sites") :module (get m "module")})
-      (filterv (fn [m :- (Map Any Any)] :- Bool (= "rep-def" (get m "form-kind")))
+(defn block->defs [block: (Map Keyword Any)] -> (Vec (Map Keyword Any))
+  (let [ts (vec (get block :triples)) by-subj (group-by (fn [t: Any] -> Any (nth t 0)) ts) ms (mapv (fn [s: Any] -> (Map Any Any) (into {} (mapv (fn [t: Any] -> (Vec Any) [(nth t 1) (nth t 2)]) (vec (get by-subj s))))) (vec (keys by-subj)))]
+    (mapv (fn [m: (Map Any Any)] -> (Map Keyword Any) {:name (get m "name") :regime (get m "rep-regime") :native (get m "native-sites") :hamt (get m "hamt-sites") :module (get m "module")})
+      (filterv (fn [m: (Map Any Any)] -> Bool (= "rep-def" (get m "form-kind")))
         ms))))
 
 (defn ent!
-  [ctx :- Any
-   cache :- (Atom (Map Any Any))
-   nm :- Any] :- Int
+  [ctx: Any
+   cache: (Atom (Map Any Any))
+   nm: Any] -> Int
   (let [hit (get (deref cache) nm)]
     (if (nil? hit)
       (let [e (c/entity! ctx)] (swap! cache assoc nm e) e)
       (int hit))))
 
-(defn reverse-cache [cache :- (Atom (Map Any Any))] :- (Map Any Any)
+(defn reverse-cache [cache: (Atom (Map Any Any))] -> (Map Any Any)
   (into {}
-    (mapv (fn [kv :- Any] :- (Vec Any) [(nth kv 1) (nth kv 0)])
+    (mapv (fn [kv: Any] -> (Vec Any) [(nth kv 1) (nth kv 0)])
       (vec (deref cache)))))
 
 (defn defs-with-regime
-  [ctx :- Any
-   regime :- Int
-   ent->n :- (Map Any Any)
-   reg :- String] :- (Vec Any)
+  [ctx: Any
+   regime: Int
+   ent->n: (Map Any Any)
+   reg: String] -> (Vec Any)
   (let [R (c/value! ctx reg)]
-    (vec (sort (mapv (fn [cid :- Int] :- Any (get ent->n (int (get (c/fact-of ctx cid) :l)))) (vec (c/by-pr ctx regime R)))))))
+    (vec (sort (mapv (fn [cid: Int] -> Any (get ent->n (int (get (c/fact-of ctx cid) :l)))) (vec (c/by-pr ctx regime R)))))))
 
 (defn q4!
-  [rep-defs :- (Vec (Map Keyword Any))
-   cg-path :- String] :- Nil
-  (let [cg-blocks (cg/parse-corpus cg-path) graph (cg/build-graph cg-blocks) defns (vec (get graph :defns)) edges (vec (get graph :edges)) key->name (into {} (mapv (fn [dd :- Any] :- (Vec Any) [(get dd :key) (get dd :name)]) defns)) name-edges (vec (distinct (filterv (fn [x :- Any] :- Bool (not (nil? x))) (mapv (fn [e :- Any] :- Any (let [an (get key->name (nth e 0)) bn (get key->name (nth e 1))] (if (and (not (nil? an)) (not (nil? bn))) [an bn] nil))) edges)))) hamt-names (set (mapv (fn [dd :- Any] :- Any (get dd :name)) (filterv (fn [dd :- Any] :- Bool (contains? #{"mixed" "hamt"} (get dd :regime))) rep-defs))) gctx (c/new-store) gtx (c/begin-tx! gctx "cg") CALLS (c/value! gctx "calls") HAMT (c/value! gctx "ships-hamt") MARK (c/value! gctx "yes") cache :- (Atom (Map Any Any)) (atom {}) _seed (doseq [dd defns] (if (nil? (get dd :name)) nil (let [e (ent! gctx cache (get dd :name))] nil))) _edges (doseq [e name-edges] (c/fact! gctx (ent! gctx cache (nth e 0)) CALLS (ent! gctx cache (nth e 1)) gtx)) _marks (doseq [nm (vec hamt-names)] (c/fact! gctx (ent! gctx cache nm) HAMT MARK gtx)) ent->name (reverse-cache cache) db (d/run-rules gctx [(d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "triple" [(d/v :y) HAMT MARK])]) (d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "forces" [(d/v :y)])])]) forced (vec (distinct (vec (sort (filterv (fn [x :- Any] :- Bool (not (nil? x))) (mapv (fn [row :- Any] :- Any (get ent->name (nth row 0))) (d/facts db "forces")))))))]
+  [rep-defs: (Vec (Map Keyword Any))
+   cg-path: String] -> Nil
+  (let [cg-blocks (cg/parse-corpus cg-path) graph (cg/build-graph cg-blocks) defns (vec (get graph :defns)) edges (vec (get graph :edges)) key->name (into {} (mapv (fn [dd: Any] -> (Vec Any) [(get dd :key) (get dd :name)]) defns)) name-edges (vec (distinct (filterv (fn [x: Any] -> Bool (not (nil? x))) (mapv (fn [e: Any] -> Any (let [an (get key->name (nth e 0)) bn (get key->name (nth e 1))] (if (and (not (nil? an)) (not (nil? bn))) [an bn] nil))) edges)))) hamt-names (set (mapv (fn [dd: Any] -> Any (get dd :name)) (filterv (fn [dd: Any] -> Bool (contains? #{"mixed" "hamt"} (get dd :regime))) rep-defs))) gctx (c/new-store) gtx (c/begin-tx! gctx "cg") CALLS (c/value! gctx "calls") HAMT (c/value! gctx "ships-hamt") MARK (c/value! gctx "yes") cache: (Atom (Map Any Any)) (atom {}) _seed (doseq [dd defns] (if (nil? (get dd :name)) nil (let [e (ent! gctx cache (get dd :name))] nil))) _edges (doseq [e name-edges] (c/fact! gctx (ent! gctx cache (nth e 0)) CALLS (ent! gctx cache (nth e 1)) gtx)) _marks (doseq [nm (vec hamt-names)] (c/fact! gctx (ent! gctx cache nm) HAMT MARK gtx)) ent->name (reverse-cache cache) db (d/run-rules gctx [(d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "triple" [(d/v :y) HAMT MARK])]) (d/rule "forces" [(d/v :x)] [(d/lit "triple" [(d/v :x) CALLS (d/v :y)]) (d/lit "forces" [(d/v :y)])])]) forced (vec (distinct (vec (sort (filterv (fn [x: Any] -> Bool (not (nil? x))) (mapv (fn [row: Any] -> Any (get ent->name (nth row 0))) (d/facts db "forces")))))))]
     (if (pos? (count forced))
       (doseq [nm forced] (println "  forces-HAMT" nm))
       (println "  (no caller transitively reaches a HAMT def in this corpus)"))
@@ -96,16 +96,16 @@
     (println "    graph node you JOIN against scope-correct edges — blast radius of a")
     (println "    rep decision, across module boundaries, in one fixpoint.")))
 
-(defn -main [& args] :- Nil
-  (let [argv (vec args) rep-path (str (nth argv 0)) cg-path (if (> (count argv) 1) (str (nth argv 1)) nil) blocks (parse-rep-blocks rep-path) rep-defs (vec (mapcat (fn [b :- (Map Keyword Any)] :- (Vec Any) (block->defs b)) blocks))]
+(defn -main [& args] -> Nil
+  (let [argv (vec args) rep-path (str (nth argv 0)) cg-path (if (> (count argv) 1) (str (nth argv 1)) nil) blocks (parse-rep-blocks rep-path) rep-defs (vec (mapcat (fn [b: (Map Keyword Any)] -> (Vec Any) (block->defs b)) blocks))]
     (println "================ REP JURISDICTION — compiler judgment as facts =================")
     (println "rep corpus:" rep-path)
     (println "rep-def facts:"
       (count rep-defs)
       " across"
-      (count (distinct (mapv (fn [dd :- Any] :- Any (get dd :module)) rep-defs)))
+      (count (distinct (mapv (fn [dd: Any] -> Any (get dd :module)) rep-defs)))
       "module(s)")
-    (let [ctx (c/new-store) tx (c/begin-tx! ctx "rep") REGIME (c/value! ctx "rep-regime") cache :- (Atom (Map Any Any)) (atom {}) _load (doseq [dd rep-defs] (c/fact! ctx (ent! ctx cache (get dd :name)) REGIME (c/value! ctx (get dd :regime)) tx)) ent->n (reverse-cache cache)]
+    (let [ctx (c/new-store) tx (c/begin-tx! ctx "rep") REGIME (c/value! ctx "rep-regime") cache: (Atom (Map Any Any)) (atom {}) _load (doseq [dd rep-defs] (c/fact! ctx (ent! ctx cache (get dd :name)) REGIME (c/value! ctx (get dd :regime)) tx)) ent->n (reverse-cache cache)]
       (println "\n---- Q1. defs that SHIP THE HAMT (pull persistent runtime) ----")
       (doseq [nm (defs-with-regime ctx REGIME ent->n "hamt")]
         (println "  HAMT  " nm))

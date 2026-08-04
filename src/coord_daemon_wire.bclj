@@ -21,27 +21,27 @@
 
 (define-mode strict)
 
-(defn effective-request-op [req :- Any] :- Any
+(defn effective-request-op [req: Any] -> Any
   (if (= :for-log (:op req))
     (get-in req [:request :op])
     (:op req)))
 
-(defn query-request? [req :- Any] :- Bool
+(defn query-request? [req: Any] -> Bool
   (and (map? req)
        (or (contains? #{:query :query-page :pull} (:op req))
            (and (= :as-of (:op req)) (:query req)))))
 
 (defrecord QueryLimitPlan
-  [timeout-ms :- Int
-   deadline-ns :- Int
-   max-steps :- Int
-   max-rows :- Int
-   max-response-bytes :- Int])
+  [timeout-ms: Int
+   deadline-ns: Int
+   max-steps: Int
+   max-rows: Int
+   max-response-bytes: Int])
 
 (defn lower-limit
-  [req :- Any
-   key :- Keyword
-   ceiling :- Int] :- Int
+  [req: Any
+   key: Keyword
+   ceiling: Int] -> Int
   (let [n (get req key)]
     (if (and (integer? n) (pos? n))
       (min n ceiling)
@@ -51,9 +51,9 @@
 ;; monotonic clock reading and wraps this immutable plan in cancellation atoms
 ;; and counters; those runtime mechanisms do not cross this boundary.
 (defn query-limit-plan
-  [req :- Any
-   ceilings :- Any
-   now-ns :- Int] :- QueryLimitPlan
+  [req: Any
+   ceilings: Any
+   now-ns: Int] -> QueryLimitPlan
   (let [timeout (lower-limit req :query-timeout-ms (:timeout-ms ceilings))]
     (->QueryLimitPlan
      timeout
@@ -66,7 +66,7 @@
 ;; Dispatch descriptions are protocol data, not executable handlers. The host
 ;; supplies the live store/config state and interprets :route/:handler while
 ;; retaining every mutation body and concurrency boundary.
-(def dispatch-table :- Any
+(def dispatch-table: Any
   {:query {:route :query :handler :query :required [:query] :response :query}
    :query-page {:route :query :handler :query-page :required [:query :limit] :response :query}
    :pull {:route :query :handler :pull :required [:root :pattern] :response :query}
@@ -137,9 +137,9 @@
    :resolved {:route :locked :handler :resolved :required [:te :p] :response :read}})
 
 (defn request-dispatch
-  [req :- Any
-   state :- Any
-   config :- Any] :- Any
+  [req: Any
+   state: Any
+   config: Any] -> Any
   (let [op (:op req)
         base (get dispatch-table op
                   {:route :locked :handler :unknown :required [] :response :error})
@@ -155,13 +155,13 @@
                         :else :fresh)]
     (assoc base :op op :route route :reload-policy reload-policy)))
 
-(defn target-request? [req :- Any] :- Bool
+(defn target-request? [req: Any] -> Bool
   (or (contains? req :te)
       (and (contains? req :module) (contains? req :name))))
 
 (defn request-validation-errors
-  [req :- Any
-   decision :- Any] :- Any
+  [req: Any
+   decision: Any] -> Any
   (cond
     (not (map? req))
     ["request must be a map"]
@@ -191,16 +191,16 @@
 
         :else base))))
 
-(defn invalid-request-response [errors :- Any] :- Any
+(defn invalid-request-response [errors: Any] -> Any
   (when (seq errors)
     {:error (vec errors) :code :invalid-request}))
 
-(defn json-format? [fmt :- Any] :- Bool
+(defn json-format? [fmt: Any] -> Bool
   (or (= fmt :json) (= fmt "json")))
 
 (defn edn-too-deep?
-  [s :- String
-   max-depth :- Int] :- Bool
+  [s: String
+   max-depth: Int] -> Bool
   (loop [i 0 depth 0 mx 0 in-str false esc false]
     (if (>= i (count s))
       (> mx max-depth)
@@ -229,52 +229,52 @@
           (recur (inc i) depth mx in-str false))))))
 
 (defn parse-request
-  [line :- String
-   max-depth :- Int] :- Any
+  [line: String
+   max-depth: Int] -> Any
   (do
     (when (edn-too-deep? line max-depth)
       (throw (ex-info "edn too deep" {:type :edn-too-deep})))
     (edn/read-string line)))
 
 (defn strict-log-fence-rejection
-  [required? :- Bool
-   req :- Any
-   served-log :- Any] :- Any
+  [required?: Bool
+   req: Any
+   served-log: Any] -> Any
   (when (and required? (not= :for-log (:op req)))
     {:reject ["this coordinator requires a :for-log envelope"]
      :code :log-fence-required
      :served-log served-log}))
 
-(defn fenced-subscribe? [req :- Any] :- Bool
+(defn fenced-subscribe? [req: Any] -> Bool
   (let [inner (:request req)]
     (and (= :for-log (:op req))
          (map? inner)
          (= :subscribe (:op inner)))))
 
-(defn subscription-request [req :- Any] :- Any
+(defn subscription-request [req: Any] -> Any
   (if (fenced-subscribe? req) (:request req) req))
 
-(defn actual-request [req :- Any] :- Any
+(defn actual-request [req: Any] -> Any
   (if (= :for-log (:op req)) (:request req) req))
 
 (defn subscription-response
-  [version :- Int
-   fenced? :- Bool
-   served-log :- Any] :- Any
+  [version: Int
+   fenced?: Bool
+   served-log: Any] -> Any
   (if fenced?
     {:subscribed version :log served-log}
     {:subscribed version}))
 
 (defrecord ConnectionState
-  [phase :- Keyword
-   request :- Any
-   actual :- Any
-   format :- Any
-   response :- Any
-   fenced-subscription :- Bool
-   query :- Bool])
+  [phase: Keyword
+   request: Any
+   actual: Any
+   format: Any
+   response: Any
+   fenced-subscription: Bool
+   query: Bool])
 
-(defn connection-start [] :- ConnectionState
+(defn connection-start [] -> ConnectionState
   (->ConnectionState :reading nil nil nil nil false false))
 
 ;; The host reports facts learned at mechanism boundaries (one parsed request,
@@ -282,8 +282,8 @@
 ;; transition owns only the lifecycle decision; readers, writers, sockets,
 ;; monitors, handler execution, and draining remain host-side.
 (defn connection-transition
-  [state :- ConnectionState
-   event :- Any] :- ConnectionState
+  [state: ConnectionState
+   event: Any] -> ConnectionState
   (let [kind (:event event)]
     (cond
       (= kind :request)
@@ -327,21 +327,21 @@
       :else state)))
 
 (defn serialize-response
-  [fmt :- Any
-   resp :- Any
-   to-json :- Any] :- String
+  [fmt: Any
+   resp: Any
+   to-json: Any] -> String
   (if (json-format? fmt)
     (to-json resp)
     (pr-str resp)))
 
 (defn structured-error
-  [stage :- Keyword
-   at :- Any
-   message :- Any
-   expected :- Any
-   got :- Any
-   suggestion :- Any
-   nearest :- Any] :- Any
+  [stage: Keyword
+   at: Any
+   message: Any
+   expected: Any
+   got: Any
+   suggestion: Any
+   nearest: Any] -> Any
   (let [base {:ok false :stage stage}
         with-at (if at (assoc base :at at) base)
         with-message (if message (assoc with-at :message message) with-at)
@@ -353,9 +353,9 @@
       with-suggestion)))
 
 (defn exception-gate-error
-  [module :- Any
-   nm :- Any
-   t :- Any] :- Any
+  [module: Any
+   nm: Any
+   t: Any] -> Any
   (let [d (ex-data t)
         class-name (.getSimpleName (class t))
         msg (or (not-empty (str (.getMessage t)))
@@ -372,9 +372,9 @@
      nil)))
 
 (defn reject-gate-error
-  [module :- Any
-   nm :- Any
-   er :- Any] :- Any
+  [module: Any
+   nm: Any
+   er: Any] -> Any
   (let [msg (if (vector? (:reject er))
               (str/join "; " (:reject er))
               (str (:reject er)))
@@ -391,9 +391,9 @@
       base)))
 
 (defn edit-min-error-response
-  [spec :- Any
-   t :- Any
-   version :- Int] :- Any
+  [spec: Any
+   t: Any
+   version: Int] -> Any
   (let [d (ex-data t)
         msg (or (not-empty (str (.getMessage t)))
                 (:message d)
@@ -405,22 +405,22 @@
       (assoc base :disambiguation (:disambiguation d))
       base)))
 
-(defn unknown-op-response [] :- Any
+(defn unknown-op-response [] -> Any
   {:error "unknown op"})
 
 (defn bad-request-response
-  [error-data :- Any
-   class-name :- String] :- Any
+  [error-data: Any
+   class-name: String] -> Any
   {:error (str "bad request: " (or (:type error-data) class-name))})
 
 ;; Catching exceptions and writing/closing sockets are host mechanisms. This
 ;; function selects the observable action and, only where a request writer is
 ;; known to exist, the protocol envelope.
 (defn connection-error-selection
-  [scope :- Keyword
-   error-kind :- Keyword
-   error-data :- Any
-   class-name :- String] :- Any
+  [scope: Keyword
+   error-kind: Keyword
+   error-data: Any
+   class-name: String] -> Any
   (cond
     (not= scope :request)
     {:action :close}

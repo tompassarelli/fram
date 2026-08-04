@@ -12,92 +12,92 @@
 
 (declare-extern java.security.MessageDigest/getInstance [String -> Any])
 
-(def worlds-capability :- t/Triple (host/capability "worlds" 1))
+(def worlds-capability: t/Triple (host/capability "worlds" 1))
 
-(def none :- Keyword :worlds/none)
+(def none: Keyword :worlds/none)
 
-(def ambiguous :- Keyword :worlds/ambiguous)
+(def ambiguous: Keyword :worlds/ambiguous)
 
 (defn world-id
-  [space :- String
-   name :- String] :- t/Triple
+  [space: String
+   name: String] -> t/Triple
   (if (and (pos? (count space)) (pos? (count name)))
     (t/triple space :worlds/world name)
     (throw (ex-info "world identity requires non-empty space and name" {:type :worlds/invalid-world}))))
 
 (defn blob-id
-  [space :- String
-   digest :- String] :- t/Triple
+  [space: String
+   digest: String] -> t/Triple
   (t/triple space :worlds/blob digest))
 
 (defn candidate-id
-  [world :- t/Triple
-   nonce :- String] :- t/Triple
+  [world: t/Triple
+   nonce: String] -> t/Triple
   (if (pos? (count nonce))
     (t/triple world :worlds/candidate nonce)
     (throw (ex-info "candidate identity requires a non-empty nonce" {:type :worlds/invalid-candidate}))))
 
 (defn operation-id
-  [candidate :- t/Triple
-   ordinal :- Int] :- t/Triple
+  [candidate: t/Triple
+   ordinal: Int] -> t/Triple
   (if (>= ordinal 0)
     (t/triple candidate :worlds/operation ordinal)
     (throw (ex-info "operation identity requires a non-negative ordinal" {:type :worlds/invalid-operation}))))
 
-(def local-term-codec-writer :- [Any Any Int Int Int -> Int]
+(def local-term-codec-writer: [Any Any Int Int Int -> Int]
   wire/write-term-codec-v1!)
 
 (declare canonical-term-digest promotion-result-marker promotion-recovery)
 
 (defn version-id
-  [world :- t/Triple
-   content :- t/Triple
-   digest :- String] :- t/Triple
+  [world: t/Triple
+   content: t/Triple
+   digest: String] -> t/Triple
   (if (= digest (canonical-term-digest content))
     (t/triple world :worlds/version digest)
     (throw (ex-info "version digest does not match canonical TermCodec content" {:type :worlds/digest-mismatch}))))
 
 (defn build-id
-  [version :- t/Triple
-   build-input :- t/Triple
-   digest :- String] :- t/Triple
+  [version: t/Triple
+   build-input: t/Triple
+   digest: String] -> t/Triple
   (if (= digest (canonical-term-digest build-input))
     (t/triple version :worlds/build digest)
     (throw (ex-info "build digest does not match canonical TermCodec input" {:type :worlds/digest-mismatch}))))
 
 (defn receipt-id
-  [build :- t/Triple
-   receipt-input :- t/Triple
-   digest :- String] :- t/Triple
+  [build: t/Triple
+   receipt-input: t/Triple
+   digest: String] -> t/Triple
   (if (= digest (canonical-term-digest receipt-input))
     (t/triple build :worlds/receipt digest)
     (throw (ex-info "receipt digest does not match canonical TermCodec input" {:type :worlds/digest-mismatch}))))
 
 (defn promotion-id
-  [candidate :- t/Triple
-   expected-head :- Any] :- t/Triple
+  [candidate: t/Triple
+   expected-head: Any] -> t/Triple
   (t/triple candidate :worlds/promote expected-head))
 
-(defn term-list [values :- (Vec Any)] :- Any
+(defn term-list [values: (Vec Any)] -> Any
   (reduce (fn
-            [tail :- Any
-             value :- Any] :- Any (if (t/term? value) (t/triple :worlds/list value tail) (throw (ex-info "world list contains a value outside Term" {:type :worlds/invalid-term}))))
+            [tail: Any
+             value: Any] -> Any (if (t/term? value) (t/triple :worlds/list value tail) (throw (ex-info "world list contains a value outside Term" {:type :worlds/invalid-term}))))
     :worlds/list-end
     (reverse values)))
 
 (defn put-operation
-  [slot :- String
-   mode :- String
-   blob :- t/Triple] :- t/Triple
+  [slot: String
+   mode: String
+   blob: t/Triple] -> t/Triple
   (t/triple slot :worlds/put (t/triple mode :worlds/blob blob)))
 
-(defn delete-operation [slot :- String] :- t/Triple
+(defn delete-operation [slot: String] -> t/Triple
   (t/triple slot :worlds/delete none))
 
-(defn inherit-operation [slot :- String] :- t/Triple
+(defn inherit-operation [slot: String] -> t/Triple
   (t/triple slot :worlds/inherit none))
 
-(defn operation-valid? [value :- Any] :- Bool
+(defn operation-valid? [value: Any] -> Bool
   (if (not (t/triple? value))
     false
     (let [slot (t/triple-slot0 value) kind (t/triple-slot1 value) body (t/triple-slot2 value)]
@@ -114,86 +114,86 @@
              (= none body)]
             [:else false]))))))
 
-(defn digest? [value :- Any] :- Bool
+(defn digest? [value: Any] -> Bool
   (boolean (and (string? value) (.matches value "sha256:[0-9a-f]{64}"))))
 
 (defn fact-values
-  [live :- (Vec t/Triple)
-   slot0 :- Any
-   slot1 :- Any] :- (Vec Any)
-  (mapv (fn [fact :- t/Triple] :- Any (t/triple-slot2 fact))
-    (filterv (fn [fact :- t/Triple] :- Bool (and (= slot0 (t/triple-slot0 fact)) (= slot1 (t/triple-slot1 fact))))
+  [live: (Vec t/Triple)
+   slot0: Any
+   slot1: Any] -> (Vec Any)
+  (mapv (fn [fact: t/Triple] -> Any (t/triple-slot2 fact))
+    (filterv (fn [fact: t/Triple] -> Bool (and (= slot0 (t/triple-slot0 fact)) (= slot1 (t/triple-slot1 fact))))
       live)))
 
 (defn fact-count
-  [live :- (Vec t/Triple)
-   slot0 :- Any
-   slot1 :- Any] :- Int
+  [live: (Vec t/Triple)
+   slot0: Any
+   slot1: Any] -> Int
   (count (fact-values live slot0 slot1)))
 
 (defn fact-value
-  [live :- (Vec t/Triple)
-   slot0 :- Any
-   slot1 :- Any
-   absent :- Any] :- Any
-  (let [values :- (Vec Any) (fact-values live slot0 slot1)]
+  [live: (Vec t/Triple)
+   slot0: Any
+   slot1: Any
+   absent: Any] -> Any
+  (let [values: (Vec Any) (fact-values live slot0 slot1)]
     (cond
       [(empty? values) absent]
       [(= 1 (count values)) (first values)]
       [:else ambiguous])))
 
 (defn has-fact?
-  [live :- (Vec t/Triple)
-   proposition :- t/Triple] :- Bool
-  (boolean (some (fn [fact :- t/Triple] :- Bool (= proposition fact)) live)))
+  [live: (Vec t/Triple)
+   proposition: t/Triple] -> Bool
+  (boolean (some (fn [fact: t/Triple] -> Bool (= proposition fact)) live)))
 
 (defn world-head
-  [live :- (Vec t/Triple)
-   world :- t/Triple] :- Any
+  [live: (Vec t/Triple)
+   world: t/Triple] -> Any
   (fact-value live world :worlds/head none))
 
 (defn candidate-present?
-  [live :- (Vec t/Triple)
-   world :- t/Triple
-   candidate :- t/Triple] :- Bool
+  [live: (Vec t/Triple)
+   world: t/Triple
+   candidate: t/Triple] -> Bool
   (has-fact? live (t/triple world :worlds/candidate candidate)))
 
 (defn candidate-sealed
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple] :- Any
+  [live: (Vec t/Triple)
+   candidate: t/Triple] -> Any
   (fact-value live candidate :worlds/sealed-version none))
 
 (defn linked-operation-count
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple] :- Int
+  [live: (Vec t/Triple)
+   candidate: t/Triple] -> Int
   (fact-count live candidate :worlds/operation))
 
 (defn operation-value
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple
-   ordinal :- Int] :- Any
+  [live: (Vec t/Triple)
+   candidate: t/Triple
+   ordinal: Int] -> Any
   (fact-value live (operation-id candidate ordinal) :worlds/value none))
 
 (defn operations-contiguous?
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple] :- Bool
+  [live: (Vec t/Triple)
+   candidate: t/Triple] -> Bool
   (let [n (linked-operation-count live candidate)]
     (loop [ordinal 0]
       (if (>= ordinal n)
         true
-        (let [identity :- t/Triple (operation-id candidate ordinal) value (operation-value live candidate ordinal)]
-          (if (and (= 1 (count (filterv (fn [linked :- Any] :- Bool (= identity linked)) (fact-values live candidate :worlds/operation)))) (and (= 1 (fact-count live identity :worlds/value)) (operation-valid? value)))
+        (let [identity: t/Triple (operation-id candidate ordinal) value (operation-value live candidate ordinal)]
+          (if (and (= 1 (count (filterv (fn [linked: Any] -> Bool (= identity linked)) (fact-values live candidate :worlds/operation)))) (and (= 1 (fact-count live identity :worlds/value)) (operation-valid? value)))
             (recur (inc ordinal))
             false))))))
 
 (defn ordered-operation-facts
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple] :- (Vec t/Triple)
+  [live: (Vec t/Triple)
+   candidate: t/Triple] -> (Vec t/Triple)
   (let [n (linked-operation-count live candidate)]
-    (loop [ordinal 0 facts :- (Vec t/Triple) []]
+    (loop [ordinal 0 facts: (Vec t/Triple) []]
       (if (>= ordinal n)
         facts
-        (let [identity :- t/Triple (operation-id candidate ordinal)]
+        (let [identity: t/Triple (operation-id candidate ordinal)]
           (recur (inc ordinal)
             (conj facts
               (t/triple identity
@@ -201,10 +201,10 @@
                 (operation-value live candidate ordinal)))))))))
 
 (defn seal-digest-input
-  [live :- (Vec t/Triple)
-   candidate :- t/Triple] :- t/Triple
+  [live: (Vec t/Triple)
+   candidate: t/Triple] -> t/Triple
   (if (operations-contiguous? live candidate)
-    (let [expected (fact-value live candidate :worlds/expected-head ambiguous) facts :- (Vec Any) (mapv (fn [fact :- t/Triple] :- Any fact) (ordered-operation-facts live candidate))]
+    (let [expected (fact-value live candidate :worlds/expected-head ambiguous) facts: (Vec Any) (mapv (fn [fact: t/Triple] -> Any fact) (ordered-operation-facts live candidate))]
       (if (= expected ambiguous)
         (throw (ex-info "candidate has no unique expected head" {:type :worlds/candidate-invalid}))
         (t/triple candidate
@@ -213,44 +213,44 @@
     (throw (ex-info "candidate operation sequence is not contiguous" {:type :worlds/candidate-gapped}))))
 
 (defn build-digest-input
-  [version :- t/Triple
-   build-spec :- Any] :- t/Triple
+  [version: t/Triple
+   build-spec: Any] -> t/Triple
   (t/triple version :worlds/build-spec build-spec))
 
 (defn receipt-digest-input
-  [build :- t/Triple
-   result :- Any] :- t/Triple
+  [build: t/Triple
+   result: Any] -> t/Triple
   (t/triple build :worlds/result result))
 
 (defn known-version?
-  [live :- (Vec t/Triple)
-   world :- t/Triple
-   version :- t/Triple] :- Bool
+  [live: (Vec t/Triple)
+   world: t/Triple
+   version: t/Triple] -> Bool
   (if (not (t/triple? version))
     false
-    (let [contents :- (Vec Any) (fact-values live version :worlds/content)]
+    (let [contents: (Vec Any) (fact-values live version :worlds/content)]
       (and (= world (t/triple-slot0 version))
         (= :worlds/version (t/triple-slot1 version))
         (digest? (t/triple-slot2 version))
         (= 1
-          (count (filterv (fn [value :- Any] :- Bool (= version value)) (fact-values live world :worlds/version))))
+          (count (filterv (fn [value: Any] -> Bool (= version value)) (fact-values live world :worlds/version))))
         (= 1 (count contents))
         (t/triple? (first contents))
         (= (t/triple-slot2 version) (canonical-term-digest (first contents)))))))
 
 (defn receipt-valid?
-  [live :- (Vec t/Triple)
-   version :- t/Triple
-   receipt :- Any] :- Bool
+  [live: (Vec t/Triple)
+   version: t/Triple
+   receipt: Any] -> Bool
   (if (not (t/triple? receipt))
     false
     (let [build-value (t/triple-slot0 receipt)]
       (if (not (t/triple? build-value))
         false
-        (let [build :- t/Triple build-value build-input-value (fact-value live build :worlds/input none) receipt-input-value (fact-value live receipt :worlds/input none) result (fact-value live receipt :worlds/result none)]
+        (let [build: t/Triple build-value build-input-value (fact-value live build :worlds/input none) receipt-input-value (fact-value live receipt :worlds/input none) result (fact-value live receipt :worlds/result none)]
           (if (or (not (t/triple? build-input-value)) (not (t/triple? receipt-input-value)))
             false
-            (let [build-input :- t/Triple build-input-value receipt-input :- t/Triple receipt-input-value]
+            (let [build-input: t/Triple build-input-value receipt-input: t/Triple receipt-input-value]
               (and (= :worlds/receipt (t/triple-slot1 receipt))
                 (digest? (t/triple-slot2 receipt))
                 (= version (t/triple-slot0 build))
@@ -264,57 +264,57 @@
                   (canonical-term-digest receipt-input))
                 (= 1 (fact-count live build :worlds/input))
                 (= 1
-                  (count (filterv (fn [value :- Any] :- Bool (= receipt value)) (fact-values live build :worlds/receipt))))
+                  (count (filterv (fn [value: Any] -> Bool (= receipt value)) (fact-values live build :worlds/receipt))))
                 (= 1 (fact-count live receipt :worlds/input))
                 (= 1 (fact-count live receipt :worlds/result))
                 (= :worlds/success result)))))))))
 
 (defn one-stage
-  [stage :- Keyword
-   result :- Keyword] :- (Vec host/ProviderStage)
+  [stage: Keyword
+   result: Keyword] -> (Vec host/ProviderStage)
   [(host/provider-stage worlds-capability stage result)])
 
 (defn reject-plan
-  [code :- Keyword
-   result :- t/Triple
-   expected-version :- Int
-   stage :- Keyword] :- host/ProviderPlan
+  [code: Keyword
+   result: t/Triple
+   expected-version: Int
+   stage: Keyword] -> host/ProviderPlan
   (host/rejected-plan code
     result
     expected-version
     (one-stage stage :worlds/rejected)))
 
 (defn actions-for
-  [retractions :- (Vec t/Triple)
-   assertions :- (Vec t/Triple)] :- (Vec host/ProviderAction)
-  (let [after-retractions :- (Vec host/ProviderAction) (reduce (fn
-                                                                 [actions :- (Vec host/ProviderAction)
-                                                                  proposition :- t/Triple] :- (Vec host/ProviderAction) (conj actions (host/provider-action :rpc/retract proposition :rpc/subject-any))) [] retractions)]
+  [retractions: (Vec t/Triple)
+   assertions: (Vec t/Triple)] -> (Vec host/ProviderAction)
+  (let [after-retractions: (Vec host/ProviderAction) (reduce (fn
+                                                                 [actions: (Vec host/ProviderAction)
+                                                                  proposition: t/Triple] -> (Vec host/ProviderAction) (conj actions (host/provider-action :rpc/retract proposition :rpc/subject-any))) [] retractions)]
     (reduce (fn
-              [actions :- (Vec host/ProviderAction)
-               proposition :- t/Triple] :- (Vec host/ProviderAction) (conj actions (host/provider-action :rpc/assert proposition :rpc/subject-any)))
+              [actions: (Vec host/ProviderAction)
+               proposition: t/Triple] -> (Vec host/ProviderAction) (conj actions (host/provider-action :rpc/assert proposition :rpc/subject-any)))
       after-retractions
       assertions)))
 
 (defn accept-plan
-  [result :- t/Triple
-   expected-version :- Int
-   retractions :- (Vec t/Triple)
-   assertions :- (Vec t/Triple)
-   stage :- Keyword] :- host/ProviderPlan
+  [result: t/Triple
+   expected-version: Int
+   retractions: (Vec t/Triple)
+   assertions: (Vec t/Triple)
+   stage: Keyword] -> host/ProviderPlan
   (host/accepted-plan result
     expected-version
     (actions-for retractions assertions)
     (one-stage stage :worlds/accepted)))
 
 (defn begin-plan
-  [space :- String
-   expected-version :- Int
-   live :- (Vec t/Triple)
-   name :- String
-   expected-head :- Any
-   nonce :- String] :- host/ProviderPlan
-  (let [world :- t/Triple (world-id space name) candidate :- t/Triple (candidate-id world nonce) current (world-head live world)]
+  [space: String
+   expected-version: Int
+   live: (Vec t/Triple)
+   name: String
+   expected-head: Any
+   nonce: String] -> host/ProviderPlan
+  (let [world: t/Triple (world-id space name) candidate: t/Triple (candidate-id world nonce) current (world-head live world)]
     (cond
       [(= current ambiguous)
        (reject-plan :worlds/head-ambiguous
@@ -340,12 +340,12 @@
          :worlds/begin)])))
 
 (defn append-plan
-  [expected-version :- Int
-   live :- (Vec t/Triple)
-   candidate :- t/Triple
-   ordinal :- Int
-   operation :- t/Triple] :- host/ProviderPlan
-  (let [world (t/triple-slot0 candidate) identity :- t/Triple (operation-id candidate ordinal) next-ordinal (linked-operation-count live candidate)]
+  [expected-version: Int
+   live: (Vec t/Triple)
+   candidate: t/Triple
+   ordinal: Int
+   operation: t/Triple] -> host/ProviderPlan
+  (let [world (t/triple-slot0 candidate) identity: t/Triple (operation-id candidate ordinal) next-ordinal (linked-operation-count live candidate)]
     (cond
       [(not (and (t/triple? world) (candidate-present? live world candidate)))
        (reject-plan :worlds/candidate-missing
@@ -376,12 +376,12 @@
          :worlds/append)])))
 
 (defn seal-plan
-  [expected-version :- Int
-   live :- (Vec t/Triple)
-   candidate :- t/Triple
-   supplied-content :- t/Triple
-   digest :- String] :- host/ProviderPlan
-  (let [world (t/triple-slot0 candidate) result :- t/Triple (t/triple candidate :worlds/seal digest)]
+  [expected-version: Int
+   live: (Vec t/Triple)
+   candidate: t/Triple
+   supplied-content: t/Triple
+   digest: String] -> host/ProviderPlan
+  (let [world (t/triple-slot0 candidate) result: t/Triple (t/triple candidate :worlds/seal digest)]
     (cond
       [(not (digest? digest))
        (reject-plan :worlds/digest-invalid result expected-version :worlds/seal)]
@@ -411,7 +411,7 @@
          expected-version
          :worlds/seal)]
       [:else
-       (let [version :- t/Triple (version-id world supplied-content digest)]
+       (let [version: t/Triple (version-id world supplied-content digest)]
          (if (known-version? live world version)
            (reject-plan :worlds/version-exists
              version
@@ -429,16 +429,16 @@
              :worlds/seal)))])))
 
 (defn build-plan
-  [expected-version :- Int
-   live :- (Vec t/Triple)
-   version :- t/Triple
-   build-spec :- Any
-   supplied-build-input :- t/Triple
-   build-digest :- String
-   result :- Any
-   supplied-receipt-input :- t/Triple
-   receipt-digest :- String] :- host/ProviderPlan
-  (let [world (t/triple-slot0 version) raw-build :- t/Triple (t/triple version :worlds/build build-digest)]
+  [expected-version: Int
+   live: (Vec t/Triple)
+   version: t/Triple
+   build-spec: Any
+   supplied-build-input: t/Triple
+   build-digest: String
+   result: Any
+   supplied-receipt-input: t/Triple
+   receipt-digest: String] -> host/ProviderPlan
+  (let [world (t/triple-slot0 version) raw-build: t/Triple (t/triple version :worlds/build build-digest)]
     (cond
       [(or (not (digest? build-digest)) (not (digest? receipt-digest)))
        (reject-plan :worlds/digest-invalid
@@ -461,7 +461,7 @@
          expected-version
          :worlds/build)]
       [:else
-       (let [build :- t/Triple (build-id version supplied-build-input build-digest) raw-receipt :- t/Triple (t/triple build :worlds/receipt receipt-digest)]
+       (let [build: t/Triple (build-id version supplied-build-input build-digest) raw-receipt: t/Triple (t/triple build :worlds/receipt receipt-digest)]
          (cond
            [(not= supplied-receipt-input (receipt-digest-input build result))
             (reject-plan :worlds/digest-input-mismatch
@@ -479,7 +479,7 @@
               expected-version
               :worlds/build)]
            [:else
-            (let [receipt :- t/Triple (receipt-id build supplied-receipt-input receipt-digest)]
+            (let [receipt: t/Triple (receipt-id build supplied-receipt-input receipt-digest)]
               (accept-plan receipt
                 expected-version
                 []
@@ -490,13 +490,13 @@
                 :worlds/build))]))])))
 
 (defn promote-plan
-  [expected-version :- Int
-   live :- (Vec t/Triple)
-   world :- t/Triple
-   candidate :- t/Triple
-   expected-head :- Any
-   receipt :- t/Triple] :- host/ProviderPlan
-  (let [promotion :- t/Triple (promotion-id candidate expected-head) current (world-head live world) sealed (candidate-sealed live candidate) recovered (promotion-recovery live world candidate expected-head receipt) declared-head (fact-value live candidate :worlds/expected-head ambiguous) declared-count (fact-value live candidate :worlds/operation-count -1) actual-count (linked-operation-count live candidate)]
+  [expected-version: Int
+   live: (Vec t/Triple)
+   world: t/Triple
+   candidate: t/Triple
+   expected-head: Any
+   receipt: t/Triple] -> host/ProviderPlan
+  (let [promotion: t/Triple (promotion-id candidate expected-head) current (world-head live world) sealed (candidate-sealed live candidate) recovered (promotion-recovery live world candidate expected-head receipt) declared-head (fact-value live candidate :worlds/expected-head ambiguous) declared-count (fact-value live candidate :worlds/operation-count -1) actual-count (linked-operation-count live candidate)]
     (cond
       [(some? recovered)
        (reject-plan :worlds/already-promoted
@@ -539,7 +539,7 @@
          expected-version
          :worlds/promote)]
       [:else
-       (let [marker :- t/Triple (promotion-result-marker sealed receipt)]
+       (let [marker: t/Triple (promotion-result-marker sealed receipt)]
          (accept-plan promotion
            expected-version
            (if (= current none) [] [(t/triple world :worlds/head current)])
@@ -547,19 +547,19 @@
             (t/triple promotion :worlds/result marker)]
            :worlds/promote))])))
 
-(def worlds-identity :- t/Triple
+(def worlds-identity: t/Triple
   (host/provider-identity worlds-capability "fram.worlds/v1"))
 
-(def worlds-contract :- t/Triple (host/provider-contract worlds-capability 1))
+(def worlds-contract: t/Triple (host/provider-contract worlds-capability 1))
 
-(def worlds-descriptor :- host/ProviderDescriptor
+(def worlds-descriptor: host/ProviderDescriptor
   (host/descriptor worlds-identity
     worlds-capability
     worlds-contract
     []
     :provider/ready))
 
-(defn canonical-term-digest [term :- Any] :- String
+(defn canonical-term-digest [term: Any] -> String
   (if (t/term? term)
     (let [out (java.io.ByteArrayOutputStream.)]
       (do
@@ -571,33 +571,33 @@
         (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-256") (.toByteArray out))]
           (str "sha256:"
             (apply str
-              (mapv (fn [value :- Any] :- String (format "%02x" (bit-and 255 value)))
+              (mapv (fn [value: Any] -> String (format "%02x" (bit-and 255 value)))
                 (vec digest)))))))
     (throw (ex-info "world digest input lies outside TermCodecV1" {:type :worlds/invalid-term}))))
 
 (defn promotion-result-marker
-  [version :- t/Triple
-   receipt :- t/Triple] :- t/Triple
+  [version: t/Triple
+   receipt: t/Triple] -> t/Triple
   (t/triple version :worlds/authorized-by receipt))
 
 (defn promotion-recovery
-  [live :- (Vec t/Triple)
-   world :- t/Triple
-   candidate :- t/Triple
-   expected-head :- Any
-   receipt :- t/Triple] :- t/Triple?
-  (let [promotion :- t/Triple (promotion-id candidate expected-head) sealed (candidate-sealed live candidate)]
-    (if (and (t/triple? sealed) (and (receipt-valid? live sealed receipt) (and (= sealed (world-head live world)) (let [marker :- t/Triple (promotion-result-marker sealed receipt)] (and (= 1 (fact-count live promotion :worlds/result)) (has-fact? live (t/triple promotion :worlds/result marker)))))))
+  [live: (Vec t/Triple)
+   world: t/Triple
+   candidate: t/Triple
+   expected-head: Any
+   receipt: t/Triple] -> t/Triple?
+  (let [promotion: t/Triple (promotion-id candidate expected-head) sealed (candidate-sealed live candidate)]
+    (if (and (t/triple? sealed) (and (receipt-valid? live sealed receipt) (and (= sealed (world-head live world)) (let [marker: t/Triple (promotion-result-marker sealed receipt)] (and (= 1 (fact-count live promotion :worlds/result)) (has-fact? live (t/triple promotion :worlds/result marker)))))))
       (promotion-result-marker sealed receipt)
       nil)))
 
-(def worlds-registry :- (Vec host/ProviderDescriptor) [worlds-descriptor])
+(def worlds-registry: (Vec host/ProviderDescriptor) [worlds-descriptor])
 
 (defn invoke-plan-to!
-  [address :- String
-   port :- Int
-   space :- String
-   plan :- host/ProviderPlan] :- host/ProviderInvocation
+  [address: String
+   port: Int
+   space: String
+   plan: host/ProviderPlan] -> host/ProviderInvocation
   (host/invoke-plan-to! worlds-registry
     [worlds-capability]
     worlds-capability

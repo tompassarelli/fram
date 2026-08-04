@@ -28,35 +28,35 @@
 (define-mode strict)
 
 (defn- sv
-  [ctx :- rr/Context?
-   view :- Any
-   e :- Any] :- Any
+  [ctx: rr/Context?
+   view: Any
+   e: Any] -> Any
   (rr/sym-val ctx view e))
 
-(defn- type-colon? [v :- Any] :- Bool
+(defn- type-colon? [v: Any] -> Bool
   (and (string? v) (contains? rc/TYPE-COLON (str v))))
 
 (defn brackets?
-  [ctx :- rr/Context?
-   view :- Any
-   e :- Any] :- Bool
+  [ctx: rr/Context?
+   view: Any
+   e: Any] -> Bool
   (= "#%brackets" (rr/head-sym ctx view e)))
 
 (defn map-node?
-  [ctx :- rr/Context?
-   view :- Any
-   e :- Any] :- Bool
+  [ctx: rr/Context?
+   view: Any
+   e: Any] -> Bool
   (= "#%map" (rr/head-sym ctx view e)))
 
 (defn- tail
-  [ctx :- rr/Context?
-   e :- Any] :- (Vec Any)
+  [ctx: rr/Context?
+   e: Any] -> (Vec Any)
   (vec (rest (rr/ordered-children ctx e))))
 
 (defn collect-bind-syms
-  [ctx :- rr/Context?
-   view :- Any
-   node :- Any] :- (Vec Any)
+  [ctx: rr/Context?
+   view: Any
+   node: Any] -> (Vec Any)
   (if (nil? node)
     []
     (let [n (rr/unwrap-meta ctx view node) v (sv ctx view n)]
@@ -65,12 +65,12 @@
         (if (contains? #{"_" "&"} (str v)) [] [n])
         (brackets? ctx view n)
         (reduce (fn
-                  [acc :- (Vec Any)
-                   k :- Any] :- (Vec Any) (into acc (collect-bind-syms ctx view k)))
+                  [acc: (Vec Any)
+                   k: Any] -> (Vec Any) (into acc (collect-bind-syms ctx view k)))
           []
           (tail ctx n))
         (map-node? ctx view n)
-        (loop [ks :- (Vec Any) (tail ctx n) acc :- (Vec Any) []]
+        (loop [ks: (Vec Any) (tail ctx n) acc: (Vec Any) []]
           (if (empty? ks)
             acc
             (let [k (first ks) kv (sv ctx view k) v2 (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -79,7 +79,7 @@
                 (recur ks2
                   (into acc
                     (if (and (some? v2) (brackets? ctx view v2))
-                      (vec (keep (fn [c :- Any] :- Any (let [leaf (rr/unwrap-meta ctx view c)] (when (some? (sv ctx view leaf)) leaf))) (tail ctx v2)))
+                      (vec (keep (fn [c: Any] -> Any (let [leaf (rr/unwrap-meta ctx view c)] (when (some? (sv ctx view leaf)) leaf))) (tail ctx v2)))
                       [])))
                 (= ":as" (str kv))
                 (recur ks2 (into acc (collect-bind-syms ctx view v2)))
@@ -90,7 +90,7 @@
                 :else
                 (recur ks2 (into acc (collect-bind-syms ctx view k)))))))
         (= "list" (rr/kind-of ctx view n))
-        (loop [ks :- (Vec Any) (rr/ordered-children ctx n) acc :- (Vec Any) []]
+        (loop [ks: (Vec Any) (rr/ordered-children ctx n) acc: (Vec Any) []]
           (if (empty? ks)
             acc
             (let [k (first ks)]
@@ -102,14 +102,14 @@
         []))))
 
 (defn collect-or-vals
-  [ctx :- rr/Context?
-   view :- Any
-   node :- Any] :- (Vec Any)
+  [ctx: rr/Context?
+   view: Any
+   node: Any] -> (Vec Any)
   (if (nil? node)
     []
     (cond
       (map-node? ctx view node)
-      (loop [ks :- (Vec Any) (tail ctx node) acc :- (Vec Any) []]
+      (loop [ks: (Vec Any) (tail ctx node) acc: (Vec Any) []]
         (if (empty? ks)
           acc
           (let [k (first ks) kv (sv ctx view k) v2 (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -119,8 +119,8 @@
                 (into acc
                   (if (and (some? v2) (map-node? ctx view v2))
                     (vec (keep-indexed (fn
-                                         [i :- Int
-                                          cc :- Any] :- Any (if (odd? i) cc nil)) (tail ctx v2)))
+                                         [i: Int
+                                          cc: Any] -> Any (if (odd? i) cc nil)) (tail ctx v2)))
                     [])))
               (contains? #{":as" ":keys" ":strs" ":syms"} (str kv))
               (recur ks2 acc)
@@ -130,18 +130,18 @@
               (recur ks2 (into acc (collect-or-vals ctx view k)))))))
       (brackets? ctx view node)
       (reduce (fn
-                [acc :- (Vec Any)
-                 k :- Any] :- (Vec Any) (into acc (collect-or-vals ctx view k)))
+                [acc: (Vec Any)
+                 k: Any] -> (Vec Any) (into acc (collect-or-vals ctx view k)))
         []
         (tail ctx node))
       :else
       [])))
 
 (defn param-binds
-  [ctx :- rr/Context?
-   view :- Any
-   bracket :- Any] :- (Vec Any)
-  (loop [ks :- (Vec Any) (tail ctx bracket) binds :- (Vec Any) [] skip :- Bool false]
+  [ctx: rr/Context?
+   view: Any
+   bracket: Any] -> (Vec Any)
+  (loop [ks: (Vec Any) (tail ctx bracket) binds: (Vec Any) [] skip: Bool false]
     (if (empty? ks)
       binds
       (let [k (first ks) v (sv ctx view k) ks2 (vec (rest ks))]
@@ -154,10 +154,10 @@
           (recur ks2 (into binds (collect-bind-syms ctx view k)) false))))))
 
 (defn let-bind-pairs
-  [ctx :- rr/Context?
-   view :- Any
-   bracket :- Any] :- (Vec Any)
-  (loop [ks :- (Vec Any) (tail ctx bracket) acc :- (Vec Any) []]
+  [ctx: rr/Context?
+   view: Any
+   bracket: Any] -> (Vec Any)
+  (loop [ks: (Vec Any) (tail ctx bracket) acc: (Vec Any) []]
     (if (empty? ks)
       acc
       (let [pat (first ks) after (if (type-colon? (sv ctx view (nth ks 1 nil))) (vec (drop 3 ks)) (vec (rest ks))) val (nth after 0 nil)]
@@ -168,10 +168,10 @@
              (collect-or-vals ctx view pat)]))))))
 
 (defn for-bind-pairs
-  [ctx :- rr/Context?
-   view :- Any
-   bracket :- Any] :- (Vec Any)
-  (loop [ks :- (Vec Any) (tail ctx bracket) acc :- (Vec Any) []]
+  [ctx: rr/Context?
+   view: Any
+   bracket: Any] -> (Vec Any)
+  (loop [ks: (Vec Any) (tail ctx bracket) acc: (Vec Any) []]
     (if (empty? ks)
       acc
       (let [k (first ks) kv (sv ctx view k) v (nth ks 1 nil) ks2 (vec (drop 2 ks))]
@@ -182,7 +182,7 @@
           (recur ks2
             (into acc
               (if (and (some? v) (brackets? ctx view v))
-                (mapv (fn [p :- Any] :- Any [:bind (nth p 0 nil) (nth p 1 nil) (nth p 2 nil)])
+                (mapv (fn [p: Any] -> Any [:bind (nth p 0 nil) (nth p 1 nil) (nth p 2 nil)])
                   (let-bind-pairs ctx view v))
                 [])))
           (type-colon? (sv ctx view v))
@@ -201,19 +201,19 @@
                (collect-or-vals ctx view k)])))))))
 
 (defn frame-of
-  [ctx :- rr/Context?
-   view :- Any
-   bsyms :- (Vec Any)] :- (Map Any Any)
+  [ctx: rr/Context?
+   view: Any
+   bsyms: (Vec Any)] -> (Map Any Any)
   (reduce (fn
-            [acc :- (Map Any Any)
-             b :- Any] :- (Map Any Any) (assoc acc (sv ctx view b) b))
+            [acc: (Map Any Any)
+             b: Any] -> (Map Any Any) (assoc acc (sv ctx view b) b))
     {}
     bsyms))
 
 (defn match-pat-binds
-  [ctx :- rr/Context?
-   view :- Any
-   pat :- Any] :- (Vec Any)
+  [ctx: rr/Context?
+   view: Any
+   pat: Any] -> (Vec Any)
   (if (nil? pat)
     []
     (let [n (rr/unwrap-meta ctx view pat) v (sv ctx view n)]
@@ -222,8 +222,8 @@
         (if (= "_" (str v)) [] [n])
         (or (= "list" (rr/kind-of ctx view n)) (brackets? ctx view n))
         (reduce (fn
-                  [acc :- (Vec Any)
-                   k :- Any] :- (Vec Any) (into acc (match-pat-binds ctx view k)))
+                  [acc: (Vec Any)
+                   k: Any] -> (Vec Any) (into acc (match-pat-binds ctx view k)))
           []
           (tail ctx n))
         :else

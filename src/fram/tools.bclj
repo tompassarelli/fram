@@ -35,37 +35,37 @@
 
 ;; row-result records (one per read arm; each producing lambda is homogeneous)
 (defrecord PredVal
-  [pred :- String
-   value :- String])
+  [pred: String
+   value: String])
 
 (defrecord ThreadViolation
-  [thread :- String
-   violation :- String])
+  [thread: String
+   violation: String])
 
 ;; tool-spec records — a catalog entry + its params
 (defrecord Param
-  [name :- String
-   type :- String
-   required :- Bool])
+  [name: String
+   type: String
+   required: Bool])
 
 (defrecord ToolSpec
-  [name :- String
-   desc :- String
-   params :- (Vec Param)
-   op :- Op
-   pred :- String])
+  [name: String
+   desc: String
+   params: (Vec Param)
+   op: Op
+   pred: String])
 
 ;; --- write-value normalization ----------------------------------------------
 ;; GAP: id is an EDN arg value (string id OR other literal) -> Any.
-(defn- at [id :- Any] :- Any
+(defn- at [id: Any] -> Any
   (if (string? id) (if (str/starts-with? id "@") id (str "@" id)) id))
 
 ;; Resolve every public predicate spelling through the folded registry. The
 ;; flat-log write still carries a string predicate, but aliases are normalized to
 ;; the canonical display name before the coordinator sees the intent.
 (defn canonical-predicate
-  [facts :- (Vec k/Fact)
-   pred :- String] :- String
+  [facts: (Vec k/Fact)
+   pred: String] -> String
   (k/predicate-name (k/predicate-registry facts) pred))
 
 ;; Shared write-value normalization for tool/MCP and CLI writes. value_kind is
@@ -74,14 +74,14 @@
 ;; @ is kept as-is.
 ;; GAP: value is an EDN write-value -> Any (the engine interns arbitrary EDN).
 (defn ref-value
-  [facts :- (Vec k/Fact)
-   pred :- String
-   value :- Any] :- Any
+  [facts: (Vec k/Fact)
+   pred: String
+   value: Any] -> Any
   (if (= "ref" (k/value-kind-of facts [] pred)) (at value) value))
 
 ;; --- catalog: the CLOSED, O(1) surface (exactly twelve tools) ----------------
-(defn catalog [facts :- (Vec k/Fact)] :- (Vec ToolSpec)
-  (let [subj-param :- (Vec Param) [(->Param "subject" "string" true)] spo-params :- (Vec Param) [(->Param "subject" "string" true) (->Param "predicate" "string" true) (->Param "object" "string" true)]]
+(defn catalog [facts: (Vec k/Fact)] -> (Vec ToolSpec)
+  (let [subj-param: (Vec Param) [(->Param "subject" "string" true)] spo-params: (Vec Param) [(->Param "subject" "string" true) (->Param "predicate" "string" true) (->Param "object" "string" true)]]
     [(->ToolSpec "tell"
        (str "Assert the fact (subject, predicate, object). A single-valued "
          "predicate replaces its current value; a multi-valued one accumulates "
@@ -205,8 +205,8 @@
 
 ;; --- dispatch ---------------------------------------------------------------
 (defn- spec-by-name
-  [cat :- (Vec ToolSpec)
-   name :- String] :- ToolSpec?
+  [cat: (Vec ToolSpec)
+   name: String] -> ToolSpec?
   (loop [cs cat]
     (if (empty? cs)
       nil
@@ -215,8 +215,8 @@
 ;; required params by op — server-side enforcement (the "can't emit a broken call"
 ;; guarantee, not just an advisory schema): a missing required param is rejected.
 (defn- missing-req
-  [op :- Op
-   args :- (Map Keyword Any)] :- (Vec String)
+  [op: Op
+   args: (Map Keyword Any)] -> (Vec String)
   (let [need-spo (or (= op :tell) (= op :retract)) need-module (or (= op :upsert-form) (or (= op :set-body) (or (= op :rename-def) (or (= op :insert-after) (or (= op :insert-before) (or (= op :replace-in-body) (= op :edit-transaction))))))) e1 (if (and need-spo (or (nil? (:subject args)) (or (nil? (:predicate args)) (nil? (:object args))))) ["missing required param 'subject' and/or 'predicate' and/or 'object'"] []) e2 (if (and (= op :show) (nil? (:subject args))) ["missing required param 'subject'"] []) e3 (if (and (= op :query) (nil? (:query args))) ["missing required param 'query'"] []) e4 (if (and need-module (nil? (:module args))) ["missing required param 'module'"] []) e5 (if (and (= op :upsert-form) (nil? (:form args))) ["missing required param 'form'"] []) e6 (if (and (= op :set-body) (or (nil? (:name args)) (nil? (:body args)))) ["missing required param 'name' and/or 'body'"] []) e7 (if (and (= op :rename-def) (or (nil? (:name args)) (nil? (:new-name args)))) ["missing required param 'name' and/or 'new-name'"] []) e8 (if (and (= op :insert-after) (or (nil? (:after args)) (nil? (:form args)))) ["missing required param 'after' and/or 'form'"] []) e9 (if (and (= op :insert-before) (or (nil? (:before args)) (nil? (:form args)))) ["missing required param 'before' and/or 'form'"] []) e10 (if (and (= op :replace-in-body) (or (nil? (:name args)) (or (nil? (:old args)) (nil? (:new args))))) ["missing required param 'name' and/or 'old' and/or 'new'"] []) e11 (if (and (= op :edit-transaction) (nil? (:edits args))) ["missing required param 'edits'"] [])]
     (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 (concat e9 (concat e10 e11)))))))))))))
 
@@ -228,19 +228,19 @@
 ;; both spellings on every surface. `untell` is likewise accepted as an alias for
 ;; `retract` (same :retract op) so the retract verb keeps both spellings everywhere.
 (defn call
-  [facts :- (Vec k/Fact)
-   idx :- k/Index
-   cat :- (Vec ToolSpec)
-   tool :- String
-   args :- (Map Keyword Any)] :- Any
-  (let [tool (if (= tool "query") "ask" (if (= tool "untell") "retract" tool)) spec :- ToolSpec? (spec-by-name cat tool)]
+  [facts: (Vec k/Fact)
+   idx: k/Index
+   cat: (Vec ToolSpec)
+   tool: String
+   args: (Map Keyword Any)] -> Any
+  (let [tool (if (= tool "query") "ask" (if (= tool "untell") "retract" tool)) spec: ToolSpec? (spec-by-name cat tool)]
     (if (nil? spec)
       {:error [(str "unknown tool '" tool "' — call `tools` for the catalog")]}
-      (let [op :- Op (:op spec) miss (missing-req op args)]
+      (let [op: Op (:op spec) miss (missing-req op args)]
         (if (not (empty? miss))
           {:error miss}
           (let [subj (:subject args)
-                pred :- String (canonical-predicate facts (str (:predicate args)))
+                pred: String (canonical-predicate facts (str (:predicate args)))
                 te (at subj)]
             (cond
               [(= op :tell)
@@ -265,12 +265,12 @@
                  (ref-value facts pred (:object args))}}]
               [(= op :show)
                {:rows
-                (mapv (fn [c :- k/Fact] :- PredVal (->PredVal (:p c) (:r c)))
+                (mapv (fn [c: k/Fact] -> PredVal (->PredVal (:p c) (:r c)))
                   (k/q-by-l facts te))}]
               [(= op :query) (q/run facts (:query args))]
               [(= op :validate)
                {:rows
-                (reduce (fn [acc :- (Vec ThreadViolation) t :- String] :- (Vec ThreadViolation) (vec (concat acc (mapv (fn [v :- String] :- ThreadViolation (->ThreadViolation t v)) (k/violations-i idx t)))))
+                (reduce (fn [acc: (Vec ThreadViolation) t: String] -> (Vec ThreadViolation) (vec (concat acc (mapv (fn [v: String] -> ThreadViolation (->ThreadViolation t v)) (k/violations-i idx t)))))
                   []
                   (k/thread-ids-i idx))}]
               [(= op :upsert-form)
