@@ -37,7 +37,7 @@
 (defn- postings-weight [postings: (Map String (Vec Int))] -> Int
   (reduce (fn
             [total: Int
-             entry: Any] -> Int (let [token: String (nth entry 0) handles: (Vec Int) (nth entry 1)] (+ total 48 (* 2 (count token)) (* 24 (count handles)))))
+             entry: Any] -> Int (let [token: String (nth entry 0) handles: (Vec Int) (nth entry 1)] (+ total 84 (* 4 (count token)) (* 42 (count handles)))))
     0
     (vec postings)))
 
@@ -70,7 +70,7 @@
                                           (conj (get index token []) handle)))
                                 current (token-set value))
                         current))))))
-        weight: Int (+ 64 (* 8 row-count) (postings-weight postings))]
+        weight: Int (+ 112 (* 14 row-count) (postings-weight postings))]
     (index-limit weight maximum)
     (->TextCandidateSource rows postings weight)))
 

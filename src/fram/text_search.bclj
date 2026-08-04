@@ -149,18 +149,18 @@
                [total: Int
                 key: String
                 handles: (Vec Int)] -> Int
-               (+ total 48 (* 2 (count key)) (* 24 (count handles))))
+               (+ total 84 (* 4 (count key)) (* 42 (count handles))))
              0 postings))
 
 (defn- token-rows-weight [rows: (Vec (Vec String))] -> Int
   (reduce (fn
             [total: Int
              tokens: (Vec String)] -> Int
-            (+ total 24
+            (+ total 42
                (reduce (fn
                          [subtotal: Int
                           token: String] -> Int
-                         (+ subtotal 24 (* 2 (count token))))
+                         (+ subtotal 42 (* 4 (count token))))
                        0 tokens)))
           0 rows))
 
@@ -168,7 +168,7 @@
   (reduce (fn
             [total: Int
              value: String] -> Int
-            (+ total 40 (* 2 (count value))))
+            (+ total 70 (* 4 (count value))))
           0 values))
 
 (defn- index-limit
@@ -218,8 +218,8 @@
         (text-index/build-source rows maximum)
         weight: Int
         (+ (text-index/source-weight exact)
-           64
-           (* 16 (count rows)))
+           112
+           (* 28 (count rows)))
         cell: (Atom (U SearchAnalyzers Nil)) (atom nil)]
     (index-limit weight maximum)
     (->TextSearchSource exact rows maximum cell weight)))
