@@ -85,7 +85,7 @@ printf '(ns codegraph.test.fixture)\n' >"$CORPUS_ROOT/codegraph/test/fixture.bcl
 printf '(ns fram.test.fixture)\n' >"$CORPUS_ROOT/tests/fixtures/fixture.bclj"
 mapfile -t CORPUS_SRCS < <(
   find "$CORPUS_ROOT" -regextype posix-extended \
-    -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' \
+    -regex '.*\.b(clj|js|nix|gl)$' \
     -not -path '*/.fram/*' \
     -not -path '*/docs/private/*' \
     -not -path '*/test/*' \

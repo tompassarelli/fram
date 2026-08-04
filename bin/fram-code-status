@@ -27,7 +27,7 @@ DIR="$(cd "$DIR" 2>/dev/null && pwd)" || fallback
 # ms from the index. Elsewhere, a timeout-capped pruned find — a pathological
 # dir (/tmp, $HOME) must not blow the <100ms budget; a partial count still
 # detects L1 correctly.
-BEAGLE_EXT_RE='\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$'
+BEAGLE_EXT_RE='\.b(clj|js|nix|gl)$'
 SOURCE_FILES=()
 if git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   REPO_ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT="$DIR"
