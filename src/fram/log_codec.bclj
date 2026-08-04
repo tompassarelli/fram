@@ -79,7 +79,7 @@
           (recur (+ position 1))
           false)))))
 
-(defn encode-header [space-id: String] -> BytesResult
+(defn encode-header! [space-id: String] -> BytesResult
   (if (= 0 (count space-id))
     (failed-bytes "FRAMLOG SpaceId must be nonempty")
     (let [encoder (wire/->Encoder (atom []) (atom 0) (atom nil))
@@ -101,7 +101,7 @@
               (->BytesResult status-ok
                              (deref (wire/encoder-bytes encoder)) nil))))))))
 
-(defn decode-frame-payload [payload: (Vec Int)] -> FrameDecodeResult
+(defn decode-frame-payload! [payload: (Vec Int)] -> FrameDecodeResult
   (let [decoder (wire/->Decoder payload (atom 0) (atom 0) (atom nil))]
     (if (< (count payload) 12)
       (->FrameDecodeResult nil "FRAMLOG transaction header is truncated")
@@ -157,16 +157,16 @@
                     (->FrameDecodeResult
                      nil "FRAMLOG contains an unknown operation action")]))))])))))
 
-(defn canonical-store-copy [root: (Atom t/TermStore)] -> (Atom t/TermStore)
+(defn canonical-store-copy! [root: (Atom t/TermStore)] -> (Atom t/TermStore)
   (let [dump (term-store/dump-term-store root)
         copy (term-store/new-term-store (t/termstoredump-space-id dump))]
     (term-store/load-term-store! copy dump)))
 
-(defn successful-boot
+(defn successful-boot!
   [root: (Atom t/TermStore)
    valid-log-bytes: Int
    boot-append: (Vec Int)] -> BootResult
-  (->BootResult status-ok (canonical-store-copy root)
+  (->BootResult status-ok (canonical-store-copy! root)
                 valid-log-bytes boot-append nil))
 
 (defn replay-complete-frames!
@@ -177,9 +177,9 @@
     (let [remaining (wire/decoder-remaining decoder)]
       (cond
         [(= remaining 0)
-         (successful-boot root valid-log-bytes [])]
+         (successful-boot! root valid-log-bytes [])]
         [(< remaining 4)
-         (successful-boot root valid-log-bytes [])]
+         (successful-boot! root valid-log-bytes [])]
         [:else
          (let [frame-start (deref (wire/decoder-position decoder))
                payload-length
@@ -194,7 +194,7 @@
              [(< (wire/decoder-remaining decoder) (+ payload-length 4))
               (do
                 (reset! (wire/decoder-position decoder) frame-start)
-                (successful-boot root valid-log-bytes []))]
+                (successful-boot! root valid-log-bytes []))]
              [:else
               (let [payload-start (deref (wire/decoder-position decoder))
                     payload-end (+ payload-start payload-length)
@@ -204,7 +204,7 @@
                     _ (reset! (wire/decoder-position decoder) payload-end)
                     stored-crc (wire/read-u32-le! decoder "FRAMLOG frame CRC")
                     actual-crc (crc32 payload)
-                    decoded (decode-frame-payload payload)
+                    decoded (decode-frame-payload! payload)
                     frame (framedecoderesult-frame decoded)]
                 (cond
                   [(not= stored-crc actual-crc)
@@ -224,16 +224,16 @@
                      (term-store/replay-transaction! root frame)
                      (recur (deref (wire/decoder-position decoder))))]))]))]))))
 
-(defn boot-framlog
+(defn boot-framlog!
   [configured-space-id: String
    bytes: (Vec Int)] -> BootResult
   (cond
     [(not (valid-byte-vector? bytes))
      (failed-boot "FRAMLOG byte vector contains a value outside u8")]
     [(= 0 (count bytes))
-     (let [header (encode-header configured-space-id)]
+     (let [header (encode-header! configured-space-id)]
        (if (= status-ok (bytesresult-status header))
-         (successful-boot
+         (successful-boot!
           (term-store/new-term-store configured-space-id)
           0 (bytesresult-bytes header))
          (failed-boot
@@ -275,7 +275,7 @@
                     decoder (term-store/new-term-store space-id)
                     (deref (wire/decoder-position decoder)))]))]))))]))
 
-(defn append-frame-bytes [frame: t/TransactionFrame] -> BytesResult
+(defn append-frame-bytes! [frame: t/TransactionFrame] -> BytesResult
   (let [payload (wire/->Encoder (atom []) (atom 0) (atom nil))
         operations (t/transactionframe-operations frame)
         sequence (t/transactionframe-sequence frame)]
@@ -316,10 +316,10 @@
                   (->BytesResult status-ok
                                  (deref (wire/encoder-bytes out)) nil))))))))))
 
-(defn encode-store-tail
+(defn encode-store-tail!
   [root: (Atom t/TermStore)
    lower-exclusive: Int] -> BytesResult
-  (let [canonical (canonical-store-copy root)
+  (let [canonical (canonical-store-copy! root)
         current (term-store/current-sequence canonical)]
     (if (or (< lower-exclusive 0) (> lower-exclusive current))
       (failed-bytes "FRAMLOG tail lower bound is outside store history")
@@ -329,7 +329,7 @@
         (loop [position 0 bytes: (Vec Int) []]
           (if (>= position (count frames))
             (->BytesResult status-ok bytes nil)
-            (let [encoded (append-frame-bytes (nth frames position))]
+            (let [encoded (append-frame-bytes! (nth frames position))]
               (if (= status-ok (bytesresult-status encoded))
                 (recur (+ position 1)
                        (into bytes (bytesresult-bytes encoded)))
