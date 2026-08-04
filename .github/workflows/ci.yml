@@ -50,6 +50,11 @@ jobs:
       - name: Install babashka
         run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
 
+      # The boundary-gate step drives its manifest and evidence checks with rg,
+      # which ubuntu-latest does not ship.
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+
       # The coordinator daemon (bin/fram-daemon) and the mTLS test run on the JVM,
       # not bb — bb's native image lacks javax.net.ssl.SSLServerSocket. ubuntu-latest
       # ships a JDK (keytool, which tls_test uses); we add the Clojure CLI on top.
