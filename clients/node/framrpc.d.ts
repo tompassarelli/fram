@@ -81,9 +81,9 @@ export interface StructuredQueryStrata {
 export type StructuredQuery = StructuredQueryRules | StructuredQueryStrata;
 
 export interface TriplePattern {
-  slot0?: TermInput;
-  slot1?: TermInput;
-  slot2?: TermInput;
+  t1?: TermInput;
+  t2?: TermInput;
+  t3?: TermInput;
 }
 
 export interface PageRequest {
@@ -125,9 +125,9 @@ export interface WriteOptions extends RequestOptions {
 export interface BatchAction {
   op: 'assert' | 'retract';
   proposition?: TripleTerm;
-  slot0?: TermInput;
-  slot1?: TermInput;
-  slot2?: TermInput;
+  t1?: TermInput;
+  t2?: TermInput;
+  t3?: TermInput;
   existing?: boolean;
 }
 
@@ -189,9 +189,9 @@ export interface FramClient {
   occurrences(options?: PagedRequestOptions): Promise<FramResponse<TripleTerm[]>>;
   scan(pattern?: TriplePattern, options?: PagedRequestOptions): Promise<FramResponse<TripleTerm[]>>;
   query(query: StructuredQuery | Term, options?: QueryOptions): Promise<FramResponse<Term[][]>>;
-  assert(slot0: TermInput, slot1: TermInput, slot2: TermInput,
+  assert(t1: TermInput, t2: TermInput, t3: TermInput,
     options?: WriteOptions): Promise<FramResponse<MutationActionResult[]>>;
-  retract(slot0: TermInput, slot1: TermInput, slot2: TermInput,
+  retract(t1: TermInput, t2: TermInput, t3: TermInput,
     options?: WriteOptions): Promise<FramResponse<MutationActionResult[]>>;
   batch(actions: BatchAction[], options?: BatchOptions): Promise<FramResponse<MutationActionResult[]>>;
   leaseAcquire(resource: TermInput, holder: TermInput, ttlMs: IntegerInput,
@@ -233,7 +233,7 @@ export function float64Term(value: number): Float64Term;
 export function booleanTerm(value: boolean): BooleanTerm;
 export function keywordTerm(value: string): KeywordTerm;
 export function instantTerm(seconds: IntegerInput, nanos: IntegerInput): InstantTerm;
-export function tripleTerm(slot0: TermInput, slot1: TermInput, slot2: TermInput): TripleTerm;
+export function tripleTerm(t1: TermInput, t2: TermInput, t3: TermInput): TripleTerm;
 export function validateTerm(value: Term): Term;
 export function term(value: TermInput): Term;
 export function float64Value(value: Float64Term): number;

@@ -158,8 +158,8 @@ export const instantTerm = (seconds, nanos) => [
   decimal(nanos, { label: 'instant nanoseconds', min: 0n, max: 999999999n }),
 ];
 
-export const tripleTerm = (slot0, slot1, slot2) => [
-  'triple', term(slot0), term(slot1), term(slot2),
+export const tripleTerm = (t1, t2, t3) => [
+  'triple', term(t1), term(t2), term(t3),
 ];
 
 export function validateTerm(value, depth = 0, budget = { nodes: 0 }) {
@@ -822,10 +822,10 @@ export function lowerQueryPlan(value) {
 }
 
 export function tripleQuery(pattern = {}) {
-  exactKeys(pattern, ['slot0', 'slot1', 'slot2'], 'triple pattern');
-  const { slot0, slot1, slot2 } = pattern;
-  const supplied = [slot0, slot1, slot2];
-  const names = ['slot0', 'slot1', 'slot2'];
+  exactKeys(pattern, ['t1', 't2', 't3'], 'triple pattern');
+  const { t1, t2, t3 } = pattern;
+  const supplied = [t1, t2, t3];
+  const names = ['t1', 't2', 't3'];
   const variables = [];
   const args = supplied.map((value, index) => {
     if (value === null || value === undefined) {
@@ -867,13 +867,13 @@ function writePayload(proposition, options) {
 }
 
 function actionPayload(action) {
-  exactKeys(action, ['op', 'proposition', 'slot0', 'slot1', 'slot2', 'existing'], 'batch action');
+  exactKeys(action, ['op', 'proposition', 't1', 't2', 't3', 'existing'], 'batch action');
   const operation = action.op === 'assert' ? 'rpc/assert'
     : action.op === 'retract' ? 'rpc/retract' : null;
   if (!operation) fail("batch action op must be 'assert' or 'retract'", 'client/invalid-action');
   const proposition = own(action, 'proposition')
     ? term(action.proposition)
-    : tripleTerm(action.slot0, action.slot1, action.slot2);
+    : tripleTerm(action.t1, action.t2, action.t3);
   if (proposition[0] !== 'triple') fail('batch proposition must be a Triple', 'client/invalid-action');
   return rpcRecord('rpc/action', [keywordTerm(operation), proposition, policy(action.existing)]);
 }
@@ -1021,11 +1021,11 @@ export function framClient({
     validate: options => call('rpc/validate', unit, options),
     occurrences: options => call('rpc/occurrences', unit, options),
     scan: (pattern = {}, options = {}) => {
-      exactKeys(pattern, ['slot0', 'slot1', 'slot2'], 'scan pattern');
+      exactKeys(pattern, ['t1', 't2', 't3'], 'scan pattern');
       return call('rpc/scan', rpcRecord('rpc/triple-pattern', [
-        rpcOption(pattern.slot0),
-        rpcOption(pattern.slot1),
-        rpcOption(pattern.slot2),
+        rpcOption(pattern.t1),
+        rpcOption(pattern.t2),
+        rpcOption(pattern.t3),
       ]), options);
     },
     query: (query, options = {}) => {
@@ -1033,11 +1033,11 @@ export function framClient({
       rawRecordFields(plan, 'query/plan', 2);
       return call('rpc/query', rpcRecord('query/request', [plan, querySnapshot(options)]), options);
     },
-    assert: (slot0, slot1, slot2, options = {}) => call(
-      'rpc/assert', writePayload(tripleTerm(slot0, slot1, slot2), options), options,
+    assert: (t1, t2, t3, options = {}) => call(
+      'rpc/assert', writePayload(tripleTerm(t1, t2, t3), options), options,
     ),
-    retract: (slot0, slot1, slot2, options = {}) => call(
-      'rpc/retract', writePayload(tripleTerm(slot0, slot1, slot2), options), options,
+    retract: (t1, t2, t3, options = {}) => call(
+      'rpc/retract', writePayload(tripleTerm(t1, t2, t3), options), options,
     ),
     batch: (actions, options = {}) => {
       if (!Array.isArray(actions) || actions.length === 0) {

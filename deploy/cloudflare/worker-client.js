@@ -75,8 +75,8 @@ export const instantTerm = (seconds, nanos) => {
   return ['instant', decimal(seconds, { label: 'instant seconds' }), ns];
 };
 
-export const tripleTerm = (slot0, slot1, slot2) =>
-  ['triple', term(slot0), term(slot1), term(slot2)];
+export const tripleTerm = (t1, t2, t3) =>
+  ['triple', term(t1), term(t2), term(t3)];
 
 export function validateTerm(value, depth = 0, budget = { nodes: 0 }) {
   if (depth > 256) fail('Term exceeds the nesting limit');
@@ -159,13 +159,13 @@ export function recordFields(value, tag, count) {
 const queryVar = name => record('query/var', [stringTerm(name)]);
 const queryConst = value => record('query/const', [term(value)]);
 
-// Build the native typed query plan for a single Triple pattern. Omitted slots
-// become variables and are returned in slot order.
+// Build the native typed query plan for a single Triple pattern. Omitted Terms
+// become variables and are returned in tuple order.
 export function tripleQuery(pattern = {}) {
-  exactKeys(pattern, [], ['slot0', 'slot1', 'slot2'], 'triple pattern');
-  const { slot0, slot1, slot2 } = pattern;
-  const supplied = [slot0, slot1, slot2];
-  const names = ['slot0', 'slot1', 'slot2'];
+  exactKeys(pattern, [], ['t1', 't2', 't3'], 'triple pattern');
+  const { t1, t2, t3 } = pattern;
+  const supplied = [t1, t2, t3];
+  const names = ['t1', 't2', 't3'];
   const variables = [];
   const args = supplied.map((value, index) => {
     if (value === null || value === undefined) {
@@ -213,19 +213,19 @@ function writePayload(proposition, opts = {}) {
   return record('rpc/write', [proposition, policy(opts.existing), option(opts.fence)]);
 }
 function actionPayload(action) {
-  exactKeys(action, ['op'], ['op', 'proposition', 'slot0', 'slot1', 'slot2', 'existing'], 'batch action');
+  exactKeys(action, ['op'], ['op', 'proposition', 't1', 't2', 't3', 'existing'], 'batch action');
   const operation = action.op === 'retract' ? 'rpc/retract' : action.op === 'assert' ? 'rpc/assert' : null;
   if (!operation) fail("batch action op must be 'assert' or 'retract'");
   const proposition = action.proposition
     ? term(action.proposition)
-    : tripleTerm(action.slot0, action.slot1, action.slot2);
+    : tripleTerm(action.t1, action.t2, action.t3);
   return record('rpc/action', [keywordTerm(operation), proposition, policy(action.existing)]);
 }
 
 function scanPayload(pattern) {
-  exactKeys(pattern, [], ['slot0', 'slot1', 'slot2'], 'scan pattern');
+  exactKeys(pattern, [], ['t1', 't2', 't3'], 'scan pattern');
   return record('rpc/triple-pattern', [
-    option(pattern.slot0), option(pattern.slot1), option(pattern.slot2),
+    option(pattern.t1), option(pattern.t2), option(pattern.t3),
   ]);
 }
 
@@ -291,10 +291,10 @@ export function framClient({ url, host, port, token, space, fetch: fetchImpl } =
       record('query/request', [term(plan), opts.asOf === undefined
         ? keywordTerm('query/current')
         : record('query/as-of', [integerTerm(opts.asOf)])]), opts),
-    assert: (slot0, slot1, slot2, opts = {}) => send('/assert', 'rpc/assert',
-      writePayload(tripleTerm(slot0, slot1, slot2), opts), opts),
-    retract: (slot0, slot1, slot2, opts = {}) => send('/assert', 'rpc/retract',
-      writePayload(tripleTerm(slot0, slot1, slot2), opts), opts),
+    assert: (t1, t2, t3, opts = {}) => send('/assert', 'rpc/assert',
+      writePayload(tripleTerm(t1, t2, t3), opts), opts),
+    retract: (t1, t2, t3, opts = {}) => send('/assert', 'rpc/retract',
+      writePayload(tripleTerm(t1, t2, t3), opts), opts),
     batch: (actions, opts = {}) => send('/assert', 'rpc/batch',
       record('rpc/batch', [list(actions.map(actionPayload)), option(opts.fence)]), opts),
     leaseAcquire: (resource, holder, ttlMs, opts) => send('/assert', 'rpc/lease-acquire',

@@ -88,7 +88,7 @@ check('typed query plans and pagination contain no untyped JSON data', async () 
     token: 'secret', space: 'space-a',
     fetch: async (_url, init) => { request = JSON.parse(init.body); return responseFor(request); },
   });
-  await fram.query(client.tripleQuery({ slot1: client.keywordTerm('title') }),
+  await fram.query(client.tripleQuery({ t2: client.keywordTerm('title') }),
     { asOf: 9, timeoutMs: 5000, page: { limit: 100 } });
   assert.equal(request.op, 'rpc/query');
   assert.deepEqual(request.page, { limit: '100' });
@@ -110,9 +110,9 @@ check('the closed client exposes every public operation and no raw escape', asyn
   });
   const fence = client.tripleTerm(client.keywordTerm('rpc/fence'), 'holder', 1);
   await fram.version(); await fram.status(); await fram.validate(); await fram.occurrences();
-  await fram.scan({ slot0: 'a' }); await fram.query(client.tripleQuery());
+  await fram.scan({ t1: 'a' }); await fram.query(client.tripleQuery());
   await fram.assert('a', 'p', 'r'); await fram.retract('a', 'p', 'r');
-  await fram.batch([{ op: 'assert', slot0: 'a', slot1: 'p', slot2: 'r' }]);
+  await fram.batch([{ op: 'assert', t1: 'a', t2: 'p', t3: 'r' }]);
   await fram.leaseAcquire('resource', 'holder', 1000);
   await fram.leaseRenew(fence, 1000); await fram.leaseRelease(fence); await fram.leaseCheck(fence);
   assert.equal(requests.length, 13);

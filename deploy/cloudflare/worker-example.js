@@ -3,8 +3,8 @@
 // Routes:
 //   GET  /            usage
 //   GET  /health      coordinator rpc/status (proves the whole chain)
-//   POST /fact        body {"slot0":"@bench1","slot1":"title","slot2":"hello"}
-//   GET  /facts?slot1=X   matching rows (&slot0=@id also supported)
+//   POST /fact        body {"t1":"@bench1","t2":"title","t3":"hello"}
+//   GET  /facts?t2=X   matching rows (&t1=@id also supported)
 //   GET  /bench?n=20  n sequential query round-trips, timing summary
 //
 // Config: SHIM_URL + FRAM_SPACE_ID vars, SHIM_TOKEN secret.
@@ -29,24 +29,24 @@ export default {
 
       if (u.pathname === '/fact' && request.method === 'POST') {
         const body = await request.json();
-        const slot0 = body.slot0;
-        const slot1 = body.slot1;
-        const slot2 = body.slot2;
-        return json(await fram.assert(slot0, slot1, slot2,
+        const t1 = body.t1;
+        const t2 = body.t2;
+        const t3 = body.t3;
+        return json(await fram.assert(t1, t2, t3,
           { expectedVersion: body.expectedVersion }));
       }
 
       if (u.pathname === '/facts') {
         const pat = {
-          slot0: u.searchParams.get('slot0') ?? u.searchParams.get('l'),
-          slot1: u.searchParams.get('slot1') ?? u.searchParams.get('p'),
+          t1: u.searchParams.get('t1') ?? u.searchParams.get('l'),
+          t2: u.searchParams.get('t2') ?? u.searchParams.get('p'),
         };
         return json(await fram.query(tripleQuery(pat)));
       }
 
       if (u.pathname === '/bench') {
         const n = Math.min(200, Number(u.searchParams.get('n')) || 20);
-        const q = tripleQuery({ slot1: u.searchParams.get('slot1') || 'title' });
+        const q = tripleQuery({ t2: u.searchParams.get('t2') || 'title' });
         const times = [];
         let rows = 0;
         for (let i = 0; i < n; i++) {
@@ -70,9 +70,9 @@ export default {
       return new Response(
         'fram worker\n' +
         '  GET  /health\n' +
-        '  POST /fact   {"slot0":"@bench1","slot1":"title","slot2":"hello"}\n' +
-        '  GET  /facts?slot1=title\n' +
-        '  GET  /bench?n=20&slot1=title\n');
+        '  POST /fact   {"t1":"@bench1","t2":"title","t3":"hello"}\n' +
+        '  GET  /facts?t2=title\n' +
+        '  GET  /bench?n=20&t2=title\n');
     } catch (e) {
       return json({ error: String(e && e.message || e) }, 502);
     }

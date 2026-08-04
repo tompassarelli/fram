@@ -149,8 +149,8 @@ try {
 
   await check('batch is atomic and stale expected-version writes fail typed', async () => {
     const batch = await fram.batch([
-      { op: 'assert', slot0: '@doc-b', slot1: keywordTerm('title'), slot2: 'Runner Notes' },
-      { op: 'assert', slot0: '@doc-c', slot1: keywordTerm('title'), slot2: 'Other Notes' },
+      { op: 'assert', t1: '@doc-b', t2: keywordTerm('title'), t3: 'Runner Notes' },
+      { op: 'assert', t1: '@doc-c', t2: keywordTerm('title'), t3: 'Other Notes' },
     ], { expectedVersion: 2n });
     assert.equal(batch.servedVersion, 3n);
     assert.deepEqual(batch.result.map(result => result.changed), [true, true]);
@@ -164,7 +164,7 @@ try {
   });
 
   await check('scan pagination pins the served snapshot and carries its exact cursor', async () => {
-    const pattern = { slot1: keywordTerm('title') };
+    const pattern = { t2: keywordTerm('title') };
     const first = await fram.scan(pattern, { page: { limit: 2 } });
     assert.equal(first.servedVersion, 3n);
     assert.equal(first.result.length, 2);
@@ -245,7 +245,7 @@ try {
   await check('retract completes the closed thirteen-operation client surface', async () => {
     const response = await fram.retract('@doc-c', keywordTerm('title'), 'Other Notes');
     assert.equal(response.result[0].changed, true);
-    const scan = await fram.scan({ slot0: '@doc-c' });
+    const scan = await fram.scan({ t1: '@doc-c' });
     assert.equal(scan.result.length, 0);
   });
 

@@ -99,9 +99,9 @@ W=https://fram-bench.example.workers.dev
 curl -sS "$W/health"
 curl -sS -X POST "$W/fact" \
   -H 'Content-Type: application/json' \
-  -d '{"slot0":"@bench1","slot1":"title","slot2":"hello"}'
-curl -sS "$W/facts?slot1=title"
-curl -sS "$W/bench?n=20&slot1=title"
+  -d '{"t1":"@bench1","t2":"title","t3":"hello"}'
+curl -sS "$W/facts?t2=title"
+curl -sS "$W/bench?n=20&t2=title"
 ```
 
 ## Operational properties

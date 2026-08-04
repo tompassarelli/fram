@@ -32,15 +32,15 @@ const version = await fram.version();
 await fram.batch([
   {
     op: 'assert',
-    slot0: '@document-1',
-    slot1: keywordTerm('title'),
-    slot2: 'Running with Wolves',
+    t1: '@document-1',
+    t2: keywordTerm('title'),
+    t3: 'Running with Wolves',
   },
   {
     op: 'assert',
-    slot0: '@document-1',
-    slot1: keywordTerm('kind'),
-    slot2: keywordTerm('note'),
+    t1: '@document-1',
+    t2: keywordTerm('kind'),
+    t3: keywordTerm('note'),
   },
 ], { expectedVersion: version.servedVersion });
 ```
@@ -97,7 +97,7 @@ Continue a page by returning its cursor unchanged with the same request:
 let cursor;
 do {
   const page = await fram.scan(
-    { slot1: keywordTerm('title') },
+    { t2: keywordTerm('title') },
     { page: { limit: 256, ...(cursor ? { cursor } : {}) } },
   );
   consume(page.result);
@@ -120,7 +120,7 @@ Terms use the same exact tagged arrays as Fram's JSON edge:
 | Bool | `['boolean', value]` |
 | Keyword | `['keyword', spelling]` |
 | Instant | `['instant', epochSeconds, nanos]` |
-| Triple | `['triple', slot0, slot1, slot2]` |
+| Triple | `['triple', t1, t2, t3]` |
 
 Use `stringTerm`, `integerTerm`, `float64Term`, `booleanTerm`, `keywordTerm`,
 `instantTerm`, and `tripleTerm` to construct them. Plain strings, safe integer

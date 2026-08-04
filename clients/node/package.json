@@ -1,6 +1,6 @@
 {
   "name": "@tompassarelli/framrpc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official zero-dependency Node.js client for binary FRAMRPC v1",
   "type": "module",
   "exports": {
