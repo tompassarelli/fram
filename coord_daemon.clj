@@ -10,7 +10,7 @@
             [fram.kernel :as kernel]
             [fram.query :as query]
             [fram.store :as term-store]
-            [fram.text-index :as text-index]
+            [fram.text-search :as text-search]
             [fram.types :as t]
             [fri-port :as fri])
   (:import [java.net ServerSocket Socket]
@@ -900,13 +900,13 @@
                (= 3 (count arguments)))
       {:arguments arguments :head-arguments head-arguments})))
 
-(defn- plan-uses-text-match? [plan]
+(defn- plan-uses-text? [plan]
   (boolean
    (some (fn [stratum]
            (some (fn [rule]
                    (some #(and (= :relation (datalog/literal-kind %))
-                               (= datalog/text-match-relation
-                                  (datalog/literal-relation %)))
+                               (contains? datalog/text-relations
+                                          (datalog/literal-relation %)))
                          (datalog/rule-body rule)))
                  stratum))
          (query/queryplan-strata plan))))
@@ -1133,7 +1133,7 @@
     state))
 
 (defn- retain-text-index-entry [state key source]
-  (let [bytes (text-index/source-weight source)]
+  (let [bytes (text-search/source-weight source)]
     (loop [bounded (-> state
                        (assoc-in [:entries key]
                                  {:source source :bytes bytes})
@@ -1205,7 +1205,7 @@
       :wait (wait-text-index-flight! flight cancellation deadline-ns)
       :build
       (try
-        (let [source (text-index/build-source
+        (let [source (text-search/build-source
                       (vec (propositions)) text-index-byte-limit)]
           (complete-text-index-flight! key flight source)
           source)
@@ -1574,7 +1574,7 @@
                (let [root (or (cached-query-page-root version)
                               (retain-query-page-root!
                                version (replayed-store-root! co version)))
-                     text? (plan-uses-text-match? plan)
+                     text? (plan-uses-text? plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))
                      source
                      (when text?

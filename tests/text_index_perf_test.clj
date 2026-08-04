@@ -3,7 +3,7 @@
          '[clojure.string :as str]
          '[coord-daemon-wire :as wire]
          '[fram.store :as store]
-         '[fram.text-index :as text-index]
+         '[fram.text-search :as text-search]
          '[fram.types :as t])
 (load-file "coord_daemon.clj")
 (load-file "tests/native_rpc_client.clj")
@@ -30,16 +30,16 @@
   (vec
    (for [_ (range 10)]
      (let [started (System/nanoTime)
-           source (text-index/build-source corpus-50k (* 64 1024 1024))
+           source (text-search/build-source corpus-50k (* 64 1024 1024))
            elapsed (/ (- (System/nanoTime) started) 1000000.0)]
-       (when (zero? (text-index/source-weight source))
+       (when (zero? (text-search/source-weight source))
          (throw (ex-info "impossible empty text index" {})))
        elapsed))))
 (def build-p95 (p95 build-ms))
 
 (def heap-before (collect-heap!))
 (def retained-source
-  (text-index/build-source corpus-50k (* 64 1024 1024)))
+  (text-search/build-source corpus-50k (* 64 1024 1024)))
 (def heap-after (collect-heap!))
 (def heap-delta (max 0 (- heap-after heap-before)))
 
@@ -160,7 +160,7 @@
 (println
  (format "text-index perf: build-50k-p95=%.2fms heap-delta-50k=%.2fMiB estimated=%.2fMiB"
          build-p95 (/ heap-delta 1048576.0)
-         (/ (text-index/source-weight retained-source) 1048576.0)))
+         (/ (text-search/source-weight retained-source) 1048576.0)))
 (println
  (format "text-index perf: rpc/query warm p95 missing=%.2fms one-token=%.2fms two-token=%.2fms N=30"
          missing-p95 one-token-p95 two-token-p95))

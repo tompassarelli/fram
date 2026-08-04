@@ -1,5 +1,6 @@
 ;; Exact-snapshot text-index residency, single-flight, and cache bounds.
 (require '[fram.text-index :as text-index]
+         '[fram.text-search :as text-search]
          '[fram.types :as t])
 (load-file "coord_daemon.clj")
 
@@ -87,10 +88,10 @@
             (empty? (:entries @coord-daemon/text-index-cache)))))
 
 (let [problem (try
-                (text-index/build-source propositions 1)
+                (text-search/build-source propositions 1)
                 nil
                 (catch clojure.lang.ExceptionInfo error error))]
-  (chk "oversize build fails with typed query-text-index-limit"
+  (chk "oversize combined search build fails with typed query-text-index-limit"
        (= :query-text-index-limit (:fram/code (ex-data problem)))))
 
 (let [bad (remove second @checks)]

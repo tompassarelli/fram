@@ -6,6 +6,7 @@
 (require fram.kernel :as kernel)
 (require fram.types :as t)
 (require fram.text-index :as text-index)
+(require fram.text-search :as text-search)
 
 ;; Query syntax adapters compile to this IR. QueryTerm.value stays Any because
 ;; Beagle cannot consume a recursive Dyn through generic equality; constant and
@@ -58,8 +59,15 @@
 (def triple-relation: String "triple")
 (def occurrence-relation: String "occurrence")
 (def text-match-relation: String "text-match")
+(def text-phrase-relation: String "text-phrase")
+(def text-substring-relation: String "text-substring")
+(def text-stem-relation: String "text-stem")
+(def text-search-relation: String "text-search")
+(def text-relations: (Set String)
+  #{text-match-relation text-phrase-relation text-substring-relation
+    text-stem-relation text-search-relation})
 (def base-relations: (Set String)
-  #{triple-relation occurrence-relation text-match-relation})
+  (conj text-relations triple-relation occurrence-relation))
 (def comparison-operators: (Set Keyword) #{:eq :ne :lt :le :gt :ge})
 (def subtract-operator: Keyword (keyword "-"))
 (def builtin-operators: (Set Keyword)
@@ -352,7 +360,7 @@
          (unify-tuples! arguments
                         (virtual-source-rows! source false arguments subst)
                         subst)]
-        [(and (= relation text-match-relation) (nil? source))
+        [(and (contains? text-relations relation) (nil? source))
          (missing-candidate-source! relation)]
         [:else (unify-tuples! arguments (vec (get db relation #{})) subst)]))))
 
@@ -581,24 +589,67 @@
       (if (contains? subst name) (get subst name) nil)
       (queryterm-value term))))
 
-(defn text-needle-valid? [needle: Any] -> Bool
-  (text-index/text-needle-valid? needle))
+(defn text-relation-needle-valid?
+  [relation: String
+   needle: Any] -> Bool
+  (cond
+    [(= relation text-match-relation)
+     (text-index/text-needle-valid? needle)]
+    [(or (= relation text-phrase-relation)
+         (= relation text-stem-relation))
+     (text-search/word-needle-valid? needle)]
+    [(or (= relation text-substring-relation)
+         (= relation text-search-relation))
+     (text-search/substring-needle-valid? needle)]
+    [:else false]))
 
 ;; Virtual relations register independently so adjacent candidate sources can
 ;; append without changing the physical relation index.
-(defn text-candidate-sources [source: text-index/TextCandidateSource] -> CandidateSources
+(defn text-candidate-sources [source: text-search/TextSearchSource] -> CandidateSources
   {text-match-relation
    (->VirtualCandidateSource
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-index/indexed-rows
+      (text-search/exact-indexed-rows
        source (bound-term-value (nth arguments 2) subst)))
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-index/scan-rows
+      (text-search/exact-scan-rows
+       source (bound-term-value (nth arguments 2) subst))))
+   text-phrase-relation
+   (->VirtualCandidateSource
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/phrase-indexed-rows
+       source (bound-term-value (nth arguments 2) subst)))
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/phrase-scan-rows
+       source (bound-term-value (nth arguments 2) subst))))
+   text-substring-relation
+   (->VirtualCandidateSource
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/substring-indexed-rows
+       source (bound-term-value (nth arguments 2) subst)))
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/substring-scan-rows
+       source (bound-term-value (nth arguments 2) subst))))
+   text-stem-relation
+   (->VirtualCandidateSource
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/stem-indexed-rows
+       source (bound-term-value (nth arguments 2) subst)))
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/stem-scan-rows
+       source (bound-term-value (nth arguments 2) subst))))
+   text-search-relation
+   (->VirtualCandidateSource
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/ranked-indexed-rows
+       source (bound-term-value (nth arguments 2) subst)))
+    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
+      (text-search/ranked-scan-rows
        source (bound-term-value (nth arguments 2) subst))))})
 
 (defn build-text-candidates [propositions: (Vec t/Triple)] -> CandidateSources
   (text-candidate-sources
-   (text-index/build-source propositions text-index/text-index-max-bytes)))
+   (text-search/build-source propositions text-index/text-index-max-bytes)))
 
 (defn- bound-prefix
   [arguments: (Vec QueryTerm)
@@ -699,7 +750,7 @@
                         (virtual-source-rows! source true arguments subst)
                         subst)]
         [(nil? source)
-         (if (= relation text-match-relation)
+         (if (contains? text-relations relation)
            (missing-candidate-source! relation)
           (reduce (fn
                     [acc: (Vec Substitution)

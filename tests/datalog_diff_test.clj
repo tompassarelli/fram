@@ -222,11 +222,13 @@
    temporal-arms))
 
 ;; (d) virtual text candidates: the indexed posting intersection must agree
-;; with the candidate source's independent tokenizer scan for each query arm.
+;; with each candidate source's independent scan for every search mode.
 (def text-propositions
   [(t/triple "@a" "title" "The Quick brown fox 42")
    (t/triple "@b" "title" "QUICK turtle")
    (t/triple "@c" "summary" "Café noir, café 42")
+   (t/triple "@e" "body" "A runner is running")
+   (t/triple "@f" "body" "Sunday brunch")
    (t/triple "@d" "count" 42)])
 (def text-db (d/edb text-propositions))
 (def text-candidates (d/build-text-candidates text-propositions))
@@ -240,7 +242,19 @@
              :args [{:var "e"} {:var "a"} "FOX quick"]}]}
     {:head {:rel "unicode-repeat" :args [{:var "e"}]}
      :body [{:rel "text-match"
-             :args [{:var "e"} {:var "a"} "CAFÉ café 42"]}]}]))
+             :args [{:var "e"} {:var "a"} "CAFÉ café 42"]}]}
+    {:head {:rel "phrase" :args [{:var "e"}]}
+     :body [{:rel "text-phrase"
+             :args [{:var "e"} {:var "a"} "quick brown fox"]}]}
+    {:head {:rel "substring" :args [{:var "e"}]}
+     :body [{:rel "text-substring"
+             :args [{:var "e"} {:var "a"} "OWN F"]}]}
+    {:head {:rel "stem" :args [{:var "e"}]}
+     :body [{:rel "text-stem"
+             :args [{:var "e"} {:var "a"} "run"]}]}
+    {:head {:rel "ranked" :args [{:var "e"} {:var "score"}]}
+     :body [{:rel "text-search"
+             :args [{:var "e"} {:var "a"} "runner" {:var "score"}]}]}]))
 (def text-idx
   (d/fixpoint-with-candidates! text-db text-rules text-candidates))
 (def text-ora
@@ -248,11 +262,16 @@
 (def text-ok
   (and (= text-idx text-ora)
        (= #{["@a"]} (rel-set text-idx "two-word"))
-       (= #{["@c"]} (rel-set text-idx "unicode-repeat"))))
+       (= #{["@c"]} (rel-set text-idx "unicode-repeat"))
+       (= #{["@a"]} (rel-set text-idx "phrase"))
+       (= #{["@a"]} (rel-set text-idx "substring"))
+       (= #{["@e"]} (rel-set text-idx "stem"))
+       (= #{"@e"}
+          (set (map first (rel-set text-idx "ranked"))))))
 
 (def checks
   [[(str "differential: all " N-PROGRAMS
-         " generated programs plus as-of/since and text-match arms match the scan oracle")
+         " generated programs plus as-of/since and all text-search arms match the scan oracle")
     (and (empty? fails) temporal-ok text-ok)]
    ["corpus is non-trivial: >=300 programs derive facts"          (>= n-derived 300)]
    ["corpus exercises recursion: >=150 recursive programs"        (>= n-recursive 150)]

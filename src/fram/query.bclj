@@ -49,9 +49,15 @@
 (def ^:dynamic *query-control*: Any nil)
 
 (def base-rel-arities: (Map String Int)
-  {d/triple-relation 3 d/occurrence-relation 3 d/text-match-relation 3})
+  {d/triple-relation 3
+   d/occurrence-relation 3
+   d/text-match-relation 3
+   d/text-phrase-relation 3
+   d/text-substring-relation 3
+   d/text-stem-relation 3
+   d/text-search-relation 4})
 (def base-relations: (Set String)
-  #{d/triple-relation d/occurrence-relation d/text-match-relation})
+  d/base-relations)
 (def aggregate-operators: (Set Keyword)
   #{:count :count-distinct :sum :avg :min :max})
 (def aggregate-argument-operators: (Set Keyword)
@@ -304,13 +310,14 @@
   [literal: d/Literal
    bound: (Set String)] -> (Vec QueryError)
   (if (and (= :relation (d/literal-kind literal))
-           (= d/text-match-relation (d/literal-relation literal)))
-    (let [arguments (d/literal-arguments literal)]
+           (contains? d/text-relations (d/literal-relation literal)))
+    (let [relation (d/literal-relation literal)
+          arguments (d/literal-arguments literal)]
       (cond
         [(d/literal-negated literal)
          [(query-error :query-text-negative
-                       "text-match is available only as a positive relation")]]
-        [(not (= 3 (count arguments))) []]
+                       (str relation " is available only as a positive relation"))]]
+        [(not (= (get base-rel-arities relation) (count arguments))) []]
         [:else
          (let [needle (nth arguments 2)
                variable (d/queryterm-variable needle)]
@@ -319,11 +326,13 @@
               (if (contains? bound variable)
                 []
                 [(query-error :query-text-unbound-needle
-                              "text-match needle must be constant or already bound")])]
-             [(d/text-needle-valid? (d/queryterm-value needle)) []]
+                              (str relation
+                                   " query must be constant or already bound"))])]
+             [(d/text-relation-needle-valid?
+               relation (d/queryterm-value needle)) []]
              [:else
               [(query-error :query-text-invalid-needle
-                            "text-match needle must contain at least one word token")]]))]))
+                            (str relation " query is empty or invalid"))]]))]))
     []))
 
 (defn- rule-errors
