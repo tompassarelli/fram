@@ -8,7 +8,7 @@
 ;; the CRDT commute machinery for `insert-after`. Two layers:
 ;;
 ;;   (1) MCP catalog/dispatch (in-process, fram.tools): the tool `insert-after`
-;;       exists with params {module,after,form}, and fram.tools/call lowers an
+;;       exists with params {module,after,form}, and fram.tools/call! lowers an
 ;;       agent-shaped call to {:edit {:op "insert-form" :module .. :after .. :form ..}},
 ;;       which fram_mcp/flip-verb-flags lowers to the exact CLI invocation
 ;;       ["insert-form" "--after" <anchor> "--spec-file" <form.edn>]. This is the
@@ -130,16 +130,16 @@
 ;; ============================================================================
 ;; (1) the AGENT-SHAPED MCP lowering — verbatim from the live code surface.
 ;; ============================================================================
-;; the model fills typed params on the generated tool; fram.tools/call lowers it.
+;; the model fills typed params on the generated tool; fram.tools/call! lowers it.
 (def tool-store (store/new-term-store "coord-mcp-insert-after"))
 (def cat (tl/catalog []))
 (def insert-spec (first (filter #(= "insert-after" (:name %)) cat)))
 (def new-form "(def fram_mcp_ins_A 4242)")
 (def agent-args {:module MOD :after anchor :form new-form})
-(def edit-env (tl/call tool-store cat "insert-after" agent-args))
+(def edit-env (tl/call! tool-store cat "insert-after" agent-args))
 (println "\n[1] MCP catalog tool 'insert-after' present:" (some? insert-spec)
          " params:" (mapv :name (:params insert-spec)))
-(println "    tl/call -> :edit envelope:" (pr-str edit-env))
+(println "    tl/call! -> :edit envelope:" (pr-str edit-env))
 
 ;; lower the {:edit ...} envelope to CLI flags exactly as fram_mcp/flip-verb-flags does.
 ;; (re-implemented here only because flip-verb-flags is a private defn in the MCP ns;

@@ -33,7 +33,7 @@
 (def ctx (term-store "tools-test" facts))
 (def cat (t/catalog facts))
 (defn has-tool? [nm] (boolean (some #(= (:name %) nm) cat)))
-(defn call [tool args] (t/call ctx cat tool args))
+(defn call [tool args] (t/call! ctx cat tool args))
 
 ;; (1) CLOSED catalog — EXACTLY these twelve names, no more, no fewer, no per-predicate tools.
 (def expected-names
@@ -66,7 +66,7 @@
 (let [mc [(terms/triple "@x" "tag" "@refnode") (terms/triple "@x" "tag" "plainword")]
       mctx (term-store "tools-undeclared" mc) mcat (t/catalog mc)]
   (chk "undeclared predicate keeps literal verbatim (no value-shape inference)"
-       (= (:write (t/call mctx mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))
+       (= (:write (t/call! mctx mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))
           {:op "retract" :l "@x" :p "tag" :r "plainword"})))
 
 ;; A declaration governs the FIRST value; aliases normalize to the canonical
@@ -78,7 +78,7 @@
       dctx (term-store "tools-declared-ref" df)
       dcat (t/catalog df)]
   (chk "declared reference predicate normalizes its first bare write"
-       (= (:write (t/call dctx dcat "tell"
+       (= (:write (t/call! dctx dcat "tell"
                           {:subject "x" :predicate ":friend" :object "z"}))
           {:op "assert" :l "@x" :p "friend" :r "@z"}))
   (chk "shared predicate normalization resolves aliases for CLI callers"
@@ -92,7 +92,7 @@
       lctx (term-store "tools-explicit-literal" lf)
       lcat (t/catalog lf)]
   (chk "explicit literal overrides reference fallback"
-       (= (:write (t/call lctx lcat "tell"
+       (= (:write (t/call! lctx lcat "tell"
                           {:subject "x" :predicate "depends_on" :object "z"}))
           {:op "assert" :l "@x" :p "depends_on" :r "z"})))
 
@@ -112,7 +112,7 @@
             (mapv #(k/profile-rule profile %) k/relational-profile-rules))
       propositions (conj declarations (terms/triple "" "predicate" "value"))
       profile-ctx (term-store space propositions)
-      rows (:rows (t/call profile-ctx (t/catalog propositions) "validate" {}))]
+      rows (:rows (t/call! profile-ctx (t/catalog propositions) "validate" {}))]
   (chk "validate reports declared relational-profile violations"
        (contains? (set (map :rule rows)) "R2")))
 

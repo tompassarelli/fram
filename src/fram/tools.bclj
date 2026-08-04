@@ -252,7 +252,7 @@
 ;; is accepted as an alias for `ask` (same :query op) so the structured escape hatch keeps
 ;; both spellings on every surface. `untell` is likewise accepted as an alias for
 ;; `retract` (same :retract op) so the retract verb keeps both spellings everywhere.
-(defn call
+(defn call!
   [ctx: (Atom t/TermStore)
    cat: (Vec ToolSpec)
    tool-name: String
