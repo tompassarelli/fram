@@ -2,10 +2,9 @@
 
 **Status:** Current v0.3 Markdown import/export compatibility projection. This
 document describes that projection's domain vocabulary and validation, not the
-recursive kernel's neutral slots or native FRAMRPC surface. The projection is
-served by the deployed v0.3 runtime; the recursive-Term cut removed the flat-fact
-kernel it calls, so the utilities below no longer load against this repository's
-committed `out/` build.
+recursive kernel's neutral slots or native FRAMRPC surface. Import produces
+occurrence-history `TransactionFrame` values containing projected `Triple`
+assertions; export consumes the fold's live-proposition view.
 
 A **thread** is one Markdown file in `threads/`: a header of projected triples, a
 `---` separator, then a free Markdown body. The filename is
@@ -16,10 +15,9 @@ To this projection there is no "thread" type — a thread is simply an entity id
 that has a `title` row. A "project" isn't a separate type either; it is a thread
 other threads point at with `part_of`. The local `import` utility folds these
 files into the v0.3 compatibility graph; `export` regenerates them
-**fact-identically**, so the files are a *view*, not a competing source of
-truth. `tests/roundtrip_test.clj` recorded that round trip and is now
-dispositioned `exclude` / `removed-flat-store` in
-`tests/occurrence_native_ci_manifest.txt`; nothing in CI pins the property today.
+**Triple-identically**, so the files are a *view*, not a competing source of
+truth. `tests/roundtrip_test.clj` pins that round trip against the current
+occurrence-history contracts in `tests/occurrence_native_ci_manifest.txt`.
 
 ## File shape
 

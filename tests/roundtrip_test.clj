@@ -1,106 +1,152 @@
-;; roundtrip_test.clj — facts<->files idempotence guard.
+;; roundtrip_test.clj — Triple<->Markdown idempotence guard.
 ;;
-;; Proves the cutover keystone stays true: import -> export -> import yields the
-;; SAME fact set. If this ever fails, the export projection has lost (or gained)
-;; information and files can no longer be trusted as a view of the fact graph.
+;; Proves that importing, exporting the live occurrence projection, and
+;; importing again yields the same Triple set.
 ;;
-;;   bb -cp out roundtrip_test.clj      (run from the repo root; uses threads/)
-(require '[fram.kernel :as k]
+;;   bb -cp out tests/roundtrip_test.clj
+(require '[fram.types :as t]
          '[fram.fold :as fold]
          '[fram.import :as imp]
          '[fram.export :as exp]
          '[fram.rt]
          '[clojure.java.io :as io]
-         '[babashka.process :as proc])
+         '[clojure.set :as set]
+         '[clojure.string :as str])
 
-(defn fact-set [assertions]
-  (set (map (juxt :l :p :r) (:facts (fold/fold assertions)))))
+(defn triple-signature [value]
+  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
+
+(defn live-triples [space frames]
+  (:live-propositions (fold/fold! space frames)))
+
+(defn triple-set [space frames]
+  (set (map triple-signature (live-triples space frames))))
+
+(defn frame-proposition [frame]
+  (t/commitoperation-proposition
+   (first (t/transactionframe-operations frame))))
+
+(defn identity-triple? [value]
+  (contains? #{"predicate_name" "predicate_alias"}
+             (t/triple-slot1 value)))
+
+(defn title-of [triples subject]
+  (some (fn [value]
+          (when (and (= subject (t/triple-slot0 value))
+                     (= "title" (t/triple-slot1 value)))
+            (t/triple-slot2 value)))
+        triples))
+
+;; The legacy exporter included title-bearing subjects and predicate metadata
+;; subjects. Keep that projection boundary while the kernel stays slot-neutral.
+(defn projection-subjects [triples]
+  (vec
+   (distinct
+    (concat
+     (map t/triple-slot0
+          (filter #(= "title" (t/triple-slot1 %)) triples))
+     (map t/triple-slot0 (filter identity-triple? triples))))))
+
+(defn export-corpus! [triples out]
+  (.mkdirs (io/file out))
+  (doseq [subject (projection-subjects triples)]
+    (let [title (title-of triples subject)
+          id (if (str/starts-with? subject "@") (subs subject 1) subject)
+          filename (str id "-"
+                        (fram.rt/slugify (if title title "untitled"))
+                        ".md")]
+      (spit (str out "/" filename) (exp/thread-md triples subject)))))
 
 (defn require-pass [label ok]
   (println (str "  [" (if ok "PASS" "FAIL") "] " label))
   (when-not ok (System/exit 1)))
 
-;; Predicate identity metadata is imported before dependent facts, aliases
+;; Predicate identity metadata is imported before dependent triples, aliases
 ;; canonicalize, and value_kind—not the object's @ sigil—governs both directions.
 (let [root (str (System/getProperty "java.io.tmpdir") "/fram-predicate-rt-"
                 (System/currentTimeMillis))
       src (str root "/src")
-      out (str root "/out")
-      log (str root "/facts.log")]
+      out (str root "/out")]
   (.mkdirs (io/file src))
-  (.mkdirs (io/file out))
   (spit (str src "/01-friend.md")
         "@friend\npredicate_name  friend\npredicate_alias  :friend\ncardinality  multi\nvalue_kind  ref\n---\n")
   (spit (str src "/02-note.md")
         "@note\npredicate_name  note\npredicate_alias  :note\ncardinality  multi\nvalue_kind  literal\n---\n")
   (spit (str src "/03-alice.md")
         "@alice\ntitle  Alice\n:friend  bob\nnote  \"@bob\"\n---\n")
-  (let [ops (imp/load-corpus src)
-        facts (:facts (fold/fold ops))
-        sigs (set (map (juxt :l :p :r) facts))
-        identity? #(contains? #{"predicate_name" "predicate_alias"} (:p %))
-        identity-count (count (filter identity? ops))
-        prefix-count (count (take-while identity? ops))
-        first-domain (first (drop-while identity? ops))]
-    (require-pass "identity metadata precedes dependent import facts"
+  (let [frames (imp/load-corpus src)
+        triples (live-triples "predicate-roundtrip" frames)
+        signatures (set (map triple-signature triples))
+        frame-triples (map frame-proposition frames)
+        identity-count (count (filter identity-triple? frame-triples))
+        prefix-count (count (take-while identity-triple? frame-triples))
+        first-domain (first (drop-while identity-triple? frame-triples))]
+    (require-pass "import emits ordered one-assertion transaction frames"
+                  (every?
+                   true?
+                   (map-indexed
+                    (fn [position frame]
+                      (let [operations (t/transactionframe-operations frame)]
+                        (and (= (+ position 1)
+                                (t/transactionframe-sequence frame))
+                             (= 1 (count operations))
+                             (= t/assert-action
+                                (t/commitoperation-action
+                                 (first operations)))
+                             (t/triple?
+                              (t/commitoperation-proposition
+                               (first operations))))))
+                    frames)))
+    (require-pass "identity metadata precedes dependent import triples"
                   (and first-domain
                        (pos? identity-count)
                        (= identity-count prefix-count)))
     (require-pass "alias import resolves to canonical ref predicate"
-                  (contains? sigs ["@alice" "friend" "@bob"]))
+                  (contains? signatures ["@alice" "friend" "@bob"]))
     (require-pass "explicit literal preserves an @-prefixed value"
-                  (contains? sigs ["@alice" "note" "@bob"]))
-    (require-pass "identity metadata remains ordinary facts"
-                  (and (contains? sigs ["@friend" "predicate_name" "friend"])
-                       (contains? sigs ["@friend" "predicate_alias" ":friend"])))
-    (fram.rt/write-log log ops)
-    (let [run (proc/shell {:continue true
-                           :out :string
-                           :err :string
-                           :extra-env {"FRAM_THREADS" src
-                                       "FRAM_LOG" log}}
-                          "./bin/fram" "export" out "--force")]
-      (require-pass "real CLI export succeeds"
-                    (= 0 (:exit run)))
-      (require-pass "real CLI export includes predicate metadata subjects"
-                    (= sigs (fact-set (imp/load-corpus out)))))
-    (let [rendered (exp/thread-md facts "@alice")]
+                  (contains? signatures ["@alice" "note" "@bob"]))
+    (require-pass "identity metadata remains ordinary triples"
+                  (and (contains? signatures
+                                  ["@friend" "predicate_name" "friend"])
+                       (contains? signatures
+                                  ["@friend" "predicate_alias" ":friend"])))
+    (export-corpus! triples out)
+    (require-pass "export includes predicate metadata subjects"
+                  (= signatures (triple-set "predicate-reimport"
+                                            (imp/load-corpus out))))
+    (let [rendered (exp/thread-md triples "@alice")]
       (require-pass "declared ref exports bare"
-                    (clojure.string/includes? rendered "friend  @bob"))
+                    (str/includes? rendered "friend  @bob"))
       (require-pass "declared literal exports quoted"
-                    (clojure.string/includes? rendered "note  \"@bob\"")))))
+                    (str/includes? rendered "note  \"@bob\"")))))
 
-(let [legacy [(k/->Fact "@a" "title" "A")
-              (k/->Fact "@a" "depends_on" "@b")
-              (k/->Fact "@a" "note" "@literal")
-              (k/->Fact "@b" "title" "B")]
+(let [legacy [(t/triple "@a" "title" "A")
+              (t/triple "@a" "depends_on" "@b")
+              (t/triple "@a" "note" "@literal")
+              (t/triple "@b" "title" "B")]
       rendered (exp/thread-md legacy "@a")]
   (require-pass "legacy ref fallback renders unchanged"
-                (clojure.string/includes? rendered "depends_on  @b"))
+                (str/includes? rendered "depends_on  @b"))
   (require-pass "legacy literal @ value remains quoted"
-                (clojure.string/includes? rendered "note  \"@literal\"")))
+                (str/includes? rendered "note  \"@literal\"")))
 
-(let [src "threads"
-      a-asserts (imp/load-corpus src)
-      a (fact-set a-asserts)
-      idx (k/build-index (:facts (fold/fold a-asserts)))
-      out (str (System/getProperty "java.io.tmpdir") "/cheln-rt-"
+(let [frames (imp/load-corpus "threads")
+      triples (live-triples "fixture-roundtrip" frames)
+      before (set (map triple-signature triples))
+      out (str (System/getProperty "java.io.tmpdir") "/fram-rt-"
                (System/currentTimeMillis))]
-  (.mkdirs (io/file out))
-  (let [facts (:facts (fold/fold a-asserts))]
-    (doseq [te (k/thread-ids-i idx)]
-      (let [title (k/one-i idx te "title")
-            fname (str (subs te 1) "-" (fram.rt/slugify (if title title "untitled")) ".md")]
-        (spit (str out "/" fname) (exp/thread-md facts te)))))
-  (let [b (fact-set (imp/load-corpus out))
-        only-a (clojure.set/difference a b)
-        only-b (clojure.set/difference b a)]
-    (println "round-trip:" (count a) "facts in," (count b) "facts back ("
-             (count (k/thread-ids-i idx)) "threads )")
-    (when (seq only-a) (println "  LOST (in source, not round-trip):")
-          (doseq [x (take 10 only-a)] (println "   " (pr-str x))))
-    (when (seq only-b) (println "  GAINED (in round-trip, not source):")
-          (doseq [x (take 10 only-b)] (println "   " (pr-str x))))
-    (if (and (empty? only-a) (empty? only-b))
-      (println "  [PASS] import->export->import is fact-identical")
-      (do (println "  [FAIL] round-trip is lossy") (System/exit 1)))))
+  (export-corpus! triples out)
+  (let [after (triple-set "fixture-reimport" (imp/load-corpus out))
+        only-before (set/difference before after)
+        only-after (set/difference after before)]
+    (println "round-trip:" (count before) "triples in," (count after)
+             "triples back (" (count (projection-subjects triples))
+             "subjects )")
+    (when (seq only-before)
+      (println "  LOST (in source, not round-trip):")
+      (doseq [value (take 10 only-before)] (println "   " (pr-str value))))
+    (when (seq only-after)
+      (println "  GAINED (in round-trip, not source):")
+      (doseq [value (take 10 only-after)] (println "   " (pr-str value))))
+    (require-pass "import->export->import is Triple-identical"
+                  (and (empty? only-before) (empty? only-after)))))

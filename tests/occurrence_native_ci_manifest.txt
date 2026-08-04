@@ -32,6 +32,7 @@ run-bb	current-model	tests/provider_host_test.clj	-
 run-bb	current-model	tests/query_aggregate_test.clj	-
 run-bb	current-model	tests/query_projection_test.clj	-
 run-bb	current-model	tests/rotations_v2_test.clj	-
+run-bb	current-model	tests/roundtrip_test.clj	-
 run-bb	current-model	tests/store_invariant_test.clj	-
 run-bb	current-model	tests/store_ordkey_test.clj	-
 run-bb	current-model	tests/store_test.clj	-
@@ -158,7 +159,6 @@ exclude	moved-graph-control	tests/receipt_envelope_producer_test.clj	tests/recei
 exclude	moved-graph-control	tests/resolve_logical_identity_test.clj	tests/resolve_logical_identity_test.clj#replace-in-body
 exclude	removed-flat-store	tests/resolve_mint_symbol_fallback_test.clj	tests/resolve_mint_symbol_fallback_test.clj#c/value!
 exclude	moved-graph-control	tests/resolve_shim_identity_test.clj	tests/resolve_shim_identity_test.clj#out/resolve\.clj
-exclude	removed-flat-store	tests/roundtrip_test.clj	tests/roundtrip_test.clj#k/->Fact
 exclude	removed-flat-store	tests/schema_test.clj	tests/schema_test.clj#c/value!
 exclude	removed-flat-store	tests/set_tx_test.clj	tests/set_tx_test.clj#->Fact
 exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_join_test.clj#facts\.log
