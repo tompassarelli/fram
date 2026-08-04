@@ -12,13 +12,20 @@
 
 (defalias PostingMap (Map String (Vec Int)))
 
-(defrecord TextSearchSource
-  [exact: text-index/TextCandidateSource
-   rows: (Vec t/Triple)
-   token-rows: (Vec (Vec String))
+(defrecord SearchAnalyzers
+  [token-rows: (Vec (Vec String))
    normalized-rows: (Vec String)
    stem-postings: PostingMap
    trigram-postings: PostingMap
+   bytes: Int])
+
+;; Analyzers realize on first use of their relations, so the shipped
+;; text-match build and query budgets stay untouched by them.
+(defrecord TextSearchSource
+  [exact: text-index/TextCandidateSource
+   rows: (Vec t/Triple)
+   maximum: Int
+   analyzers-cell: (Atom (U SearchAnalyzers Nil))
    bytes: Int])
 
 (defrecord SearchBuildState
@@ -28,7 +35,10 @@
    trigram-postings: PostingMap])
 
 (defn source-weight [source: TextSearchSource] -> Int
-  (textsearchsource-bytes source))
+  (let [analyzers: (U SearchAnalyzers Nil)
+        (deref (textsearchsource-analyzers-cell source))]
+    (+ (textsearchsource-bytes source)
+       (if (nil? analyzers) 0 (searchanalyzers-bytes analyzers)))))
 
 (defn- lower [value: String] -> String
   (.toLowerCase value java.util.Locale/ROOT))
@@ -206,22 +216,41 @@
   (let [rows: (Vec t/Triple) (vec propositions)
         exact: text-index/TextCandidateSource
         (text-index/build-source rows maximum)
-        state: SearchBuildState (build-state rows)
-        token-rows: (Vec (Vec String)) (searchbuildstate-token-rows state)
-        normalized-rows: (Vec String) (searchbuildstate-normalized-rows state)
-        stem-postings: PostingMap (searchbuildstate-stem-postings state)
-        trigram-postings: PostingMap (searchbuildstate-trigram-postings state)
         weight: Int
         (+ (text-index/source-weight exact)
            64
-           (* 16 (count rows))
-           (token-rows-weight token-rows)
-           (strings-weight normalized-rows)
-           (postings-weight stem-postings)
-           (postings-weight trigram-postings))]
+           (* 16 (count rows)))
+        cell: (Atom (U SearchAnalyzers Nil)) (atom nil)]
     (index-limit weight maximum)
-    (->TextSearchSource exact rows token-rows normalized-rows
-                        stem-postings trigram-postings weight)))
+    (->TextSearchSource exact rows maximum cell weight)))
+
+;; Build-on-first-use with a benign race: a concurrent double build is
+;; idempotent and last-wins, matching the snapshot cache's own semantics.
+(defn- analyzers-of! [source: TextSearchSource] -> SearchAnalyzers
+  (let [current: (U SearchAnalyzers Nil)
+        (deref (textsearchsource-analyzers-cell source))]
+    (if (nil? current)
+      (let [state: SearchBuildState
+            (build-state (textsearchsource-rows source))
+            token-rows: (Vec (Vec String)) (searchbuildstate-token-rows state)
+            normalized-rows: (Vec String)
+            (searchbuildstate-normalized-rows state)
+            stem-postings: PostingMap (searchbuildstate-stem-postings state)
+            trigram-postings: PostingMap
+            (searchbuildstate-trigram-postings state)
+            weight: Int
+            (+ (token-rows-weight token-rows)
+               (strings-weight normalized-rows)
+               (postings-weight stem-postings)
+               (postings-weight trigram-postings))
+            analyzers: SearchAnalyzers
+            (->SearchAnalyzers token-rows normalized-rows
+                               stem-postings trigram-postings weight)]
+        (index-limit (+ (textsearchsource-bytes source) weight)
+                     (textsearchsource-maximum source))
+        (reset! (textsearchsource-analyzers-cell source) analyzers)
+        analyzers)
+      current)))
 
 (defn- needle-error [message: String] -> Any
   (throw (ex-info message
@@ -311,61 +340,67 @@
           true
           (recur (inc start)))))))
 
-(defn phrase-handles
+(defn phrase-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [tokens: (Vec String) (word-needle "text-phrase" needle)
         candidates: (Vec Int)
         (text-index/indexed-handles (textsearchsource-exact source) needle)
-        rows: (Vec (Vec String)) (textsearchsource-token-rows source)]
+        rows: (Vec (Vec String))
+        (searchanalyzers-token-rows (analyzers-of! source))]
     (filterv (fn [handle: Int] -> Bool
                (sequence-contains? (nth rows handle) tokens))
              candidates)))
 
-(defn phrase-scan-handles
+(defn phrase-scan-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [tokens: (Vec String) (word-needle "text-phrase" needle)
-        rows: (Vec (Vec String)) (textsearchsource-token-rows source)]
+        rows: (Vec (Vec String))
+        (searchanalyzers-token-rows (analyzers-of! source))]
     (filterv (fn [handle: Int] -> Bool
                (sequence-contains? (nth rows handle) tokens))
              (all-handles source))))
 
-(defn substring-handles
+(defn substring-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [value: String (substring-needle "text-substring" needle)
         grams: (Vec String) (vec (trigrams value))
+        analyzers: SearchAnalyzers (analyzers-of! source)
         candidates: (Vec Int)
         (if (empty? grams)
           (all-handles source)
-          (postings-handles (textsearchsource-trigram-postings source) grams))
-        rows: (Vec String) (textsearchsource-normalized-rows source)]
+          (postings-handles (searchanalyzers-trigram-postings analyzers) grams))
+        rows: (Vec String) (searchanalyzers-normalized-rows analyzers)]
     (filterv (fn [handle: Int] -> Bool
                (str/includes? (nth rows handle) value))
              candidates)))
 
-(defn substring-scan-handles
+(defn substring-scan-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [value: String (substring-needle "text-substring" needle)
-        rows: (Vec String) (textsearchsource-normalized-rows source)]
+        rows: (Vec String)
+        (searchanalyzers-normalized-rows (analyzers-of! source))]
     (filterv (fn [handle: Int] -> Bool
                (str/includes? (nth rows handle) value))
              (all-handles source))))
 
-(defn stem-handles
+(defn stem-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [keys: (Vec String)
         (vec (stems (word-needle "text-stem" needle)))]
-    (postings-handles (textsearchsource-stem-postings source) keys)))
+    (postings-handles
+     (searchanalyzers-stem-postings (analyzers-of! source)) keys)))
 
-(defn stem-scan-handles
+(defn stem-scan-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [keys: (Set String) (stems (word-needle "text-stem" needle))
-        rows: (Vec (Vec String)) (textsearchsource-token-rows source)]
+        rows: (Vec (Vec String))
+        (searchanalyzers-token-rows (analyzers-of! source))]
     (filterv (fn [handle: Int] -> Bool
                (let [row-stems: (Set String) (stems (nth rows handle))]
                  (every? (fn [key: String] -> Bool
@@ -382,18 +417,20 @@
             (if (= token wanted) (inc total) total))
           0 tokens))
 
-(defn- score-at
+(defn- score-at!
   [source: TextSearchSource
    handle: Int
    needle: Any] -> Int
   (let [value: String (substring-needle "text-search" needle)
         query-tokens: (Vec String) (word-tokens value)
         query-stems: (Set String) (stems query-tokens)
+        analyzers: SearchAnalyzers (analyzers-of! source)
         document-tokens: (Vec String)
-        (nth (textsearchsource-token-rows source) handle)
+        (nth (searchanalyzers-token-rows analyzers) handle)
         document-token-set: (Set String) (set document-tokens)
         document-stems: (Set String) (stems document-tokens)
-        normalized: String (nth (textsearchsource-normalized-rows source) handle)
+        normalized: String
+        (nth (searchanalyzers-normalized-rows analyzers) handle)
         substring-match: Bool (str/includes? normalized value)
         stem-covered: Bool
         (and (not (empty? query-stems))
@@ -430,34 +467,35 @@
    right: (Vec Int)] -> (Vec Int)
   (vec (sort (vec (set (concat left right))))))
 
-(defn ranked-handles
+(defn ranked-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (let [value: String (substring-needle "text-search" needle)
         query-tokens: (Vec String) (word-tokens value)
+        analyzers: SearchAnalyzers (analyzers-of! source)
         stem-candidates: (Vec Int)
         (if (empty? query-tokens)
           []
           (postings-handles
-           (textsearchsource-stem-postings source)
+           (searchanalyzers-stem-postings analyzers)
            (vec (stems query-tokens))))
         gram-keys: (Vec String) (vec (trigrams value))
         substring-candidates: (Vec Int)
         (if (empty? gram-keys)
           (all-handles source)
           (postings-handles
-           (textsearchsource-trigram-postings source) gram-keys))
+           (searchanalyzers-trigram-postings analyzers) gram-keys))
         candidates: (Vec Int)
         (union-handles stem-candidates substring-candidates)]
     (filterv (fn [handle: Int] -> Bool
-               (pos? (score-at source handle needle)))
+               (pos? (score-at! source handle needle)))
              candidates)))
 
-(defn ranked-scan-handles
+(defn ranked-scan-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
   (filterv (fn [handle: Int] -> Bool
-             (pos? (score-at source handle needle)))
+             (pos? (score-at! source handle needle)))
            (all-handles source)))
 
 (defn- rows-for-handles
@@ -472,7 +510,7 @@
                needle]))
           handles)))
 
-(defn- ranked-rows-for-handles
+(defn- ranked-rows-for-handles!
   [source: TextSearchSource
    needle: Any
    handles: (Vec Int)] -> (Vec (Vec Any))
@@ -482,7 +520,7 @@
               [(t/triple-slot0 proposition)
                (t/triple-slot1 proposition)
                needle
-               (score-at source handle needle)]))
+               (score-at! source handle needle)]))
           handles)))
 
 (defn exact-indexed-rows
@@ -495,42 +533,42 @@
    needle: Any] -> (Vec (Vec Any))
   (text-index/scan-rows (textsearchsource-exact source) needle))
 
-(defn phrase-indexed-rows
+(defn phrase-indexed-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (phrase-handles source needle)))
+  (rows-for-handles source needle (phrase-handles! source needle)))
 
-(defn phrase-scan-rows
+(defn phrase-scan-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (phrase-scan-handles source needle)))
+  (rows-for-handles source needle (phrase-scan-handles! source needle)))
 
-(defn substring-indexed-rows
+(defn substring-indexed-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (substring-handles source needle)))
+  (rows-for-handles source needle (substring-handles! source needle)))
 
-(defn substring-scan-rows
+(defn substring-scan-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (substring-scan-handles source needle)))
+  (rows-for-handles source needle (substring-scan-handles! source needle)))
 
-(defn stem-indexed-rows
+(defn stem-indexed-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (stem-handles source needle)))
+  (rows-for-handles source needle (stem-handles! source needle)))
 
-(defn stem-scan-rows
+(defn stem-scan-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (rows-for-handles source needle (stem-scan-handles source needle)))
+  (rows-for-handles source needle (stem-scan-handles! source needle)))
 
-(defn ranked-indexed-rows
+(defn ranked-indexed-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (ranked-rows-for-handles source needle (ranked-handles source needle)))
+  (ranked-rows-for-handles! source needle (ranked-handles! source needle)))
 
-(defn ranked-scan-rows
+(defn ranked-scan-rows!
   [source: TextSearchSource
    needle: Any] -> (Vec (Vec Any))
-  (ranked-rows-for-handles source needle (ranked-scan-handles source needle)))
+  (ranked-rows-for-handles! source needle (ranked-scan-handles! source needle)))

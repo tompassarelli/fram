@@ -617,34 +617,34 @@
    text-phrase-relation
    (->VirtualCandidateSource
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/phrase-indexed-rows
+      (text-search/phrase-indexed-rows!
        source (bound-term-value (nth arguments 2) subst)))
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/phrase-scan-rows
+      (text-search/phrase-scan-rows!
        source (bound-term-value (nth arguments 2) subst))))
    text-substring-relation
    (->VirtualCandidateSource
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/substring-indexed-rows
+      (text-search/substring-indexed-rows!
        source (bound-term-value (nth arguments 2) subst)))
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/substring-scan-rows
+      (text-search/substring-scan-rows!
        source (bound-term-value (nth arguments 2) subst))))
    text-stem-relation
    (->VirtualCandidateSource
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/stem-indexed-rows
+      (text-search/stem-indexed-rows!
        source (bound-term-value (nth arguments 2) subst)))
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/stem-scan-rows
+      (text-search/stem-scan-rows!
        source (bound-term-value (nth arguments 2) subst))))
    text-search-relation
    (->VirtualCandidateSource
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/ranked-indexed-rows
+      (text-search/ranked-indexed-rows!
        source (bound-term-value (nth arguments 2) subst)))
     (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/ranked-scan-rows
+      (text-search/ranked-scan-rows!
        source (bound-term-value (nth arguments 2) subst))))})
 
 (defn build-text-candidates [propositions: (Vec t/Triple)] -> CandidateSources
