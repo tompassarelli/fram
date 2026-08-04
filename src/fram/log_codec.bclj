@@ -82,7 +82,8 @@
 (defn encode-header! [space-id: String] -> BytesResult
   (if (= 0 (count space-id))
     (failed-bytes "FRAMLOG SpaceId must be nonempty")
-    (let [encoder (wire/->Encoder (atom []) (atom 0) (atom nil))
+    (let [encoder (wire/->Encoder (wire/empty-byte-cell) (atom 0)
+                                  (wire/empty-error-cell))
           space-bytes
           (wire/utf8-bytes! encoder space-id max-codec-count "FRAMLOG SpaceId")]
       (if (deref (wire/encoder-error encoder))
@@ -102,7 +103,8 @@
                              (deref (wire/encoder-bytes encoder)) nil))))))))
 
 (defn decode-frame-payload! [payload: (Vec Int)] -> FrameDecodeResult
-  (let [decoder (wire/->Decoder payload (atom 0) (atom 0) (atom nil))]
+  (let [decoder (wire/->Decoder payload (atom 0) (atom 0)
+                                (wire/empty-error-cell))]
     (if (< (count payload) 12)
       (->FrameDecodeResult nil "FRAMLOG transaction header is truncated")
       (let [sequence (wire/read-i64-le! decoder "FRAMLOG transaction sequence")
@@ -243,7 +245,7 @@
      (failed-boot "FRAMLOG magic does not match; migration is required")]
     [:else
      (let [decoder (wire/->Decoder bytes (atom (count framlog-magic))
-                                   (atom 0) (atom nil))]
+                                   (atom 0) (wire/empty-error-cell))]
        (if (< (wire/decoder-remaining decoder) 8)
          (failed-boot "FRAMLOG header is truncated")
          (let [version (wire/read-u16-le! decoder "FRAMLOG version")
@@ -276,7 +278,8 @@
                     (deref (wire/decoder-position decoder)))]))]))))]))
 
 (defn append-frame-bytes! [frame: t/TransactionFrame] -> BytesResult
-  (let [payload (wire/->Encoder (atom []) (atom 0) (atom nil))
+  (let [payload (wire/->Encoder (wire/empty-byte-cell) (atom 0)
+                                (wire/empty-error-cell))
         operations (t/transactionframe-operations frame)
         sequence (t/transactionframe-sequence frame)]
     (if (or (< sequence 0) (= 0 (count operations)))
@@ -306,7 +309,8 @@
           (if payload-error
             (failed-bytes
              (str "FRAMLOG transaction encode failed: " payload-error))
-            (let [out (wire/->Encoder (atom []) (atom 0) (atom nil))]
+            (let [out (wire/->Encoder (wire/empty-byte-cell) (atom 0)
+                                      (wire/empty-error-cell))]
               (wire/append-u32-le! out (count payload-bytes))
               (swap! (wire/encoder-bytes out) into payload-bytes)
               (wire/append-u32-le! out (crc32 payload-bytes))

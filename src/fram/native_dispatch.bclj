@@ -5,7 +5,6 @@
             [coord-read :as read]
             [fram.native-lease-ops :as lease]
             [fram.native-query-ops :as query-ops]
-            [fram.native-wire-codec :as native-wire]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -716,8 +715,7 @@
                        "expected-version does not match the served version")]
       [:else
        (let [read-result: query-ops/NativeReadResult
-             (query-ops/dispatch-read!
-              session request native-wire/canonical-term-sha256!)]
+             (query-ops/dispatch-read! session request)]
          (if (query-ops/nativereadresult-handled read-result)
            (let [read-response (query-ops/nativereadresult-response read-result)]
              (if read-response

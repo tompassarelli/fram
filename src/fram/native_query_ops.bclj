@@ -3,6 +3,7 @@
 (ns fram.native-query-ops
   (:require [fram.datalog :as d]
             [fram.kernel :as kernel]
+            [fram.native-wire-codec :as native-wire]
             [fram.query :as query]
             [fram.schema :as schema]
             [fram.store :as store]
@@ -546,11 +547,9 @@
            (rpc-occurrences selected)
            (t/->RpcPageResponse ordinal next-cursor done)))))))
 
-;; digest-term is lowercase SHA-256 over canonical TermCodecV1 bytes.
 (defn query-response!
   [session: schema/Session
-   request: t/RpcRequest
-   digest-term: [Any -> String]] -> t/RpcResponse
+   request: t/RpcRequest] -> t/RpcResponse
   (let [request-fields: (Vec Any)
         (read-record! (t/rpc-request-payload-value request) :query/request 2)
         plan-term (nth request-fields 0)
@@ -559,7 +558,7 @@
         view: QueryView
         (requested-query-view! (schema/store-of session)
                                (nth request-fields 1) cursor)
-        digest (digest-term
+        digest (native-wire/canonical-term-sha256!
                 (t/triple plan-term
                           (queryview-lower-exclusive view)
                           (queryview-version view)))
@@ -588,8 +587,7 @@
 
 (defn occurrences-response!
   [session: schema/Session
-   request: t/RpcRequest
-   digest-term: [Any -> String]] -> t/RpcResponse
+   request: t/RpcRequest] -> t/RpcResponse
   (do
     (require-unit! (t/rpc-request-payload-value request))
     (let [root (schema/store-of session)
@@ -599,7 +597,7 @@
                     (querycursor-snapshot-version cursor) head)
           snapshot (snapshot-root! root version)
           rows: (Vec t/Triple) (store/operation-occurrences snapshot)
-          digest (digest-term :rpc/unit)
+          digest (native-wire/canonical-term-sha256! :rpc/unit)
           page-result: PageResult
           (slice-occurrence-page!
            rows (t/rpcrequest-page request) cursor version digest)]
@@ -642,8 +640,7 @@
 
 (defn dispatch-read!
   [session: schema/Session
-   request: t/RpcRequest
-   digest-term: [Any -> String]] -> NativeReadResult
+   request: t/RpcRequest] -> NativeReadResult
   (let [operation (t/rpcrequest-op request)
         served-version (store/current-sequence (schema/store-of session))]
     (if (contains? #{:rpc/query :rpc/occurrences :rpc/validate} operation)
@@ -665,11 +662,10 @@
              "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences"))]
           [(= operation :rpc/query)
            (->NativeReadResult true
-                               (query-response! session request digest-term))]
+                               (query-response! session request))]
           [(= operation :rpc/occurrences)
            (->NativeReadResult true
-                               (occurrences-response!
-                                session request digest-term))]
+                               (occurrences-response! session request))]
           [:else
            (->NativeReadResult true (validate-response! session request))])
         (catch Exception problem

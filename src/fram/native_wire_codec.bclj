@@ -33,13 +33,16 @@
    nodes: (Atom Int)
    error: (Atom String?)])
 
+(def empty-byte-vector: (Vec Int) [])
+(def no-error: String? nil)
+
 (defn increment-int [value: Int] -> Int (+ value 1))
 
 (defn empty-byte-cell [] -> (Atom (Vec Int))
-  (let [cell: (Atom (Vec Int)) (atom [])] cell))
+  (atom empty-byte-vector))
 
 (defn empty-error-cell [] -> (Atom String?)
-  (let [cell: (Atom String?) (atom nil)] cell))
+  (atom no-error))
 
 (defn decoder-error!
   [decoder: Decoder
