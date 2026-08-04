@@ -1,0 +1,417 @@
+#lang beagle/clj
+
+(ns fram.native-lease-ops
+  (:require [coord-commit :as commit]
+            [fram.rotation :as rot]
+            [fram.schema :as schema]
+            [fram.store :as store]
+            [fram.types :as t]))
+
+(define-mode strict)
+
+(def max-time-ms: Int 9223372036854775807)
+(def max-list-values: Int 65536)
+
+(defrecord ValuesResult
+  [ok: Bool
+   values: (Vec Any)
+   message: String?])
+
+(defrecord FenceResult
+  [ok: Bool
+   resource: Any
+   holder: Any
+   epoch: Int?
+   message: String?])
+
+(defrecord LeaseState
+  [resource: Any
+   holder: Any
+   expires-ms: Int
+   epoch: Int
+   occurrence: t/Triple
+   proposition: t/Triple])
+
+(defn values-ok [values: (Vec Any)] -> ValuesResult
+  (->ValuesResult true values nil))
+
+(defn values-error [message: String] -> ValuesResult
+  (->ValuesResult false [] message))
+
+(defn rpc-list [values: (Vec Any)] -> Any
+  (reduce
+   (fn
+     [tail: Any
+      value: Any] -> Any
+     (t/triple :rpc/list value tail))
+   :rpc/list-end
+   (reverse values)))
+
+(defn rpc-record
+  [tag: Keyword
+   fields: (Vec Any)] -> t/Triple
+  (t/triple tag (rpc-list fields) :rpc/record))
+
+(defn rpc-option [value: Any] -> Any
+  (if (nil? value)
+    :rpc/none
+    (t/triple :rpc/some value :rpc/option)))
+
+(defn read-list [value: Any] -> ValuesResult
+  (loop [cursor value values: (Vec Any) [] count-value 0]
+    (cond
+      [(= cursor :rpc/list-end) (values-ok values)]
+      [(>= count-value max-list-values)
+       (values-error "RPC list exceeds the Term node bound")]
+      [(and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor)))
+       (recur (t/triple-slot2 cursor)
+              (conj values (t/triple-slot1 cursor))
+              (inc count-value))]
+      [:else (values-error "RPC list must end with :rpc/list-end")])))
+
+(defn read-record
+  [value: Any
+   tag: Keyword
+   field-count: Int] -> ValuesResult
+  (if (and (t/triple? value)
+           (and (= tag (t/triple-slot0 value))
+                (= :rpc/record (t/triple-slot2 value))))
+    (let [result: ValuesResult (read-list (t/triple-slot1 value))]
+      (if (and (valuesresult-ok result)
+               (= field-count (count (valuesresult-values result))))
+        result
+        (if (valuesresult-ok result)
+          (values-error "RPC record contains the wrong number of fields")
+          result)))
+    (values-error "RPC record tag or marker is invalid")))
+
+(defn response
+  [request: t/RpcRequest
+   served-version: Int
+   payload: Any] -> t/RpcResponse
+  (t/->RpcResponse (t/rpcrequest-space request)
+                   (t/rpcrequest-op request)
+                   served-version nil nil payload))
+
+(defn error-response
+  [request: t/RpcRequest
+   served-version: Int
+   code: Keyword
+   retryable: Bool
+   message: String] -> t/RpcResponse
+  (t/->RpcResponse
+   (t/rpcrequest-space request)
+   (t/rpcrequest-op request)
+   served-version nil
+   (t/->RpcError code retryable message nil)
+   nil))
+
+(defn expected-version-matches?
+  [served-version: Int
+   expected-version: Int?] -> Bool
+  (and (not (commit/version-conflict? true served-version expected-version))
+       (or (nil? expected-version) (= served-version expected-version))))
+
+(defn millis->instant [value: Int] -> t/Instant
+  (t/instant (quot value 1000) (* (mod value 1000) 1000000)))
+
+(defn fence-record
+  [resource: Any
+   holder: Any
+   epoch: Int] -> t/Triple
+  (rpc-record :rpc/fence [resource holder epoch]))
+
+(defn grant-record
+  [resource: Any
+   holder: Any
+   epoch: Int
+   expires-ms: Int] -> t/Triple
+  (rpc-record :lease/grant
+              [(fence-record resource holder epoch)
+               (millis->instant expires-ms)]))
+
+(defn released-record [released: Bool] -> t/Triple
+  (rpc-record :lease/released [released]))
+
+(defn check-record
+  [valid: Bool
+   expires-ms: Int?] -> t/Triple
+  (rpc-record :lease/check
+              [valid
+               (rpc-option
+                (if (nil? expires-ms)
+                  nil
+                  (millis->instant expires-ms)))]))
+
+(defn parse-fence [value: Any] -> FenceResult
+  (let [fields: ValuesResult (read-record value :rpc/fence 3)]
+    (if (not (valuesresult-ok fields))
+      (->FenceResult false nil nil nil
+                     (or (valuesresult-message fields)
+                         "lease fence is malformed"))
+      (let [values: (Vec Any) (valuesresult-values fields)
+            resource (nth values 0)
+            holder (nth values 1)
+            epoch (nth values 2)]
+        (if (and (t/term? resource)
+                 (and (t/term? holder)
+                      (integer? epoch)))
+          (->FenceResult true resource holder epoch nil)
+          (->FenceResult false nil nil nil
+                         "lease fence requires Term resource/holder and an integer epoch"))))))
+
+(defn lease-state [event: t/Triple] -> LeaseState?
+  (let [proposition: t/Triple (rot/proposition-of event)
+        value (t/triple-slot2 proposition)
+        occurrence: t/Triple (rot/occurrence-of event)]
+    (if (and (= :kernel/lease (t/triple-slot1 proposition))
+             (and (t/triple? value)
+                  (and (= :kernel/expires-at (t/triple-slot1 value))
+                       (and (integer? (t/triple-slot2 value))
+                            (t/occurrence-coordinate? occurrence)))))
+      (let [transaction (t/triple-slot0 occurrence)
+            epoch (if (t/triple? transaction)
+                    (t/triple-slot2 transaction)
+                    nil)]
+        (if (integer? epoch)
+          (->LeaseState (t/triple-slot0 proposition)
+                        (t/triple-slot0 value)
+                        (t/triple-slot2 value)
+                        epoch occurrence proposition)
+          nil))
+      nil)))
+
+(defn current-lease
+  [session: schema/Session
+   resource: Any] -> LeaseState?
+  (loop [remaining: (Vec t/Triple)
+         (rot/by-slot01 (schema/view session) resource :kernel/lease)
+         current: LeaseState? nil]
+    (if (empty? remaining)
+      current
+      (let [candidate: LeaseState? (lease-state (first remaining))]
+        (recur (vec (rest remaining))
+               (if (nil? candidate) current candidate))))))
+
+(defn decision-snapshot [lease: LeaseState] -> commit/LeaseSnapshot
+  (commit/->LeaseSnapshot ""
+                          (leasestate-expires-ms lease)
+                          (leasestate-epoch lease)))
+
+(defn held?
+  [lease: LeaseState?
+   now-ms: Int] -> Bool
+  (if (nil? lease)
+    false
+    (commit/lease-held? (decision-snapshot lease) now-ms)))
+
+(defn matching-fence?
+  [lease: LeaseState?
+   fence: FenceResult] -> Bool
+  (and (not (nil? lease))
+       (and (= (leasestate-resource lease) (fenceresult-resource fence))
+            (and (= (leasestate-holder lease) (fenceresult-holder fence))
+                 (= (leasestate-epoch lease) (fenceresult-epoch fence))))))
+
+(defn valid-grant-input?
+  [resource: Any
+   holder: Any
+   ttl-ms: Any
+   now-ms: Int] -> Bool
+  (and (t/term? resource)
+       (and (t/term? holder)
+            (and (integer? ttl-ms)
+                 (and (pos? ttl-ms)
+                      (and (>= now-ms 0)
+                           (<= ttl-ms (- max-time-ms now-ms))))))))
+
+(defn lease-proposition
+  [resource: Any
+   holder: Any
+   expires-ms: Int] -> t/Triple
+  (t/triple resource :kernel/lease
+            (t/triple holder :kernel/expires-at expires-ms)))
+
+(defn replace-lease!
+  [session: schema/Session
+   prior: LeaseState?
+   resource: Any
+   holder: Any
+   expires-ms: Int] -> Int
+  (let [root (schema/store-of session)
+        proposition: t/Triple (lease-proposition resource holder expires-ms)
+        operations: (Vec t/CommitOperation)
+        (if (nil? prior)
+          [(store/assert-operation proposition)]
+          [(store/retract-operation (leasestate-proposition prior))
+           (store/assert-operation proposition)])]
+    (do
+      (store/commit-transaction! root operations)
+      (schema/refresh! session)
+      (store/current-sequence root))))
+
+(defn retract-lease!
+  [session: schema/Session
+   lease: LeaseState?] -> Int
+  (let [root (schema/store-of session)]
+    (if (nil? lease)
+      (store/current-sequence root)
+      (do
+        (store/commit-transaction!
+         root [(store/retract-operation (leasestate-proposition lease))])
+        (schema/refresh! session)
+        (store/current-sequence root)))))
+
+(defn matching-expiry
+  [lease: LeaseState?
+   fence: FenceResult] -> Int?
+  (if (nil? lease)
+    nil
+    (if (matching-fence? lease fence)
+      (leasestate-expires-ms lease)
+      nil)))
+
+(defn acquire-response!
+  [session: schema/Session
+   request: t/RpcRequest
+   now-ms: Int] -> t/RpcResponse
+  (let [served-version (store/current-sequence (schema/store-of session))
+        fields: ValuesResult
+        (read-record (t/rpc-request-payload-value request) :lease/acquire 3)]
+    (if (not (valuesresult-ok fields))
+      (error-response request served-version :rpc-invalid-payload false
+                      (or (valuesresult-message fields)
+                          "lease acquire payload is malformed"))
+      (let [values: (Vec Any) (valuesresult-values fields)
+            resource (nth values 0)
+            holder (nth values 1)
+            ttl-ms (nth values 2)]
+        (if (not (valid-grant-input? resource holder ttl-ms now-ms))
+          (error-response
+           request served-version :rpc-invalid-payload false
+           "lease acquire requires Term resource/holder and a positive bounded ttl-ms")
+          (let [prior: LeaseState? (current-lease session resource)]
+            (if (held? prior now-ms)
+              (error-response request served-version :rpc/lease-held false
+                              "lease resource is already held")
+              (let [expires-ms (+ now-ms ttl-ms)
+                    epoch (replace-lease! session prior resource holder expires-ms)]
+                (response request epoch
+                          (grant-record resource holder epoch expires-ms))))))))))
+
+(defn renew-response!
+  [session: schema/Session
+   request: t/RpcRequest
+   now-ms: Int] -> t/RpcResponse
+  (let [served-version (store/current-sequence (schema/store-of session))
+        fields: ValuesResult
+        (read-record (t/rpc-request-payload-value request) :lease/renew 2)]
+    (if (not (valuesresult-ok fields))
+      (error-response request served-version :rpc-invalid-payload false
+                      (or (valuesresult-message fields)
+                          "lease renew payload is malformed"))
+      (let [values: (Vec Any) (valuesresult-values fields)
+            fence: FenceResult (parse-fence (nth values 0))
+            ttl-ms (nth values 1)]
+        (if (or (not (fenceresult-ok fence))
+                (not (valid-grant-input?
+                      (fenceresult-resource fence)
+                      (fenceresult-holder fence) ttl-ms now-ms)))
+          (error-response
+           request served-version :rpc-invalid-payload false
+           (or (fenceresult-message fence)
+               "lease renew requires a valid fence and positive bounded ttl-ms"))
+          (let [prior: LeaseState?
+                (current-lease session (fenceresult-resource fence))]
+            (if (not (and (matching-fence? prior fence)
+                          (held? prior now-ms)))
+              (error-response request served-version
+                              :rpc/lease-fence-mismatch false
+                              "lease fence is stale or expired")
+              (let [expires-ms (+ now-ms ttl-ms)
+                    epoch (replace-lease!
+                           session prior
+                           (fenceresult-resource fence)
+                           (fenceresult-holder fence)
+                           expires-ms)]
+                (response
+                 request epoch
+                 (grant-record (fenceresult-resource fence)
+                               (fenceresult-holder fence)
+                               epoch expires-ms))))))))))
+
+(defn release-response!
+  [session: schema/Session
+   request: t/RpcRequest] -> t/RpcResponse
+  (let [served-version (store/current-sequence (schema/store-of session))
+        fence: FenceResult
+        (parse-fence (t/rpc-request-payload-value request))]
+    (if (not (fenceresult-ok fence))
+      (error-response request served-version :rpc-invalid-payload false
+                      (or (fenceresult-message fence)
+                          "lease release fence is malformed"))
+      (let [prior: LeaseState?
+            (current-lease session (fenceresult-resource fence))]
+        (if (not (matching-fence? prior fence))
+          (response request served-version (released-record false))
+          (let [committed-version (retract-lease! session prior)]
+            (response request committed-version (released-record true))))))))
+
+(defn check-response
+  [session: schema/Session
+   request: t/RpcRequest
+   now-ms: Int] -> t/RpcResponse
+  (let [served-version (store/current-sequence (schema/store-of session))
+        fence: FenceResult
+        (parse-fence (t/rpc-request-payload-value request))]
+    (if (not (fenceresult-ok fence))
+      (error-response request served-version :rpc-invalid-payload false
+                      (or (fenceresult-message fence)
+                          "lease check fence is malformed"))
+      (let [prior: LeaseState?
+            (current-lease session (fenceresult-resource fence))
+            expires-ms: Int? (matching-expiry prior fence)]
+        (response
+         request served-version
+         (check-record (and (some? expires-ms) (held? prior now-ms))
+                       expires-ms))))))
+
+(defn lease-operation? [operation: Keyword] -> Bool
+  (or (= :rpc/lease-acquire operation)
+      (or (= :rpc/lease-renew operation)
+          (or (= :rpc/lease-release operation)
+              (= :rpc/lease-check operation)))))
+
+(defn dispatch!
+  [session: schema/Session
+   request: t/RpcRequest
+   now-ms: Int] -> t/RpcResponse
+  (let [root (schema/store-of session)
+        served-version (store/current-sequence root)
+        operation (t/rpcrequest-op request)]
+    (cond
+      [(not (= (store/space-id root) (t/rpcrequest-space request)))
+       (error-response request served-version :rpc/space-mismatch false
+                       "request SpaceId does not match the served store")]
+      [(not (expected-version-matches?
+             served-version (t/rpcrequest-expected-version request)))
+       (error-response request served-version :rpc/conflict true
+                       "expected-version does not match the served version")]
+      [(t/rpcrequest-timeout-ms request)
+       (error-response request served-version :rpc/unexpected-timeout false
+                       "timeout-ms is supported only by rpc/query")]
+      [(t/rpcrequest-page request)
+       (error-response request served-version :rpc/unexpected-page false
+                       "lease operations do not support paging")]
+      [(= :rpc/lease-acquire operation)
+       (acquire-response! session request now-ms)]
+      [(= :rpc/lease-renew operation)
+       (renew-response! session request now-ms)]
+      [(= :rpc/lease-release operation)
+       (release-response! session request)]
+      [(= :rpc/lease-check operation)
+       (check-response session request now-ms)]
+      [:else
+       (error-response
+        request served-version :rpc/native-operation-unavailable false
+        "FRAMRPC operation is not a lease operation")])))
