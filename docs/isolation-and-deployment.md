@@ -20,14 +20,14 @@ FRAMRPC v1 is a bounded binary protocol. Each frame carries magic, version, requ
 
 Unknown operation, record, field, and Term tags, trailing bytes, or over-limit nesting are rejected. FRAMRPC is not EDN, JSON, HTTP, or MCP.
 
-The native daemon accepts exactly thirteen operations:
+The coordinator contract accepts exactly thirteen operations:
 
 - metadata: `rpc/version`, `rpc/status`, `rpc/validate`;
 - mutation: `rpc/assert`, `rpc/retract`, `rpc/batch`;
 - read: `rpc/scan`, `rpc/query`, `rpc/occurrences`;
 - fencing: `rpc/lease-acquire`, `rpc/lease-renew`, `rpc/lease-release`, `rpc/lease-check`.
 
-Query, scan, and occurrences accept page cursors; only query accepts a timeout. Mutations may carry expected logical version, reads report served version, and status reports ordered-result-cache counters. There is no native pull, import/export, graph-edit, deployment, or cutover operation; those local or sealed controls do not enlarge FRAMRPC.
+Query, scan, and occurrences accept page cursors; only query accepts a timeout. Mutations may carry expected logical version, reads report served version, and status reports ordered-result-cache counters. There is no FRAMRPC pull, import/export, graph-edit, deployment, or cutover operation; those local or sealed controls do not enlarge FRAMRPC.
 
 The official zero-dependency [`clients/node/framrpc.mjs`](../clients/node/framrpc.mjs) client connects directly and exposes all thirteen operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
 
@@ -46,7 +46,7 @@ The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it 
 - `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
 - The Cloudflare shim/Worker is an optional authenticated JSON edge.
 
-The launcher consumes only a linked executable promoted behind the native artifact's READY marker; raw Beagle projection output is not executable runtime input. Compiled Clojure under `out/` remains available only through the explicit JVM routes. The frozen Zig implementation remains a compatibility, rollback, and differential oracle held to the same semantic and thirteen-operation wire contract.
+The native route consumes only a linked executable promoted behind the native artifact's READY marker. The Graal route consumes the absolute executable named by `FRAM_GRAAL_ARTIFACT`; it is not a Native World artifact. Raw Beagle projection output is not executable runtime input. Compiled Clojure under `out/` remains available only through the explicit JVM routes. QBE remains the direct-native cross-check.
 
 ## Durable state and handoff
 
