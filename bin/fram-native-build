@@ -357,8 +357,23 @@ if [[ -z "$host" ]]; then
     die "beagle native-exe failed"
   fi
 else
+  native_daemon_entries=(
+    fram.native-daemon/serve-flat-generated-abi
+    fram.native-daemon/serve-flat-store-boot
+    fram.native-daemon/serve-flat-store-dispatch!
+    fram.native-daemon/serve-flat-store-shutdown
+    fram.native-daemon/serve-flat-codec-read-request
+    fram.native-daemon/serve-flat-codec-write-response
+    fram.native-daemon/serve-flat-codec-release-request
+    fram.native-daemon/serve-flat-codec-release-response
+  )
+  native_daemon_entry_args=()
+  for native_daemon_entry in "${native_daemon_entries[@]}"; do
+    native_daemon_entry_args+=(--entry "$native_daemon_entry")
+  done
   if ! "$beagle" native-module \
       --out "$stage" \
+      "${native_daemon_entry_args[@]}" \
       -- \
       "${normalized_sources[@]}" \
       >"$stage/native-module.log" 2>&1; then
