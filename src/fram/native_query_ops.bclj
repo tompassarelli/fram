@@ -352,7 +352,7 @@
        ordinal
        (parse-query-row! (nth fields 3))))))
 
-(defn request-cursor [request: t/RpcRequest] -> QueryCursor?
+(defn request-cursor! [request: t/RpcRequest] -> QueryCursor?
   (let [page (t/rpcrequest-page request)]
     (if (some? page)
       (let [cursor (t/rpc-page-request-cursor-value page)]
@@ -555,7 +555,7 @@
         (read-record! (t/rpc-request-payload-value request) :query/request 2)
         plan-term (nth request-fields 0)
         plan: query/QueryPlan (parse-query-plan! plan-term)
-        cursor: QueryCursor? (request-cursor request)
+        cursor: QueryCursor? (request-cursor! request)
         view: QueryView
         (requested-query-view! (schema/store-of session)
                                (nth request-fields 1) cursor)
@@ -594,7 +594,7 @@
     (require-unit! (t/rpc-request-payload-value request))
     (let [root (schema/store-of session)
           head (store/current-sequence root)
-          cursor: QueryCursor? (request-cursor request)
+          cursor: QueryCursor? (request-cursor! request)
           version (if (some? cursor)
                     (querycursor-snapshot-version cursor) head)
           snapshot (snapshot-root! root version)
