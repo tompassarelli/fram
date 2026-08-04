@@ -607,7 +607,7 @@
                 (pageresult-page page-result)
                 (pageresult-payload page-result)))))
 
-(defn validation-payload [root: (Atom t/TermStore)] -> t/Triple
+(defn validation-payload! [root: (Atom t/TermStore)] -> t/Triple
   (try
     (let [space-id (store/space-id root)
           copy (store/new-term-store space-id)
@@ -638,7 +638,7 @@
     (do
       (require-unit! (t/rpc-request-payload-value request))
       (response request served-version nil
-                (validation-payload (schema/store-of session))))))
+                (validation-payload! (schema/store-of session))))))
 
 (defn dispatch-read!
   [session: schema/Session

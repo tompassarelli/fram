@@ -69,11 +69,11 @@
 (defn failed-response [message: String] -> ResponseResult
   (->ResponseResult status-fatal nil message empty-bytes))
 
-(defn boot-store
+(defn boot-store!
   [canonical-log-path: String
    space-id: String
    log-bytes: (Vec Int)] -> StoreResult
-  (let [decoded (log/boot-framlog space-id log-bytes)
+  (let [decoded (log/boot-framlog! space-id log-bytes)
         root (log/bootresult-store decoded)]
     (if (and (= status-ok (log/bootresult-status decoded)) root)
       (->StoreResult
@@ -105,7 +105,7 @@
             root (schema/store-of session)
             before-sequence (term-store/current-sequence root)
             rpc-response (dispatch/dispatch! session request now-ms)
-            encoded (log/encode-store-tail root before-sequence)]
+            encoded (log/encode-store-tail! root before-sequence)]
         (if (= status-ok (log/bytesresult-status encoded))
           (->ResponseResult status-ok
                             (wrap-rpc-response frame rpc-response)
@@ -116,8 +116,8 @@
                      "native FRAMLOG append encoding failed"))))
       (failed-response "decoded request frame omitted RpcRequest"))))
 
-(defn read-request [request-bytes: (Vec Int)] -> RequestResult
-  (let [decoded (native-wire/decode-request-bytes request-bytes)
+(defn read-request! [request-bytes: (Vec Int)] -> RequestResult
+  (let [decoded (native-wire/decode-request-bytes! request-bytes)
         frame (native-wire/decoderesult-frame decoded)
         error (native-wire/decoderesult-error decoded)]
     (if (and (nil? error) frame)
@@ -125,9 +125,9 @@
       (failed-request
        (error-or error "native FRAMRPC request decode failed")))))
 
-(defn write-response [response-value: Response] -> BytesResult
+(defn write-response! [response-value: Response] -> BytesResult
   (let [encoded
-        (native-wire/encode-response-bytes (response-frame response-value))
+        (native-wire/encode-response-bytes! (response-frame response-value))
         bytes (native-wire/encoderesult-bytes encoded)
         error (native-wire/encoderesult-error encoded)]
     (if (and (nil? error) bytes)
@@ -138,11 +138,11 @@
 ;; fram:native/serve_flat_host.h. Keep their order and signatures stable.
 (defn serve-flat-generated-abi [] -> Int serve-flat-abi)
 
-(defn serve-flat-store-boot
+(defn serve-flat-store-boot!
   [canonical-log-path: String
    space-id: String
    log-bytes: (Vec Int)] -> StoreResult
-  (boot-store canonical-log-path space-id log-bytes))
+  (boot-store! canonical-log-path space-id log-bytes))
 
 (defn serve-flat-store-dispatch!
   [store-result: StoreResult
@@ -168,14 +168,14 @@
       (fatal-status
        (error-or (storeresult-error store-result) "store boot failed")))))
 
-(defn serve-flat-codec-read-request [request-bytes: (Vec Int)] -> RequestResult
-  (read-request request-bytes))
+(defn serve-flat-codec-read-request! [request-bytes: (Vec Int)] -> RequestResult
+  (read-request! request-bytes))
 
-(defn serve-flat-codec-write-response [response-result: ResponseResult] -> BytesResult
+(defn serve-flat-codec-write-response! [response-result: ResponseResult] -> BytesResult
   (let [response-value (responseresult-response response-result)]
     (if (and (= status-ok (responseresult-status response-result))
              response-value)
-      (write-response response-value)
+      (write-response! response-value)
       (->BytesResult status-fatal empty-bytes))))
 
 (defn serve-flat-codec-release-request [request-result: RequestResult] -> Nil nil)

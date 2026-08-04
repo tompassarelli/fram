@@ -569,7 +569,7 @@
     (append-presence! encoder (not (nil? payload)))
     (if (nil? payload) nil (append-term! encoder payload 0))))
 
-(defn finish-response-frame
+(defn finish-response-frame!
   [frame: t/RpcFrameV1
    body-bytes: (Vec Int)] -> EncodeResult
   (let [out (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
@@ -586,7 +586,7 @@
         (->EncodeResult nil error)
         (->EncodeResult (deref (encoder-bytes out)) nil)))))
 
-(defn encode-response-bytes [frame: t/RpcFrameV1] -> EncodeResult
+(defn encode-response-bytes! [frame: t/RpcFrameV1] -> EncodeResult
   (let [response (t/rpcframev1-response frame)]
     (cond
       [(not= :response (t/rpcframev1-kind frame))
@@ -607,4 +607,4 @@
              [(> (count body-bytes) rpc-v1-max-body-bytes)
               (->EncodeResult nil
                               "FRAMRPC body exceeds the configured byte limit")]
-             [:else (finish-response-frame frame body-bytes)])))])))
+             [:else (finish-response-frame! frame body-bytes)])))])))
