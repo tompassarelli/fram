@@ -52,6 +52,37 @@ Source head exposes no deployment control. Pinned v0.3 clusters use the live [co
 
 Deployment worktrees stay pristine. Controller markers live in controller state, never the source tree being validated.
 
+## Growth and retention — what the application owns
+
+The log never deletes: every assertion and retraction is appended forever, and
+that history is the product. Until compaction ships (tracked in
+[guarantees](guarantees.md#profiles) as not yet gated), growth control belongs
+to the application, on three measured facts:
+
+- One operation costs ~26 bytes of framing plus **every atom's bytes verbatim,
+  every time it appears** — the log carries no string dictionary. A fact whose
+  subject is a 100-character identifier pays those 100 bytes on each of its
+  occurrences; measured: 1,000 assertions under one 10-character subject are
+  36 KB, under one 100-character subject 126 KB.
+- Re-asserting a corpus appends all of it again, exactly linearly: a 15k-fact
+  corpus measured 1.2 MB per generation and 12.2 MB after ten identical
+  rebuilds. A rebuild-from-source lifecycle multiplies the log by the number
+  of rebuilds and records rebuilds, not revisions.
+- A reference saves bytes only when its token is shorter than what it
+  replaces; pointing many facts at a long string id costs more than inlining.
+
+The patterns that keep growth proportional to change:
+
+1. **Supersede, don't rebuild.** Incremental updates from a change cursor keep
+   history meaningful and the log linear in edits, not in rebuilds.
+2. **One SpaceId per rebuild** when a full rebuild is genuinely needed: a new
+   space is a new log file, and retiring the old one is ordinary file
+   management.
+3. **Short identity tokens.** Minted transaction coordinates (`txn/mint!`) are
+   compact Terms; long human-readable identifiers belong in one asserted name
+   fact, not in every subject position.
+4. **Seal epochs** for ranges you must keep but will not touch.
+
 ## Probes
 
 - [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
