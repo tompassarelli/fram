@@ -52,6 +52,8 @@ Meaning needs one relational anchor. A space opts into an optional profile with 
 
 Only the anchoring proposition is bootstrap-exempt. Listing `R5` additionally requires a namespaced non-`:kernel/*` predicate to have an asserted grouping; omitting R5 preserves the space's prior verdicts. Current enforcement status is in [guarantees](guarantees.md#profiles).
 
+The relational profile reads the positions as **entity** (t1), **attribute** (t2), and **value** (t3) — the EAV discipline. Role words are profile vocabulary: profile-aware surfaces such as `text-match(entity, attribute, needle)` may speak them, while kernel and wire vocabulary stays t1/t2/t3. The verdict and rejected bench are in the [naming ledger](naming.md#profile--and-the-eav-reading--chosen-2026-08-04).
+
 ## Semantic hints and similarity
 
 Similarity is retrieval guidance, never identity or a kernel primitive:

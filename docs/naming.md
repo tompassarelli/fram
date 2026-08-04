@@ -113,6 +113,28 @@ Rejected bench:
 - **bare `0`/`1`/`2`** — ungreppable and unpronounceable in prose.
 - **1-based `slot1`/`slot2`/`slot3`** — keeps the invented word while changing only the defensible part.
 
+## profile — and the EAV reading — chosen 2026-08-04
+
+The thing is the word for an optional, stored contract above the unchanged kernel, and the role vocabulary of the first one. **Profile** follows the standards prior (Bluetooth profiles, OWL 2 profiles): a named usage convention that constrains and reads one substrate without changing it. The relational profile's reading of the positions is **entity (t1), attribute (t2), value (t3)** — the database literature's EAV prior. Role words are profile vocabulary: profile documentation and profile-aware surfaces such as `text-match(entity, attribute, needle)` may speak them; kernel and wire vocabulary stays t1/t2/t3.
+
+Rejected bench:
+
+- **world** — retired to the historical Worlds service; reuse reopens a settled verdict.
+- **schema** — implies stored enforcement types the kernel refuses to own.
+- **dialect** — implies a different language rather than a convention over one.
+- **layer / mode** — generic altitude words, and mode reads as a runtime switch.
+- **renaming the stored `"relational"` anchor to `"eav"`** — a stored-value migration purchasing a spelling; the reading is recorded instead.
+
+## time lives in the log, not the Triple — architecture ruling — chosen 2026-08-04
+
+The thing is where time attaches. A Triple is timeless content; time is the occurrence's log coordinate, and any time that must be data is an ordinary Triple, per the [glossary](glossary.md#semantic-kernel). Two priors decide it. Recursion: a quoted Triple must be timeless, or `((a, :works-for, b), :supported-by, doc)` cannot say which version it quotes — Datomic's datom fuses `(e, a, v)` with `(tx, added)` and therefore cannot nest, reifying statements as entities instead. Type–token: separate occurrences keep equal propositions asserted independently as two corroborating events, where Datomic elides the redundant datom. The accepted cost is that as-of filtering rides snapshot machinery at the query boundary instead of a time field in every index row.
+
+Rejected bench:
+
+- **datom-style fused tuple** — breaks quotation and collapses independent corroboration.
+- **a fourth time position** — makes the arity a lie and assigns a kernel role to a slot.
+- **validity-interval fields** — closing an interval mutates history that must stay append-only.
+
 ## Appending an entry
 
 Record the date, what the thing is (including what it does not promise), the prior that decided it, and each rejected candidate with one honest sentence. Reconcile superseded rulings in place and link the successor; never let obsolete vocabulary pose as current doctrine.

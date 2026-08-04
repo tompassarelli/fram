@@ -26,6 +26,8 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 **profile** — An optional, stored contract that validates a space's propositions above the unchanged kernel.
 
+**EAV reading** — The relational profile's role names for the positions: entity (t1), attribute (t2), value (t3). Profile vocabulary only, never kernel roles.
+
 ## Storage and query
 
 **FRAMLOG** — The authoritative binary append-only history for one SpaceId.
