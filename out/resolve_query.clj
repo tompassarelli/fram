@@ -1,9 +1,8 @@
 (ns resolve-query
   (:require [clojure.string :as str]
             [fram.types :as t]
-            [fram.store :as c]
-            [fram.rotation :as rot]
             [fram.datalog :as d]
+            [resolve-ident :as ri]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-modules :as rm]
@@ -54,48 +53,26 @@
   (if (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))]
   (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} h) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src [])))) {} srcs))
 
-(defn- ent! [ctx k->id k]
-  (let [cur (get (deref k->id) k)]
-  (if (some? cur) cur (let [e (rr/mint! ctx)]
-  (do
-  (swap! k->id assoc k e)
-  e)))))
+(def ^String CALLS-DEFN "calls-defn")
 
-(defn- invert [k->id]
-  (reduce (fn [m k] (let [v (get (deref k->id) k)]
-  (if (some? v) (assoc m v k) m))) {} (set (keys (deref k->id)))))
+(def ^String IS-ROOT "is-root")
+
+(def ^String IS-PRIV "is-priv")
+
+(defn- edge-propositions [edges ^String predicate]
+  (mapv (fn [e] (t/triple (nth e 0) predicate (nth e 1))) edges))
 
 (defn blast-closure! [edges]
-  (let [ctx (rr/context (c/new-term-store "resolve-query"))
-   EDGE "calls-defn"
-   k->id (atom {})]
-  (do
-  (doseq [e edges]
-  (rr/assert! ctx (ent! ctx k->id (nth e 0)) EDGE (ent! ctx k->id (nth e 1))))
-  (let [id->k (invert k->id)
-   propositions (rot/propositions (rot/all-occurrences (rr/current-view ctx)))
-   db (d/run-rules! propositions [(d/rule "reaches" [(d/variable "x") (d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant EDGE) (d/variable "y")])]) (d/rule "reaches" [(d/variable "x") (d/variable "z")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant EDGE) (d/variable "y")]) (d/relation-literal "reaches" [(d/variable "y") (d/variable "z")])])])
-   reaches (set (mapv (fn [row] [(get id->k (nth row 0)) (get id->k (nth row 1))]) (vec (d/facts db "reaches"))))
+  (let [db (d/run-rules! (edge-propositions edges CALLS-DEFN) [(d/rule "reaches" [(d/variable "x") (d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")])]) (d/rule "reaches" [(d/variable "x") (d/variable "z")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")]) (d/relation-literal "reaches" [(d/variable "y") (d/variable "z")])])])
+   reaches (set (mapv (fn [row] [(nth row 0) (nth row 1)]) (vec (d/facts db "reaches"))))
    blast (reduce (fn [m row] (let [x (nth row 0)
    y (nth row 1)]
   (assoc m y (conj (get m y #{}) x)))) {} (vec reaches))]
-  {:reaches reaches :blast blast}))))
+  {:reaches reaches :blast blast}))
 
 (defn dead-private-bindings! [cg privacy]
   (let [defn-meta (:defn-meta cg {})
    edges (:edges cg [])
-   ctx (rr/context (c/new-term-store "resolve-dead"))
-   CALLS "calls-defn"
-   ISROOT "is-root"
-   ISPRIV "is-priv"
-   k->id (atom {})]
-  (do
-  (doseq [e edges]
-  (rr/assert! ctx (ent! ctx k->id (nth e 0)) CALLS (ent! ctx k->id (nth e 1))))
-  (doseq [leaf (set (keys defn-meta))]
-  (let [e (ent! ctx k->id leaf)]
-  (if (= :private (get privacy leaf)) (rr/assert! ctx e ISPRIV e) (rr/assert! ctx e ISROOT e))))
-  (let [id->k (invert k->id)
-   propositions (rot/propositions (rot/all-occurrences (rr/current-view ctx)))
-   db (d/run-strata! propositions [[(d/rule "live" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant ISROOT) (d/variable "x")])]) (d/rule "live" [(d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS) (d/variable "y")]) (d/relation-literal "live" [(d/variable "x")])])] [(d/rule "dead" [(d/variable "p")] [(d/relation-literal d/triple-relation [(d/variable "p") (d/constant ISPRIV) (d/variable "p")]) (d/negated-literal "live" [(d/variable "p")])])]])]
-  (set (vec (keep (fn [row] (get id->k (nth row 0))) (vec (d/facts db "dead")))))))))
+   marks (mapv (fn [leaf] (t/triple leaf (if (= :private (get privacy leaf)) IS-PRIV IS-ROOT) leaf)) (vec (set (keys defn-meta))))
+   db (d/run-strata-db! (d/edb (vec (concat (edge-propositions edges CALLS-DEFN) marks))) [[(d/rule "live" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant IS-ROOT) (d/variable "x")])]) (d/rule "live" [(d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")]) (d/relation-literal "live" [(d/variable "x")])])] [(d/rule "dead" [(d/variable "p")] [(d/relation-literal d/triple-relation [(d/variable "p") (d/constant IS-PRIV) (d/variable "p")]) (d/negated-literal "live" [(d/variable "p")])])]])]
+  (set (vec (keep (fn [row] (nth row 0)) (vec (d/facts db "dead")))))))

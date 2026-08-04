@@ -3,7 +3,7 @@
 ;; Proves: a unique anchor swaps ONE interior fN edge (mint new + supersede one), the
 ;; def is NOT re-emitted, and the three fail-closed paths (0-match / ambiguous / no-def)
 ;; refuse with NO store mutation. Uses the real schema module (emit-edn'd) as the corpus.
-(require '[fram.store :as c] '[clojure.edn :as edn]
+(require '[resolve-ident :as ri] '[clojure.edn :as edn]
          '[clojure.java.io :as io] '[clojure.string :as str] '[babashka.process :refer [sh]])
 ;; resolve.clj + its Beagle-compiled parts are bare-ns files at the repo ROOT
 ;; (build.sh), off the `bb -cp out` classpath — load them the way the daemon
@@ -30,10 +30,13 @@
                           (do (swap! fail inc) (println "  [FAIL] " name))))
 ;; run a verb thunk under capture-only (no re-resolve/project), *reject!* -> a catchable
 ;; signal; return {:minted N :superseded M} or {:reject CODE}.
+;; S2: a minted identity is a Term, so "how many nodes did this mint" is the
+;; handle's ordinal count, and "how many facts did it supersede" is its
+;; withdrawal count — the store's own retractions, not a supersedes list.
 (defn run-verb [thunk]
-  (let [id0 (:next-id @r/ctx) sup0 (count (:superseded @r/ctx))]
+  (let [id0 (ri/minted-count r/ctx) sup0 (ri/withdrawal-count r/ctx)]
     (try (thunk)
-         {:minted (- (:next-id @r/ctx) id0) :superseded (- (count (:superseded @r/ctx)) sup0)}
+         {:minted (- (ri/minted-count r/ctx) id0) :superseded (- (ri/withdrawal-count r/ctx) sup0)}
          (catch clojure.lang.ExceptionInfo e (or (:data (ex-data e)) (ex-data e))))))
 
 (r/resolve-edn!
@@ -44,7 +47,7 @@
      (println "================ replace-in-body verb test ================")
      ;; 1) SUCCESS: unique anchor (empty? cs) -> (zero? (count cs))
      (let [res (run-verb #(r/verb-replace-in-body! "cardinality" "schema"
-                                                   '(empty? cs) '(zero? (count cs))))]
+                                                   '(empty? events) '(zero? (count events))))]
        (check "unique anchor: superseded exactly 1 fN edge" (= 1 (:superseded res)))
        ;; minted a SMALL subtree (the 5-node replacement + its facts), NOT the whole def
        ;; (a whole-def cardinality re-mint is 100s of objects) — the sub-def granularity win.
@@ -53,7 +56,7 @@
 
 ;; fresh store per fail-closed case (a rejected edit must leave the store untouched)
 (doseq [[nm anchor code] [["0-match anchor rejects (code 5)" '(no-such-form-xyz) 5]
-                          ["ambiguous anchor rejects (code 5)" 'cs 5]]]
+                          ["ambiguous anchor rejects (code 5)" 'events 5]]]
   (r/resolve-edn!
    [edn-path]
    (fn []

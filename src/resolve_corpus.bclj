@@ -21,24 +21,23 @@
 ;; ============================================================================
 (ns resolve-corpus
   (:require [clojure.string :as str]
-    [fram.types :as t]
-    [fram.store :as c]
+    [resolve-ident :as ri]
     [resolve-read :as rr]
     [resolve-modules :as rm]
     [resolve-walk :as rw]))
 
 (define-mode strict)
 
-(def MODULE-NAME-RE: Any (re-pattern "@([^#]+)#.+"))
+(def MODULE-NAME-RE: Any (re-pattern "@([^#]+)#\\d+"))
 
 (def SLASH-RE: Any (re-pattern "/"))
 
 ;; GAP: Beagle cannot name the heterogeneous module tables or the host callbacks
 ;; that mutate resolve.clj's thread-local dynamic bindings more precisely than
-;; Any. The recursive Term alias cannot cross Beagle module calls without
-;; narrowing, so node/predicate fields use Any and are validated by rr/context.
+;; Any. Store, tx, predicate ids, source vectors, and the binding atom remain
+;; concrete so the unchecked boundary is limited to those two shapes.
 (defrecord CorpusState
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    KIND: Any
    BOUND: Any
@@ -74,7 +73,7 @@
     nil))
 
 (defn make-xresolve
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    ents-of: Any
    exports: Any
@@ -84,8 +83,8 @@
   (let [{:keys [refer as rename]} (rm/parse-require ctx view (vec (get ents-of src []))) xport (fn
                                                                                                  [m: Any
                                                                                                   n: Any] -> Any (or (get-in exports [m n]) (get-in type-exports [m n]))) xacc (fn
-                                                                                                                                                                                   [m: Any
-                                                                                                                                                                                    n: Any] -> Any (get-in accessor-exports [m n]))]
+                                                                                                                                                                                 [m: Any
+                                                                                                                                                                                  n: Any] -> Any (get-in accessor-exports [m n]))]
     (fn [nm: Any] -> Any
       (cond
         (nil? nm)
@@ -122,7 +121,7 @@
         nil))))
 
 (defn module-export-set
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    ents-of: Any
    src: Any] -> Any
@@ -133,7 +132,7 @@
         (keys (rm/module-accessors ctx view ents))))))
 
 (defn module-imports
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    ents-of: Any
    src: Any] -> Any
@@ -141,7 +140,7 @@
     (into #{} (concat (vals refer) (vals as) (map first (vals rename))))))
 
 (defn import-graph
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    ents-of: Any
    srcs: (Vec Any)] -> Any
@@ -151,7 +150,7 @@
         srcs))))
 
 (defn module-has-macro?
-  [ctx: rr/Context
+  [ctx: ri/Graph
    view: Any
    ents-of: Any
    src: Any] -> Bool
@@ -159,15 +158,15 @@
     (boolean (some (fn [form: Any] -> Bool (let [def-form (rm/unwrap-def ctx view form) head (first (rr/ordered-children ctx def-form))] (= "defmacro" (rr/sym-val ctx view head)))) (rm/forms-of ctx view ents)))))
 
 (defn lift-bound-to-refers!
-  [ctx: rr/Context
+  [ctx: ri/Graph
    KIND: Any
    BOUND: Any
    REFERS: Any] -> Any
   (when (some? BOUND)
-    (doseq [event (rr/events-by-predicate ctx BOUND)]
-      (let [leaf (rr/event-subject event) target (rr/event-value event)]
-        (when (and (rr/live-node? ctx KIND target) (empty? (rr/events-by-subject-predicate ctx leaf REFERS)))
-          (rr/assert! ctx leaf REFERS target))))))
+    (doseq [occ (ri/by-predicate ctx BOUND)]
+      (let [leaf (ri/subject-at ctx occ) target (ri/target-at ctx occ)]
+        (when (and (some? target) (rr/live-node? ctx KIND target) (empty? (ri/by-subject-predicate ctx leaf REFERS)))
+          (ri/assert! ctx leaf REFERS target))))))
 
 (defn corpus-from-store! [state: CorpusState] -> Any
   (let [t0 (System/nanoTime) groups (rw/warm-groups (:ctx state) (:corpus-cache state) name->module) t-groups (System/nanoTime) tables (rw/scoped-corpus-tables (:ctx state) (:view state) groups (:corpus-scope state)) install (:install-warm state)]
@@ -178,50 +177,58 @@
           (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state))))))
       tables)))
 
+(def RESOLVE-SPACE: String "resolve")
+
 (defn resolve-edn!
   [host: CorpusHost
    edn-paths: (Vec Any)
    body: Any] -> Any
-  (let [context: rr/Context (rr/context (c/new-term-store "resolve")) with-state (:with-state host)]
-    (with-state context
+  (let [ctx (ri/new-graph RESOLVE-SPACE) with-state (:with-state host)]
+    (with-state ctx
       (fn [] -> Any
         (let [state-fn (:state host) load (:load-edn host) loaded (mapv load edn-paths) state (state-fn) install-srcs (:install-srcs state) install-tables (:install-tables state)]
           (do
             (install-srcs loaded)
             (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
             (let [run-all (:run-all state)] (run-all))
-            (let [result (body)] (do (rr/commit! context) result))))))))
+            (body)))))))
 
 (defn resolve-warm-store!
   [host: CorpusHost
-   store: (Atom t/TermStore)
+   ctx: ri/Graph
    body: Any] -> Any
-  (let [context: rr/Context (rr/context store) with-state (:with-state host)]
-    (with-state context
+  (let [with-state (:with-state host)]
+    (with-state ctx
       (fn [] -> Any
         (let [state-fn (:state host) state (state-fn)]
           (do
             (corpus-from-store! state)
             (when (:resolve-walk? state)
               (let [run-all (:run-all state)] (run-all))
-              (lift-bound-to-refers! (:ctx state) (:KIND state) (:BOUND state) (:REFERS state)))
-            (let [result (body)] (do (rr/commit! context) result))))))))
+              (lift-bound-to-refers! (:ctx state)
+                (:KIND state)
+                (:BOUND state)
+                (:REFERS state)))
+            (body)))))))
 
 (defn resolve-modules!
   [host: CorpusHost
-   store: (Atom t/TermStore)
+   ctx: ri/Graph
    module-set: Any
    body: Any] -> Any
-  (let [context: rr/Context (rr/context store) with-state (:with-state host)]
-    (with-state context
+  (let [with-state (:with-state host)]
+    (with-state ctx
       (fn [] -> Any
         (let [state-fn (:state host) state (state-fn)]
           (do
             (corpus-from-store! state)
             (let [fresh (state-fn) run-over (:run-over fresh)]
               (run-over (filter module-set (:srcs fresh)))
-              (lift-bound-to-refers! (:ctx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
-            (let [result (body)] (do (rr/commit! context) result))))))))
+              (lift-bound-to-refers! (:ctx fresh)
+                (:KIND fresh)
+                (:BOUND fresh)
+                (:REFERS fresh)))
+            (body)))))))
 
 (defn file-entities
   [file-ents: (Atom Any)
@@ -247,37 +254,39 @@
 
 (defn table-srcs [tables: Any] -> Any (:srcs tables))
 
-(defn corpus-predicate-ids! [context: rr/Context] -> Any
-  {:Vp "v"
-   :KIND "kind"
-   :REFERS "refers_to"
-   :BOUND "bound_to"
-   :FIXED "keep_spelling"
-   :QUAL "qualifier"
-   :CTOR "ctor_prefix"
-   :ACC "accessor_field"})
+(def corpus-predicates: (Map Keyword Any)
+  {:Vp
+   "v"
+   :KIND
+   "kind"
+   :REFERS
+   "refers_to"
+   :BOUND
+   "bound_to"
+   :FIXED
+   "keep_spelling"
+   :QUAL
+   "qualifier"
+   :CTOR
+   "ctor_prefix"
+   :ACC
+   "accessor_field"})
 
-(def REF-PREDICATE-RE: Regex (re-pattern "(?:f|seg|comment)\\d+"))
-
-(defn node-reference-predicate? [predicate: Any] -> Bool
-  (and (string? predicate)
-    (or (= "child" predicate)
-      (or (= "tail" predicate) (some? (re-matches REF-PREDICATE-RE predicate))))))
+;; S2: a predicate IS its spelling Term, so there is nothing left to intern —
+;; the table stays so no caller moves.
+(defn corpus-predicate-ids [ctx: ri/Graph] -> (Map Keyword Any) corpus-predicates)
 
 (defn load-edn!
-  [ctx: rr/Context
+  [ctx: ri/Graph
    file-ents: (Atom Any)
    path: Any] -> Any
-  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line: Any] -> Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) ent (fn [lid: Any] -> Any (or (get (deref local) lid) (let [e (rr/mint! ctx)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
+  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line: Any] -> Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) builder (ri/open ctx) ent (fn [lid: Any] -> Any (or (get (deref local) lid) (let [e (ri/mint! ctx builder)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
     (do
       (doseq [line lines :when (str/starts-with? line "[")]
         (let [[s p o] (read-edn line)]
-          (rr/assert! ctx
+          (ri/assert-on! builder
             (ent s)
             p
-            (if (node-reference-predicate? p)
-              (if (integer? o)
-                (ent o)
-                (throw (ex-info "resolve: structural edge target must be a local integer id" {:predicate p :target o})))
-              o))))
+            (if (integer? o) (ent o) (ri/literal! o)))))
+      (ri/commit! ctx builder)
       src)))

@@ -36,7 +36,7 @@
 ;; ============================================================================
 (ns resolve-render
   (:require [clojure.string :as str]
-    [fram.types :as t]
+    [resolve-ident :as ri]
     [resolve-core :as rc]
     [resolve-read :as rr]
     [resolve-binds :as rb]))
@@ -44,7 +44,7 @@
 (define-mode strict)
 
 (defn ultimate
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -54,7 +54,7 @@
       (if (and (some? tgt) (< n 64)) (recur tgt (inc n)) b))))
 
 (defn binding-name
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -62,7 +62,7 @@
   (rr/sym-val ctx view (ultimate ctx view BOUND REFERS B)))
 
 (defn render-sym
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -71,21 +71,21 @@
   (let [v (rr/pred-val ctx view e "v") D (rr/refers-target ctx view BOUND REFERS e)]
     (if (nil? D)
       v
-      (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (rr/events-by-subject-predicate ctx e FIXED)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (binding-name ctx view BOUND REFERS D) nm (cond (some? cpfx) (str (str cpfx) (str nm0)) (some? afield) (str (str/lower-case (str nm0)) "-" (str afield)) :else nm0)]
+      (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (ri/by-subject-predicate ctx e FIXED)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (binding-name ctx view BOUND REFERS D) nm (cond (some? cpfx) (str (str cpfx) (str nm0)) (some? afield) (str (str/lower-case (str nm0)) "-" (str afield)) :else nm0)]
         (cond fixed? v (some? qual) (str (str qual) "/" (str nm)) :else nm)))))
 
 (defn ord-edges
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    n: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? n))
     []
     (let [rows (reduce (fn
                          [acc: (Vec Any)
-                          event: t/Triple] -> (Vec Any) (let [predicate (rr/event-predicate event)] (if (and (string? predicate) (rc/ord-pos? predicate)) (conj acc [(rc/ord-parse predicate) predicate event (rr/event-value event)]) acc))) [] (rr/events-by-subject ctx n))]
+                          cid: Any] -> (Vec Any) (let [p: Any (ri/predicate-at ctx cid) r: Any (ri/target-at ctx cid)] (if (and (string? p) (rc/ord-pos? p) (some? r)) (conj acc [(rc/ord-parse p) p cid r]) acc))) [] (ri/by-subject ctx n))]
       (vec (sort-by (fn [row: Any] -> Any (nth row 0)) rc/ord-cmp rows)))))
 
 (defn node->str
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -118,7 +118,7 @@
       (str (rr/pred-val ctx view n "v")))))
 
 (defn node->canon
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -133,7 +133,7 @@
       [:leaf (rr/kind-of ctx view n) (rr/pred-val ctx view n "v")])))
 
 (defn- anchor-go
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -152,7 +152,7 @@
      []]))
 
 (defn anchor-match-sites
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -162,7 +162,7 @@
   (vec (nth (anchor-go ctx view BOUND REFERS FIXED root target []) 1)))
 
 (defn anchor-matches
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    BOUND: Any
    REFERS: Any
@@ -173,7 +173,7 @@
     (anchor-match-sites ctx view BOUND REFERS FIXED root target)))
 
 (defn crumb-label
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    n: Any] -> Any
   (let [h (rr/head-sym ctx view n)]

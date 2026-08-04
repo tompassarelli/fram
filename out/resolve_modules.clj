@@ -1,7 +1,6 @@
 (ns resolve-modules
   (:require [clojure.string :as str]
-            [fram.types :as t]
-            [fram.store :as c]
+            [resolve-ident :as ri]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]))

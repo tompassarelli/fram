@@ -21,8 +21,7 @@
 ;; ============================================================================
 (ns resolve-modules
   (:require [clojure.string :as str]
-    [fram.types :as t]
-    [fram.store :as c]
+    [resolve-ident :as ri]
     [resolve-core :as rc]
     [resolve-read :as rr]
     [resolve-binds :as rb]))
@@ -30,19 +29,19 @@
 (define-mode strict)
 
 (defn- sv
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    e: Any] -> Any
   (rr/sym-val ctx view e))
 
 (defn- hd
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    e: Any] -> Any
   (rr/head-sym ctx view e))
 
 (defn- wrapper
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> Any
   (loop [i 0]
@@ -52,7 +51,7 @@
         (if (= "beagle-file" (hd ctx view e)) e (recur (inc i)))))))
 
 (defn unwrap-def
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    form: Any] -> Any
   (if (= "js/export" (hd ctx view form))
@@ -60,13 +59,13 @@
     form))
 
 (defn forms-of
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Vec Any)
   (vec (rest (rr/ordered-children ctx (wrapper ctx view ents)))))
 
 (defn ns-form
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> Any
   (let [fs (forms-of ctx view ents)]
@@ -76,40 +75,40 @@
         (let [f (nth fs i)] (if (= "ns" (hd ctx view f)) f (recur (inc i))))))))
 
 (defn module-name
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> Any
   (let [nf (ns-form ctx view ents)]
     (if (nil? nf) nil (sv ctx view (nth (rr/ordered-children ctx nf) 1 nil)))))
 
 (defn- logical-name-leaf*
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    node: Any] -> Any
   (let [outer (rr/unwrap-meta ctx view node) leaf (if (= "list" (rr/kind-of ctx view outer)) (nth (rr/ordered-children ctx outer) 0 nil) outer)]
     (rr/unwrap-meta ctx view leaf)))
 
 (defn module-defs
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Map Any Any)
   (reduce (fn
             [acc: (Map Any Any)
              f: Any] -> (Map Any Any) (let [d (unwrap-def ctx view f) h (str (hd ctx view d))] (cond (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (logical-name-leaf* ctx view (nth (rr/ordered-children ctx d) 1 nil)) nm (sv ctx view nl)] (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl))) (contains? #{"definterface" "defprotocol"} h) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                             [a: (Map Any Any)
-                                                                                                                                                                                                                                                                                                                                                              m: Any] -> (Map Any Any) (let [nl (logical-name-leaf* ctx view m) nm (sv ctx view nl)] (if (or (nil? nm) (nil? nl)) a (assoc a nm nl)))) acc (vec (drop 2 (rr/ordered-children ctx d)))) :else acc)))
+                                                                                                                                                                                                                                                                                                                                                           [a: (Map Any Any)
+                                                                                                                                                                                                                                                                                                                                                            m: Any] -> (Map Any Any) (let [nl (logical-name-leaf* ctx view m) nm (sv ctx view nl)] (if (or (nil? nm) (nil? nl)) a (assoc a nm nl)))) acc (vec (drop 2 (rr/ordered-children ctx d)))) :else acc)))
     {}
     (forms-of ctx view ents)))
 
 (defn merge-import-opts
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    acc: (Map Keyword Any)
    modn: Any
    kids: (Vec Any)] -> (Map Keyword Any)
-  (let [idx (fn [kw: String] -> Any (loop [i 0] (if (>= i (count kids)) nil (if (= kw (str (sv ctx view (nth kids i)))) i (recur (inc i)))))) ri (idx ":refer") ai (idx ":as") rri (idx ":rename") nb (if (nil? ri) nil (nth kids (inc ri) nil)) refers (if (and (some? nb) (rb/brackets? ctx view nb)) (vec (keep (fn [k: Any] -> Any (sv ctx view k)) (vec (rest (rr/ordered-children ctx nb))))) []) alias (if (nil? ai) nil (sv ctx view (nth kids (inc ai) nil))) rmap (let [mb (if (nil? rri) nil (nth kids (inc rri) nil))] (if (and (some? mb) (rb/map-node? ctx view mb)) (loop [cs: (Vec Any) (vec (rest (rr/ordered-children ctx mb))) m: (Vec Any) []] (if (< (count cs) 2) m (recur (vec (drop 2 cs)) (conj m [(sv ctx view (nth cs 0)) (sv ctx view (nth cs 1))])))) [])) a1 (if (empty? refers) acc (assoc acc :refer (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       [m: (Map Any Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        n: Any] -> (Map Any Any) (assoc m n modn)) (get acc :refer {}) refers))) a2 (if (nil? alias) a1 (assoc a1 :as (assoc (get a1 :as {}) alias modn)))]
+  (let [idx (fn [kw: String] -> Int? (loop [i 0] (if (>= i (count kids)) nil (if (= kw (str (sv ctx view (nth kids i)))) i (recur (inc i)))))) ri (idx ":refer") ai (idx ":as") rri (idx ":rename") nb (if (nil? ri) nil (nth kids (inc ri) nil)) refers (if (and (some? nb) (rb/brackets? ctx view nb)) (vec (keep (fn [k: Any] -> Any (sv ctx view k)) (vec (rest (rr/ordered-children ctx nb))))) []) alias (if (nil? ai) nil (sv ctx view (nth kids (inc ai) nil))) rmap (let [mb (if (nil? rri) nil (nth kids (inc rri) nil))] (if (and (some? mb) (rb/map-node? ctx view mb)) (loop [cs: (Vec Any) (vec (rest (rr/ordered-children ctx mb))) m: (Vec Any) []] (if (< (count cs) 2) m (recur (vec (drop 2 cs)) (conj m [(sv ctx view (nth cs 0)) (sv ctx view (nth cs 1))])))) [])) a1 (if (empty? refers) acc (assoc acc :refer (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                [m: (Map Any Any)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 n: Any] -> (Map Any Any) (assoc m n modn)) (get acc :refer {}) refers))) a2 (if (nil? alias) a1 (assoc a1 :as (assoc (get a1 :as {}) alias modn)))]
     (if (empty? rmap)
       a2
       (assoc a2
@@ -121,7 +120,7 @@
           rmap)))))
 
 (defn parse-require
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Map Keyword Any)
   (let [fs (forms-of ctx view ents) bare (reduce (fn
@@ -136,7 +135,7 @@
         (vec (rest (rr/ordered-children ctx reqs)))))))
 
 (defn module-exports
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Map Any Any)
   (reduce (fn
@@ -146,45 +145,45 @@
     (forms-of ctx view ents)))
 
 (defn logical-name-leaf
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    node: Any] -> Any
   (logical-name-leaf* ctx view node))
 
 (defn type-name-leaf
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    d: Any] -> Any
   (let [children (rr/ordered-children ctx d) name-index (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))]
     (logical-name-leaf ctx view (nth children name-index nil))))
 
 (defn module-types
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Map Any Any)
   (let [defs (filterv (fn [f: Any] -> Bool (contains? rc/TYPE-DEFS (str (hd ctx view (unwrap-def ctx view f))))) (forms-of ctx view ents)) names (reduce (fn
-                                                                                                                                                             [acc: (Map Any Any)
-                                                                                                                                                              f: Any] -> (Map Any Any) (let [nl (type-name-leaf ctx view (unwrap-def ctx view f)) nm (sv ctx view nl)] (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))) {} defs) variants (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                           [acc: (Map Any Any)
-                                                                                                                                                                                                                                                                                                                                                            f: Any] -> (Map Any Any) (let [d (unwrap-def ctx view f)] (if (= "defunion" (hd ctx view d)) (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                     [a: (Map Any Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                      v: Any] -> (Map Any Any) (let [vn (logical-name-leaf ctx view v) nm (sv ctx view vn)] (if (or (nil? nm) (nil? vn)) a (assoc a nm vn)))) acc (let [children (rr/ordered-children ctx d)] (vec (drop (inc (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))) children)))) acc))) {} defs)]
+                                                                                                                                                           [acc: (Map Any Any)
+                                                                                                                                                            f: Any] -> (Map Any Any) (let [nl (type-name-leaf ctx view (unwrap-def ctx view f)) nm (sv ctx view nl)] (if (or (nil? nm) (nil? nl)) acc (assoc acc nm nl)))) {} defs) variants (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                       [acc: (Map Any Any)
+                                                                                                                                                                                                                                                                                                                                                        f: Any] -> (Map Any Any) (let [d (unwrap-def ctx view f)] (if (= "defunion" (hd ctx view d)) (reduce (fn
+                                                                                                                                                                                                                                                                                                                                                                                                                                                               [a: (Map Any Any)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                v: Any] -> (Map Any Any) (let [vn (logical-name-leaf ctx view v) nm (sv ctx view vn)] (if (or (nil? nm) (nil? vn)) a (assoc a nm vn)))) acc (let [children (rr/ordered-children ctx d)] (vec (drop (inc (rc/type-name-index (hd ctx view d) (sv ctx view (nth children 1 nil)))) children)))) acc))) {} defs)]
     (merge variants names)))
 
 (defn module-accessors
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    ents: (Vec Any)] -> (Map Any Any)
   (reduce (fn
             [acc: (Map Any Any)
              f: Any] -> (Map Any Any) (let [d (unwrap-def ctx view f)] (if (contains? #{"defrecord" "deftype"} (str (hd ctx view d))) (let [nl (type-name-leaf ctx view d) nm (sv ctx view nl) fb (first (filterv (fn [k: Any] -> Bool (rb/brackets? ctx view k)) (vec (drop 2 (rr/ordered-children ctx d)))))] (if (or (nil? nm) (nil? fb)) acc (let [pfx (str/lower-case (str nm))] (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                    [a: (Map Any Any)
-                                                                                                                                                                                                                                                                                                                                                                                                     b: Any] -> (Map Any Any) (let [fld (sv ctx view b)] (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (rb/param-binds ctx view fb))))) acc)))
+                                                                                                                                                                                                                                                                                                                                                                                                [a: (Map Any Any)
+                                                                                                                                                                                                                                                                                                                                                                                                 b: Any] -> (Map Any Any) (let [fld (sv ctx view b)] (if (nil? fld) a (assoc a (str pfx "-" (str fld)) [nl fld])))) acc (rb/param-binds ctx view fb))))) acc)))
     {}
     (forms-of ctx view ents)))
 
 (defn form-binding-leaves
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    form: Any] -> (Map Any Any)
   (let [d (unwrap-def ctx view form) h (str (hd ctx view d)) children (rr/ordered-children ctx d) top (type-name-leaf ctx view d) top-name (sv ctx view top) base (if (and (rc/named-def-head? h) (some? top) (some? top-name)) {[:top top-name] top} {})]

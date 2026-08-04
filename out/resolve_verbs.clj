@@ -1,6 +1,6 @@
 (ns resolve-verbs
   (:require [clojure.string :as str]
-            [fram.types :as t]
+            [resolve-ident :as ri]
             [resolve-core :as rc]
             [resolve-read :as rr]
             [resolve-binds :as rb]
@@ -124,8 +124,11 @@
   (doseq [src target-srcs]
   (let [B (dbind src old)]
   (if (some? B) (do
-  (do
-  (rr/update-single! ctx B (:Vp v) new)
+  (let [oldc (first (ri/by-subject-predicate ctx B (:Vp v)))
+   retire (:retire v)]
+  (if (some? oldc) (do
+  (retire oldc)))
+  (ri/assert! ctx B (:Vp v) (ri/literal! new))
   (swap! edits (fn [n] (+ n 1))))))))
   (if (= 0 (deref edits)) (do
   (warn (str "REJECTED — no binding named `" old "` found in \"" target "\" (nothing to rename; no facts mutated)."))
@@ -142,10 +145,7 @@
   (warn (str "projected -> " (op src) "   <- " src))))))))
 
 (defn- nn [e]
-  (if (nil? e) (throw (ex-info "resolve: node or order identity is required" {:type :missing-authoring-identity})) e))
-
-(defn- index-or-negative [index]
-  (if (nil? index) -1 index))
+  e)
 
 (defn- ekey [e]
   (nth (vec e) 0))
@@ -156,9 +156,8 @@
 (defn- enode [e]
   (nth (vec e) 2))
 
-(defn- ^String ord-tie [node]
-  (let [encoder (.withoutPadding (. java.util.Base64 getUrlEncoder))]
-  (str "t" (.encodeToString encoder (.getBytes (pr-str node) "UTF-8")))))
+(defn- ^String ord-tie [^Verb v]
+  (if (:capture-only? v) "PENDING" "0"))
 
 (defn- ^String ord-str* [path ^String tie]
   (str "f" (str/join "." path) "~" tie))
@@ -244,9 +243,8 @@
 
 (defn wrap-forms [^Verb v parent]
   (let [ctx (:ctx v)
-   rows (reduce (fn [acc event] (let [predicate (rr/event-predicate event)
-   key (if (string? predicate) (rc/ord-parse predicate) nil)]
-  (if (nil? key) acc (conj acc [key event (rr/event-value event)])))) [] (rr/events-by-subject ctx parent))]
+   rows (reduce (fn [acc cid] (let [k (rc/ord-parse (ri/predicate-at ctx cid))]
+  (if (nil? k) acc (conj acc [k cid (ri/value-at ctx cid)])))) [] (ri/by-subject ctx parent))]
   (vec (sort-by (fn [row] (nth row 0)) rc/ord-cmp rows))))
 
 (defn- reject-candidate [^Verb v root site others idx]
@@ -377,7 +375,7 @@
   (let [retire (:retire v)
    emit (:emit v)]
   (retire (ecid mover-entry))
-  (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-between lo hi) (ord-tie (nn mover-form))) (nn mover-form))
+  (ri/assert! ctx (nn wrap) (ri/literal! (ord-str* (rc/ord-between lo hi) (ord-tie v))) (nn mover-form))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
@@ -417,9 +415,9 @@
   (if (= "js/export" (rr/head-sym ctx (:view v) (nn victim-form))) (list (symbol "js/export") retained) retained)) datum))]
   (if (some? victim-entry) (let [retire (:retire v)]
   (retire (ecid victim-entry))
-  (rr/assert! ctx (nn wrap) (ord-str* (:path (ekey victim-entry)) (ord-tie (nn new-root))) (nn new-root))) (let [last-path (if (> (count forms) 0) (do
+  (ri/assert! ctx (nn wrap) (ri/literal! (ord-str* (:path (ekey victim-entry)) (ord-tie v))) (nn new-root))) (let [last-path (if (> (count forms) 0) (do
   (:path (ekey (last forms)))))]
-  (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-append last-path) (ord-tie (nn new-root))) (nn new-root))))
+  (ri/assert! ctx (nn wrap) (ri/literal! (ord-str* (rc/ord-append last-path) (ord-tie v))) (nn new-root))))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
@@ -446,10 +444,9 @@
    anchor-bind (dbind src after-name)
    anchor-form (if (some? anchor-bind) (do
   (ffv src anchor-bind)))
-   found (if (some? anchor-form) (do
+   i (nn (if (some? anchor-form) (do
   (first (vec (keep-indexed (fn [n e] (if (= (enode e) anchor-form) (do
-  n))) forms)))))
-   i (index-or-negative found)]
+  n))) forms))))))]
   (if (< i 0) (do
   (warn (str "REJECTED — insert-form anchor `" after-name "` not found in \"" scope "\"."))
   (reject 3)))
@@ -458,7 +455,7 @@
    next-path (if (< (+ i 1) (count forms)) (do
   (:path (ekey (nth forms (+ i 1))))))
    new-root (mint src datum)]
-  (rr/assert! ctx (nn wrap) (ord-str* (rc/ord-between anchor-path next-path) (ord-tie (nn new-root))) (nn new-root))
+  (ri/assert! ctx (nn wrap) (ri/literal! (ord-str* (rc/ord-between anchor-path next-path) (ord-tie v))) (nn new-root))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
@@ -469,9 +466,9 @@
 
 (defn- next-comment-idx [^Verb v form]
   (let [ctx (:ctx v)]
-  (+ 1 (reduce (fn [acc n] (if (> n acc) n acc)) -1 (vec (keep (fn [event] (let [predicate (rr/event-predicate event)]
-  (if (and (string? predicate) (some? (re-matches COMMENT-RE predicate))) (do
-  (parse-long (subs predicate 7)))))) (rr/events-by-subject ctx form)))))))
+  (+ 1 (reduce (fn [acc n] (if (> n acc) n acc)) -1 (vec (keep (fn [cid] (let [p (ri/predicate-at ctx cid)]
+  (if (and (string? p) (some? (re-matches COMMENT-RE (str p)))) (do
+  (parse-long (subs (str p) 7)))))) (ri/by-subject ctx form)))))))
 
 (defn verb-insert-comment! [^Verb v ^String scope ^String anchor-name ^String text placement]
   (let [ctx (:ctx v)
@@ -499,15 +496,17 @@
    emit (:emit v)
    form (nn anchor-form)
    k (next-comment-idx v form)
-   cnode (nn (reg src (rr/mint! ctx)))
-   seg (nn (reg src (rr/mint! ctx)))]
-  (rr/assert! ctx cnode (:KIND v) "comment")
-  (rr/assert! ctx cnode "style" "line")
-  (rr/assert! ctx cnode "placement" plc)
-  (rr/assert! ctx seg (:KIND v) "text")
-  (rr/assert! ctx seg (:Vp v) lex)
-  (rr/assert! ctx cnode "seg0" seg)
-  (rr/assert! ctx form (str "comment" k) cnode)
+   builder (ri/open ctx)
+   cnode (nn (reg src (ri/mint! ctx builder)))
+   seg (nn (reg src (ri/mint! ctx builder)))]
+  (ri/assert-on! builder cnode (:KIND v) (ri/literal! "comment"))
+  (ri/assert-on! builder cnode "style" (ri/literal! "line"))
+  (ri/assert-on! builder cnode "placement" (ri/literal! plc))
+  (ri/assert-on! builder seg (:KIND v) (ri/literal! "text"))
+  (ri/assert-on! builder seg (:Vp v) (ri/literal! lex))
+  (ri/assert-on! builder cnode "seg0" seg)
+  (ri/assert-on! builder form (str "comment" k) cnode)
+  (ri/commit! ctx builder)
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
@@ -553,7 +552,7 @@
    emit (:emit v)]
   (doseq [e body-slots]
   (retire (ecid e)))
-  (rr/assert! ctx (nn d) (str "f" body-start) (nn new-root))
+  (ri/assert! ctx (nn d) (str "f" body-start) (nn new-root))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))
@@ -603,7 +602,7 @@
    site (first matches)
    new-root (mint src new-datum)]
   (retire (:cid site))
-  (rr/assert! ctx (nn (:parent site)) (:pos site) (nn new-root))
+  (ri/assert! ctx (nn (:parent site)) (:pos site) (nn new-root))
   (if (not (:capture-only? v)) (do
   (let [rr! (:reresolve v)]
   (rr!))))

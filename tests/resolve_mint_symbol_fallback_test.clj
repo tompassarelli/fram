@@ -1,4 +1,4 @@
-(require '[fram.store :as c]
+(require '[resolve-ident :as ri]
          '[resolve-mint :as rmi])
 
 (def failures (atom 0))
@@ -11,38 +11,55 @@
       (println "  actual:  " (pr-str actual))
       (swap! failures inc))))
 
-(def ctx (c/new-store))
-(def tx (c/begin-tx! ctx "resolve-mint-symbol-fallback-test"))
-(def KIND (c/value! ctx "kind"))
-(def Vp (c/value! ctx "v"))
-(def BOUND (c/value! ctx "bound_to"))
-(def REFERS (c/value! ctx "refers_to"))
-(def FIXED (c/value! ctx "keep_spelling"))
-(def QUALIFIER (c/value! ctx "qualifier"))
+;; S2: a predicate IS its spelling Term and a node is a minted coordinate, so the
+;; projection's integers come from ri/ordinal — view coordinates, not identity.
+(def ctx (ri/new-graph "resolve-mint-symbol-fallback-test"))
+(def KIND "kind")
+(def Vp "v")
+(def BOUND "bound_to")
+(def REFERS "refers_to")
+(def FIXED "keep_spelling")
+(def QUALIFIER "qualifier")
 
 (defn- symbol! [spelling]
-  (let [e (c/entity! ctx)]
-    (c/fact! ctx e KIND (c/value! ctx "symbol") tx)
-    [e (c/fact! ctx e Vp (c/value! ctx spelling) tx)]))
+  (let [b (ri/open ctx)
+        e (ri/mint! ctx b)]
+    (ri/assert-on! b e KIND "symbol")
+    (let [v-occ (ri/assert-on! b e Vp spelling)]
+      (ri/commit! ctx b)
+      [e v-occ])))
+
+(defn- node! []
+  (let [b (ri/open ctx) e (ri/mint! ctx b)]
+    (ri/assert-on! b e KIND "symbol")
+    (ri/commit! ctx b)
+    e))
 
 (def emit
   (rmi/->Emit ctx nil BOUND REFERS FIXED {} identity identity #{} #{}))
 (def emit-line (ns-resolve 'resolve-mint 'emit-line))
 
 (let [[leaf v-cid] (symbol! "zig/getenv")
-      external-target (c/entity! ctx)]
-  (c/fact! ctx leaf REFERS external-target tx)
-  (c/fact! ctx leaf QUALIFIER (c/value! ctx "must-not-prefix") tx)
+      external-target (node!)]
+  (ri/assert! ctx leaf REFERS external-target)
+  (ri/assert! ctx leaf QUALIFIER "must-not-prefix")
   (check! "unresolved external target preserves the quoted leaf spelling"
-          (str "[" leaf " \"v\" \"zig/getenv\"]")
+          (str "[" (ri/ordinal ctx leaf) " \"v\" \"zig/getenv\"]")
           (emit-line emit nil leaf v-cid)))
 
 (let [[leaf v-cid] (symbol! "old-name")
       [binding _] (symbol! "renamed-name")]
-  (c/fact! ctx leaf REFERS binding tx)
+  (ri/assert! ctx leaf REFERS binding)
   (check! "resolved binding identity still projects its renamed spelling"
-          (str "[" leaf " \"v\" \"renamed-name\"]")
+          (str "[" (ri/ordinal ctx leaf) " \"v\" \"renamed-name\"]")
           (emit-line emit nil leaf v-cid)))
 
+;; The widening's own bar: a projection integer must never be mistaken for a node.
+(let [[leaf _] (symbol! "shape-probe")]
+  (check! "a minted identity is a Term, and the ordinal that projects it is not"
+          [true false]
+          [(ri/minted-node-id? leaf) (ri/minted-node-id? (ri/ordinal ctx leaf))]))
+
+(println (str "resolve-mint symbol fallback: " (if (zero? @failures) "PASS" "FAIL")))
 (when (pos? @failures)
   (System/exit 1))

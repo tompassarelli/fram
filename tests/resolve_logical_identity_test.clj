@@ -6,7 +6,7 @@
 ;;
 ;; SAFE: no daemon, socket, filesystem fixture, or canonical log.
 ;; ============================================================================
-(require '[fram.store :as c]
+(require '[resolve-ident :as ri]
          '[resolve-binds :as rb]
          '[resolve-corpus :as rco]
          '[resolve-core :as rc]
@@ -68,18 +68,17 @@
            plain-caller-form
            hinted-form])))
 
-(def ctx (c/new-store))
-(def tx (c/begin-tx! ctx "resolve-logical-identity-test"))
-(def SUP (c/value! ctx "supersedes"))
-(def KIND (c/value! ctx "kind"))
-(def Vp (c/value! ctx "v"))
-(def BOUND (c/value! ctx "bound_to"))
-(def REFERS (c/value! ctx "refers_to"))
-(def FIXED (c/value! ctx "keep_spelling"))
-(c/set-supersedes-pred! ctx SUP)
+;; S2: identities are Terms and a predicate IS its spelling, so there is nothing
+;; to intern; the supersedes predicate is gone (withdrawal replaced it).
+(def ctx (ri/new-graph "resolve-logical-identity-test"))
+(def KIND "kind")
+(def Vp "v")
+(def BOUND "bound_to")
+(def REFERS "refers_to")
+(def FIXED "keep_spelling")
 
 (def ents (atom {}))
-(def mint (rmi/->Mint ctx tx SUP KIND Vp ents nil BOUND REFERS FIXED))
+(def mint (rmi/->Mint ctx KIND Vp ents nil BOUND REFERS FIXED))
 (rmi/mint-datum! mint source-id datum)
 
 (def module-ents (get @ents source-id))
@@ -162,7 +161,6 @@
      (rvb/make-verb!
       {:ctx ctx
        :view nil
-       :tx tx
        :srcs ["pkg.gen" "pkg.gen_seq"]
        :emit-srcs []
        :capture-only? true
@@ -207,8 +205,6 @@
   (rvb/make-verb!
    {:ctx ctx
     :view nil
-    :tx tx
-    :SUP SUP
     :KIND KIND
     :Vp Vp
     :srcs [source-id]
@@ -273,14 +269,18 @@
                          live-upsert-verb "newly-appended"))))
        (pr-str (rvb/wrap-forms live-upsert-verb upsert-wrapper)))
 
-(def unresolved-wrapper (c/entity! ctx))
+(def unresolved-wrapper
+  (let [b (ri/open ctx) node (ri/mint! ctx b)]
+    (ri/assert-on! b node "kind" "list")
+    (ri/commit! ctx b)
+    node))
 (def unresolved-mints (atom 0))
 (def unresolved-verb
   (upsert-verb
    unresolved-wrapper
    (fn [_ name] (when (= name "plain-caller") (get modframe name)))
    (fn [_ _] (swap! unresolved-mints inc))))
-(def unresolved-facts-before (count (c/current-facts ctx)))
+(def unresolved-facts-before (count (ri/live-propositions ctx)))
 (def unresolved-result
   (try
     (rvb/verb-upsert-form!
@@ -293,7 +293,7 @@
 (check "same-name binding with no live wrapper entry rejects before minting"
        (and (= 3 (:code unresolved-result))
             (zero? @unresolved-mints)
-            (= unresolved-facts-before (count (c/current-facts ctx))))
+            (= unresolved-facts-before (count (ri/live-propositions ctx))))
        (pr-str {:result unresolved-result
                 :mints @unresolved-mints}))
 

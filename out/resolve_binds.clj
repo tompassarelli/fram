@@ -1,6 +1,5 @@
 (ns resolve-binds
-  (:require [fram.types :as t]
-            [fram.store :as c]
+  (:require [resolve-ident :as ri]
             [resolve-core :as rc]
             [resolve-read :as rr]))
 

@@ -1,12 +1,11 @@
 (ns resolve-corpus
   (:require [clojure.string :as str]
-            [fram.types :as t]
-            [fram.store :as c]
+            [resolve-ident :as ri]
             [resolve-read :as rr]
             [resolve-modules :as rm]
             [resolve-walk :as rw]))
 
-(def MODULE-NAME-RE (re-pattern "@([^#]+)#.+"))
+(def MODULE-NAME-RE (re-pattern "@([^#]+)#\\d+"))
 
 (def SLASH-RE (re-pattern "/"))
 
@@ -104,11 +103,11 @@
 
 (defn lift-bound-to-refers! [ctx KIND BOUND REFERS]
   (if (some? BOUND) (do
-  (doseq [event (rr/events-by-predicate ctx BOUND)]
-  (let [leaf (rr/event-subject event)
-   target (rr/event-value event)]
-  (if (and (rr/live-node? ctx KIND target) (empty? (rr/events-by-subject-predicate ctx leaf REFERS))) (do
-  (rr/assert! ctx leaf REFERS target))))))))
+  (doseq [occ (ri/by-predicate ctx BOUND)]
+  (let [leaf (ri/subject-at ctx occ)
+   target (ri/target-at ctx occ)]
+  (if (and (some? target) (rr/live-node? ctx KIND target) (empty? (ri/by-subject-predicate ctx leaf REFERS))) (do
+  (ri/assert! ctx leaf REFERS target))))))))
 
 (defn corpus-from-store! [^CorpusState state]
   (let [t0 (System/nanoTime)
@@ -123,10 +122,12 @@
   (profile (format "  corpus-from-store!: groups=%.1fms frames+exports=%.1fms cached=%s nsrcs=%d scoped=%s" (/ (- t-groups t0) 1000000.0) (/ (- (System/nanoTime) t-groups) 1000000.0) (some? (:corpus-cache state)) (count (:srcs tables)) (boolean (:corpus-scope state)))))))
   tables)))
 
+(def ^String RESOLVE-SPACE "resolve")
+
 (defn resolve-edn! [^CorpusHost host edn-paths body]
-  (let [context (rr/context (c/new-term-store "resolve"))
+  (let [ctx (ri/new-graph RESOLVE-SPACE)
    with-state (:with-state host)]
-  (with-state context (fn [] (let [state-fn (:state host)
+  (with-state ctx (fn [] (let [state-fn (:state host)
    load (:load-edn host)
    loaded (mapv load edn-paths)
    state (state-fn)
@@ -137,15 +138,11 @@
   (install-tables (rw/corpus-tables (:ctx state) (:view state) loaded (deref (:file-ents state))))
   (let [run-all (:run-all state)]
   (run-all))
-  (let [result (body)]
-  (do
-  (rr/commit! context)
-  result))))))))
+  (body)))))))
 
-(defn resolve-warm-store! [^CorpusHost host store body]
-  (let [context (rr/context store)
-   with-state (:with-state host)]
-  (with-state context (fn [] (let [state-fn (:state host)
+(defn resolve-warm-store! [^CorpusHost host ctx body]
+  (let [with-state (:with-state host)]
+  (with-state ctx (fn [] (let [state-fn (:state host)
    state (state-fn)]
   (do
   (corpus-from-store! state)
@@ -153,15 +150,11 @@
   (let [run-all (:run-all state)]
   (run-all))
   (lift-bound-to-refers! (:ctx state) (:KIND state) (:BOUND state) (:REFERS state))))
-  (let [result (body)]
-  (do
-  (rr/commit! context)
-  result))))))))
+  (body)))))))
 
-(defn resolve-modules! [^CorpusHost host store module-set body]
-  (let [context (rr/context store)
-   with-state (:with-state host)]
-  (with-state context (fn [] (let [state-fn (:state host)
+(defn resolve-modules! [^CorpusHost host ctx module-set body]
+  (let [with-state (:with-state host)]
+  (with-state ctx (fn [] (let [state-fn (:state host)
    state (state-fn)]
   (do
   (corpus-from-store! state)
@@ -169,10 +162,7 @@
    run-over (:run-over fresh)]
   (run-over (filter module-set (:srcs fresh)))
   (lift-bound-to-refers! (:ctx fresh) (:KIND fresh) (:BOUND fresh) (:REFERS fresh)))
-  (let [result (body)]
-  (do
-  (rr/commit! context)
-  result))))))))
+  (body)))))))
 
 (defn file-entities [file-ents src]
   (get (deref file-ents) src []))
@@ -189,20 +179,18 @@
 (defn table-srcs [tables]
   (:srcs tables))
 
-(defn corpus-predicate-ids! [context]
-  {:Vp "v" :KIND "kind" :REFERS "refers_to" :BOUND "bound_to" :FIXED "keep_spelling" :QUAL "qualifier" :CTOR "ctor_prefix" :ACC "accessor_field"})
+(def corpus-predicates {:Vp "v" :KIND "kind" :REFERS "refers_to" :BOUND "bound_to" :FIXED "keep_spelling" :QUAL "qualifier" :CTOR "ctor_prefix" :ACC "accessor_field"})
 
-(def REF-PREDICATE-RE (re-pattern "(?:f|seg|comment)\\d+"))
-
-(defn ^Boolean node-reference-predicate? [predicate]
-  (and (string? predicate) (or (= "child" predicate) (or (= "tail" predicate) (some? (re-matches REF-PREDICATE-RE predicate))))))
+(defn corpus-predicate-ids [ctx]
+  corpus-predicates)
 
 (defn load-edn! [ctx file-ents path]
   (let [lines (str/split-lines (slurp path))
    src (-> (first (filter (fn [line] (str/starts-with? line "@file")) lines)) (subs 6))
    local (atom {})
    read-edn (requiring-resolve 'clojure.edn/read-string)
-   ent (fn [lid] (or (get (deref local) lid) (let [e (rr/mint! ctx)]
+   builder (ri/open ctx)
+   ent (fn [lid] (or (get (deref local) lid) (let [e (ri/mint! ctx builder)]
   (do
   (swap! local assoc lid e)
   (swap! file-ents update src (fnil conj []) e)
@@ -211,5 +199,6 @@
   (doseq [line lines
    :when (str/starts-with? line "[")]
   (let [[s p o] (read-edn line)]
-  (rr/assert! ctx (ent s) p (if (node-reference-predicate? p) (if (integer? o) (ent o) (throw (ex-info "resolve: structural edge target must be a local integer id" {:predicate p :target o}))) o))))
+  (ri/assert-on! builder (ent s) p (if (integer? o) (ent o) (ri/literal! o)))))
+  (ri/commit! ctx builder)
   src)))

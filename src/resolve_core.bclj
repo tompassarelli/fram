@@ -27,11 +27,11 @@
 
 (defrecord OrdKey
   [path: (Vec Int)
-   tie: Any])
+   tie: Int])
 
 (defn- digits [s: String] -> Int (let [v (parse-long s)] (if (nil? v) 0 v)))
 
-(def ORD-RE: Regex (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+|t[A-Za-z0-9_-]+)"))
+(def ORD-RE: Regex (re-pattern "f(\\d+(?:\\.\\d+)*)~(\\d+)"))
 
 (def ORD-DOT-RE: Regex (re-pattern "\\."))
 
@@ -41,9 +41,8 @@
   (when (string? p)
     (let [m (re-matches ORD-RE (str p))]
       (if (some? m)
-        (let [raw-tie (str (nth m 2))]
-          (->OrdKey (mapv digits (vec (str/split (str (nth m 1)) ORD-DOT-RE)))
-            (if (str/starts-with? raw-tie "t") raw-tie (digits raw-tie))))
+        (->OrdKey (mapv digits (vec (str/split (nth m 1) ORD-DOT-RE)))
+          (digits (nth m 2)))
         (let [d (re-matches ORD-FLAT-RE (str p))]
           (when (some? d) (->OrdKey [(* (inc (digits (nth d 1))) ORD-STEP)] 0)))))))
 
@@ -51,11 +50,8 @@
 
 (defn ord-str
   [path: (Vec Int)
-   tie: Any] -> String
+   tie: Int] -> String
   (str "f" (str/join "." path) "~" tie))
-
-(defn- tie-key [tie: Any] -> Any
-  (if (int? tie) [0 tie] [1 (str tie)]))
 
 (defn ord-veccmp
   [a: (Vec Int)
@@ -76,7 +72,7 @@
   [x: OrdKey
    y: OrdKey] -> Int
   (let [c (ord-veccmp (:path x) (:path y))]
-    (if (zero? c) (compare (tie-key (:tie x)) (tie-key (:tie y))) c)))
+    (if (zero? c) (compare (:tie x) (:tie y)) c)))
 
 (defn ord-append [last-path: (U (Vec Int) Nil)] -> (Vec Int)
   (if (or (nil? last-path) (empty? last-path))
@@ -301,8 +297,8 @@
                                                                                                                     [xs: (Vec Any)
                                                                                                                      role: Keyword
                                                                                                                      i: Int] -> (Vec Any) (let [raw (nth xs i nil) nm (logical-datum-name raw) old-node (if (nil? nm) nil (get old-bindings [role nm]))] (if (nil? old-node) xs (assoc xs i (reuse-logical-datum raw old-node))))) with-top (if (named-def-head? head) (replace-one items :top name-index) items) member-start (cond (= "defunion" head) (inc name-index) (contains? #{"definterface" "defprotocol"} head) 2 :else -1) role (if (= "defunion" head) :variant :member) rewritten (if (< member-start 0) with-top (reduce (fn
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            [xs: (Vec Any)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             i: Int] -> (Vec Any) (replace-one xs role i)) with-top (range member-start (count with-top))))]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          [xs: (Vec Any)
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           i: Int] -> (Vec Any) (replace-one xs role i)) with-top (range member-start (count with-top))))]
       (copy-reader-meta (apply list rewritten) datum))))
 
 ;; ---------------------------------------------------------------- ord keys ---

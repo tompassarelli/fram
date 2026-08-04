@@ -26,7 +26,7 @@
 ;;   bb -cp out tests/store_delete_reorder_test.clj   (from the repo root)
 ;; SAFE: /tmp work dir, in-process; no daemon, no socket, no canonical log touched.
 ;; ============================================================================
-(require '[fram.store :as c] '[fram.schema :as s]
+(require '[resolve-ident :as ri] '[fram.schema :as s]
          '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as proc])
 
 (def home (System/getProperty "user.home"))
@@ -77,9 +77,9 @@
       (fn []
         (binding [resolve/*reject!* (fn [code] (throw (ex-info (str "rejected " code) {:code code})))]
           (let [src (first resolve/srcs)
-                v-before (count (filter #(seq (c/by-lp resolve/ctx % resolve/Vp)) (@resolve/file->ents src)))
+                v-before (count (filter #(seq (ri/by-subject-predicate resolve/ctx % resolve/Vp)) (@resolve/file->ents src)))
                 res (caught? (resolve/verb-delete! "base" "demo"))   ; greet references base -> orphan
-                v-after (count (filter #(seq (c/by-lp resolve/ctx % resolve/Vp)) (@resolve/file->ents src)))]
+                v-after (count (filter #(seq (ri/by-subject-predicate resolve/ctx % resolve/Vp)) (@resolve/file->ents src)))]
             (chk "D2a: delete of still-referenced `base` is REFUSED (orphan invariant)" (= :rejected res))
             (chk "D2b: the refused delete mutated NOTHING (live v-fact count unchanged)" (= v-before v-after))))))
 

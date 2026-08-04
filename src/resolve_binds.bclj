@@ -20,15 +20,12 @@
 ;; the classpath.
 ;; ============================================================================
 (ns resolve-binds
-  (:require [fram.types :as t]
-    [fram.store :as c]
-    [resolve-core :as rc]
-    [resolve-read :as rr]))
+  (:require [resolve-ident :as ri] [resolve-core :as rc] [resolve-read :as rr]))
 
 (define-mode strict)
 
 (defn- sv
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    e: Any] -> Any
   (rr/sym-val ctx view e))
@@ -37,24 +34,24 @@
   (and (string? v) (contains? rc/TYPE-COLON (str v))))
 
 (defn brackets?
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    e: Any] -> Bool
   (= "#%brackets" (rr/head-sym ctx view e)))
 
 (defn map-node?
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    e: Any] -> Bool
   (= "#%map" (rr/head-sym ctx view e)))
 
 (defn- tail
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    e: Any] -> (Vec Any)
   (vec (rest (rr/ordered-children ctx e))))
 
 (defn collect-bind-syms
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    node: Any] -> (Vec Any)
   (if (nil? node)
@@ -102,7 +99,7 @@
         []))))
 
 (defn collect-or-vals
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    node: Any] -> (Vec Any)
   (if (nil? node)
@@ -138,7 +135,7 @@
       [])))
 
 (defn param-binds
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    bracket: Any] -> (Vec Any)
   (loop [ks: (Vec Any) (tail ctx bracket) binds: (Vec Any) [] skip: Bool false]
@@ -154,7 +151,7 @@
           (recur ks2 (into binds (collect-bind-syms ctx view k)) false))))))
 
 (defn let-bind-pairs
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    bracket: Any] -> (Vec Any)
   (loop [ks: (Vec Any) (tail ctx bracket) acc: (Vec Any) []]
@@ -168,7 +165,7 @@
              (collect-or-vals ctx view pat)]))))))
 
 (defn for-bind-pairs
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    bracket: Any] -> (Vec Any)
   (loop [ks: (Vec Any) (tail ctx bracket) acc: (Vec Any) []]
@@ -201,7 +198,7 @@
                (collect-or-vals ctx view k)])))))))
 
 (defn frame-of
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    bsyms: (Vec Any)] -> (Map Any Any)
   (reduce (fn
@@ -211,7 +208,7 @@
     bsyms))
 
 (defn match-pat-binds
-  [ctx: rr/Context?
+  [ctx: (U ri/Graph Nil)
    view: Any
    pat: Any] -> (Vec Any)
   (if (nil? pat)
@@ -267,7 +264,7 @@
 
 ;;     ------------------------------------------------------- binding vectors ---
 
-;;     Param names from [x :- T y], skipping the types.
+;;     Param names from [x: T y], skipping the types.
 
 ;;   let-bind-pairs
 
