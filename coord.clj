@@ -19,6 +19,9 @@
   (.getBytes "{:k " java.nio.charset.StandardCharsets/UTF_8))
 (def ^:private triple-log-version 1)
 (def ^:private triple-log-flags 0)
+;; Header flag bit 0: every frame payload in this generation is
+;; Deflate-compressed; the CRC still covers the stored (compressed) bytes.
+(def ^:private deflate-flag 1)
 (def ^:private triple-log-manifest-version
   "fram-triple-log-migration-manifest/v1")
 (def ^:private max-term-depth 256)
@@ -151,7 +154,29 @@
    :action (wire-action (t/commitoperation-action operation))
    :triple (t/commitoperation-proposition operation)})
 
-(defn- write-transaction-frame! [^java.io.OutputStream out tx]
+(defn- deflate-bytes ^bytes [^bytes bytes]
+  (let [out (java.io.ByteArrayOutputStream. (alength bytes))]
+    (with-open [gz (java.util.zip.GZIPOutputStream. out)]
+      (.write gz bytes))
+    (.toByteArray out)))
+
+(defn- inflate-bytes ^bytes [^bytes bytes path offset]
+  (try
+    (let [out (java.io.ByteArrayOutputStream. (* 4 (alength bytes)))
+          buffer (byte-array 8192)]
+      (with-open [gz (java.util.zip.GZIPInputStream.
+                      (java.io.ByteArrayInputStream. bytes))]
+        (loop []
+          (let [n (.read gz buffer)]
+            (when (pos? n)
+              (.write out buffer 0 n)
+              (recur)))))
+      (.toByteArray out))
+    (catch java.io.IOException error
+      (fail! :corrupt-triple-log "FRAMLOG deflate frame is invalid"
+             {:path path :offset offset :cause (.getMessage error)}))))
+
+(defn- write-transaction-frame! [^java.io.OutputStream out tx deflate?]
   (let [payload (java.io.ByteArrayOutputStream.)
         operations (:operations tx)]
     (write-i64-le! payload (:tx-seq tx))
@@ -165,8 +190,9 @@
       (write-u32-le! payload (:ordinal operation))
       (write-u8! payload (:action operation))
       (write-triple! payload (:triple operation) 0))
-    (let [bytes (.toByteArray payload)
-          crc (doto (java.util.zip.CRC32.) (.update bytes))]
+    (let [bytes (let [^bytes raw (.toByteArray payload)]
+                  (if deflate? (deflate-bytes raw) raw))
+          crc (doto (java.util.zip.CRC32.) (.update ^bytes bytes))]
       (write-u32-le! out (alength ^bytes bytes))
       (.write out ^bytes bytes)
       (write-u32-le! out (.getValue crc)))))
@@ -233,7 +259,8 @@
       (let [version (bit-and 65535 (int (.getShort buffer)))
             flags (bit-and 65535 (int (.getShort buffer)))
             space-length (read-u32 buffer "SpaceId length")]
-        (when-not (and (= triple-log-version version) (= triple-log-flags flags))
+        (when-not (and (= triple-log-version version)
+                       (contains? #{triple-log-flags deflate-flag} flags))
           (fail! :unsupported-log-version
                  "FRAMLOG version or flags are unsupported"
                  {:path path :version version :flags flags}))
@@ -244,18 +271,21 @@
         (let [space-bytes (byte-array (int space-length))
               _ (.get buffer space-bytes)
               space-id (strict-utf8-string space-bytes "SpaceId")
+              deflate? (= deflate-flag flags)
               header-bytes (.position buffer)]
           (loop [frames [] valid-bytes header-bytes prefix-ends {}]
             (let [offset (.position buffer)
                   remaining (.remaining buffer)]
               (cond
                 (zero? remaining)
-                {:space-id space-id :frames frames :valid-bytes valid-bytes
+                {:space-id space-id :deflate? deflate? :frames frames
+                 :valid-bytes valid-bytes
                  :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail nil}
 
                 (< remaining 4)
-                {:space-id space-id :frames frames :valid-bytes valid-bytes
+                {:space-id space-id :deflate? deflate? :frames frames
+                 :valid-bytes valid-bytes
                  :header-bytes header-bytes :prefix-ends prefix-ends
                  :torn-tail {:offset offset :bytes remaining
                              :reason :torn-frame-length}}
@@ -280,7 +310,11 @@
                         (fail! :corrupt-triple-log "FRAMLOG frame CRC does not match"
                                {:path path :offset offset
                                 :stored stored-crc :actual actual-crc}))
-                      (let [frame (decode-transaction-payload payload offset)
+                      (let [frame (decode-transaction-payload
+                                   (if deflate?
+                                     (inflate-bytes payload path offset)
+                                     payload)
+                                   offset)
                             end (.position buffer)]
                         (recur (conj frames frame) end
                                (assoc prefix-ends (:tx-seq frame) end)))))))))))
@@ -326,19 +360,23 @@
      :valid-bytes valid-bytes
      :fingerprint fingerprint}))
 
-(defn- write-header! [^java.io.OutputStream out space-id]
-  (let [space-bytes (strict-utf8-bytes space-id "SpaceId")]
-    (when (zero? (alength ^bytes space-bytes))
-      (fail! :space-id-required "SpaceId must be nonempty" {}))
-    (.write out triple-log-magic)
-    (write-u16-le! out triple-log-version)
-    (write-u16-le! out triple-log-flags)
-    (write-u32-le! out (alength ^bytes space-bytes))
-    (.write out ^bytes space-bytes)))
+(defn- write-header!
+  ([out space-id] (write-header! out space-id triple-log-flags))
+  ([^java.io.OutputStream out space-id flags]
+   (let [space-bytes (strict-utf8-bytes space-id "SpaceId")]
+     (when (zero? (alength ^bytes space-bytes))
+       (fail! :space-id-required "SpaceId must be nonempty" {}))
+     (.write out triple-log-magic)
+     (write-u16-le! out triple-log-version)
+     (write-u16-le! out flags)
+     (write-u32-le! out (alength ^bytes space-bytes))
+     (.write out ^bytes space-bytes))))
 
 (defn create-triple-log!
-  "Atomically create a header-only FRAMLOG generation for SPACE-ID."
-  [path space-id]
+  "Atomically create a header-only FRAMLOG generation for SPACE-ID.
+   {:deflate? true} creates a generation whose frames are Deflate-compressed."
+  ([path space-id] (create-triple-log! path space-id {}))
+  ([path space-id {:keys [deflate?] :or {deflate? false}}]
   (let [target (.getCanonicalFile (java.io.File. (str path)))
         parent (.getParentFile target)]
     (when-not (and (.isAbsolute target) parent (.isDirectory parent))
@@ -354,7 +392,8 @@
       (try
         (with-open [file-out (java.io.FileOutputStream. (.toFile tmp))
                     out (java.io.BufferedOutputStream. file-out)]
-          (write-header! out space-id)
+          (write-header! out space-id
+                         (if deflate? deflate-flag triple-log-flags))
           (.flush out)
           (.force (.getChannel file-out) true))
         (java.nio.file.Files/move
@@ -362,20 +401,20 @@
          (into-array java.nio.file.CopyOption
                      [java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
         (.getPath target)
-        (finally (java.nio.file.Files/deleteIfExists tmp))))))
+        (finally (java.nio.file.Files/deleteIfExists tmp)))))))
 
-(defn- append-frame-durable! [path frame]
+(defn- append-frame-durable! [path frame deflate?]
   (with-open [file-out (java.io.FileOutputStream. (str path) true)
               out (java.io.BufferedOutputStream. file-out)]
-    (write-transaction-frame! out frame)
+    (write-transaction-frame! out frame deflate?)
     (.flush out)
     (.force (.getChannel file-out) true)))
 
-(defn- append-frame-cohort-durable! [path frames]
+(defn- append-frame-cohort-durable! [path frames deflate?]
   (with-open [file-out (java.io.FileOutputStream. (str path) true)
               out (java.io.BufferedOutputStream. file-out)]
     (doseq [frame frames]
-      (write-transaction-frame! out frame))
+      (write-transaction-frame! out frame deflate?))
     (.flush out)
     (.force (.getChannel file-out) true)))
 
@@ -419,6 +458,7 @@
          (truncate-log! canonical (:valid-bytes parsed)))
        {:term-store context
         :space-id space-id
+        :deflate? (:deflate? parsed)
         :log canonical
         :lock (Object.)
         :mutation-state (atom {:status :ready})
@@ -682,7 +722,7 @@
     (if *deferred-frames*
       (swap! *deferred-frames* conj serializable)
       (when-let [path (:log co)]
-        (append-frame-durable! path serializable)))
+        (append-frame-durable! path serializable (:deflate? co))))
     (term-store/replay-transaction! (coordinator-store co) frame)))
 
 (defn- throwable-code [error]
@@ -826,7 +866,7 @@
          :version (term-store/current-sequence context)}
         (try
           (when-let [path (:log co)]
-            (append-frame-cohort-durable! path @frames))
+            (append-frame-cohort-durable! path @frames (:deflate? co)))
           (let [root @(coordinator-store scratch)]
             (reset! context root)
             {:results results :frame-count (count @frames) :root root
@@ -1352,7 +1392,7 @@
                   out (java.io.BufferedOutputStream. file-out)]
         (write-header! out space-id)
         (doseq [transaction transactions]
-          (write-transaction-frame! out transaction))
+          (write-transaction-frame! out transaction false))
         (.flush out)
         (.force (.getChannel file-out) true))
       {:path tmp :bytes (java.nio.file.Files/size tmp)
@@ -1424,7 +1464,7 @@
                                space-id tx-sequence (vec same) active classification [])
                               tx-counts (migration-counts [transaction] tx-diagnostics)
                               sample-room (- 32 (count diagnostics))]
-                          (write-transaction-frame! out transaction)
+                          (write-transaction-frame! out transaction false)
                           (recur (seq later) tx-sequence (or first-tx tx-sequence)
                                  next-active (merge-with + counts tx-counts)
                                  (if (pos? sample-room)

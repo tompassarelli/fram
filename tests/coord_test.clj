@@ -235,9 +235,9 @@
 (def cohort-result
   (with-redefs-fn
     {append-cohort-var
-     (fn [path frames]
+     (fn [path frames deflate?]
        (swap! cohort-barriers inc)
-       (append-cohort-original path frames))}
+       (append-cohort-original path frames deflate?))}
     #(coord/commit-cohort!
       cohort-co
       [(fn [co] (coord/assert! co (t/triple "group" :item 1) {}))
@@ -286,8 +286,8 @@
 (def post-force-error
   (with-redefs-fn
     {append-frame-var
-     (fn [path frame]
-       (append-frame-original path frame)
+     (fn [path frame deflate?]
+       (append-frame-original path frame deflate?)
        (throw (ex-info "injected after force" {:type :injected-post-force})))}
     #(error-code
       (fn []
@@ -329,8 +329,8 @@
 (def corrupt-error
   (with-redefs-fn
     {append-frame-var
-     (fn [path frame]
-       (append-frame-original path frame)
+     (fn [path frame deflate?]
+       (append-frame-original path frame deflate?)
        (with-open [file (java.io.RandomAccessFile. (str path) "rw")]
          (.seek file (dec (.length file)))
          (let [last-byte (.read file)]

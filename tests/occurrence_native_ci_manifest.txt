@@ -13,6 +13,7 @@ run-bb	current-model	tests/core_code_blind_test.clj	-
 run-bb	current-model	tests/datalog_fn_test.clj	-
 run-bb	current-model	tests/datalog_predicate_test.clj	-
 run-bb	current-model	tests/fold_occurrence_test.clj	-
+run-bb	current-model	tests/framlog_deflate_test.clj	-
 run-bb	current-model	tests/fram_promotion_test.clj	-
 run-bb	current-model	tests/fram_rpc_v1_test.clj	-
 run-bb	current-model	tests/framlog_torn_sweep_test.clj	-

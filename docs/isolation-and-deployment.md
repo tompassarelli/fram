@@ -63,7 +63,10 @@ to the application, on three measured facts:
   every time it appears** — the log carries no string dictionary. A fact whose
   subject is a 100-character identifier pays those 100 bytes on each of its
   occurrences; measured: 1,000 assertions under one 10-character subject are
-  36 KB, under one 100-character subject 126 KB.
+  36 KB, under one 100-character subject 126 KB. A generation created with
+  `{:deflate? true}` compresses each frame (measured 17.8× on a repeated-long-id
+  corpus, write and fold time unchanged); the flag is per-generation and set at
+  `create-triple-log!`.
 - Re-asserting a corpus appends all of it again, exactly linearly: a 15k-fact
   corpus measured 1.2 MB per generation and 12.2 MB after ten identical
   rebuilds. A rebuild-from-source lifecycle multiplies the log by the number
