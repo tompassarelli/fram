@@ -191,3 +191,9 @@ exclude	shared-runner-timing	tests/text_index_perf_test.clj	tests/text_index_per
 run-clojure	current-model	tests/s1_schema_foundation_test.clj	-
 exclude	s2-frontier	tests/s2_authoring_test.clj	tests/s2_authoring_test.clj#rr/context
 exclude	text-authoritative-render	tests/s0_render_bootstrap_test.clj	tests/s0_render_bootstrap_test.clj#byte-identical
+run-bb	current-model	tests/candidate_transformer_test.clj	-
+run-bb	current-model	tests/native_code_reader_test.clj	-
+run-bb	current-model	tests/projection_lifecycle_test.clj	-
+run-bb	current-model	tests/query_cursor_binary_search_test.clj	-
+exclude	needs-built-binary-arg	tests/graph_control_mcp_e2e_test.clj	tests/graph_control_mcp_e2e_test.clj#usage
+exclude	needs-native-toolchain	tests/native_code_commit_gate_test.clj	tests/native_code_commit_gate_test.clj#native
