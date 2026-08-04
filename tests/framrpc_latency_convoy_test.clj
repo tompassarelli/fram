@@ -139,13 +139,13 @@
             (every? #(nil? (error-code %)) (:responses baseline)))
 
     ;; ---- A. a two-second read delay must not convoy the writer lock ---------
-    (let [original query/project-with-occurrences
+    (let [original query/run-plan-projected!
           entered (promise)]
-      (with-redefs [query/project-with-occurrences
-                    (fn [propositions occurrences]
+      (with-redefs [query/run-plan-projected!
+                    (fn [projection plan]
                       (deliver entered true)
                       (Thread/sleep delay-ms)
-                      (original propositions occurrences))]
+                      (original projection plan))]
         (let [slow (future
                      (elapsed-ms
                       #(request! port space :rpc/query

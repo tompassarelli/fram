@@ -165,7 +165,7 @@
  (format "text-index perf: rpc/query warm p95 missing=%.2fms one-token=%.2fms two-token=%.2fms N=30"
          missing-p95 one-token-p95 two-token-p95))
 (println
- (format "text-index perf: rows missing=%s one-token=%s two-token=%s result-cache misses=%d hits=%d"
+ (format "text-index perf: rows missing=%s one-token=%s two-token=%s result-cache misses=%d hits=%d (distinct needles by design: hits must be 0)"
          (nth result-counts 0) (nth result-counts 1) (nth result-counts 2)
          (:misses result-cache) (:hits result-cache)))
 
