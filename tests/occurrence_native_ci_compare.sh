@@ -21,7 +21,7 @@ normalize() {
       invalid = 1
       next
     }
-    $1 != "catalog-drift" && $1 != "vocab-residue" {
+    $1 != "catalog-drift" && $1 != "vocab-residue" && $1 != "latency-delay-hook" {
       printf "%s:%d: unknown failure producer %s\n", FILENAME, FNR, $1 > "/dev/stderr"
       invalid = 1
       next
@@ -49,7 +49,7 @@ for side in pristine candidate; do
   fi
 done
 
-for producer in catalog-drift vocab-residue; do
+for producer in catalog-drift vocab-residue latency-delay-hook; do
   awk -F '\t' -v producer="$producer" '$1 == producer {print $2}' \
     "$scratch/pristine" > "$scratch/pristine.$producer"
   awk -F '\t' -v producer="$producer" '$1 == producer {print $2}' \
@@ -69,6 +69,21 @@ if [ -s "$scratch/catalog.missing" ] || [ -s "$scratch/catalog.new" ]; then
   while IFS= read -r failure; do
     [ -n "$failure" ] && printf '  NEW      catalog-drift\t%s\n' "$failure" >&2
   done < "$scratch/catalog.new"
+  status=1
+fi
+
+comm -23 "$scratch/pristine.latency-delay-hook" "$scratch/candidate.latency-delay-hook" \
+  > "$scratch/latency.missing"
+comm -13 "$scratch/pristine.latency-delay-hook" "$scratch/candidate.latency-delay-hook" \
+  > "$scratch/latency.new"
+if [ -s "$scratch/latency.missing" ] || [ -s "$scratch/latency.new" ]; then
+  echo "known failure comparison: latency-delay-hook must equal pristine" >&2
+  while IFS= read -r failure; do
+    [ -n "$failure" ] && printf '  MISSING  latency-delay-hook\t%s\n' "$failure" >&2
+  done < "$scratch/latency.missing"
+  while IFS= read -r failure; do
+    [ -n "$failure" ] && printf '  NEW      latency-delay-hook\t%s\n' "$failure" >&2
+  done < "$scratch/latency.new"
   status=1
 fi
 
