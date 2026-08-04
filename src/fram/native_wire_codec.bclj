@@ -432,6 +432,16 @@
   (append-term-limited! encoder term depth rpc-v1-max-string-bytes
                         rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
+(defn canonical-term-sha256! [term: Any] -> String
+  (let [encoder (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
+    (append-term! encoder term 0)
+    (let [error (deref (encoder-error encoder))]
+      (if error
+        (throw (ex-info error {:type :term-codec-encode-failed
+                               :fram/code :term-codec-encode-failed
+                               :message error}))
+        (sha256-bytes (deref (encoder-bytes encoder)))))))
+
 (defn read-keyword-term!
   [decoder: Decoder
    label: String] -> Keyword

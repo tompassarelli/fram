@@ -4,6 +4,8 @@
   (:require [coord-commit :as commit]
             [coord-read :as read]
             [fram.native-lease-ops :as lease]
+            [fram.native-query-ops :as query-ops]
+            [fram.native-wire-codec :as native-wire]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -712,33 +714,45 @@
              served-version (t/rpcrequest-expected-version request)))
        (error-response request served-version :rpc/conflict true
                        "expected-version does not match the served version")]
-      [(t/rpcrequest-timeout-ms request)
-       (error-response request served-version :rpc/unexpected-timeout false
-                       "timeout-ms is supported only by rpc/query")]
-      [(and (mutation-request? operation) (t/rpcrequest-page request))
-       (error-response request served-version :rpc/unexpected-page false
-                       "mutation operations do not support paging")]
-      [(= :rpc/version operation)
-       (if (t/rpcrequest-page request)
-         (error-response request served-version :rpc/unexpected-page false
-                         "rpc/version does not support paging")
-         (unit-response request served-version :rpc/unit))]
-      [(= :rpc/status operation)
-       (if (t/rpcrequest-page request)
-         (error-response request served-version :rpc/unexpected-page false
-                         "rpc/status does not support paging")
-         (unit-response
-          request served-version
-          (rpc-status (count (store/live-propositions root)))))]
-      [(= :rpc/scan operation)
-       (scan-response! session request served-version)]
-      [(or (= :rpc/assert operation) (= :rpc/retract operation))
-       (write-response! session request now-ms served-version)]
-      [(= :rpc/batch operation)
-       (batch-response! session request now-ms served-version)]
-      [(lease/lease-operation? operation)
-       (lease/dispatch! session request now-ms)]
       [:else
-       (error-response
-        request served-version :rpc/native-operation-unavailable false
-        "FRAMRPC operation has no typed native coordinator route")])))
+       (let [read-result: query-ops/NativeReadResult
+             (query-ops/dispatch-read!
+              session request native-wire/canonical-term-sha256!)]
+         (if (query-ops/nativereadresult-handled read-result)
+           (let [read-response (query-ops/nativereadresult-response read-result)]
+             (if read-response
+               read-response
+               (error-response
+                request served-version :rpc/native-query-failed false
+                "native read route returned no response")))
+           (cond
+             [(t/rpcrequest-timeout-ms request)
+              (error-response request served-version :rpc/unexpected-timeout false
+                              "timeout-ms is supported only by rpc/query")]
+             [(and (mutation-request? operation) (t/rpcrequest-page request))
+              (error-response request served-version :rpc/unexpected-page false
+                              "mutation operations do not support paging")]
+             [(= :rpc/version operation)
+              (if (t/rpcrequest-page request)
+                (error-response request served-version :rpc/unexpected-page false
+                                "rpc/version does not support paging")
+                (unit-response request served-version :rpc/unit))]
+             [(= :rpc/status operation)
+              (if (t/rpcrequest-page request)
+                (error-response request served-version :rpc/unexpected-page false
+                                "rpc/status does not support paging")
+                (unit-response
+                 request served-version
+                 (rpc-status (count (store/live-propositions root)))))]
+             [(= :rpc/scan operation)
+              (scan-response! session request served-version)]
+             [(or (= :rpc/assert operation) (= :rpc/retract operation))
+              (write-response! session request now-ms served-version)]
+             [(= :rpc/batch operation)
+              (batch-response! session request now-ms served-version)]
+             [(lease/lease-operation? operation)
+              (lease/dispatch! session request now-ms)]
+             [:else
+              (error-response
+               request served-version :rpc/native-operation-unavailable false
+               "FRAMRPC operation has no typed native coordinator route")])))])))
