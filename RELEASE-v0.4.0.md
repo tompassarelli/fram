@@ -44,11 +44,10 @@ patch for the deployed v0.3 flat-log and EDN-line runtime.
   `jvm-oracle`, or checkout-only `jvm-dev`. The default `native` route requires
   an absolute `FRAM_NATIVE_ARTIFACT_DIR` containing a valid `READY` marker and
   `bin/fram-daemon-native`.
-- Reminder for consumers upgrading from before v0.3.7: v0.3.7 already made a
-  separate breaking Node-client vocabulary change, renaming public
-  `slot0`/`slot1`/`slot2` parameters and object keys to `t1`/`t2`/`t3`.
-  That mechanical rename remains in force. It did not alter the binary wire,
-  where Triple positions are positional.
+- Reminder for consumers upgrading from before v0.3.7: that release made a
+  separate breaking Node-client positional-vocabulary change. Its migration
+  remains in force; see the [v0.3.7 release notes](https://github.com/tompassarelli/fram/releases/tag/v0.3.7).
+  It did not alter the binary wire, where Triple positions are positional.
 - Do not expose FRAMRPC directly to untrusted networks. Authentication and TLS
   remain the responsibility of the gateway or Cloudflare shim.
 
@@ -73,6 +72,6 @@ patch for the deployed v0.3 flat-log and EDN-line runtime.
 - Native-image compilation is intentionally slower than the JVM development
   loop. Ordinary development continues on JVM/Babashka paths; Graal builds are
   reserved for release and deployment gates.
-- This release makes no generic startup, memory, or throughput claim. Those
+- This release makes no generic startup, memory, or throughput guarantee. Those
   properties remain workload- and deployment-specific and must be measured on
   Fram rather than inferred from other Graal applications.
