@@ -6,7 +6,7 @@ This document specifies the source-head trust domain, coordinator bind and FRAMR
 
 Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glossary.md#storage-and-query), one FRAMLOG, one writer process/lock, and one private network boundary form a trust domain. Separate personal, client, and public-tooling data across all four; ontology fields are not tenant isolation.
 
-`bin/fram-daemon` binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New logs require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
+`bin/fram-daemon` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-daemon-native`. `FRAM_DAEMON_RUNTIME=jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. Neither is an automatic fallback. The coordinator binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New logs require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
 The listener is plaintext. Remote deployments keep it private and terminate TLS, authentication, tenant routing, request limits, and public audit policy at a gateway or sidecar.
 
@@ -37,12 +37,12 @@ client -- HTTPS/closed JSON --> authenticated Worker or shim
 
 The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it never forwards EDN or arbitrary daemon records. Cloudflare setup and probes live in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
 
-- `bin/fram-daemon` is the long-lived active or standby coordinator.
+- `bin/fram-daemon` is the native-first launcher for the long-lived active or standby coordinator.
 - `bin/fram` is the local CLI and FRAMRPC client.
 - `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
 - The Cloudflare shim/Worker is an optional authenticated JSON edge.
 
-Compiled Clojure under `out/` starts without Beagle. The Zig implementation is a compatibility, rollback, and differential oracle held to the same semantic and thirteen-operation wire contract, not a scheduled JVM replacement.
+The launcher consumes only a linked executable promoted behind the native artifact's READY marker; raw Beagle projection output is not executable runtime input. Compiled Clojure under `out/` remains available only through the explicit JVM routes. The frozen Zig implementation remains a compatibility, rollback, and differential oracle held to the same semantic and thirteen-operation wire contract.
 
 ## Durable state and handoff
 

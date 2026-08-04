@@ -76,10 +76,9 @@ export FRAM_SNAPSHOT_BOOT="${FRAM_SNAPSHOT_BOOT:-1}"
 setsid "$HERE/fram-daemon" "$FRAM_PORT" "$LOG" >"/tmp/fram-daemon-$FRAM_PORT.log" 2>&1 &
 disown 2>/dev/null || true
 
-# the daemon now runs on the JVM (Clojure) — slower to boot than bb, and it reads
-# the whole fact log at startup, so give it room (and a first-ever run may resolve
-# deps once). GNU timeout supplies one monotonic deadline for the complete poll
-# loop; probe runtime no longer shortens the configured startup window.
+# The selected daemon may read the whole fact log at startup, so give it room.
+# GNU timeout supplies one monotonic deadline for the complete poll loop; probe
+# runtime no longer shortens the configured startup window.
 export -f coordinator_ready
 if timeout --foreground "${STARTUP_TIMEOUT_SECONDS}s" \
     bash -c '

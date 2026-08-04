@@ -78,6 +78,7 @@ committed under `out/`.
 $ git clone https://github.com/Autonymy/fram && cd fram
 $ export FRAM_SPACE_ID=fram-demo
 $ export FRAM_LOG=/tmp/fram-demo.framlog
+$ export FRAM_DAEMON_RUNTIME=jvm-dev  # explicit checkout fallback
 $ bin/fram-up
 $ bin/fram tell :email :grouped-under :contact
 $ bin/fram tell Alice :email alice@example.com
@@ -94,9 +95,12 @@ engine wire is binary FRAMRPC.
 
 ## Runtime surfaces
 
-- `bin/fram-daemon` is the JVM coordinator. It owns one `SpaceId` and one
-  `history.framlog`, accepts the closed thirteen-operation FRAMRPC v1 set, and
-  holds writer authority for its active lifetime.
+- `bin/fram-daemon` is the native-first coordinator launcher. Its default route
+  requires `FRAM_NATIVE_ARTIFACT_DIR` to name a READY artifact containing
+  `bin/fram-daemon-native`; it never falls back silently. `jvm-oracle` and
+  `jvm-dev` are explicit retained routes. The launched coordinator owns one
+  `SpaceId` and one `history.framlog`, accepts the closed thirteen-operation
+  FRAMRPC v1 set, and holds writer authority for its active lifetime.
 - `bin/fram` routes public data commands (`tell`, `retract`, `show`, `query`,
   `scan`, `occurrences`, `version`, `status`, and `validate`) over FRAMRPC.
   Explicit local migration/projection/admin commands are separate from that

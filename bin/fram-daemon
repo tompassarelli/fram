@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Fram coordinator daemon — the sole-writer multi-agent service. Runs on the JVM
-# (Clojure), not babashka: a long-lived server wants JIT throughput and full Java
-# threads; fast startup is irrelevant. The CLI and MCP edge stay on babashka.
-# Checkout runs resolve deps.edn; the package supplies a build-time-resolved,
-# store-only Java classpath.
+# Fram coordinator daemon — the sole-writer multi-agent service. Production
+# launches require a completed Beagle native artifact. The JVM remains available
+# only through the explicitly selected oracle or checkout-development routes.
 #   fram-daemon [serve] [port] [framlog] [space-id]   (mode defaults to serve)
+#   FRAM_DAEMON_RUNTIME=native       production runtime (default)
+#   FRAM_NATIVE_ARTIFACT_DIR=<path>  READY native-build artifact directory
+#   FRAM_DAEMON_RUNTIME=jvm-oracle   sealed Java/classpath differential oracle
+#   FRAM_DAEMON_RUNTIME=jvm-dev      checkout-only Clojure development runtime
 #   FRAM_BIND=0.0.0.0          bind all interfaces (default loopback)
-#   FRAM_DAEMON_XMX=4g         max heap; empty disables the flag (JVM ergonomics)
-#   FRAM_DAEMON_G1_REGION=32m  G1 region size; empty disables the flag
+#   FRAM_DAEMON_XMX=4g         JVM fallback max heap; empty disables the flag
+#   FRAM_DAEMON_G1_REGION=32m  JVM fallback G1 region size; empty disables it
 #   FRAM_DAEMON_LOG=<path>     request log file (default stderr)
 #   FRAM_DAEMON_QUIET=1        log only slow requests
 #   FRAM_SLOW_MS=1000          slow-request threshold, always logged
 #   TLS termination belongs at the authenticated gateway until the sealed native
 #   TLS listener is restored; these public data sockets are plaintext/private.
-# cd $HERE so the daemon's relative load-file assets resolve.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,13 +48,57 @@ elif [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
 else
   log_path="$HERE/history.framlog"
 fi
-mkdir -p "$(dirname "$log_path")"
 space_id="${3:-${FRAM_SPACE_ID:-}}"
 if [[ ! -e "$log_path" && -z "$space_id" ]]; then
   echo "fram-daemon: FRAM_SPACE_ID (or the fourth argument) is required to create a FRAMLOG" >&2
   exit 2
 fi
 
+runtime="${FRAM_DAEMON_RUNTIME:-native}"
+case "$runtime" in
+  native)
+    artifact_dir="${FRAM_NATIVE_ARTIFACT_DIR:-}"
+    if [[ -z "$artifact_dir" ]]; then
+      echo "fram-daemon: FRAM_NATIVE_ARTIFACT_DIR is required for FRAM_DAEMON_RUNTIME=native" >&2
+      exit 2
+    fi
+    case "$artifact_dir" in
+      /*) ;;
+      *)
+        echo "fram-daemon: FRAM_NATIVE_ARTIFACT_DIR must be absolute: $artifact_dir" >&2
+        exit 2
+        ;;
+    esac
+    ready="$artifact_dir/READY"
+    native_daemon="$artifact_dir/bin/fram-daemon-native"
+    if [[ ! -r "$ready" ]]; then
+      echo "fram-daemon: native artifact is not ready: missing $ready" >&2
+      exit 2
+    fi
+    ready_line="$(<"$ready")"
+    if [[ ! "$ready_line" =~ ^fram-native-build/v1\ [0-9a-f]{64}$ ]]; then
+      echo "fram-daemon: native artifact READY marker is invalid: $ready" >&2
+      exit 2
+    fi
+    if [[ ! -x "$native_daemon" ]]; then
+      echo "fram-daemon: native artifact executable is unavailable: $native_daemon" >&2
+      exit 2
+    fi
+    mkdir -p "$(dirname "$log_path")"
+    export FRAM_PORT="${1:-7977}"
+    export FRAM_LOG="$log_path"
+    if [[ -n "$space_id" ]]; then export FRAM_SPACE_ID="$space_id"; fi
+    cd "$HERE"
+    exec "$native_daemon"
+    ;;
+  jvm-oracle|jvm-dev) ;;
+  *)
+    echo "fram-daemon: unsupported FRAM_DAEMON_RUNTIME '$runtime'; expected native, jvm-oracle, or jvm-dev" >&2
+    exit 2
+    ;;
+esac
+
+mkdir -p "$(dirname "$log_path")"
 daemon_args=(coord_daemon.clj "$mode" "${1:-7977}" "$log_path")
 if [[ -n "$space_id" ]]; then daemon_args+=("$space_id"); fi
 
@@ -74,9 +119,9 @@ if [[ -z "${FRAM_DAEMON_NO_OOM_EXIT:-}" && -n "$xmx" ]]; then
     "-XX:HeapDumpPath=${oom_dump:-/tmp/fram-daemon-oom.hprof}")
 fi
 
-if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
+if [[ "$runtime" == "jvm-oracle" ]]; then
   if [[ -z "${FRAM_JAVA:-}" || -z "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
-    echo "fram-daemon: FRAM_JAVA and FRAM_DAEMON_CLASSPATH_FILE must be set together" >&2
+    echo "fram-daemon: FRAM_DAEMON_RUNTIME=jvm-oracle requires FRAM_JAVA and FRAM_DAEMON_CLASSPATH_FILE" >&2
     exit 2
   fi
   if [[ ! -x "$FRAM_JAVA" ]]; then
@@ -104,6 +149,18 @@ if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
     "${daemon_args[@]}"
 fi
 
+if [[ "${FRAM_PACKAGED:-0}" == "1" ]]; then
+  echo "fram-daemon: FRAM_DAEMON_RUNTIME=jvm-dev is checkout-only" >&2
+  exit 2
+fi
+if [[ -n "${FRAM_JAVA:-}" || -n "${FRAM_DAEMON_CLASSPATH_FILE:-}" ]]; then
+  echo "fram-daemon: FRAM_DAEMON_RUNTIME=jvm-dev rejects packaged Java/classpath bindings" >&2
+  exit 2
+fi
+if ! command -v clojure >/dev/null 2>&1; then
+  echo "fram-daemon: FRAM_DAEMON_RUNTIME=jvm-dev requires clojure on PATH" >&2
+  exit 2
+fi
 cd "$HERE"
 clojure_jvm_args=()
 for flag in "${heap_flags[@]}"; do clojure_jvm_args+=("-J$flag"); done
