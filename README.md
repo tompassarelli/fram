@@ -56,6 +56,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Guarantees](docs/guarantees.md) — every guarantee, its gate, and its status; failures land on a named line.
 - [Workload contract](docs/workload-contract.md) — the reference workload envelope and the client obligations it assumes.
 - [Coordinator wire](docs/coordinator-bind-and-wire.md) — binary FRAMRPC v1 and the private-network boundary.
+- [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 - [Thread format](THREAD-FORMAT.md) — the current v0.3 Markdown
@@ -105,6 +106,10 @@ engine wire is binary FRAMRPC.
 - `bin/fram-mcp` is a JSON-RPC-over-stdio edge with exactly five public data
   tools: `tell`, `retract`, `show`, `ask`, and `validate`. Graph authoring and
   deployment control are separate sealed services.
+- `clients/node/framrpc.mjs` is the official zero-dependency Node client for
+  direct builder and application traffic. It preserves recursive Terms,
+  batches, versions, occurrence replay, paging/cursors, snapshot selectors,
+  and leases across all thirteen FRAMRPC v1 operations.
 - The Cloudflare shim accepts closed JSON with tagged recursive Terms and lowers
   it to FRAMRPC. It does not accept EDN or an untyped escape hatch.
 

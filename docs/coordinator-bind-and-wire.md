@@ -16,6 +16,11 @@ The listener is plaintext. Keep it on loopback or a private network and put an
 authenticated TLS gateway or sidecar in front. There is no engine-level user
 authentication in this boundary.
 
+The official zero-dependency Node client lives at
+`fram:clients/node/framrpc.mjs`. It connects directly to this socket, preserves
+the complete recursive Term vocabulary, and exposes all thirteen operations.
+It does not route through HTTP, JSON, MCP, or the Clojure shim.
+
 ## FRAMRPC v1
 
 The live wire is binary FRAMRPC v1. Each bounded frame carries protocol magic,
@@ -69,6 +74,9 @@ runtime only; it must not be inferred from FRAMRPC v1.
   record and recursive Term encoding.
 - [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj)
   exercises the real listener.
+- [`../tests/node_framrpc_client_test.mjs`](../tests/node_framrpc_client_test.mjs)
+  drives all thirteen operations from the official Node client against the real
+  listener.
 - [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj)
   prevents operation drift and legacy parsers from returning.
 - [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj)

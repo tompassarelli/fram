@@ -40,6 +40,7 @@ check('noncanonical typed values are rejected locally', () => {
 
 check('client has one JSON mode and requires an explicit SpaceId', () => {
   assert.throws(() => client.framClient({ token: 'secret' }), /space required/);
+  assert.throws(() => client.tripleQuery({ l: 'legacy' }), /unknown/);
   assert.equal('RawEdn' in client, false);
   assert.equal('raw' in client, false);
   assert.equal('ednEncode' in client, false);

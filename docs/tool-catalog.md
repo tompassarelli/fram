@@ -26,10 +26,19 @@ takes one subject string. `ask` accepts a structured JSON query; its advertised
 constant schema currently covers strings and numbers. This is a real edge
 limitation, not a second kernel model.
 
-Use the native CLI or the tagged Cloudflare JSON API when a request must carry
-recursive Triples, Keywords, Bools, or Instants without string projection. Do
-not send an undocumented JSON shape to MCP and assume its current permissive
-decoder is a compatibility promise.
+Use the official Node FRAMRPC client, the native CLI, or the tagged Cloudflare
+JSON API when a request must carry recursive Triples, Keywords, Bools, or
+Instants without string projection. Do not send an undocumented JSON shape to
+MCP and assume its current permissive decoder is a compatibility promise.
+
+## Builder and application clients
+
+MCP is not the builder transport. The zero-dependency client at
+`fram:clients/node/framrpc.mjs` speaks binary FRAMRPC directly and exposes the
+complete frozen operation set: recursive-Term writes, atomic batches, exact
+expected and served versions, status, snapshot-pinned query/scan pagination,
+occurrence replay, validation, and leases. Its protocol implementation is owned
+and tested in Fram; consumers do not copy or reinterpret the wire codec.
 
 ## `ask`
 

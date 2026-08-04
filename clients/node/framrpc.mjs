@@ -1,0 +1,1061 @@
+import { createConnection } from 'node:net';
+
+const MAGIC = Buffer.from([0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00]);
+const HEADER_BYTES = 26;
+const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_FRAME_BYTES = HEADER_BYTES + MAX_BODY_BYTES;
+const MAX_STRING_BYTES = 1024 * 1024;
+const MAX_SPACE_BYTES = 4096;
+const MAX_TERM_NODES = 65536;
+const MAX_TERM_DEPTH = 256;
+const MAX_PAGE_LIMIT = 4096;
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+const U32_MAX = (1n << 32n) - 1n;
+const I64 = /^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$/;
+const FLOAT64 = /^[0-9a-f]{16}$/;
+const OPERATIONS = new Set([
+  'rpc/version', 'rpc/status', 'rpc/validate',
+  'rpc/assert', 'rpc/retract', 'rpc/batch',
+  'rpc/scan', 'rpc/query', 'rpc/occurrences',
+  'rpc/lease-acquire', 'rpc/lease-renew', 'rpc/lease-release',
+  'rpc/lease-check',
+]);
+const PAGED_OPERATIONS = new Set(['rpc/scan', 'rpc/query', 'rpc/occurrences']);
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+export const FRAMRPC_VERSION = Object.freeze({ major: 1, minor: 0 });
+
+export class FramProtocolError extends Error {
+  constructor(message, code = 'client/protocol', options) {
+    super(`FRAMRPC: ${message}`, options);
+    this.name = 'FramProtocolError';
+    this.code = code;
+  }
+}
+
+export class FramTransportError extends Error {
+  constructor(message, cause) {
+    super(`FRAMRPC transport: ${message}`, cause ? { cause } : undefined);
+    this.name = 'FramTransportError';
+  }
+}
+
+export class FramRpcError extends Error {
+  constructor(response) {
+    super(response.error.message);
+    this.name = 'FramRpcError';
+    this.code = response.error.code;
+    this.retryable = response.error.retryable;
+    this.detail = response.error.detail;
+    this.space = response.space;
+    this.operation = response.operation;
+    this.servedVersion = response.servedVersion;
+  }
+}
+
+function fail(message, code) {
+  throw new FramProtocolError(message, code);
+}
+
+function own(value, key) {
+  return Object.hasOwn(value, key);
+}
+
+function plainObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail(`${label} must be an object`, 'client/invalid-input');
+  }
+  return value;
+}
+
+function exactKeys(value, allowed, label) {
+  plainObject(value, label);
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) fail(`${label}.${key} is unknown`, 'client/invalid-input');
+  }
+  return value;
+}
+
+function decimal(value, { label = 'integer', min = I64_MIN, max = I64_MAX } = {}) {
+  let text;
+  if (typeof value === 'bigint') text = value.toString();
+  else if (typeof value === 'number' && Number.isSafeInteger(value)) text = String(value);
+  else if (typeof value === 'string' && I64.test(value)) text = value;
+  else fail(`${label} must be a safe integer, bigint, or canonical decimal string`, 'client/invalid-integer');
+  if (!I64.test(text)) fail(`${label} is not canonical decimal`, 'client/invalid-integer');
+  const parsed = BigInt(text);
+  if (parsed < min || parsed > max) fail(`${label} is out of range`, 'client/integer-range');
+  return text;
+}
+
+function integerBigInt(value, options) {
+  return BigInt(decimal(value, options));
+}
+
+function strictUtf8(value, maximum, label) {
+  if (typeof value !== 'string') fail(`${label} must be a string`, 'client/invalid-text');
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        fail(`${label} contains an unpaired UTF-16 surrogate`, 'client/invalid-utf8');
+      }
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      fail(`${label} contains an unpaired UTF-16 surrogate`, 'client/invalid-utf8');
+    }
+  }
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length > maximum) fail(`${label} exceeds the UTF-8 byte limit`, 'client/string-limit');
+  return bytes;
+}
+
+function canonicalFloatBits(bits) {
+  if (typeof bits !== 'string' || !FLOAT64.test(bits)) {
+    fail('float64 bits must be 16 lowercase hex digits', 'client/invalid-float');
+  }
+  const raw = BigInt(`0x${bits}`);
+  const exponent = (raw >> 52n) & 0x7ffn;
+  const fraction = raw & ((1n << 52n) - 1n);
+  if (exponent === 0x7ffn && fraction !== 0n && bits !== '7ff8000000000000') {
+    fail('float64 NaN bits are not canonical', 'client/invalid-float');
+  }
+  return bits;
+}
+
+function floatBits(value) {
+  if (typeof value !== 'number') fail('float64 value must be a number', 'client/invalid-float');
+  if (Number.isNaN(value)) return '7ff8000000000000';
+  const bytes = Buffer.allocUnsafe(8);
+  bytes.writeDoubleBE(value, 0);
+  return bytes.toString('hex');
+}
+
+export const stringTerm = value => {
+  strictUtf8(value, MAX_STRING_BYTES, 'String atom');
+  return ['string', value];
+};
+
+export const integerTerm = value => ['integer', decimal(value)];
+export const float64Term = value => ['float64', floatBits(value)];
+
+export const booleanTerm = value => {
+  if (typeof value !== 'boolean') fail('boolean Term requires a boolean', 'client/invalid-term');
+  return ['boolean', value];
+};
+
+export const keywordTerm = value => {
+  const bytes = strictUtf8(value, MAX_STRING_BYTES, 'Keyword atom');
+  if (bytes.length === 0) fail('Keyword atom spelling must be nonempty', 'client/invalid-keyword');
+  return ['keyword', value];
+};
+
+export const instantTerm = (seconds, nanos) => [
+  'instant',
+  decimal(seconds, { label: 'instant seconds' }),
+  decimal(nanos, { label: 'instant nanoseconds', min: 0n, max: 999999999n }),
+];
+
+export const tripleTerm = (slot0, slot1, slot2) => [
+  'triple', term(slot0), term(slot1), term(slot2),
+];
+
+export function validateTerm(value, depth = 0, budget = { nodes: 0 }) {
+  if (depth > MAX_TERM_DEPTH) fail('Term exceeds the nesting limit', 'client/term-depth');
+  budget.nodes += 1;
+  if (budget.nodes > MAX_TERM_NODES) fail('Term exceeds the node limit', 'client/term-nodes');
+  if (!Array.isArray(value) || typeof value[0] !== 'string') {
+    fail('Term must be a tagged array', 'client/invalid-term');
+  }
+  const arity = count => {
+    if (value.length !== count) fail(`${value[0]} Term has the wrong arity`, 'client/invalid-term');
+  };
+  switch (value[0]) {
+    case 'string':
+      arity(2);
+      strictUtf8(value[1], MAX_STRING_BYTES, 'String atom');
+      break;
+    case 'integer':
+      arity(2);
+      decimal(value[1]);
+      break;
+    case 'float64':
+      arity(2);
+      canonicalFloatBits(value[1]);
+      break;
+    case 'boolean':
+      arity(2);
+      if (typeof value[1] !== 'boolean') fail('boolean Term payload must be boolean', 'client/invalid-term');
+      break;
+    case 'keyword':
+      arity(2);
+      keywordTerm(value[1]);
+      break;
+    case 'instant':
+      arity(3);
+      decimal(value[1], { label: 'instant seconds' });
+      decimal(value[2], { label: 'instant nanoseconds', min: 0n, max: 999999999n });
+      break;
+    case 'triple':
+      arity(4);
+      validateTerm(value[1], depth + 1, budget);
+      validateTerm(value[2], depth + 1, budget);
+      validateTerm(value[3], depth + 1, budget);
+      break;
+    default:
+      fail(`unknown Term tag ${JSON.stringify(value[0])}`, 'client/invalid-term');
+  }
+  return value;
+}
+
+export function term(value) {
+  if (Array.isArray(value)) return validateTerm(value);
+  if (typeof value === 'string') return stringTerm(value);
+  if (typeof value === 'bigint') return integerTerm(value);
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? integerTerm(value) : float64Term(value);
+  if (typeof value === 'boolean') return booleanTerm(value);
+  if (value instanceof Date) {
+    const millis = BigInt(value.getTime());
+    const seconds = millis >= 0n ? millis / 1000n : (millis - 999n) / 1000n;
+    const nanos = (millis - seconds * 1000n) * 1000000n;
+    return instantTerm(seconds, nanos);
+  }
+  fail('value is outside Term; use an explicit typed constructor', 'client/invalid-term');
+}
+
+export function float64Value(value) {
+  validateTerm(value);
+  if (value[0] !== 'float64') fail('expected a float64 Term', 'client/invalid-term');
+  const bytes = Buffer.from(value[1], 'hex');
+  return bytes.readDoubleBE(0);
+}
+
+export function integerValue(value) {
+  validateTerm(value);
+  if (value[0] !== 'integer') fail('expected an integer Term', 'client/invalid-term');
+  return BigInt(value[1]);
+}
+
+function keywordName(value, label = 'value') {
+  if (!Array.isArray(value) || value.length !== 2 || value[0] !== 'keyword') {
+    fail(`${label} must be a Keyword Term`, 'client/invalid-record');
+  }
+  return value[1];
+}
+
+function stringValue(value, label = 'value') {
+  if (!Array.isArray(value) || value.length !== 2 || value[0] !== 'string') {
+    fail(`${label} must be a String Term`, 'client/invalid-record');
+  }
+  return value[1];
+}
+
+function boolValue(value, label = 'value') {
+  if (!Array.isArray(value) || value.length !== 2 || value[0] !== 'boolean') {
+    fail(`${label} must be a Bool Term`, 'client/invalid-record');
+  }
+  return value[1];
+}
+
+function intValue(value, label = 'value') {
+  if (!Array.isArray(value) || value.length !== 2 || value[0] !== 'integer') {
+    fail(`${label} must be an Int Term`, 'client/invalid-record');
+  }
+  return BigInt(value[1]);
+}
+
+function isKeyword(value, spelling) {
+  return Array.isArray(value) && value.length === 2
+    && value[0] === 'keyword' && value[1] === spelling;
+}
+
+function rawListValues(value) {
+  const values = [];
+  let cursor = value;
+  while (!isKeyword(cursor, 'rpc/list-end')) {
+    if (!Array.isArray(cursor) || cursor.length !== 4 || cursor[0] !== 'triple'
+        || !isKeyword(cursor[1], 'rpc/list')) {
+      fail('RPC list is malformed', 'client/invalid-list');
+    }
+    values.push(cursor[2]);
+    if (values.length > MAX_TERM_NODES) fail('RPC list exceeds the node limit', 'client/invalid-list');
+    cursor = cursor[3];
+  }
+  return values;
+}
+
+export function listValues(value) {
+  validateTerm(value);
+  return rawListValues(value);
+}
+
+function rawRecordFields(value, tag, count) {
+  if (!Array.isArray(value) || value.length !== 4 || value[0] !== 'triple'
+      || !isKeyword(value[1], tag) || !isKeyword(value[3], 'rpc/record')) {
+    fail(`expected ${tag} RPC record`, 'client/invalid-record');
+  }
+  const fields = rawListValues(value[2]);
+  if (fields.length !== count) fail(`${tag} RPC record has the wrong field count`, 'client/invalid-record');
+  return fields;
+}
+
+export function recordFields(value, tag, count) {
+  validateTerm(value);
+  return rawRecordFields(value, tag, count);
+}
+
+function rpcList(values) {
+  return values.reduceRight(
+    (tail, value) => tripleTerm(keywordTerm('rpc/list'), value, tail),
+    keywordTerm('rpc/list-end'),
+  );
+}
+
+function rpcRecord(tag, fields) {
+  return tripleTerm(keywordTerm(tag), rpcList(fields), keywordTerm('rpc/record'));
+}
+
+function rpcOption(value) {
+  return value === null || value === undefined
+    ? keywordTerm('rpc/none')
+    : tripleTerm(keywordTerm('rpc/some'), term(value), keywordTerm('rpc/option'));
+}
+
+function optionValue(value) {
+  if (isKeyword(value, 'rpc/none')) return null;
+  if (Array.isArray(value) && value.length === 4 && value[0] === 'triple'
+      && isKeyword(value[1], 'rpc/some') && isKeyword(value[3], 'rpc/option')) {
+    return value[2];
+  }
+  fail('RPC option is malformed', 'client/invalid-option');
+}
+
+const unit = keywordTerm('rpc/unit');
+
+class Writer {
+  constructor() {
+    this.parts = [];
+    this.length = 0;
+  }
+
+  push(bytes) {
+    this.parts.push(bytes);
+    this.length += bytes.length;
+  }
+
+  u8(value) {
+    const bytes = Buffer.allocUnsafe(1);
+    bytes.writeUInt8(value, 0);
+    this.push(bytes);
+  }
+
+  u16(value) {
+    const bytes = Buffer.allocUnsafe(2);
+    bytes.writeUInt16LE(value, 0);
+    this.push(bytes);
+  }
+
+  u32(value) {
+    const bytes = Buffer.allocUnsafe(4);
+    bytes.writeUInt32LE(value, 0);
+    this.push(bytes);
+  }
+
+  i64(value) {
+    const bytes = Buffer.allocUnsafe(8);
+    bytes.writeBigInt64LE(value, 0);
+    this.push(bytes);
+  }
+
+  u64(value) {
+    const bytes = Buffer.allocUnsafe(8);
+    bytes.writeBigUInt64LE(value, 0);
+    this.push(bytes);
+  }
+
+  finish() {
+    return Buffer.concat(this.parts, this.length);
+  }
+}
+
+function writeText(writer, value, maximum, label) {
+  const bytes = strictUtf8(value, maximum, label);
+  writer.u32(bytes.length);
+  writer.push(bytes);
+}
+
+function writeTermUnchecked(writer, value) {
+  switch (value[0]) {
+    case 'string':
+      writer.u8(1);
+      writeText(writer, value[1], MAX_STRING_BYTES, 'String atom');
+      break;
+    case 'integer':
+      writer.u8(2);
+      writer.i64(BigInt(value[1]));
+      break;
+    case 'float64':
+      writer.u8(3);
+      writer.u64(BigInt(`0x${value[1]}`));
+      break;
+    case 'boolean':
+      writer.u8(value[1] ? 5 : 4);
+      break;
+    case 'keyword':
+      writer.u8(6);
+      writeText(writer, value[1], MAX_STRING_BYTES, 'Keyword atom');
+      break;
+    case 'triple':
+      writer.u8(7);
+      writeTermUnchecked(writer, value[1]);
+      writeTermUnchecked(writer, value[2]);
+      writeTermUnchecked(writer, value[3]);
+      break;
+    case 'instant':
+      writer.u8(8);
+      writer.i64(BigInt(value[1]));
+      writer.u32(Number(BigInt(value[2])));
+      break;
+    default:
+      fail('unsupported Term', 'client/invalid-term');
+  }
+}
+
+function writeTerm(writer, value, budget = { nodes: 0 }) {
+  validateTerm(value, 0, budget);
+  writeTermUnchecked(writer, value);
+}
+
+class Reader {
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.offset = 0;
+    this.nodes = 0;
+  }
+
+  ensure(count, context) {
+    if (this.offset + count > this.bytes.length) {
+      fail(`frame ended inside ${context}`, 'client/truncated');
+    }
+  }
+
+  u8(context) {
+    this.ensure(1, context);
+    const value = this.bytes.readUInt8(this.offset);
+    this.offset += 1;
+    return value;
+  }
+
+  u32(context) {
+    this.ensure(4, context);
+    const value = this.bytes.readUInt32LE(this.offset);
+    this.offset += 4;
+    return value;
+  }
+
+  i64(context) {
+    this.ensure(8, context);
+    const value = this.bytes.readBigInt64LE(this.offset);
+    this.offset += 8;
+    return value;
+  }
+
+  u64(context) {
+    this.ensure(8, context);
+    const value = this.bytes.readBigUInt64LE(this.offset);
+    this.offset += 8;
+    return value;
+  }
+
+  presence(context) {
+    const value = this.u8(context);
+    if (value !== 0 && value !== 1) fail(`${context} must be 0 or 1`, 'client/invalid-presence');
+    return value === 1;
+  }
+
+  bool(context) {
+    const value = this.u8(context);
+    if (value !== 0 && value !== 1) fail(`${context} must be 0 or 1`, 'client/invalid-boolean');
+    return value === 1;
+  }
+
+  text(maximum, context) {
+    const length = this.u32(`${context} length`);
+    if (length > maximum) fail(`${context} exceeds the UTF-8 byte limit`, 'client/string-limit');
+    this.ensure(length, context);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    try {
+      return textDecoder.decode(bytes);
+    } catch (cause) {
+      throw new FramProtocolError(`${context} is not valid UTF-8`, 'client/invalid-utf8', { cause });
+    }
+  }
+
+  term(depth = 0) {
+    if (depth > MAX_TERM_DEPTH) fail('Term exceeds the nesting limit', 'client/term-depth');
+    this.nodes += 1;
+    if (this.nodes > MAX_TERM_NODES) fail('Term exceeds the node limit', 'client/term-nodes');
+    const tag = this.u8('Term tag');
+    switch (tag) {
+      case 1:
+        return ['string', this.text(MAX_STRING_BYTES, 'String atom')];
+      case 2:
+        return ['integer', this.i64('Int atom').toString()];
+      case 3: {
+        const bits = this.u64('Float atom').toString(16).padStart(16, '0');
+        return ['float64', Number.isNaN(float64Value(['float64', bits]))
+          ? '7ff8000000000000' : bits];
+      }
+      case 4:
+        return ['boolean', false];
+      case 5:
+        return ['boolean', true];
+      case 6: {
+        const spelling = this.text(MAX_STRING_BYTES, 'Keyword atom');
+        if (!spelling) fail('Keyword atom spelling must be nonempty', 'client/invalid-keyword');
+        return ['keyword', spelling];
+      }
+      case 7:
+        return ['triple', this.term(depth + 1), this.term(depth + 1), this.term(depth + 1)];
+      case 8: {
+        const seconds = this.i64('Instant seconds');
+        const nanos = this.u32('Instant nanos');
+        if (nanos >= 1000000000) fail('Instant nanoseconds are outside the canonical range', 'client/invalid-instant');
+        return ['instant', seconds.toString(), String(nanos)];
+      }
+      default:
+        fail(`unknown Term tag ${tag}`, 'client/bad-term-tag');
+    }
+  }
+
+  done() {
+    return this.offset === this.bytes.length;
+  }
+}
+
+function writePresence(writer, value) {
+  writer.u8(value === null || value === undefined ? 0 : 1);
+}
+
+function pageRequest(value) {
+  const page = plainObject(value, 'page');
+  if (!own(page, 'limit')) fail('page.limit is required', 'client/invalid-page');
+  for (const key of Object.keys(page)) {
+    if (key !== 'limit' && key !== 'cursor') fail(`page.${key} is unknown`, 'client/invalid-page');
+  }
+  const limit = integerBigInt(page.limit, { label: 'page.limit', min: 1n, max: BigInt(MAX_PAGE_LIMIT) });
+  return { limit: Number(limit), cursor: own(page, 'cursor') ? term(page.cursor) : null };
+}
+
+function requestControls(operation, options) {
+  const opts = options || {};
+  plainObject(opts, 'request options');
+  const expectedVersion = own(opts, 'expectedVersion')
+    ? integerBigInt(opts.expectedVersion, { label: 'expectedVersion', min: 0n }) : null;
+  const page = own(opts, 'page') ? pageRequest(opts.page) : null;
+  const timeoutMs = own(opts, 'timeoutMs')
+    ? Number(integerBigInt(opts.timeoutMs, { label: 'timeoutMs', min: 0n, max: U32_MAX })) : null;
+  if (page && !PAGED_OPERATIONS.has(operation)) {
+    fail(`${operation} does not accept pagination`, 'client/unexpected-page');
+  }
+  if (timeoutMs !== null && operation !== 'rpc/query') {
+    fail(`${operation} does not accept timeoutMs`, 'client/unexpected-timeout');
+  }
+  return { expectedVersion, page, timeoutMs };
+}
+
+function encodeRequestFrame(requestId, space, operation, payload, options) {
+  if (typeof space !== 'string' || !space) fail('space must be a nonempty string', 'client/invalid-space');
+  strictUtf8(space, MAX_SPACE_BYTES, 'SpaceId');
+  if (!OPERATIONS.has(operation)) fail(`${operation} is outside FRAMRPC v1`, 'client/unsupported-operation');
+  const controls = requestControls(operation, options);
+  const body = new Writer();
+  const budget = { nodes: 0 };
+  writeTerm(body, stringTerm(space), budget);
+  writeTerm(body, keywordTerm(operation), budget);
+  writePresence(body, controls.expectedVersion);
+  if (controls.expectedVersion !== null) body.i64(controls.expectedVersion);
+  writePresence(body, controls.page);
+  if (controls.page) {
+    body.u32(controls.page.limit);
+    writePresence(body, controls.page.cursor);
+    if (controls.page.cursor) writeTerm(body, controls.page.cursor, budget);
+  }
+  writePresence(body, controls.timeoutMs);
+  if (controls.timeoutMs !== null) body.u32(controls.timeoutMs);
+  writeTerm(body, term(payload), budget);
+  if (body.length > MAX_BODY_BYTES) fail('request body exceeds 1 MiB', 'client/frame-too-large');
+
+  const header = new Writer();
+  header.push(MAGIC);
+  header.u16(FRAMRPC_VERSION.major);
+  header.u16(FRAMRPC_VERSION.minor);
+  header.u8(1);
+  header.u8(0);
+  header.u32(body.length);
+  header.i64(requestId);
+  header.push(body.finish());
+  return header.finish();
+}
+
+function responsePage(reader) {
+  const ordinal = reader.u32('page ordinal');
+  const nextCursor = reader.presence('next cursor presence') ? reader.term() : null;
+  const done = reader.bool('page done');
+  return { ordinal, nextCursor, done };
+}
+
+function responseError(reader) {
+  const code = keywordName(reader.term(), 'error code');
+  const retryable = reader.bool('error retryable');
+  const message = stringValue(reader.term(), 'error message');
+  const detail = reader.presence('error detail presence') ? reader.term() : null;
+  return { code, retryable, message, detail };
+}
+
+function decodeResponseFrame(frame, expected) {
+  if (!Buffer.isBuffer(frame)) fail('response frame must be a Buffer', 'client/invalid-frame');
+  if (frame.length < HEADER_BYTES) fail('response ended inside its header', 'client/truncated');
+  if (frame.length > MAX_FRAME_BYTES) fail('response exceeds the frame limit', 'client/frame-too-large');
+  if (!frame.subarray(0, MAGIC.length).equals(MAGIC)) fail('response magic does not match', 'client/invalid-magic');
+  const major = frame.readUInt16LE(8);
+  const minor = frame.readUInt16LE(10);
+  const kind = frame.readUInt8(12);
+  const flags = frame.readUInt8(13);
+  const bodyLength = frame.readUInt32LE(14);
+  const requestId = frame.readBigInt64LE(18);
+  if (major !== 1 || minor !== 0) fail('response protocol version is unsupported', 'client/unsupported-version');
+  if (kind !== 2) fail('request expected a response frame', 'client/invalid-kind');
+  if (flags !== 0) fail('response flags must be zero', 'client/invalid-flags');
+  if (bodyLength > MAX_BODY_BYTES) fail('response body exceeds 1 MiB', 'client/frame-too-large');
+  if (frame.length !== HEADER_BYTES + bodyLength) fail('response body length is inconsistent', 'client/truncated');
+  if (requestId !== expected.requestId) fail('response request id does not match', 'client/identity-mismatch');
+
+  const reader = new Reader(frame.subarray(HEADER_BYTES));
+  const space = stringValue(reader.term(), 'response space');
+  const operation = keywordName(reader.term(), 'response operation');
+  const servedVersion = reader.i64('served version');
+  const page = reader.presence('response page presence') ? responsePage(reader) : null;
+  const error = reader.presence('response error presence') ? responseError(reader) : null;
+  const payload = reader.presence('response payload presence') ? reader.term() : null;
+  if (!reader.done()) fail('response body has trailing bytes', 'client/trailing-bytes');
+  if (space !== expected.space || operation !== expected.operation) {
+    fail('response identity does not match the request', 'client/identity-mismatch');
+  }
+  return { space, operation, servedVersion, page, error, payload };
+}
+
+function declaredFrameBytes(buffer) {
+  if (buffer.length < HEADER_BYTES) return null;
+  if (!buffer.subarray(0, MAGIC.length).equals(MAGIC)) fail('response magic does not match', 'client/invalid-magic');
+  const bodyLength = buffer.readUInt32LE(14);
+  if (bodyLength > MAX_BODY_BYTES) fail('response body exceeds 1 MiB', 'client/frame-too-large');
+  return HEADER_BYTES + bodyLength;
+}
+
+function exchange({ host, port, frame, expected, timeoutMs, signal }) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let chunks = [];
+    let received = 0;
+    let declared = null;
+    const socket = createConnection({ host, port });
+
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const abort = () => finish(new FramTransportError('request aborted'));
+
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    socket.setNoDelay(true);
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => socket.write(frame));
+    socket.on('data', chunk => {
+      if (settled) return;
+      chunks.push(chunk);
+      received += chunk.length;
+      if (received > MAX_FRAME_BYTES) {
+        finish(new FramProtocolError('response exceeds the frame limit', 'client/frame-too-large'));
+        return;
+      }
+      try {
+        if (declared === null && received >= HEADER_BYTES) {
+          declared = declaredFrameBytes(Buffer.concat(chunks, received));
+        }
+        if (declared !== null && received > declared) {
+          finish(new FramProtocolError('response has bytes beyond its declared body', 'client/trailing-bytes'));
+        } else if (declared !== null && received === declared) {
+          finish(null, decodeResponseFrame(Buffer.concat(chunks, received), expected));
+        }
+      } catch (error) {
+        finish(error);
+      }
+    });
+    socket.once('timeout', () => finish(new FramTransportError(`request exceeded ${timeoutMs}ms`)));
+    socket.once('end', () => {
+      if (!settled) finish(new FramTransportError('connection ended before a complete response'));
+    });
+    socket.once('error', error => finish(new FramTransportError(error.message, error)));
+  });
+}
+
+function queryName(value, label) {
+  if (typeof value !== 'string' || !value) fail(`${label} must be a nonempty string`, 'client/query-syntax');
+  return value;
+}
+
+function queryOperation(value, label) {
+  const name = queryName(value, label);
+  return name.startsWith(':') ? name.slice(1) : name;
+}
+
+function required(value, key, label = 'query') {
+  plainObject(value, label);
+  if (!own(value, key)) fail(`${label}.${key} is required`, 'client/query-syntax');
+  return value[key];
+}
+
+function queryTerm(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).length === 1 && own(value, 'var')) {
+    return rpcRecord('query/var', [stringTerm(queryName(value.var, 'query variable'))]);
+  }
+  return rpcRecord('query/const', [term(value)]);
+}
+
+function queryHead(value) {
+  return rpcRecord('query/head', [
+    stringTerm(queryName(required(value, 'rel', 'query head'), 'query relation')),
+    rpcList(required(value, 'args', 'query head').map(queryTerm)),
+  ]);
+}
+
+function queryClause(value) {
+  plainObject(value, 'query clause');
+  if (own(value, 'rel')) {
+    const negated = Boolean(value.neg ?? value.not ?? value.negated);
+    return rpcRecord('query/relation', [
+      stringTerm(queryName(value.rel, 'query relation')),
+      rpcList(required(value, 'args', 'query clause').map(queryTerm)),
+      booleanTerm(negated),
+    ]);
+  }
+  if (own(value, 'pred')) {
+    const args = required(value, 'args', 'query predicate');
+    if (!Array.isArray(args) || args.length !== 2) {
+      fail('query predicate requires exactly two arguments', 'client/query-syntax');
+    }
+    return rpcRecord('query/predicate', [
+      keywordTerm(queryOperation(value.pred, 'query predicate')),
+      queryTerm(args[0]), queryTerm(args[1]),
+    ]);
+  }
+  if (own(value, 'fn')) {
+    return rpcRecord('query/function', [
+      keywordTerm(queryOperation(value.fn, 'query function')),
+      rpcList(required(value, 'args', 'query function').map(queryTerm)),
+      stringTerm(queryName(required(value, 'bind', 'query function'), 'query binding')),
+    ]);
+  }
+  fail('query clause must be relation, predicate, or function', 'client/query-syntax');
+}
+
+function queryRule(value) {
+  return rpcRecord('query/rule', [
+    queryHead(required(value, 'head', 'query rule')),
+    rpcList(required(value, 'body', 'query rule').map(queryClause)),
+  ]);
+}
+
+function queryFind(value) {
+  if (typeof value === 'string') {
+    return rpcRecord('query/find-relation', [stringTerm(queryName(value, 'find relation'))]);
+  }
+  plainObject(value, 'aggregate find');
+  const grouping = (value.group || []).map(index => integerTerm(index));
+  const aggregates = required(value, 'agg', 'aggregate find').map(aggregate => {
+    plainObject(aggregate, 'aggregate');
+    return rpcRecord('query/aggregate', [
+      keywordTerm(queryOperation(required(aggregate, 'op', 'aggregate'), 'aggregate operation')),
+      rpcOption(own(aggregate, 'arg') ? integerTerm(aggregate.arg) : null),
+    ]);
+  });
+  const having = (value.having || []).map(clause => {
+    plainObject(clause, 'having clause');
+    return rpcRecord('query/having', [
+      keywordTerm(queryOperation(required(clause, 'op', 'having clause'), 'having comparison')),
+      integerTerm(required(clause, 'agg', 'having clause')),
+      term(required(clause, 'val', 'having clause')),
+    ]);
+  });
+  return rpcRecord('query/find-aggregate', [
+    stringTerm(queryName(required(value, 'rel', 'aggregate find'), 'aggregate relation')),
+    rpcList(grouping), rpcList(aggregates), rpcList(having),
+  ]);
+}
+
+export function lowerQueryPlan(value) {
+  plainObject(value, 'query');
+  const hasRules = own(value, 'rules');
+  const hasStrata = own(value, 'strata');
+  if (hasRules === hasStrata) fail('query requires exactly one of rules or strata', 'client/query-syntax');
+  const strata = hasRules ? [value.rules] : value.strata;
+  if (!Array.isArray(strata) || !strata.every(Array.isArray)) {
+    fail('query strata must be arrays of rules', 'client/query-syntax');
+  }
+  return rpcRecord('query/plan', [
+    queryFind(required(value, 'find')),
+    rpcList(strata.map(rules => rpcRecord('query/stratum', [rpcList(rules.map(queryRule))]))),
+  ]);
+}
+
+export function tripleQuery(pattern = {}) {
+  exactKeys(pattern, ['slot0', 'slot1', 'slot2'], 'triple pattern');
+  const { slot0, slot1, slot2 } = pattern;
+  const supplied = [slot0, slot1, slot2];
+  const names = ['slot0', 'slot1', 'slot2'];
+  const variables = [];
+  const args = supplied.map((value, index) => {
+    if (value === null || value === undefined) {
+      variables.push(names[index]);
+      return rpcRecord('query/var', [stringTerm(names[index])]);
+    }
+    return rpcRecord('query/const', [term(value)]);
+  });
+  const headTerms = variables.length
+    ? variables.map(name => rpcRecord('query/var', [stringTerm(name)])) : args;
+  const head = rpcRecord('query/head', [stringTerm('out'), rpcList(headTerms)]);
+  const relation = rpcRecord('query/relation', [stringTerm('triple'), rpcList(args), booleanTerm(false)]);
+  const rule = rpcRecord('query/rule', [head, rpcList([relation])]);
+  const stratum = rpcRecord('query/stratum', [rpcList([rule])]);
+  return rpcRecord('query/plan', [rpcRecord('query/find-relation', [stringTerm('out')]), rpcList([stratum])]);
+}
+
+function querySnapshot(options) {
+  const hasAsOf = own(options, 'asOf');
+  const hasSince = own(options, 'since');
+  if (hasAsOf && hasSince) fail('query accepts asOf or since, not both', 'client/query-syntax');
+  if (hasAsOf) return rpcRecord('query/as-of', [integerTerm(options.asOf)]);
+  if (!hasSince) return keywordTerm('query/current');
+  const since = typeof options.since === 'object' && options.since !== null
+    ? options.since : { lowerExclusive: options.since };
+  const lower = required(since, 'lowerExclusive', 'since selector');
+  const upper = !own(since, 'upper') || since.upper === 'current'
+    ? keywordTerm('query/current')
+    : rpcRecord('query/as-of', [integerTerm(since.upper)]);
+  return rpcRecord('query/since', [integerTerm(lower), upper]);
+}
+
+function policy(existing) {
+  return keywordTerm(existing ? 'rpc/subject-existing' : 'rpc/subject-any');
+}
+
+function writePayload(proposition, options) {
+  return rpcRecord('rpc/write', [proposition, policy(options.existing), rpcOption(options.fence)]);
+}
+
+function actionPayload(action) {
+  exactKeys(action, ['op', 'proposition', 'slot0', 'slot1', 'slot2', 'existing'], 'batch action');
+  const operation = action.op === 'assert' ? 'rpc/assert'
+    : action.op === 'retract' ? 'rpc/retract' : null;
+  if (!operation) fail("batch action op must be 'assert' or 'retract'", 'client/invalid-action');
+  const proposition = own(action, 'proposition')
+    ? term(action.proposition)
+    : tripleTerm(action.slot0, action.slot1, action.slot2);
+  if (proposition[0] !== 'triple') fail('batch proposition must be a Triple', 'client/invalid-action');
+  return rpcRecord('rpc/action', [keywordTerm(operation), proposition, policy(action.existing)]);
+}
+
+function instantValue(value, label) {
+  if (!Array.isArray(value) || value.length !== 3 || value[0] !== 'instant') {
+    fail(`${label} must be an Instant Term`, 'client/invalid-record');
+  }
+  return { epochSeconds: BigInt(value[1]), nanos: Number(value[2]) };
+}
+
+function mutationResult(payload) {
+  const [results] = rawRecordFields(payload, 'rpc/mutation-result', 1);
+  return rawListValues(results).map(value => {
+    const [inputIndex, changed, occurrences] = rawRecordFields(value, 'rpc/action-result', 3);
+    const index = intValue(inputIndex, 'action input index');
+    if (index > BigInt(Number.MAX_SAFE_INTEGER)) fail('action input index exceeds safe integer', 'client/integer-range');
+    return { inputIndex: Number(index), changed: boolValue(changed), occurrences: rawListValues(occurrences) };
+  });
+}
+
+function queryRows(payload) {
+  const [rows] = rawRecordFields(payload, 'query/rows', 1);
+  return rawListValues(rows).map(row => {
+    const [values] = rawRecordFields(row, 'query/row', 1);
+    return rawListValues(values);
+  });
+}
+
+function statusResult(payload) {
+  const [state, liveCount, engine, cache] = rawRecordFields(payload, 'rpc/status', 4);
+  const [hits, misses, bytes, evictions] = rawRecordFields(cache, 'rpc/result-cache', 4);
+  return {
+    state: keywordName(state, 'status state'),
+    liveCount: intValue(liveCount, 'status live count'),
+    engine: keywordName(engine, 'status engine'),
+    cache: {
+      hits: intValue(hits, 'cache hits'),
+      misses: intValue(misses, 'cache misses'),
+      bytes: intValue(bytes, 'cache bytes'),
+      evictions: intValue(evictions, 'cache evictions'),
+    },
+  };
+}
+
+function validationResult(payload) {
+  const [valid, violations] = rawRecordFields(payload, 'rpc/validation', 2);
+  return {
+    valid: boolValue(valid, 'validation valid'),
+    violations: rawListValues(violations).map(value => {
+      const [code, detail] = rawRecordFields(value, 'rpc/violation', 2);
+      return { code: keywordName(code, 'violation code'), detail };
+    }),
+  };
+}
+
+function operationResult(operation, payload) {
+  if (payload === null) return null;
+  switch (operation) {
+    case 'rpc/version':
+      if (!isKeyword(payload, 'rpc/unit')) fail('version payload is not rpc/unit', 'client/invalid-record');
+      return null;
+    case 'rpc/status':
+      return statusResult(payload);
+    case 'rpc/validate':
+      return validationResult(payload);
+    case 'rpc/assert':
+    case 'rpc/retract':
+    case 'rpc/batch':
+      return mutationResult(payload);
+    case 'rpc/scan': {
+      const [triples] = rawRecordFields(payload, 'rpc/triples', 1);
+      return rawListValues(triples);
+    }
+    case 'rpc/query':
+      return queryRows(payload);
+    case 'rpc/occurrences': {
+      const [occurrences] = rawRecordFields(payload, 'rpc/occurrences', 1);
+      return rawListValues(occurrences);
+    }
+    case 'rpc/lease-acquire':
+    case 'rpc/lease-renew': {
+      const [fence, expires] = rawRecordFields(payload, 'lease/grant', 2);
+      return { fence, expires: instantValue(expires, 'lease expiry') };
+    }
+    case 'rpc/lease-release': {
+      const [released] = rawRecordFields(payload, 'lease/released', 1);
+      return { released: boolValue(released, 'lease released') };
+    }
+    case 'rpc/lease-check': {
+      const [valid, expires] = rawRecordFields(payload, 'lease/check', 2);
+      const expiry = optionValue(expires);
+      return {
+        valid: boolValue(valid, 'lease valid'),
+        expires: expiry === null ? null : instantValue(expiry, 'lease expiry'),
+      };
+    }
+    default:
+      fail(`${operation} has no response decoder`, 'client/unsupported-operation');
+  }
+}
+
+function publicResponse(response) {
+  if (response.error) throw new FramRpcError(response);
+  return {
+    space: response.space,
+    operation: response.operation,
+    servedVersion: response.servedVersion,
+    page: response.page,
+    result: operationResult(response.operation, response.payload),
+    payload: response.payload,
+  };
+}
+
+export function framClient({
+  host = '127.0.0.1', port = 7977, space,
+  requestTimeoutMs = 15000,
+} = {}) {
+  if (typeof host !== 'string' || !host) fail('host must be a nonempty string', 'client/invalid-host');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) fail('port must be from 1 through 65535', 'client/invalid-port');
+  if (typeof space !== 'string' || !space) fail('space must be a nonempty string', 'client/invalid-space');
+  strictUtf8(space, MAX_SPACE_BYTES, 'SpaceId');
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
+    fail('requestTimeoutMs must be a positive safe integer', 'client/invalid-timeout');
+  }
+  let nextRequestId = 1n;
+
+  async function call(operation, payload, options = {}) {
+    const requestId = nextRequestId;
+    nextRequestId = nextRequestId === I64_MAX ? 1n : nextRequestId + 1n;
+    const frame = encodeRequestFrame(requestId, space, operation, payload, options);
+    const queryTimeout = own(options, 'timeoutMs') ? Number(options.timeoutMs) + 1000 : 0;
+    const response = await exchange({
+      host, port, frame,
+      expected: { requestId, space, operation },
+      timeoutMs: Math.max(requestTimeoutMs, queryTimeout),
+      signal: options.signal,
+    });
+    return publicResponse(response);
+  }
+
+  return Object.freeze({
+    version: options => call('rpc/version', unit, options),
+    status: options => call('rpc/status', unit, options),
+    validate: options => call('rpc/validate', unit, options),
+    occurrences: options => call('rpc/occurrences', unit, options),
+    scan: (pattern = {}, options = {}) => {
+      exactKeys(pattern, ['slot0', 'slot1', 'slot2'], 'scan pattern');
+      return call('rpc/scan', rpcRecord('rpc/triple-pattern', [
+        rpcOption(pattern.slot0),
+        rpcOption(pattern.slot1),
+        rpcOption(pattern.slot2),
+      ]), options);
+    },
+    query: (query, options = {}) => {
+      const plan = Array.isArray(query) ? term(query) : lowerQueryPlan(query);
+      rawRecordFields(plan, 'query/plan', 2);
+      return call('rpc/query', rpcRecord('query/request', [plan, querySnapshot(options)]), options);
+    },
+    assert: (slot0, slot1, slot2, options = {}) => call(
+      'rpc/assert', writePayload(tripleTerm(slot0, slot1, slot2), options), options,
+    ),
+    retract: (slot0, slot1, slot2, options = {}) => call(
+      'rpc/retract', writePayload(tripleTerm(slot0, slot1, slot2), options), options,
+    ),
+    batch: (actions, options = {}) => {
+      if (!Array.isArray(actions) || actions.length === 0) {
+        fail('batch requires at least one action', 'client/invalid-action');
+      }
+      return call('rpc/batch', rpcRecord('rpc/batch', [
+        rpcList(actions.map(actionPayload)), rpcOption(options.fence),
+      ]), options);
+    },
+    leaseAcquire: (resource, holder, ttlMs, options = {}) => call(
+      'rpc/lease-acquire', rpcRecord('lease/acquire', [
+        term(resource), term(holder), integerTerm(ttlMs),
+      ]), options,
+    ),
+    leaseRenew: (fence, ttlMs, options = {}) => call(
+      'rpc/lease-renew', rpcRecord('lease/renew', [term(fence), integerTerm(ttlMs)]), options,
+    ),
+    leaseRelease: (fence, options = {}) => call('rpc/lease-release', term(fence), options),
+    leaseCheck: (fence, options = {}) => call('rpc/lease-check', term(fence), options),
+  });
+}

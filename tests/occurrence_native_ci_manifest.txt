@@ -48,6 +48,7 @@ run-shell	current-boundary	tests/occurrence_native_ci_compare_test.sh	-
 run-shell	current-cache	tests/fri_golden.sh	-
 run-shell	current-boundary	tests/zig_rpc_source_ratchet.sh	-
 run-node	current-cloudflare	tests/cloudflare_worker_client_test.mjs	-
+run-node	current-node-client	tests/node_framrpc_client_test.mjs	-
 aggregate-nix	package-closure	tests/package_daemon_smoke.sh	flake.nix#package_daemon_smoke
 aggregate-zig	zig-bootstrap	tests/zig_daemon_bootstrap_test.sh	build.zig#fram-daemon-zig
 aggregate-zig	zig-oracle	tests/zig_occ_oracle_test.sh	build.zig#fram-daemon-zig

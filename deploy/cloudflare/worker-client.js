@@ -161,8 +161,10 @@ const queryConst = value => record('query/const', [term(value)]);
 
 // Build the native typed query plan for a single Triple pattern. Omitted slots
 // become variables and are returned in slot order.
-export function tripleQuery({ slot0, slot1, slot2, l, p, r } = {}) {
-  const supplied = [slot0 ?? l, slot1 ?? p, slot2 ?? r];
+export function tripleQuery(pattern = {}) {
+  exactKeys(pattern, [], ['slot0', 'slot1', 'slot2'], 'triple pattern');
+  const { slot0, slot1, slot2 } = pattern;
+  const supplied = [slot0, slot1, slot2];
   const names = ['slot0', 'slot1', 'slot2'];
   const variables = [];
   const args = supplied.map((value, index) => {
@@ -211,12 +213,20 @@ function writePayload(proposition, opts = {}) {
   return record('rpc/write', [proposition, policy(opts.existing), option(opts.fence)]);
 }
 function actionPayload(action) {
+  exactKeys(action, ['op'], ['op', 'proposition', 'slot0', 'slot1', 'slot2', 'existing'], 'batch action');
   const operation = action.op === 'retract' ? 'rpc/retract' : action.op === 'assert' ? 'rpc/assert' : null;
   if (!operation) fail("batch action op must be 'assert' or 'retract'");
   const proposition = action.proposition
     ? term(action.proposition)
-    : tripleTerm(action.slot0 ?? action.l, action.slot1 ?? action.p, action.slot2 ?? action.r);
+    : tripleTerm(action.slot0, action.slot1, action.slot2);
   return record('rpc/action', [keywordTerm(operation), proposition, policy(action.existing)]);
+}
+
+function scanPayload(pattern) {
+  exactKeys(pattern, [], ['slot0', 'slot1', 'slot2'], 'scan pattern');
+  return record('rpc/triple-pattern', [
+    option(pattern.slot0), option(pattern.slot1), option(pattern.slot2),
+  ]);
 }
 
 export function framClient({ url, host, port, token, space, fetch: fetchImpl } = {}) {
@@ -276,9 +286,7 @@ export function framClient({ url, host, port, token, space, fetch: fetchImpl } =
     status: () => send('/q', 'rpc/status', unit),
     validate: () => send('/q', 'rpc/validate', unit),
     occurrences: opts => send('/q', 'rpc/occurrences', unit, opts),
-    scan: (pattern = {}, opts) => send('/q', 'rpc/scan',
-      record('rpc/triple-pattern', [option(pattern.slot0 ?? pattern.l),
-        option(pattern.slot1 ?? pattern.p), option(pattern.slot2 ?? pattern.r)]), opts),
+    scan: (pattern = {}, opts) => send('/q', 'rpc/scan', scanPayload(pattern), opts),
     query: (plan, opts = {}) => send('/q', 'rpc/query',
       record('query/request', [term(plan), opts.asOf === undefined
         ? keywordTerm('query/current')

@@ -1,0 +1,28 @@
+{
+  "name": "@tompassarelli/framrpc",
+  "version": "0.1.0",
+  "description": "Official zero-dependency Node.js client for binary FRAMRPC v1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./framrpc.d.ts",
+      "import": "./framrpc.mjs"
+    }
+  },
+  "types": "./framrpc.d.ts",
+  "files": [
+    "framrpc.mjs",
+    "framrpc.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tompassarelli/fram.git",
+    "directory": "clients/node"
+  },
+  "license": "MIT OR Apache-2.0"
+}

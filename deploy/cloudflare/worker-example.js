@@ -29,9 +29,9 @@ export default {
 
       if (u.pathname === '/fact' && request.method === 'POST') {
         const body = await request.json();
-        const slot0 = body.slot0 ?? body.l;
-        const slot1 = body.slot1 ?? body.p;
-        const slot2 = body.slot2 ?? body.r;
+        const slot0 = body.slot0;
+        const slot1 = body.slot1;
+        const slot2 = body.slot2;
         return json(await fram.assert(slot0, slot1, slot2,
           { expectedVersion: body.expectedVersion }));
       }
