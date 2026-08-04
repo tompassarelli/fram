@@ -33,13 +33,17 @@
    nodes: (Atom Int)
    error: (Atom String?)])
 
-(defn decoder-error! [decoder: Decoder message: String] -> Nil
+(defn decoder-error!
+  [decoder: Decoder
+   message: String] -> Nil
   (if (nil? (deref (decoder-error decoder)))
     (reset! (decoder-error decoder) message)
     nil)
   nil)
 
-(defn encoder-error! [encoder: Encoder message: String] -> Nil
+(defn encoder-error!
+  [encoder: Encoder
+   message: String] -> Nil
   (if (nil? (deref (encoder-error encoder)))
     (reset! (encoder-error encoder) message)
     nil)
@@ -51,14 +55,19 @@
 (defn decoder-remaining [decoder: Decoder] -> Int
   (- (count (decoder-bytes decoder)) (deref (decoder-position decoder))))
 
-(defn ensure-bytes! [decoder: Decoder amount: Int context: String] -> Bool
+(defn ensure-bytes!
+  [decoder: Decoder
+   amount: Int
+   context: String] -> Bool
   (if (and (>= amount 0) (>= (decoder-remaining decoder) amount))
     true
     (do
       (decoder-error! decoder (str "FRAMRPC ended inside " context))
       false)))
 
-(defn read-u8! [decoder: Decoder context: String] -> Int
+(defn read-u8!
+  [decoder: Decoder
+   context: String] -> Int
   (if (ensure-bytes! decoder 1 context)
     (let [position (deref (decoder-position decoder))
           value (nth (decoder-bytes decoder) position)]
@@ -69,12 +78,16 @@
           0)))
     0))
 
-(defn read-u16-le! [decoder: Decoder context: String] -> Int
+(defn read-u16-le!
+  [decoder: Decoder
+   context: String] -> Int
   (let [b0 (read-u8! decoder context)
         b1 (read-u8! decoder context)]
     (+ b0 (bit-shift-left b1 8))))
 
-(defn read-u32-le! [decoder: Decoder context: String] -> Int
+(defn read-u32-le!
+  [decoder: Decoder
+   context: String] -> Int
   (loop [offset 0 value 0]
     (if (< offset 4)
       (recur (+ offset 1)
@@ -82,7 +95,9 @@
                      (bit-shift-left (read-u8! decoder context) (* offset 8))))
       value)))
 
-(defn read-i64-le! [decoder: Decoder context: String] -> Int
+(defn read-i64-le!
+  [decoder: Decoder
+   context: String] -> Int
   (loop [offset 0 value 0]
     (if (< offset 8)
       (recur (+ offset 1)
@@ -90,7 +105,9 @@
                      (bit-shift-left (read-u8! decoder context) (* offset 8))))
       value)))
 
-(defn read-presence! [decoder: Decoder context: String] -> Bool
+(defn read-presence!
+  [decoder: Decoder
+   context: String] -> Bool
   (let [value (read-u8! decoder context)]
     (cond
       [(= value 0) false]
@@ -100,16 +117,22 @@
          (decoder-error! decoder (str context " must be the strict byte 0 or 1"))
          false)])))
 
-(defn read-bool! [decoder: Decoder context: String] -> Bool
+(defn read-bool!
+  [decoder: Decoder
+   context: String] -> Bool
   (read-presence! decoder context))
 
-(defn append-u8! [encoder: Encoder value: Int] -> Nil
+(defn append-u8!
+  [encoder: Encoder
+   value: Int] -> Nil
   (if (byte-value? value)
     (swap! (encoder-bytes encoder) conj value)
     (encoder-error! encoder "FRAMRPC encoder produced a value outside u8"))
   nil)
 
-(defn append-u16-le! [encoder: Encoder value: Int] -> Nil
+(defn append-u16-le!
+  [encoder: Encoder
+   value: Int] -> Nil
   (loop [offset 0]
     (if (< offset 2)
       (do
@@ -118,7 +141,9 @@
         (recur (+ offset 1)))
       nil)))
 
-(defn append-u32-le! [encoder: Encoder value: Int] -> Nil
+(defn append-u32-le!
+  [encoder: Encoder
+   value: Int] -> Nil
   (if (and (>= value 0) (<= value 4294967295))
     (loop [offset 0]
       (if (< offset 4)
@@ -129,7 +154,9 @@
         nil))
     (encoder-error! encoder "FRAMRPC u32 value is out of range")))
 
-(defn append-i64-le! [encoder: Encoder value: Int] -> Nil
+(defn append-i64-le!
+  [encoder: Encoder
+   value: Int] -> Nil
   (loop [offset 0]
     (if (< offset 8)
       (do
@@ -138,7 +165,9 @@
         (recur (+ offset 1)))
       nil)))
 
-(defn append-presence! [encoder: Encoder present: Bool] -> Nil
+(defn append-presence!
+  [encoder: Encoder
+   present: Bool] -> Nil
   (append-u8! encoder (if present 1 0)))
 
 (defn utf8-bytes!
@@ -146,58 +175,12 @@
    value: String
    maximum: Int
    label: String] -> (Vec Int)
-  (loop [index 0 result: (Vec Int) []]
-    (if (>= index (count value))
-      result
-      (let [unit (int (.charAt value index))
-            high? (and (>= unit 55296) (<= unit 56319))
-            low? (and (>= unit 56320) (<= unit 57343))
-            pair-unit (if (and high? (< (+ index 1) (count value)))
-                        (int (.charAt value (+ index 1))) -1)
-            pair? (and high? (and (>= pair-unit 56320) (<= pair-unit 57343)))
-            code-point (if pair?
-                         (+ 65536
-                            (+ (bit-shift-left (- unit 55296) 10)
-                               (- pair-unit 56320)))
-                         unit)
-            next-bytes
-            (cond
-              [(or (and high? (not pair?)) low?)
-               (do
-                 (encoder-error! encoder
-                                 (str label " contains an unpaired UTF-16 surrogate"))
-                 result)]
-              [(<= code-point 127) (conj result code-point)]
-              [(<= code-point 2047)
-               (conj (conj result (+ 192 (bit-shift-right code-point 6)))
-                     (+ 128 (bit-and code-point 63)))]
-              [(<= code-point 65535)
-               (conj
-                (conj (conj result (+ 224 (bit-shift-right code-point 12)))
-                      (+ 128 (bit-and (bit-shift-right code-point 6) 63)))
-                (+ 128 (bit-and code-point 63)))]
-              [:else
-               (conj
-                (conj
-                 (conj (conj result (+ 240 (bit-shift-right code-point 18)))
-                       (+ 128 (bit-and (bit-shift-right code-point 12) 63)))
-                 (+ 128 (bit-and (bit-shift-right code-point 6) 63)))
-                (+ 128 (bit-and code-point 63)))])]
-        (if (> (count next-bytes) maximum)
-          (do
-            (encoder-error! encoder (str label " exceeds the UTF-8 byte limit"))
-            result)
-          (if (deref (encoder-error encoder))
-            result
-            (recur (+ index (if pair? 2 1)) next-bytes)))))))
-
-(defn code-point-text [code-point: Int] -> String
-  (if (<= code-point 65535)
-    (str (char code-point))
-    (let [adjusted (- code-point 65536)
-          high (+ 55296 (bit-shift-right adjusted 10))
-          low (+ 56320 (bit-and adjusted 1023))]
-      (str (char high) (char low)))))
+  (let [bytes: (Vec Int) (utf8-encode value)]
+    (if (> (count bytes) maximum)
+      (do
+        (encoder-error! encoder (str label " exceeds the UTF-8 byte limit"))
+        [])
+      bytes)))
 
 (defn continuation? [value: Int] -> Bool
   (= 128 (bit-and value 192)))
@@ -207,11 +190,12 @@
    length: Int
    label: String] -> String
   (if (ensure-bytes! decoder length label)
-    (let [end (+ (deref (decoder-position decoder)) length)]
-      (loop [result ""]
+    (let [start (deref (decoder-position decoder))
+          end (+ start length)]
+      (loop []
         (let [position (deref (decoder-position decoder))]
           (if (>= position end)
-            result
+            (utf8-decode (subvec (decoder-bytes decoder) start end))
             (let [b0 (read-u8! decoder label)
                   width (cond
                           [(<= b0 127) 1]
@@ -222,7 +206,7 @@
               (if (or (= width 0) (> (+ position width) end))
                 (do
                   (decoder-error! decoder (str label " is not valid UTF-8"))
-                  result)
+                  "")
                 (let [b1 (if (> width 1) (read-u8! decoder label) 0)
                       b2 (if (> width 2) (read-u8! decoder label) 0)
                       b3 (if (> width 3) (read-u8! decoder label) 0)
@@ -257,10 +241,10 @@
                                                     (<= code-point 57343)))
                                           (<= code-point 1114111)))))]
                   (if scalar-valid
-                    (recur (str result (code-point-text code-point)))
+                    (recur)
                     (do
                       (decoder-error! decoder (str label " is not valid UTF-8"))
-                      result)))))))))
+                      "")))))))))
     ""))
 
 (defn read-sized-text!
@@ -321,11 +305,15 @@
           false)
         true))))
 
-(defn decoder-node! [decoder: Decoder depth: Int] -> Bool
+(defn decoder-node!
+  [decoder: Decoder
+   depth: Int] -> Bool
   (decoder-node-limited! decoder depth rpc-v1-max-term-nodes
                          rpc-v1-max-term-depth))
 
-(defn encoder-node! [encoder: Encoder depth: Int] -> Bool
+(defn encoder-node!
+  [encoder: Encoder
+   depth: Int] -> Bool
   (encoder-node-limited! encoder depth rpc-v1-max-term-nodes
                          rpc-v1-max-term-depth))
 
@@ -342,7 +330,7 @@
          (read-sized-text! decoder max-string-bytes "String atom")]
         [(= tag 2) (read-i64-le! decoder "Int atom")]
         [(= tag 3)
-         (Double/longBitsToDouble (read-i64-le! decoder "Float atom"))]
+         (float-from-bits (read-i64-le! decoder "Float atom"))]
         [(= tag 4) false]
         [(= tag 5) true]
         [(= tag 6)
@@ -376,7 +364,9 @@
            :rpc/invalid)]))
     :rpc/invalid))
 
-(defn read-term! [decoder: Decoder depth: Int] -> Any
+(defn read-term!
+  [decoder: Decoder
+   depth: Int] -> Any
   (read-term-limited! decoder depth rpc-v1-max-string-bytes
                       rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
@@ -407,7 +397,7 @@
       [(and (number? term) (not (integer? term)))
        (do
          (append-u8! encoder 3)
-         (append-i64-le! encoder (Double/doubleToLongBits (double term))))]
+         (append-i64-le! encoder (float-to-bits term)))]
       [(false? term) (append-u8! encoder 4)]
       [(true? term) (append-u8! encoder 5)]
       [(keyword? term)
@@ -427,11 +417,16 @@
        (encoder-error! encoder "TermCodecV1 encountered a value outside Term")])
     nil))
 
-(defn append-term! [encoder: Encoder term: Any depth: Int] -> Nil
+(defn append-term!
+  [encoder: Encoder
+   term: Any
+   depth: Int] -> Nil
   (append-term-limited! encoder term depth rpc-v1-max-string-bytes
                         rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
-(defn read-keyword-term! [decoder: Decoder label: String] -> Keyword
+(defn read-keyword-term!
+  [decoder: Decoder
+   label: String] -> Keyword
   (let [value (read-term! decoder 0)]
     (if (keyword? value)
       value
@@ -521,14 +516,17 @@
                 [:else (->DecodeResult frame nil)]))]))])))
 
 (defn append-page-response!
-  [encoder: Encoder page: t/RpcPageResponse] -> Nil
+  [encoder: Encoder
+   page: t/RpcPageResponse] -> Nil
   (append-u32-le! encoder (t/rpcpageresponse-ordinal page))
   (let [cursor (t/rpc-page-response-cursor-value page)]
     (append-presence! encoder (not (nil? cursor)))
     (if (nil? cursor) nil (append-term! encoder cursor 0)))
   (append-u8! encoder (if (t/rpcpageresponse-done page) 1 0)))
 
-(defn append-error! [encoder: Encoder error: t/RpcError] -> Nil
+(defn append-error!
+  [encoder: Encoder
+   error: t/RpcError] -> Nil
   (append-term! encoder (t/rpcerror-code error) 0)
   (append-u8! encoder (if (t/rpcerror-retryable error) 1 0))
   (append-term! encoder (t/rpcerror-message error) 0)
@@ -537,7 +535,8 @@
     (if (nil? detail) nil (append-term! encoder detail 0))))
 
 (defn append-response-body!
-  [encoder: Encoder response: t/RpcResponse] -> Nil
+  [encoder: Encoder
+   response: t/RpcResponse] -> Nil
   (let [space-node (encoder-node! encoder 0)
         space-bytes
         (if space-node
