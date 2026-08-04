@@ -158,9 +158,9 @@ exclude	removed-serve-flat	tests/query_page_wire_test.clj	tests/query_page_wire_
 exclude	removed-flat-store	tests/query_test.clj	tests/query_test.clj#k/->Fact
 exclude	moved-graph-control	tests/receipt_envelope_producer_test.clj	tests/receipt_envelope_producer_test.clj#fram-edit
 exclude	moved-graph-control	tests/resolve_logical_identity_test.clj	tests/resolve_logical_identity_test.clj#replace-in-body
-exclude	removed-flat-store	tests/resolve_mint_symbol_fallback_test.clj	tests/resolve_mint_symbol_fallback_test.clj#c/value!
+run-bb	current-model	tests/resolve_mint_symbol_fallback_test.clj	-
 exclude	moved-graph-control	tests/resolve_shim_identity_test.clj	tests/resolve_shim_identity_test.clj#out/resolve\.clj
-exclude	removed-flat-store	tests/schema_test.clj	tests/schema_test.clj#c/value!
+run-bb	current-model	tests/schema_test.clj	-
 exclude	removed-flat-store	tests/set_tx_test.clj	tests/set_tx_test.clj#->Fact
 exclude	removed-flat-log	tests/show_reporter_join_test.clj	tests/show_reporter_join_test.clj#facts\.log
 exclude	removed-flat-log	tests/slow_read_attribution_test.clj	tests/slow_read_attribution_test.clj#coordination\.log
