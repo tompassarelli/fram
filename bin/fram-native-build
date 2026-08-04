@@ -72,7 +72,7 @@ case "$host" in
 esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
 
-for command in cmp flock git grep mktemp realpath sed sha256sum; do
+for command in awk cmp flock git grep mktemp realpath sed sha256sum; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 
@@ -162,6 +162,169 @@ write_input_manifest() {
   } >"$destination"
 }
 
+write_serve_flat_symbols() {
+  local report_path="$1" module_header="$2" destination="$3"
+  local logical symbol suffix prototype prototype_regex return_type parameters
+  local parameter parameter_regex source_index existing index
+  local has_arena has_capability call_parameters call_arguments
+  local -a report_rows=() prototypes=() raw_parameters=() source_types=()
+  local -a symbols=() return_types=() arena_prefixes=() capability_prefixes=()
+  local -A argument_types=()
+  local -a logical_names=(
+    serve-flat-generated-abi
+    serve-flat-store-boot
+    serve-flat-store-dispatch!
+    serve-flat-store-shutdown
+    serve-flat-codec-read-request
+    serve-flat-codec-write-response
+    serve-flat-codec-release-request
+    serve-flat-codec-release-response
+  )
+  local -a suffixes=(
+    generated_abi
+    store_boot
+    store_dispatch
+    store_shutdown
+    codec_read_request
+    codec_write_response
+    codec_release_request
+    codec_release_response
+  )
+  local -a macro_suffixes=(
+    GENERATED_ABI
+    STORE_BOOT
+    STORE_DISPATCH
+    STORE_SHUTDOWN
+    CODEC_READ_REQUEST
+    CODEC_WRITE_RESPONSE
+    CODEC_RELEASE_REQUEST
+    CODEC_RELEASE_RESPONSE
+  )
+  local -a source_arities=(0 3 2 1 1 1 1 1)
+
+  [[ -f "$module_header" ]] || die "native-module omitted module_0.h"
+  for index in "${!logical_names[@]}"; do
+    logical="${logical_names[$index]}"
+    mapfile -t report_rows < <(
+      awk -v name="$logical" '$1 == "lowered" && $3 == name { print $2 }' \
+        "$report_path"
+    )
+    [[ ${#report_rows[@]} -eq 1 ]] ||
+      die "native report must contain exactly one lowered row for $logical (found ${#report_rows[@]})"
+    [[ "${report_rows[0]}" =~ ^fn_([0-9]+)$ ]] ||
+      die "native report has an invalid function id for $logical: ${report_rows[0]}"
+    symbol="native_m0_fn_${BASH_REMATCH[1]}"
+    for existing in "${symbols[@]}"; do
+      [[ "$existing" != "$symbol" ]] ||
+        die "native report maps multiple serve-flat exports to $symbol"
+    done
+    symbols+=("$symbol")
+
+    mapfile -t prototypes < <(
+      grep -E "^[A-Za-z_][A-Za-z0-9_]* ${symbol}\\(.*\\);$" \
+        "$module_header" || true
+    )
+    [[ ${#prototypes[@]} -eq 1 ]] ||
+      die "module_0.h must contain exactly one prototype for $logical ($symbol)"
+    prototype="${prototypes[0]}"
+    prototype_regex="^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+${symbol}\\((.*)\\);$"
+    [[ "$prototype" =~ $prototype_regex ]] ||
+      die "cannot parse generated prototype for $logical: $prototype"
+    return_type="${BASH_REMATCH[1]}"
+    parameters="${BASH_REMATCH[2]}"
+    return_types+=("$return_type")
+
+    raw_parameters=()
+    if [[ "$parameters" == "void" ]]; then
+      :
+    elif [[ -n "$parameters" ]]; then
+      IFS=',' read -r -a raw_parameters <<<"$parameters"
+      for source_index in "${!raw_parameters[@]}"; do
+        parameter="${raw_parameters[$source_index]}"
+        parameter="$(sed -E \
+          's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' \
+          <<<"$parameter")"
+        raw_parameters[source_index]="$parameter"
+      done
+    else
+      die "generated prototype uses an unspecified parameter list for $logical"
+    fi
+
+    has_arena=0
+    has_capability=0
+    source_index=0
+    if [[ ${#raw_parameters[@]} -gt "$source_index" &&
+      "${raw_parameters[$source_index]}" == "native_arena *arena" ]]; then
+      has_arena=1
+      source_index=$((source_index + 1))
+    fi
+    if [[ ${#raw_parameters[@]} -gt "$source_index" &&
+      "${raw_parameters[$source_index]}" == "const native_capability *capability" ]]; then
+      has_capability=1
+      source_index=$((source_index + 1))
+    fi
+    arena_prefixes+=("$has_arena")
+    capability_prefixes+=("$has_capability")
+
+    source_types=()
+    parameter_regex='^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]+native_v_([0-9]+)$'
+    while [[ "$source_index" -lt ${#raw_parameters[@]} ]]; do
+      parameter="${raw_parameters[$source_index]}"
+      [[ "$parameter" =~ $parameter_regex ]] ||
+        die "cannot parse source parameter in prototype for $logical: $parameter"
+      [[ "${BASH_REMATCH[2]}" == "${#source_types[@]}" ]] ||
+        die "generated source parameters are out of order for $logical"
+      source_types+=("${BASH_REMATCH[1]}")
+      source_index=$((source_index + 1))
+    done
+    [[ ${#source_types[@]} -eq "${source_arities[$index]}" ]] ||
+      die "generated prototype for $logical has ${#source_types[@]} source arguments; expected ${source_arities[$index]}"
+    for source_index in "${!source_types[@]}"; do
+      argument_types["$index:$source_index"]="${source_types[$source_index]}"
+    done
+  done
+
+  {
+    printf '%s\n' \
+      '#ifndef FRAM_SERVE_FLAT_SYMBOLS_H' \
+      '#define FRAM_SERVE_FLAT_SYMBOLS_H' \
+      '' \
+      '#include "module_0.h"' \
+      ''
+    for index in "${!logical_names[@]}"; do
+      suffix="${suffixes[$index]}"
+      printf 'typedef %s fram_serve_flat_%s_return;\n' \
+        "${return_types[$index]}" "$suffix"
+      for ((source_index = 0; source_index < source_arities[index]; source_index += 1)); do
+        printf 'typedef %s fram_serve_flat_%s_arg_%d;\n' \
+          "${argument_types["$index:$source_index"]}" "$suffix" "$source_index"
+      done
+      printf '#define FRAM_SERVE_FLAT_SYMBOL_%s %s\n' \
+        "${macro_suffixes[$index]}" "${symbols[$index]}"
+
+      call_parameters='arena, capability'
+      call_arguments=''
+      if [[ "${arena_prefixes[$index]}" == "1" ]]; then
+        call_arguments='(arena)'
+      fi
+      if [[ "${capability_prefixes[$index]}" == "1" ]]; then
+        [[ -z "$call_arguments" ]] || call_arguments+=', '
+        call_arguments+='(capability)'
+      fi
+      for ((source_index = 0; source_index < source_arities[index]; source_index += 1)); do
+        call_parameters+=", arg_$source_index"
+        [[ -z "$call_arguments" ]] || call_arguments+=', '
+        call_arguments+="(arg_$source_index)"
+      done
+      printf '#define FRAM_SERVE_FLAT_CALL_%s(%s) FRAM_SERVE_FLAT_SYMBOL_%s(%s)\n' \
+        "${macro_suffixes[$index]}" "$call_parameters" \
+        "${macro_suffixes[$index]}" "$call_arguments"
+      printf '\n'
+    done
+    printf '%s\n' '#endif'
+  } >"$destination"
+}
+
 input_manifest="$(mktemp "$cache_root/.tmp/input.XXXXXX")"
 write_input_manifest "$input_manifest"
 closure_hash="$(sha256sum "$input_manifest" | sed 's/ .*//')"
@@ -242,6 +405,8 @@ if [[ -z "$host" ]]; then
 else
   [[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
     die "native-module omitted the native shim"
+  write_serve_flat_symbols "$report" "$stage/module_0.h" \
+    "$stage/serve_flat_symbols.h"
   shopt -s nullglob
   module_sources=("$stage"/module_*.c)
   shopt -u nullglob
