@@ -41,7 +41,7 @@
       (and (t/occurrence-coordinate? (t/triple-slot0 event))
         (t/triple? (t/triple-slot2 event))))))
 
-(defn- assertion! [event: t/Triple] -> t/Triple
+(defn- checked-assertion [event: t/Triple] -> t/Triple
   (if (assertion-occurrence? event)
     event
     (throw (ex-info "fram: rotations cover assertion occurrences only" {:type :invalid-rotation-occurrence}))))
@@ -67,7 +67,7 @@
 (defn- rotate-add
   [rotation: Rotation
    event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (assertion! event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (conj (rotation-events rotation) event)
@@ -85,7 +85,7 @@
 (defn- rotate-del
   [rotation: Rotation
    event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (assertion! event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (without-event (rotation-events rotation) event)
@@ -238,6 +238,16 @@
             (let [target: t/Triple? (newest (by-proposition current proposition))]
               (recur (if (some? target) (rotate-del current target) current)
                 (inc ordinal)))))))))
+
+;; Uncommitted builder operations projected onto a committed rotation through
+;; the same fold commit applies, so a staged read cannot disagree with its own
+;; commit.
+(defn staged
+  [rotation: Rotation
+   space-id: String
+   sequence: Int
+   operations: (Vec t/CommitOperation)] -> Rotation
+  (apply-frame rotation space-id (t/->TransactionFrame sequence operations)))
 
 (defn refresh
   [rotation: Rotation
