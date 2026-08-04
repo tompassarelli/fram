@@ -60,7 +60,7 @@
                  :action (if (or (= sequence 1) (even? sequence)) 1 2)
                  :triple (if (= sequence 1) marker filler)}]})
             (range 1 3002))]
-  ((var-get #'coord/append-frame-cohort-durable!) log-path frames)
+  ((var-get #'coord/append-frame-cohort-durable!) log-path frames false)
   (let [port (free-port)
         server (future (coord-daemon/serve! port log-path space :active))
         plan (query-plan marker)

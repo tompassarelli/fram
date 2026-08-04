@@ -207,7 +207,7 @@
 (def pre-append-error
   (with-redefs-fn
     {append-frame-var
-     (fn [_ _]
+     (fn [_ _ _]
        (throw (ex-info "injected before append" {:type :injected-pre-append})))}
     #(error-code
       (fn [] (coord/assert! pre-append-co (t/triple "pre" :state "attempted") {})))))
@@ -261,7 +261,7 @@
 (def failed-cohort-error
   (with-redefs-fn
     {append-cohort-var
-     (fn [_ _]
+     (fn [_ _ _]
        (throw (ex-info "injected cohort barrier failure"
                        {:type :injected-cohort-barrier})))}
     #(error-code

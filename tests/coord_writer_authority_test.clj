@@ -111,8 +111,8 @@
           failure
           (with-redefs-fn
             {append-var
-             (fn [path frames]
-               (original path frames)
+             (fn [path frames deflate?]
+               (original path frames deflate?)
                (throw (ex-info "injected after force"
                                {:type :injected-post-force})))}
             #(direct-request!
