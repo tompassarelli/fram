@@ -3,6 +3,7 @@
 (ns fram.native-dispatch
   (:require [coord-commit :as commit]
             [coord-read :as read]
+            [fram.native-lease-ops :as lease]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -735,6 +736,8 @@
        (write-response! session request now-ms served-version)]
       [(= :rpc/batch operation)
        (batch-response! session request now-ms served-version)]
+      [(lease/lease-operation? operation)
+       (lease/dispatch! session request now-ms)]
       [:else
        (error-response
         request served-version :rpc/native-operation-unavailable false
