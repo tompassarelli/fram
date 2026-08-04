@@ -10,10 +10,14 @@ die() {
 
 usage() {
   cat <<'USAGE'
-Usage: fram-native-build --entry NS/NAME SOURCE...
+Usage:
+  fram-native-build --entry NS/NAME SOURCE...
+  fram-native-build --host serve-flat [--adapter FILE] SOURCE...
 
 Prints the absolute immutable artifact directory on success.
 Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, and FRAM_NATIVE_CC as needed.
+
+The serve-flat host defaults to native/serve_flat_generated.c beside this script.
 
 Consumer:
   FRAM_NATIVE_ARTIFACT_DIR="$(fram-native-build --entry NS/NAME SOURCE...)"
@@ -21,12 +25,24 @@ USAGE
 }
 
 entry=""
+host=""
+adapter=""
 sources=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --entry)
       [[ $# -ge 2 && -z "$entry" ]] || die "--entry needs one NS/NAME"
       entry="$2"
+      shift 2
+      ;;
+    --host)
+      [[ $# -ge 2 && -z "$host" ]] || die "--host needs one host name"
+      host="$2"
+      shift 2
+      ;;
+    --adapter)
+      [[ $# -ge 2 && -z "$adapter" ]] || die "--adapter needs one source path"
+      adapter="$2"
       shift 2
       ;;
     --help|-h)
@@ -43,8 +59,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 entry="${entry:-${FRAM_NATIVE_ENTRY:-}}"
-[[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
-  die "--entry must be a qualified NS/NAME"
+case "$host" in
+  "")
+    [[ -z "$adapter" ]] || die "--adapter requires --host serve-flat"
+    [[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
+      die "--entry must be a qualified NS/NAME"
+    ;;
+  serve-flat)
+    [[ -z "$entry" ]] || die "--entry and --host are mutually exclusive"
+    ;;
+  *) die "unsupported host: $host" ;;
+esac
 [[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
 
 for command in cmp flock git grep mktemp realpath sed sha256sum; do
@@ -57,6 +82,21 @@ beagle_candidate="${beagle_candidate:-${home:+$home/code/beagle/main/bin/beagle}
 beagle="$(command -v "$beagle_candidate" 2>/dev/null || true)"
 [[ -n "$beagle" && -x "$beagle" ]] || die "set FRAM_BEAGLE to an executable CLI"
 beagle="$(realpath "$beagle")"
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+host_source=""
+host_header=""
+if [[ "$host" == "serve-flat" ]]; then
+  host_source="$repo/native/serve_flat_host.c"
+  host_header="$repo/native/serve_flat_host.h"
+  adapter="${adapter:-$repo/native/serve_flat_generated.c}"
+  [[ -f "$host_source" ]] || die "serve-flat host source is unavailable: $host_source"
+  [[ -f "$host_header" ]] || die "serve-flat host header is unavailable: $host_header"
+  [[ -f "$adapter" ]] || die "serve-flat generated adapter is unavailable: $adapter"
+  host_source="$(realpath "$host_source")"
+  host_header="$(realpath "$host_header")"
+  adapter="$(realpath "$adapter")"
+fi
 
 cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
 cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
@@ -88,6 +128,9 @@ fi
 if [[ -x "$(dirname "$beagle")/beagle-native-exe" ]]; then
   beagle_identity+=":native-exe-$(sha256sum "$(dirname "$beagle")/beagle-native-exe" | sed 's/ .*//')"
 fi
+if [[ -x "$(dirname "$beagle")/beagle-native-module" ]]; then
+  beagle_identity+=":native-module-$(sha256sum "$(dirname "$beagle")/beagle-native-module" | sed 's/ .*//')"
+fi
 cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
@@ -102,8 +145,16 @@ trap cleanup EXIT INT TERM
 write_input_manifest() {
   local destination="$1" index source
   {
-    printf 'fram-native-build-input/v1\n%s\n%s\n%s\n%s\n' \
-      "$builder_identity" "$entry" "$beagle_identity" "$cc_identity"
+    printf 'fram-native-build-input/v1\n%s\nhost=%s\nentry=%s\n%s\n%s\n' \
+      "$builder_identity" "$host" "$entry" "$beagle_identity" "$cc_identity"
+    if [[ -n "$host_source" ]]; then
+      printf 'host-source %q %s\n' "$host_source" \
+        "$(sha256sum "$host_source" | sed 's/ .*//')"
+      printf 'host-header %q %s\n' "$host_header" \
+        "$(sha256sum "$host_header" | sed 's/ .*//')"
+      printf 'adapter %q %s\n' "$adapter" \
+        "$(sha256sum "$adapter" | sed 's/ .*//')"
+    fi
     for index in "${!normalized_sources[@]}"; do
       source="${normalized_sources[$index]}"
       printf '%06d %q %s\n' "$index" "$source" "$(sha256sum "$source" | sed 's/ .*//')"
@@ -131,15 +182,26 @@ fi
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin"
 cp "$input_manifest" "$stage/input.manifest"
-if ! "$beagle" native-exe \
-    --out "$stage/bin/fram-daemon-native" \
-    --entry "$entry" \
-    --cc "$cc" \
-    --artifacts "$stage" \
-    "${normalized_sources[@]}" \
-    >"$stage/native-exe.log" 2>&1; then
-  sed -n '1,240p' "$stage/native-exe.log" >&2
-  die "beagle native-exe failed"
+if [[ -z "$host" ]]; then
+  if ! "$beagle" native-exe \
+      --out "$stage/bin/fram-daemon-native" \
+      --entry "$entry" \
+      --cc "$cc" \
+      --artifacts "$stage" \
+      "${normalized_sources[@]}" \
+      >"$stage/native-exe.log" 2>&1; then
+    sed -n '1,240p' "$stage/native-exe.log" >&2
+    die "beagle native-exe failed"
+  fi
+else
+  if ! "$beagle" native-module \
+      --out "$stage" \
+      -- \
+      "${normalized_sources[@]}" \
+      >"$stage/native-module.log" 2>&1; then
+    sed -n '1,240p' "$stage/native-module.log" >&2
+    die "beagle native-module failed"
+  fi
 fi
 
 report="$stage/report.txt"
@@ -169,13 +231,38 @@ done
   die "native report must contain exactly seven passing obligations"
 ! grep -q '^pending ' "$report" || die "native report contains pending lowering work"
 
-exe_report="$stage/native-exe.report.txt"
-[[ -f "$exe_report" && "$(wc -l <"$exe_report")" == "2" ]] ||
-  die "native build omitted the two-line executable receipt"
-[[ "$(grep -Fc "native-exe-entry PASS name=$entry " "$exe_report" || true)" == "1" ]] ||
-  die "native executable entry receipt does not match $entry"
-[[ "$(grep -Fc "native-exe-c17 PASS compiler=$cc output=" "$exe_report" || true)" == "1" ]] ||
-  die "native executable C17 link receipt is invalid"
+if [[ -z "$host" ]]; then
+  exe_report="$stage/native-exe.report.txt"
+  [[ -f "$exe_report" && "$(wc -l <"$exe_report")" == "2" ]] ||
+    die "native build omitted the two-line executable receipt"
+  [[ "$(grep -Fc "native-exe-entry PASS name=$entry " "$exe_report" || true)" == "1" ]] ||
+    die "native executable entry receipt does not match $entry"
+  [[ "$(grep -Fc "native-exe-c17 PASS compiler=$cc output=" "$exe_report" || true)" == "1" ]] ||
+    die "native executable C17 link receipt is invalid"
+else
+  [[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
+    die "native-module omitted the native shim"
+  shopt -s nullglob
+  module_sources=("$stage"/module_*.c)
+  shopt -u nullglob
+  [[ ${#module_sources[@]} -gt 0 ]] || die "native-module omitted module_*.c"
+  if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror \
+      -I"$stage" -I"$(dirname "$host_header")" \
+      "${module_sources[@]}" \
+      "$stage/native_shim.c" \
+      "$host_source" \
+      "$adapter" \
+      -o "$stage/bin/fram-daemon-native" \
+      >"$stage/native-host.log" 2>&1; then
+    sed -n '1,240p' "$stage/native-host.log" >&2
+    die "serve-flat native host link failed"
+  fi
+  {
+    printf 'native-host-c17 PASS compiler=%s output=%s\n' \
+      "$cc" "$stage/bin/fram-daemon-native"
+    printf 'native-host-abi PASS host=serve-flat exports=8\n'
+  } >"$stage/native-host.report.txt"
+fi
 [[ -x "$stage/bin/fram-daemon-native" ]] || die "native executable is missing"
 
 after_manifest="$stage/input.after"
