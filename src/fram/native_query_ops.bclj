@@ -1,0 +1,685 @@
+#lang beagle/clj
+
+(ns fram.native-query-ops
+  (:require [fram.datalog :as d]
+            [fram.kernel :as kernel]
+            [fram.query :as query]
+            [fram.schema :as schema]
+            [fram.store :as store]
+            [fram.types :as t]))
+
+(define-mode strict)
+
+(def max-list-values: Int 65536)
+(def unpaged-occurrence-limit: Int 256)
+(def default-query-timeout-ms: Int 5000)
+(def max-query-timeout-ms: Int 60000)
+(def query-step-limit: Int 10000000)
+
+(defrecord OptionValue
+  [present: Bool
+   value: Any])
+
+(defrecord QueryCursor
+  [snapshot-version: Int
+   digest: String
+   next-page-ordinal: Int
+   after-row: (Vec Any)])
+
+(defrecord QueryView
+  [root: (Atom t/TermStore)
+   version: Int
+   lower-exclusive: Int])
+
+(defrecord PageResult
+  [payload: t/Triple
+   page: t/RpcPageResponse?])
+
+(defrecord NativeReadResult
+  [handled: Bool
+   response: t/RpcResponse?])
+
+(def retryable-error-codes: (Set Keyword)
+  #{:rpc/conflict :rpc/cancelled :query-cancelled :query-time-limit
+    :query-work-limit :query/archive-unavailable :durability-ambiguous})
+
+(defn fail!
+  [code: Keyword
+   message: String] -> Any
+  (throw (ex-info message {:type code :fram/code code :message message})))
+
+(defn rpc-list [values: (Vec Any)] -> Any
+  (reduce
+   (fn
+     [tail: Any
+      value: Any] -> Any
+     (t/triple :rpc/list value tail))
+   :rpc/list-end
+   (reverse values)))
+
+(defn rpc-record
+  [tag: Keyword
+   fields: (Vec Any)] -> t/Triple
+  (t/triple tag (rpc-list fields) :rpc/record))
+
+(defn rpc-query-row [values: (Vec Any)] -> t/Triple
+  (rpc-record :query/row [(rpc-list values)]))
+
+(defn rpc-query-rows [rows: (Vec d/Tuple)] -> t/Triple
+  (rpc-record :query/rows
+              [(rpc-list
+                (mapv
+                 (fn [row: d/Tuple] -> Any (rpc-query-row row)) rows))]))
+
+(defn rpc-occurrences [values: (Vec t/Triple)] -> t/Triple
+  (rpc-record :rpc/occurrences [(rpc-list values)]))
+
+(defn rpc-violation
+  [code: Keyword
+   detail: Any] -> t/Triple
+  (rpc-record :rpc/violation [code detail]))
+
+(defn rpc-validation
+  [valid: Bool
+   violations: (Vec Any)] -> t/Triple
+  (rpc-record :rpc/validation [valid (rpc-list violations)]))
+
+(defn response
+  [request: t/RpcRequest
+   served-version: Int
+   page: t/RpcPageResponse?
+   payload: Any] -> t/RpcResponse
+  (t/->RpcResponse (t/rpcrequest-space request)
+                   (t/rpcrequest-op request)
+                   served-version page nil payload))
+
+(defn error-response
+  [request: t/RpcRequest
+   served-version: Int
+   code: Keyword
+   message: String] -> t/RpcResponse
+  (t/->RpcResponse
+   (t/rpcrequest-space request)
+   (t/rpcrequest-op request)
+   served-version nil
+   (t/->RpcError code (contains? retryable-error-codes code) message nil)
+   nil))
+
+(defn read-list! [value: Any] -> (Vec Any)
+  (loop [cursor value values: (Vec Any) [] count-value 0]
+    (cond
+      [(= cursor :rpc/list-end) values]
+      [(>= count-value max-list-values)
+       (fail! :rpc-invalid-list "RPC list exceeds the Term node bound")]
+      [(and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor)))
+       (recur (t/triple-slot2 cursor)
+              (conj values (t/triple-slot1 cursor))
+              (inc count-value))]
+      [:else
+       (fail! :rpc-invalid-list "RPC list must end with :rpc/list-end")])))
+
+(defn read-record!
+  [value: Any
+   tag: Keyword
+   field-count: Int] -> (Vec Any)
+  (if (and (t/triple? value)
+           (and (= tag (t/triple-slot0 value))
+                (= :rpc/record (t/triple-slot2 value))))
+    (let [fields: (Vec Any) (read-list! (t/triple-slot1 value))]
+      (if (= field-count (count fields))
+        fields
+        (fail! :rpc-invalid-record
+               "RPC record contains the wrong number of fields")))
+    (fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
+
+(defn read-option! [value: Any] -> OptionValue
+  (cond
+    [(= value :rpc/none) (->OptionValue false nil)]
+    [(and (t/triple? value)
+          (and (= :rpc/some (t/triple-slot0 value))
+               (= :rpc/option (t/triple-slot2 value))))
+     (->OptionValue true (t/triple-slot1 value))]
+    [:else
+     (fail! :rpc-invalid-option
+            "RPC option must be :rpc/none or a :rpc/some record")]))
+
+(defn require-term!
+  [value: Any
+   label: String] -> Any
+  (if (t/term? value)
+    value
+    (fail! :rpc-invalid-payload (str label " must be a Term"))))
+
+(defn require-string!
+  [value: Any
+   label: String] -> String
+  (if (string? value)
+    value
+    (fail! :rpc-invalid-payload (str label " must be a String"))))
+
+(defn require-int!
+  [value: Any
+   label: String] -> Int
+  (if (integer? value)
+    value
+    (fail! :rpc-invalid-payload (str label " must be an Int"))))
+
+(defn require-keyword!
+  [value: Any
+   label: String] -> Keyword
+  (if (keyword? value)
+    value
+    (fail! :rpc-invalid-payload (str label " must be a Keyword"))))
+
+(defn require-bool!
+  [value: Any
+   label: String] -> Bool
+  (if (boolean? value)
+    value
+    (fail! :rpc-invalid-payload (str label " must be a Bool"))))
+
+(defn require-unit! [value: Any] -> Nil
+  (if (= value :rpc/unit)
+    nil
+    (fail! :rpc-invalid-payload
+           "operation payload must be :rpc/unit")))
+
+(defn query-record-tag [value: Any] -> Keyword?
+  (if (and (t/triple? value)
+           (and (keyword? (t/triple-slot0 value))
+                (= :rpc/record (t/triple-slot2 value))))
+    (t/triple-slot0 value)
+    nil))
+
+(defn parse-query-term! [value: Any] -> d/QueryTerm
+  (match (query-record-tag value)
+    [:query/var
+    (let [fields: (Vec Any) (read-record! value :query/var 1)]
+      (d/variable (require-string! (nth fields 0) "query variable")))]
+
+    [:query/const
+    (let [fields: (Vec Any) (read-record! value :query/const 1)]
+      (d/constant (require-term! (nth fields 0) "query constant")))]
+
+    [_ (fail! :query-invalid-term
+              "query term must be query/var or query/const")]))
+
+(defn parse-query-terms! [value: Any] -> (Vec d/QueryTerm)
+  (mapv
+   (fn [term: Any] -> d/QueryTerm (parse-query-term! term))
+   (read-list! value)))
+
+(defn parse-query-head! [value: Any] -> (Vec Any)
+  (let [fields: (Vec Any) (read-record! value :query/head 2)]
+    [(require-string! (nth fields 0) "query head relation")
+     (parse-query-terms! (nth fields 1))]))
+
+(defn parse-query-clause! [value: Any] -> d/Literal
+  (match (query-record-tag value)
+    [:query/relation
+    (let [fields: (Vec Any) (read-record! value :query/relation 3)
+          relation (require-string! (nth fields 0) "query relation")
+          terms: (Vec d/QueryTerm) (parse-query-terms! (nth fields 1))
+          negated (require-bool! (nth fields 2) "query negation")]
+      (if negated
+        (d/negated-literal relation terms)
+        (d/relation-literal relation terms)))]
+
+    [:query/predicate
+    (let [fields: (Vec Any) (read-record! value :query/predicate 3)
+          operation (require-keyword! (nth fields 0) "query predicate")]
+      (if (contains? d/comparison-operators operation)
+        (d/comparison-literal
+         operation
+         [(parse-query-term! (nth fields 1))
+          (parse-query-term! (nth fields 2))])
+        (fail! :query-invalid-predicate
+               "query predicate operation is unsupported")))]
+
+    [:query/function
+    (let [fields: (Vec Any) (read-record! value :query/function 3)
+          operation (require-keyword! (nth fields 0) "query function")]
+      (if (contains? d/builtin-operators operation)
+        (d/builtin-literal
+         operation
+         (parse-query-terms! (nth fields 1))
+         (require-string! (nth fields 2) "query function binding"))
+        (fail! :query-invalid-function
+               "query function operation is unsupported")))]
+
+    [_ (fail! :query-invalid-clause
+              "query clause record is unsupported")]))
+
+(defn parse-query-rule! [value: Any] -> d/Rule
+  (let [fields: (Vec Any) (read-record! value :query/rule 2)
+        head: (Vec Any) (parse-query-head! (nth fields 0))]
+    (d/rule
+     (nth head 0)
+     (nth head 1)
+     (mapv
+      (fn [clause: Any] -> d/Literal (parse-query-clause! clause))
+      (read-list! (nth fields 1))))))
+
+(defn parse-query-stratum! [value: Any] -> (Vec d/Rule)
+  (let [fields: (Vec Any) (read-record! value :query/stratum 1)]
+    (mapv
+     (fn [rule: Any] -> d/Rule (parse-query-rule! rule))
+     (read-list! (nth fields 0)))))
+
+(defn parse-query-aggregate! [value: Any] -> query/AggregateSpec
+  (let [fields: (Vec Any) (read-record! value :query/aggregate 2)
+        operation (require-keyword! (nth fields 0) "query aggregate")
+        argument: OptionValue (read-option! (nth fields 1))]
+    (if (contains? query/aggregate-operators operation)
+      (query/aggregate-spec
+       operation
+       (if (optionvalue-present argument)
+         (require-int! (optionvalue-value argument) "aggregate argument index")
+         nil))
+      (fail! :query-invalid-aggregate
+             "query aggregate operation is unsupported"))))
+
+(defn parse-query-having! [value: Any] -> query/HavingClause
+  (let [fields: (Vec Any) (read-record! value :query/having 3)
+        comparison (require-keyword! (nth fields 0) "having comparison")]
+    (if (contains? d/comparison-operators comparison)
+      (query/having-clause
+       comparison
+       (require-int! (nth fields 1) "having aggregate index")
+       (require-term! (nth fields 2) "having value"))
+      (fail! :query-invalid-having
+             "having comparison operation is unsupported"))))
+
+(defn parse-query-find! [value: Any] -> query/FindSpec
+  (match (query-record-tag value)
+    [:query/find-relation
+    (let [fields: (Vec Any) (read-record! value :query/find-relation 1)]
+      (query/relation-find
+       (require-string! (nth fields 0) "find relation")))]
+
+    [:query/find-aggregate
+    (let [fields: (Vec Any) (read-record! value :query/find-aggregate 4)]
+      (query/aggregate-find
+       (require-string! (nth fields 0) "aggregate find relation")
+       (mapv
+        (fn [position: Any] -> Int
+          (require-int! position "aggregate grouping index"))
+        (read-list! (nth fields 1)))
+       (mapv
+        (fn [aggregate: Any] -> query/AggregateSpec
+          (parse-query-aggregate! aggregate))
+        (read-list! (nth fields 2)))
+       (mapv
+        (fn [clause: Any] -> query/HavingClause
+          (parse-query-having! clause))
+        (read-list! (nth fields 3)))))]
+
+    [_ (fail! :query-invalid-find
+              "query find record is unsupported")]))
+
+(defn parse-query-plan! [value: Any] -> query/QueryPlan
+  (let [fields: (Vec Any) (read-record! value :query/plan 2)
+        plan: query/QueryPlan
+        (query/query-plan
+         (parse-query-find! (nth fields 0))
+         (mapv
+          (fn [stratum: Any] -> (Vec d/Rule)
+            (parse-query-stratum! stratum))
+          (read-list! (nth fields 1))))
+        errors: (Vec query/QueryError) (query/validate-plan plan)]
+    (if (empty? errors)
+      plan
+      (let [error: query/QueryError (first errors)]
+        (fail! (query/error-code error) (query/error-message error))))))
+
+(defn parse-query-row! [value: Any] -> (Vec Any)
+  (let [fields: (Vec Any) (read-record! value :query/row 1)]
+    (mapv
+     (fn [entry: Any] -> Any (require-term! entry "query row value"))
+     (read-list! (nth fields 0)))))
+
+(defn parse-query-cursor! [value: Any] -> QueryCursor
+  (let [fields: (Vec Any) (read-record! value :query/cursor 4)
+        snapshot-version
+        (require-int! (nth fields 0) "cursor snapshot version")
+        ordinal (require-int! (nth fields 2) "cursor page ordinal")]
+    (if (or (< snapshot-version 0) (< ordinal 0))
+      (fail! :query-cursor-mismatch
+             "query cursor coordinates must be non-negative")
+      (->QueryCursor
+       snapshot-version
+       (require-string! (nth fields 1) "cursor query digest")
+       ordinal
+       (parse-query-row! (nth fields 3))))))
+
+(defn request-cursor [request: t/RpcRequest] -> QueryCursor?
+  (let [page (t/rpcrequest-page request)]
+    (if (some? page)
+      (let [cursor (t/rpc-page-request-cursor-value page)]
+        (if (some? cursor) (parse-query-cursor! cursor) nil))
+      nil)))
+
+(defn upper-snapshot-version!
+  [snapshot: Any
+   cursor: QueryCursor?
+   head: Int] -> Int
+  (cond
+    [(= snapshot :query/current)
+     (if (some? cursor) (querycursor-snapshot-version cursor) head)]
+    [(= :query/as-of (query-record-tag snapshot))
+     (let [fields: (Vec Any) (read-record! snapshot :query/as-of 1)]
+       (require-int! (nth fields 0) "query snapshot version"))]
+    [:else
+     (fail! :query-invalid-snapshot
+            "query upper snapshot must be current or as-of")]))
+
+(defn snapshot-root!
+  [root: (Atom t/TermStore)
+   version: Int] -> (Atom t/TermStore)
+  (let [head (store/current-sequence root)]
+    (if (or (< version 0) (> version head))
+      (fail! :query-invalid-snapshot
+             "query snapshot is outside available history")
+      (if (= version head)
+        root
+        (let [copy (store/new-term-store (store/space-id root))
+              frames: (Vec t/TransactionFrame)
+              (store/transaction-frames-between (deref root) -1 version)]
+          (do
+            (doseq [frame: t/TransactionFrame frames]
+              (store/replay-transaction! copy frame))
+            copy))))))
+
+(defn requested-query-view!
+  [root: (Atom t/TermStore)
+   snapshot: Any
+   cursor: QueryCursor?] -> QueryView
+  (let [head (store/current-sequence root)
+        lower-and-upper: (Vec Int)
+        (if (= :query/since (query-record-tag snapshot))
+          (let [fields: (Vec Any) (read-record! snapshot :query/since 2)
+                lower (require-int! (nth fields 0) "query since lower bound")]
+            (if (< lower 0)
+              (fail! :query-invalid-snapshot
+                     "query since lower bound must be non-negative")
+              [lower (upper-snapshot-version! (nth fields 1) cursor head)]))
+          [-1 (upper-snapshot-version! snapshot cursor head)])
+        lower (nth lower-and-upper 0)
+        upper (nth lower-and-upper 1)]
+    (cond
+      [(and (some? cursor)
+            (not= (querycursor-snapshot-version cursor) upper))
+       (fail! :query-cursor-mismatch
+              "query cursor belongs to a different snapshot")]
+      [(> lower upper)
+       (fail! :query-invalid-snapshot
+              "query since lower bound exceeds its upper snapshot")]
+      [:else (->QueryView (snapshot-root! root upper) upper lower)])))
+
+(defn occurrence-sequence [event: t/Triple] -> Int
+  (let [coordinate: t/Triple (t/triple-slot0 event)
+        transaction: t/Triple (t/triple-slot0 coordinate)]
+    (t/triple-slot2 transaction)))
+
+(defn view-occurrences [view: QueryView] -> (Vec t/Triple)
+  (filterv
+   (fn [event: t/Triple] -> Bool
+     (> (occurrence-sequence event) (queryview-lower-exclusive view)))
+   (store/operation-occurrences (queryview-root view))))
+
+(defn query-rows!
+  [view: QueryView
+   plan: query/QueryPlan
+   timeout-ms: Int] -> query/QueryResult
+  (let [root (queryview-root view)
+        propositions: (Vec t/Triple) (store/live-propositions root)
+        occurrences: (Vec t/Triple) (view-occurrences view)
+        projection: query/Projection
+        (query/project-with-occurrences propositions occurrences)
+        control: d/QueryControl (d/query-control query-step-limit timeout-ms)]
+    (binding [query/*query-control* control]
+      (query/run-plan-projected! projection plan))))
+
+(defn query-row-position!
+  [rows: (Vec d/Tuple)
+   after-row: (Vec Any)] -> Int
+  (loop [position 0]
+    (if (>= position (count rows))
+      (fail! :query-cursor-mismatch
+             "query cursor row is absent from its snapshot")
+      (if (= after-row (nth rows position))
+        position
+        (recur (inc position))))))
+
+(defn occurrence-position!
+  [rows: (Vec t/Triple)
+   after-row: (Vec Any)] -> Int
+  (if (= 2 (count after-row))
+    (let [position-value (nth after-row 0)
+          expected (nth after-row 1)]
+      (if (and (integer? position-value)
+               (and (>= position-value 0)
+                    (and (< position-value (count rows))
+                         (= expected (nth rows position-value)))))
+        position-value
+        (fail! :query-cursor-mismatch
+               "page cursor row is absent from its snapshot")))
+    (fail! :query-cursor-mismatch
+           "page cursor row is absent from its snapshot")))
+
+(defn page-request-limit! [page: t/RpcPageRequest] -> Int
+  (let [limit (t/rpcpagerequest-limit page)]
+    (if (and (>= limit 1) (<= limit query/max-page-limit))
+      limit
+      (fail! :query-page-limit
+             "query page limit must be from 1 through 4096"))))
+
+(defn rpc-query-cursor
+  [snapshot-version: Int
+   digest: String
+   next-page-ordinal: Int
+   after-row: (Vec Any)] -> t/Triple
+  (rpc-record
+   :query/cursor
+   [snapshot-version digest next-page-ordinal (rpc-query-row after-row)]))
+
+(defn slice-query-page!
+  [rows: (Vec d/Tuple)
+   page: t/RpcPageRequest?
+   cursor: QueryCursor?
+   snapshot-version: Int
+   digest: String] -> PageResult
+  (if (nil? page)
+    (->PageResult (rpc-query-rows rows) nil)
+    (let [limit (page-request-limit! page)]
+      (if (and (some? cursor) (not= digest (querycursor-digest cursor)))
+        (fail! :query-cursor-mismatch
+               "query cursor belongs to a different query")
+        (let [ordinal (if (some? cursor)
+                        (querycursor-next-page-ordinal cursor) 0)
+              start (if (some? cursor)
+                      (inc (query-row-position!
+                            rows (querycursor-after-row cursor))) 0)
+              selected: (Vec d/Tuple)
+              (vec (take limit (drop start rows)))
+              next-position (+ start (count selected))
+              done (>= next-position (count rows))
+              next-cursor
+              (if done
+                nil
+                (rpc-query-cursor
+                 snapshot-version digest (inc ordinal)
+                 (nth selected (dec (count selected)))))]
+          (->PageResult
+           (rpc-query-rows selected)
+           (t/->RpcPageResponse ordinal next-cursor done)))))))
+
+(defn slice-occurrence-page!
+  [rows: (Vec t/Triple)
+   page: t/RpcPageRequest?
+   cursor: QueryCursor?
+   snapshot-version: Int
+   digest: String] -> PageResult
+  (if (nil? page)
+    (->PageResult
+     (rpc-occurrences (vec (take unpaged-occurrence-limit rows))) nil)
+    (let [limit (page-request-limit! page)]
+      (if (and (some? cursor) (not= digest (querycursor-digest cursor)))
+        (fail! :query-cursor-mismatch
+               "query cursor belongs to a different query")
+        (let [ordinal (if (some? cursor)
+                        (querycursor-next-page-ordinal cursor) 0)
+              start (if (some? cursor)
+                      (inc (occurrence-position!
+                            rows (querycursor-after-row cursor))) 0)
+              selected: (Vec t/Triple)
+              (vec (take limit (drop start rows)))
+              next-position (+ start (count selected))
+              done (>= next-position (count rows))
+              next-cursor
+              (if done
+                nil
+                (rpc-query-cursor
+                 snapshot-version digest (inc ordinal)
+                 [(dec next-position) (nth selected (dec (count selected)))]))]
+          (->PageResult
+           (rpc-occurrences selected)
+           (t/->RpcPageResponse ordinal next-cursor done)))))))
+
+;; digest-term is lowercase SHA-256 over canonical TermCodecV1 bytes.
+(defn query-response!
+  [session: schema/Session
+   request: t/RpcRequest
+   digest-term: [Any -> String]] -> t/RpcResponse
+  (let [request-fields: (Vec Any)
+        (read-record! (t/rpc-request-payload-value request) :query/request 2)
+        plan-term (nth request-fields 0)
+        plan: query/QueryPlan (parse-query-plan! plan-term)
+        cursor: QueryCursor? (request-cursor request)
+        view: QueryView
+        (requested-query-view! (schema/store-of session)
+                               (nth request-fields 1) cursor)
+        digest (digest-term
+                (t/triple plan-term
+                          (queryview-lower-exclusive view)
+                          (queryview-version view)))
+        requested-timeout (t/rpcrequest-timeout-ms request)
+        timeout-ms (min max-query-timeout-ms
+                        (if (some? requested-timeout)
+                          requested-timeout default-query-timeout-ms))]
+    (if (< timeout-ms 0)
+      (error-response request (queryview-version view)
+                      :rpc-invalid-payload
+                      "query timeout-ms must be non-negative")
+      (let [result: query/QueryResult (query-rows! view plan timeout-ms)
+            errors: (Vec query/QueryError) (query/result-errors result)]
+        (if (not (empty? errors))
+          (let [error: query/QueryError (first errors)]
+            (error-response request (queryview-version view)
+                            (query/error-code error)
+                            (query/error-message error)))
+          (let [page-result: PageResult
+                (slice-query-page!
+                 (query/result-rows result) (t/rpcrequest-page request)
+                 cursor (queryview-version view) digest)]
+            (response request (queryview-version view)
+                      (pageresult-page page-result)
+                      (pageresult-payload page-result))))))))
+
+(defn occurrences-response!
+  [session: schema/Session
+   request: t/RpcRequest
+   digest-term: [Any -> String]] -> t/RpcResponse
+  (do
+    (require-unit! (t/rpc-request-payload-value request))
+    (let [root (schema/store-of session)
+          head (store/current-sequence root)
+          cursor: QueryCursor? (request-cursor request)
+          version (if (some? cursor)
+                    (querycursor-snapshot-version cursor) head)
+          snapshot (snapshot-root! root version)
+          rows: (Vec t/Triple) (store/operation-occurrences snapshot)
+          digest (digest-term :rpc/unit)
+          page-result: PageResult
+          (slice-occurrence-page!
+           rows (t/rpcrequest-page request) cursor version digest)]
+      (response request version
+                (pageresult-page page-result)
+                (pageresult-payload page-result)))))
+
+(defn validation-payload [root: (Atom t/TermStore)] -> t/Triple
+  (try
+    (let [space-id (store/space-id root)
+          copy (store/new-term-store space-id)
+          propositions: (Vec t/Triple) (store/live-propositions root)
+          violations: (Vec t/Triple)
+          (kernel/lint-declared-profile propositions space-id)]
+      (do
+        (store/load-term-store! copy (store/dump-term-store root))
+        (rpc-validation
+         true
+         (mapv
+          (fn [violation: t/Triple] -> Any
+            (rpc-violation :rpc/profile-violation violation))
+          violations))))
+    (catch Exception problem
+      (let [data (ex-data problem)
+            code-value (or (:fram/code data) (:type data))
+            code (if (keyword? code-value)
+                   code-value :rpc/validation-failed)]
+        (rpc-validation
+         false
+         [(rpc-violation code "validation failed")])))))
+
+(defn validate-response!
+  [session: schema/Session
+   request: t/RpcRequest] -> t/RpcResponse
+  (let [served-version (store/current-sequence (schema/store-of session))]
+    (do
+      (require-unit! (t/rpc-request-payload-value request))
+      (response request served-version nil
+                (validation-payload (schema/store-of session))))))
+
+(defn dispatch-read!
+  [session: schema/Session
+   request: t/RpcRequest
+   digest-term: [Any -> String]] -> NativeReadResult
+  (let [operation (t/rpcrequest-op request)
+        served-version (store/current-sequence (schema/store-of session))]
+    (if (contains? #{:rpc/query :rpc/occurrences :rpc/validate} operation)
+      (try
+        (cond
+          [(and (not= operation :rpc/query)
+                (some? (t/rpcrequest-timeout-ms request)))
+           (->NativeReadResult
+            true
+            (error-response
+             request served-version :rpc/unexpected-timeout
+             "timeout-ms is supported only by rpc/query"))]
+          [(and (= operation :rpc/validate)
+                (some? (t/rpcrequest-page request)))
+           (->NativeReadResult
+            true
+            (error-response
+             request served-version :rpc/unexpected-page
+             "paging is supported only by rpc/query, rpc/scan, and rpc/occurrences"))]
+          [(= operation :rpc/query)
+           (->NativeReadResult true
+                               (query-response! session request digest-term))]
+          [(= operation :rpc/occurrences)
+           (->NativeReadResult true
+                               (occurrences-response!
+                                session request digest-term))]
+          [:else
+           (->NativeReadResult true (validate-response! session request))])
+        (catch Exception problem
+          (let [data (ex-data problem)
+                code-value (or (:fram/code data) (:type data))
+                code (if (keyword? code-value)
+                       code-value :rpc/native-query-failed)
+                message-value (:message data)
+                message (if (string? message-value)
+                          message-value "native read operation failed")]
+            (->NativeReadResult
+             true (error-response request served-version code message)))))
+      (->NativeReadResult false nil))))
