@@ -39,7 +39,7 @@ typedef struct writer_authority {
 static volatile sig_atomic_t stop_requested = 0;
 
 static void print_usage(void) {
-  fputs("usage: fram-daemon-native [serve-flat] [port] [log] [space-id]\n",
+  fputs("usage: fram-daemon-native [serve] [port] [log] [space-id]\n",
         stderr);
 }
 
@@ -67,13 +67,8 @@ static int load_config(int argc, char **argv, daemon_config *config) {
   const char *log_path;
   const char *space_id;
 
-  if (index < argc && strcmp(argv[index], "serve-flat") == 0) {
+  if (index < argc && strcmp(argv[index], "serve") == 0) {
     index += 1;
-  } else if (index < argc && strcmp(argv[index], "serve") == 0) {
-    fputs("fram-daemon-native: this host implements only the deployed "
-          "serve-flat contract\n",
-          stderr);
-    return -1;
   }
   if (argc - index > 3) {
     print_usage();
@@ -533,8 +528,8 @@ int main(int argc, char **argv) {
 
   if (generated_abi != FRAM_SERVE_FLAT_GENERATED_ABI) {
     fprintf(stderr,
-            "fram-daemon-native: generated serve-flat ABI mismatch; expected "
-            "%u, got %u\n",
+            "fram-daemon-native: generated host ABI mismatch; expected %u, "
+            "got %u\n",
             (unsigned int)FRAM_SERVE_FLAT_GENERATED_ABI,
             (unsigned int)generated_abi);
     return 2;
@@ -565,7 +560,7 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   fprintf(stderr,
-          "fram-daemon-native: serve-flat listening on 127.0.0.1:%u, log=%s\n",
+          "fram-daemon-native: listening on 127.0.0.1:%u, log=%s\n",
           (unsigned int)config.port, authority.canonical_log_path);
   result = accept_loop(listener_fd, store) == 0 ? 0 : 1;
 

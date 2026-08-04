@@ -72,7 +72,7 @@ native_m0_type_1 native_m0_fn_2(native_arena *arena, const native_capability *ca
 native_m0_type_9 native_m0_fn_3(native_m0_type_1 native_v_0);
 native_m0_type_6 native_m0_fn_5(native_arena *arena, const native_capability *capability, native_m0_type_5 native_v_0);
 native_m0_type_0 native_m0_fn_7(void);
-native_m0_type_5 native_m0_fn_11(const native_capability *capability, native_m0_type_1 native_v_0, native_m0_type_7 native_v_1);
+native_m0_type_5 native_m0_fn_11(const native_capability *capability, native_m0_type_1 native_v_0, native_m0_type_7 native_v_1, native_m0_type_0 native_v_2);
 native_m0_type_8 native_m0_fn_13(native_m0_type_7 native_v_0);
 native_m0_type_8 native_m0_fn_17(const native_capability *capability, native_m0_type_5 native_v_0);
 native_m0_type_7 native_m0_fn_19(native_arena *arena, native_m0_type_4 native_v_0);
@@ -112,9 +112,11 @@ native_m0_type_0 native_m0_fn_7(void) { return 1; }
 
 native_m0_type_5 native_m0_fn_11(const native_capability *capability,
                                    native_m0_type_1 native_v_0,
-                                   native_m0_type_7 native_v_1) {
+                                   native_m0_type_7 native_v_1,
+                                   native_m0_type_0 native_v_2) {
   (void)capability;
-  return (native_m0_type_5){.field_0 = native_v_0.field_0 + native_v_1.field_0};
+  return (native_m0_type_5){
+      .field_0 = native_v_0.field_0 + native_v_1.field_0 + native_v_2};
 }
 
 native_m0_type_8 native_m0_fn_13(native_m0_type_7 native_v_0) {
@@ -331,7 +333,8 @@ uint32_t fram_serve_flat_generated_abi(void) {
       FRAM_SERVE_FLAT_CALL_CODEC_READ_REQUEST(
           &arena, &capability, &bytes);
   fram_serve_flat_store_dispatch_return dispatched =
-      FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(&arena, &capability, boot, request);
+      FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(
+          &arena, &capability, boot, request, 0);
   fram_serve_flat_store_shutdown_return stopped =
       FRAM_SERVE_FLAT_CALL_STORE_SHUTDOWN(&arena, &capability, boot);
   fram_serve_flat_codec_write_response_return written =
@@ -438,8 +441,8 @@ symbols_header="$host_artifact/serve_flat_symbols.h"
   fail "serve-flat symbol header did not contain exactly eight symbol mappings"
 [[ "$(grep -c '^#define FRAM_SERVE_FLAT_CALL_' "$symbols_header")" == "8" ]] ||
   fail "serve-flat symbol header did not contain exactly eight normalized calls"
-[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_serve_flat_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "18" ]] ||
-  fail "serve-flat symbol header did not contain all eighteen stable type aliases"
+[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_serve_flat_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "19" ]] ||
+  fail "serve-flat symbol header did not contain all nineteen stable type aliases"
 required_symbol_lines=(
   '#define FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI native_m0_fn_7'
   '#define FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT native_m0_fn_2'
@@ -454,6 +457,7 @@ required_symbol_lines=(
   'typedef native_m0_type_2 fram_serve_flat_store_boot_arg_1;'
   'typedef native_m0_type_4 fram_serve_flat_store_boot_arg_2;'
   'typedef native_m0_type_5 fram_serve_flat_store_dispatch_return;'
+  'typedef native_m0_type_0 fram_serve_flat_store_dispatch_arg_2;'
   'typedef native_m0_type_9 fram_serve_flat_store_shutdown_return;'
   'typedef native_m0_type_7 fram_serve_flat_codec_read_request_return;'
   'typedef native_m0_type_4 fram_serve_flat_codec_read_request_arg_0;'
@@ -465,7 +469,7 @@ required_symbol_lines=(
   'typedef native_m0_type_5 fram_serve_flat_codec_release_response_arg_0;'
   '#define FRAM_SERVE_FLAT_CALL_GENERATED_ABI(arena, capability) FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI()'
   '#define FRAM_SERVE_FLAT_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2))'
-  '#define FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1) FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1))'
+  '#define FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1), (arg_2))'
   '#define FRAM_SERVE_FLAT_CALL_STORE_SHUTDOWN(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_STORE_SHUTDOWN((arg_0))'
   '#define FRAM_SERVE_FLAT_CALL_CODEC_READ_REQUEST(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))'
   '#define FRAM_SERVE_FLAT_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))'
@@ -475,11 +479,11 @@ for required_line in "${required_symbol_lines[@]}"; do
   grep -Fqx -- "$required_line" "$symbols_header" ||
     fail "serve-flat symbol header omitted: $required_line"
 done
-if "$host_artifact/bin/fram-daemon-native" serve \
+if "$host_artifact/bin/fram-daemon-native" serve not-a-port \
     >"$scratch/host.out" 2>"$scratch/host.err"; then
-  fail "serve-flat host accepted the unsupported serve contract"
+  fail "serve-flat host accepted an invalid port"
 fi
-grep -Fq 'this host implements only the deployed serve-flat contract' \
+grep -Fq 'fram-daemon-native: invalid port: not-a-port' \
   "$scratch/host.err" || fail "linked serve-flat host main did not run"
 
 host_hit="$("${build_env[@]}" "$builder" --host serve-flat \

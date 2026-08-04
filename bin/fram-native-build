@@ -200,7 +200,7 @@ write_serve_flat_symbols() {
     CODEC_RELEASE_REQUEST
     CODEC_RELEASE_RESPONSE
   )
-  local -a source_arities=(0 3 2 1 1 1 1 1)
+  local -a source_arities=(0 3 3 1 1 1 1 1)
 
   [[ -f "$module_header" ]] || die "native-module omitted module_0.h"
   for index in "${!logical_names[@]}"; do
