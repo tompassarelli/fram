@@ -184,3 +184,10 @@ exclude	moved-world-service	tests/world_git_bridge_test.clj	tests/world_git_brid
 exclude	moved-world-service	tests/world_kernel_test.clj	tests/world_kernel_test.clj#fram\.world
 exclude	moved-world-service	tests/world_persistence_test.clj	tests/world_persistence_test.clj#fram\.world
 exclude	moved-world-service	tests/world_vertical_slice_test.clj	tests/world_vertical_slice_test.clj#fram\.world
+
+run-bb	current-model	tests/text_match_test.clj	-
+run-clojure	current-model	tests/text_index_cache_test.clj	-
+exclude	shared-runner-timing	tests/text_index_perf_test.clj	tests/text_index_perf_test.clj#p95
+run-clojure	current-model	tests/s1_schema_foundation_test.clj	-
+exclude	s2-frontier	tests/s2_authoring_test.clj	tests/s2_authoring_test.clj#rr/context
+exclude	text-authoritative-render	tests/s0_render_bootstrap_test.clj	tests/s0_render_bootstrap_test.clj#byte-identical
