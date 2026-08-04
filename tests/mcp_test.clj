@@ -10,7 +10,9 @@
 (import '[java.net ServerSocket])
 
 (def checks (atom []))
-(defn check! [label value] (swap! checks conj [label (boolean value)]))
+(defn check!
+  ([label value] (check! label value nil))
+  ([label value detail] (swap! checks conj [label (boolean value) detail])))
 (defn free-port [] (with-open [socket (ServerSocket. 0)] (.getLocalPort socket)))
 (defn eventually [f]
   (loop [remaining 800]
@@ -136,7 +138,8 @@
                  (str/includes? (call-text (get by-id 10)) "object")))
     (check! "graph-control names are absent from the public MCP runtime"
             (and (get-in by-id [11 :result :isError])
-                 (= "unknown tool: add-def" (call-text (get by-id 11)))))
+                 (= "unknown tool: add-def" (call-text (get by-id 11))))
+            (get by-id 11))
     (check! "malformed query is a bounded MCP error"
             (and (get-in by-id [12 :result :isError])
                  (seq (call-text (get by-id 12))))))
@@ -176,7 +179,9 @@
     (fs/delete-tree scratch)))
 
 (let [failures (remove second @checks)]
-  (doseq [[label ok] @checks] (println (if ok "  [PASS]" "  [FAIL]") label))
+  (doseq [[label ok detail] @checks]
+    (println (if ok "  [PASS]" "  [FAIL]") label)
+    (when (and (not ok) detail) (println "    actual:" (pr-str detail))))
   (if (seq failures)
     (do (println "\nfram MCP FRAMRPC:" (count failures) "FAILED") (System/exit 1))
     (println "\nfram MCP FRAMRPC:" (count @checks) "/" (count @checks) "PASS")))
