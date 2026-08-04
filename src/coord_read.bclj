@@ -29,7 +29,8 @@
     0
     (map (fn [cid: Int] -> Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
-(defn current-seq [ctx: (Atom fram.types/TermStore)] -> Int (c/current-seq ctx))
+(defn current-seq [ctx: (Atom fram.types/TermStore)] -> Int
+  (c/current-sequence ctx))
 
 (defn agent-of
   [ctx: (Atom fram.types/TermStore)
