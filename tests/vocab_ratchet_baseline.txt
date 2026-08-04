@@ -10,13 +10,13 @@
 1	codegraph/bin/safe-rename
 5	codegraph/docs/build-log.md
 2	codegraph/test/comment-falsifier.sh
-1	docs/WHY_FRAM_EXISTS.md
 1	docs/architecture.md
+1	docs/archive/WHY_FRAM_EXISTS.md
 41	docs/archive/claims-design.md
 1	docs/archive/measurements.md
+3	docs/archive/position-in-class.md
+1	docs/guarantees.md
 3	docs/naming.md
-2	docs/ontology.md
-3	docs/position-in-class.md
 1	flake.nix
 3	integrations/north/hooks/code-upstream-guard.sh
 2	integrations/north/hooks/code-upstream-guard.test.sh
@@ -41,6 +41,8 @@
 1	tests/goldens/resolve/callgraph-fram.out
 1	tests/package_graph_edit_runtime_smoke.sh
 1	tests/resolve_golden.sh
+1	tests/s0_render_bootstrap_test.clj
+31	tests/s1_schema_foundation_test.clj
 3	tests/show_reporter_join_test.clj
 11	tests/vocab_ratchet_test.sh
 50	tests/world_claims_addendum_demo.clj
