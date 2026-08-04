@@ -1,0 +1,73 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semver tag to publish (for example, v0.4.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fram-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and smoke the tagged Graal coordinator before publishing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the requested release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Bind this run to one immutable release commit
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "release tag must be vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
+            exit 2
+          }
+          tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          [[ "$head_commit" == "$tag_commit" ]] || {
+            echo "checked-out source is not the requested tag commit" >&2
+            exit 1
+          }
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Build the static Graal coordinator from that commit
+        env:
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          docker build --pull \
+            --tag "fram-coordinator:$RELEASE_COMMIT" \
+            --file deploy/cloudflare/Dockerfile .
+
+      - name: Smoke a mutation across a Graal container restart
+        env:
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: bash tests/graal_release_smoke.sh "fram-coordinator:$RELEASE_COMMIT"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag \
+            --target "$RELEASE_COMMIT" --title "$RELEASE_TAG" --generate-notes
