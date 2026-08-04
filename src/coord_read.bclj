@@ -1,7 +1,5 @@
 #lang beagle/clj
 
-;; generated view. Author substantive forms only through the Fram graph-edit
-;; verbs. SEEDED 2026-07-27 for engine-core M5 Cut A.
 ;; ============================================================================
 ;; coord-read — pure coordinator readers.
 ;; ============================================================================
@@ -13,49 +11,49 @@
 (define-mode strict)
 
 (defn live-cids-lp
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    te: Int
    pid: Int] -> (Vec Int)
   (c/by-lp ctx te pid))
 
 (defn seq-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> Int
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) 0 (c/tx-seq ctx txid))))
 
 (defn base-version
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    te: Int
    pid: Int] -> Int
   (reduce max
     0
     (map (fn [cid: Int] -> Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
-(defn current-seq [ctx: (Atom fram.types/Store)] -> Int (c/current-seq ctx))
+(defn current-seq [ctx: (Atom fram.types/TermStore)] -> Int (c/current-seq ctx))
 
 (defn agent-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> Any
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-agent ctx txid))))
 
 (defn observed-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> Int?
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-observed ctx txid))))
 
 (defn ts-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> String?
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-ts ctx txid))))
 
 (defn causal-key
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> (Vec Any)
   (let [obs (observed-of ctx cid)]
     [(if (nil? obs) (seq-of ctx cid) obs) cid (str (agent-of ctx cid))]))
 
 (defn superseded-as-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    s: Int] -> (Set Int)
   (let [sup (c/supersedes-pred ctx)]
     (reduce (fn
@@ -65,7 +63,7 @@
       (c/all-facts ctx))))
 
 (defn live-as-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    s: Int] -> (Set Int)
   (let [sup (c/supersedes-pred ctx) gone (superseded-as-of ctx s)]
     (reduce (fn
@@ -75,7 +73,7 @@
       (c/all-facts ctx))))
 
 (defn live-as-of-lp
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    s: Int
    te: Int
    pid: Int] -> (Vec Int)
@@ -84,7 +82,7 @@
       all)))
 
 (defn live-r-on
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int
    pid: Int?] -> Int?
   (if (nil? pid)
@@ -93,12 +91,17 @@
       (if (int? r) r nil))))
 
 (defn withdrawal-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> Any
-  (let [wb (s/resolve-predicate ctx "withdrawn_by") by-id (live-r-on ctx cid wb)]
+  (let [session (s/session ctx)
+        wb (s/resolve-predicate session "withdrawn_by")
+        by-id (live-r-on ctx cid wb)]
     (if (nil? by-id)
       nil
-      (let [at-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_at")) reason-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_reason"))]
+      (let [at-id (live-r-on ctx cid
+                    (s/resolve-predicate session "withdrawn_at"))
+            reason-id (live-r-on ctx cid
+                        (s/resolve-predicate session "withdrawn_reason"))]
         {:by
          (c/literal ctx by-id)
          :at
@@ -107,12 +110,12 @@
          (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
 (defn withdrawn?
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    cid: Int] -> Bool
   (boolean (withdrawal-of ctx cid)))
 
 (defn live-members
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    te: Int
    pid: Int
    policy: Keyword] -> (Vec Int)
@@ -123,9 +126,11 @@
       live)))
 
 (defn view-selects
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    view: String] -> (U (Set Int) Nil)
-  (let [ve (s/resolve-name ctx view) sel (s/resolve-predicate ctx "selects")]
+  (let [session (s/session ctx)
+        ve (s/resolve-name session view)
+        sel (s/resolve-predicate session "selects")]
     (if (or (nil? ve) (nil? sel))
       nil
       (reduce (fn
@@ -135,7 +140,7 @@
         (c/by-lp ctx ve sel)))))
 
 (defn pool-of
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    view: String?
    cids: (Vec Int)] -> (Vec Int)
   (if (nil? view)
@@ -147,7 +152,7 @@
           (if (empty? in-view) cids in-view))))))
 
 (defn elect
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    view: String?
    cids: (Vec Int)] -> Int?
   (if (empty? cids)
@@ -155,7 +160,7 @@
     (first (sort-by (fn [cid: Int] -> (Vec Any) [cid (str (agent-of ctx cid))]) (pool-of ctx view cids)))))
 
 (defn elect-causal
-  [ctx: (Atom fram.types/Store)
+  [ctx: (Atom fram.types/TermStore)
    view: String?
    cids: (Vec Int)] -> Int?
   (if (empty? cids)

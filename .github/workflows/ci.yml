@@ -13,6 +13,7 @@ jobs:
     env:
       BEAGLE_HOME: ${{ github.workspace }}/.beagle
       FRAM_BEAGLE: ${{ github.workspace }}/.beagle/bin/beagle
+      FRAM_DAEMON_RUNTIME: jvm-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,9 +56,8 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
-      # The coordinator daemon (bin/fram-daemon) and the mTLS test run on the JVM,
-      # not bb — bb's native image lacks javax.net.ssl.SSLServerSocket. ubuntu-latest
-      # ships a JDK (keytool, which tls_test uses); we add the Clojure CLI on top.
+      # CI selects the checkout-only JVM development route until the complete
+      # native daemon artifact is linkable. The mTLS test also needs the JDK.
       - name: Install Clojure CLI
         run: |
           curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh

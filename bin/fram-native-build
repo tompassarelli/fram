@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LC_ALL=C
+umask 022
+
+die() {
+  echo "fram-native-build: $*" >&2
+  exit 2
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: fram-native-build --entry NS/NAME SOURCE...
+
+Prints the absolute immutable artifact directory on success.
+Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, and FRAM_NATIVE_CC as needed.
+
+Consumer:
+  FRAM_NATIVE_ARTIFACT_DIR="$(fram-native-build --entry NS/NAME SOURCE...)"
+USAGE
+}
+
+entry=""
+sources=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --entry)
+      [[ $# -ge 2 && -z "$entry" ]] || die "--entry needs one NS/NAME"
+      entry="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      sources+=("$@")
+      break
+      ;;
+    -*) die "unknown option: $1" ;;
+    *) sources+=("$1"); shift ;;
+  esac
+done
+entry="${entry:-${FRAM_NATIVE_ENTRY:-}}"
+[[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
+  die "--entry must be a qualified NS/NAME"
+[[ ${#sources[@]} -gt 0 ]] || die "provide the dependency-first source closure"
+
+for command in cmp flock git grep mktemp realpath sed sha256sum; do
+  command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
+done
+
+home="${HOME:-}"
+beagle_candidate="${FRAM_BEAGLE:-${BEAGLE_HOME:+$BEAGLE_HOME/bin/beagle}}"
+beagle_candidate="${beagle_candidate:-${home:+$home/code/beagle/main/bin/beagle}}"
+beagle="$(command -v "$beagle_candidate" 2>/dev/null || true)"
+[[ -n "$beagle" && -x "$beagle" ]] || die "set FRAM_BEAGLE to an executable CLI"
+beagle="$(realpath "$beagle")"
+
+cc_candidate="${FRAM_NATIVE_CC:-${CC:-cc}}"
+cc="$(command -v "$cc_candidate" 2>/dev/null || true)"
+[[ -n "$cc" && -x "$cc" ]] || die "C17 compiler is not executable: $cc_candidate"
+cc="$(realpath "$cc")"
+
+cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
+[[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
+[[ -n "${FRAM_NATIVE_CACHE:-}" ]] || cache_root="$cache_root/fram/native-build"
+mkdir -p "$cache_root/.locks" "$cache_root/.tmp"
+cache_root="$(cd "$cache_root" && pwd -P)"
+
+normalized_sources=()
+for source in "${sources[@]}"; do
+  [[ -f "$source" ]] || die "source file not found: $source"
+  normalized_sources+=("$(realpath "$source")")
+done
+
+beagle_root="$(git -C "$(dirname "$beagle")" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -n "$beagle_root" ]]; then
+  git -C "$beagle_root" diff --quiet --ignore-submodules -- ||
+    die "Beagle has tracked changes: $beagle_root"
+  git -C "$beagle_root" diff --cached --quiet --ignore-submodules -- ||
+    die "Beagle has staged changes: $beagle_root"
+  beagle_identity="git:$(git -C "$beagle_root" rev-parse 'HEAD^{commit}')"
+else
+  beagle_identity="file:$(sha256sum "$beagle" | sed 's/ .*//')"
+fi
+if [[ -x "$(dirname "$beagle")/beagle-native-exe" ]]; then
+  beagle_identity+=":native-exe-$(sha256sum "$(dirname "$beagle")/beagle-native-exe" | sed 's/ .*//')"
+fi
+cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
+builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
+
+input_manifest=""
+stage=""
+cleanup() {
+  [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
+  [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
+}
+trap cleanup EXIT INT TERM
+
+write_input_manifest() {
+  local destination="$1" index source
+  {
+    printf 'fram-native-build-input/v1\n%s\n%s\n%s\n%s\n' \
+      "$builder_identity" "$entry" "$beagle_identity" "$cc_identity"
+    for index in "${!normalized_sources[@]}"; do
+      source="${normalized_sources[$index]}"
+      printf '%06d %q %s\n' "$index" "$source" "$(sha256sum "$source" | sed 's/ .*//')"
+    done
+  } >"$destination"
+}
+
+input_manifest="$(mktemp "$cache_root/.tmp/input.XXXXXX")"
+write_input_manifest "$input_manifest"
+closure_hash="$(sha256sum "$input_manifest" | sed 's/ .*//')"
+artifact_dir="$cache_root/$closure_hash"
+
+exec {lock_fd}>"$cache_root/.locks/$closure_hash.lock"
+flock "$lock_fd"
+if [[ -e "$artifact_dir" ]]; then
+  ready=""
+  [[ ! -f "$artifact_dir/READY" ]] || ready="$(<"$artifact_dir/READY")"
+  [[ "$ready" == "fram-native-build/v1 $closure_hash" &&
+    -x "$artifact_dir/bin/fram-daemon-native" ]] ||
+    die "cache entry exists but is not READY: $artifact_dir"
+  printf '%s\n' "$artifact_dir"
+  exit 0
+fi
+
+stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
+mkdir -p "$stage/bin"
+cp "$input_manifest" "$stage/input.manifest"
+if ! "$beagle" native-exe \
+    --out "$stage/bin/fram-daemon-native" \
+    --entry "$entry" \
+    --cc "$cc" \
+    --artifacts "$stage" \
+    "${normalized_sources[@]}" \
+    >"$stage/native-exe.log" 2>&1; then
+  sed -n '1,240p' "$stage/native-exe.log" >&2
+  die "beagle native-exe failed"
+fi
+
+report="$stage/report.txt"
+[[ -f "$report" ]] || die "native build omitted report.txt"
+required_lines=(
+  "stage source-seal ACCEPTED"
+  "stage source-to-typed ACCEPTED"
+  "stage typed-to-native COMPLETE"
+  "native-lowering-result NativeLoweringCompleteV0"
+  "materialize-c17 OK module_0.h module_0.c"
+  "materialize-qbe OK module_0.ssa"
+  "result PASS"
+  "obligation-projection PASS valid-ssa"
+  "obligation-projection PASS exhaustive-matches"
+  "obligation-projection PASS closed-layouts"
+  "obligation-projection PASS checked-arithmetic"
+  "obligation-projection PASS legal-abi"
+  "obligation-projection PASS discharged-tokens"
+  "obligation-projection PASS bounded-effects"
+)
+for line in "${required_lines[@]}"; do
+  [[ "$(grep -Fxc -- "$line" "$report" || true)" == "1" ]] ||
+    die "native report must contain exactly once: $line"
+done
+[[ "$(grep -c '^obligation-projection ' "$report" || true)" == "7" &&
+   "$(grep -c '^obligation-projection PASS ' "$report" || true)" == "7" ]] ||
+  die "native report must contain exactly seven passing obligations"
+! grep -q '^pending ' "$report" || die "native report contains pending lowering work"
+
+exe_report="$stage/native-exe.report.txt"
+[[ -f "$exe_report" && "$(wc -l <"$exe_report")" == "2" ]] ||
+  die "native build omitted the two-line executable receipt"
+[[ "$(grep -Fc "native-exe-entry PASS name=$entry " "$exe_report" || true)" == "1" ]] ||
+  die "native executable entry receipt does not match $entry"
+[[ "$(grep -Fc "native-exe-c17 PASS compiler=$cc output=" "$exe_report" || true)" == "1" ]] ||
+  die "native executable C17 link receipt is invalid"
+[[ -x "$stage/bin/fram-daemon-native" ]] || die "native executable is missing"
+
+after_manifest="$stage/input.after"
+write_input_manifest "$after_manifest"
+cmp -s "$input_manifest" "$after_manifest" || die "source closure changed during build"
+rm -f "${after_manifest:?}"
+printf 'fram-native-build/v1 %s\n' "$closure_hash" >"$stage/READY"
+mv "$stage" "$artifact_dir"
+stage=""
+printf '%s\n' "$artifact_dir"

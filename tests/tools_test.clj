@@ -2,26 +2,38 @@
 ;; Proves: (1) the catalog is exactly TWELVE tools, never minted per-predicate;
 ;; (2) tell/retract lower to a coordinator-routable {:write} intent (@-normalized
 ;; refs), with `untell` accepted as an alias for `retract`; (3) reads (show/validate)
-;; return rows off the fold; (4) `ask`/`query` reach fram.query; (5) unknown tool +
+;; return rows from a TermStore snapshot; (4) `ask`/`query` reach fram.query; (5) unknown tool +
 ;; missing required param -> :error; (6) the seven graph-AST edit verbs dispatch to the
 ;; {:edit} envelope. The vocabulary is DATA (a predicate is an entity), so there are no
 ;; owner-of/set-owner/<pred>-list tools — `show <pred>` and `ask` reach it instead.
 ;;   bb -cp out tests/tools_test.clj
-(require '[fram.kernel :as k] '[fram.tools :as t])
+(require '[fram.kernel :as k]
+         '[fram.schema :as schema]
+         '[fram.store :as store]
+         '[fram.tools :as t]
+         '[fram.types :as terms])
 
 (def checks (atom []))
 (defn chk [nm ok] (swap! checks conj [nm ok]))
 
-(def facts
-  [(k/->Fact "@x" "title" "X thread")     ; single, literal
-   (k/->Fact "@x" "owner" "personal")     ; single, literal
-   (k/->Fact "@x" "depends_on" "@y")      ; multi, ref
-   (k/->Fact "@y" "title" "Y thread")])
+(defn term-store [space propositions]
+  (let [ctx (store/new-term-store space)]
+    (if (empty? propositions)
+      ctx
+      (do
+        (store/commit-transaction! ctx (mapv store/assert-operation propositions))
+        ctx))))
 
-(def idx (k/build-index facts))
+(def facts
+  [(terms/triple "@x" "title" "X thread")     ; single, literal
+   (terms/triple "@x" "owner" "personal")     ; single, literal
+   (terms/triple "@x" "depends_on" "@y")      ; multi, ref
+   (terms/triple "@y" "title" "Y thread")])
+
+(def ctx (term-store "tools-test" facts))
 (def cat (t/catalog facts))
 (defn has-tool? [nm] (boolean (some #(= (:name %) nm) cat)))
-(defn call [tool args] (t/call facts idx cat tool args))
+(defn call [tool args] (t/call! ctx cat tool args))
 
 ;; (1) CLOSED catalog — EXACTLY these twelve names, no more, no fewer, no per-predicate tools.
 (def expected-names
@@ -51,40 +63,40 @@
      (= (:write (call "untell" {:subject "x" :predicate "depends_on" :object "@y"}))
         {:op "retract" :l "@x" :p "depends_on" :r "@y"}))
 ;; An undeclared predicate defaults to literal even when prior values happen to be refs.
-(let [mc [(k/->Fact "@x" "tag" "@refnode") (k/->Fact "@x" "tag" "plainword")]
-      mi (k/build-index mc) mcat (t/catalog mc)]
+(let [mc [(terms/triple "@x" "tag" "@refnode") (terms/triple "@x" "tag" "plainword")]
+      mctx (term-store "tools-undeclared" mc) mcat (t/catalog mc)]
   (chk "undeclared predicate keeps literal verbatim (no value-shape inference)"
-       (= (:write (t/call mc mi mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))
+       (= (:write (t/call! mctx mcat "retract" {:subject "x" :predicate "tag" :object "plainword"}))
           {:op "retract" :l "@x" :p "tag" :r "plainword"})))
 
 ;; A declaration governs the FIRST value; aliases normalize to the canonical
 ;; spelling before the write intent reaches the coordinator.
 (let [df (vec (concat facts
-                      [(k/->Fact "@friend" "predicate_name" "friend")
-                       (k/->Fact "@friend" "predicate_alias" ":friend")
-                       (k/->Fact "@friend" "value_kind" "ref")]))
-      di (k/build-index df)
+                      [(terms/triple "@friend" "predicate_name" "friend")
+                       (terms/triple "@friend" "predicate_alias" ":friend")
+                       (terms/triple "@friend" "value_kind" "ref")]))
+      dctx (term-store "tools-declared-ref" df)
       dcat (t/catalog df)]
   (chk "declared reference predicate normalizes its first bare write"
-       (= (:write (t/call df di dcat "tell"
+       (= (:write (t/call! dctx dcat "tell"
                           {:subject "x" :predicate ":friend" :object "z"}))
           {:op "assert" :l "@x" :p "friend" :r "@z"}))
   (chk "shared predicate normalization resolves aliases for CLI callers"
-       (= "friend" (t/canonical-predicate df ":friend"))))
+       (= "friend" (t/canonical-predicate (schema/session dctx) ":friend"))))
 
 ;; An explicit negative declaration wins over the transitional depends_on
 ;; fallback, so a literal that happens to look like an id stays literal.
 (let [lf (vec (concat facts
-                      [(k/->Fact "@depends_on" "predicate_name" "depends_on")
-                       (k/->Fact "@depends_on" "value_kind" "literal")]))
-      li (k/build-index lf)
+                      [(terms/triple "@depends_on" "predicate_name" "depends_on")
+                       (terms/triple "@depends_on" "value_kind" "literal")]))
+      lctx (term-store "tools-explicit-literal" lf)
       lcat (t/catalog lf)]
   (chk "explicit literal overrides reference fallback"
-       (= (:write (t/call lf li lcat "tell"
+       (= (:write (t/call! lctx lcat "tell"
                           {:subject "x" :predicate "depends_on" :object "z"}))
           {:op "assert" :l "@x" :p "depends_on" :r "z"})))
 
-;; (3) reads off the fold
+;; (3) reads from the TermStore snapshot
 (chk "show @x returns its facts (pred/value rows)"
      (= (set (map (fn [r] [(:pred r) (:value r)]) (:rows (call "show" {:subject "x"}))))
         #{["title" "X thread"] ["owner" "personal"] ["depends_on" "@y"]}))
@@ -92,6 +104,17 @@
      (= (set (map :pred (:rows (call "show" {:subject "@x"})))) #{"title" "owner" "depends_on"}))
 (chk "validate returns rows (no violations here -> empty)"
      (vector? (:rows (call "validate" {}))))
+
+(let [space "tools-profile"
+      profile "tools-relational"
+      declarations
+      (into [(k/relational-profile-declaration space profile)]
+            (mapv #(k/profile-rule profile %) k/relational-profile-rules))
+      propositions (conj declarations (terms/triple "" "predicate" "value"))
+      profile-ctx (term-store space propositions)
+      rows (:rows (t/call! profile-ctx (t/catalog propositions) "validate" {}))]
+  (chk "validate reports declared relational-profile violations"
+       (contains? (set (map :rule rows)) "R2")))
 
 ;; (4) ask / query reach fram.query (transitive over the same fold); `query` aliases `ask`
 (def reaches-q

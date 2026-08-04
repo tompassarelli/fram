@@ -8,7 +8,7 @@
 ;; the CRDT commute machinery for `insert-after`. Two layers:
 ;;
 ;;   (1) MCP catalog/dispatch (in-process, fram.tools): the tool `insert-after`
-;;       exists with params {module,after,form}, and fram.tools/call lowers an
+;;       exists with params {module,after,form}, and fram.tools/call! lowers an
 ;;       agent-shaped call to {:edit {:op "insert-form" :module .. :after .. :form ..}},
 ;;       which fram_mcp/flip-verb-flags lowers to the exact CLI invocation
 ;;       ["insert-form" "--after" <anchor> "--spec-file" <form.edn>]. This is the
@@ -27,17 +27,15 @@
          '[clojure.string :as str]
          '[clojure.edn :as edn]
          '[babashka.process :as proc]
-         '[fram.kernel :as k]
-         '[fram.fold :as fold]
-         '[fram.tools :as tl]
-         '[fram.rt])
+         '[fram.store :as store]
+         '[fram.tools :as tl])
 
 (defn- die [& xs] (binding [*out* *err*] (apply println xs)) (System/exit 1))
 
 (def here (System/getProperty "user.dir"))
 ;; the source code log to copy. Prefer this worktree's, else the main checkout's.
 (def src-log (let [a (str here "/.fram/code.log")
-                   b (str (System/getProperty "user.home") "/code/fram/.fram/code.log")]
+                   b (str (System/getProperty "user.home") "/code/fram/main/.fram/code.log")]
                (cond (.exists (io/file a)) a
                      (.exists (io/file b)) b
                      :else (die "no .fram/code.log found at" a "or" b))))
@@ -132,17 +130,16 @@
 ;; ============================================================================
 ;; (1) the AGENT-SHAPED MCP lowering — verbatim from the live code surface.
 ;; ============================================================================
-;; the model fills typed params on the generated tool; fram.tools/call lowers it.
-(def facts (:facts (fold/fold (fram.rt/read-log tmp-log))))
-(def cat (tl/catalog facts))
-(def idx (k/build-index facts))
+;; the model fills typed params on the generated tool; fram.tools/call! lowers it.
+(def tool-store (store/new-term-store "coord-mcp-insert-after"))
+(def cat (tl/catalog []))
 (def insert-spec (first (filter #(= "insert-after" (:name %)) cat)))
 (def new-form "(def fram_mcp_ins_A 4242)")
 (def agent-args {:module MOD :after anchor :form new-form})
-(def edit-env (tl/call facts idx cat "insert-after" agent-args))
+(def edit-env (tl/call! tool-store cat "insert-after" agent-args))
 (println "\n[1] MCP catalog tool 'insert-after' present:" (some? insert-spec)
          " params:" (mapv :name (:params insert-spec)))
-(println "    tl/call -> :edit envelope:" (pr-str edit-env))
+(println "    tl/call! -> :edit envelope:" (pr-str edit-env))
 
 ;; lower the {:edit ...} envelope to CLI flags exactly as fram_mcp/flip-verb-flags does.
 ;; (re-implemented here only because flip-verb-flags is a private defn in the MCP ns;

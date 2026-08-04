@@ -168,7 +168,7 @@
   (ensure-authority! (= digest "sha256:226f40e6da724f8a8b38e58f490bf4f0ae09b2bc9991ba93c2b9fb04697eedad") "catalog-fixture" "tools" "catalog does not match the exact graph-edit-v1 fixture")
   digest)))
 
-(def beagle-source-extensions [".bclj" ".bcljs" ".bjs" ".bnix" ".bgl" ".bsql" ".bpy" ".bzig" ".bodin"])
+(def beagle-source-extensions [".bclj" ".bcljs" ".bjs" ".bnix" ".bgl" ".bsql" ".bpy"])
 
 (defn- ^Boolean portable-relative-path? [value ^Boolean allow-empty]
   (if (string? value) (if (empty? value) allow-empty (and (clean-authority-string? value) (not (str/starts-with? value "/")) (not (str/ends-with? value "/")) (not (str/includes? value "\\")) (not (str/includes? value "//")) (not (str/includes? value ":")) (every? (fn [segment] (and (not (= segment ".")) (not (= segment "..")) (pos? (count (str segment))))) (vec (.split value "/"))))) false))

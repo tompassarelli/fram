@@ -2,9 +2,9 @@
 # Build from the REPO ROOT (the build context is the fram checkout):
 #   docker build -f deploy/cloudflare/Dockerfile -t fram-coordinator .
 #
-# The daemon runs on the JVM (bin/fram-daemon: real threads). Compiled namespaces ship in
-# out/ — nothing to build; `clojure -P` below only warms the tiny dep cache
-# (clojure + cheshire) into the image so first boot never touches the network.
+# This retained image carries the explicit jvm-dev fallback. The launcher still
+# defaults to a READY native artifact; callers must select jvm-dev deliberately.
+# `clojure -P` warms that fallback's dep cache so its first boot stays offline.
 FROM clojure:temurin-21-tools-deps-bookworm-slim
 
 WORKDIR /fram

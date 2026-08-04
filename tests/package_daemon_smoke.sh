@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installed-closure smoke: empty HOME/cwd, native daemon, CLI, MCP, leases,
-# restart replay, and writable default state.
+# Installed-closure smoke: native fail-closed launch, explicit JVM oracle, CLI,
+# MCP, leases, restart replay, and writable default state.
 set -euo pipefail
 
 package_root="${1:?usage: package_daemon_smoke.sh /nix/store/...-fram}"
@@ -66,11 +66,27 @@ trap cleanup EXIT INT TERM
 free_port() { "$bb" -e '(with-open [s (java.net.ServerSocket. 0)] (println (.getLocalPort s)))'; }
 port="$(free_port)"
 
+native_error="$work/native-error.out"
+if "$env_bin" -i FRAM_SPACE_ID="$space" \
+    "$package_root/bin/fram-daemon" serve "$port" "$log" \
+    >"$native_error" 2>&1; then
+  echo "fram package smoke: default launch silently fell back from native" >&2
+  exit 1
+fi
+"$grep_bin" -Fxq \
+  "fram-daemon: FRAM_NATIVE_ARTIFACT_DIR is required for FRAM_DAEMON_RUNTIME=native" \
+  "$native_error" || {
+    echo "fram package smoke: missing native artifact did not fail exactly" >&2
+    sed -n '1,40p' "$native_error" >&2
+    exit 1
+  }
+
 start_daemon() {
   (
     cd "$work/cwd"
     exec "$env_bin" -i HOME="$home" XDG_CACHE_HOME="$home/.cache" \
       FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
+      FRAM_DAEMON_RUNTIME=jvm-oracle \
       "$package_root/bin/fram-daemon" serve "$port" "$log"
   ) >"$daemon_output" 2>&1 &
   pid=$!
@@ -214,6 +230,7 @@ daemon_output="$work/state-daemon.out"
   cd "$work/cwd"
   exec "$env_bin" -i HOME="$home" FRAM_STATE_DIR="$state_dir" \
     FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
+    FRAM_DAEMON_RUNTIME=jvm-oracle \
     "$package_root/bin/fram-daemon" serve "$port"
 ) >"$daemon_output" 2>&1 &
 pid=$!

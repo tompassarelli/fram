@@ -1,12 +1,12 @@
 {
-  description = "fram — fact-engine CLIs (babashka-backed; JVM coordinator daemon)";
+  description = "fram — fact-engine CLIs and native-first coordinator launcher";
 
   inputs = {
     # Pinned to the same nixpkgs rev the host system tracks.
     nixpkgs.url = "github:NixOS/nixpkgs/e8210c649915deed7080033cdbabcc19e40bb899";
 
-    # Build-time only: turn the committed deps-lock.json into a pure Maven cache.
-    # The packaged daemon runs Java directly and has no runtime clj-nix dependency.
+    # Build-time only: turn the committed deps-lock.json into a pure Maven cache
+    # for the explicitly selected packaged JVM oracle.
     clj-nix.url = "github:jlesquembre/clj-nix/2b1290ee56e9bbd50e9b5874c985d34ad2f1b458";
     clj-nix.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -34,8 +34,8 @@
           # The bin/ scripts resolve HERE = $(dirname $0)/.. and load out/ (compiled
           # Clojure), coord*.clj, resolve.clj, codegraph/, tests/, and src/
           # from there. The CLI + MCP run on babashka against committed out/. The
-          # daemon's exact JVM classpath is resolved once during the build from the
-          # pure cache above, then Java runs it directly at runtime.
+          # JVM oracle's exact classpath is resolved once during the build from the
+          # pure cache above. Native remains the launcher's default route.
           runtimePackages = [
             pkgs.babashka
             pkgs.coreutils
@@ -199,9 +199,10 @@
           '';
 
           meta = with pkgs.lib; {
-            description = "Fram fact-engine CLI, MCP server, primer, and JVM coordinator daemon";
+            description = "Fram fact-engine CLI, MCP server, primer, and native-first coordinator launcher";
             longDescription = ''
-              Self-contained CLI, MCP server, primer, and JVM coordinator daemon.
+              Self-contained CLI, MCP server, primer, and native-first coordinator
+              launcher with an explicitly selected packaged JVM oracle.
               Beagle graph-authoring helpers are retained under libexec and require
               an external BEAGLE_HOME toolchain; they are not public package commands.
             '';

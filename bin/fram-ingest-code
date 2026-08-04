@@ -72,10 +72,8 @@
       (die "unknown option" (first a))
       :else                    (recur (rest a) (update opts :srcs conj (first a))))))
 
-;; Any Beagle source extension — the extension only selects the EMIT TARGET
-;; (.bclj->clj .bcljs->cljs .bjs->js .bnix->nix .bgl->neutral .bodin->odin;
-;; dormant .bsql/.bpy/.bzig). The parsed AST is target-INDEPENDENT, so ingest is too.
-(def ^:private beagle-ext-re #"\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$")
+;; Live Beagle source extensions; the parsed AST is target-independent.
+(def ^:private beagle-ext-re #"\.b(clj|js|nix|gl)$")
 (defn- beagle-file? [p] (boolean (re-find beagle-ext-re p)))
 
 (defn- beagle-files [path]

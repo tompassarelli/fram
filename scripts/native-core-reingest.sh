@@ -61,7 +61,7 @@ for s in "${SRCS[@]}"; do
   if [[ -d "$s" ]]; then
     while IFS= read -r f; do FILES+=("$f"); done < <(
       find "$s" -maxdepth 1 -regextype posix-extended \
-        -regex '.*\.b(clj|cljs|js|nix|gl|sql|py|zig|odin)$' | sort)
+        -regex '.*\.b(clj|js|nix|gl)$' | sort)
   elif [[ -f "$s" ]]; then
     FILES+=("$s")
   else

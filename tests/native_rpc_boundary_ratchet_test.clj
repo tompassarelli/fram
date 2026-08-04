@@ -105,6 +105,10 @@
       status (file-source "bin/fram-code-status")]
   (check! "flat serving is migration-only; code ingest and launch are native"
           (and (str/includes? launcher "serve-flat was removed")
+               (str/includes? launcher "FRAM_DAEMON_RUNTIME:-native")
+               (str/includes? launcher "artifact_dir/READY")
+               (str/includes? launcher "jvm-oracle|jvm-dev")
+               (str/includes? launcher "exec \"$native_daemon\"")
                (str/includes? migration "migrate-triple-log")
                (= 2 (count (re-seq #"serve-flat" launcher)))
                (str/includes? code-on "bin/fram-daemon serve")
