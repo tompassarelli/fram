@@ -33,6 +33,14 @@
    nodes: (Atom Int)
    error: (Atom String?)])
 
+(defn increment-int [value: Int] -> Int (+ value 1))
+
+(defn empty-byte-cell [] -> (Atom (Vec Int))
+  (let [cell: (Atom (Vec Int)) (atom [])] cell))
+
+(defn empty-error-cell [] -> (Atom String?)
+  (let [cell: (Atom String?) (atom nil)] cell))
+
 (defn decoder-error!
   [decoder: Decoder
    message: String] -> Nil
@@ -72,7 +80,7 @@
     (let [position (deref (decoder-position decoder))
           value (nth (decoder-bytes decoder) position)]
       (if (byte-value? value)
-        (do (swap! (decoder-position decoder) inc) value)
+        (do (swap! (decoder-position decoder) increment-int) value)
         (do
           (decoder-error! decoder "FRAMRPC byte vector contains a value outside u8")
           0)))
@@ -280,7 +288,7 @@
     (do
       (decoder-error! decoder "recursive Term exceeds the TermCodecV1 depth bound")
       false)
-    (let [node-count (swap! (decoder-nodes decoder) inc)]
+    (let [node-count (swap! (decoder-nodes decoder) increment-int)]
       (if (> node-count max-nodes)
         (do
           (decoder-error! decoder
@@ -297,7 +305,7 @@
     (do
       (encoder-error! encoder "recursive Term exceeds the TermCodecV1 depth bound")
       false)
-    (let [node-count (swap! (encoder-nodes encoder) inc)]
+    (let [node-count (swap! (encoder-nodes encoder) increment-int)]
       (if (> node-count max-nodes)
         (do
           (encoder-error! encoder
@@ -472,8 +480,8 @@
                      (read-u8! decoder "magic"))))
       valid)))
 
-(defn decode-request-bytes [bytes: (Vec Int)] -> DecodeResult
-  (let [decoder (->Decoder bytes (atom 0) (atom 0) (atom nil))
+(defn decode-request-bytes! [bytes: (Vec Int)] -> DecodeResult
+  (let [decoder (->Decoder bytes (atom 0) (atom 0) (empty-error-cell))
         byte-count (count bytes)]
     (cond
       [(> byte-count rpc-v1-max-frame-bytes)
@@ -564,7 +572,7 @@
 (defn finish-response-frame
   [frame: t/RpcFrameV1
    body-bytes: (Vec Int)] -> EncodeResult
-  (let [out (->Encoder (atom []) (atom 0) (atom nil))]
+  (let [out (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
     (swap! (encoder-bytes out) into rpc-v1-magic)
     (append-u16-le! out 1)
     (append-u16-le! out 0)
@@ -590,7 +598,7 @@
       [(not (nil? (t/rpcframev1-request frame)))
        (->EncodeResult nil "response frame must not carry RpcRequest")]
       [:else
-       (let [body (->Encoder (atom []) (atom 0) (atom nil))]
+       (let [body (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
          (append-response-body! body response)
          (let [body-bytes (deref (encoder-bytes body))
                body-error (deref (encoder-error body))]
