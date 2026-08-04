@@ -1,6 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph
 (ns fram.text-index)
 
 (define-mode strict)

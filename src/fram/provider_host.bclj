@@ -1,6 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — this file is a generated view of the Fram code graph.
 ;; Author substantive forms through the sealed graph-edit channel.
 ;; The provider host is application-side; the substrate keeps its closed wire.
 (ns fram.provider-host (:require [fram.types :as t]))

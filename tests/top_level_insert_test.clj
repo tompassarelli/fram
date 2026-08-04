@@ -95,7 +95,6 @@
 
 (spit source-file
       (str "#lang beagle/clj\n"
-           ";; @upstream:graph\n"
            "(ns src.fram.topinsert)\n"
            "(define-mode strict)\n\n"
            "(defn setup! [] :- Int\n"

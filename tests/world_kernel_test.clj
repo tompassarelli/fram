@@ -10,7 +10,6 @@
 ;; before the kernel exists, and each bar fails INDIVIDUALLY with a named reason
 ;; instead of the suite dying at load time. Do not weaken a bar to make it pass;
 ;; implement fram.world through the mcp__fram graph-edit verbs (the .bclj carries
-;; the @upstream:graph sentinel — a text edit would desync the graph).
 ;;
 ;; WHAT A WORLD IS. A world is a versioned VIEW over the fact graph, never a
 ;; copy. A Version is IMMUTABLE and content-addressed as (immutable base

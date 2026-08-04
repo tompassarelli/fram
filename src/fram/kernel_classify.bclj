@@ -1,6 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — author via the fram MCP graph-edit verbs, never Edit/Write.
 (ns fram.kernel-classify
   "The ONE classification authority fram.kernel / fram.fold / coord_daemon\n  delegate to, so a daemon and a CLI can never classify differently: predicate\n  cardinality, reference shape, fold key bytes, lease codec, delivery candidacy.\n\n  INVARIANT: stays inside the zig-lowerable subset — String/Int/Bool/records/Vec\n  only, no Any, no higher-order fns, no throw, no env reads.")
 

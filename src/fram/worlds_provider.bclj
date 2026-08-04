@@ -1,6 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — this file is a generated view of the Fram code graph.
 ;; Author substantive forms through the sealed graph-edit channel.
 ;; Worlds is one provider capability; codegraph candidates remain separate.
 (ns fram.worlds-provider

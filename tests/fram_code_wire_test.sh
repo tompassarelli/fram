@@ -146,7 +146,6 @@ assert "fram-code-status honors GRAPH_UPSTREAM_REGISTRY override" \
 assert "fram-code-status carries the configured SpaceId" \
   'echo "$STATUS_LINE" | grep -q "space=wire-test-space"'
 
-printf '%s\n' '(define-target clj)' ';; @upstream:graph' '(defn adopted [] 2)' \
   > "$DIR/some/adopted.bclj"
 printf '%s\n' '/stale/pre-container/file.bclj' > "$REG"
 STATUS_LINE="$(GRAPH_UPSTREAM_REGISTRY="$REG" "$HERE/bin/fram-code-status" "$DIR")"

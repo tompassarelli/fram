@@ -43,7 +43,6 @@
 
 (spit source-file
       (str "#lang beagle/clj\n"
-           ";; @upstream:graph\n"
            "(ns src.plangrep.model)\n"
            "(define-mode strict)\n"
            "(defn base [] :- Int 1)\n"

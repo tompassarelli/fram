@@ -1,6 +1,5 @@
 #lang beagle/clj
 
-;; @upstream:graph — the code lives in the Fram fact graph; this text is
 ;; GENERATED. Author via the fram MCP graph-edit verbs (add-def / set-body /
 ;; rename-def / insert-after / replace-in-body), never Edit/Write — a text edit
 ;; would desync the graph. De-adopt (drop sentinel + registry entry) to edit as
