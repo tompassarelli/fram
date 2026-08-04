@@ -39,6 +39,7 @@ historical_docs=(
   docs/archive/position-in-class.md
   docs/archive/pull-reference.md
   docs/archive/WHY_FRAM_EXISTS.md
+  docs/archive/worlds-provider-v1-final-report.md
 )
 
 fail() {
