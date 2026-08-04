@@ -172,11 +172,11 @@ write_serve_flat_symbols() {
   local -A argument_types=()
   local -a logical_names=(
     serve-flat-generated-abi
-    serve-flat-store-boot
+    serve-flat-store-boot!
     serve-flat-store-dispatch!
     serve-flat-store-shutdown
-    serve-flat-codec-read-request
-    serve-flat-codec-write-response
+    serve-flat-codec-read-request!
+    serve-flat-codec-write-response!
     serve-flat-codec-release-request
     serve-flat-codec-release-response
   )
@@ -359,11 +359,11 @@ if [[ -z "$host" ]]; then
 else
   native_daemon_entries=(
     fram.native-daemon/serve-flat-generated-abi
-    fram.native-daemon/serve-flat-store-boot
+    fram.native-daemon/serve-flat-store-boot!
     fram.native-daemon/serve-flat-store-dispatch!
     fram.native-daemon/serve-flat-store-shutdown
-    fram.native-daemon/serve-flat-codec-read-request
-    fram.native-daemon/serve-flat-codec-write-response
+    fram.native-daemon/serve-flat-codec-read-request!
+    fram.native-daemon/serve-flat-codec-write-response!
     fram.native-daemon/serve-flat-codec-release-request
     fram.native-daemon/serve-flat-codec-release-response
   )

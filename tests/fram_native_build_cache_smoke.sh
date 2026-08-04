@@ -177,16 +177,16 @@ C
       'materialize-c17 OK module_0.h module_0.c' \
       'materialize-qbe OK module_0.ssa' \
       'lowered fn_7 serve-flat-generated-abi 1 blocks' \
-      'lowered fn_2 serve-flat-store-boot 1 blocks' \
+      'lowered fn_2 serve-flat-store-boot! 1 blocks' \
       'lowered fn_11 serve-flat-store-dispatch! 1 blocks' \
       'lowered fn_3 serve-flat-store-shutdown 1 blocks' \
-      'lowered fn_19 serve-flat-codec-read-request 1 blocks' \
-      'lowered fn_5 serve-flat-codec-write-response 1 blocks' \
+      'lowered fn_19 serve-flat-codec-read-request! 1 blocks' \
+      'lowered fn_5 serve-flat-codec-write-response! 1 blocks' \
       'lowered fn_13 serve-flat-codec-release-request 1 blocks'
     [[ "$missing_symbol" == 1 ]] ||
       printf '%s\n' 'lowered fn_17 serve-flat-codec-release-response 1 blocks'
     [[ "$duplicate_symbol" == 0 ]] ||
-      printf '%s\n' 'lowered fn_23 serve-flat-store-boot 1 blocks'
+      printf '%s\n' 'lowered fn_23 serve-flat-store-boot! 1 blocks'
     printf '%s\n' \
       'obligation-projection PASS valid-ssa' \
       'obligation-projection PASS exhaustive-matches' \
@@ -512,7 +512,7 @@ if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
     >"$scratch/duplicate-symbol.out" 2>"$scratch/duplicate-symbol.err"; then
   fail "serve-flat host accepted a duplicate logical symbol"
 fi
-grep -Fq 'exactly one lowered row for serve-flat-store-boot (found 2)' \
+grep -Fq 'exactly one lowered row for serve-flat-store-boot! (found 2)' \
   "$scratch/duplicate-symbol.err" ||
   fail "duplicate serve-flat logical symbol did not fail before link"
 
@@ -524,7 +524,7 @@ if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
   fail "serve-flat host accepted an unexpected generated arity"
 fi
 grep -Fq \
-  'serve-flat-codec-write-response has 2 source arguments; expected 1' \
+  'serve-flat-codec-write-response! has 2 source arguments; expected 1' \
   "$scratch/bad-arity.err" ||
   fail "unexpected serve-flat prototype arity did not fail before link"
 
