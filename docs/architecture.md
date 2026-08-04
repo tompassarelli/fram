@@ -1,142 +1,56 @@
 # Architecture
 
-**Status:** Current source-head architecture. The deployed v0.3 coordinator
-still has explicitly version-scoped operational surfaces; those are compatibility
-contracts, not alternative kernel semantics.
+This document maps Fram's [shared vocabulary](glossary.md) onto durable storage, immutable query roots, and process boundaries at source head.
 
-## One semantic language
+## Kernel and history
 
-Fram's public value model is deliberately small:
-
-```text
-Atom   := String | Int | Float | Bool | Keyword | Instant
-Term   := Atom | Triple
-Triple := (Term, Term, Term)
-```
-
-The three positions are named `slot0`, `slot1`, and `slot2`. They are neutral:
-the kernel assigns none of them a subject, predicate, object, entity, or
-attribute role. Ontologies may establish those roles by convention. Because a
-Triple is itself a Term, any slot can contain another Triple.
-
-The word “Turtle” is reserved for the *turtles all the way down* design thesis:
-prefer this one recursive language wherever it fits. It is not a code type or
-storage format.
-
-## Proposition and history
-
-A proposition is a Triple. An assertion is the proposition at a logical
-occurrence coordinate:
+The kernel accepts the recursive grammar and neutral `t1`/`t2`/`t3` positions defined in the glossary. Domain roles come from ontology patterns, never position. A proposition enters history at ordinary Triple coordinates:
 
 ```text
 tx := (space, :kernel/tx-sequence, sequence)
 op := (tx, :kernel/op-ordinal, ordinal)
-
 (op, :kernel/asserts, proposition)
 ```
 
-Retractions use `:kernel/retracts`. When a retraction withdraws one exact earlier
-assertion, the history also contains:
+Retractions use `:kernel/retracts`; `(retraction-op, :kernel/withdraws, assertion-op)` names the exact withdrawn assertion. Transaction sequence and operation ordinal define replay order. Recorded, valid, and observation time are ordinary metadata and never proposition identity. See [ontology](ontology.md) for modeling rules.
 
-```text
-(retraction-op, :kernel/withdraws, assertion-op)
-```
+## Storage, writer, and readers
 
-Equal propositions may therefore have distinct occurrences. Transaction
-sequence and operation ordinal give exact replay order. Wall-clock time is an
-ordinary relation such as `(tx, :kernel/recorded-at, instant)`; valid and
-observation time remain domain relations. None changes proposition identity.
+`TermStore` interns Atoms and recursive Triples. `AtomRow`, `TripleRow`, operation rows, integer handles, and `SPO`/`POS`/`OSP` rotations are private mechanics, not semantic identity.
 
-## Storage and durability
+Binary FRAMLOG v1 is authoritative. Its header fixes the SpaceId; transaction frames carry a logical sequence and ordered assert/retract operations using the recursive Term codec. Replay rebuilds liveness and indexes. A one-shot migration converts the legacy flat log; serving has no dual semantic path.
 
-`TermStore` interns Atoms and recursive Triples. Its `AtomRow`, `TripleRow`,
-transaction rows, operation rows, and integer handles are private physical
-structures. A handle is allowed to change across dump/load or another engine
-implementation; a Term is not.
+One active coordinator owns writer authority. Its FIFO sequencer prepares bounded transaction cohorts on private roots, appends one frame per transaction, forces the cohort once, and atomically publishes the final immutable root before acknowledgements. Standbys never append; readers use only published roots and never acquire the sequencer lock. Exact guarantees and the workload envelope live in [guarantees](guarantees.md).
 
-The durable history is binary FRAMLOG v1. Its header fixes the `SpaceId`, and
-transaction frames carry a logical sequence plus ordered assert/retract
-operations encoded with the recursive Term codec. Replay rebuilds liveness and
-indexes from that history. The one-shot migration converts the legacy flat log
-to FRAMLOG; there is no permanent dual semantic path.
-
-Historical query roots use prefix-bound FRI2 checkpoints plus transaction-tail
-replay. A sealed epoch is a canonical FRAMLOG prefix named by a fingerprinted
-binary range manifest; derived roots and results are bounded caches, while
-completed canonical ranges are retained indefinitely unless an explicit
-retention decision marks one expired.
-
-The active writer owns one `SpaceId` and one history log. A standby can load and
-serve the same durable prefix, but only the active process may append. The
-active daemon orders mutations through one FIFO sequencer. It retains one
-FRAMLOG frame per logical transaction, appends a bounded cohort contiguously,
-forces that cohort once, then atomically publishes its final immutable store
-root before acknowledging any member. Readers use only published roots and do
-not acquire the sequencer lock.
+Historical roots use validated prefix-bound FRI2 checkpoints plus tail replay. Canonical sealed epochs are named by fingerprinted range manifests; derived roots and results are bounded caches. Invalid derived state falls back to canonical history.
 
 ## Query projection
 
-The Datalog engine projects two exact materialized base relations:
+The evaluator exposes two materialized relations and one positive virtual relation:
 
 ```text
-triple(slot0, slot1, slot2)
+triple(t1, t2, t3)
 occurrence(coordinate, action, proposition)
+text-match(entity, attribute, needle)
 ```
 
-`triple` contains live propositions. `occurrence` contains explicit operation
-history and is included only when that projection is requested. A positive
-virtual `text-match(entity, attribute, needle)` relation is served from a lazy
-snapshot-scoped inverted index over live string values. All three relations
-have arity three and every cell is a Term. There is no compatibility relation
-that exposes a semantic row id.
+Every cell is a Term. `triple` is live state, `occurrence` is explicit history, and `text-match` uses a lazy snapshot-scoped index. Rules, recursion, stratified negation, arithmetic, aggregates, temporal selectors, and paging are specified in the [query reference](query-reference.md).
 
-Rules, recursion, stratified negation, comparisons, arithmetic, aggregates, and
-stable paging operate above this projection. See
-[`query-reference.md`](query-reference.md).
-
-## Process and wire boundaries
-
-The source-head runtime has four boundaries:
+## Boundaries
 
 1. **FRAMLOG** is durable local history.
-2. **FRAMRPC v1** is the private binary coordinator protocol. It is a closed,
-   thirteen-operation protocol with the same tagged recursive Term codec as the
-   log.
-3. **The CLI** accepts local EDN-shaped human syntax, lowers it immediately to
-   typed Terms or typed query records, and speaks FRAMRPC. EDN is not the live
-   engine wire.
-4. **Public edges** use closed JSON. `bin/fram-mcp` exposes exactly `tell`,
-   `retract`, `show`, `ask`, and `validate`; the Cloudflare shim maps tagged JSON
-   Terms to FRAMRPC.
+2. **FRAMRPC v1** is the private binary coordinator protocol: thirteen closed operations using the same recursive Term codec.
+3. **CLI EDN** is local human syntax lowered to typed records before FRAMRPC; it is not the wire.
+4. **Public JSON edges** are closed adapters. `bin/fram-mcp` exposes only the five verbs in the [tool catalog](tool-catalog.md).
 
-Graph-authoring controls and deployment controls are separate sealed services.
-They are not extra public data verbs. The deployed v0.3 blue/green controller
-has its own versioned operational protocol; see
-[`coordinator-cutover.md`](coordinator-cutover.md).
+Graph-authoring and deployment controls are separate sealed services. The pinned v0.3 blue/green control protocol remains in [coordinator cutover](coordinator-cutover.md); it does not enlarge FRAMRPC.
 
-## Security boundary
-
-The engine has no tenant authentication or authorization. The coordinator binds
-to loopback by default; a remote deployment keeps FRAMRPC private and terminates
-authentication and TLS at a gateway or sidecar. `SpaceId`, process, log, and
-network isolation define a trust domain. See
-[`isolation-and-deployment.md`](isolation-and-deployment.md).
+The engine has no tenant authorization. Loopback/private FRAMRPC, process, SpaceId, and log form a trust domain; authenticated TLS belongs at a gateway or sidecar. Bind, wire, deployment, and probe details are consolidated in [isolation and deployment](isolation-and-deployment.md).
 
 ## Executable contracts
 
-- [`../src/fram/types.bclj`](../src/fram/types.bclj) — Atom, Term, Triple, and
-  occurrence constructors.
-- [`../src/fram/store.bclj`](../src/fram/store.bclj) — interning, transactions,
-  liveness, and history projection.
-- [`../src/coord_daemon_wire.bclj`](../src/coord_daemon_wire.bclj) — FRAMRPC
-  record and Term codec contract.
-- [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj) — recursive
-  terms, coordinates, and liveness.
-- [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj)
-  — one-shot migration and FRAMLOG bytes.
-- [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj)
-  — closed native operation boundary.
+- [`../src/fram/types.bclj`](../src/fram/types.bclj) and [`../src/fram/store.bclj`](../src/fram/store.bclj): recursive values, transactions, liveness, and projections.
+- [`../src/coord_daemon_wire.bclj`](../src/coord_daemon_wire.bclj): FRAMRPC records and codec.
+- [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), and [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj): kernel, boundary, and migration gates.
 
-Older Worlds, claims, Codegraph, and pull documents remain design or experiment
-records where marked. They do not add primitives or operations to this
-architecture.
+Historical Worlds, claims, Codegraph, pull, rationale, and positioning documents in [`archive/`](archive/README.md) add no current primitives or operations.

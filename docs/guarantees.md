@@ -1,8 +1,8 @@
 # Guarantees
 
-**Status:** the current guarantee contract for the source-head engine.
+This document is the current source-head guarantee, concurrency, workload, and client-obligation contract, with every claim bound to a named gate or explicit gap.
 
-A guarantee enters this document only with its gate named. Removing or
+A guarantee enters this contract only with its gate named. Removing or
 excluding a gate removes the guarantee. A failure observed in production must
 land on exactly one line of this document: either a guaranteed line (a Fram
 defect — the guarantee was false, and its gate gets strengthened with the
@@ -53,7 +53,7 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | I1 | One active coordinator per `SpaceId`; its singleton FIFO sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
-| I3 | K concurrent socket writers: every acked fact is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
+| I3 | K concurrent socket writers: every acked proposition is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
 | I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
 
 ## Ordering and recovery
@@ -70,7 +70,7 @@ Two runtime surfaces exist until cluster migration completes:
 |---|---|---|---|
 | N1 | Closed 13-operation FRAMRPC v1; unknown tags, fields, or trailing bytes are rejected; EDN is refused on the wire | BACKED | [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj), `native_rpc_daemon_test.clj`, boundary ratchet |
 | N2 | Limits: body ≤ 1,048,576 B; frame ≤ 1,048,602 B; string ≤ 1 MiB; term nodes ≤ 65,536; depth ≤ 256 | PARTIAL | decode-side truncation and oversize gated; encode-side enforcement untested |
-| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-fact) gate |
+| N3 | `:rpc/scan` and `:rpc/occurrences` accept the `:rpc/query` page cursor; an unpaged reply past ~250 rows (TermCodecV1 depth bound 256, measured 2026-08-02) still fails typed `:term-depth-exceeded`, now from a bounded fold instead of the full corpus. The depth cliff binds EVERY paged response: any `:rpc/query` page near 250–300 rows hits it too, so the contract's 4096-row page ceiling is unusable — the effective page bound is ~200 rows (bench-measured) | PARTIAL | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) paged reassembly, cursor pinning, bounded unpaged fold; no at-scale (350k-Triple) gate |
 
 ## Query
 
@@ -87,13 +87,13 @@ Two runtime surfaces exist until cluster migration completes:
 ## Profiles
 
 The relational profile is advisory at this slice. Its declared rules are R1:
-all slots are Atoms; R2: slot0 is a non-blank String or Keyword; R3: slot1 is
-a non-blank String or Keyword; R4: slot2 is a non-nil Atom (the blank String is
+all positions are Atoms; R2: t1 is a non-blank String or Keyword; R3: t2 is
+a non-blank String or Keyword; R4: t3 is a non-nil Atom (the blank String is
 valid). Only the exact `:kernel/profile` anchoring proposition is exempt.
 
 R5 — the declared-vocabulary rule — is listed separately because a profile
 opts into it: a space that does not list `R5` beside R1-R4 keeps every
-verdict it had. Where it is listed, a proposition whose slot1 is a namespaced
+verdict it had. Where it is listed, a proposition whose t2 is a namespaced
 Keyword violates R5 unless that Keyword's grouping is asserted in the same
 space as `(predicate, :grouped-under, anything)`. The engine's `:kernel/*`
 occurrence vocabulary is exempt, as the ontology's regress rule records.
@@ -104,9 +104,30 @@ occurrence vocabulary is exempt, as the ontology's regress rule records.
 | P2 | Enforce mode rejects a violating operation before append, atomically for a batch | UNBACKED | enforce mode is outside the observe-only slice |
 | P3 | The prospective admission verdict and advisory lint verdict agree for R1-R4 | BACKED | `profile_lint_test.clj` differential corpus, including one negative per rule and the former namespace-carve-out shape |
 | P4 | Tightening a profile preserves committed occurrences and reports older violations by occurrence coordinate | UNBACKED | evolution and occurrence-addressed reporting are outside the observe-only slice |
-| P5 | Under R5 a declaring space rejects a namespaced non-`:kernel/` slot1 whose grouping is unasserted, and spaces that omit R5 are unaffected | BACKED | `profile_lint_test.clj` R5 arms: ungrouped reject, grouped accept, omitting space, `:kernel/` exemption |
+| P5 | Under R5 a declaring space rejects a namespaced non-`:kernel/` t2 whose grouping is unasserted, and spaces that omit R5 are unaffected | BACKED | `profile_lint_test.clj` R5 arms: ungrouped reject, grouped accept, omitting space, `:kernel/` exemption |
 
-## Capacity and performance envelope — the open rungs
+## Write semantics
+
+One writer serializes accepted transactions while clients read immutable published snapshots. Native mutations may carry `expected-version`; stale or future values fail `:rpc/conflict` without advancing the version. Lease fencing is an additional resource guard, not a replacement for transaction OCC or sole-writer authority.
+
+Actions in a batch receive ordered occurrence coordinates and commit as one frame or not at all. Every assertion creates a new occurrence even when equal proposition content is live. Retraction withdraws the latest live equal occurrence and records its exact target; retracting without a live match is an explicit unchanged receipt and does not advance the version. Cardinality, uniqueness, referential integrity, and replacement policy are domain rules, never implied by `t1`, `t2`, or `t3`.
+
+## Workload envelope and client obligations
+
+Reference workload NW-1 is a coordination substrate observed near 350k live Triples: mostly single-proposition writes, occasional atomic batches, targeted reads, paged projection drains, at most eight concurrent bulk clients, one subscription stream, listener leases, and interactive/sweep traffic. Whole-corpus client filtering is excluded.
+
+| Dimension | Contract |
+|---|---|
+| Request/response | body ≤ 1 MiB; frame ≤ 1 MiB; bulk reads paginate; the effective page bound remains ~200 rows under N3 |
+| Latency | targeted read p95 at 500k Triples and ≤8 clients is TBD and may not be cited |
+| Writes | sustained single-transaction throughput and restart cost per 100k Triples are TBD and may not be cited |
+| Contention | `:rpc/conflict` is normal contract behavior; retry from a fresh base |
+| Restart | replay is O(full log); probe `:rpc/status` before serving |
+| Overload | unspecified until bounded admission exists |
+
+Clients must retry transient transport errors with bounded backoff, paginate every nontrivial read, never substitute a differently scoped result after timeout, and probe readiness after restart. A fail-closed reaction to one missing read amplifies transient flicker and is outside the contract. Every numeric TBD becomes a guarantee only when its gate is named here.
+
+## Capacity and performance envelope — open rungs
 
 **Current head capacity points (2026-08-02 receipt):**
 
@@ -156,6 +177,4 @@ writes/s) must not be quoted for head. Remaining envelope work:
   ([`isolation-and-deployment.md`](isolation-and-deployment.md)).
 - Single-machine, single-writer receipts — not distributed consensus.
 - Head does not serve v0.3 EDN-line clients; that path is migration-only.
-- Equal propositions are not deduplicated: assertion always creates a new
-  occurrence (this is contract, not a defect —
-  [`concurrency-and-writes.md`](concurrency-and-writes.md)).
+- Equal propositions are not deduplicated: assertion always creates a new occurrence.

@@ -1,10 +1,12 @@
+> **HISTORICAL — design provenance only.**
+
 # Why Fram Exists
 
-**Status:** Current, load-bearing rationale. The executable model is
-[`src/fram/types.bclj`](../src/fram/types.bclj) and
-[`tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj). Vocabulary
+**Status:** Historical positioning rationale, retired 2026-08-04. The current model is
+[`src/fram/types.bclj`](../../src/fram/types.bclj) and
+[`tests/triple_kernel_test.clj`](../../tests/triple_kernel_test.clj). Vocabulary
 and the canonical normalized example are defined once in
-[`ontology.md`](ontology.md); this document defers to it.
+[`ontology.md`](../ontology.md); this document defers to it.
 
 ## Verdict
 
@@ -118,7 +120,7 @@ The FRAMLOG and FRAMRPC codecs preserve that boundary exactly.
 where the model permits. It is an architectural prior, not a type, row, id, or
 log format. Code therefore says `Term`, `Triple`, `TripleRow`, and
 `slot0`/`slot1`/`slot2`. The binding terminology decision is recorded in
-[`naming.md`](naming.md).
+[`naming.md`](../naming.md).
 
 ## Decision
 

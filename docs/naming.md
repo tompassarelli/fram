@@ -1,336 +1,118 @@
-# The naming ledger
+# Naming ledger
 
-Why load-bearing names in Fram are what they are — recorded so no fight has to be
-re-fought. Entries stay dated, but a superseded ruling is marked and reconciled in
-place so obsolete vocabulary cannot masquerade as current doctrine; git preserves the
-original wording.
+This ledger preserves each load-bearing naming verdict, its deciding prior, and its rejected bench so the argument is not repeated.
 
-## The rule
+Entries stay dated. When a later ruling supersedes wording, reconcile that entry in place and point to the successor; git preserves the former text.
 
-Fram's primary readers include LLMs. A repository is effectively a system prompt for
-every consumer's AI — whatever vocabulary the committed files use is the vocabulary
-that comes back out of the next model that reads them. So names are chosen by **prior
-alignment**: pick the word whose *strongest existing prior* matches the semantics, so a
-model (or a human) reaching for the word gets it right with zero instruction.
+## Rule
 
-A name that needs a paragraph of correction is a bug. The correction loses to the
-prior eventually — every time.
+Fram's readers include LLMs, so repository vocabulary becomes generated vocabulary. Choose by **prior alignment**: the strongest established meaning must match the thing without a correction paragraph.
 
 ## fact — chosen 2026-06; superseded as a primitive 2026-08-01
 
-The June ruling used **fact** for a stored `(subject predicate object)` record. The
-recursive-Triple cut supersedes that ruling: **Triple is Fram's sole structural semantic
-primitive**, its positions are neutral, and no stored `Fact` record or fact-as-synonym
-for Triple belongs in the kernel vocabulary.
+The June ruling named a stored `(subject predicate object)` record **fact**. The recursive-Triple cut superseded that primitive: [Triple](glossary.md#semantic-kernel) is the sole structural semantic primitive, while fact is valid only for a proposition admitted by a view. Datalog and coordination projections may say fact; storage and kernel APIs say Term, Triple, proposition, and occurrence. This keeps truth and endorsement out of storage identity: one proposition may be asserted, disputed, withdrawn, or selected differently without changing its Triple.
 
-**Fact** remains valid only as a derived or query-level notion: a proposition represented
-by a Triple that is present in a particular world or view under that projection's
-rules. Datalog may therefore expose facts, and a world may select which facts are in
-scope, without introducing a second stored thing. Storage and kernel APIs say `Term`,
-`Triple`, and assertion occurrence; projections may say “fact” when they mean a
-proposition currently admitted by the projection.
-
-This boundary also keeps epistemics out of storage identity. A proposition can be
-asserted, disputed, withdrawn, or selected by different worlds without changing what
-its Triple is; each assertion occurrence is another ordinary Triple that relates an
-occurrence coordinate to that proposition.
+The deciding prior is Datalog: a fact is a proposition present in the evaluated relation. The rejected primitive use is **fact-as-stored-row** — it falsely merges structure, assertion act, and view status.
 
 ## world — chosen 2026-07-26
 
-**Current scope:** historical Worlds-service vocabulary. The Worlds service has
-moved out of the public recursive-kernel runtime, so `world` and `version` are
-not kernel primitives or FRAMRPC data operations. The entry below preserves the
-prior that governed that service and its retained design records.
+**Current scope:** historical Worlds-service vocabulary. The service left the public recursive-kernel runtime, so `world` and `version` are not kernel primitives or FRAMRPC operations.
 
-The primitive: a named, forkable lineage of immutable versions. A version fixes *which
-facts are in scope* — the thing you evaluate queries "at." It deliberately does **not**
-guarantee those facts agree with each other: rival assertions coexist inside a world by
-design. A world fixes scope, not harmony.
+The thing was a named, forkable lineage of immutable versions that fixed which facts a query saw without promising consistency. The possible-worlds prior decided it: propositions are evaluated at a way things could stand.
 
-Chosen for the **possible-worlds prior** (modal logic, Kripke semantics): a world is "a
-way things could stand, at which propositions are evaluated" — precisely what a version
-does for facts. Best prior alignment available; a model gets "fork a world" and
-"evaluated at this world" right with no instruction.
+Rejected bench:
 
-The rejected bench, one sentence each:
-
-- **consistent-plane** — asserts a property the primitive deliberately lacks (worlds
-  may contain contradictions), and compound names lose the naming war before it starts.
-- **plane** — control-plane/data-plane owns that word for exactly the infrastructure
-  audience integrating Fram.
-- **reality** — claims truth; a world can be entirely wrong and still be a perfectly
-  good world. Same honesty rule that kept "fact" from meaning "true."
-- **universe** — claims totality; a version is deliberately partial (a sparse overlay
-  over a base).
-- **branch** — mechanics-true (fork, head, diverge) but semantically empty — a branch
-  of *what?* — and collides with git in a system that lives beside git.
-
-Practical tie-breakers, all of which "world" wins: it compounds cleanly (`world.head`,
-`world.sealed`, `fork-head`), pluralizes naturally ("the two worlds diverged"), and
-verbs naturally ("fork a world"). Try `reality.sealed` with a straight face.
+- **consistent-plane** — promises consistency that rival assertions deliberately violate.
+- **plane** — collides with infrastructure control/data planes.
+- **reality** — claims truth a world need not have.
+- **universe** — claims totality although a version may be partial.
+- **branch** — describes mechanics but not what is branching, and collides with git.
 
 ## codegraph — chosen 2026-07-26
 
-**Current scope:** historical experiment and sealed-consumer vocabulary, not a
-public data primitive. The retained Codegraph code and receipts may project
-recursive Triples for analysis, but they do not enlarge the five-tool MCP edge
-or the thirteen-operation FRAMRPC boundary. **Partly superseded 2026-08-02:** the
-agent skill named `codegraph` is retired and its read-side faculty now lives in
-`code-as-facts` (see the skill-names entry below). The revealed-preference argument
-here still decides what the *subsystem* is called; it no longer names a live skill.
+**Current scope:** historical experiment and sealed-consumer vocabulary, not a public data primitive. **Partly superseded 2026-08-02:** the `codegraph` skill was retired into `code-as-facts`; the subsystem verdict remains.
 
-The thing: the code-intelligence surface. Point the engine at a Beagle source tree,
-project it to facts, and *derive* the answers — scope-correct who-calls, transitive
-blast radius, safe rename — as Datalog over a reference graph instead of as bespoke
-passes over text. What it does **not** promise: to be the authoring path (that's the
-engine's edit verbs), to preserve formatting, or to work on anything but Beagle.
+The thing was the code-intelligence surface that projected Beagle source to queryable relations for who-calls, blast radius, and rename analysis; it did not promise source authoring, formatting preservation, or non-Beagle input. Revealed preference decided it: users independently reached for `codegraph`, while `chartroom` required its experiment story. The lexical resolver was engine machinery and moved out; its former shim is gone and the Beagle resolver modules now build to `out/resolve.clj`.
 
-It was called **chartroom** because that was the name of the *experiment* — a nautical
-room where you spread the charts out and plot the course, cute for a bet on "can a graph
-beat grep." The bet cleared its kill lines, the experiment shipped and got folded into
-fram (ADR 0001), and the museum placard stayed nailed to the door.
+Rejected bench:
 
-The prior decided it, and the prior had already spoken: the agent skill fronting this
-surface was named **codegraph** by the same hands that wrote `chartroom/`, without
-deliberation, because that's the word you reach for when you have to *use* the thing
-rather than remember its origin story. That is revealed preference, and under the rule
-at the top of this file it is the strongest evidence available — a name nobody had to be
-taught. "chartroom" is a metaphor you must be told; "codegraph" is a description you
-already know. `codegraph` also compounds without apology (`codegraph/src`, "the code
-graph") and tells an LLM what it holds in one token pair.
+- **chartroom** — an experiment codename costs an explanation at every call site.
+- **callgraph** — names only one narrower relation and was already a module name.
+- **codeintel** — imports IDE and vendor expectations this surface did not serve.
+- **code-as-facts** as the subsystem directory — names the bet and live skill well, but is too long for the module.
 
-The rejected bench:
+The old `chartroom` name survives only where provenance would otherwise become false.
 
-- **chartroom** — an experiment's codename doing a shipped subsystem's job. Nautical
-  charm buys nothing at the call site and costs a sentence of explanation forever.
-- **callgraph** — already taken, one layer down (`codegraph/src/callgraph.bclj`), and
-  narrower than the surface: call edges are one query the graph answers, not the graph.
-- **codeintel** — accurate and joyless; also an IDE-vendor prior (LSP, Sourcegraph) that
-  drags in editor-plumbing expectations this surface doesn't serve.
-- **code-as-facts** — the right description of the *bet*, which is why it survives as
-  prose and as the skill's tagline; too long and too hyphenated to be a directory.
+## Turtle — architecture prior, never a primitive — chosen 2026-08-01
 
-The same move split the directory: `resolve.clj` — the lexical resolver and the
-minimal-op AST edit verbs the graph-authoring commands `load-file` — was never
-code-intelligence. It is tier-3 engine code that happened to be born in the experiment's
-folder, so it was promoted out of `codegraph/` into the engine's own source set, where
-its address says what it is. (Superseded in detail, not in ruling: the root
-`resolve.clj` shim is gone; the resolver is now the Beagle modules
-`src/resolve_*.bclj`, built to `out/resolve.clj`.) `codegraph/` keeps only the analysis
-surface.
+**Turtle** invokes “turtles all the way down”: use ordinary recursive Triples for data, coordinates, history, and metadata when the model permits. It never names a record, identifier, log, or second stored type; the literal semantic vocabulary is linked from the [glossary](glossary.md#semantic-kernel).
 
-One honest sentence for keeping "chartroom" nowhere load-bearing: an experiment earns a
-verdict, not a permanent namespace, and the only places the old name survives are the
-records that would be lies without it — ADR 0001, the codegraph experiment's own
-retained records, the skill line that says which repo got folded in, and this entry.
+**Superseded 2026-08-04:** the original clause called the positions `slot0`/`slot1`/`slot2`; [positions of the Triple — t1/t2/t3](#positions-of-the-triple--t1t2t3--chosen-2026-08-04) now governs public vocabulary. Roles remain ontology conventions, not kernel position. The 2026-08-03 reconciliation also superseded the original `plangrep/page` grounding example: grouping implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
 
-## Turtle — an architecture prior, never a primitive — chosen 2026-08-01
-
-When a Fram document says **Turtle**, the intended prior is the phrase **“turtles all
-the way down.”** It names a design philosophy: prefer uniform ordinary recursive
-triples wherever the model permits, so metadata and higher-order structure use the same
-machinery as the statements they describe. It does not name a record, identifier, log
-format, or second kind of stored thing.
-
-The semantic vocabulary is deliberately literal:
-
-```text
-Atom   := String | Int | Float | Bool | Keyword | Instant
-Term   := Atom | Triple
-Triple := (Term, Term, Term)
-```
-
-**Slot-addressable ontology** means `slot0`, `slot1`, and `slot2` are stable neutral
-addresses, while roles are expressed by ordinary ontology patterns and never assigned
-by kernel position. A transaction coordinate such as
-`(space, kernel/tx-sequence, 1842)` is therefore a Triple, not a transaction primitive.
-A Triple can occupy any slot of another Triple.
-
-Atoms honestly terminate the recursion. `/` carries no kernel semantics and does not
-privilege the middle slot. (**Reconciled 2026-08-03:** the original entry offered
-`plangrep/page` as acceptable "grounding vocabulary"; the normalization principle in
-[`ontology.md`](ontology.md) supersedes that clause — a grouping that a namespaced
-spelling implies must be asserted as a Triple, or the spelling is hiding a join. The
-rest of this paragraph already said so.) Use an atom when a value is genuinely atomic.
-When its components need to be queried or described, represent that structure with
-more Triples rather than hiding it in an opaque compound string.
-
-Physical implementations may use tagged term handles, atom tables, and `TripleRow`
-records for finite storage. Those are private representations of the one recursive
-model, not semantic identity. Accordingly, code uses `Term`, `Triple`, `TripleRow`, and
-`slot0`/`slot1`/`slot2`; names such as `TurtleRow`, `turtle-id`, and “turtle log” are
-category errors.
+Atoms terminate recursion honestly. When components need queries or descriptions, use more Triples instead of opaque compounds. Tagged handles, tables, and rows remain private representations; `TurtleRow`, `turtle-id`, and “turtle log” remain category errors.
 
 ## agent skill names — fram-modeling, code-as-facts — chosen 2026-08-02
 
-The ruling in one line: **the kernel substrate is the typed Triple** — an asserted
-Triple *is* a proposition — and **"fact" is the coordination layer's word**, the one
-North's rows speak. Agent-facing skill names are chosen against that split, not
-against whichever layer's vocabulary happened to be current when the skill was
-written. Two consequences, both applied here:
+The thing was an unambiguous routing vocabulary for agent skills. The layer split decided it: Triple names kernel structure, while fact is the coordination projection's word. Therefore `fact-modeling` became **`fram-modeling`**, named for the stable tool, and the read-side `codegraph` skill merged into **`code-as-facts`**, one write/read faculty over one projected AST.
 
-- **`fact-modeling` → `fram-modeling`.** The skill teaches how to model data and
-  logic *in Fram*: rent the engine, assert, supersede, query the live view, derive
-  with Datalog. Naming it after a layer's word for the stored thing had already
-  dated it twice (`fact-authoring` → `fact-modeling`), and the recursive-Triple cut
-  would have dated it a third time. Name the **tool**, which does not move.
-- **The `codegraph` skill is retired into `code-as-facts`.** They were one surface
-  described twice: `code-as-facts` taught the write side of the code graph (the
-  graph-edit verbs behind the upstream guard) and `codegraph` taught the read side
-  (who-calls, blast radius) of the same projected AST in the same store. Two skill
-  files over one substrate is a routing coin-flip for a model, and the read side
-  was pinned to a subsystem this ledger already scoped as historical. One skill,
-  two faculties, and the stale entry points (`codegraph/src/*.clj`, experiment-era
-  gate numbers) dropped rather than carried forward.
+Rejected bench:
 
-The rejected bench:
+- **code-as-triples** — kernel-accurate but wrong for the coordination handle already wired into North and the upstream guard.
+- **codegraph** for the merged skill — routes users toward one historical consumer instead of the authoring faculty.
+- **fram-authoring** — collides with `beagle-authoring` and the graph-edit channel.
+- **fram-data** — omits Datalog derivation, half the faculty.
 
-- **code-as-triples** — the accurate *kernel* word, rejected deliberately. This name
-  is a live coordination-layer identifier, not prose: North's composer requires a
-  skill's frontmatter `name:` to equal its directory, and the code-upstream-guard's
-  denial text, `bin/fram-primer`, and the profile's greenfield rule all send agents
-  to **code-as-facts** by that exact string. Renaming the coordination-facing handle
-  to the kernel's word would break every one of those and buy nothing: at that layer
-  "fact" is the correct word, and this skill is the thing an agent opts into, not a
-  storage contract.
-- **codegraph** (as the merged skill's name) — names the module, not the faculty, and
-  the module is a retained historical analysis surface. A live skill named after it
-  routes the model into `codegraph/` instead of the engine entry points.
-- **fram-authoring** — collides head-on with `beagle-authoring` and with the
-  graph-edit authoring channel that `code-as-facts` owns.
-- **fram-data** — undersells the half that earns the engine its keep: Datalog
-  derivation, not storage.
+Skills are named for the tool (`fram-modeling`, `beagle-authoring`) or the bet (`code-as-facts`), never the current layer's stored-thing word.
 
-The discipline this leaves behind: a skill is named for the **tool** it teaches
-(`fram-modeling`, `beagle-authoring`) or for the **bet** an agent is opting into
-(`code-as-facts`) — never for the layer-of-the-month word for the stored thing.
+## normalized example — settled 2026-08-03
 
-## the normalized example — settled 2026-08-03
+The thing is one copyable positive example, defined only in [ontology](ontology.md#normalization). It replaced the earlier `:contact/email` example whose spelling contradicted the new rule. The deciding prior is copy behavior: readers reproduce a concrete example more reliably than a prohibition.
 
-The thing: one canonical worked example of normalized vocabulary, defined in
-[`ontology.md`](ontology.md) and linked from everywhere else. The contamination
-vector it closes: `:contact/email` entered the README and rationale as a positive
-example on 2026-08-01 (5c4499e); the normalization principle landed 2026-08-02
-(1853c72) without repairing the earlier examples; and every reader — human and
-model — copied the concrete positive example over the abstract negative rule.
-A prohibition without a copyable replacement loses to the prior every time; this
-is the same law as the rule at the top of this file, applied to examples instead
-of names.
+The ruling is unnamespaced domain vocabulary with grouping asserted as an ordinary Triple. `:kernel/*` occurrence predicates are primitive-exempt; closed `:rpc/*` tags are wire syntax; `SPO`/`POS`/`OSP` are private rotations.
 
-The ruling: current documents carry exactly one canonical normalized example.
-Domain vocabulary in examples is unnamespaced (`:email`), and its grouping is
-asserted — `(:email, :grouped-under, :contact)` — never spelled. The engine's
-`:kernel/*` occurrence vocabulary stays primitive-exempt, as the ontology's
-regress rule already records. Closed wire tags (`:rpc/*`) are protocol syntax,
-not domain vocabulary. Physical rotation names (`SPO`/`POS`/`OSP` tries) are
-private storage mechanics in the same category as `TripleRow`, never kernel
-vocabulary.
+Rejected bench:
 
-The rejected bench:
-
-- **`:contact-email`** (re-spell without the slash) — hides the same structure
-  behind different punctuation; the defect was never the `/`, it was the
-  grouping that existed only in spelling.
-- **value reification** (`("Alice", :has, email-1)` plus `(email-1, :value, ...)`)
-  — the workaround stores without recursion need for statement metadata. Fram's
-  recursion annotates the proposition directly and the occurrence already
-  carries who/when; the intermediate entity only dilutes the middle slot into a
-  generic verb and triples the join count. Give a value its own Term when the
-  domain gives it identity, never to satisfy normalization.
-- **prohibition-only documentation** — the state this entry repairs; a negative
-  rule with no positive example is a bug with a delay on it.
+- **`:contact-email`** — hides the same grouping behind different punctuation.
+- **value reification** — invents an entity and joins where recursive proposition annotation already works.
+- **prohibition-only documentation** — loses to any nearby copyable counterexample.
 
 ## Beagle fact projections — identifiers retained; contracts split — chosen 2026-08-03
 
-The thing: Beagle exposes two projections that share the fact layer but do not
-share a fidelity contract. `bin/beagle-facts`, implemented by
-`beagle-lib/private/emit-facts.rkt`, emits a compact analysis view of the parsed
-AST for Datalog queries. Its special-form overlays deliberately omit
-reconstructive detail, so it is lossy. `beagle facts-roundtrip`, backed by
-`beagle-lib/private/facts-roundtrip.rkt`, emits a verbose program view that
-preserves reader-datum identity and can render source. `.fram/corpus.facts`
-materializes the compact analysis view for program-inspection queries.
+The thing is two Beagle projections sharing a family word but not fidelity: `bin/beagle-facts`/`emit-facts.rkt` emits a compact lossy CNF analysis view, while `beagle facts-roundtrip`/`facts-roundtrip.rkt` emits a verbose program-lossless view preserving reader-datum, not byte, identity. `.fram/corpus.facts` materializes the compact view.
 
-The ruling: keep `beagle-facts`, `facts-roundtrip`, `emit-facts.rkt`, and the
-`.facts` extension. Here **fact** names projection status: a proposition selected
-into an analysis or live-program view. It does not name Fram's stored structure;
-**Triple** remains the sole structural primitive. The lossless code-as-facts
-projection is also within the boundary because its selected live triples
-constitute the program.
+Datalog's admitted-proposition prior decided **fact** here; it names projection status, not Fram storage. Keep the existing identifiers and always state which fidelity contract applies.
 
-The two projections must not share one descriptive sentence. Current prose uses:
+Rejected bench:
 
-- **compact analysis projection:** "a compact, lossy projection of the parsed AST
-  into CNF analysis facts, represented as three-slot vectors";
-- **program roundtrip projection:** "a verbose, program-lossless source↔fact
-  projection; lossless means reader-datum identity, not byte identity."
+- **`beagle-triples` / `emit-triples.rkt` / `corpus.triples`** — names row shape but erases projection purpose and still conflates fidelity.
+- **`beagle-codegraph`** — names one historical consumer, not either projection.
+- **`program-roundtrip`** — fits only the lossless half and severs the shared source↔fact prior.
+- **one “lossless CNF fact-triple” description** — is observably false for `emit-facts.rkt`.
+- **`claims`** — belongs to assertion acts, not projected views.
 
-The named concession is that `facts` remains a family word across two contracts.
-Every description where both are in scope therefore carries the contract:
-compact/lossy analysis or verbose/program-lossless roundtrip.
+## namespaced vocabulary outside fixtures — scoped 2026-08-04
 
-The prior that decides it is Datalog and coordination usage: a fact is a
-proposition admitted to the current view. Renaming the family to the kernel word
-would describe row shape while erasing why those rows exist.
+The thing was every remaining `ns/name` family after normalization. An inventory at `a488892` found 26 non-`:kernel/*`/`:rpc/*` families across 692 occurrences and separated them by contract.
 
-The rejected bench:
+- **Semantic fixtures** (`ontology/slot`, `plangrep/*`, `example/*`, `builder/*`, `growth/entry`, `building/id`, `deep/*`, `agent/lane`) became unnamespaced because none exercised grouping. The kernel slash probe and ExceptionInfo tag `:test/rejected-plan` remain intentionally namespaced.
+- **Historical code** (`provider/*`, `world/*`, `worlds/*`) retained spelling because rewriting a service awaiting retirement buys no queryable structure.
+- **Closed wire tags** (`authority/*`, `fram/*`, `fram.defcheck/*`, `lease/*`, `query/*`) retained spelling because a change is wire versioning, not ontology normalization.
 
-- **`beagle-triples`, `triples-roundtrip.rkt`, `emit-triples.rkt`,
-  `corpus.triples`** — structurally true but layer-wrong. It names the kernel
-  representation instead of the projection's selected propositions and still
-  fails to distinguish the two fidelity contracts.
-- **`beagle-codegraph` / `emit-codegraph.rkt`** — names one historical consumer
-  and analysis subsystem, not the projection; it misroutes the lossless
-  code-as-facts authoring surface.
-- **`program-roundtrip`** — accurate only for the lossless half and severs the
-  established source↔fact prior without improving the compact analysis half.
-- **"lossless CNF fact-triple projection" for both paths** — rejected because it
-  is observably false for `emit-facts.rkt` and collapses two views into one
-  supposed artifact.
-- **`claims`** — belongs to the occurrence/act layer; neither projection is an
-  assertion event.
+The deciding prior is boundary ownership: at that revision no in-scope family was written verbatim to a configured live store, so nine fixtures and zero stores changed. Replan if a configured non-test `worlds/invoke-plan-to!` caller, an external corpus carrying `worlds/*` or `provider/*`, or a FRAMRPC tag rename appears.
 
-## namespaced vocabulary outside the fixtures — scoped 2026-08-04
+## positions of the Triple — t1/t2/t3 — chosen 2026-08-04
 
-The thing: every `ns/name` spelling still standing in the repository once the
-normalized example above is applied. An inventory at `a488892` found 26
-namespaced non-`:kernel/*`/`:rpc/*` families across 692 occurrences and sorted
-them into three piles, not one.
+The thing is the three neutral positional addresses of `Triple := (Term, Term, Term)`. **t1**, **t2**, and **t3** follow 1-based tuple coordinates: projections π1/π2/π3, Prolog `arg(1,...)`, Erlang `element(1,...)`, RDF `rdf:_1`, and Scala `_1`; **t** comes directly from the kernel grammar, so t1 is the first Term.
 
-The ruling, per pile:
+The names never touch the binary wire, where triples encode as positional tagged arrays. This is client-API and documentation vocabulary, not a wire migration. Engine-internal Zig, `.bclj`, and `out/` identifiers remain `slot0`/`slot1`/`slot2` as private storage mechanics, in the same category as `TripleRow` and `SPO`/`POS`/`OSP` tries.
 
-- **Semantic test fixtures** — `ontology/slot`, `plangrep/*`, `example/*`,
-  `builder/*`, `growth/entry`, `building/id`, `deep/*`, `agent/lane` — are
-  normalized to unnamespaced atoms. None of them exercised a grouping, so no
-  grouping proposition was invented to preserve an accidental namespace. Two
-  namespaced atoms stay on purpose: the kernel probe in `triple_kernel_test.clj`,
-  whose whole subject is that `/` earns no kernel behavior, and the
-  ExceptionInfo type `:test/rejected-plan`, which is an error tag beside
-  `:rpc/conflict` rather than a stored predicate.
-- **Historical code** — `provider/*`, `world/*`, `worlds/*` — is retained as
-  spelled. Worlds is already scoped historical above; re-spelling vocabulary
-  inside a service awaiting retirement rewrites a passing suite and buys no
-  queryable structure. It retires with the service, not before.
-- **Closed wire tags** — `authority/*`, `fram/*`, `fram.defcheck/*`, `lease/*`,
-  `query/*` — are protocol syntax, not domain vocabulary, under the same
-  exemption `:rpc/*` already carries. They are FRAMRPC v1 grammar, projection
-  keys, and ExceptionInfo types: `lease/*` lowers to `:kernel/lease` before
-  anything is stored, and `query/*` only reads snapshots. A spelling change
-  there is a versioned wire migration, not normalization.
+Rejected bench:
 
-What made this a scoping entry instead of a migration: at `a488892` **no
-in-scope family is written verbatim to a configured live store** — every stored
-occurrence is a test fixture or historical Worlds code. Normalization therefore
-touched nine test files and zero stores.
-
-Three observations reopen it, each a replan trigger rather than a judgment call:
-a configured non-test caller of `worlds/invoke-plan-to!`; an external live
-corpus carrying `worlds/*` or `provider/*`; or a proposed FRAMRPC tag rename,
-which enters through wire versioning and not through this ledger.
+- **`slot0`/`slot1`/`slot2`** — combines a frame-language word with array-offset indexing, a hybrid with no single tradition behind it, and the owner retired it from public vocabulary.
+- **`s0`/`s1`/`s2`** — an abbreviation that needs a correction sentence.
+- **bare `0`/`1`/`2`** — ungreppable and unpronounceable in prose.
+- **1-based `slot1`/`slot2`/`slot3`** — keeps the invented word while changing only the defensible part.
 
 ## Appending an entry
 
-When a name fight happens, record: what the thing *is* (its actual semantics, including
-what it deliberately does not promise), the prior that decided it, the rejected bench
-with one honest sentence each, and the date. Future readers — human and model — inherit
-the verdict instead of the argument.
+Record the date, what the thing is (including what it does not promise), the prior that decided it, and each rejected candidate with one honest sentence. Reconcile superseded rulings in place and link the successor; never let obsolete vocabulary pose as current doctrine.

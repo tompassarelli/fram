@@ -1,80 +1,60 @@
-# Isolation and deployment
+# Isolation, wire, and deployment
 
-**Status:** Current source-head deployment boundary, with the deployed v0.3
-handoff called out separately.
+This document specifies the source-head trust domain, coordinator bind and FRAMRPC boundary, supported deployment shape, and v0.3 handoff.
 
-## Trust domains
+## Trust domain and bind
 
-Fram has no engine-level accounts, authorization, or tenant policy. Isolation
-comes from four aligned coordinates:
+Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glossary.md#storage-and-query), one FRAMLOG, one writer process/lock, and one private network boundary form a trust domain. Separate personal, client, and public-tooling data across all four; ontology fields are not tenant isolation.
 
-- one `SpaceId`;
-- one binary FRAMLOG history;
-- one active writer process and its lock;
-- one private network boundary.
+`bin/fram-daemon` binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New logs require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
-Treat that set as one trust domain. Personal data, client data, and public
-tooling belong in separate spaces, logs, processes, and gateway routes. Do not
-use an ontology field as a substitute for tenant isolation.
+The listener is plaintext. Remote deployments keep it private and terminate TLS, authentication, tenant routing, request limits, and public audit policy at a gateway or sidecar.
 
-## Private engine, authenticated edge
+## FRAMRPC v1
 
-The native coordinator speaks plaintext FRAMRPC and binds loopback by default.
-Remote deployments keep that socket private. TLS, bearer-token validation,
-tenant routing, request limits, and public audit policy belong at the gateway or
-sidecar.
+FRAMRPC v1 is a bounded binary protocol. Each frame carries magic, version, request identity, SpaceId, one operation tag, typed controls, and a closed payload. Terms use the recursive tagged codec linked from the [glossary](glossary.md#semantic-kernel); triples are positional tagged arrays, so `t1`/`t2`/`t3` never appear on the wire.
 
-The public edge must select a SpaceId and route only to the matching private
-coordinator. The daemon rejects a request whose SpaceId disagrees with its log.
+Unknown operation, record, field, and Term tags, trailing bytes, or over-limit nesting are rejected. FRAMRPC is not EDN, JSON, HTTP, or MCP.
 
-## Cloudflare shape
+The native daemon accepts exactly thirteen operations:
 
-A Cloudflare Worker is an edge client, not the durable writer. The supported
-shape is:
+- metadata: `rpc/version`, `rpc/status`, `rpc/validate`;
+- mutation: `rpc/assert`, `rpc/retract`, `rpc/batch`;
+- read: `rpc/scan`, `rpc/query`, `rpc/occurrences`;
+- fencing: `rpc/lease-acquire`, `rpc/lease-renew`, `rpc/lease-release`, `rpc/lease-check`.
+
+Query, scan, and occurrences accept page cursors; only query accepts a timeout. Mutations may carry expected logical version, reads report served version, and status reports ordered-result-cache counters. There is no native pull, import/export, graph-edit, deployment, or cutover operation; those local or sealed controls do not enlarge FRAMRPC.
+
+The official zero-dependency [`clients/node/framrpc.mjs`](../clients/node/framrpc.mjs) client connects directly and exposes all thirteen operations with recursive Terms, batches, versions, snapshots, paging, replay, and leases.
+
+## Edge and process shape
 
 ```text
-client -- HTTPS/JSON --> Worker or authenticated shim
-       -- private FRAMRPC --> active Fram coordinator
+client -- HTTPS/closed JSON --> authenticated Worker or shim
+       -- private FRAMRPC --> active coordinator
        -- append --> history.framlog
 ```
 
-The JSON boundary uses tagged recursive Terms and a closed operation mapping.
-It does not forward EDN or arbitrary daemon records. Exact setup and probes are
-in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
+The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it never forwards EDN or arbitrary daemon records. Cloudflare setup and probes live in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
 
-## Durable state
-
-`history.framlog` is a binary FRAMLOG v1 file, not a line-oriented text log.
-Back it up as an append-only durable artifact and preserve its SpaceId. Use the
-engine's scan, query, occurrence, and validation surfaces to inspect semantic
-content; do not scrape binary bytes with text tools.
-
-The one-shot migration command converts a legacy flat log to the recursive
-format. Run it against an explicitly chosen source and destination while the
-source is quiescent. The native daemon refuses the removed flat-serving mode.
-
-## Runtime processes
-
-- `bin/fram-daemon` is the long-lived JVM active or standby coordinator.
+- `bin/fram-daemon` is the long-lived active or standby coordinator.
 - `bin/fram` is the local CLI and FRAMRPC client.
-- `bin/fram-mcp` is a five-tool JSON-RPC-over-stdio data edge.
-- the Cloudflare shim/Worker is an optional authenticated JSON edge.
+- `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
+- The Cloudflare shim/Worker is an optional authenticated JSON edge.
 
-Compiled Clojure is committed under `out/`. Beagle is required to regenerate
-source projections, not to start a released daemon. A second daemon
-implementation in Zig serves the same semantic and FRAMRPC contracts and is held
-at that closed thirteen-operation boundary as a compatibility, rollback, and
-differential-oracle implementation — not as a scheduled replacement of the JVM
-coordinator. Its source ratchet runs in CI; its bootstrap and oracle suites are
-toolchain-owned aggregates that `ci.yml` does not itself execute.
+Compiled Clojure under `out/` starts without Beagle. The Zig implementation is a compatibility, rollback, and differential oracle held to the same semantic and thirteen-operation wire contract, not a scheduled JVM replacement.
 
-## Deployment handoff
+## Durable state and handoff
 
-Source-head FRAMRPC does not expose deployment control. The currently deployed
-v0.3 generations use the operator-owned
-[`coordinator-cutover.md`](coordinator-cutover.md) protocol for blue/green
-writer transfer. That document is live for v0.3 until cluster migration; its
-flat-store terminology is not part of the recursive kernel model.
+Back up `history.framlog` as an append-only binary artifact with its SpaceId. Inspect it through scan, query, occurrences, and validate, never text scraping. Legacy flat logs enter only through the one-shot migration against explicit quiescent source and destination paths.
 
-Keep runtime deployment worktrees pristine. A deployment marker belongs in the
-controller's state, never inside the source worktree the runtime validates.
+Source head exposes no deployment control. Pinned v0.3 clusters use the live [coordinator cutover](coordinator-cutover.md) contract until migration; its flat-store and EDN control vocabulary is version-scoped, not kernel vocabulary. The current host instead uses systemd socket activation and a generation symlink.
+
+Deployment worktrees stay pristine. Controller markers live in controller state, never the source tree being validated.
+
+## Probes
+
+- [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
+- [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) and [`../tests/node_framrpc_client_test.mjs`](../tests/node_framrpc_client_test.mjs): real listener and official client.
+- [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): closed operation boundary.
+- [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj): active/standby authority.

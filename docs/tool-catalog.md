@@ -1,74 +1,29 @@
 # Public tool catalog
 
-**Status:** Current source-head MCP data surface.
-
-`bin/fram-mcp` advertises exactly five public data verbs:
+This document fixes the current source-head MCP data surface at exactly five public data verbs and separates it from native and sealed controls.
 
 | Tool | Contract |
 |---|---|
 | `tell` | assert one Triple |
 | `retract` | retract one exact Triple |
-| `show` | return live Triples whose `slot0` matches |
+| `show` | return live Triples whose `t1` matches |
 | `ask` | run one validated structured query |
 | `validate` | report structural integrity |
 
-That advertised list is closed. Missing arguments and unknown names fail at the
-boundary; dispatch additionally answers two unadvertised spellings of verbs
-already in the list — `untell` for `retract`, and `query` as the internal name
-`ask` normalizes to. The public process does not link or advertise
-graph-authoring verbs. Those belong to a separate sealed control service.
+The advertised list is closed. Missing arguments and unknown names fail. Dispatch accepts only two unadvertised synonyms for listed concepts: `untell` for retract and internal `query` normalized to ask. Graph-authoring verbs belong to a separate sealed control service.
 
-## Current MCP value boundary
+## Value boundary
 
-The kernel supports recursive typed Terms, but the current MCP write schemas
-intentionally expose `subject`, `predicate`, and `object` as strings. `show`
-takes one subject string. `ask` accepts a structured JSON query; its advertised
-constant schema currently covers strings and numbers. This is a real edge
-limitation, not a second kernel model.
+The kernel accepts recursive typed [Terms](glossary.md#semantic-kernel), but current MCP writes intentionally expose String `subject`, `predicate`, and `object`; show takes one subject String; ask's advertised constant schema covers Strings and numbers. This edge limitation is not a second kernel model.
 
-Use the official Node FRAMRPC client, the native CLI, or the tagged Cloudflare
-JSON API when a request must carry recursive Triples, Keywords, Bools, or
-Instants without string projection. Do not send an undocumented JSON shape to
-MCP and assume its current permissive decoder is a compatibility promise.
+Use the official Node FRAMRPC client, native CLI, or tagged Cloudflare JSON API for recursive Triples, Keywords, Bools, or Instants. Undocumented permissive decoding is not a compatibility promise.
 
-## Builder and application clients
+## Ask and other clients
 
-MCP is not the builder transport. The zero-dependency client at
-`fram:clients/node/framrpc.mjs` speaks binary FRAMRPC directly and exposes the
-complete frozen operation set: recursive-Term writes, atomic batches, exact
-expected and served versions, status, snapshot-pinned query/scan pagination,
-occurrence replay, validation, and leases. Its protocol implementation is owned
-and tested in Fram; consumers do not copy or reinterpret the wire codec.
+`ask` accepts the JSON equivalent of the [structured query](query-reference.md), lowers it to a typed plan, and sends FRAMRPC. It is not a string query language.
 
-## `ask`
+The zero-dependency Node client is the builder/application transport. It exposes all thirteen FRAMRPC operations, recursive Terms, atomic batches, expected and served versions, snapshot-pinned paging, occurrence replay, validation, and leases without copying or reinterpreting the codec.
 
-`ask` accepts the JSON equivalent of the structured query in
-[`query-reference.md`](query-reference.md). It is lowered to the typed query
-plan and sent over FRAMRPC; it is not a string query language.
+`bin/fram` also offers scan, occurrences, version, status, and local migration/projection/admin commands. Those are native or local utilities, not additional MCP tools.
 
-```json
-{
-  "find": "titles",
-  "rules": [
-    {
-      "head": {"rel": "titles", "args": [{"var": "item"}, {"var": "title"}]},
-      "body": [
-        {"rel": "triple", "args": [{"var": "item"}, ":title", {"var": "title"}]}
-      ]
-    }
-  ]
-}
-```
-
-## CLI is not the MCP catalog
-
-`bin/fram` exposes human commands such as `scan`, `occurrences`, `version`, and
-`status` in addition to the five data concepts above. Those commands map to the
-closed native FRAMRPC protocol; they are not extra MCP tools. Local
-migration/projection/admin commands are compatibility utilities and likewise do
-not enlarge the public MCP catalog.
-
-The executable catalog contract is
-[`../tests/mcp_test.clj`](../tests/mcp_test.clj). The native operation boundary
-is separately ratcheted by
-[`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj).
+[`../tests/mcp_test.clj`](../tests/mcp_test.clj) gates this catalog; [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj) separately gates FRAMRPC.

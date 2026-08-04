@@ -6,16 +6,13 @@ cd "$repo"
 
 canonical_docs=(
   README.md
-  docs/WHY_FRAM_EXISTS.md
   docs/architecture.md
-  docs/concurrency-and-writes.md
-  docs/coordinator-bind-and-wire.md
   docs/glossary.md
+  docs/guarantees.md
   docs/isolation-and-deployment.md
   docs/naming.md
   docs/ontology.md
   docs/query-reference.md
-  docs/semantic-hints.md
   docs/tool-catalog.md
   deploy/cloudflare/PROCEDURE.md
 )
@@ -39,7 +36,9 @@ historical_docs=(
   docs/archive/claims-design.md
   docs/archive/codegraph-README.md
   docs/archive/measurements.md
+  docs/archive/position-in-class.md
   docs/archive/pull-reference.md
+  docs/archive/WHY_FRAM_EXISTS.md
 )
 
 fail() {
@@ -124,14 +123,14 @@ grep -Fq 'Atom   := String | Int | Float | Bool | Keyword | Instant' README.md |
   fail 'README lacks the exact Atom contract'
 grep -Fq 'Term   := Atom | Triple' README.md || fail 'README lacks the Term contract'
 grep -Fq 'Triple := (Term, Term, Term)' README.md || fail 'README lacks the Triple contract'
-grep -Fq '`slot0`, `slot1`, and `slot2`' README.md || fail 'README lacks neutral slot names'
+grep -Fq '`t1`, `t2`, and `t3`' README.md || fail 'README lacks neutral Triple-position names'
 grep -Fq 'exactly five public data' docs/tool-catalog.md ||
   fail 'tool catalog does not pin five public verbs'
-grep -Fq 'triple(slot0, slot1, slot2)' docs/query-reference.md ||
+grep -Fq 'triple(t1, t2, t3)' docs/query-reference.md ||
   fail 'query reference lacks the triple base relation'
 grep -Fq 'occurrence(coordinate, action, proposition)' docs/query-reference.md ||
   fail 'query reference lacks the occurrence base relation'
-grep -Fq 'FRAMRPC v1' docs/coordinator-bind-and-wire.md ||
+grep -Fq 'FRAMRPC v1' docs/isolation-and-deployment.md ||
   fail 'wire reference lacks FRAMRPC v1'
 grep -Fq 'does not implement `rpc/pull`' docs/archive/pull-reference.md ||
   fail 'legacy pull reference does not state the missing runtime surface'

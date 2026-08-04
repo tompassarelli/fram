@@ -1,25 +1,18 @@
 # Coordinator blue/green cutover contract
 
+This document governs writer-authority transfer on deployed v0.3 clusters until they migrate to the native recursive-Term runtime.
+
 **Status:** Current deployed-v0.3 operator contract, pinned to v0.3 runtimes.
-Keep using this protocol on a cluster that has not migrated to the recursive
-native runtime. **The blue/green controller described here no longer runs on the
-current host:** that host selects a generation with systemd socket activation
-and a generation symlink, so nothing below describes how it switches
-generations. What is retained here is the protocol contract for the pinned v0.3
-runtime only. Its EDN control requests, flat-store/log vocabulary, and marker
-fields are version-scoped deployment mechanics; they do not define the
-source-head Term/Triple kernel or FRAMRPC v1 public data surface.
+
+The controller no longer runs on the current host, which uses systemd socket activation and a generation symlink. This retained protocol's EDN controls, flat-store vocabulary, and marker fields do not define source-head kernel or FRAMRPC behavior.
 
 Protocol: `fram-coordinator-cutover/v1`
 
-This protocol transfers writer authority between two already-running
-coordinator generations. The public selector owns connection holding and route
-switching. Fram owns mutation admission, drain, durable-prefix proof, and the
-per-log kernel writer lock.
+The public selector owns connection holding and atomic route switching; Fram owns mutation admission, drain, durable-prefix proof, and the per-log writer lock.
 
 ## Private endpoints
 
-Run each candidate on a private loopback TCP port:
+Run each candidate on a private loopback INET port:
 
 ```text
 FRAM_COORD_ROLE=active|standby
@@ -27,12 +20,7 @@ FRAM_CUTOVER_TOKEN=<shared secret>
 FRAM_REQUIRE_LOG_FENCE=1
 ```
 
-The current inherited-listener implementation supports INET sockets. A system
-selector may proxy them through a Unix-facing frontend, but must give Fram
-private loopback TCP endpoints until the daemon listener itself gains Unix
-`SocketChannel` support.
-
-Every control request is log-fenced:
+A Unix-facing selector may proxy those endpoints. Read the token from an owner-only file, never the command line. Fence every control request to its canonical log path:
 
 ```clojure
 {:op :for-log
@@ -40,36 +28,13 @@ Every control request is log-fenced:
  :request <control request>}
 ```
 
-Read the token from an owner-only file. Never put it on the command line.
+## Promotion
 
-## Steady-state promotion
+Prepare successors while predecessors still serve, then apply the final handoff to every log endpoint and switch public routes as one transaction:
 
-The selector must prepare every successor while the predecessor is still
-serving traffic. It then applies the bounded final handoff independently to
-every public log endpoint and switches all public routes as one transaction:
-
-1. Read both boot identities:
-
-   ```clojure
-   {:op :cutover-status :token T}
-   ```
-
-2. Prepare each read-only standby:
-
-   ```clojure
-   {:op :cutover-prepare
-    :token T
-    :cutover-id ID}
-   ```
-
-   Preparation reloads the current physical tail and materializes the query
-   cache without acquiring writer authority or changing the standby role. The
-   predecessor remains writable throughout this potentially expensive work.
-   A prepared marker is diagnostic only: it never substitutes for the exact
-   final demotion marker.
-
-3. `HOLD`: stop admitting new public requests and drain selector-owned
-   connections.
+1. Read both boot identities: `{:op :cutover-status :token T}`.
+2. Prepare each standby: `{:op :cutover-prepare :token T :cutover-id ID}`. Preparation reloads the tail and query cache without authority; its marker is diagnostic, never a final demotion marker.
+3. `HOLD` new public requests and drain selector-owned connections.
 4. Demote each active generation:
 
    ```clojure
@@ -79,16 +44,7 @@ every public log endpoint and switches all public routes as one transaction:
     :expected-instance ACTIVE-BOOT-ID}
    ```
 
-   Success is usable only when the response has all of:
-
-   - `:phase :demoted`
-   - `:drain {:queries 0 :reloads 0 :snapshots 0 :complete true ...}`
-   - a `fram-coordinator-cutover-marker/v1` `:marker`
-   - `[:writer-authority :write-authorized] false`
-
-   The marker is the final durable logical version plus physical byte,
-   file-identity, and boundary-hash proof. Retrying the same demotion ID is
-   idempotent and returns the same marker.
+   Accept only `:phase :demoted`, a complete zero-active drain, a `fram-coordinator-cutover-marker/v1` marker, and false writer authorization. The marker proves final logical version, bytes, file identity, and boundary hash; retrying the same ID returns the same marker.
 
 5. Promote each prepared standby:
 
@@ -99,58 +55,33 @@ every public log endpoint and switches all public routes as one transaction:
     :marker DEMOTION-MARKER}
    ```
 
-   Fram acquires the kernel writer lock, reloads the final tail, and compares
-   the observed marker before reopening mutation admission. Success requires
-   `:phase :active`, the marker version, and
-   `[:writer-authority :write-authorized] true`.
+   Fram acquires the writer lock, reloads the final tail, and compares the marker before admitting mutation. Accept only `:phase :active`, the marker version, and true writer authorization.
 
-6. Verify status on every newly active private endpoint.
-7. Atomically `SWAP` all public routes, then `RESUME` held requests.
+6. Verify every new active private endpoint.
+7. Atomically `SWAP` all public routes, then `RESUME`.
 
-If any demotion or promotion fails, keep public traffic held. Never route to a
-generation that lacks writer authority.
+On any demotion or promotion failure, keep traffic held and never route to a generation without writer authority.
 
 ## Rollback
 
-Rollback uses the same protocol, not a force flag:
-
-1. Keep public traffic held.
-2. Demote the newly promoted generation with a fresh cutover ID.
-3. Promote the retired predecessor using that new marker.
-4. Verify authority and version.
-5. Atomically restore all public routes and resume.
-
-A marker mismatch releases the attempted successor's writer lock and leaves it
-read-only, so the predecessor remains eligible for exact rollback.
+Keep traffic held, demote the new generation with a fresh ID, promote the predecessor with that new marker, verify authority/version, atomically restore routes, and resume. Marker mismatch releases the successor's writer lock and leaves it read-only; there is no force flag.
 
 ## One-time legacy bootstrap
 
-A live coordinator predating this protocol owns neither the kernel writer lock
-nor demotion verbs. There is deliberately no unauditable force-promotion
-request.
+A pre-protocol coordinator owns neither the writer lock nor demotion verbs. Migrate with one bounded bounce:
 
-The one-time safe migration is one bounded bounce:
+1. Hold all selectors.
+2. Prove every legacy direct unit and listener stopped.
+3. Start the new generation as active so it locks and folds the quiescent final log before listening.
+4. Verify instance, version, and authority for every endpoint.
+5. Atomically switch routes and resume.
+6. Start the next standby so later changes use marker handoff.
 
-1. Hold all public selectors.
-2. Prove every legacy direct unit is stopped and its listener/process is gone.
-3. Start the new generation as `FRAM_COORD_ROLE=active`; it acquires the writer
-   lock and folds the quiescent final log before listening.
-4. Verify instance, version, and writer authority for every log endpoint.
-5. Atomically switch all public routes and resume.
-6. Start the next revision's standby so all later cutovers use the steady-state
-   marker protocol.
-
-Never run an `active` protocol generation concurrently with a legacy writer
-that does not participate in the lock.
+Never overlap an active protocol generation with a legacy writer outside the lock.
 
 ## Operator command
 
-`fram-cutover` emits one EDN response on stdout and uses these exit codes:
-
-- `0`: acknowledged success
-- `2`: usage or local input error
-- `3`: daemon rejection
-- `4`: transport or protocol error
+`fram-cutover` emits one EDN response. Exit codes are `0` acknowledged success, `2` usage/input error, `3` daemon rejection, and `4` transport/protocol error.
 
 ```bash
 fram-cutover status \
@@ -176,11 +107,4 @@ fram-cutover promote \
   --marker-file /run/fram/cutover/coordination.marker.edn
 ```
 
-Marker output is written atomically with mode `0600`. If local marker
-publication fails after a successful demotion, retry the same demotion ID to
-recover the identical marker.
-
-The controller's default response timeout is 65 seconds, slightly above the
-daemon's default 60-second synchronization bound. Operators may lower it only
-when the daemon's synchronization bound is lowered with it; otherwise a client
-can abandon a preparation that is still safely running on the server.
+Marker output is atomic mode `0600`. If publication fails after demotion, retry the same ID to recover the identical marker. The controller timeout defaults to 65 seconds, above the daemon's 60-second synchronization bound; lower both together only.

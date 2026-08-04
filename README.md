@@ -13,8 +13,8 @@ Term   := Atom | Triple
 Triple := (Term, Term, Term)
 ```
 
-The positions are `slot0`, `slot1`, and `slot2`. The kernel does not impose
-subject/predicate/object roles, and any Triple can occupy any slot of another
+The positions are `t1`, `t2`, and `t3`. The kernel does not impose
+subject/predicate/object roles, and any Triple can occupy any position of another
 Triple. `Atom`, `Term`, and `Triple` are the public semantic vocabulary;
 `TripleRow` and integer term handles are private storage mechanics.
 
@@ -48,14 +48,12 @@ type. See the [naming ledger](docs/naming.md).
 
 ## Current documentation
 
-- [Why Fram exists](docs/WHY_FRAM_EXISTS.md) — the recursive-Triple argument and its negative space.
 - [Architecture](docs/architecture.md) — semantic kernel, physical rows, log, coordinator, and projections.
+- [Glossary](docs/glossary.md) — the single vocabulary source for current documents.
 - [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
-- [Concurrency and writes](docs/concurrency-and-writes.md) — one writer, exact OCC, occurrence receipts, and replay.
-- [Ontology](docs/ontology.md) — what the stored things are: triple, proposition, occurrence, the one canonical normalized example, and where "fact" is honest.
-- [Guarantees](docs/guarantees.md) — every guarantee, its gate, and its status; failures land on a named line.
-- [Workload contract](docs/workload-contract.md) — the reference workload envelope and the client obligations it assumes.
-- [Coordinator wire](docs/coordinator-bind-and-wire.md) — binary FRAMRPC v1 and the private-network boundary.
+- [Ontology](docs/ontology.md) — modeling rules, the canonical normalized example, profiles, and semantic hints.
+- [Guarantees](docs/guarantees.md) — guarantees, concurrency, workload envelope, and client obligations.
+- [Naming ledger](docs/naming.md) — durable naming verdicts and rejected alternatives.
 - [Node FRAMRPC client](clients/node/README.md) — the complete direct builder and application data plane.
 - [Isolation and deployment](docs/isolation-and-deployment.md) — trust domains and the Cloudflare edge shape.
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
@@ -65,7 +63,7 @@ type. See the [naming ledger](docs/naming.md).
   blue/green operator contract, pinned to the v0.3 runtime; the controller it
   describes no longer runs on the current host.
 
-The old pull, Worlds, claims, and Codegraph documents live under
+The rationale and positioning essays, plus the old pull, Worlds, claims, and Codegraph documents, live under
 [`docs/archive/`](docs/archive/README.md). Each one carries a `HISTORICAL`
 banner, is retained as design evidence only, and is never a recursive-kernel
 runtime reference.

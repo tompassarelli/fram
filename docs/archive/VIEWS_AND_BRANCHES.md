@@ -10,7 +10,7 @@
 **Status: historical pre-recursive-kernel design note. Not a current runtime
 reference.** Its `[today]` labels describe the repository snapshot at which this
 note was written, not source head. Preserve its terminology as design evidence;
-use [WHY_FRAM_EXISTS.md](../WHY_FRAM_EXISTS.md) for the current model.
+use [architecture.md](../architecture.md) for the current model.
 
 ---
 

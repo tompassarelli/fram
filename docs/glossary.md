@@ -1,51 +1,61 @@
-# Operational glossary
+# Glossary
 
-**fact (v0.3 sense)** — On the deployed v0.3 line, a fact is one stored subject–predicate–object record; in the current kernel, “fact” is not a stored type and means only a proposition included by a particular view’s rules.
+This document is the single source for Fram's current semantic, storage, query, wire, and deployment vocabulary.
 
-**Term** — A Term is any value Fram can place in a Triple: either an Atom or another Triple.
+## Semantic kernel
 
-**Atom** — An Atom is a non-recursive leaf value: a string, integer, floating-point number, Boolean, keyword, or instant.
+**Atom** — A non-recursive leaf: String, Int, Float, Bool, Keyword, or Instant.
 
-**Triple** — A Triple is exactly three neutral Term slots, any of which may contain another Triple, and the kernel assigns none of the slots a fixed subject, predicate, or object role.
+**Term** — Any value accepted in a Triple: an Atom or another Triple.
 
-**proposition** — A proposition is a Triple used as statement content, independent of when or how many times that content is asserted.
+**Triple** — Exactly three neutral Terms, recursively; the kernel assigns no subject, predicate, object, entity, or attribute role to a position.
 
-**occurrence** — An occurrence is one assertion or retraction at an exact log position identified by its transaction and operation numbers, so equal propositions recorded at different positions remain distinguishable.
+**t1 / t2 / t3** — The first, second, and third positional addresses of `Triple := (Term, Term, Term)`; these public names never appear on the binary wire.
 
-**live set** — The live set is the current view of assertion occurrences still in force after retractions and explicit replacements, while the full operation history remains preserved.
+**proposition** — A Triple used as statement content, independent of whether, when, or how often it is asserted.
 
-**fold** — A fold replays ordered log transactions to reconstruct the store’s history, live occurrences, live propositions, and current logical version.
+**transaction coordinate** — `(space, :kernel/tx-sequence, sequence)`, the durable logical address of one accepted transaction.
 
-**fold-boot** — A fold-boot starts a Fram server by folding its complete authoritative log history into memory instead of starting from a checkpoint.
+**occurrence** — One assertion or retraction at `(transaction-coordinate, :kernel/op-ordinal, ordinal)`; equal propositions at different coordinates remain distinct.
 
-**snapshot boot (v0.3 sense)** — A snapshot boot restores a validated checkpoint and replays only the later log tail, falling back to a fold-boot if the checkpoint cannot be proved to match the logs and fold logic; the recursive-Term coordinator implements no checkpoint path and always fold-boots.
+**live set** — The propositions whose assertion occurrences remain in force after exact retractions; full occurrence history is retained.
 
-**checkpoint (v0.3 sense)** — A checkpoint is an on-disk image of the folded store at one logical version, with log identities and byte offsets that identify the later records still needing replay.
+**fact** — A proposition admitted by a particular view's rules, not a stored kernel type; on the historical v0.3 line it meant one stored subject–predicate–object record.
 
-**rotation** — A rotation is a disposable index of live assertion occurrences by individual Triple slots and slot pairs, so many queries can find matches without scanning the whole live set.
+**Turtle** — The “turtles all the way down” architecture prior: prefer the same recursive Triple language for data, coordinates, history, and metadata; never a primitive or storage type.
 
-**projection** — A projection is a derived, rebuildable view of stored Terms or occurrences, such as live query relations or indexes, rather than authoritative history.
+**profile** — An optional, stored contract that validates a space's propositions above the unchanged kernel.
 
-**world** — A world is the historical name for a named history that can branch into immutable versions, each deciding which facts a query sees without promising those facts agree; it is not a current kernel primitive or FRAMRPC operation.
+## Storage and query
 
-**epoch** — An epoch is an inclusive transaction-sequence range sealed as a canonical FRAMLOG segment and published through a fingerprinted range manifest. Completed epochs are retained indefinitely by default; active-store compaction remains a separate operational step.
+**FRAMLOG** — The authoritative binary append-only history for one SpaceId.
 
-**Fram server** — A Fram server is a long-running process that loads one store, serves its private data protocol, and appends accepted changes only when it holds writer authority.
+**fold / replay** — Applying ordered FRAMLOG transactions to reconstruct logical version, occurrence liveness, live propositions, and indexes.
 
-**writer/standby (authority roles)** — The writer is the one Fram server generation allowed to append to a store, while a standby stays read-only, refreshes from the same durable history, and can be prepared to take authority.
+**snapshot** — An immutable `{version, root}` query view published by the writer.
 
-**work store** — The work store is the Fram-backed history containing operator-facing work records, intentions, and schema, kept separate from high-volume machine telemetry.
+**checkpoint** — A derived, prefix-bound image used to accelerate historical reconstruction; invalid checkpoints fall back to canonical replay.
 
-**telemetry store** — The telemetry store is the separate Fram-backed history for runs, sessions, measurements, and other high-volume machine output.
+**epoch** — An inclusive transaction-sequence range sealed as a canonical FRAMLOG segment and named by a fingerprinted range manifest.
 
-**blue/green generation** — A blue or green generation is one of two side-by-side deployment copies of the Fram servers, allowing one copy to serve while the other is prepared and checked.
+**rotation** — A disposable index of live occurrences by individual Triple positions and position pairs; `SPO`/`POS`/`OSP` are private physical names.
 
-**selector** — The selector is the operator-owned front end that can hold and drain public connections, check both deployment copies, and switch all store routes together.
+**projection** — A rebuildable view of Terms or occurrences, including query relations, profiles, and indexes; never authoritative history.
 
-**promote (deployment)** — To promote is to give a prepared standby writer authority after it matches the previous writer’s final durable marker; public traffic moves only after the new writer passes its checks.
+**SpaceId** — The immutable identity binding a coordinator, its FRAMLOG, and every accepted request into one trust domain.
 
-**wire skew** — Wire skew means a client and server speak different protocol versions or formats, so a healthy server may still reject, drop, or hang the client’s requests.
+## Wire and deployment
 
-**FRAMRPC** — FRAMRPC is Fram’s private binary protocol, carrying typed recursive Terms and a closed set of thirteen data operations between clients and a Fram server.
+**FRAMRPC** — Fram's private binary protocol for typed recursive Terms and a closed thirteen-operation data surface.
 
-**v0.3 line** — The v0.3 line is the still-deployed compatibility release series that uses the older flat-store, line-protocol runtime and its blue/green cutover contract until migration to the recursive-Term FRAMRPC runtime.
+**writer / standby** — The sole coordinator generation authorized to append to a SpaceId's log, and a read-only generation that may prepare to acquire authority.
+
+**selector** — The operator-owned front end that holds and drains public connections, checks deployment generations, and switches all routes together.
+
+**blue/green generation** — One of two side-by-side deployment copies used to transfer writer authority without changing the public route prematurely.
+
+**promote** — Grant a prepared standby writer authority after it proves agreement with the former writer's final durable marker.
+
+**wire skew** — A client/server protocol-version or format mismatch that can make healthy endpoints reject, drop, or hang requests.
+
+**v0.3 line** — The deployed compatibility release using the older flat store, EDN line protocol, and blue/green cutover contract until cluster migration.
