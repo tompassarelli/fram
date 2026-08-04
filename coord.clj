@@ -11,7 +11,7 @@
             [fram.store :as term-store]
             [fram.types :as t]))
 
-(def ^:private triple-log-magic
+(def ^:private ^"[B" triple-log-magic
   (.getBytes "FRAMLOG\u0000" java.nio.charset.StandardCharsets/UTF_8))
 (def ^:private legacy-fri-magic
   (.getBytes "FRAMFRI1" java.nio.charset.StandardCharsets/UTF_8))
@@ -225,8 +225,9 @@
     (fail! :migration-required
            "legacy log requires bin/fram-migrate-triple-log before runtime boot"
            {:path path :migrator "bin/fram-migrate-triple-log"}))
-  (let [buffer (doto (java.nio.ByteBuffer/wrap bytes)
-                 (.order java.nio.ByteOrder/LITTLE_ENDIAN))]
+  (let [^java.nio.ByteBuffer buffer
+        (doto (java.nio.ByteBuffer/wrap bytes)
+          (.order java.nio.ByteOrder/LITTLE_ENDIAN))]
     (.position buffer (alength triple-log-magic))
     (try
       (ensure-remaining! buffer 8 "FRAMLOG header")
@@ -318,7 +319,7 @@
                       (get (:prefix-ends parsed) sequence)
                       (:header-bytes parsed))
         bytes (java.nio.file.Files/readAllBytes (.toPath file))
-        prefix (java.util.Arrays/copyOfRange bytes 0 valid-bytes)
+        ^bytes prefix (java.util.Arrays/copyOfRange bytes 0 (int valid-bytes))
         digest (.digest (java.security.MessageDigest/getInstance "SHA-256") prefix)
         fingerprint (apply str (map #(format "%02x" (bit-and % 255)) digest))]
     {:space-id (:space-id parsed)
@@ -690,7 +691,7 @@
     (or (:fram/code data) (:type data) (:code data)
         (keyword (.getSimpleName (class error))))))
 
-(defn- fence-and-reconcile! [co before-store error]
+(defn- fence-and-reconcile! [co before-store ^Throwable error]
   ;; No caller may observe the pre-append version as writable while the log is
   ;; being resolved after a write whose durable outcome is unknown.
   (let [cause {:code (throwable-code error) :message (.getMessage error)}]
@@ -1008,10 +1009,12 @@
                       (.digest digest))))))
 
 (defn- file-stamp [^java.io.File file]
-  (let [attributes
+  (let [^"[Ljava.nio.file.LinkOption;" options
+        (make-array java.nio.file.LinkOption 0)
+        ^java.nio.file.attribute.BasicFileAttributes attributes
         (java.nio.file.Files/readAttributes
          (.toPath file) java.nio.file.attribute.BasicFileAttributes
-         (make-array java.nio.file.LinkOption 0))]
+         options)]
     {:file-key (str (.fileKey attributes))
      :bytes (.size attributes)
      :modified-ms (.toMillis (.lastModifiedTime attributes))}))

@@ -25,11 +25,14 @@
 
 (def docker-copy-sources
   (->> (str/split-lines docker-source)
+       (remove #(str/includes? % "--from="))
        (keep #(second (re-matches #"\s*COPY\s+(.+?)\s*" %)))
        (mapcat #(drop-last (str/split % #"\s+")))
        set))
 (def expected-docker-sources
-  (set/union root-assets #{"deps.edn" "out/" "bin/fram-daemon"}))
+  (set/union root-assets
+             #{"deps.edn" "out/" "native/deps.edn" "native/build.sh"
+               "native/reachability-metadata.json" "native/src/"}))
 
 (def checks (atom []))
 (defn chk [label ok detail]
@@ -38,7 +41,7 @@
 (chk "daemon load-file closure is recognized"
      (= #{"coord.clj" "coord_writer_authority.clj"} load-assets)
      load-assets)
-(chk "Docker COPY sources equal the daemon runtime closure"
+(chk "Docker source COPYs equal the Graal build closure"
      (= expected-docker-sources docker-copy-sources)
      {:expected expected-docker-sources :actual docker-copy-sources})
 (chk "Nix package includes every root runtime asset"

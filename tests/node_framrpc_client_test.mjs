@@ -22,6 +22,7 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const checks = [];
 const I64_MIN = -(1n << 63n);
+const expectedEngine = process.env.FRAM_EXPECTED_ENGINE ?? 'rpc/jvm';
 
 async function check(label, body) {
   await body();
@@ -125,7 +126,7 @@ try {
     const version = await fram.version();
     const status = await fram.status();
     assert.equal(version.servedVersion, 0n);
-    assert.equal(status.result.engine, 'rpc/jvm');
+    assert.equal(status.result.engine, expectedEngine);
     assert.equal(status.result.liveCount, 0n);
   });
 

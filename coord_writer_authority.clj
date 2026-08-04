@@ -52,7 +52,7 @@
   (let [path (authority-path log)
         parent (.getParentFile (io/file path))]
     (when parent (.mkdirs parent))
-    (let [channel (open-channel path)]
+    (let [^FileChannel channel (open-channel path)]
       (try
         (if-let [lock (.tryLock channel)]
           {:format authority-format

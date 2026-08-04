@@ -107,6 +107,8 @@
           (and (str/includes? launcher "serve-flat was removed")
                (str/includes? launcher "FRAM_DAEMON_RUNTIME:-native")
                (str/includes? launcher "artifact_dir/READY")
+               (str/includes? launcher "FRAM_GRAAL_ARTIFACT")
+               (str/includes? launcher "exec \"$graal_artifact\"")
                (str/includes? launcher "jvm-oracle|jvm-dev")
                (str/includes? launcher "exec \"$native_daemon\"")
                (str/includes? migration "migrate-triple-log")

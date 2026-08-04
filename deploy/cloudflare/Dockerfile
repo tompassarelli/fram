@@ -1,28 +1,37 @@
-# Fram coordinator daemon image.
+# Fram coordinator release image. Graal compilation belongs to image builds,
+# never to the JVM development loop.
 # Build from the REPO ROOT (the build context is the fram checkout):
 #   docker build -f deploy/cloudflare/Dockerfile -t fram-coordinator .
-#
-# This retained image carries the explicit jvm-dev fallback. The launcher still
-# defaults to a READY native artifact; callers must select jvm-dev deliberately.
-# `clojure -P` warms that fallback's dep cache so its first boot stays offline.
-FROM clojure:temurin-21-tools-deps-bookworm-slim
+
+FROM clojure:temurin-21-tools-deps-bookworm-slim AS fram-aot
 
 WORKDIR /fram
 
-# deps first — cached layer unless deps.edn changes
 COPY deps.edn ./
-RUN clojure -P
+COPY native/deps.edn native/deps.edn
+RUN clojure -Sdeps "$(cat native/deps.edn)" -P
 
-# exactly what coord_daemon.clj needs at runtime:
-#   out/                 compiled engine namespaces (classpath, deps.edn :paths)
-#   coord.clj            reified coordinator library (load-file'd)
-#   coord_writer_authority.clj  writer-token admission (load-file'd)
-#   rotations.clj        covering read indexes (load-file'd)
-#   out/resolve.clj      generated namespace-preserving resolver shim
-#   out/defcheck_gate.clj conditional load (FRAM_DEFCHECK=1)
 COPY out/ out/
 COPY coord.clj coord_daemon.clj coord_writer_authority.clj ./
-COPY bin/fram-daemon bin/fram-daemon
+COPY native/build.sh native/build.sh
+COPY native/reachability-metadata.json native/reachability-metadata.json
+COPY native/src/ native/src/
+RUN native/build.sh aot
+
+FROM ghcr.io/graalvm/native-image-community:25.0.2-muslib AS fram-native-image
+
+USER root
+WORKDIR /fram
+COPY --from=fram-aot /root/.m2 /root/.m2
+COPY --from=fram-aot /fram /fram
+RUN FRAM_GRAAL_STATIC=1 native/build.sh image
+
+FROM alpine:3.22
+
+RUN addgroup -S fram \
+    && adduser -S -G fram fram \
+    && install -d -o fram -g fram /data
+COPY --from=fram-native-image /fram/native/fram-daemon-graal /usr/local/bin/fram-daemon-graal
 
 # The wire protocol is UNAUTHENTICATED — 0.0.0.0 is safe ONLY because
 # docker-compose keeps this port on a private network with the shim as the
@@ -31,15 +40,12 @@ ENV FRAM_BIND=0.0.0.0 \
     FRAM_SNAPSHOT_BOOT=1 \
     FRAM_SPACE_ID=cloudflare
 
-# durable state: the append-only fact log (+ snapshot checkpoints) live here.
-# Container restarts refold/snapshot-boot from this file; the Workers hold nothing.
 VOLUME /data
 EXPOSE 7977
 
-# Probe the real binary protocol with the same shared client used by data tools.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
-  CMD clojure -M -e "(require '[fram.rt :as rt] '[coord-daemon-wire :as wire]) (rt/require-native-success! (rt/native-call! 7977 :rpc/version wire/rpc-unit))"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["nc", "-z", "127.0.0.1", "7977"]
 
-# One-shot migration owns any legacy facts.log conversion before this image is
-# deployed. The live source is the recursive-term FRAMLOG only.
-CMD ["bin/fram-daemon", "serve", "7977", "/data/history.framlog"]
+USER fram
+ENTRYPOINT ["/usr/local/bin/fram-daemon-graal"]
+CMD ["serve", "7977", "/data/history.framlog"]
