@@ -284,7 +284,10 @@
   (and (string? needle) (not (empty? (word-tokens needle)))))
 
 (defn substring-needle-valid? [needle: Any] -> Bool
-  (and (string? needle) (not (empty? (str/trim needle)))))
+  (if (string? needle)
+    (let [text: String needle]
+      (not (empty? (str/trim text))))
+    false))
 
 (defn- shortest-posting [vectors: (Vec (Vec Int))] -> (Vec Int)
   (loop [index 0 best: (U (Vec Int) Nil) nil]

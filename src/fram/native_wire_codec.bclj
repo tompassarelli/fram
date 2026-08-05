@@ -406,9 +406,10 @@
       [(integer? term)
        (do (append-u8! encoder 2) (append-i64-le! encoder term))]
       [(and (number? term) (not (integer? term)))
-       (do
-         (append-u8! encoder 3)
-         (append-i64-le! encoder (float-to-bits term)))]
+       (let [float-term: Float term]
+         (do
+           (append-u8! encoder 3)
+           (append-i64-le! encoder (float-to-bits float-term))))]
       [(false? term) (append-u8! encoder 4)]
       [(true? term) (append-u8! encoder 5)]
       [(keyword? term)

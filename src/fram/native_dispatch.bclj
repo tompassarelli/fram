@@ -662,9 +662,11 @@
             action (actionresult-action parsed)
             fence: FenceResult (parse-fence (read-option (nth values 2)))]
         (if (and (actionresult-ok parsed) action)
-          (execute-actions!
-           session request (->ActionPlan true [action] nil nil)
-           fence now-ms served-version)
+          (let [present-action: Action action
+                actions: (Vec Action) [present-action]]
+            (execute-actions!
+             session request (->ActionPlan true actions nil nil)
+             fence now-ms served-version))
           (error-response
            request served-version
            (or (actionresult-code parsed) :rpc-invalid-payload)

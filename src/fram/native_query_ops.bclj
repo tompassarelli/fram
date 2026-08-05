@@ -27,6 +27,10 @@
    next-page-ordinal: Int
    after-row: (Vec Any)])
 
+(defrecord QueryHead
+  [relation: String
+   terms: (Vec d/QueryTerm)])
+
 (defrecord QueryView
   [root: (Atom t/TermStore)
    version: Int
@@ -210,10 +214,11 @@
    (fn [term: Any] -> d/QueryTerm (parse-query-term! term))
    (read-list! value)))
 
-(defn parse-query-head! [value: Any] -> (Vec Any)
+(defn parse-query-head! [value: Any] -> QueryHead
   (let [fields: (Vec Any) (read-record! value :query/head 2)]
-    [(require-string! (nth fields 0) "query head relation")
-     (parse-query-terms! (nth fields 1))]))
+    (->QueryHead
+     (require-string! (nth fields 0) "query head relation")
+     (parse-query-terms! (nth fields 1)))))
 
 (defn parse-query-clause! [value: Any] -> d/Literal
   (match (query-record-tag value)
@@ -253,10 +258,10 @@
 
 (defn parse-query-rule! [value: Any] -> d/Rule
   (let [fields: (Vec Any) (read-record! value :query/rule 2)
-        head: (Vec Any) (parse-query-head! (nth fields 0))]
+        head: QueryHead (parse-query-head! (nth fields 0))]
     (d/rule
-     (nth head 0)
-     (nth head 1)
+     (queryhead-relation head)
+     (queryhead-terms head)
      (mapv
       (fn [clause: Any] -> d/Literal (parse-query-clause! clause))
       (read-list! (nth fields 1))))))
@@ -458,11 +463,14 @@
   (if (= 2 (count after-row))
     (let [position-value (nth after-row 0)
           expected (nth after-row 1)]
-      (if (and (integer? position-value)
-               (and (>= position-value 0)
-                    (and (< position-value (count rows))
-                         (= expected (nth rows position-value)))))
-        position-value
+      (if (integer? position-value)
+        (let [position: Int position-value]
+          (if (and (>= position 0)
+                   (and (< position (count rows))
+                        (= expected (nth rows position))))
+            position
+            (fail! :query-cursor-mismatch
+                   "page cursor row is absent from its snapshot")))
         (fail! :query-cursor-mismatch
                "page cursor row is absent from its snapshot")))
     (fail! :query-cursor-mismatch
@@ -563,9 +571,13 @@
                           (queryview-lower-exclusive view)
                           (queryview-version view)))
         requested-timeout (t/rpcrequest-timeout-ms request)
+        timeout-value: Int
+        (if (some? requested-timeout)
+          (let [present-timeout: Int requested-timeout]
+            present-timeout)
+          default-query-timeout-ms)
         timeout-ms (min max-query-timeout-ms
-                        (if (some? requested-timeout)
-                          requested-timeout default-query-timeout-ms))]
+                        timeout-value)]
     (if (< timeout-ms 0)
       (error-response request (queryview-version view)
                       :rpc-invalid-payload

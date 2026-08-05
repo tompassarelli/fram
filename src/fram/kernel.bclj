@@ -96,10 +96,12 @@
 ;; The engine's own occurrence vocabulary is primitive-exempt; :rpc/* is wire
 ;; syntax and never reaches a stored proposition.
 (defn- namespaced-vocabulary? [value: Any] -> Bool
-  (and (keyword? value)
-       (let [spelling: String (str value)]
-         (and (str/includes? spelling "/")
-              (not (str/starts-with? spelling kernel-vocabulary-prefix))))))
+  (if (keyword? value)
+    (let [keyword-value: Keyword value
+          spelling: String (str keyword-value)]
+      (and (str/includes? spelling "/")
+           (not (str/starts-with? spelling kernel-vocabulary-prefix))))
+    false))
 
 (defn- grouped-vocabulary?
   [triples: (Vec t/Triple)
