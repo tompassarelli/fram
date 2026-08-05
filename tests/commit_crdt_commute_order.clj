@@ -11,7 +11,7 @@
 ;; WHAT IS THE TIE?
 ;;
 ;; This test inserts two defs concurrently at the same gap and checks the SOURCE of each
-;; tie. The daemon sets the tie to the new form node's atomic name-int (reserve-name-ints!,
+;; tie. The server sets the tie to the new form node's atomic name-int (reserve-name-ints!,
 ;; a monotonic counter reserved at COMMIT). We assert tie == the node's @<mod>#<int>
 ;; name-int. If so, the order is the COMMIT order (whoever commits first gets the lower
 ;; tie -> lands first), NOT a generation-time site-id. That is the honest boundary:

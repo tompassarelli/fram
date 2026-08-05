@@ -72,7 +72,7 @@
         (and (t/triple? candidate)
              (= world (t/triple-t1 candidate))
              (= :worlds/candidate (t/triple-t2 candidate))))
-(check! "begin emits one expected-version batch, not a special daemon verb"
+(check! "begin emits one expected-version batch, not a special server verb"
         (let [request (host/plan-request space begin)]
           (and (= :rpc/batch (t/rpcrequest-op request))
                (= 0 (t/rpcrequest-expected-version request)))))

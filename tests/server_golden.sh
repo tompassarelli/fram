@@ -22,7 +22,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:?usage: server_golden.sh capture|verify <dir>}"
 GOLD="${2:?usage: server_golden.sh capture|verify <dir>}"
-DAEMON="${FRAM_SERVER_DAEMON:-$HERE/server.clj}"
+SERVER="${FRAM_GOLDEN_SERVER:-$HERE/server.clj}"
 WORK="${TMPDIR:-/tmp}/server-golden-run"
 TRANSPORT="${FRAM_SERVER_GOLDEN_TRANSPORT:-port}"
 
@@ -54,11 +54,11 @@ cat >"$WORK/probe.clj" <<'EOF'
          '[fram.schema :as s])
 
 (def root (System/getenv "FRAM_GOLDEN_ROOT"))
-(def daemon (System/getenv "FRAM_GOLDEN_DAEMON"))
+(def server (System/getenv "FRAM_GOLDEN_SERVER"))
 (def case-name (first *command-line-args*))
 (def transport (System/getenv "FRAM_GOLDEN_TRANSPORT"))
 (binding [*command-line-args* []]
-  (load-file daemon))
+  (load-file server))
 
 (def case-dir (io/file "/tmp/server-golden-run/cases" case-name))
 (.mkdirs case-dir)
@@ -248,7 +248,7 @@ run_case() {
   (
     cd "$HERE"
       FRAM_GOLDEN_ROOT="$HERE" \
-      FRAM_GOLDEN_DAEMON="$DAEMON" \
+      FRAM_GOLDEN_SERVER="$SERVER" \
       FRAM_GOLDEN_TRANSPORT="$TRANSPORT" \
       timeout 240 clojure -M "$WORK/probe.clj" "$case_name"
   ) >"$WORK/$case_name.out" 2>"$WORK/$case_name.err"

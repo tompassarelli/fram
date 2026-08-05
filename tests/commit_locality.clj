@@ -14,9 +14,9 @@
 ;;   (kernel single? excludes it), and the base_version reject at database.clj:130
 ;;   is `(and single ...)` -> never fires for positions.
 ;;
-;; LIVE, NOT LATENT (resolved by the daemon-masking audit lens):
+;; LIVE, NOT LATENT (resolved by the server-masking audit lens):
 ;;   Concurrent :edit-min upsert-form APPENDs to one module corrupt the index in
-;;   the live daemon. Both requests clone lock-free (server.clj:842) and
+;;   the live server. Both requests clone lock-free (server.clj:842) and
 ;;   dispatch OUTSIDE the outer dlock (:953); each computes next-n = (inc (max fN))
 ;;   on its own clone of the same base state (resolve.clj:1168) and freezes the
 ;;   literal "f3" at harvest; the dlock (:923) wraps ONLY the commit replay, with
@@ -108,12 +108,12 @@
 (println "Single-valued fields: stale concurrent write -> :reject :conflict (SAFE, EXP1).")
 (println "Dense multi-valued fN positions: stale concurrent write -> BOTH land -> duplicate")
 (println "  index -> silent render corruption (HAZARD, EXP2). No commit-time conflict detection.")
-(println "LIVE in the daemon, not latent: edit-min computes next-n on a lock-free clone and")
-(println "  commits the frozen \"fN\" under the dlock with NO recompute (daemon:842,:953,:923;")
+(println "LIVE in the server, not latent: edit-min computes next-n on a lock-free clone and")
+(println "  commits the frozen \"fN\" under the dlock with NO recompute (server:842,:953,:923;")
 (println "  resolve.clj:1168). The wired verbs avoid corruption ONLY single-writer / fresh-clone:")
 (println "  they harvest retire+mint ops that COMMIT under the dlock, but the mint/index-compute")
 (println "  itself runs lock-free on the clone. Smoking gun: the SAME clone-side race was fixed")
-(println "  for node-name-ints (daemon:798-815) but the fN index was left unpatched.")
+(println "  for node-name-ints (server:798-815) but the fN index was left unpatched.")
 (println "")
 (println "FIX FORK (all DEFERRED — not built here):")
 (println "  A. single-valued-per-position cardinality -> REJECT the loser (EXP3). Safe, but")

@@ -8,13 +8,13 @@
 ;; SPELLING can't match the renamed def and renders the stale name. bound_to fixes it:
 ;;   1. boot, ingest migration (persist-bound! locks every ref to its @mod#int).
 ;;   2. auto-select the most-referenced top-level def D; rename it (display name only).
-;;   3. COLD RESTART (re-boot the daemon from the flat log — bound_to is durable).
+;;   3. COLD RESTART (re-boot the server from the flat log — bound_to is durable).
 ;;   4. whole re-materialize (refers_to re-derived BY SPELLING from scratch).
 ;;   5. every reference L that was bound to D now: (refers-target L) == D  [identity],
 ;;      binding-name(D) == NEW name [renders new], sym-val(L) == OLD name [no spelling
 ;;      rewrite — pure identity follow, the exact "no spelling fallback" property].
 ;;
-;; SAFE: a /tmp COPY of .fram/code.log + in-process daemon; NO socket, NEVER port 7977.
+;; SAFE: a /tmp COPY of .fram/code.log + in-process server; NO socket, NEVER port 7977.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[fram.store :as c] '[fram.schema :as s])
 (def root (System/getProperty "user.dir"))
@@ -59,7 +59,7 @@
              (catch Throwable t {:reject (.getMessage t)})))
 (println "rename:" (pr-str (select-keys rn [:ok :ops :reject])))
 
-;; ---- COLD RESTART — re-boot the daemon from the durable flat log ----
+;; ---- COLD RESTART — re-boot the server from the durable flat log ----
 (boot-flat! flat)
 (handle {:op :refers-ensure})                    ; whole re-materialize: refers_to re-derived by SPELLING
 (def st1 (:store @db))

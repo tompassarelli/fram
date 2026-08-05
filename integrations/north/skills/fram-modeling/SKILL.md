@@ -3,9 +3,8 @@ name: fram-modeling
 description: >-
   Use when BUILDING a program, app, or tool on the Fram engine — modeling
   data/logic as recursive Triples + Datalog instead of SQL/records/imperative
-  state. Covers assert vs supersede (update), live-view queries, and Datalog
-  derivation. Formerly named fact-modeling. NOT for one-off store reads —
-  just rent the store and call by-lp.
+state. Covers append-only occurrence history, live-view queries, and Datalog
+derivation. Formerly named fact-modeling. NOT for one-off store reads.
 ---
 
 # Fram modeling — building on the Fram engine (triples + Datalog)
@@ -16,21 +15,13 @@ graph of triples.** Data, logic, and structure live as triples, so each is *reas
 uniform way. Text and SQL are projections, never the truth. For **greenfield**, the
 triple store is the backend — not SQL (persisting to SQL then rebuilding a graph to
 ask relational questions reintroduces the reconstruction tax the engine exists to
-kill). The deployed v0.3 store API says "fact" for a stored triple (`fact!`,
-`by-lp`, `fact-of`) — API vocabulary, not kernel ontology (`fram:docs/ontology.md`).
+kill).
 
 ## 0. The surface is GENERATED — never trust a static list
 
-Like beagle-authoring ("the compiler is the source of truth"), the Fram API churns;
-any cheatsheet pasted here rots. Get the **live** surface + the canonical patterns:
-
-```sh
-bb fram:bin/fram-primer        # generated FROM src/fram/*.bclj — always current
-```
-
-It prints: the live `fram.cnf` / `fram.datalog` / `fram.schema` signatures, plus the
-five idioms below with pointers to where each is proven. Read it at the start of any
-fram-modeling task instead of guessing the API.
+Like beagle-authoring ("the compiler is the source of truth"), the Fram API churns.
+Inspect the source-head `fram:README.md`, `fram:docs/query-reference.md`, and the
+typed definitions under `fram:src/fram/` instead of relying on a static cheatsheet.
 
 ## 1. The operating model (this does not churn)
 

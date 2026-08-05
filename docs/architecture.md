@@ -57,9 +57,44 @@ Every cell is a Term. `triple` is live state, `occurrence` is explicit history, 
 3. **CLI EDN** is local human syntax lowered to typed records before FRAMRPC; it is not the wire.
 4. **Public JSON edges** are closed adapters. `bin/fram-mcp` exposes only the five verbs in the [tool catalog](tool-catalog.md).
 
-Graph-authoring and deployment controls are separate sealed services. The pinned
-v0.3 blue/green control protocol remains in [v0.3 writer handoff](v0.3-writer-handoff.md);
-it does not enlarge FRAMRPC.
+Graph-authoring and deployment controls are separate sealed services; they do
+not enlarge FRAMRPC.
+
+## Native embedding
+
+The Native World closure has two host shapes over the same eight generated
+engine hooks. The server host owns sockets and serves FRAMRPC. The embedding
+host publishes ABI v1 as `fram.h`, `libfram.a`, and `libfram.so`:
+
+```text
+fram_open -> opaque database handle
+fram_transact | fram_query | fram_snapshot
+          -> one canonical FRAMRPC v1 request slice
+          <- one canonical FRAMRPC v1 response buffer
+fram_close
+```
+
+The three call names express host intent; they all enter the same typed native
+dispatcher, which remains authoritative for operation validity. Protocol-level
+errors are therefore ordinary FRAMRPC responses. C-level errors cover invalid
+ownership, malformed frames, engine failures, host failures, and allocation
+failure. The caller releases every returned buffer with
+`fram_buffer_release`; fixed caller-owned `fram_error` storage never crosses an
+allocator boundary.
+
+`fram_open` either selects the built-in POSIX path or accepts a versioned host
+table. The table supplies allocation, a millisecond clock, exact storage reads,
+truncate, append, durability sync, and close. This keeps FRAMLOG recovery and
+commit semantics inside Fram while making the I/O capabilities replaceable by
+an embedding host. The built-in POSIX storage acquires writer authority on the
+FRAMLOG; a custom storage context must already be exclusive through its close.
+The ABI has no Graal isolate or managed-runtime lifecycle.
+
+Wasm does not require a second database API. A future component adapter can
+implement the same clock, storage, sync, and allocation capabilities as Wasm
+imports and map linear-memory slices onto ABI v1. Component bindings and a
+durable Worker/Durable Object storage adapter are separate materializer work;
+they are not part of the Linux library artifact.
 
 ## Native embedding
 

@@ -5,7 +5,7 @@
 ;; The thesis in miniature: disjoint same-module edits must BOTH survive — the exact
 ;; thing the whole-module path (git's weakness) breaks (second clobbers first /
 ;; false-conflict). We set-body fnA (`cardinality`) AND set-body fnB (`lookup`) in
-;; `schema` through the SAME warm :edit-min daemon. PASS = BOTH new bodies present in
+;; `schema` through the SAME warm :edit-min server. PASS = BOTH new bodies present in
 ;; render(log) AND schema recompiles 1/0 AND neither got :conflict. Then we run the
 ;; WHOLE-MODULE path on the SAME scenario and show it does NOT commute (the contrast).
 ;;   bb -cp out code_edit_min_commute.clj
@@ -82,7 +82,7 @@
 (def lookup-marker "(first (lookup-all ctx subj pname))")
 
 ;; ============================================================================
-;; PATH 1 — :edit-min through ONE warm daemon (the fact path).
+;; PATH 1 — :edit-min through ONE warm server (the fact path).
 ;; ============================================================================
 (def flat (str (System/getProperty "java.io.tmpdir") "/commute-min-" (System/nanoTime) ".code.log"))
 (io/copy (io/file fixture) (io/file flat))

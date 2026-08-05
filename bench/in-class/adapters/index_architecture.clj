@@ -2,7 +2,7 @@
 ;;
 ;; Candidate A keeps live fact ids in three Store-native integer hash-prefix
 ;; tries. Candidate B queries the production immutable sorted mmap rotations.
-;; This file is benchmark-only: it neither changes Store nor daemon routing.
+;; This file is benchmark-only: it neither changes Store nor server routing.
 (require '[cheshire.core :as json]
          '[clojure.edn :as edn]
          '[clojure.java.io :as io]

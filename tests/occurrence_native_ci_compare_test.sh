@@ -8,21 +8,21 @@ trap 'rm -rf "${scratch:?}"' EXIT INT TERM
 
 printf '%s\n' \
   $'catalog-drift\tcatalog-drift' \
-  $'vocab-residue\tRELEASE-v0.3.0.md' \
+  $'vocab-residue\tdocs/archive/measurements.md' \
   $'vocab-residue\tserver.clj' \
   $'vocab-residue\tdeploy/cloudflare/PROCEDURE.md' \
   > "$scratch/pristine.tsv"
 printf '%s\n' \
   $'catalog-drift\tcatalog-drift' \
-  $'vocab-residue\tRELEASE-v0.3.0.md' \
+  $'vocab-residue\tdocs/archive/measurements.md' \
   > "$scratch/subset.tsv"
 printf '%s\n' \
   $'catalog-drift\tcatalog-drift' \
-  $'vocab-residue\tRELEASE-v0.3.0.md' \
+  $'vocab-residue\tdocs/archive/measurements.md' \
   $'vocab-residue\tnew/residue.txt' \
   > "$scratch/regrowth.tsv"
 printf '%s\n' \
-  $'vocab-residue\tRELEASE-v0.3.0.md' \
+  $'vocab-residue\tdocs/archive/measurements.md' \
   > "$scratch/catalog-changed.tsv"
 
 passes=0

@@ -21,15 +21,8 @@ Vocabulary:
 
 ## Surface binding
 
-Two runtime surfaces exist until cluster migration completes:
-
-- **head** — the occurrence-native server, binary FRAMLOG, and FRAMRPC v1
-  (this source tree). Every guarantee below binds to head unless marked.
-- **v0.3** — the deployed flat-log generation governed by
-  [`v0.3-writer-handoff.md`](v0.3-writer-handoff.md). Its guarantee suite is
-  excluded at head; v0.3 guarantees are frozen with that release and are not
-  restated here. Head does not serve v0.3 EDN-line clients (see
-  non-guarantees).
+Every guarantee below binds to the occurrence-native server, binary FRAMLOG,
+and FRAMRPC v1 in this source tree.
 
 ## Durability
 
@@ -114,7 +107,7 @@ Actions in a batch receive ordered occurrence coordinates and commit as one fram
 
 ## Workload envelope and client obligations
 
-Reference workload NW-1 is a coordination substrate observed near 350k live Triples: mostly single-proposition writes, occasional atomic batches, targeted reads, paged projection drains, at most eight concurrent bulk clients, one subscription stream, listener leases, and interactive/sweep traffic. Whole-corpus client filtering is excluded.
+Reference workload NW-1 is a coordination substrate observed near 350k live Triples: mostly single-proposition writes, occasional atomic batches, targeted reads, paged projection drains, at most eight concurrent bulk clients, one bounded listener poller, listener leases, and interactive/sweep traffic. Whole-corpus client filtering is excluded.
 
 | Dimension | Contract |
 |---|---|
@@ -180,5 +173,4 @@ writes/s) must not be quoted for head. Remaining envelope work:
 - No engine access control: isolate by process, network, `SpaceId`, and log
   ([`isolation-and-deployment.md`](isolation-and-deployment.md)).
 - Single-machine, single-writer receipts — not distributed consensus.
-- Head does not serve v0.3 EDN-line clients; that path is migration-only.
 - Equal propositions are not deduplicated: assertion always creates a new occurrence.

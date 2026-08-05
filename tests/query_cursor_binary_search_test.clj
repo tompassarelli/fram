@@ -82,7 +82,7 @@
           response (request! port space :rpc/batch (wire/rpc-batch! actions nil))]
       (check! (str "batch " (first chunk) " asserts cleanly") (nil? (error-code response)))))
 
-  ;; Reference order computed independently of the daemon's own sort/cursor
+  ;; Reference order computed independently of the server's own sort/cursor
   ;; code: query/row-key applied client-side to every inserted row.
   (let [expected (vec (sort-by query/row-key
                                 (mapv (fn [i] [(str "row-" i) i]) (range row-count))))

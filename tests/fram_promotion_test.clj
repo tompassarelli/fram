@@ -1,4 +1,4 @@
-;; Checkout-first daemon promotion: clean commit capture, checkout resolution,
+;; Checkout-first server promotion: clean commit capture, checkout resolution,
 ;; dirty-tree rejection, and project-only restart scope.
 ;;
 ;; Run from the Fram root:

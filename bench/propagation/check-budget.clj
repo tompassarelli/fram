@@ -12,7 +12,7 @@
 ;; The two RATIO budgets encode the thesis and are immune to CI machine speed (both arms
 ;; measured in the same run on the same box). Budgets live in perf-budget.edn.
 ;;   bb -cp out bench/propagation/check-budget.clj
-;; SAFE: sweep.clj runs /tmp-only, daemon on non-7977 port, never the canonical log.
+;; SAFE: sweep.clj runs /tmp-only, server on non-7977 port, never the canonical log.
 ;; ============================================================================
 (require '[clojure.string :as str] '[clojure.java.io :as io]
          '[babashka.process :as proc] '[clojure.edn :as edn])

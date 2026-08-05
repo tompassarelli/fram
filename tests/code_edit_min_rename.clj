@@ -24,14 +24,14 @@
 (Thread/sleep 500)
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
-(println "daemon up:" (:facts (client port {:op :status})) "facts, port" port)
+(println "server up:" (:facts (client port {:op :status})) "facts, port" port)
 
 ;; MODULE-NAMING CONTRACT (decided @019f796f): the checked-in corpus is authoritative —
 ;; its modules are file-path-derived (`src.fram.schema`, not bare `schema`). The rename
 ;; verb below is scope-match? SUFFIX-tolerant (production, unchanged) so bare "schema"
 ;; still resolves there. But `bin/fram-render-code` requires the EXACT module identity
 ;; (`@<module>#root`, no suffix tolerance — that's its contract, not a bug). Resolve the
-;; exact name from the daemon's own :index op (never hardcode a new prefix).
+;; exact name from the server's own :index op (never hardcode a new prefix).
 (def index-resp (client port {:op :index}))
 (defn- resolve-module [bare]
   (or (some #(when (or (= % bare) (str/ends-with? % (str "." bare))) %) (:modules index-resp))

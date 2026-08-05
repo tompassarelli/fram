@@ -37,12 +37,12 @@
                (not (re-find #"(?m)^    raw:" worker)))
           nil))
 
-(let [daemon (file-source "server.clj")]
-  (check! "daemon listener has no line/EDN compatibility parser"
-          (absent? daemon ["clojure.edn" "edn/read" "readLine" "io/reader"])
+(let [server (file-source "server.clj")]
+  (check! "server listener has no line/EDN compatibility parser"
+          (absent? server ["clojure.edn" "edn/read" "readLine" "io/reader"])
           nil)
-  (check! "daemon serves only the closed thirteen-op FRAMRPC set"
-          (= 13 (count (re-seq #":rpc/[a-z-]+" (between daemon
+  (check! "server serves only the closed thirteen-op FRAMRPC set"
+          (= 13 (count (re-seq #":rpc/[a-z-]+" (between server
                                                        "(def native-rpc-operations"
                                                        "(def paged-rpc-operations"))))
           nil))

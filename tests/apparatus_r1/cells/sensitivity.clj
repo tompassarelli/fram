@@ -46,8 +46,8 @@
           false (let [r (m/admit-racing-write :b2 {:writer-holds-lock true :fd-transferred false :acked true})]
                   (and (:acked r) (= :silent-loss (:outcome r)))))
 
-(h/section "S3 — daemon-start post-rename/pre-dirsync + simulated rename revert")
-;; Model: an old-daemon-start acking inside the window, then a power-loss that
+(h/section "S3 — server-start post-rename/pre-dirsync + simulated rename revert")
+;; Model: an old-server-start acking inside the window, then a power-loss that
 ;; reverts an UNDURABLE rename. Does an acknowledged write become revertible?
 (defn s3-ack-revertible?
   "Under B2 the replacement files stay non-writable (0444) through both renames

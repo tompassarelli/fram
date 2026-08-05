@@ -347,9 +347,29 @@
            :rpc/invalid)]))
     :rpc/invalid))
 
-(defn read-term! [decoder: Decoder depth: Int] -> t/Term
-  (read-term-limited! decoder depth rpc-v1-max-string-bytes
-                      rpc-v1-max-term-nodes rpc-v1-max-term-depth))
+(defn decoded-term!
+  [decoder: Decoder
+   value: Any] -> t/Term
+  (cond
+    [(string? value) value]
+    [(integer? value) value]
+    [(and (number? value) (not (integer? value))) value]
+    [(boolean? value) value]
+    [(keyword? value) value]
+    [(t/instant? value) value]
+    [(t/triple? value) value]
+    [:else
+     (do
+       (decoder-error! decoder "TermCodecV1 decoded a value outside Term")
+       :rpc/invalid)]))
+
+(defn read-term!
+  [decoder: Decoder
+   depth: Int] -> t/Term
+  (decoded-term!
+   decoder
+   (read-term-limited! decoder depth rpc-v1-max-string-bytes
+                       rpc-v1-max-term-nodes rpc-v1-max-term-depth)))
 
 (defn append-term-limited!
   [encoder: Encoder
@@ -453,20 +473,22 @@
 (defn read-page-request! [decoder: Decoder] -> t/RpcPageRequest
   (let [limit (read-u32-le! decoder "page limit")
         cursor-present (read-presence! decoder "page cursor presence")
-        cursor (if cursor-present (read-term! decoder 0) nil)]
+        cursor: t/Term? (if cursor-present (read-term! decoder 0) nil)]
     (t/->RpcPageRequest limit cursor)))
 
 (defn read-request-body! [decoder: Decoder] -> t/RpcRequest
   (let [space (read-space-term! decoder)
         op (read-keyword-term! decoder "request op")
         expected-present (read-presence! decoder "expected-version presence")
-        expected (if expected-present
-                   (read-i64-le! decoder "expected-version") nil)
+        expected: Int? (if expected-present
+                         (read-i64-le! decoder "expected-version") nil)
         page-present (read-presence! decoder "request page presence")
-        page (if page-present (read-page-request! decoder) nil)
+        page: t/RpcPageRequest?
+        (if page-present (read-page-request! decoder) nil)
         timeout-present (read-presence! decoder "timeout-ms presence")
-        timeout (if timeout-present (read-u32-le! decoder "timeout-ms") nil)
-        payload (read-term! decoder 0)]
+        timeout: Int? (if timeout-present
+                        (read-u32-le! decoder "timeout-ms") nil)
+        payload: t/Term (read-term! decoder 0)]
     (t/->RpcRequest space op expected page timeout payload)))
 
 (defn magic-valid! [decoder: Decoder] -> Bool

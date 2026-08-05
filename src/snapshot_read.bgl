@@ -6,7 +6,10 @@
 ;; OCC, leases, locks, queues, promises, fsync, and group commit remain in the
 ;; server runtime. This module owns only read-time derivations over database state.
 ;; ============================================================================
-(ns snapshot-read (:require [fram.store :as c] [fram.schema :as s]))
+(ns snapshot-read
+  (:require [fram.store :as c]
+            [fram.schema :as s]
+            [fram.types :as t]))
 
 (define-mode strict)
 
@@ -14,7 +17,9 @@
   [ctx: (Atom fram.types/TermStore)
    te: Int
    pid: Int] -> (Vec Int)
-  (c/by-lp ctx te pid))
+  (filterv
+    (fn [cid: Int] -> Bool (c/live? ctx cid))
+    (c/raw-by-lp ctx te pid)))
 
 (defn seq-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Int
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) 0 (c/tx-seq ctx txid))))
@@ -27,8 +32,8 @@
     0
     (map (fn [cid: Int] -> Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
-(defn current-seq [ctx: (Atom fram.types/TermStore)] -> Int
-  (c/current-sequence ctx))
+(defn current-seq [ctx: (Atom t/TermStore)] -> Int
+  (dec (t/termstore-next-sequence (deref ctx))))
 
 (defn agent-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
   (let [txid (c/fact-tx ctx cid)] (if (nil? txid) nil (c/tx-agent ctx txid))))
@@ -70,7 +75,7 @@
    pid: Int?] -> Int?
   (if (nil? pid)
     nil
-    (let [fcid (first (c/by-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
+    (let [fcid (first (live-cids-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
       (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx: (Atom fram.types/TermStore) cid: Int] -> Any
@@ -115,7 +120,7 @@
       nil
       (reduce (fn [acc: (Set Int) cid: Int] -> (Set Int) (let [f (c/fact-of ctx cid) r: Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
         #{}
-        (c/by-lp ctx ve sel)))))
+        (live-cids-lp ctx ve sel)))))
 
 (defn pool-of
   [ctx: (Atom fram.types/TermStore)

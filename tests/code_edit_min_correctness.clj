@@ -1,7 +1,7 @@
 ;; ============================================================================
 ;; code_edit_min_correctness.clj — Build A correctness + opcount-scaling.
 ;; ============================================================================
-;; ONE warm daemon over a disposable copy of the committed fixture. Proves:
+;; ONE warm server over a disposable copy of the committed fixture. Proves:
 ;;  (A) op count SCALES with the edited body (a literal body => a HANDFUL of ops),
 ;;  (B) CORRECTNESS: render(log) after the minimal-op edit carries the exact new
 ;;      body, drops the old body, and the single edited module recompiles 1/0.
@@ -68,7 +68,7 @@
 (def status (client port {:op :status}))
 (when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT wrong log" (pr-str (:log status))) (shutdown!) (System/exit 1))
-(println "daemon up:" (:facts status) "facts, port" port)
+(println "server up:" (:facts status) "facts, port" port)
 
 (def checks (atom []))
 (defn chk [nm ok & [extra]] (swap! checks conj [nm (boolean ok) extra]))

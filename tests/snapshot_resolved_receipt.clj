@@ -3,7 +3,7 @@
 ;;   bb -cp out snapshot_resolved_receipt.clj
 ;;
 ;; P-of / select-main-1 return (first live) — a SELECTION, not a uniqueness proof (#19):
-;; a contested field reads as a silently-arbitrary pick with no signal. The new daemon
+;; a contested field reads as a silently-arbitrary pick with no signal. The new server
 ;; :resolved op surfaces {:value :members :ambiguous?} so the agent gets a CHECKABLE
 ;; answer. Rep-stable (pure read over the (l,p) live group, no fN).
 ;;

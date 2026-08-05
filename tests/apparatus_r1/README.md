@@ -5,7 +5,7 @@ production code, against the completed B2 contract (`019f79eb-e8e0`, §1-§5). T
 directory is **test-only apparatus**: it exercises **no** production/runtime/
 package source. It lives under `tests/` and is therefore excluded from the Nix
 closure (the package copies only `tests/fram_mcp.clj`), never touches `out/`, the
-daemon, port 7977, canonical logs, or user state.
+server, port 7977, canonical logs, or user state.
 
 ## What it proves
 
@@ -20,7 +20,7 @@ harness itself fails loud.
 | Cross-runtime identity oracle | `identity/kev.clj` (bb+JVM), `identity/kev.mjs` (node) | raw-byte `K_ev` = `[tx, bytes(unsigned-lex), rank]` is byte-identical across **bb == JVM == JS** |
 | S1 post-flip byte-identical append | `cells/sensitivity.clj` | B2 preserves the legitimate later append (tx=2 multiplicity 2); B-prime suppresses it (1) |
 | S2 in-flight fd-transfer admission | `cells/sensitivity.clj` | B2 = named residual (never silent); B-prime = silent loss of an acked write |
-| S3 daemon-start + rename revert | `cells/sensitivity.clj` | B2 = no acked write revertible (fence-through-dirsync); B-prime = revertible |
+| S3 server-start + rename revert | `cells/sensitivity.clj` | B2 = no acked write revertible (fence-through-dirsync); B-prime = revertible |
 | S4 exact-mode restore | `cells/sensitivity.clj`, `cells/mode_cells.clj` | B2 restores exact 0600/0660; B-prime clobbers to 0644 (real `chmod`) |
 | Generation-bound residual oracle | `cells/residual.clj` | recorded `:src_telem_bytes`/`:src_telem_sha` exactly measure the consumed prefix; legit identical append beyond the boundary is authored |
 | K0-K8 kill matrix + reverse-pin | `cells/kmatrix.clj` | doctor roll-forward/back by inode/sha (never `:phase`); projection invariant modulo one flip event; post-revert append preserved |
@@ -46,9 +46,9 @@ here binds one.
 
 ## Deliberate scope boundaries (limitations)
 
-- The admission/daemon-start cells (S2/S3, "old/new daemon-start race",
+- The admission/server-start cells (S2/S3, "old/new server-start race",
   "unavailable admission surface") are proven at the **reference-model** verdict
-  level, NOT by starting a real `fram` daemon — starting one would touch
+  level, NOT by starting a real `fram` server — starting one would touch
   production binaries/ports/state, which is out of bounds for R-1. Real process
   evidence (kill, SIGSTOP, fd-transfer, acked-ledger completeness, cleanup) is
   supplied by `cells/kill_ledger.clj` against scratch logs.

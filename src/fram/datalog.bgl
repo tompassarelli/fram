@@ -799,9 +799,9 @@
   (let [first-key (nth tuple (nth order 0))
         second-key (nth tuple (nth order 1))
         third-key (nth tuple (nth order 2))
-        first-node (get trie first-key {})
-        second-node (get first-node second-key {})
-        leaf (get second-node third-key [])]
+        first-node: HandleTrieBranch (get trie first-key {})
+        second-node: HandleTrieLeaf (get first-node second-key {})
+        leaf: (Vec Int) (get second-node third-key [])]
     (assoc trie first-key
            (assoc first-node second-key
                   (assoc second-node third-key (conj leaf handle))))))

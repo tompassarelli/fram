@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # The Beagle FRI2 replay module against the frozen Zig oracle, per corpus:
-#   1. the frozen harness leg — zig daemon + `fram-rpc-client oracle`, whose
-#      independent native model is verified against the daemon on every line;
+#   1. the frozen harness leg — zig server + `fram-rpc-client oracle`, whose
+#      independent native model is verified against the server on every line;
 #   2. the Beagle leg — fram.fri-replay decides the same corpus and folds the
 #      accepted transactions through fram.store;
 #   3. three text diffs — the summary line, the final version + live data facts
-#      the Zig daemon persisted to its FRAMLOG, and the per-transaction ops.
+#      the Zig server persisted to its FRAMLOG, and the per-transaction ops.
 #
 # Harness patterns (free port, readiness probe, fingerprint sort) follow
 # tests/zig_occ_oracle_test.sh; the Zig binaries are used, never rebuilt here
@@ -14,12 +14,12 @@ set -euo pipefail
 
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d)"
-daemon_pid=
+server_pid=
 
 cleanup() {
-  if [[ -n "${daemon_pid:-}" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
-    kill -TERM "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
+  if [[ -n "${server_pid:-}" ]] && kill -0 "$server_pid" 2>/dev/null; then
+    kill -TERM "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
   fi
   rm -rf "${test_dir:?}"
 }
@@ -33,9 +33,9 @@ if [[ -z "${FRAM_ZIG_SERVER:-}" || -z "${FRAM_RPC_CLIENT:-}" ]]; then
     "${zig[@]}" build -Doptimize=ReleaseSafe --prefix "$install_dir"
   )
 fi
-daemon_bin="${FRAM_ZIG_SERVER:-$install_dir/bin/fram-server-zig}"
+server_bin="${FRAM_ZIG_SERVER:-$install_dir/bin/fram-server-zig}"
 client_bin="${FRAM_RPC_CLIENT:-$install_dir/bin/fram-rpc-client}"
-[[ -x "$daemon_bin" ]]
+[[ -x "$server_bin" ]]
 [[ -x "$client_bin" ]]
 
 free_port() {
@@ -75,16 +75,16 @@ for corpus in "${corpora[@]}"; do
   name="$(basename "$corpus" .tsv)"
   space="oracle-$name"
   log="$test_dir/$name.framlog"
-  daemon_out="$test_dir/$name.daemon.out"
+  server_out="$test_dir/$name.server.out"
   zig_dir="$test_dir/$name.zig"
   beagle_dir="$test_dir/$name.beagle"
   : >"$log"
 
   port="$(free_port)"
   FRAM_SPACE_ID="$space" FRAM_CREATE_LOG=1 \
-    "$daemon_bin" serve-log "$port" "$log" \
-    >"$daemon_out" 2>&1 &
-  daemon_pid=$!
+    "$server_bin" serve-log "$port" "$log" \
+    >"$server_out" 2>&1 &
+  server_pid=$!
 
   ready=
   for _ in $(seq 1 100); do
@@ -95,15 +95,15 @@ for corpus in "${corpora[@]}"; do
     sleep 0.025
   done
   if [[ -z "$ready" ]]; then
-    cat "$daemon_out" >&2
+    cat "$server_out" >&2
     exit 1
   fi
 
   "$client_bin" oracle "$port" "$space" "$corpus" 2>"$test_dir/$name.oracle.out"
-  kill -TERM "$daemon_pid"
-  wait "$daemon_pid"
-  daemon_pid=
-  grep -q "\[fram\] shutdown complete" "$daemon_out"
+  kill -TERM "$server_pid"
+  wait "$server_pid"
+  server_pid=
+  grep -q "\[fram\] shutdown complete" "$server_out"
 
   mkdir -p "$zig_dir" "$beagle_dir"
   grep '^oracle ' "$test_dir/$name.oracle.out" >"$zig_dir/summary"

@@ -41,7 +41,7 @@ async function freePort() {
   return port;
 }
 
-async function startDaemon(port, log, space) {
+async function startServer(port, log, space) {
   const child = spawn(resolve(root, 'bin/fram-server'), ['serve', String(port), log, space], {
     cwd: root,
     env: {
@@ -69,7 +69,7 @@ async function startDaemon(port, log, space) {
     child.once('exit', code => {
       if (!ready) {
         clearTimeout(timer);
-        reject(new Error(`daemon exited during startup (${code})\n${output}`));
+        reject(new Error(`server exited during startup (${code})\n${output}`));
       }
     });
   });
@@ -93,7 +93,7 @@ async function startDaemon(port, log, space) {
 const tmp = await mkdtemp(resolve(tmpdir(), 'fram-node-client-'));
 const port = await freePort();
 const space = `node-client-${process.pid}`;
-const daemon = await startDaemon(port, resolve(tmp, 'history.framlog'), space);
+const server = await startServer(port, resolve(tmp, 'history.framlog'), space);
 const fram = framClient({ host: '127.0.0.1', port, space, requestTimeoutMs: 30000 });
 
 try {
@@ -208,7 +208,7 @@ try {
     assert.equal(events.result.length, 3);
   });
 
-  await check('v0.3.5 text-match runs through the same direct query operation', async () => {
+  await check('text-match runs through the same direct query operation', async () => {
     const response = await fram.query({
       find: 'matches',
       rules: [{
@@ -252,9 +252,9 @@ try {
 
   console.log(`\nnode FRAMRPC client: ${checks.length}/${checks.length} PASS`);
 } catch (error) {
-  console.error(`\nnode FRAMRPC client: FAILED\n${error.stack || error}\n${daemon.output()}`);
+  console.error(`\nnode FRAMRPC client: FAILED\n${error.stack || error}\n${server.output()}`);
   process.exitCode = 1;
 } finally {
-  await daemon.stop();
+  await server.stop();
   await rm(tmp, { recursive: true, force: true });
 }

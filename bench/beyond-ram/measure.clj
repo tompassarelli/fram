@@ -1,4 +1,4 @@
-;; bench/beyond-ram/measure.clj — one measured daemon, in-process, in a FRESH JVM
+;; bench/beyond-ram/measure.clj — one measured server, in-process, in a FRESH JVM
 ;; (the driver runs the modes SEQUENTIALLY so RSS numbers don't share page-cache
 ;; noise). Boots the given corpus in one of three modes and prints an EDN row:
 ;;   off     — FRAM_MMAP_IMAGE unset: whole-log fold + warm cache (today's baseline).

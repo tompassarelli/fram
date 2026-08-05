@@ -1020,14 +1020,6 @@
      timeout
      false)))
 
-(defn read-server-stream-line!
-  "Read one bounded UTF-8 event line without an idle deadline.
-   A persistent reader retains bytes following the newline for the next event."
-  [source]
-  (let [reader (as-server-reader source)]
-    (.setSoTimeout (:socket reader) 0)
-    (read-server-line! reader nil nil true)))
-
 (defn- ensure-server-terminal-eof! [reader deadline timeout]
   (let [{:keys [socket input buffer bounds]} reader]
     (loop []
@@ -1709,57 +1701,6 @@
 
 (defn server-live-facts [port log]
   (or (:facts (server-live-state port log)) []))
-
-;; subscribe + stream commit events (one EDN line each) until disconnect.
-;; TLS setup has its own absolute handshake deadline. After the request write, the
-;; subscription acknowledgement arms the small-response absolute deadline; only a
-;; validated subscription earns an unbounded idle read.
-(defn- server-watch-request [port request]
-  (with-open [s (server-socket (connect-host) port)]   ; honors FRAM_SERVER_CONNECT + mTLS like server-rt
-    (let [w (.getOutputStream s)
-          reader (server-reader s)
-          fenced? (= :for-log (:op request))
-          expected-log (:expected-log request)]
-      (.write w
-              (.getBytes (str (pr-str request) "\n")
-                         java.nio.charset.StandardCharsets/UTF_8))
-      (.flush w)
-      (let [line (read-server-response-line! reader)
-            response (parse-server-edn-line! line)]
-        (cond
-          (:reject response)
-          (throw (ex-info
-                  (str "server rejected watch subscription"
-                       (when-let [code (:code response)] (str " (" (name code) ")"))
-                       ": " (reject-message (:reject response)))
-                  response))
-
-          (not (integer? (:subscribed response)))
-          (throw (ex-info "invalid watch subscription handshake"
-                          {:port port :response response}))
-
-          (and fenced?
-               (not= (canonical-log-path expected-log)
-                     (some-> (:log response) canonical-log-path)))
-          (throw (ex-info "watch subscription acknowledged for the wrong log"
-                          {:port port
-                           :expected-log (canonical-log-path expected-log)
-                           :served-log (:log response)})))
-
-        ;; The server has accepted this exact subscription. An idle watch is normal,
-        ;; so remove the request deadline now (and only now); disconnect/EOF still
-        ;; terminates the loop and closes the socket.
-        (.setSoTimeout s 0)
-        (println line)
-        (loop []
-          (when-let [event (read-server-stream-line! reader)]
-            (println event)
-            (recur))))))
-  nil)
-(defn server-watch [port]
-  (server-watch-request port {:op :subscribe}))
-(defn server-watch-for-log [port log]
-  (server-watch-request port (log-envelope log {:op :subscribe})))
 
 ;; --- time module runtime (ported from los.rt for `north clock`) -----------
 

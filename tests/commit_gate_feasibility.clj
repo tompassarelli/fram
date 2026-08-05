@@ -13,7 +13,7 @@
 ;;           (2) corpus-from-store! WHOLE (*corpus-scope* nil);
 ;;           (3) corpus-from-store! SCOPED to one module (*corpus-scope* set).
 ;;
-;; SAFETY: isolated daemon on a /tmp COPY of .fram/code.log. Never port 7977, never
+;; SAFETY: isolated server on a /tmp COPY of .fram/code.log. Never port 7977, never
 ;; the canonical log, never the original corpus. Read-only over the store (corpus-
 ;; from-store! only set!s in-memory tables; *resolve-walk?* false skips all writes).
 ;; ============================================================================

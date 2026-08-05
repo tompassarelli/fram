@@ -157,7 +157,7 @@
          (when-let [pred (:pred response)] (str "\tpred=" pred)))
 
     :else
-    (fail! "daemon returned an unrecognized response"
+    (fail! "server returned an unrecognized response"
            {:index index :request request :response response})))
 
 (let [[corpus-path port-text & extra] *command-line-args*]
@@ -165,7 +165,7 @@
     (binding [*out* *err*]
       (println "usage: bb tests/zig_occ_oracle_driver.clj CORPUS PORT"))
     (System/exit 2))
-  (let [port (parse-integer port-text :daemon-port)
+  (let [port (parse-integer port-text :server-port)
         lines (->> (str/split-lines (slurp corpus-path))
                    (remove str/blank?)
                    vec)
@@ -179,7 +179,7 @@
       (swap! raw conj {:request {:op :facts} :response facts-response})
       (println (str "final-version\t" (:version facts-response)))
       (doseq [[l p r] (:facts facts-response)
-              ;; daemon bookkeeping subjects (@snapshot:*, @log:*) carry
+              ;; server bookkeeping subjects (@snapshot:*, @log:*) carry
               ;; per-run absolute paths — never oracle semantics (C3)
               :when (and (not (contains? schema-predicates p))
                          (not (re-find #"^@(?:snapshot|log):" (str l))))]

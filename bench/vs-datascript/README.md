@@ -5,6 +5,10 @@ shapes as `bench/index-rotations/` (its README documents corpus staging) —
 this directory adds the DataScript side and stitches both into one table.
 Scratch homes only (`/tmp/fram-bench/`), never the live `:7977` server.
 
+This is a retained 2026-07 benchmark receipt. The flat-protocol Fram runner
+used for the recorded server column was removed; the commands below describe
+that historical run, not the current FRAMRPC/FRAMLOG server.
+
 ## Dependency license check
 
 - **DataScript 1.7.3** — EPL-1.0. Checked 2026-07-27 by extracting
@@ -30,12 +34,11 @@ Both systems load the exact same folded fact set from the exact same corpus
 version 451961 — identical files `bench/index-rotations/` uses):
 
 - **fram**: `bench/index-rotations/cold-query-and-write-throughput.clj` boots
-  the real server (`bin/fram-server serve-flat`) over a fresh copy of the
-  corpus and drives it over its real TCP/EDN socket protocol — the actual
-  multi-agent-facing surface.
+  the then-current flat-protocol server over a fresh copy of the corpus and
+  drives it over its TCP/EDN socket protocol.
 - **DataScript**: `compare.clj` runs fram's OWN fold code
   (`fram.rt/read-log` + `fram.fold/fold`, the identical function
-  `server.clj`'s `migrate-flat->database` calls at boot) to turn the raw log
+  the benchmarked flat-log server called at boot) to turn the raw log
   into the same final live-fact set, then loads those facts into a
   DataScript db in-process (no server, no socket — DataScript is an embedded
   library, not a server) and drives the 5 query shapes directly against it.
@@ -48,11 +51,10 @@ join, subject pull (SPO), and a 2-rule/multi-hop conjunction (the shape that
 was fram's rotations-engine defect in the sibling benchmark). Same cold /
 warm / read-under-write / write-throughput phases as `bench/index-rotations/`.
 
-Run: `bench/vs-datascript/run-all.sh [port]` from repo root — stages nothing
-itself (corpus must already be staged per `bench/index-rotations/README.md`),
-boots fram's bench, runs DataScript's, prints the combined table
-(`bench/vs-datascript/report.bb`, rerunnable standalone against the two
-`/tmp/fram-bench/result-*.edn` files).
+The original combined runner was `bench/vs-datascript/run-all.sh [port]`; it
+was removed with the flat-protocol server harness. `compare.clj` remains the
+DataScript-side receipt, and `report.bb` can rerender the two historical
+`/tmp/fram-bench/result-*.edn` result files when they are present.
 
 ## Results (2026-07-27, this run)
 

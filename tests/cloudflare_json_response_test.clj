@@ -1,4 +1,4 @@
-;; Real daemon + authenticated JSON shim + FRAMRPC restart proof.
+;; Real server + authenticated JSON shim + FRAMRPC restart proof.
 (require '[babashka.fs :as fs]
          '[babashka.process :as proc]
          '[cheshire.core :as json]
@@ -110,7 +110,7 @@
          (wire/rpc-query-head! "all" [t1 t2 t3])
          [(wire/rpc-query-relation! "triple" [t1 t2 t3] false)])])])))
 
-(let [daemon-port (free-port)
+(let [server-port (free-port)
       shim-port (free-port)
       scratch (fs/create-temp-dir {:prefix "fram-cloudflare-rpc-"})
       log-path (str (io/file (str scratch) "history.framlog"))
@@ -119,15 +119,15 @@
       inherited (apply dissoc (into {} (System/getenv))
                        ["FRAM_LOG" "FRAM_TELEMETRY_LOG" "SHIM_LIBRARY"
                         "FRAM_SERVER_TLS" "FRAM_TLS_KEYSTORE" "FRAM_TLS_TRUSTSTORE"])
-      daemon (atom nil)
+      server (atom nil)
       shim (atom nil)
-      start-daemon!
+      start-server!
       (fn []
-        (reset! daemon
+        (reset! server
                 (proc/process
                  {:dir root :env (assoc inherited "FRAM_SERVER_RUNTIME" "jvm-dev")
                   :out :inherit :err :inherit}
-                 "bin/fram-server" "serve" (str daemon-port) log-path space)))]
+                 "bin/fram-server" "serve" (str server-port) log-path space)))]
   (try
     (let [node @(proc/process {:dir root :out :string :err :string}
                               "node" "tests/cloudflare_worker_client_test.mjs")]
@@ -136,14 +136,14 @@
         (binding [*out* *err*] (println (:err node))))
       (check! "Worker client typed JSON contract" (zero? (:exit node))))
 
-    (start-daemon!)
+    (start-server!)
     (check! "server starts on FRAMRPC"
-            (eventually #(= 0 (direct-version daemon-port space))))
+            (eventually #(= 0 (direct-version server-port space))))
     (reset! shim
             (proc/process
              {:dir root
               :env (assoc inherited "FRAM_SERVER_CONNECT" "127.0.0.1"
-                          "FRAM_SERVER_PORT" (str daemon-port)
+                          "FRAM_SERVER_PORT" (str server-port)
                           "SHIM_PORT" (str shim-port)
                           "SHIM_TOKEN" token)
               :out :inherit :err :inherit}
@@ -211,11 +211,11 @@
                      (= true (get-in second-page [:json "page" "done"]))
                      (= "1" (get-in second-page [:json "servedVersion"])))))
 
-      (stop-process! @daemon)
-      (reset! daemon nil)
-      (start-daemon!)
-      (check! "daemon restart replays the recursive FRAMLOG"
-              (eventually #(= 1 (direct-version daemon-port space))))
+      (stop-process! @server)
+      (reset! server nil)
+      (start-server!)
+      (check! "server restart replays the recursive FRAMLOG"
+              (eventually #(= 1 (direct-version server-port space))))
       (let [after-restart
             (http-post shim-port "/q" token "application/json"
                        (request-json space :rpc/scan
@@ -277,8 +277,8 @@
                    (string? (get-in wrong-space [:json "error" "code"]))
                    (= "another-space" (get-in wrong-space [:json "space"])))))
 
-    (stop-process! @daemon)
-    (reset! daemon nil)
+    (stop-process! @server)
+    (reset! server nil)
     (let [upstream
           (http-post shim-port "/q" token "application/json"
                      (request-json space :rpc/version wire/rpc-unit))]
@@ -288,7 +288,7 @@
 
     (finally
       (stop-process! @shim)
-      (stop-process! @daemon)
+      (stop-process! @server)
       (future-cancel watchdog)
       (fs/delete-tree scratch))))
 
