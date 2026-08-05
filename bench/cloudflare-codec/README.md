@@ -1,11 +1,11 @@
 # Cloudflare response-codec baseline
 
 This microbenchmark measures JavaScript serialization plus parsing for the EDN
-and JSON shapes returned by the Fram coordinator. It uses the exact EDN codec
+and JSON shapes returned by the Fram server. It uses the exact EDN codec
 exported by `~/code/fram/main/deploy/cloudflare/worker-client.js` and the
 built-in JSON codec used by that client.
 
-It does not measure the Babashka shim, JVM coordinator, query engine, network,
+It does not measure the Babashka shim, JVM server, query engine, network,
 Cloudflare Worker isolate, or application. Use it only to bound the local codec
 cost; use an end-to-end deployment trace for architecture or capacity choices.
 

@@ -19,7 +19,8 @@
 # SAFE: isolated /tmp copy of .fram/code.log; never 7977 / canonical log.
 # ============================================================================
 set -euo pipefail
-cd "$(dirname "$0")"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 export BEAGLE_HOME="${BEAGLE_HOME:-$HOME/code/beagle/main}"
 LOG=/tmp/store-render-test.log
 EDNDIR=/tmp/store-render-crdt-edn
@@ -27,7 +28,7 @@ BCLJ=/tmp/store-render-crdt.bclj
 rm -rf "$EDNDIR"; mkdir -p "$EDNDIR"
 
 echo "=== insert a probe via the CRDT mid-insert verb (-> $LOG) ==="
-bb -cp out coord_render_insert.clj    # writes $LOG with one inserted (def fram_render_probe 42)
+bb -cp out tests/code_render_insert.clj    # writes $LOG with one inserted (def fram_render_probe 42)
 
 echo "=== render the CRDT-keyed module through the real CLI (racket EDN->text) ==="
 RESOLVE_OUT="$EDNDIR" bb -cp out bin/fram-render-code kernel --log "$LOG" --out "$BCLJ"

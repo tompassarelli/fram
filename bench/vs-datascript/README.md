@@ -3,7 +3,7 @@
 Thread `019fa01d-ee47-7344-ba27-e7b0e63c86d2`. Same corpus, same workload
 shapes as `bench/index-rotations/` (its README documents corpus staging) —
 this directory adds the DataScript side and stitches both into one table.
-Scratch homes only (`/tmp/fram-bench/`), never the live `:7977` daemon.
+Scratch homes only (`/tmp/fram-bench/`), never the live `:7977` server.
 
 ## Dependency license check
 
@@ -30,14 +30,14 @@ Both systems load the exact same folded fact set from the exact same corpus
 version 451961 — identical files `bench/index-rotations/` uses):
 
 - **fram**: `bench/index-rotations/cold-query-and-write-throughput.clj` boots
-  the real daemon (`bin/fram-daemon serve-flat`) over a fresh copy of the
+  the real server (`bin/fram-server serve-flat`) over a fresh copy of the
   corpus and drives it over its real TCP/EDN socket protocol — the actual
   multi-agent-facing surface.
 - **DataScript**: `compare.clj` runs fram's OWN fold code
   (`fram.rt/read-log` + `fram.fold/fold`, the identical function
-  `coord_daemon.clj`'s `migrate-flat->co` calls at boot) to turn the raw log
+  `server.clj`'s `migrate-flat->database` calls at boot) to turn the raw log
   into the same final live-fact set, then loads those facts into a
-  DataScript db in-process (no daemon, no socket — DataScript is an embedded
+  DataScript db in-process (no server, no socket — DataScript is an embedded
   library, not a server) and drives the 5 query shapes directly against it.
   Row counts came back identical to fram's for every shape (3328 / 4417 /
   1162 / 11 / 1623), confirming both sides really did see the same corpus.
@@ -93,14 +93,14 @@ context would be marketing, not measurement:
 
 - **fram pays a real network+durability tier DataScript doesn't have.**
   Every fram number above crossed a TCP socket with EDN
-  serialize/deserialize, hit a real `bin/fram-daemon` JVM process boundary,
+  serialize/deserialize, hit a real `bin/fram-server` JVM process boundary,
   and (on writes) appended to a durable on-disk log a second writer/reader
   process could observe concurrently. DataScript's numbers are in-process
   method calls against an in-memory immutable structure with **no
   persistence, no network protocol, and no multi-process concurrent access**
   at all — there is nothing to make durable, nothing to serialize over a
   wire, and only one process can ever hold the reference. The 22527ms fram
-  "boot" figure includes JVM start + socket bind + full daemon
+  "boot" figure includes JVM start + socket bind + full server
   initialization; DataScript's 1886ms "cold-load" is object construction
   only. These are different tiers of guarantee, not the same job done
   slower.

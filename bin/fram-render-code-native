@@ -12,7 +12,7 @@
 ;;   bin/fram-render-code-native --modules a,b,c --space-id <id> --verify [...]
 ;;   bin/fram-render-code-native --require-graph [--log <f> | --port <P>]
 ;;
-;;   <module>       module NAME as ingested (e.g. coord_read, fram.text_index)
+;;   <module>       module NAME as ingested (e.g. snapshot_read, fram.text_index)
 ;;   --space-id     SpaceId of the corpus (required; no default is safe)
 ;;   --port         render off an ALREADY RUNNING server (minimal closure)
 ;;   --log          render off a corpus file by booting an EPHEMERAL read-only
