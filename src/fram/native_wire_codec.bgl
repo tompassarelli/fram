@@ -347,29 +347,11 @@
            :rpc/invalid)]))
     :rpc/invalid))
 
-(defn decoded-term!
-  [decoder: Decoder
-   value: Any] -> t/Term
-  (cond
-    [(string? value) value]
-    [(integer? value) value]
-    [(and (number? value) (not (integer? value))) value]
-    [(boolean? value) value]
-    [(keyword? value) value]
-    [(t/instant? value) value]
-    [(t/triple? value) value]
-    [:else
-     (do
-       (decoder-error! decoder "TermCodecV1 decoded a value outside Term")
-       :rpc/invalid)]))
-
 (defn read-term!
   [decoder: Decoder
    depth: Int] -> t/Term
-  (decoded-term!
-   decoder
-   (read-term-limited! decoder depth rpc-v1-max-string-bytes
-                       rpc-v1-max-term-nodes rpc-v1-max-term-depth)))
+  (read-term-limited! decoder depth rpc-v1-max-string-bytes
+                      rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
 (defn append-term-limited!
   [encoder: Encoder
