@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; Authenticated JSON gateway for the private FRAMRPC server socket.
-;; JSON is an edge representation only: the daemon receives one closed binary
+;; JSON is an edge representation only: the server receives one closed binary
 ;; RpcRequest, and its typed RpcResponse is rendered back to strict JSON.
 (require '[org.httpkit.server :as srv]
          '[cheshire.core :as json]
@@ -13,8 +13,8 @@
         '[java.nio ByteBuffer]
         '[java.nio.charset CodingErrorAction StandardCharsets])
 
-(def fram-host (or (System/getenv "FRAM_HOST") "127.0.0.1"))
-(def fram-port (parse-long (or (System/getenv "FRAM_PORT") "7977")))
+(def fram-host (or (System/getenv "FRAM_SERVER_CONNECT") "127.0.0.1"))
+(def fram-port (parse-long (or (System/getenv "FRAM_SERVER_PORT") "7977")))
 (def shim-port (parse-long (or (System/getenv "SHIM_PORT") "8787")))
 (def max-body-bytes (* 1024 1024))
 

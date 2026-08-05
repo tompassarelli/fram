@@ -12,7 +12,7 @@ usage() {
 Usage: fram-cloudflare-native-image --artifact /absolute/READY-artifact --tag IMAGE
 
 The artifact must be the absolute content-addressed directory emitted by
-fram-native-build. The image contains only its static native daemon and READY
+fram-native-build. The image contains only its static native server and READY
 receipt; it never compiles Graal or carries a JVM.
 USAGE
 }
@@ -59,13 +59,13 @@ hash="${artifact##*/}"
   die "artifact directory name is not a content hash: $artifact"
 
 ready="$artifact/READY"
-daemon="$artifact/bin/fram-daemon-native"
+server="$artifact/bin/fram-server-native"
 [[ -r "$ready" ]] || die "artifact READY receipt is unavailable: $ready"
 [[ "$(<"$ready")" == "fram-native-build/v1 $hash" ]] ||
   die "artifact READY receipt does not match its content hash: $ready"
-[[ -x "$daemon" ]] || die "artifact native daemon is unavailable: $daemon"
-if readelf -l "$daemon" | grep -Fq 'Requesting program interpreter'; then
-  die "artifact native daemon is dynamically linked; Cloudflare image requires static musl"
+[[ -x "$server" ]] || die "artifact native server is unavailable: $server"
+if readelf -l "$server" | grep -Fq 'Requesting program interpreter'; then
+  die "artifact native server is dynamically linked; Cloudflare image requires static musl"
 fi
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"

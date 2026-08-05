@@ -6,7 +6,7 @@ This document specifies the source-head database trust domain, server bind and F
 
 Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glossary.md#storage-and-query), one FRAMLOG, one writer process/lock, and one private network boundary form a trust domain. Separate personal, client, and public-tooling data across all four; ontology fields are not tenant isolation.
 
-`bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_DAEMON_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
+`bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_SERVER_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_SERVER_PORT` selects its port, and `FRAM_SERVER_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
 The Cloudflare server image builds the Graal route as a fully static musl
 release artifact. Graal compilation is not part of the JVM development loop;
@@ -39,9 +39,9 @@ client -- HTTPS/closed JSON --> authenticated Worker or shim
        -- append --> database (SpaceId + FRAMLOG)
 ```
 
-The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it never forwards EDN or arbitrary daemon records. Cloudflare setup and probes live in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
+The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it never forwards EDN or arbitrary server records. Cloudflare setup and probes live in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
 
-- `bin/fram-server` is the native-first launcher for the long-lived active or standby server.
+- `bin/fram-server` is the native-first launcher for the single active server. Native production exposes no standby-serving mode and rebuilds state by replaying the full FRAMLOG at boot.
 - `bin/fram` is the local CLI and FRAMRPC client.
 - `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
 - The Cloudflare shim/Worker is an optional authenticated JSON edge.
@@ -95,4 +95,4 @@ The patterns that keep growth proportional to change:
 - [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
 - [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) and [`../tests/node_framrpc_client_test.mjs`](../tests/node_framrpc_client_test.mjs): real listener and official client.
 - [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): closed operation boundary.
-- [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): active/standby authority.
+- [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): writer-authority and JVM-oracle compatibility behavior.

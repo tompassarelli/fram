@@ -47,7 +47,7 @@
   (doseq [file (reverse (file-seq root))] (io/delete-file file true)))
 
 (defn- render-tool [& args]
-  (apply shell/sh "env" (str "FRAM_BEAGLE=" beagle) "FRAM_DAEMON_QUIET=1"
+  (apply shell/sh "env" (str "FRAM_BEAGLE=" beagle) "FRAM_SERVER_QUIET=1"
          (str (io/file fram-root "bin/fram-render-code-native"))
          "--log" log-path "--space-id" space "--root" fram-root
          (concat args [:dir fram-root])))

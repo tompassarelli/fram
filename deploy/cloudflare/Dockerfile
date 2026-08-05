@@ -37,7 +37,6 @@ COPY --from=fram-native-image /fram/native/fram-server-graal /usr/local/bin/fram
 # docker-compose keeps this port on a private network with the shim as the
 # sole authenticated ingress. Never publish 7977 to the internet.
 ENV FRAM_BIND=0.0.0.0 \
-    FRAM_SNAPSHOT_BOOT=1 \
     FRAM_SPACE_ID=cloudflare
 
 VOLUME /data

@@ -48,14 +48,14 @@ async function startDaemon(port, log, space) {
       ...process.env,
       FRAM_SPACE_ID: space,
       FRAM_GRAPH_OPS_LOG: 'off',
-      FRAM_DAEMON_QUIET: '1',
+      FRAM_SERVER_QUIET: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
   let ready = false;
   const startup = new Promise((resolveReady, reject) => {
-    const timer = setTimeout(() => reject(new Error(`daemon startup timeout\n${output}`)), 60000);
+    const timer = setTimeout(() => reject(new Error(`server startup timeout\n${output}`)), 60000);
     const consume = chunk => {
       output += chunk.toString();
       if (!ready && output.includes('Fram server listening')) {

@@ -70,7 +70,7 @@ runtime reference.
 
 ## Quickstart
 
-The checkout runtime needs Babashka for the CLI and Clojure/JVM for the daemon.
+The checkout runtime needs Babashka for the CLI and Clojure/JVM for the server.
 Beagle is needed only when rebuilding graph-authored source; compiled Clojure is
 committed under `out/`.
 
@@ -78,7 +78,7 @@ committed under `out/`.
 $ git clone https://github.com/Autonymy/fram && cd fram
 $ export FRAM_SPACE_ID=fram-demo
 $ export FRAM_LOG=/tmp/fram-demo.framlog
-$ export FRAM_DAEMON_RUNTIME=jvm-dev  # explicit checkout fallback
+$ export FRAM_SERVER_RUNTIME=jvm-dev  # explicit checkout fallback
 $ bin/fram-up
 $ bin/fram tell :email :grouped-under :contact
 $ bin/fram tell Alice :email alice@example.com

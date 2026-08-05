@@ -1,9 +1,9 @@
-;; The container and Nix package must carry every repo-root file the daemon
+;; The container and Nix package must carry every repo-root file the server
 ;; load-files; out/ is copied as one generated namespace closure.
 (require '[clojure.set :as set]
          '[clojure.string :as str])
 
-(def daemon-source
+(def server-source
   (->> (str/split-lines (slurp "server.clj"))
        (map #(str/replace % #";.*$" ""))
        (str/join "\n")))
@@ -15,11 +15,11 @@
 
 (def direct-loads
   (map second
-       (re-seq #"\(load-file\s+\"([^\"]+)\"\)" daemon-source)))
+       (re-seq #"\(load-file\s+\"([^\"]+)\"\)" server-source)))
 (def cwd-loads
   (map second
        (re-seq #"\(load-file\s+\(str\s+\(System/getProperty\s+\"user.dir\"\)\s+\"/([^\"]+)\"\)\)"
-               daemon-source)))
+               server-source)))
 (def load-assets (set (concat direct-loads cwd-loads)))
 (def root-assets
   (conj (set (remove #(str/starts-with? % "out/") load-assets))
@@ -40,7 +40,7 @@
 (defn chk [label ok detail]
   (swap! checks conj [label ok detail]))
 
-(chk "daemon load-file closure is recognized"
+(chk "server load-file closure is recognized"
      (= #{"database.clj" "writer_authority.clj"} load-assets)
      load-assets)
 (chk "Docker source COPYs equal the Graal build closure"

@@ -1,4 +1,4 @@
-;; Writer authority and FRAMRPC v1 JVM daemon integration.
+;; Writer authority and FRAMRPC v1 JVM server integration.
 (require '[babashka.process :as process]
          '[clojure.java.io :as io]
          '[clojure.string :as str]
@@ -62,12 +62,12 @@
 (let [log (str (io/file scratch "lock-only.framlog"))]
   (spit log "")
   (check! "nil role preserves active default"
-          (= :active (writer-authority/role-from nil)))
+          (= :active (writer-authority/server-role-from nil)))
   (check! "standby role is explicit"
-          (= :standby (writer-authority/role-from "standby")))
+          (= :standby (writer-authority/server-role-from "standby")))
   (check! "unknown role fails closed"
           (= :invalid-server-role
-             (try (writer-authority/role-from "writer-ish") nil
+             (try (writer-authority/server-role-from "writer-ish") nil
                   (catch clojure.lang.ExceptionInfo error
                     (:code (ex-data error))))))
   (let [first (writer-authority/acquire! log)]
@@ -88,7 +88,7 @@
       space "direct-space"]
   (server/boot! log space :active)
   (try
-    (check! "active daemon holds TermStore writer authority"
+    (check! "active server holds TermStore writer authority"
             (true? (:write-authorized (server/writer-authority-status))))
     (let [proposition (t/triple "A" :email "a@example.com")
           response (direct-request!

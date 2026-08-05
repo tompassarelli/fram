@@ -1,4 +1,4 @@
-;; Dependencies for bin/fram-daemon's explicit jvm-oracle and jvm-dev routes.
+;; Dependencies for bin/fram-server's explicit jvm-oracle and jvm-dev routes.
 ;; They retain the differential/development runtime with full Java threads and
 ;; javax.net.ssl.SSLServerSocket. The native launcher never selects them
 ;; implicitly. The CLI + MCP stay on babashka; cheshire is declared here because

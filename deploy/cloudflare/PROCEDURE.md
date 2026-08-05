@@ -44,7 +44,7 @@ Neither the Worker nor the shim accepts EDN or an untyped raw escape hatch.
 
 The Fram server image compiles the Beagle-emitted JVM closure into one static
 Graal executable. This is a release/deployment build; normal Fram server
-development stays on `FRAM_DAEMON_RUNTIME=jvm-dev` and does not run Graal.
+development stays on `FRAM_SERVER_RUNTIME=jvm-dev` and does not run Graal.
 The separate shim image remains Babashka.
 
 From `fram:deploy/cloudflare`:
@@ -57,7 +57,7 @@ docker compose ps
 ```
 
 The Fram server persists database history at `/data/history.framlog`. If this deployment has an old
-flat `facts.log`, stop the old daemon and migrate it once before starting the new
+flat `facts.log`, stop the old server and migrate it once before starting the new
 image:
 
 ```sh
@@ -75,7 +75,7 @@ carries a JVM:
 
 ```sh
 artifact="$(bin/fram-native-build --host serve-flat SOURCE...)"
-bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-coordinator-native:local
+bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-server-native:local
 ```
 
 The helper requires an absolute artifact path, verifies that its directory hash

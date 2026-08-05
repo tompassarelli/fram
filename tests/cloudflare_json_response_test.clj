@@ -142,7 +142,7 @@
     (reset! shim
             (proc/process
              {:dir root
-              :env (assoc inherited "FRAM_HOST" "127.0.0.1"
+              :env (assoc inherited "FRAM_SERVER_CONNECT" "127.0.0.1"
                           "FRAM_SERVER_PORT" (str daemon-port)
                           "SHIM_PORT" (str shim-port)
                           "SHIM_TOKEN" token)

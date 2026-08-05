@@ -22,8 +22,8 @@ Node.js 20 or newer is required.
 import { framClient, keywordTerm } from '@tompassarelli/framrpc';
 
 const fram = framClient({
-  host: process.env.FRAM_CONNECT || '127.0.0.1',
-  port: Number(process.env.FRAM_PORT || 7977),
+  host: process.env.FRAM_SERVER_CONNECT || '127.0.0.1',
+  port: Number(process.env.FRAM_SERVER_PORT || 7977),
   space: process.env.FRAM_SPACE_ID,
 });
 
@@ -143,6 +143,6 @@ Daemon errors throw `FramRpcError` with `code`, `retryable`, `detail`,
 use `FramTransportError` and `FramProtocolError`.
 
 FRAMRPC v1 serves one request per TCP connection. The client follows that
-contract directly without HTTP, JSON, MCP, or a Clojure shim. The daemon socket
+contract directly without HTTP, JSON, MCP, or a Clojure shim. The server socket
 is plaintext and unauthenticated; keep it on loopback or a private network, or
 put an authenticated TLS boundary in front of it.

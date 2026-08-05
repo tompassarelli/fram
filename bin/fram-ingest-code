@@ -197,7 +197,7 @@
           proposition-count (atom 0)]
       (try
         (database/create-triple-log! (.getPath sibling) space-id)
-        (let [db (database/open-server! (.getPath sibling) space-id)
+        (let [db (database/open-database! (.getPath sibling) space-id)
               total (count files)]
           ;; Report each module as it lands: a minutes-long fold with no output
           ;; is indistinguishable from a hang to any caller with a timeout.

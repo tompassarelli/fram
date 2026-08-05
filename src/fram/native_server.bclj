@@ -1,6 +1,6 @@
 #lang beagle/clj
 
-(ns fram.native-daemon
+(ns fram.native-server
   (:require [fram.log-codec :as log]
             [fram.native-dispatch :as dispatch]
             [fram.native-wire-codec :as native-wire]

@@ -50,13 +50,13 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 **FRAMRPC** — Fram's private binary protocol for typed recursive Terms and a closed thirteen-operation data surface.
 
-**writer / standby** — The sole server generation authorized to append to a SpaceId's log, and a read-only server generation that may prepare to acquire authority.
+**writer** — The sole active server generation authorized to append to a SpaceId's log. Native production has no standby-serving mode.
 
 **selector** — The operator-owned front end that holds and drains public connections, checks deployment generations, and switches all routes together.
 
-**blue/green generation** — One of two side-by-side deployment copies used to transfer writer authority without changing the public route prematurely.
+**blue/green generation** — A v0.3 compatibility deployment copy used by the frozen writer-handoff protocol.
 
-**promote** — Grant a prepared standby writer authority after it proves agreement with the former writer's final durable marker.
+**promote** — A v0.3 writer-handoff operation that grants a prepared standby authority after it proves agreement with the former writer's final durable marker.
 
 **wire skew** — A client/server protocol-version or format mismatch that can make healthy endpoints reject, drop, or hang requests.
 

@@ -23,9 +23,10 @@ Binary FRAMLOG v1 is authoritative. Its header fixes the SpaceId; transaction fr
 One active server owns writer authority for one database. Its FIFO commit
 sequencer prepares bounded transaction cohorts on private roots, appends one
 frame per transaction, forces the cohort once, and atomically publishes the
-final immutable snapshot before acknowledgements. Standby servers never append;
-readers use only published snapshots and never acquire the commit-sequencer
-lock. Exact guarantees and the workload envelope live in [guarantees](guarantees.md).
+final immutable snapshot before acknowledgements. The native production route
+has no standby-serving mode; readers use only published snapshots and never
+acquire the commit-sequencer lock. Exact guarantees and the workload envelope
+live in [guarantees](guarantees.md).
 
 ```text
 North coordinator -> Fram server -> database (SpaceId + FRAMLOG) -> commit sequencer

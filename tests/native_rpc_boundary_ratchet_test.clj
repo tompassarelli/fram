@@ -25,7 +25,7 @@
           nil)
   (check! "Cloudflare shim uses the shared FRAMRPC client"
           (and (str/includes? shim "rt/native-request-to!")
-               (str/includes? shim "wire/rpc-request!")
+               (str/includes? shim "framrpc/rpc-request!")
                (str/includes? shim "strict-duplicate-detection true"))
           nil)
   (check! "Worker has the exact closed Term vocabulary"
@@ -122,7 +122,7 @@
                (str/includes? launcher "FRAM_GRAAL_ARTIFACT")
                (str/includes? launcher "exec \"$graal_artifact\"")
                (str/includes? launcher "jvm-oracle|jvm-dev")
-               (str/includes? launcher "exec \"$native_daemon\"")
+               (str/includes? launcher "exec \"$native_server\"")
                (str/includes? migration "migrate-triple-log")
                (= 2 (count (re-seq #"serve-flat" launcher)))
                (str/includes? code-on "bin/fram-server serve")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test-only fixture (NOT production code): simulates a coordinator that dies
+# Test-only fixture (NOT production code): simulates a server that dies
 # immediately during boot, so readiness tests can prove the harness detects
 # and reports a dead child fast and diagnostically instead of waiting out
 # its full deadline.
