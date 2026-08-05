@@ -127,7 +127,7 @@ The storage implementation interns Atoms and Triples and keeps compact
 identity. Querying is slot-neutral and history remains addressable after a
 withdrawal. The exact executable contracts live in
 [`tests/triple_kernel_test.clj`](tests/triple_kernel_test.clj),
-[`tests/coord_test.clj`](tests/coord_test.clj), and
+[`tests/database_test.clj`](tests/database_test.clj), and
 [`tests/triple_query_test.clj`](tests/triple_query_test.clj).
 
 Fram is pre-1.0. There is no engine access control: isolate by process, network,

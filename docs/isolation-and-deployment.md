@@ -95,4 +95,4 @@ The patterns that keep growth proportional to change:
 - [`../tests/fram_rpc_v1_test.clj`](../tests/fram_rpc_v1_test.clj): recursive Term records and codec.
 - [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) and [`../tests/node_framrpc_client_test.mjs`](../tests/node_framrpc_client_test.mjs): real listener and official client.
 - [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj): closed operation boundary.
-- [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj): active/standby authority.
+- [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj): active/standby authority.

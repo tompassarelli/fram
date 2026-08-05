@@ -35,24 +35,24 @@ Two runtime surfaces exist until cluster migration completes:
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| D1 | An acked commit is durable: its FRAMLOG frame is covered by a successful `force(true)` barrier before the cohort's immutable head is published | BACKED | `coord_test.clj` asserts two frames/one barrier and no publication on an injected barrier failure; concurrent gate verifies ack/frame identity |
-| D2 | A torn trailing frame never corrupts state: authority boot truncates to `:valid-bytes`; exactly the longest committed prefix survives, at every possible cut offset | BACKED | [`../tests/framlog_torn_sweep_test.clj`](../tests/framlog_torn_sweep_test.clj) — every-byte cut sweep, 3,984 boots, exact-image oracle with negative control; plus `coord_test.clj` |
-| D3 | A standby (no writer authority) reports a torn tail and never rewrites the log | BACKED | sweep passive arm asserts byte-identical file at every cut; plus `coord_test.clj` |
-| D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:database-corrupt` / `:database-state-invalid`); every waiter in a failed cohort is refused and writes stay fenced until restart | BACKED | `coord_test.clj` fault injection covers singleton and cohort barriers before append, after force, and corrupt replay |
-| D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | BACKED | sweep flip arm — 3,968 single-bit/high-bit flips: every one detected by CRC or repaired-to-prefix, zero divergent images. Residual (named, unswept): multi-byte garbage tails; header-region corruption is gated separately in `coord_test.clj` |
+| D1 | An acked commit is durable: its FRAMLOG frame is covered by a successful `force(true)` barrier before the cohort's immutable head is published | BACKED | `database_test.clj` asserts two frames/one barrier and no publication on an injected barrier failure; concurrent gate verifies ack/frame identity |
+| D2 | A torn trailing frame never corrupts state: authority boot truncates to `:valid-bytes`; exactly the longest committed prefix survives, at every possible cut offset | BACKED | [`../tests/framlog_torn_sweep_test.clj`](../tests/framlog_torn_sweep_test.clj) — every-byte cut sweep, 3,984 boots, exact-image oracle with negative control; plus `database_test.clj` |
+| D3 | A standby (no writer authority) reports a torn tail and never rewrites the log | BACKED | sweep passive arm asserts byte-identical file at every cut; plus `database_test.clj` |
+| D4 | An append-path failure fences the writer (`:durability-ambiguous` / `:recovery-required` / `:database-corrupt` / `:database-state-invalid`); every waiter in a failed cohort is refused and writes stay fenced until restart | BACKED | `database_test.clj` fault injection covers singleton and cohort barriers before append, after force, and corrupt replay |
+| D5 | Damaged committed bytes are detected loudly on replay; replay never silently produces a divergent image | BACKED | sweep flip arm — 3,968 single-bit/high-bit flips: every one detected by CRC or repaired-to-prefix, zero divergent images. Residual (named, unswept): multi-byte garbage tails; header-region corruption is gated separately in `database_test.clj` |
 
 ## Atomicity
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| A1 | One RPC batch remains one transaction frame; a sequencer cohort prepares FIFO on a private root and publishes all covered frames together after one barrier, or publishes none | BACKED | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) batch path; `coord_test.clj` two-frame cohort success/failure arms |
+| A1 | One RPC batch remains one transaction frame; a sequencer cohort prepares FIFO on a private root and publishes all covered frames together after one barrier, or publishes none | BACKED | [`../tests/native_rpc_daemon_test.clj`](../tests/native_rpc_daemon_test.clj) batch path; `database_test.clj` two-frame cohort success/failure arms |
 
 ## Isolation and concurrency
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| I1 | One active server per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
-| I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
+| I1 | One active server per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/writer_authority_test.clj`](../tests/writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
+| I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `database_test.clj` (24 racers → exactly 1 ok) |
 | I3 | K concurrent socket writers: every acked proposition is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
 | I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |
 
@@ -60,7 +60,7 @@ Two runtime surfaces exist until cluster migration completes:
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| O1 | `tx-sequence` + `op-ordinal` define exact logical order; mutation receipts return occurrence coordinates | BACKED | [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), `coord_test.clj`, [`../tests/model_generative_test.clj`](../tests/model_generative_test.clj) — seeded op sequences compared against a pure model after every op |
+| O1 | `tx-sequence` + `op-ordinal` define exact logical order; mutation receipts return occurrence coordinates | BACKED | [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), `database_test.clj`, [`../tests/model_generative_test.clj`](../tests/model_generative_test.clj) — seeded op sequences compared against a pure model after every op |
 | R1 | Replay restores logical order and occurrence liveness; restart resumes at the next tx without duplication | PARTIAL | `native_rpc_daemon_test.clj` restart — idle daemon, tiny corpus; `model_generative_test.clj` cold-restart arm compares the model and a byte-exact store dump per generated sequence; no restart-under-load, no at-scale replay bound |
 | R2 | Old flat logs are accepted only by the one-shot migration command | BACKED | [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj) |
 

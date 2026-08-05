@@ -6,7 +6,7 @@
          '[cheshire.core :as json]
          '[cheshire.factory :as json-factory]
          '[clojure.string :as str]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as framrpc]
          '[fram.rt :as rt]
          '[fram.types :as terms])
 (import '[java.io ByteArrayOutputStream InputStream]
@@ -81,13 +81,13 @@
     decoded))
 
 (defn- count-node! [nodes]
-  (when (> (swap! nodes inc) wire/rpc-v1-max-term-nodes)
+  (when (> (swap! nodes inc) framrpc/rpc-v1-max-term-nodes)
     (fail! "shim/term-node-limit" "Term exceeds the node limit")))
 
 (declare decode-term!)
 
 (defn- decode-term! [value nodes depth]
-  (when (> depth wire/rpc-v1-max-term-depth)
+  (when (> depth framrpc/rpc-v1-max-term-depth)
     (fail! "shim/term-depth-limit" "Term exceeds the nesting limit"))
   (count-node! nodes)
   (when-not (vector? value)
@@ -180,7 +180,7 @@
   (let [limit (parse-u32! (get value "limit") "page.limit")]
     (when (zero? limit)
       (fail! "shim/invalid-page" "page.limit must be positive"))
-    (wire/rpc-page-request!
+    (framrpc/rpc-page-request!
      limit
      (when (contains? value "cursor")
        (decode-json-term! (get value "cursor"))))))
@@ -194,7 +194,7 @@
   (when-not (and (string? value) (not (str/blank? value)))
     (fail! "shim/invalid-space" "space must be a non-empty string"))
   (when (> (alength (.getBytes ^String value StandardCharsets/UTF_8))
-           wire/rpc-v1-max-space-bytes)
+           framrpc/rpc-v1-max-space-bytes)
     (fail! "shim/invalid-space" "space exceeds the FRAMRPC byte limit"))
   value)
 
@@ -202,7 +202,7 @@
   (exact-keys! value #{"space" "op" "payload"}
                #{"space" "op" "payload" "expectedVersion" "page" "timeoutMs"}
                "request")
-  (wire/rpc-request!
+  (framrpc/rpc-request!
    (request-space! (get value "space"))
    (request-op! (get value "op"))
    (when (contains? value "expectedVersion")
