@@ -37,6 +37,14 @@ PORT="$(free_port 8200)" || exit 1
 DEAD="$(free_port $((PORT + 1)))" || exit 1
 SPACE="fram-selfcheck"
 LOG="$SCRATCH/history.framlog"
+case "${FRAM_DAEMON_RUNTIME:-native}" in
+  native) EXPECTED_ENGINE=:rpc/native ;;
+  graal|jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm ;;
+  *)
+    echo "fram selfcheck: unsupported FRAM_DAEMON_RUNTIME: ${FRAM_DAEMON_RUNTIME}" >&2
+    exit 2
+    ;;
+esac
 
 start_daemon() {
   FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$SPACE" \
@@ -73,6 +81,7 @@ fi
 live_port="$PORT"
 [[ "${FRAM_SELFCHECK_FAULT:-}" != "socket" ]] || live_port="$DEAD"
 FRAM_SC_PHASE=live FRAM_SC_PORT="$live_port" FRAM_SC_SPACE="$SPACE" \
+  FRAM_SC_EXPECTED_ENGINE="$EXPECTED_ENGINE" \
   bb -cp "$HERE/out" "$HERE/bin/fram-selfcheck-probe.clj"
 live_rc=$?
 
@@ -86,6 +95,7 @@ if ! wait_port; then
   exit 1
 fi
 FRAM_SC_PHASE=restart FRAM_SC_PORT="$PORT" FRAM_SC_SPACE="$SPACE" \
+  FRAM_SC_EXPECTED_ENGINE="$EXPECTED_ENGINE" \
   bb -cp "$HERE/out" "$HERE/bin/fram-selfcheck-probe.clj"
 restart_rc=$?
 

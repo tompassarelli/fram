@@ -7,6 +7,11 @@
 (def port (Integer/parseInt (System/getenv "FRAM_SC_PORT")))
 (def space (System/getenv "FRAM_SC_SPACE"))
 (def phase (System/getenv "FRAM_SC_PHASE"))
+(def expected-engine
+  (case (System/getenv "FRAM_SC_EXPECTED_ENGINE")
+    ":rpc/native" :rpc/native
+    ":rpc/jvm" :rpc/jvm
+    (throw (ex-info "FRAM_SC_EXPECTED_ENGINE must be :rpc/native or :rpc/jvm" {}))))
 (def results (atom []))
 (def request-id (atom 0))
 
@@ -51,7 +56,7 @@
              status (request! :rpc/status wire/rpc-unit)
              [state live-count engine _] (fields (payload status) :rpc/status 4)]
          [(and (= 0 (terms/rpcresponse-served-version version))
-               (= :ready state) (= 0 live-count) (= :rpc/jvm engine))
+               (= :ready state) (= 0 live-count) (= expected-engine engine))
           "version/status typed round-trip"]))
 
     (section "terms"

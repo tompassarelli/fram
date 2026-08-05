@@ -84,6 +84,7 @@
 
 (let [fast (file-source "bin/fram-fast.clj")
       up (file-source "bin/fram-up")
+      selfcheck-runner (file-source "bin/fram-selfcheck")
       selfcheck (file-source "bin/fram-selfcheck-probe.clj")]
   (check! "CLI data client has no legacy coordinator helper"
           (absent? fast ["coord-request-for-log" "coord-version-for-log"
@@ -96,6 +97,16 @@
           (and (str/includes? up "native-call!")
                (str/includes? selfcheck "native-request-to!")
                (absent? (str up selfcheck) ["coord-version-for-log" "edn/read" "readLine"]))
+          nil)
+  (check! "deep probes bind the exact runtime engine identity"
+          (and (str/includes? selfcheck-runner "native) EXPECTED_ENGINE=:rpc/native")
+               (str/includes? selfcheck-runner
+                              "graal|jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm")
+               (str/includes? selfcheck-runner
+                              "FRAM_SC_EXPECTED_ENGINE=\"$EXPECTED_ENGINE\"")
+               (str/includes? selfcheck
+                              "FRAM_SC_EXPECTED_ENGINE must be :rpc/native or :rpc/jvm")
+               (str/includes? selfcheck "(= expected-engine engine)"))
           nil))
 
 (let [launcher (file-source "bin/fram-daemon")
