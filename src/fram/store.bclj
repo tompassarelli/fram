@@ -677,7 +677,10 @@
    coordinate: Any
    proposition: Any
    postings: (Map Int (Vec Int))] -> (Vec Int)
-  (let [[start end] (operation-range-bounds store lower-exclusive upper-inclusive)
+  (let [bounds: (Vec Int)
+        (operation-range-bounds store lower-exclusive upper-inclusive)
+        start (nth bounds 0)
+        end (nth bounds 1)
         exact (when (some? coordinate) (exact-occurrence-position store coordinate))
         proposition-handle
         (when (some? proposition) (known-term-handle store proposition))
