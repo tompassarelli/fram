@@ -123,7 +123,8 @@
     (let [steps: (Atom Int) (atom 0)
           cancelled: (Atom (U Keyword Nil)) (query-cancellation-cell nil)]
       (->QueryControl steps cancelled max-steps
-                      (+ (System/nanoTime) (* timeout-ms 1000000)) timeout-ms))
+                      (+ (monotonic-nanoseconds) (* timeout-ms 1000000))
+                      timeout-ms))
     (throw (ex-info "fram: query limits must be positive steps and non-negative milliseconds"
                     {:type :invalid-query-control}))))
 
@@ -241,7 +242,7 @@
       (if (nil? control)
         true
         (let [steps (swap! (querycontrol-steps control) next-query-step)
-              now (System/nanoTime)
+              now (monotonic-nanoseconds)
               cancelled (deref (querycontrol-cancelled control))
               code (cond
                      [(some? cancelled) :query-cancelled]
