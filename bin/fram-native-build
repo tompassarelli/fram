@@ -109,8 +109,10 @@ fi
 cache_root="${FRAM_NATIVE_CACHE:-${XDG_CACHE_HOME:-${home:+$home/.cache}}}"
 [[ -n "$cache_root" ]] || die "set FRAM_NATIVE_CACHE, XDG_CACHE_HOME, or HOME"
 [[ -n "${FRAM_NATIVE_CACHE:-}" ]] || cache_root="$cache_root/fram/native-build"
-mkdir -p "$cache_root/.locks" "$cache_root/.tmp"
+mkdir -p "$cache_root/.locks" "$cache_root/.tmp" \
+  "$cache_root/.worlds/.locks" "$cache_root/.worlds/.tmp"
 cache_root="$(cd "$cache_root" && pwd -P)"
+world_cache="$cache_root/.worlds"
 
 normalized_sources=()
 for source in "${sources[@]}"; do
@@ -141,37 +143,100 @@ cc_identity="$cc:$($cc --version 2>&1 | sed -n '1p')"
 builder_identity="$(sha256sum "${BASH_SOURCE[0]}" | sed 's/ .*//')"
 
 input_manifest=""
+world_input_manifest=""
 stage=""
+world_stage=""
 cleanup() {
   [[ -z "$stage" || ! -d "$stage" ]] || rm -rf "${stage:?}"
+  [[ -z "$world_stage" || ! -d "$world_stage" ]] || rm -rf "${world_stage:?}"
   [[ -z "$input_manifest" || ! -f "$input_manifest" ]] || rm -f "${input_manifest:?}"
+  [[ -z "$world_input_manifest" || ! -f "$world_input_manifest" ]] ||
+    rm -f "${world_input_manifest:?}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-write_input_manifest() {
+native_server_entries=(
+  fram.native-server/server-generated-abi
+  fram.native-server/server-store-boot!
+  fram.native-server/server-store-dispatch!
+  fram.native-server/server-store-shutdown
+  fram.native-server/server-codec-read-request!
+  fram.native-server/server-codec-write-response!
+  fram.native-server/server-codec-release-request
+  fram.native-server/server-codec-release-response
+)
+native_server_entry_args=()
+for native_server_entry in "${native_server_entries[@]}"; do
+  native_server_entry_args+=(--entry "$native_server_entry")
+done
+
+write_world_input_manifest() {
   local destination="$1" index source
   {
-    printf 'fram-native-build-input/v1\n%s\nhost=%s\n%s\n%s\n' \
-      "$builder_identity" "$host" "$beagle_identity" "$cc_identity"
-    if [[ -n "$host_source" ]]; then
-      printf 'host-source %q %s\n' "$host_source" \
-        "$(sha256sum "$host_source" | sed 's/ .*//')"
-      printf 'host-header %q %s\n' "$host_header" \
-        "$(sha256sum "$host_header" | sed 's/ .*//')"
-      if [[ -n "$adapter_header" ]]; then
-        printf 'adapter-header %q %s\n' "$adapter_header" \
-          "$(sha256sum "$adapter_header" | sed 's/ .*//')"
-      fi
-      printf 'adapter %q %s\n' "$adapter" \
-        "$(sha256sum "$adapter" | sed 's/ .*//')"
-    fi
+    printf 'fram-native-world-input/v1\n%s\n%s\nconfiguration=profile=3\n' \
+      "$builder_identity" "$beagle_identity"
+    for native_server_entry in "${native_server_entries[@]}"; do
+      printf 'entry=%s\n' "$native_server_entry"
+    done
     for index in "${!normalized_sources[@]}"; do
       source="${normalized_sources[$index]}"
       printf '%06d %q %s\n' "$index" "$source" "$(sha256sum "$source" | sed 's/ .*//')"
     done
   } >"$destination"
+}
+
+write_input_manifest() {
+  local destination="$1"
+  {
+    printf 'fram-native-build-input/v1\n%s\nhost=%s\nworld=%s\nnative-world=%s\n%s\n' \
+      "$builder_identity" "$host" "$world_closure_hash" \
+      "$native_world_digest" "$cc_identity"
+    printf 'host-source %q %s\n' "$host_source" \
+      "$(sha256sum "$host_source" | sed 's/ .*//')"
+    printf 'host-header %q %s\n' "$host_header" \
+      "$(sha256sum "$host_header" | sed 's/ .*//')"
+    if [[ -n "$adapter_header" ]]; then
+      printf 'adapter-header %q %s\n' "$adapter_header" \
+        "$(sha256sum "$adapter_header" | sed 's/ .*//')"
+    fi
+    printf 'adapter %q %s\n' "$adapter" \
+      "$(sha256sum "$adapter" | sed 's/ .*//')"
+  } >"$destination"
+}
+
+validate_native_report() {
+  local report_path="$1" materializer="$2" line
+  local -a required_lines=(
+    "stage source-seal ACCEPTED"
+    "stage source-to-typed ACCEPTED"
+    "stage typed-to-native COMPLETE"
+    "native-lowering-result NativeLoweringCompleteV0"
+    "result PASS"
+    "obligation-projection PASS valid-ssa"
+    "obligation-projection PASS exhaustive-matches"
+    "obligation-projection PASS closed-layouts"
+    "obligation-projection PASS checked-arithmetic"
+    "obligation-projection PASS legal-abi"
+    "obligation-projection PASS discharged-tokens"
+    "obligation-projection PASS bounded-effects"
+  )
+  [[ -f "$report_path" ]] || die "native build omitted $report_path"
+  case "$materializer" in
+    c17) required_lines+=("materialize-c17 OK module_0.h module_0.c") ;;
+    qbe) required_lines+=("materialize-qbe OK module_0.ssa") ;;
+    *) die "unknown report materializer: $materializer" ;;
+  esac
+  for line in "${required_lines[@]}"; do
+    [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
+      die "native report must contain exactly once: $line"
+  done
+  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "7" &&
+     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "7" ]] ||
+    die "native report must contain exactly seven passing obligations"
+  ! grep -q '^pending ' "$report_path" ||
+    die "native report contains pending lowering work"
 }
 
 write_server_symbols() {
@@ -337,6 +402,93 @@ write_server_symbols() {
   } >"$destination"
 }
 
+world_input_manifest="$(mktemp "$world_cache/.tmp/input.XXXXXX")"
+write_world_input_manifest "$world_input_manifest"
+world_closure_hash="$(sha256sum "$world_input_manifest" | sed 's/ .*//')"
+world_dir="$world_cache/$world_closure_hash"
+
+exec {world_lock_fd}>"$world_cache/.locks/$world_closure_hash.lock"
+flock "$world_lock_fd"
+if [[ ! -e "$world_dir" ]]; then
+  world_stage="$(mktemp -d "$world_cache/.tmp/$world_closure_hash.XXXXXX")"
+  cp "$world_input_manifest" "$world_stage/input.manifest"
+  c17_projection="$world_stage/materialize-c17"
+  qbe_projection="$world_stage/materialize-qbe"
+  mkdir -p "$c17_projection" "$qbe_projection"
+  if ! "$beagle" build --materializer c17 \
+      --out "$c17_projection" \
+      "${native_server_entry_args[@]}" \
+      -- \
+      "${normalized_sources[@]}" \
+      >"$world_stage/materialize-c17.log" 2>&1; then
+    sed -n '1,240p' "$world_stage/materialize-c17.log" >&2
+    die "beagle C17 materialization failed"
+  fi
+  if ! "$beagle" build --materializer qbe \
+      --out "$qbe_projection" \
+      "${native_server_entry_args[@]}" \
+      -- \
+      "${normalized_sources[@]}" \
+      >"$world_stage/materialize-qbe.log" 2>&1; then
+    sed -n '1,240p' "$world_stage/materialize-qbe.log" >&2
+    die "beagle QBE materialization failed"
+  fi
+  for projection in "$c17_projection" "$qbe_projection"; do
+    [[ -f "$projection/module.native-world" &&
+       -f "$projection/module.native-world.sha256" ]] ||
+      die "materializer omitted its sealed Native World: $projection"
+  done
+  cmp -s "$c17_projection/module.native-world.sha256" \
+    "$qbe_projection/module.native-world.sha256" ||
+    die "C17 and QBE materializers sealed different Native Worlds"
+  cmp -s "$c17_projection/module.native-world" \
+    "$qbe_projection/module.native-world" ||
+    die "C17 and QBE materializers emitted different sealed Native Worlds"
+  for artifact in source.facts module.native-world module.native-world.sha256 \
+      module_0.h module_0.c native_shim.h native_shim.c \
+      native_unicode15_data.h UNICODE-LICENSE.txt; do
+    [[ -f "$c17_projection/$artifact" ]] ||
+      die "C17 materializer omitted $artifact"
+    cp "$c17_projection/$artifact" "$world_stage/$artifact"
+  done
+  [[ -f "$qbe_projection/module_0.ssa" ]] ||
+    die "QBE materializer omitted module_0.ssa"
+  cp "$c17_projection/report.txt" "$world_stage/report.txt"
+  cp "$qbe_projection/report.txt" "$world_stage/report.qbe.txt"
+  cp "$qbe_projection/module_0.ssa" "$world_stage/module_0.ssa"
+  rm -rf "${c17_projection:?}" "${qbe_projection:?}"
+  validate_native_report "$world_stage/report.txt" c17
+  validate_native_report "$world_stage/report.qbe.txt" qbe
+  write_server_symbols "$world_stage/report.txt" "$world_stage/module_0.h" \
+    "$world_stage/server_symbols.validate"
+  rm -f "$world_stage/server_symbols.validate"
+  native_world_digest="$(sha256sum "$world_stage/module.native-world" | sed 's/ .*//')"
+  [[ "$(<"$world_stage/module.native-world.sha256")" == "$native_world_digest" ]] ||
+    die "materializer Native World digest does not match its bytes"
+  write_world_input_manifest "$world_stage/input.after"
+  cmp -s "$world_input_manifest" "$world_stage/input.after" ||
+    die "source/compiler/config closure changed during Native World build"
+  rm -f "$world_stage/input.after"
+  printf 'fram-native-world/v1 %s %s\n' \
+    "$world_closure_hash" "$native_world_digest" >"$world_stage/READY"
+  mv "$world_stage" "$world_dir"
+  world_stage=""
+fi
+
+[[ -f "$world_dir/READY" && -f "$world_dir/input.manifest" &&
+  -f "$world_dir/module.native-world" &&
+  -f "$world_dir/module.native-world.sha256" ]] ||
+  die "Native World cache entry is incomplete: $world_dir"
+cmp -s "$world_input_manifest" "$world_dir/input.manifest" ||
+  die "Native World cache identity does not match its input closure"
+native_world_digest="$(sha256sum "$world_dir/module.native-world" | sed 's/ .*//')"
+[[ "$(<"$world_dir/module.native-world.sha256")" == "$native_world_digest" &&
+  "$(<"$world_dir/READY")" == \
+    "fram-native-world/v1 $world_closure_hash $native_world_digest" ]] ||
+  die "Native World cache entry failed its digest receipt: $world_dir"
+validate_native_report "$world_dir/report.txt" c17
+validate_native_report "$world_dir/report.qbe.txt" qbe
+
 input_manifest="$(mktemp "$cache_root/.tmp/input.XXXXXX")"
 write_input_manifest "$input_manifest"
 closure_hash="$(sha256sum "$input_manifest" | sed 's/ .*//')"
@@ -347,8 +499,11 @@ flock "$lock_fd"
 if [[ -e "$artifact_dir" ]]; then
   ready=""
   [[ ! -f "$artifact_dir/READY" ]] || ready="$(<"$artifact_dir/READY")"
-  [[ "$ready" == "fram-native-build/v1 $closure_hash" ]] ||
+  [[ "$ready" == "fram-native-build/v1 $closure_hash" &&
+    -f "$artifact_dir/input.manifest" ]] ||
     die "cache entry exists but is not READY: $artifact_dir"
+  cmp -s "$input_manifest" "$artifact_dir/input.manifest" ||
+    die "cache entry identity does not match its input closure: $artifact_dir"
   if [[ "$host" == "embed" ]]; then
     [[ -f "$artifact_dir/include/fram.h" &&
       -f "$artifact_dir/lib/libfram.a" &&
@@ -365,101 +520,16 @@ fi
 stage="$(mktemp -d "$cache_root/.tmp/$closure_hash.XXXXXX")"
 mkdir -p "$stage/bin" "$stage/include" "$stage/lib"
 cp "$input_manifest" "$stage/input.manifest"
-native_server_entries=(
-  fram.native-server/server-generated-abi
-  fram.native-server/server-store-boot!
-  fram.native-server/server-store-dispatch!
-  fram.native-server/server-store-shutdown
-  fram.native-server/server-codec-read-request!
-  fram.native-server/server-codec-write-response!
-  fram.native-server/server-codec-release-request
-  fram.native-server/server-codec-release-response
-)
-native_server_entry_args=()
-for native_server_entry in "${native_server_entries[@]}"; do
-  native_server_entry_args+=(--entry "$native_server_entry")
-done
-c17_projection="$stage/materialize-c17"
-qbe_projection="$stage/materialize-qbe"
-mkdir -p "$c17_projection" "$qbe_projection"
-if ! "$beagle" build --materializer c17 \
-    --out "$c17_projection" \
-    "${native_server_entry_args[@]}" \
-    -- \
-    "${normalized_sources[@]}" \
-    >"$stage/materialize-c17.log" 2>&1; then
-  sed -n '1,240p' "$stage/materialize-c17.log" >&2
-  die "beagle C17 materialization failed"
-fi
-if ! "$beagle" build --materializer qbe \
-    --out "$qbe_projection" \
-    "${native_server_entry_args[@]}" \
-    -- \
-    "${normalized_sources[@]}" \
-    >"$stage/materialize-qbe.log" 2>&1; then
-  sed -n '1,240p' "$stage/materialize-qbe.log" >&2
-  die "beagle QBE materialization failed"
-fi
-for projection in "$c17_projection" "$qbe_projection"; do
-  [[ -f "$projection/module.native-world" &&
-     -f "$projection/module.native-world.sha256" ]] ||
-    die "materializer omitted its sealed Native World: $projection"
-done
-cmp -s "$c17_projection/module.native-world.sha256" \
-  "$qbe_projection/module.native-world.sha256" ||
-  die "C17 and QBE materializers sealed different Native Worlds"
-cmp -s "$c17_projection/module.native-world" \
-  "$qbe_projection/module.native-world" ||
-  die "C17 and QBE materializers emitted different sealed Native Worlds"
 for artifact in source.facts module.native-world module.native-world.sha256 \
     module_0.h module_0.c native_shim.h native_shim.c \
-    native_unicode15_data.h UNICODE-LICENSE.txt; do
-  [[ -f "$c17_projection/$artifact" ]] ||
-    die "C17 materializer omitted $artifact"
-  cp "$c17_projection/$artifact" "$stage/$artifact"
+    native_unicode15_data.h UNICODE-LICENSE.txt report.txt report.qbe.txt \
+    module_0.ssa materialize-c17.log materialize-qbe.log; do
+  [[ -f "$world_dir/$artifact" ]] ||
+    die "Native World cache entry omitted $artifact"
+  cp "$world_dir/$artifact" "$stage/$artifact"
 done
-[[ -f "$qbe_projection/module_0.ssa" ]] ||
-  die "QBE materializer omitted module_0.ssa"
-cp "$c17_projection/report.txt" "$stage/report.txt"
-cp "$qbe_projection/report.txt" "$stage/report.qbe.txt"
-cp "$qbe_projection/module_0.ssa" "$stage/module_0.ssa"
-rm -rf "${c17_projection:?}" "${qbe_projection:?}"
 
 report="$stage/report.txt"
-validate_native_report() {
-  local report_path="$1" materializer="$2" line
-  local -a required_lines=(
-    "stage source-seal ACCEPTED"
-    "stage source-to-typed ACCEPTED"
-    "stage typed-to-native COMPLETE"
-    "native-lowering-result NativeLoweringCompleteV0"
-    "result PASS"
-    "obligation-projection PASS valid-ssa"
-    "obligation-projection PASS exhaustive-matches"
-    "obligation-projection PASS closed-layouts"
-    "obligation-projection PASS checked-arithmetic"
-    "obligation-projection PASS legal-abi"
-    "obligation-projection PASS discharged-tokens"
-    "obligation-projection PASS bounded-effects"
-  )
-  [[ -f "$report_path" ]] || die "native build omitted $report_path"
-  case "$materializer" in
-    c17) required_lines+=("materialize-c17 OK module_0.h module_0.c") ;;
-    qbe) required_lines+=("materialize-qbe OK module_0.ssa") ;;
-    *) die "unknown report materializer: $materializer" ;;
-  esac
-  for line in "${required_lines[@]}"; do
-    [[ "$(grep -Fxc -- "$line" "$report_path" || true)" == "1" ]] ||
-      die "native report must contain exactly once: $line"
-  done
-  [[ "$(grep -c '^obligation-projection ' "$report_path" || true)" == "7" &&
-     "$(grep -c '^obligation-projection PASS ' "$report_path" || true)" == "7" ]] ||
-    die "native report must contain exactly seven passing obligations"
-  ! grep -q '^pending ' "$report_path" ||
-    die "native report contains pending lowering work"
-}
-validate_native_report "$report" c17
-validate_native_report "$stage/report.qbe.txt" qbe
 
 [[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
   die "C17 materializer omitted the native shim"
@@ -535,9 +605,15 @@ else
   [[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"
 fi
 
+world_after_manifest="$stage/world-input.after"
+write_world_input_manifest "$world_after_manifest"
+cmp -s "$world_input_manifest" "$world_after_manifest" ||
+  die "source/compiler/config closure changed during host packaging"
+rm -f "${world_after_manifest:?}"
 after_manifest="$stage/input.after"
 write_input_manifest "$after_manifest"
-cmp -s "$input_manifest" "$after_manifest" || die "source closure changed during build"
+cmp -s "$input_manifest" "$after_manifest" ||
+  die "host packaging closure changed during build"
 rm -f "${after_manifest:?}"
 printf 'fram-native-build/v1 %s\n' "$closure_hash" >"$stage/READY"
 mv "$stage" "$artifact_dir"

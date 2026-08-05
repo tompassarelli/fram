@@ -484,8 +484,11 @@ embed_hit="$("${build_env[@]}" "$builder" --host embed \
   --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "embed host cache hit failed"
 [[ "$embed_hit" == "$embed_artifact" ]] || fail "embed host missed the cache"
-[[ "$(wc -l <"$calls")" == "$((calls_before_embed + 2))" ]] ||
-  fail "embed host cache hit rebuilt a materializer projection"
+[[ "$(wc -l <"$calls")" == "$calls_before_embed" ]] ||
+  fail "embed host rebuilt the shared Native World"
+[[ "$(find "$scratch/cache/.worlds" -mindepth 2 -maxdepth 2 \
+  -name READY | wc -l)" == "1" ]] ||
+  fail "server and embed did not share exactly one Native World"
 
 printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
   ';; MISSING_SERVER_SYMBOL' >"$scratch/sources/missing-symbol.bgl"
@@ -536,5 +539,8 @@ grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
   fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "failed server host link left temporary artifacts"
+[[ -z "$(find "$scratch/cache/.worlds/.tmp" -mindepth 1 -maxdepth 1 \
+  -print -quit)" ]] ||
+  fail "failed Native World build left temporary artifacts"
 
 echo "fram native build cache smoke: PASS"
