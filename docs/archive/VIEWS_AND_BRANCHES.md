@@ -173,7 +173,7 @@ load-bearing fact then adversarially verified) settled the empirics:
 - **The substrate is already view-capable; single-head lives entirely in the read/resolve layer.**
   *Verified true:* the append-only log holds divergent facts (multi-valued AST preds; supersession
   is an appended fact, not a delete). "Current" is **one global subtraction** — `live? = (not
-  (superseded? cid))` over a single `:superseded` set (`store.bclj:115`), with **no second selector
+  (superseded? cid))` over a single `:superseded` set (`store.bgl:115`), with **no second selector
   anywhere** in the read layer. So global-head is **not a designed invariant** — it is the only
   shape single-storage can represent, materialized in the read layer (`live?`, one `current-seq`,
   one warm cache, the take-firsts).

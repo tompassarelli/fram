@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 (ns fram.native-server
   (:require [fram.log-codec :as log]
@@ -66,9 +66,7 @@
   (->ResponseResult
    status-fatal nil message empty-bytes store-result false))
 
-(defn next-store-result
-  [prior: StoreResult
-   store: Store] -> StoreResult
+(defn next-store-result [prior: StoreResult store: Store] -> StoreResult
   (->StoreResult
    status-ok store nil
    (storeresult-valid-log-bytes prior) empty-bytes))

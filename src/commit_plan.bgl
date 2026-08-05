@@ -1,7 +1,5 @@
-#lang beagle/clj
+#lang beagle
 
-;; generated view. Author substantive forms only through the Fram graph-edit
-;; verbs. SEEDED 2026-07-28 for engine-core M5 Cut B.
 ;; ============================================================================
 ;; commit-plan — pure commit-sequencer decisions.
 ;; ============================================================================

@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 ;; ============================================================================
 ;; fram.schema — the store schema/identity layer over the recursive-Term store.

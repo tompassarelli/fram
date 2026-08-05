@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Recompile Fram's Beagle (.bclj) sources to Clojure into out/.
+# Recompile Fram's hosted Beagle (.bclj) sources to Clojure into out/.
 #
 # You do NOT need this to run Fram — the compiled Clojure in out/ is
 # committed and runs on babashka (bin/fram). You only need this to rebuild
-# from the .bclj sources, which requires Beagle (a typed Lisp that compiles to
-# Clojure) at $BEAGLE_HOME (default ~/code/beagle/main), entered via direnv.
+# from the hosted .bclj sources, which requires Beagle at $BEAGLE_HOME
+# (default ~/code/beagle/main), entered via direnv. Canonical .bgl Native Core
+# modules are built through fram:bin/fram-native-build instead.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/out"

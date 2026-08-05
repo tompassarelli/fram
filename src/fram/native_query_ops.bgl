@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 (ns fram.native-query-ops
   (:require [fram.datalog :as d]

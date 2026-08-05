@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 ;; ============================================================================
 ;; snapshot-read — pure database snapshot readers.

@@ -39,7 +39,6 @@
 1	tests/goldens/resolve/callgraph-fram.out
 1	tests/package_graph_edit_runtime_smoke.sh
 1	tests/resolve_golden.sh
-1	tests/s0_render_bootstrap_test.clj
 31	tests/s1_schema_foundation_test.clj
 3	tests/show_reporter_join_test.clj
 11	tests/vocab_ratchet_test.sh

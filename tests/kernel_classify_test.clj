@@ -13,7 +13,7 @@
   (println (if pred "PASS" "FAIL") label)
   (when-not pred (swap! failures inc)))
 
-;; --- strip-at (kernel.bclj:261) ---------------------------------------------
+;; --- strip-at (kernel.bgl:261) ----------------------------------------------
 (check "strip-at drops one leading @" (= "depends_on" (kc/strip-at "@depends_on")))
 (check "strip-at leaves a bare name alone" (= "depends_on" (kc/strip-at "depends_on")))
 (check "strip-at drops ONLY the first @" (= "@a" (kc/strip-at "@@a")))
@@ -42,12 +42,12 @@
 (check "has-whitespace? ignores a non-whitespace control byte"
        (false? (kc/has-whitespace? (str "a" (char 0) "b"))))
 
-;; --- emoji-single? (kernel.bclj:120) ----------------------------------------
+;; --- emoji-single? (kernel.bgl:120) -----------------------------------------
 (check "emoji-single? on the emoji_ prefix" (true? (kc/emoji-single? "emoji_blocked")))
 (check "emoji-single? off a non-emoji pred" (false? (kc/emoji-single? "title")))
 (check "emoji-single? needs the underscore" (false? (kc/emoji-single? "emoji")))
 
-;; --- fallback-single (kernel.bclj:23-26, verbatim order) --------------------
+;; --- fallback-single (kernel.bgl:23-26, verbatim order) ---------------------
 (check "fallback-single has the 23 transitional preds" (= 23 (count kc/fallback-single)))
 (check "fallback-single starts at title" (= "title" (first kc/fallback-single)))
 (check "fallback-single ends at clockify_id" (= "clockify_id" (last kc/fallback-single)))
@@ -73,7 +73,7 @@
 (check "meta-single-seed? does not seed a domain pred" (false? (kc/meta-single-seed? "title")))
 
 ;; --- single-eff? precedence: fact > configured > fallback -------------------
-;; (kernel.bclj:131 single-eff?, kernel.bclj:304 single-eff-reg?)
+;; (kernel.bgl:131 single-eff?, kernel.bgl:304 single-eff-reg?)
 (check "declaration beats an absent config and absent fallback"
        (true? (kc/single-eff? true true false "wholly_unknown")))
 (check "a NEGATIVE declaration beats configured"

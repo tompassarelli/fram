@@ -66,7 +66,7 @@ The engine has no tenant authorization. Loopback/private FRAMRPC, process, Space
 ## Executable contracts
 
 - [`../database.clj`](../database.clj), [`../server.clj`](../server.clj), and [`../writer_authority.clj`](../writer_authority.clj): database lifetime, server entry, and writer authority.
-- [`../src/fram/types.bclj`](../src/fram/types.bclj), [`../src/fram/store.bclj`](../src/fram/store.bclj), [`../src/commit_plan.bclj`](../src/commit_plan.bclj), and [`../src/snapshot_read.bclj`](../src/snapshot_read.bclj): recursive values, transactions, liveness, commit planning, and snapshot reads.
+- `fram:src/fram/types.bgl`, `fram:src/fram/store.bgl`, `fram:src/commit_plan.bgl`, and `fram:src/snapshot_read.bgl`: recursive values, transactions, liveness, commit planning, and snapshot reads.
 - [`../src/framrpc.bclj`](../src/framrpc.bclj): FRAMRPC records and codec.
 - [`../tests/triple_kernel_test.clj`](../tests/triple_kernel_test.clj), [`../tests/native_rpc_boundary_ratchet_test.clj`](../tests/native_rpc_boundary_ratchet_test.clj), and [`../tests/triple_log_migration_test.clj`](../tests/triple_log_migration_test.clj): kernel, boundary, and migration gates.
 

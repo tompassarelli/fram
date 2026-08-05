@@ -20,19 +20,28 @@ cat >"$scratch/tool/bin/beagle" <<'FAKE_BEAGLE'
 set -euo pipefail
 command="${1:-}"
 shift
-if [[ "$command" == "native-module" ]]; then
+if [[ "$command" == "build" ]]; then
   out=""
+  materializer=""
   sources=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --out) out="$2"; shift 2 ;;
+      --materializer) materializer="$2"; shift 2 ;;
+      --entry) shift 2 ;;
       --) shift; sources+=("$@"); break ;;
       *) sources+=("$1"); shift ;;
     esac
   done
-  [[ -n "$out" && ${#sources[@]} -gt 0 ]] || exit 96
-  printf '%s\n' native-module >>"$FAKE_NATIVE_CALLS"
+  [[ -n "$out" && "$materializer" =~ ^(c17|qbe)$ &&
+    ${#sources[@]} -gt 0 ]] || exit 96
+  printf 'build-%s\n' "$materializer" >>"$FAKE_NATIVE_CALLS"
   mkdir -p "$out"
+  printf '%s\n' 'fake source facts' >"$out/source.facts"
+  printf '%s\n' 'fake sealed Native World' >"$out/module.native-world"
+  sha256sum "$out/module.native-world" | sed 's/ .*//' \
+    >"$out/module.native-world.sha256"
+  if [[ "$materializer" == "c17" ]]; then
   cat >"$out/module_0.h" <<'C'
 #ifndef FAKE_MODULE_0_H
 #define FAKE_MODULE_0_H
@@ -143,7 +152,6 @@ native_m0_type_7 native_m0_fn_19(native_arena *arena,
 }
 
 C
-  printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
   cat >"$out/native_shim.h" <<'C'
 #ifndef FAKE_NATIVE_SHIM_H
 #define FAKE_NATIVE_SHIM_H
@@ -157,6 +165,11 @@ typedef struct native_vec { int64_t length; } native_vec;
 int fake_native_shim(void);
 #endif
 C
+    printf '%s\n' '/* fake Unicode data */' >"$out/native_unicode15_data.h"
+    printf '%s\n' 'fake Unicode license' >"$out/UNICODE-LICENSE.txt"
+  else
+    printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
+  fi
   cat >"$out/native_shim.c" <<'C'
 #include "native_shim.h"
 int fake_native_shim(void) { return 0; }
@@ -169,7 +182,7 @@ C
     grep -Fq DUPLICATE_SERVER_SYMBOL "$source" && duplicate_symbol=1
     grep -Fq BAD_SERVER_ARITY "$source" && bad_arity=1
   done
-  if [[ "$bad_arity" == 1 ]]; then
+  if [[ "$materializer" == "c17" && "$bad_arity" == 1 ]]; then
     sed -i \
       '/native_m0_fn_5/s/);$/, native_m0_type_0 native_v_1);/' \
       "$out/module_0.h"
@@ -179,9 +192,13 @@ C
       'stage source-seal ACCEPTED' \
       'stage source-to-typed ACCEPTED' \
       'stage typed-to-native COMPLETE' \
-      'native-lowering-result NativeLoweringCompleteV0' \
-      'materialize-c17 OK module_0.h module_0.c' \
-      'materialize-qbe OK module_0.ssa' \
+      'native-lowering-result NativeLoweringCompleteV0'
+    if [[ "$materializer" == "c17" ]]; then
+      printf '%s\n' 'materialize-c17 OK module_0.h module_0.c'
+    else
+      printf '%s\n' 'materialize-qbe OK module_0.ssa'
+    fi
+    printf '%s\n' \
       'lowered fn_7 server-generated-abi 1 blocks' \
       'lowered fn_2 server-store-boot! 1 blocks' \
       'lowered fn_11 server-store-dispatch! 1 blocks' \
@@ -225,7 +242,6 @@ printf '%s\n' "$entry" >>"$FAKE_NATIVE_CALLS"
 mkdir -p "$artifacts" "$(dirname "$out")"
 printf '%s\n' '/* fake module */' >"$artifacts/module_0.h"
 printf '%s\n' '/* fake module */' >"$artifacts/module_0.c"
-printf '%s\n' 'export function w $main() { ret 0 }' >"$artifacts/module_0.ssa"
 printf '%s\n' '/* fake shim */' >"$artifacts/native_shim.c"
 printf '%s\n' '/* fake shim */' >"$artifacts/native_shim.h"
 printf '%s\n' '/* fake entry */' >"$artifacts/native_entry.c"
@@ -248,8 +264,7 @@ done
     'stage source-to-typed ACCEPTED' \
     'stage typed-to-native COMPLETE' \
     'native-lowering-result NativeLoweringCompleteV0' \
-    'materialize-c17 OK module_0.h module_0.c' \
-    'materialize-qbe OK module_0.ssa'
+    'materialize-c17 OK module_0.h module_0.c'
   printf 'obligation-projection %s valid-ssa\n' "$([[ "$bad" == 0 ]] && echo PASS || echo FAIL)"
   printf '%s\n' \
     'obligation-projection PASS exhaustive-matches' \
@@ -268,8 +283,8 @@ cat "$artifacts/native-exe.report.txt"
 FAKE_BEAGLE
 chmod +x "$scratch/tool/bin/beagle"
 
-printf '%s\n' '(ns demo.main)' '(defn start [] -> Nil nil)' \
-  >"$scratch/sources/good.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.main)' '(defn start [] -> Nil nil)' \
+  >"$scratch/sources/good.bgl"
 build_env=(
   env
   FRAM_BEAGLE="$scratch/tool/bin/beagle"
@@ -279,24 +294,24 @@ build_env=(
 )
 
 artifact="$("${build_env[@]}" "$builder" --entry demo.main/start \
-  "$scratch/sources/good.bclj")" || fail "initial build failed"
+  "$scratch/sources/good.bgl")" || fail "initial build failed"
 [[ "$artifact" == "$scratch/cache/"* ]] || fail "builder did not print its cache artifact"
 [[ -f "$artifact/READY" && -x "$artifact/bin/fram-server-native" ]] ||
   fail "promoted artifact is not ready and executable"
 "$artifact/bin/fram-server-native" || fail "linked native executable did not run"
 
 hit="$("${build_env[@]}" "$builder" --entry demo.main/start \
-  "$scratch/sources/good.bclj")" || fail "cache hit failed"
+  "$scratch/sources/good.bgl")" || fail "cache hit failed"
 [[ "$hit" == "$artifact" ]] || fail "identical closure missed the cache"
 [[ "$(wc -l <"$calls")" == "1" ]] || fail "cache hit rebuilt the artifact"
 
-printf '%s\n' '(ns demo.slow)' ';; SLOW_BUILD' '(defn start [] -> Nil nil)' \
-  >"$scratch/sources/slow.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.slow)' ';; SLOW_BUILD' \
+  '(defn start [] -> Nil nil)' >"$scratch/sources/slow.bgl"
 "${build_env[@]}" "$builder" --entry demo.slow/start \
-  "$scratch/sources/slow.bclj" >"$scratch/slow-a.out" &
+  "$scratch/sources/slow.bgl" >"$scratch/slow-a.out" &
 first_pid=$!
 "${build_env[@]}" "$builder" --entry demo.slow/start \
-  "$scratch/sources/slow.bclj" >"$scratch/slow-b.out" &
+  "$scratch/sources/slow.bgl" >"$scratch/slow-b.out" &
 second_pid=$!
 wait "$first_pid" || fail "first concurrent build failed"
 wait "$second_pid" || fail "second concurrent build failed"
@@ -304,10 +319,10 @@ cmp -s "$scratch/slow-a.out" "$scratch/slow-b.out" ||
   fail "concurrent builders observed different artifacts"
 [[ "$(wc -l <"$calls")" == "2" ]] || fail "per-closure lock allowed a duplicate build"
 
-printf '%s\n' '(ns demo.bad)' ';; BAD_OBLIGATION' '(defn start [] -> Nil nil)' \
-  >"$scratch/sources/bad.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.bad)' ';; BAD_OBLIGATION' \
+  '(defn start [] -> Nil nil)' >"$scratch/sources/bad.bgl"
 if "${build_env[@]}" "$builder" --entry demo.bad/start \
-    "$scratch/sources/bad.bclj" >"$scratch/bad.out" 2>"$scratch/bad.err"; then
+    "$scratch/sources/bad.bgl" >"$scratch/bad.out" 2>"$scratch/bad.err"; then
   fail "failed native obligation was promoted"
 fi
 grep -Fq 'obligation-projection PASS valid-ssa' "$scratch/bad.err" ||
@@ -434,7 +449,7 @@ C
 
 calls_before_host="$(wc -l <"$calls")"
 host_artifact="$("${build_env[@]}" "$builder" --host server \
-  --adapter "$adapter" "$scratch/sources/good.bclj")" ||
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "server host build failed"
 [[ -f "$host_artifact/READY" && -x "$host_artifact/bin/fram-server-native" ]] ||
   fail "server host artifact is not ready and executable"
@@ -493,16 +508,16 @@ grep -Fq 'fram-server-native: invalid port: not-a-port' \
   "$scratch/host.err" || fail "linked server host main did not run"
 
 host_hit="$("${build_env[@]}" "$builder" --host server \
-  --adapter "$adapter" "$scratch/sources/good.bclj")" ||
+  --adapter "$adapter" "$scratch/sources/good.bgl")" ||
   fail "server host cache hit failed"
 [[ "$host_hit" == "$host_artifact" ]] || fail "server host missed the cache"
-[[ "$(wc -l <"$calls")" == "$((calls_before_host + 1))" ]] ||
-  fail "server host cache hit rebuilt the native module"
+[[ "$(wc -l <"$calls")" == "$((calls_before_host + 2))" ]] ||
+  fail "server host cache hit rebuilt a materializer projection"
 
-printf '%s\n' '(ns demo.missing-symbol)' ';; MISSING_SERVER_SYMBOL' \
-  >"$scratch/sources/missing-symbol.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.missing-symbol)' \
+  ';; MISSING_SERVER_SYMBOL' >"$scratch/sources/missing-symbol.bgl"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
-    "$scratch/sources/missing-symbol.bclj" \
+    "$scratch/sources/missing-symbol.bgl" \
     >"$scratch/missing-symbol.out" 2>"$scratch/missing-symbol.err"; then
   fail "server host accepted a missing logical symbol"
 fi
@@ -511,10 +526,10 @@ grep -Fq \
   "$scratch/missing-symbol.err" ||
   fail "missing server logical symbol did not fail before link"
 
-printf '%s\n' '(ns demo.duplicate-symbol)' ';; DUPLICATE_SERVER_SYMBOL' \
-  >"$scratch/sources/duplicate-symbol.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.duplicate-symbol)' \
+  ';; DUPLICATE_SERVER_SYMBOL' >"$scratch/sources/duplicate-symbol.bgl"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
-    "$scratch/sources/duplicate-symbol.bclj" \
+    "$scratch/sources/duplicate-symbol.bgl" \
     >"$scratch/duplicate-symbol.out" 2>"$scratch/duplicate-symbol.err"; then
   fail "server host accepted a duplicate logical symbol"
 fi
@@ -522,10 +537,10 @@ grep -Fq 'exactly one lowered row for server-store-boot! (found 2)' \
   "$scratch/duplicate-symbol.err" ||
   fail "duplicate server logical symbol did not fail before link"
 
-printf '%s\n' '(ns demo.bad-arity)' ';; BAD_SERVER_ARITY' \
-  >"$scratch/sources/bad-arity.bclj"
+printf '%s\n' '#lang beagle' '(ns demo.bad-arity)' ';; BAD_SERVER_ARITY' \
+  >"$scratch/sources/bad-arity.bgl"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
-    "$scratch/sources/bad-arity.bclj" \
+    "$scratch/sources/bad-arity.bgl" \
     >"$scratch/bad-arity.out" 2>"$scratch/bad-arity.err"; then
   fail "server host accepted an unexpected generated arity"
 fi
@@ -538,7 +553,7 @@ sed '/^void fram_server_codec_release_response/,/^}/d' \
   "$adapter" >"$adapter.incomplete"
 mv "$adapter.incomplete" "$adapter"
 if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
-    "$scratch/sources/good.bclj" \
+    "$scratch/sources/good.bgl" \
     >"$scratch/missing-export.out" 2>"$scratch/missing-export.err"; then
   fail "server host linked without all eight generated ABI exports"
 fi

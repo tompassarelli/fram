@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 ;; The portable store ABI deliberately uses only records and homogeneous
 ;; vectors. Semantic values are recursive Terms; transaction history is kept
 ;; in private physical rows and projected back to ordinary Triples.

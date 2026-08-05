@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 ;; Typed Datalog over homogeneous rows of recursive Fram Terms. Relation names
 ;; are query-local; the kernel assigns no role to slot0, slot1, or slot2.
 (ns fram.datalog)

@@ -3,7 +3,7 @@
 # Why Fram Exists
 
 **Status:** Historical positioning rationale, retired 2026-08-04. The current model is
-[`src/fram/types.bclj`](../../src/fram/types.bclj) and
+[`src/fram/types.bgl`](../../src/fram/types.bgl) and
 [`tests/triple_kernel_test.clj`](../../tests/triple_kernel_test.clj). Vocabulary
 and the canonical normalized example are defined once in
 [`ontology.md`](../ontology.md); this document defers to it.

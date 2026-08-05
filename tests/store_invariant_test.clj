@@ -5,7 +5,7 @@
 ;;   bb store_invariant_test.clj
 (require '[clojure.string :as str])
 
-(def src (slurp "src/fram/store.bclj"))
+(def src (slurp "src/fram/store.bgl"))
 ;; strip each line from its first `;` (beagle comment) — no `;` occurs in code strings here.
 (def code (->> (str/split-lines src)
                (map (fn [l] (let [i (str/index-of l ";")] (if i (subs l 0 i) l))))
@@ -13,7 +13,7 @@
                str/lower-case))
 
 ;; life-os (app A) + code-as-facts (app B) DATA vocabulary. NOT the language
-;; pragma `#lang beagle/clj` — `beagle` is the host language, not a domain term.
+;; pragma `#lang beagle` — `beagle` is the language, not a domain term.
 (def forbidden
   ["thread" "title" "owner" "clock" "driver" "work_phase" "work-phase"
    "depends_on" "relates_to" "session" "estimate" "outcome" "abandoned"

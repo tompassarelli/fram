@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 (ns fram.log-codec
   (:require [fram.native-wire-codec :as wire]
@@ -97,15 +97,11 @@
                            shifted)))))]
         (recur (+ position 1) (bit-and crc32-mask next-crc))))))
 
-(defn u16-le-at
-  [bytes: (Vec Int)
-   position: Int] -> Int
+(defn u16-le-at [bytes: (Vec Int) position: Int] -> Int
   (+ (nth bytes position)
      (bit-shift-left (nth bytes (+ position 1)) 8)))
 
-(defn u32-le-at
-  [bytes: (Vec Int)
-   position: Int] -> Int
+(defn u32-le-at [bytes: (Vec Int) position: Int] -> Int
   (loop [offset 0 value 0]
     (if (>= offset 4)
       value
@@ -214,9 +210,7 @@
 (defn start-framlog-stream [configured-space-id: String] -> BootStream
   (->BootStream configured-space-id nil [] 0 false false [] nil))
 
-(defn failed-boot-stream
-  [stream: BootStream
-   message: String] -> BootStream
+(defn failed-boot-stream [stream: BootStream message: String] -> BootStream
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)
@@ -238,9 +232,7 @@
    (bootstream-boot-append stream)
    nil))
 
-(defn pending-boot-stream
-  [stream: BootStream
-   pending: (Vec Int)] -> BootStream
+(defn pending-boot-stream [stream: BootStream pending: (Vec Int)] -> BootStream
   (->BootStream
    (bootstream-configured-space-id stream)
    (bootstream-store stream)

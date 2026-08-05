@@ -13,7 +13,7 @@
 ;;   bin/fram-render-code <module> [--log <code.log>] [--out <file.bclj>]
 ;;     <module>  module NAME (e.g. schema) — the @<module># node prefix.
 ;;     --log     default $PWD/.fram/code.log
-;;     --out     default: STDOUT (so callers can `cmp -s <(bin/fram-render-code schema) src/fram/schema.bclj`)
+;;     --out     default: STDOUT (so callers can compare the render with the module source)
 ;;
 ;; NORMALIZATION (the Keystone's documented "modulo"): the renderer is the SAME
 ;; normalizing pretty-printer the existing text-canonical authoring path uses

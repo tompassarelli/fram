@@ -8,16 +8,8 @@
 # `;; @graph-owned` sentinel. For each such module it runs bin/fram-render-code
 # and writes the result back to src/fram/<module>.bclj.
 #
-# In THIS experiment only schema.bclj carries the sentinel, so this regenerates
-# schema only. It is byte-identical to the committed source's render projection
-# (the KEYSTONE gate proves render(log) == render(text)), so re-running it on a
-# clean tree leaves src/fram/schema.bclj's RENDER unchanged.
-#
-# IMPORTANT: render normalizes #lang beagle/clj -> (define-target clj). The committed
-# src/fram/schema.bclj still carries #lang (it predates full adoption), so a naive
-# overwrite would change those bytes. To stay NON-DESTRUCTIVE this script is DRY-RUN
-# by default (prints what WOULD change); pass --write to actually overwrite (a human
-# land decision, gated by the KEYSTONE byte-identity check below).
+# This script is dry-run by default; pass --write to overwrite adopted hosted
+# modules after the byte-identity gate succeeds.
 #
 #   bin/fram-render-code-all [--log <code.log>] [--write]
 # ============================================================================

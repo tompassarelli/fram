@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 (ns fram.native-dispatch
   (:require [commit-plan :as plan]

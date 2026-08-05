@@ -1,7 +1,7 @@
 ;; datalog_scale_test.clj — the canonical 200-chain bar for the INDEXED evaluator.
 ;; Transitive closure over a 200-node chain = 200*199/2 = 19900 reaches-pairs,
 ;; through the public query path (q/run -> d/fixpoint). The scan-join oracle does
-;; this in ~4.2 s; the positional index (datalog.bclj) tightens it to well under a
+;; this in ~4.2 s; the positional index (datalog.bgl) tightens it to well under a
 ;; second. Bar: EXACTLY 19900 pairs, under 1000 ms, with honest machine/load/RSS
 ;; metadata printed so a slow-box failure is diagnosable rather than mysterious.
 ;;   bb -cp out datalog_scale_test.clj

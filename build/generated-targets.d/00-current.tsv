@@ -1,4 +1,5 @@
 # kind	source	destination
+# Canonical .bgl modules are built by fram:bin/fram-native-build, never emitted into fram:out/.
 beagle	src/fram/rt_core.bclj	out/fram/rt_core.clj
 copy	src/fram/rt.clj	out/fram/rt.clj
 copy	src/fram/kernel_host.clj	out/fram/kernel_host.clj
@@ -9,19 +10,11 @@ copy	src/fram/program_inspection.clj	out/fram/program_inspection.clj
 copy	src/fram/graph_control_mcp.clj	out/fram/graph_control_mcp.clj
 copy	src/fram/code_commit_gate.clj	out/fram/code_commit_gate.clj
 copy	src/fram/projection_lifecycle.clj	out/fram/projection_lifecycle.clj
-beagle	src/fram/types.bclj	out/fram/types.clj
-beagle	src/fram/store.bclj	out/fram/store.clj
-beagle	src/fram/rotation.bclj	out/fram/rotation.clj
-beagle	src/fram/txn.bclj	out/fram/txn.clj
-beagle	src/fram/schema.bclj	out/fram/schema.clj
-beagle	src/fram/datalog.bclj	out/fram/datalog.clj
-beagle	src/fram/kernel.bclj	out/fram/kernel.clj
 beagle	src/fram/kernel_classify.bclj	out/fram/kernel_classify.clj
 beagle	src/fram/fold.bclj	out/fram/fold.clj
 beagle	src/fram/fri_replay.bclj	out/fram/fri_replay.clj
 beagle	src/fram/import.bclj	out/fram/import.clj
 beagle	src/fram/export.bclj	out/fram/export.clj
-beagle	src/fram/query.bclj	out/fram/query.clj
 beagle	src/fram/tools.bclj	out/fram/tools.clj
 beagle	src/fram/authority.bclj	out/fram/authority.clj
 beagle	src/fram/world.bclj	out/fram/world.clj
@@ -41,8 +34,6 @@ beagle	src/resolve_verbs.bclj	out/resolve_verbs.clj
 beagle	src/fri_port.bclj	out/fri_port.clj
 beagle	src/fri.bclj	out/fri.clj
 beagle	src/framrpc.bclj	out/framrpc.clj
-beagle	src/snapshot_read.bclj	out/snapshot_read.clj
-beagle	src/commit_plan.bclj	out/commit_plan.clj
 beagle	src/defcheck_gate.bclj	out/defcheck_gate.clj
 beagle	codegraph/src/codegraph.bclj	out/codegraph.clj
 beagle	codegraph/src/callgraph.bclj	out/callgraph.clj

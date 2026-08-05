@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 ;; Covering rotations over the LIVE assertion occurrences of one TermStore: a
 ;; disposable projection pinned to (SpaceId, store version), never kernel

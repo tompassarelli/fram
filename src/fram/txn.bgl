@@ -1,4 +1,4 @@
-#lang beagle/clj
+#lang beagle
 
 ;; The authoritative transaction builder: one pinned transaction coordinate, one
 ;; monotonic mint-ordinal allocator, and the single-cardinality update compiler.
