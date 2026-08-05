@@ -10,7 +10,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [cheshire.core :as cheshire]
-            [coord-daemon-wire :as rpc-wire]
+            [framrpc :as framrpc]
             [fram.fold :as fold]
             [fram.kernel :as kernel]
             [fram.rt-core :as rtc]
@@ -290,7 +290,7 @@
 ;; str/split-lines discards byte positions (and readLine's charset handling is
 ;; lossy on the offset for multi-byte values), so we split the RAW UTF-8 bytes on
 ;; 0x0A — never a UTF-8 continuation byte — and carry each segment's byte offset.
-;; public: the daemon's incremental tail reader (coord_daemon read-log-tail*)
+;; public: the server's incremental tail reader (server read-log-tail*)
 ;; emits the SAME warning + fail-closed shapes when it catches a torn/corrupt tail.
 (defn warn-torn-tail! [path off n]
   (binding [*out* *err*]
@@ -348,11 +348,11 @@
         primary-file (.getAbsoluteFile (io/file primary))
         inferred (when (= "coordination.log" (.getName primary-file))
                    (str (io/file (.getParentFile primary-file) "telemetry.log")))
-        coord (read-log primary)
+        primary-history (read-log primary)
         telemetry (or (System/getenv "FRAM_TELEMETRY_LOG") inferred)]
     (if telemetry
-      (vec (sort-by #(or (:tx %) 0) (into coord (read-log telemetry))))
-      coord)))
+      (vec (sort-by #(or (:tx %) 0) (into primary-history (read-log telemetry))))
+      primary-history)))
 
 ;; ============================================================================
 ;; vGUARD — the rollback floor (Reification R0; B2 contract §2/§3/§5).
@@ -406,10 +406,12 @@
   (str (io/file (corpus-dir log-path) ".fram.rewrite.lock")))
 (defn rewrite-intent-path [log-path]
   (str (io/file (corpus-dir log-path) ".fram.rewrite.intent")))
+;; v0.3 recovery fixes these legacy keys and filename spellings: the intent is
+;; hashed/persisted state, so changing one would require a protocol migration.
 ;; Replacement-file names are PROTOCOL CONSTANTS shared by the vR flip writer
 ;; and this doctor: roll-back knows exactly which tmps to sweep, roll-forward
 ;; which composed telemetry replacement to prefer.
-(defn rewrite-coord-tmp-path [log-path]
+(defn rewrite-server-tmp-path [log-path]
   (str (io/file (corpus-dir log-path) ".fram.rewrite.coord.tmp")))
 (defn rewrite-telem-tmp-path [log-path]
   (str (io/file (corpus-dir log-path) ".fram.rewrite.telem.tmp")))
@@ -573,17 +575,17 @@
   inode/bytes; :rolled-forward = it is the composed replacement. Anything
   unrecognizable refuses loud — never guess about a corpus."
   [log-path intent]
-  (let [coord     (str log-path)
-        live-ino  (when (.exists (io/file coord)) (file-ino coord))
+  (let [primary-log (str log-path)
+        live-ino  (when (.exists (io/file primary-log)) (file-ino primary-log))
         old-ino   (get-in intent [:coord :ino])
         new-ino   (get-in intent [:new_coord :ino])
         old-bytes (get-in intent [:coord :bytes])
         old-sha   (get-in intent [:coord :sha])
         new-sha1  (get-in intent [:new_coord :sha1])
-        line1-sha (when new-sha1 (file-line1-sha16 coord))
-        prefix-sha (when (and old-bytes old-sha) (file-prefix-sha16 coord old-bytes))]
+        line1-sha (when new-sha1 (file-line1-sha16 primary-log))
+        prefix-sha (when (and old-bytes old-sha) (file-prefix-sha16 primary-log old-bytes))]
     (rtc/classify-rewrite-crash
-     coord live-ino old-ino new-ino old-bytes old-sha new-sha1 line1-sha prefix-sha)))
+     primary-log live-ino old-ino new-ino old-bytes old-sha new-sha1 line1-sha prefix-sha)))
 ;;
 ;;
 ;;
@@ -636,7 +638,7 @@
     (delete-if-exists! (str log-path ".snap"))
     (delete-tree! (str log-path ".snapshots"))
     ;; leftover coordination tmp (the rename source when the flip died post-move)
-    (delete-if-exists! (rewrite-coord-tmp-path log-path))
+    (delete-if-exists! (rewrite-server-tmp-path log-path))
     ;; (12) delete the intent + directory fsync.
     (delete-if-exists! (rewrite-intent-path log-path))
     (fsync-dir! dir)
@@ -647,7 +649,7 @@
   ;; the exact recorded modes on the untouched sources, drop the intent.
   (let [dir   (corpus-dir log-path)
         telem (telem-path-for log-path)]
-    (delete-if-exists! (rewrite-coord-tmp-path log-path))
+    (delete-if-exists! (rewrite-server-tmp-path log-path))
     (delete-if-exists! (rewrite-telem-tmp-path log-path))
     (when (.exists (io/file (str log-path)))
       (set-file-mode! (str log-path) (get-in intent [:coord :mode])))
@@ -751,7 +753,7 @@
 (defn doctor-rewrite!
   "Intent doctor for the doctor CLI: loud, exact, never guesses. Heals (or
   no-ops) and RETURNS the one-line report for the caller to print — the doctor
-  CLI's first line stays the coordinator health contract, so this line prints
+  CLI's first line stays the server health contract, so this line prints
   after it. Exit 2 when a live flip holds the lock (nothing to heal yet —
   retry after it completes); exit 1 on a refusal state (unknown intent
   version / unclassifiable corpus)."
@@ -843,13 +845,13 @@
               (println (str "  " (format "%-30s" ts) "  " (format "%-5s" txn) "  "
                             op "  " (format "%-8s" who) "  " (:p m) " = " rv)))))))))
 
-;; --- coordinator client: write THROUGH the daemon (safe concurrent path) -----
+;; --- server client: write THROUGH the daemon (safe concurrent path) -----
 ;; One request/response over the local socket. The daemon serializes writes
 ;; (optimistic base_version + obligation rules), so this is the safe multi-agent
 ;; write path — unlike append-fact-op, which writes the log directly.
 
-;; client-side mutual TLS: present FRAM_TLS_KEYSTORE, verify the coordinator against
-;; FRAM_TLS_TRUSTSTORE. Works on babashka (client SSL classes are present; only the
+;; client-side mutual TLS: present FRAM_SERVER_TLS_KEYSTORE, verify the server against
+;; FRAM_SERVER_TLS_TRUSTSTORE. Works on babashka (client SSL classes are present; only the
 ;; SERVER-side SSLServerSocket is absent, which is why the daemon runs on the JVM).
 (defn- client-ssl-context [ks ts pass]
   (let [pw (.toCharArray ^String pass)
@@ -862,43 +864,43 @@
     (doto (javax.net.ssl.SSLContext/getInstance "TLS")
       (.init (.getKeyManagers kmf) (.getTrustManagers tmf) nil))))
 
-;; connect to the coordinator: FRAM_CONNECT host (default 127.0.0.1); mutual TLS when
-;; FRAM_TLS_* is set, else plaintext (the unchanged loopback default).
+;; connect to the server: FRAM_SERVER_CONNECT host (default 127.0.0.1); mutual TLS when
+;; FRAM_SERVER_TLS_* is set, else plaintext (the unchanged loopback default).
 (defn- connect-host []
-  (let [h (System/getenv "FRAM_CONNECT")] (if (str/blank? h) "127.0.0.1" h)))
+  (let [h (System/getenv "FRAM_SERVER_CONNECT")] (if (str/blank? h) "127.0.0.1" h)))
 
-(defn- coord-timeout-ms [name default]
+(defn- server-timeout-ms [name default]
   (let [raw (or (System/getenv name) (str default))]
     (when-not (re-matches #"[1-9][0-9]{0,5}" raw)
       (throw
        (ex-info
         (str name " must be an integer from 1 through 999999 milliseconds")
-        {:type :invalid-coordinator-timeout :name name :value raw})))
+        {:type :invalid-server-timeout :name name :value raw})))
     (Integer/parseInt raw)))
 
-(def ^:dynamic *coord-response-byte-limit* nil)
+(def ^:dynamic *server-response-byte-limit* nil)
 
-(defn- coord-response-byte-limit []
-  (let [raw (or (System/getenv "FRAM_COORD_MAX_RESPONSE_BYTES") "67108864")
+(defn- server-response-byte-limit []
+  (let [raw (or (System/getenv "FRAM_SERVER_MAX_RESPONSE_BYTES") "67108864")
         value (when (re-matches #"[1-9][0-9]{0,8}" raw)
                 (Long/parseLong raw))]
     (when-not (and value (<= value 67108864))
       (throw
        (ex-info
-        "FRAM_COORD_MAX_RESPONSE_BYTES must be an integer from 1 through 67108864"
-        {:type :invalid-coordinator-response-limit :value raw})))
+        "FRAM_SERVER_MAX_RESPONSE_BYTES must be an integer from 1 through 67108864"
+        {:type :invalid-server-response-limit :value raw})))
     (int value)))
 
 (def query-page-response-byte-limit 1048576)
 
-(defn- coord-response-timeout! [timeout cause]
+(defn- server-response-timeout! [timeout cause]
   (throw
-   (ex-info "coordinator response deadline exceeded"
-            {:type :coordinator-response-timeout
+   (ex-info "server response deadline exceeded"
+            {:type :server-response-timeout
              :timeout-ms timeout}
             cause)))
 
-(defn- decode-coord-utf8! [bytes]
+(defn- decode-server-utf8! [bytes]
   (try
     (let [decoder
           (doto (.newDecoder java.nio.charset.StandardCharsets/UTF_8)
@@ -907,25 +909,25 @@
       (str (.decode decoder (java.nio.ByteBuffer/wrap bytes))))
     (catch java.nio.charset.CharacterCodingException error
       (throw
-       (ex-info "coordinator response line is not valid UTF-8"
-                {:type :malformed-coordinator-utf8}
+       (ex-info "server response line is not valid UTF-8"
+                {:type :malformed-server-utf8}
                 error)))))
 
-(defrecord CoordinatorReader [socket input buffer bounds])
+(defrecord ServerReader [socket input buffer bounds])
 
-(defn coordinator-reader [socket]
-  (->CoordinatorReader
+(defn server-reader [socket]
+  (->ServerReader
    socket
    (.getInputStream socket)
    (byte-array 65536)
    (int-array 2)))
 
-(defn- as-coordinator-reader [source]
-  (if (instance? CoordinatorReader source)
+(defn- as-server-reader [source]
+  (if (instance? ServerReader source)
     source
-    (coordinator-reader source)))
+    (server-reader source)))
 
-(defn- coord-newline-offset [buffer start end]
+(defn- server-newline-offset [buffer start end]
   (.indexOf
    (String.
     buffer
@@ -934,40 +936,40 @@
     java.nio.charset.StandardCharsets/ISO_8859_1)
    "\n"))
 
-(defn- finish-coord-line! [output]
-  (let [line (decode-coord-utf8! (.toByteArray output))]
+(defn- finish-server-line! [output]
+  (let [line (decode-server-utf8! (.toByteArray output))]
     (if (str/ends-with? line "\r")
       (subs line 0 (dec (count line)))
       line)))
 
-(defn- arm-coord-deadline! [socket deadline timeout]
+(defn- arm-server-deadline! [socket deadline timeout]
   (let [remaining-ns (- deadline (System/nanoTime))]
     (when-not (pos? remaining-ns)
-      (coord-response-timeout! timeout nil))
+      (server-response-timeout! timeout nil))
     (.setSoTimeout
      socket
      (int (max 1 (quot (+ remaining-ns 999999) 1000000))))))
 
-(defn- read-coord-line! [source deadline timeout eof-ok?]
-  (let [{:keys [socket input buffer bounds]} (as-coordinator-reader source)
+(defn- read-server-line! [source deadline timeout eof-ok?]
+  (let [{:keys [socket input buffer bounds]} (as-server-reader source)
         buffer-size (alength buffer)
-        limit (or *coord-response-byte-limit* (coord-response-byte-limit))
+        limit (or *server-response-byte-limit* (server-response-byte-limit))
         output (java.io.ByteArrayOutputStream.)]
     (loop []
       (when (and deadline (not (pos? (- deadline (System/nanoTime)))))
-        (coord-response-timeout! timeout nil))
+        (server-response-timeout! timeout nil))
       (let [start (aget bounds 0)
             end (aget bounds 1)]
         (if (< start end)
           (let [available (- end start)
-                newline-offset (coord-newline-offset buffer start end)
+                newline-offset (server-newline-offset buffer start end)
                 take-bytes (if (neg? newline-offset) available newline-offset)
                 total (+ (.size output) take-bytes)]
             (when (> total limit)
               (throw
                (ex-info
-                (str "coordinator response line exceeds " limit " bytes")
-                {:type :coordinator-response-too-large
+                (str "server response line exceeds " limit " bytes")
+                {:type :server-response-too-large
                  :max-bytes limit})))
             (.write output buffer start take-bytes)
             (if (neg? newline-offset)
@@ -976,15 +978,15 @@
                 (recur))
               (do
                 (aset-int bounds 0 (+ start newline-offset 1))
-                (finish-coord-line! output))))
+                (finish-server-line! output))))
           (do
             (when deadline
-              (arm-coord-deadline! socket deadline timeout))
+              (arm-server-deadline! socket deadline timeout))
             (let [read-count
                   (try
                     (.read input buffer 0 buffer-size)
                     (catch java.net.SocketTimeoutException error
-                      (coord-response-timeout! timeout error)))]
+                      (server-response-timeout! timeout error)))]
               (cond
                 (= -1 read-count)
                 (if (and eof-ok? (zero? (.size output)))
@@ -992,11 +994,11 @@
                   (throw
                    (ex-info
                     (if (zero? (.size output))
-                      "coordinator closed before sending a response line"
-                      "coordinator closed during a response line")
+                      "server closed before sending a response line"
+                      "server closed during a response line")
                     {:type (if (zero? (.size output))
-                             :coordinator-response-closed
-                             :coordinator-response-truncated)
+                             :server-response-closed
+                             :server-response-truncated)
                      :bytes (.size output)})))
 
                 (zero? read-count)
@@ -1008,72 +1010,72 @@
                   (aset-int bounds 1 read-count)
                   (recur))))))))))
 
-(defn read-coord-response-line!
+(defn read-server-response-line!
   "Read one bounded UTF-8 response line under an absolute total deadline."
   [source]
-  (let [timeout (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 2000)]
-    (read-coord-line!
+  (let [timeout (server-timeout-ms "FRAM_SERVER_READ_TIMEOUT_MS" 2000)]
+    (read-server-line!
      source
      (+ (System/nanoTime) (* 1000000 (long timeout)))
      timeout
      false)))
 
-(defn read-coord-stream-line!
+(defn read-server-stream-line!
   "Read one bounded UTF-8 event line without an idle deadline.
    A persistent reader retains bytes following the newline for the next event."
   [source]
-  (let [reader (as-coordinator-reader source)]
+  (let [reader (as-server-reader source)]
     (.setSoTimeout (:socket reader) 0)
-    (read-coord-line! reader nil nil true)))
+    (read-server-line! reader nil nil true)))
 
-(defn- ensure-coord-terminal-eof! [reader deadline timeout]
+(defn- ensure-server-terminal-eof! [reader deadline timeout]
   (let [{:keys [socket input buffer bounds]} reader]
     (loop []
       (let [start (aget bounds 0)
             end (aget bounds 1)]
         (when (< start end)
           (throw
-           (ex-info "coordinator sent more than one terminal response frame"
-                    {:type :multiple-coordinator-response-frames
+           (ex-info "server sent more than one terminal response frame"
+                    {:type :multiple-server-response-frames
                      :surplus-bytes (- end start)})))
-        (arm-coord-deadline! socket deadline timeout)
+        (arm-server-deadline! socket deadline timeout)
         (let [read-count
               (try
                 (.read input buffer 0 (alength buffer))
                 (catch java.net.SocketTimeoutException error
-                  (coord-response-timeout! timeout error)))]
+                  (server-response-timeout! timeout error)))]
           (cond
             (= -1 read-count) nil
             (zero? read-count) (recur)
             :else
             (throw
-             (ex-info "coordinator sent more than one terminal response frame"
-                      {:type :multiple-coordinator-response-frames
+             (ex-info "server sent more than one terminal response frame"
+                      {:type :multiple-server-response-frames
                        :surplus-bytes read-count}))))))))
 
-(defn- read-coord-terminal-line-with-timeout! [reader timeout]
+(defn- read-server-terminal-line-with-timeout! [reader timeout]
   (let [deadline (+ (System/nanoTime) (* 1000000 (long timeout)))
-        line (read-coord-line! reader deadline timeout false)]
-    (ensure-coord-terminal-eof! reader deadline timeout)
+        line (read-server-line! reader deadline timeout false)]
+    (ensure-server-terminal-eof! reader deadline timeout)
     line))
 
-(defn- read-coord-terminal-line! [reader]
-  (read-coord-terminal-line-with-timeout!
+(defn- read-server-terminal-line! [reader]
+  (read-server-terminal-line-with-timeout!
    reader
-   (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 2000)))
+   (server-timeout-ms "FRAM_SERVER_READ_TIMEOUT_MS" 2000)))
 
-(defn- malformed-coord-line! [message line error]
+(defn- malformed-server-line! [message line error]
   (throw
    (ex-info
     message
-    {:type :malformed-coordinator-response
+    {:type :malformed-server-response
      :line-bytes
      (count (.getBytes
              (str line)
              java.nio.charset.StandardCharsets/UTF_8))}
     error)))
 
-(defn parse-coord-edn-line! [line]
+(defn parse-server-edn-line! [line]
   (try
     (with-open [reader (java.io.PushbackReader. (java.io.StringReader. line))]
       (let [eof (Object.)
@@ -1086,17 +1088,17 @@
     ;; Hostile bounded input can still overflow a recursive parser. Normalize that
     ;; one Error alongside ordinary parse Exceptions, but let VM-fatal Errors pass.
     (catch StackOverflowError error
-      (malformed-coord-line!
-       "coordinator response line is not exactly one valid EDN form"
+      (malformed-server-line!
+       "server response line is not exactly one valid EDN form"
        line
        error))
     (catch Exception error
-      (malformed-coord-line!
-       "coordinator response line is not exactly one valid EDN form"
+      (malformed-server-line!
+       "server response line is not exactly one valid EDN form"
        line
        error))))
 
-(defn- parse-coord-json-line! [line]
+(defn- parse-server-json-line! [line]
   (try
     (with-open [reader (java.io.StringReader. line)]
       (let [values (vec (take 2 (cheshire/parsed-seq reader)))]
@@ -1104,17 +1106,17 @@
           (throw (ex-info "not exactly one JSON value" {})))
         (first values)))
     (catch StackOverflowError error
-      (malformed-coord-line!
-       "coordinator response line is not exactly one valid JSON value"
+      (malformed-server-line!
+       "server response line is not exactly one valid JSON value"
        line
        error))
     (catch Exception error
-      (malformed-coord-line!
-       "coordinator response line is not exactly one valid JSON value"
+      (malformed-server-line!
+       "server response line is not exactly one valid JSON value"
        line
        error))))
 
-(defn- run-with-coord-watchdog!
+(defn- run-with-server-watchdog!
   [closeable timeout timeout-message timeout-type operation]
   (let [state (atom :armed)
         watchdog
@@ -1146,38 +1148,38 @@
       (finally
         (future-cancel watchdog)))))
 
-(defn- coord-tls-handshake! [socket]
-  (let [timeout (coord-timeout-ms "FRAM_COORD_HANDSHAKE_TIMEOUT_MS" 2000)]
+(defn- server-tls-handshake! [socket]
+  (let [timeout (server-timeout-ms "FRAM_SERVER_HANDSHAKE_TIMEOUT_MS" 2000)]
     ;; One timeout owns the handshake: SO_TIMEOUT bounds an individual SSL read
     ;; and the watchdog bounds the whole exchange. Request/facts readers replace
     ;; it with their own absolute deadline after the handshake succeeds.
     (.setSoTimeout socket timeout)
-    (run-with-coord-watchdog!
+    (run-with-server-watchdog!
      socket
      timeout
-     "coordinator TLS handshake deadline exceeded"
-     :coordinator-handshake-timeout
+     "server TLS handshake deadline exceeded"
+     :server-handshake-timeout
      (fn []
        (.startHandshake socket)
        nil))))
 
-(defn- coord-socket [host port]
-  (let [ks (System/getenv "FRAM_TLS_KEYSTORE") ts (System/getenv "FRAM_TLS_TRUSTSTORE")
-        pass (or (System/getenv "FRAM_TLS_PASS")
-                 (when-let [f (System/getenv "FRAM_TLS_PASS_FILE")] (str/trim (slurp f))))]
+(defn- server-socket [host port]
+  (let [ks (System/getenv "FRAM_SERVER_TLS_KEYSTORE") ts (System/getenv "FRAM_SERVER_TLS_TRUSTSTORE")
+        pass (or (System/getenv "FRAM_SERVER_TLS_PASS")
+                 (when-let [f (System/getenv "FRAM_SERVER_TLS_PASS_FILE")] (str/trim (slurp f))))]
     ;; fail CLOSED on a partial config — a typo'd/missing var must NOT silently
     ;; downgrade a "secure" link to plaintext.
     (when (and (or ks ts pass) (not (and ks ts pass)))
       (binding [*out* *err*]
-        (println "FATAL: FRAM_TLS_* partially set — need ALL of FRAM_TLS_KEYSTORE / FRAM_TLS_TRUSTSTORE / FRAM_TLS_PASS (refusing to connect in plaintext)"))
+        (println "FATAL: FRAM_SERVER_TLS_* partially set — need ALL of FRAM_SERVER_TLS_KEYSTORE / FRAM_SERVER_TLS_TRUSTSTORE / FRAM_SERVER_TLS_PASS (refusing to connect in plaintext)"))
       (System/exit 2))
     (if (and ks ts pass)
       (let [s (.createSocket (.getSocketFactory (client-ssl-context ks ts pass)))]
         (try
           (.connect s
                     (java.net.InetSocketAddress. ^String host (int port))
-                    (coord-timeout-ms "FRAM_COORD_CONNECT_TIMEOUT_MS" 2000))
-          (coord-tls-handshake! s)
+                    (server-timeout-ms "FRAM_SERVER_CONNECT_TIMEOUT_MS" 2000))
+          (server-tls-handshake! s)
           s
           (catch Throwable error
             (try (.close s) (catch Throwable _ nil))
@@ -1186,7 +1188,7 @@
         (try
           (.connect s
                     (java.net.InetSocketAddress. ^String host (int port))
-                    (coord-timeout-ms "FRAM_COORD_CONNECT_TIMEOUT_MS" 2000))
+                    (server-timeout-ms "FRAM_SERVER_CONNECT_TIMEOUT_MS" 2000))
           s
           (catch Throwable error
             (try (.close s) (catch Throwable _ nil))
@@ -1226,7 +1228,7 @@
 (defn- rpc-stream-body-length! [header]
   (dotimes [index 8]
     (when-not (= (bit-and 255 (int (aget header index)))
-                 (bit-and 255 (int (aget rpc-wire/rpc-v1-magic index))))
+                 (bit-and 255 (int (aget framrpc/rpc-v1-magic index))))
       (throw (ex-info "FRAMRPC response magic does not match"
                       {:type :rpc-invalid-magic}))))
   (let [buffer (doto (java.nio.ByteBuffer/wrap header)
@@ -1237,8 +1239,8 @@
           kind (bit-and 255 (int (.get buffer)))
           flags (bit-and 255 (int (.get buffer)))
           body-length (Integer/toUnsignedLong (.getInt buffer))]
-      (when-not (and (= major rpc-wire/rpc-v1-major)
-                     (= minor rpc-wire/rpc-v1-minor))
+      (when-not (and (= major framrpc/rpc-v1-major)
+                     (= minor framrpc/rpc-v1-minor))
         (throw (ex-info "FRAMRPC response version is unsupported"
                         {:type :rpc-unsupported-version
                          :major major :minor minor})))
@@ -1248,40 +1250,40 @@
       (when-not (zero? flags)
         (throw (ex-info "FRAMRPC v1 response flags must be zero"
                         {:type :rpc-invalid-flags :flags flags})))
-      (when (> body-length rpc-wire/rpc-v1-max-body-bytes)
+      (when (> body-length framrpc/rpc-v1-max-body-bytes)
         (throw (ex-info "FRAMRPC response body exceeds the 1 MiB limit"
                         {:type :rpc-frame-too-large
                          :body-length body-length})))
       (int body-length))))
 
 (defn read-rpc-frame! [input]
-  (let [header (byte-array rpc-wire/rpc-v1-header-bytes)]
-    (when-not (read-rpc-exact! input header 0 rpc-wire/rpc-v1-header-bytes)
+  (let [header (byte-array framrpc/rpc-v1-header-bytes)]
+    (when-not (read-rpc-exact! input header 0 framrpc/rpc-v1-header-bytes)
       (throw (ex-info "FRAMRPC response ended inside its header"
                       {:type :rpc-truncated})))
     (let [body-length (rpc-stream-body-length! header)
           body (byte-array body-length)
-          frame (byte-array (+ rpc-wire/rpc-v1-header-bytes body-length))]
+          frame (byte-array (+ framrpc/rpc-v1-header-bytes body-length))]
       (when-not (read-rpc-exact! input body 0 body-length)
         (throw (ex-info "FRAMRPC response ended inside its body"
                         {:type :rpc-truncated})))
-      (System/arraycopy header 0 frame 0 rpc-wire/rpc-v1-header-bytes)
-      (System/arraycopy body 0 frame rpc-wire/rpc-v1-header-bytes body-length)
-      (rpc-wire/decode-rpc-frame-v1! frame))))
+      (System/arraycopy header 0 frame 0 framrpc/rpc-v1-header-bytes)
+      (System/arraycopy body 0 frame framrpc/rpc-v1-header-bytes body-length)
+      (framrpc/decode-rpc-frame-v1! frame))))
 
 (defn native-request-to!
   "Send one closed FRAMRPC request to host/port and return its RpcResponse.
    The response id, space, and operation must match the request exactly."
   [host port request]
   (let [request-id (next-rpc-request-id)]
-    (with-open [socket (coord-socket host port)]
-      (let [timeout (max (coord-timeout-ms "FRAM_COORD_READ_TIMEOUT_MS" 15000)
+    (with-open [socket (server-socket host port)]
+      (let [timeout (max (server-timeout-ms "FRAM_SERVER_READ_TIMEOUT_MS" 15000)
                          (+ 1000 (or (terms/rpcrequest-timeout-ms request) 0)))
             output (.getOutputStream socket)]
         (.setSoTimeout socket timeout)
         (.write output
-                (rpc-wire/encode-rpc-frame-v1!
-                 (rpc-wire/rpc-request-frame request-id request)))
+                (framrpc/encode-rpc-frame-v1!
+                 (framrpc/rpc-request-frame request-id request)))
         (.flush output)
         (let [frame (read-rpc-frame! (.getInputStream socket))
               response (terms/rpcframev1-response frame)]
@@ -1308,7 +1310,7 @@
   ([port space operation payload expected-version page timeout-ms]
    (native-request!
     port
-    (rpc-wire/rpc-request! space operation expected-version page timeout-ms
+    (framrpc/rpc-request! space operation expected-version page timeout-ms
                            payload))))
 
 (defn native-error [response] (terms/rpcresponse-error response))
@@ -1328,10 +1330,10 @@
     response))
 
 (defn rpc-record-fields! [value tag field-count]
-  (rpc-wire/rpc-record-fields! value tag field-count))
+  (framrpc/rpc-record-fields! value tag field-count))
 
 (defn rpc-list-values! [value]
-  (rpc-wire/rpc-list-values! value))
+  (framrpc/rpc-list-values! value))
 
 ;; The human syntax is deliberately just a local lowering convenience. A
 ;; three-element vector is a Triple; {:instant [seconds nanos]} is an Instant;
@@ -1412,19 +1414,19 @@
   (if (and (map? value)
            (= #{(if (contains? value :var) :var "var")}
               (set (keys value))))
-    (rpc-wire/rpc-query-variable!
+    (framrpc/rpc-query-variable!
      (query-name! (query-field value :var) "query variable"))
-    (rpc-wire/rpc-query-constant! (lower-term! value))))
+    (framrpc/rpc-query-constant! (lower-term! value))))
 
 (defn- lower-query-head! [value]
-  (rpc-wire/rpc-query-head!
+  (framrpc/rpc-query-head!
    (query-name! (require-query-field! value :rel) "query relation")
    (mapv lower-query-term! (require-query-field! value :args))))
 
 (defn- lower-query-clause! [value]
   (cond
     (query-has? value :rel)
-    (rpc-wire/rpc-query-relation!
+    (framrpc/rpc-query-relation!
      (query-name! (query-field value :rel) "query relation")
      (mapv lower-query-term! (require-query-field! value :args))
      (boolean (or (query-field value :neg)
@@ -1436,13 +1438,13 @@
       (when-not (= 2 (count arguments))
         (throw (ex-info "query predicate requires exactly two arguments"
                         {:type :query-invalid-syntax})))
-      (rpc-wire/rpc-query-predicate!
+      (framrpc/rpc-query-predicate!
        (query-operation! (query-field value :pred) "query predicate")
        (lower-query-term! (nth arguments 0))
        (lower-query-term! (nth arguments 1))))
 
     (query-has? value :fn)
-    (rpc-wire/rpc-query-function!
+    (framrpc/rpc-query-function!
      (query-operation! (query-field value :fn) "query function")
      (mapv lower-query-term! (require-query-field! value :args))
      (query-name! (require-query-field! value :bind) "query binding"))
@@ -1452,18 +1454,18 @@
                     {:type :query-invalid-syntax :value value}))))
 
 (defn- lower-query-rule! [value]
-  (rpc-wire/rpc-query-rule!
+  (framrpc/rpc-query-rule!
    (lower-query-head! (require-query-field! value :head))
    (mapv lower-query-clause! (require-query-field! value :body))))
 
 (defn- lower-query-find! [value]
   (if (map? value)
-    (rpc-wire/rpc-query-find-aggregate!
+    (framrpc/rpc-query-find-aggregate!
      (query-name! (require-query-field! value :rel) "aggregate relation")
      (mapv long (or (query-field value :group) []))
      (mapv
       (fn [aggregate]
-        (rpc-wire/rpc-query-aggregate!
+        (framrpc/rpc-query-aggregate!
          (query-operation! (require-query-field! aggregate :op)
                            "aggregate operation")
          (when (query-has? aggregate :arg)
@@ -1471,13 +1473,13 @@
       (require-query-field! value :agg))
      (mapv
       (fn [having]
-        (rpc-wire/rpc-query-having!
+        (framrpc/rpc-query-having!
          (query-operation! (require-query-field! having :op)
                            "having comparison")
          (long (require-query-field! having :agg))
          (lower-term! (require-query-field! having :val))))
       (or (query-field value :having) [])))
-    (rpc-wire/rpc-query-find-relation!
+    (framrpc/rpc-query-find-relation!
      (query-name! value "find relation"))))
 
 (defn lower-query-plan!
@@ -1491,10 +1493,10 @@
     (when (= rules? strata?)
       (throw (ex-info "query requires exactly one of rules or strata"
                       {:type :query-invalid-syntax})))
-    (rpc-wire/rpc-query-plan!
+    (framrpc/rpc-query-plan!
      (lower-query-find! (require-query-field! value :find))
      (mapv (fn [rules]
-             (rpc-wire/rpc-query-stratum!
+             (framrpc/rpc-query-stratum!
               (mapv lower-query-rule! rules)))
            (if rules?
              [(require-query-field! value :rules)]
@@ -1503,21 +1505,21 @@
 (defn native-query-payload!
   ([query] (native-query-payload! query nil))
   ([query as-of]
-   (rpc-wire/rpc-query-request!
+   (framrpc/rpc-query-request!
     (lower-query-plan! query)
     (if (nil? as-of)
-      rpc-wire/query-current
-      (rpc-wire/rpc-query-as-of! (long as-of))))))
+      framrpc/query-current
+      (framrpc/rpc-query-as-of! (long as-of))))))
 
-(defn- coord-rt [port req]
-  (with-open [s (coord-socket (connect-host) port)]
+(defn- server-rt [port req]
+  (with-open [s (server-socket (connect-host) port)]
     (let [w (.getOutputStream s)
-          reader (coordinator-reader s)]
+          reader (server-reader s)]
       (.write w
               (.getBytes (str (pr-str req) "\n")
                          java.nio.charset.StandardCharsets/UTF_8))
       (.flush w)
-      (parse-coord-edn-line! (read-coord-terminal-line! reader)))))
+      (parse-server-edn-line! (read-server-terminal-line! reader)))))
 
 ;; Protocol-level corpus identity. The distinct :for-log operation is deliberate:
 ;; an older daemon rejects it as unknown instead of ignoring an optional field and
@@ -1532,17 +1534,17 @@
 ;;
 ;;
 
-(defn coord-request-for-log [port log req]
-  (coord-rt port (log-envelope log req)))
+(defn server-request-for-log [port log req]
+  (server-rt port (log-envelope log req)))
 
-(defn coord-version [port]
-  (try (let [resp (coord-rt port {:op :version})] (rtc/coord-version-response resp))
+(defn server-version [port]
+  (try (let [resp (server-rt port {:op :version})] (rtc/server-version-response resp))
        (catch Exception _ -1)))
 
-(defn coord-version-for-log [port log]
+(defn server-version-for-log [port log]
   (try
-    (let [resp (coord-request-for-log port log {:op :version})]
-      (rtc/coord-version-for-log-response resp))
+    (let [resp (server-request-for-log port log {:op :version})]
+      (rtc/server-version-for-log-response resp))
 ;;
 ;;
 ;;
@@ -1553,8 +1555,8 @@
 ;;
 ;;
 
-(defn- coord-write-response [resp]
-  (rtc/coord-write-response resp))
+(defn- server-write-response [resp]
+  (rtc/server-write-response resp))
 ;;
 ;;
 ;;
@@ -1564,39 +1566,39 @@
 ;;
 ;;
 
-(defn- coord-write [op port te pred value base]
+(defn- server-write [op port te pred value base]
   (try
-    (coord-write-response
-     (coord-rt port {:op op :te te :p pred :r value :base base :frame "agent"}))
+    (server-write-response
+     (server-rt port {:op op :te te :p pred :r value :base base :frame "agent"}))
     (catch Exception _ "error:nodaemon")))
 
-(defn- coord-write-for-log [op port log te pred value base]
+(defn- server-write-for-log [op port log te pred value base]
   (try
-    (coord-write-response
-     (coord-request-for-log
+    (server-write-response
+     (server-request-for-log
       port log {:op op :te te :p pred :r value :base base :frame "agent"}))
     (catch Exception _ "error:nodaemon")))
 
-(defn coord-assert  [port te pred value base] (coord-write :assert  port te pred value base))
-(defn coord-retract [port te pred value base] (coord-write :retract port te pred value base))
-(defn coord-assert-for-log
+(defn server-assert  [port te pred value base] (server-write :assert  port te pred value base))
+(defn server-retract [port te pred value base] (server-write :retract port te pred value base))
+(defn server-assert-for-log
   [port log te pred value base]
-  (coord-write-for-log :assert port log te pred value base))
-(defn coord-retract-for-log
+  (server-write-for-log :assert port log te pred value base))
+(defn server-retract-for-log
   [port log te pred value base]
-  (coord-write-for-log :retract port log te pred value base))
+  (server-write-for-log :retract port log te pred value base))
 
-(defn coord-port [] (if-let [p (System/getenv "FRAM_PORT")] (Integer/parseInt p) 7977))
+(defn server-port [] (if-let [p (System/getenv "FRAM_SERVER_PORT")] (Integer/parseInt p) 7977))
 
-(defn coord-status [port]
-  (try (let [r (coord-rt port {:op :status})]
+(defn server-status [port]
+  (try (let [r (server-rt port {:op :status})]
          (str "up|" (:version r) "|" (:facts r) "|" (:log r)))
        (catch Exception _ "down")))
 
-(defn coord-status-for-log [port log]
+(defn server-status-for-log [port log]
   (try
-    (let [r (coord-request-for-log port log {:op :status})]
-      (rtc/coord-status-response port r))
+    (let [r (server-request-for-log port log {:op :status})]
+      (rtc/server-status-response port r))
 ;;
 ;;
 ;;
@@ -1614,7 +1616,7 @@
 ;;
 ;;
     (catch Exception _
-      (rtc/coord-status-down port))))
+      (rtc/server-status-down port))))
 ;;
 ;;
 ;;
@@ -1628,38 +1630,38 @@
 ;; Keyed on (l,p,r) / Datalog strings — REP-STABLE across the fractional/CRDT ordering
 ;; rewrite (no fN ordering touched).
 (defn warm-read [port req]
-  (try (let [r (coord-rt port req)]
+  (try (let [r (server-rt port req)]
          (rtc/warm-read-response r))
        (catch Exception _ nil)))
 (defn warm-read-for-log [port log req]
   (try
-    (let [r (coord-request-for-log port log req)]
+    (let [r (server-request-for-log port log req)]
       (rtc/warm-read-for-log-response r))
 ;;
 ;;
     (catch Exception _ nil)))
-(defn coord-query    [port q]       (warm-read port {:op :query :query q}))   ; -> q/run envelope | nil
-(defn coord-query-page
+(defn server-query    [port q]       (warm-read port {:op :query :query q}))   ; -> q/run envelope | nil
+(defn server-query-page
   [port q limit after]
-  (binding [*coord-response-byte-limit* query-page-response-byte-limit]
+  (binding [*server-response-byte-limit* query-page-response-byte-limit]
     (warm-read port {:op :query-page :query q :limit limit :after after})))
-(defn coord-callers  [port te]      (warm-read port {:op :callers :te te}))   ; -> {:callers [...]} | nil
-(defn coord-resolved [port te pred] (warm-read port {:op :resolved :te te :p pred})) ; -> {:value :members :ambiguous? :values} | nil — surfaces multiplicity (#3)
-(defn coord-query-for-log
+(defn server-callers  [port te]      (warm-read port {:op :callers :te te}))   ; -> {:callers [...]} | nil
+(defn server-resolved [port te pred] (warm-read port {:op :resolved :te te :p pred})) ; -> {:value :members :ambiguous? :values} | nil — surfaces multiplicity (#3)
+(defn server-query-for-log
   [port log q]
   (warm-read-for-log port log {:op :query :query q}))
-(defn coord-query-page-for-log
+(defn server-query-page-for-log
   [port log q limit after]
-  (binding [*coord-response-byte-limit* query-page-response-byte-limit]
+  (binding [*server-response-byte-limit* query-page-response-byte-limit]
     (warm-read-for-log
      port log {:op :query-page :query q :limit limit :after after})))
-(defn coord-callers-for-log
+(defn server-callers-for-log
   [port log te]
   (warm-read-for-log port log {:op :callers :te te}))
-(defn coord-resolved-for-log
+(defn server-resolved-for-log
   [port log te pred]
   (warm-read-for-log port log {:op :resolved :te te :p pred}))
-(defn coord-show-for-log
+(defn server-show-for-log
   [port log te]
   (warm-read-for-log port log {:op :show :te te}))
 
@@ -1671,25 +1673,25 @@
 ;; build-index directly and every listing stays byte-identical to the cold fold's.
 ;; Asked with {:fmt :json} DELIBERATELY: this is a multi-megabyte whole-corpus
 ;; payload, and bb parses JSON (cheshire, native) substantially faster than EDN.
-;; coord-live-state retains the response version beside the facts so long-lived
-;; clients can cache one built projection and refresh only after the coordinator
+;; server-live-state retains the response version beside the facts so long-lived
+;; clients can cache one built projection and refresh only after the server
 ;; version moves. nil is the capability sentinel: daemon down, old daemon, malformed
-;; response, or a daemon serving another log. coord-live-facts preserves the older
+;; response, or a daemon serving another log. server-live-facts preserves the older
 ;; Vec-only interface for Beagle/CLI callers.
-(defn coord-live-state [port log]
+(defn server-live-state [port log]
   (let [facts-timeout
-        (coord-timeout-ms "FRAM_COORD_FACTS_TIMEOUT_MS" 30000)]
+        (server-timeout-ms "FRAM_SERVER_FACTS_TIMEOUT_MS" 30000)]
     (try
-      (with-open [s (coord-socket (connect-host) port)]
+      (with-open [s (server-socket (connect-host) port)]
         (let [w (.getOutputStream s)
-              reader (coordinator-reader s)]
+              reader (server-reader s)]
           (.write w
                   (.getBytes
                    (str (pr-str (log-envelope log {:op :facts :fmt :json})) "\n")
                    java.nio.charset.StandardCharsets/UTF_8))
           (.flush w)
-          (let [resp (parse-coord-json-line!
-                      (read-coord-terminal-line-with-timeout!
+          (let [resp (parse-server-json-line!
+                      (read-server-terminal-line-with-timeout!
                        reader
                        facts-timeout))]
             (when (and (map? resp)
@@ -1705,29 +1707,29 @@
                        (get resp "facts"))}))))
       (catch Exception _ nil))))
 
-(defn coord-live-facts [port log]
-  (or (:facts (coord-live-state port log)) []))
+(defn server-live-facts [port log]
+  (or (:facts (server-live-state port log)) []))
 
 ;; subscribe + stream commit events (one EDN line each) until disconnect.
 ;; TLS setup has its own absolute handshake deadline. After the request write, the
 ;; subscription acknowledgement arms the small-response absolute deadline; only a
 ;; validated subscription earns an unbounded idle read.
-(defn- coord-watch-request [port request]
-  (with-open [s (coord-socket (connect-host) port)]   ; honors FRAM_CONNECT + mTLS like coord-rt
+(defn- server-watch-request [port request]
+  (with-open [s (server-socket (connect-host) port)]   ; honors FRAM_SERVER_CONNECT + mTLS like server-rt
     (let [w (.getOutputStream s)
-          reader (coordinator-reader s)
+          reader (server-reader s)
           fenced? (= :for-log (:op request))
           expected-log (:expected-log request)]
       (.write w
               (.getBytes (str (pr-str request) "\n")
                          java.nio.charset.StandardCharsets/UTF_8))
       (.flush w)
-      (let [line (read-coord-response-line! reader)
-            response (parse-coord-edn-line! line)]
+      (let [line (read-server-response-line! reader)
+            response (parse-server-edn-line! line)]
         (cond
           (:reject response)
           (throw (ex-info
-                  (str "coordinator rejected watch subscription"
+                  (str "server rejected watch subscription"
                        (when-let [code (:code response)] (str " (" (name code) ")"))
                        ": " (reject-message (:reject response)))
                   response))
@@ -1750,14 +1752,14 @@
         (.setSoTimeout s 0)
         (println line)
         (loop []
-          (when-let [event (read-coord-stream-line! reader)]
+          (when-let [event (read-server-stream-line! reader)]
             (println event)
             (recur))))))
   nil)
-(defn coord-watch [port]
-  (coord-watch-request port {:op :subscribe}))
-(defn coord-watch-for-log [port log]
-  (coord-watch-request port (log-envelope log {:op :subscribe})))
+(defn server-watch [port]
+  (server-watch-request port {:op :subscribe}))
+(defn server-watch-for-log [port log]
+  (server-watch-request port (log-envelope log {:op :subscribe})))
 
 ;; --- time module runtime (ported from los.rt for `north clock`) -----------
 

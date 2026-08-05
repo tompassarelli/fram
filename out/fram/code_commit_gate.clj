@@ -4,7 +4,7 @@
             [clojure.java.shell :as shell]
             [clojure.set :as set]
             [clojure.string :as str]
-            [coord-daemon-wire :as wire]
+            [framrpc :as framrpc]
             [fram.candidate-transformer :as transformer]
             [fram.code-reader :as code-reader]
             [fram.rt :as rt]
@@ -179,9 +179,9 @@
 
 (defn- batch-actions [candidate]
   (mapv (fn [[operation [slot0 slot1 slot2]]]
-          (wire/rpc-action! operation
+          (framrpc/rpc-action! operation
                             (t/triple slot0 slot1 slot2)
-                            wire/rpc-subject-any))
+                            framrpc/rpc-subject-any))
         (action-rows candidate)))
 
 (defn commit-candidate!
@@ -194,7 +194,7 @@
              {:module (:module candidate)
               :base-version (:base-version candidate)}))
     (rt/native-call! port space :rpc/batch
-                     (wire/rpc-batch! actions nil)
+                     (framrpc/rpc-batch! actions nil)
                      (:base-version candidate) nil nil)))
 
 (defn- mutation-results [response]

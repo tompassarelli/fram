@@ -3,7 +3,7 @@
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
-            [coord-daemon-wire :as wire]
+            [framrpc :as framrpc]
             [fram.rt :as rt]
             [fram.types :as t]))
 
@@ -13,7 +13,7 @@
 ;; envelope wrap each page's items beyond the wire's term-codec-v1 depth bound.
 (def ^:private page-envelope-depth-overhead 3)
 (def ^:private maximum-page-limit
-  (- wire/term-codec-v1-depth-limit page-envelope-depth-overhead))
+  (- framrpc/term-codec-v1-depth-limit page-envelope-depth-overhead))
 
 (defn- invalid! [message data]
   (throw (ex-info message (assoc data :type :invalid-code-snapshot))))
@@ -35,7 +35,7 @@
     triples))
 
 (defn- drain-corpus! [port space page-limit]
-  (let [pattern (wire/rpc-triple-pattern! nil nil nil)]
+  (let [pattern (framrpc/rpc-triple-pattern! nil nil nil)]
     (loop [cursor nil
            seen #{}
            version nil
@@ -43,7 +43,7 @@
            triples []]
       (let [response (-> (rt/native-call!
                           port space :rpc/scan pattern nil
-                          (wire/rpc-page-request! page-limit cursor) nil)
+                          (framrpc/rpc-page-request! page-limit cursor) nil)
                          rt/require-native-success!)
             served (t/rpcresponse-served-version response)
             page (t/rpcresponse-page response)]

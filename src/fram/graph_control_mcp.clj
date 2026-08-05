@@ -5,7 +5,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]
-            [coord-daemon-wire :as wire]
+            [framrpc :as framrpc]
             [fram.code-commit-gate :as gate]
             [fram.code-reader :as code-reader]
             [fram.program-inspection :as program]
@@ -151,7 +151,7 @@
      :retracts #{}}))
 
 (defn preflight!
-  "Prove coordinator reachability, complete module roots, and one sealed green check."
+  "Prove server reachability, complete module roots, and one sealed green check."
   []
   (let [checkout-root (canonical-path! (required-env! "FRAM_CHECKOUT_ROOT")
                                        "checkout root")
@@ -173,7 +173,7 @@
                     (required-env! "FRAM_BEAGLE") snapshot))
         version-after
         (-> (rt/native-call! port space :rpc/version
-                             wire/rpc-unit nil nil nil)
+                             framrpc/rpc-unit nil nil nil)
             rt/require-native-success!
             t/rpcresponse-served-version)]
     (when-not (:accepted check)
@@ -186,7 +186,7 @@
              {:before (:version corpus) :after version-after}))
     {:contractVersion preflight-contract
      :ok true
-     :service {:name server-name :coordinator "reachable"}
+     :service {:name server-name :server "reachable"}
      :corpus {:version (str version-after)
               :moduleCount (count roots)
               :modules (mapv :module roots)
