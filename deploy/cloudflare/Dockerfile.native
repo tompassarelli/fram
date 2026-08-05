@@ -1,0 +1,30 @@
+# Native coordinator runtime image. Its build context is one READY
+# fram-native-build artifact directory, never the Fram checkout:
+#   bin/fram-cloudflare-native-image --artifact /abs/<closure-hash> --tag fram-native .
+# This is additive while Dockerfile remains the Graal release route.
+
+FROM alpine:3.22 AS verify
+
+ARG FRAM_NATIVE_ARTIFACT_HASH
+COPY READY /fram-artifact/READY
+COPY bin/fram-daemon-native /fram-artifact/fram-daemon-native
+
+RUN test "$FRAM_NATIVE_ARTIFACT_HASH" != "" \
+    && test "$(cat /fram-artifact/READY)" = "fram-native-build/v1 $FRAM_NATIVE_ARTIFACT_HASH" \
+    && test -x /fram-artifact/fram-daemon-native
+
+FROM scratch
+
+ARG FRAM_NATIVE_ARTIFACT_HASH
+LABEL org.fram.native-artifact="$FRAM_NATIVE_ARTIFACT_HASH"
+COPY --from=verify /fram-artifact/READY /usr/local/share/fram/READY
+COPY --from=verify /fram-artifact/fram-daemon-native /usr/local/bin/fram-daemon-native
+
+ENV FRAM_PORT=7977 \
+    FRAM_LOG=/data/history.framlog \
+    FRAM_SPACE_ID=cloudflare
+
+VOLUME /data
+EXPOSE 7977
+ENTRYPOINT ["/usr/local/bin/fram-daemon-native"]
+CMD ["serve", "7977", "/data/history.framlog"]

@@ -66,6 +66,25 @@ bin/fram-migrate-triple-log /path/to/facts.log my-production-space /path/to/hist
 
 Do not retain a dual-serving fallback after migration.
 
+## Staged Native image
+
+The current compose file deliberately continues to build `Dockerfile`, the
+Graal release route. The additive Native image is packaged only from a completed
+content-addressed `fram-native-build` artifact; it neither invokes Graal nor
+carries a JVM:
+
+```sh
+artifact="$(bin/fram-native-build --host serve-flat SOURCE...)"
+bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-coordinator-native:local
+```
+
+The helper requires an absolute artifact path, verifies that its directory hash
+and `READY` receipt agree, rejects a dynamically linked executable, and uses
+that artifact directory as the complete Docker build context. `Dockerfile.native`
+checks the same receipt before producing a `scratch` runtime image. This stages
+the release-image seam only; it does not change compose, defaults, or the Graal
+deployment route.
+
 ## Smoke the shim
 
 ```sh
