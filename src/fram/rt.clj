@@ -1625,7 +1625,7 @@
 ;; COLD full-log fold the MCP/CLI read path pays per request (interface investigation
 ;; #1: ~60x tax — cold load-state ~450ms vs warm ~7ms on the canonical log). warm-read
 ;; returns the parsed resp, or NIL if the daemon is down OR doesn't support the op
-;; ({:error "unknown op"} — an older serve-flat daemon predating the warm-op commits):
+;; ({:error "unknown op"} from an older server predating the warm-op commits):
 ;; the caller falls back to the cold path on nil. This IS the capability handshake.
 ;; Keyed on (l,p,r) / Datalog strings — REP-STABLE across the fractional/CRDT ordering
 ;; rewrite (no fN ordering touched).

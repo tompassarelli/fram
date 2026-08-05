@@ -20,7 +20,7 @@
   (check! "Cloudflare runtime contains no EDN codec or negotiation"
           (every? #(absent? % ["clojure.edn" "edn/read" "application/edn"
                                "RawEdn" "ednEncode" "ednDecode" ":fmt"
-                               "format = 'edn'" "serve-flat"])
+                               "format = 'edn'"])
                   [shim worker example docker compose])
           nil)
   (check! "Cloudflare shim uses the shared FRAMRPC client"
@@ -115,24 +115,22 @@
       code-on (file-source "bin/fram-code-on")
       ingest (file-source "bin/fram-ingest-code")
       status (file-source "bin/fram-code-status")]
-  (check! "flat serving is migration-only; code ingest and launch are native"
-          (and (str/includes? launcher "serve-flat was removed")
-               (str/includes? launcher "FRAM_SERVER_RUNTIME:-native")
+  (check! "FRAMLOG serving, migration, and code ingest retain distinct boundaries"
+          (and (str/includes? launcher "FRAM_SERVER_RUNTIME:-native")
                (str/includes? launcher "artifact_dir/READY")
                (str/includes? launcher "FRAM_GRAAL_ARTIFACT")
                (str/includes? launcher "exec \"$graal_artifact\"")
                (str/includes? launcher "jvm-oracle|jvm-dev")
                (str/includes? launcher "exec \"$native_server\"")
                (str/includes? migration "migrate-triple-log")
-               (= 2 (count (re-seq #"serve-flat" launcher)))
                (str/includes? code-on "bin/fram-server serve")
                (str/includes? code-on "--space-id \"$SPACE_ID\"")
-               (absent? code-on ["serve-flat" "edn/read" ":edit-protocol"])
+               (absent? code-on ["edn/read" ":edit-protocol"])
                (every? #(str/includes? ingest %)
                        ["database/create-triple-log!" "database/open-database!"
                         "database/commit!" "replace-atomically!"])
                (str/includes? status "\"$HERE/bin/fram\" status")
-               (absent? status ["wc -l" "serve-flat"]))
+               (absent? status ["wc -l"]))
           nil))
 
 (let [failures (remove second @checks)]

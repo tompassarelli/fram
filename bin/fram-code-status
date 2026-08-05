@@ -146,7 +146,6 @@ REG="${GRAPH_UPSTREAM_REGISTRY:-$HOME/.config/fram/graph-upstream-files}"
 CANON=0
 CANON="$(python3 - "$REG" "${SOURCE_FILES[@]}" <<'PY'
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -201,37 +200,9 @@ try:
 except OSError:
     pass
 
-markers = ("@upstream:graph", "@upstream-is-graph", "@claim-canonical")
-directive = re.compile(
-    r";+\s*(?:" + "|".join(re.escape(marker) for marker in markers) + r")(?:\s|$)"
-)
-header = re.compile(r"(?:#lang\s+\S+|\(define-target\s+\S+\))\Z")
-
-def self_declared(path):
-    try:
-        with open(path, "r", errors="replace") as handle:
-            scanned = 0
-            while scanned < 65536:
-                line = handle.readline()
-                if line == "":
-                    return False
-                scanned += len(line)
-                stripped = line.strip()
-                if not stripped or header.fullmatch(stripped):
-                    continue
-                if stripped.startswith(";;"):
-                    if directive.match(stripped):
-                        return True
-                    continue
-                return False
-    except OSError:
-        return False
-    return False
-
 print(sum(1 for path in sources
           if (os.path.realpath(path) in registry
-              or git_provenance(path) in registry_provenance
-              or self_declared(path))))
+              or git_provenance(path) in registry_provenance)))
 PY
 )" || CANON=0
 

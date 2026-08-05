@@ -1,7 +1,6 @@
 ;; commit_fenced_publish_kernel_test.clj — portless commit sequencer proof for
-;; :managed-agent-publish. The real wire/disconnect/concurrency receipt is
-;; tests/commit_fenced_publish_test.clj; this companion drives the exact handler
-;; in-process so restricted environments can still prove the mutation kernel.
+;; :managed-agent-publish. This drives the exact handler in-process so restricted
+;; environments can still prove the mutation kernel.
 ;;
 ;; Run: bb -cp out tests/commit_fenced_publish_kernel_test.clj
 (require '[clojure.java.io :as io]

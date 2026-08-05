@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Installed-closure smoke: native fail-closed launch, explicit JVM oracle, CLI,
+# Installed server-closure smoke: native fail-closed launch, explicit JVM oracle, CLI,
 # MCP, leases, restart replay, and writable default state.
 set -euo pipefail
 
-package_root="${1:?usage: package_daemon_smoke.sh /nix/store/...-fram}"
+package_root="${1:?usage: package_server_smoke.sh /nix/store/...-fram}"
 bb="${FRAM_SMOKE_BB:?FRAM_SMOKE_BB is required}"
 env_bin="${FRAM_SMOKE_ENV:?FRAM_SMOKE_ENV is required}"
 grep_bin="${FRAM_SMOKE_GREP:?FRAM_SMOKE_GREP is required}"
@@ -24,7 +24,7 @@ required=(
   "$runtime/writer_authority.clj" "$runtime/rotations.clj"
   "$runtime/out/framrpc.clj" "$runtime/out/fram/rt.clj"
   "$runtime/out/fram/types.clj" "$runtime/tests/fram_mcp.clj"
-  "$runtime/daemon.classpath"
+  "$runtime/server.classpath"
 )
 for path in "${required[@]}"; do
   [[ -e "$path" ]] || { echo "fram package smoke: missing runtime asset: $path" >&2; exit 1; }
@@ -255,13 +255,6 @@ wait_ready >/dev/null
 [[ ! -e "$state_dir/facts.log" && ! -e "$state_dir/coordination.log" ]] || {
   echo "fram package smoke: default state created a retired log" >&2; exit 1; }
 stop_daemon
-
-if "$package_root/bin/fram-server" serve-flat 9999 "$work/legacy.log" \
-   >"$work/legacy.out" 2>&1; then
-  echo "fram package smoke: serve-flat unexpectedly remained available" >&2; exit 1
-fi
-"$grep_bin" -Fq "migrate once" "$work/legacy.out" || {
-  echo "fram package smoke: serve-flat rejection lacks migration direction" >&2; exit 1; }
 
 primer_output="$("$env_bin" -i HOME="$home" "$package_root/bin/fram-primer" --beagle-catalog)"
 "$grep_bin" -Fq "define STDLIB-FRAM" <<<"$primer_output" || {

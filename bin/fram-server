@@ -21,15 +21,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 # A numeric first arg keeps the convenient `fram-server [port] [log]` shape.
-# Flat-log serving was removed; migration is a separate one-shot command.
-mode=serve
-case "${1:-}" in
-  serve) shift ;;
-  serve-flat)
-    echo "fram-server: serve-flat was removed; migrate once with bin/fram-migrate-triple-log" >&2
-    exit 2
-    ;;
-esac
+if [[ "${1:-}" == "serve" ]]; then shift; fi
 
 if [[ -n "${2:-}" ]]; then
   log_path="$2"
@@ -111,7 +103,7 @@ case "$runtime" in
       exit 2
     fi
     mkdir -p "$(dirname "$log_path")"
-    graal_args=("$mode" "${1:-7977}" "$log_path")
+    graal_args=(serve "${1:-7977}" "$log_path")
     if [[ -n "$space_id" ]]; then graal_args+=("$space_id"); fi
     cd "$HERE"
     exec "$graal_artifact" "${graal_args[@]}"
@@ -124,7 +116,7 @@ case "$runtime" in
 esac
 
 mkdir -p "$(dirname "$log_path")"
-server_args=(server.clj "$mode" "${1:-7977}" "$log_path")
+server_args=(server.clj serve "${1:-7977}" "$log_path")
 if [[ -n "$space_id" ]]; then server_args+=("$space_id"); fi
 
 # Heap and G1 region size are bound together: shrinking the heap also shrinks the

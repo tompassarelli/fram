@@ -2,8 +2,8 @@
 ;; multi-fact publication primitive (thread 019f9063 / incident 019f8958).
 ;;
 ;; No socket, no daemon boot: this drives database.clj's commit sequencer directly, so it is
-;; fast and deterministic (the socket-level boundary proofs — disconnect/timeout/
-;; concurrent writers — live in commit_assert_batch_atomicity_test.clj). The bar here
+;; fast and deterministic (the FRAMRPC concurrency boundary lives in
+;; framrpc_write_conc_test.clj). The bar here
 ;; is the primitive itself: EVERY fact validates before the FIRST mutation, accepted
 ;; writes land in ONE tx with ONE :commit marker (all-or-none at the durable seam),
 ;; and single-fact commit! is untouched.

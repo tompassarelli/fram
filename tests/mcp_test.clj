@@ -1,4 +1,4 @@
-;; Real stdio JSON-RPC MCP -> shared FRAMRPC client -> real JVM daemon.
+;; Real stdio JSON-RPC MCP -> shared FRAMRPC client -> real JVM server.
 (require '[babashka.fs :as fs]
          '[babashka.process :as proc]
          '[cheshire.core :as json]
@@ -53,13 +53,15 @@
   (apply dissoc (into {} (System/getenv))
          ["FRAM_LOG" "FRAM_THREADS" "FRAM_TELEMETRY_LOG" "FRAM_GRAPH_EDIT"
           "FRAM_FLIP" "FRAM_MCP_PROFILE" "FRAM_SERVER_TLS"]))
-(def daemon
-  (proc/process {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
+(def server
+  (proc/process {:dir root :env (assoc inherited
+                                      "FRAM_SERVER_RUNTIME" "jvm-dev"
+                                      "FRAM_SNAPSHOT_BOOT" "0")
                  :out :inherit :err :inherit}
                 "bin/fram-server" "serve" (str port) log-path space))
 
 (try
-  (check! "real JVM daemon starts on FRAMRPC"
+  (check! "real JVM server starts on FRAMRPC"
           (eventually #(= 0 (direct-version port space))))
 
   (let [query
@@ -115,7 +117,7 @@
     (check! "tell commits through FRAMRPC"
             (and (not (get-in by-id [3 :result :isError]))
                  (str/includes? (call-text (get by-id 3)) "servedVersion")))
-    (check! "second tell advances the daemon logical version"
+    (check! "second tell advances the server logical version"
             (= "2" (get (json/parse-string (call-text (get by-id 4)))
                          "servedVersion")))
     (let [rows (json/parse-string (call-text (get by-id 5)))]
@@ -175,7 +177,7 @@
                  (str/includes? (:err missing-space) "FRAM_SPACE_ID"))))
 
   (finally
-    (stop-process! daemon)
+    (stop-process! server)
     (fs/delete-tree scratch)))
 
 (let [failures (remove second @checks)]

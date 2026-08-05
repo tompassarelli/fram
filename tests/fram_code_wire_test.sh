@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fram_code_wire_test.sh — focused test for the dual Claude/Codex MCP wiring
 # shared by fram-code-on/off (bin/fram-code-wire, fram-code-wire-toml.py) and
-# for bin/fram-code-status's canonical= registry read. No daemon boot, no
+# for bin/fram-code-status's canonical= registry read. No server boot, no
 # Beagle ingest — exercises only the merge/unwire/status-read logic so it
 # runs in well under a second. Exits 0 iff every assertion holds.
 set -uo pipefail
@@ -43,7 +43,7 @@ cp "$DIR/.codex/config.toml" "$TMP/config.toml.orig"
 
 SERVER_JSON='{"command":"/fake/fram-mcp","args":[],"env":{"FRAM_SPACE_ID":"wire-test-space","FRAM_SERVER_PORT":"31337","FRAM_LOG":"/canonical/fram/.fram/code.log"}}'
 
-# fram-code-on binds one stable SpaceId to ingest, daemon, and MCP configuration.
+# fram-code-on binds one stable SpaceId to ingest, server, and MCP configuration.
 assert_code_on_line "fram-code-on requires an explicit stable SpaceId" \
   'fram-code-on: --space-id is required and must be nonempty'
 assert_code_on_line "fram-code-on passes SpaceId to native ingest" \
@@ -56,7 +56,7 @@ assert_code_on_line "fram-code-on binds the native FRAMLOG path" \
   '"FRAM_LOG": "$CODE_LOG"'
 assert_code_on_line "fram-code-on excludes inherited telemetry from graph servers" \
   'exec env -u FRAM_TELEMETRY_LOG \'
-assert_code_on_line "fram-code-on launches the native daemon with SpaceId" \
+assert_code_on_line "fram-code-on launches the native server with SpaceId" \
   'bin/fram-server serve "$PORT" "$CODE_LOG" "$SPACE_ID"'
 assert_code_on_line "fram-code-on probes native rpc/status" \
   'native_status_line() {'
@@ -73,7 +73,7 @@ assert_code_on_line "fram-code-on excludes singular test trees from the authorin
 assert_code_on_line "fram-code-on excludes plural tests trees from the authoring corpus" \
   "-not -path '*/tests/*'"
 assert "fram-code-on does not configure the separate graph-control plane" \
-  '! grep -Eq "FRAM_GRAPH_EDIT|FRAM_CODE_(PORT|LOG)|:edit-protocol|serve-flat" "$HERE/bin/fram-code-on"'
+  '! grep -Eq "FRAM_GRAPH_EDIT|FRAM_CODE_(PORT|LOG)|:edit-protocol" "$HERE/bin/fram-code-on"'
 
 # The authoring corpus contains production source, not parser/checker fixtures.
 CORPUS_ROOT="$TMP/corpus-selection"
@@ -135,7 +135,7 @@ assert "re-running wire on: exactly one [mcp_servers.fram] block" \
 assert "re-running wire on: exactly one mcpServers.fram key" \
   '[ "$(jq ".mcpServers | keys | map(select(. == \"fram\")) | length" "$DIR/.mcp.json")" = "1" ]'
 
-# --- fram-code-status reports the guard's registry-or-sentinel contract -----
+# --- fram-code-status reports the guard's registry contract -----------------
 REG="$TMP/graph-upstream-files"
 mkdir -p "$DIR/some"
 printf '%s\n' '(define-target clj)' '(defn ordinary [] 1)' > "$DIR/some/file.bclj"

@@ -34,7 +34,6 @@
 1	tests/apparatus_r1/cells/perf_104k.clj
 1	tests/apparatus_r1/lib/r1/harness.clj
 1	tests/authority_primitives_test.clj
-77	tests/claims_daemon_test.clj
 108	tests/claims_spec_test.clj
 1	tests/daemon_read_cli_test.clj
 2	tests/docs_semantics_ratchet.sh

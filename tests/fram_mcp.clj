@@ -143,7 +143,7 @@
 
 (defn- native-version! []
   (let [response (fram.rt/native-call!
-                  (fram.rt/database-port) :rpc/version rpc-wire/rpc-unit)]
+                  (fram.rt/server-port) :rpc/version rpc-wire/rpc-unit)]
     (fram.rt/require-native-success! response)
     (terms/rpcresponse-served-version response)))
 
@@ -159,7 +159,7 @@
         (let [base (native-version!)
               response
               (fram.rt/native-call!
-               (fram.rt/database-port) (fram.rt/rpc-space-id) operation
+               (fram.rt/server-port) (fram.rt/rpc-space-id) operation
                (rpc-wire/rpc-write! proposition rpc-wire/rpc-subject-any nil)
                base nil nil)]
           (cond
@@ -191,7 +191,7 @@
   (try
     (let [response
           (fram.rt/native-call!
-           (fram.rt/database-port) :rpc/scan
+           (fram.rt/server-port) :rpc/scan
            (rpc-wire/rpc-triple-pattern!
             (mcp-subject! (:subject arguments)) nil nil))]
       (or (native-error-result response)
@@ -212,7 +212,7 @@
   (try
     (let [response
           (fram.rt/native-call!
-           (fram.rt/database-port) :rpc/query
+           (fram.rt/server-port) :rpc/query
            (fram.rt/native-query-payload! (:query arguments)))]
       (or (native-error-result response)
           (let [[rows]
@@ -233,7 +233,7 @@
   (try
     (let [response
           (fram.rt/native-call!
-           (fram.rt/database-port) :rpc/validate rpc-wire/rpc-unit)]
+           (fram.rt/server-port) :rpc/validate rpc-wire/rpc-unit)]
       (or (native-error-result response)
           (let [[valid violations]
                 (fram.rt/rpc-record-fields!

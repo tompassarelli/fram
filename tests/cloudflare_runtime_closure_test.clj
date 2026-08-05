@@ -11,7 +11,7 @@
 (def native-docker-source (slurp "deploy/cloudflare/Dockerfile.native"))
 (def native-image-builder-source (slurp "bin/fram-cloudflare-native-image"))
 (def flake-source (slurp "flake.nix"))
-(def package-smoke-source (slurp "tests/package_daemon_smoke.sh"))
+(def package-smoke-source (slurp "tests/package_server_smoke.sh"))
 
 (def direct-loads
   (map second

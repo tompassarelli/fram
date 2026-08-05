@@ -2110,12 +2110,6 @@
       (println (pr-str
                 (database/migrate-legacy-flat-log! first-arg second-arg third-arg)))
 
-      "serve-flat"
-      (server-fail! :migration-required
-                    "flat-log runtime boot was removed; run bin/fram-migrate-triple-log"
-                    {:source second-arg
-                     :migrator "bin/fram-migrate-triple-log"})
-
       (server-fail! :unknown-command
                     "expected serve or migrate-triple-log"
                     {:command command}))))
