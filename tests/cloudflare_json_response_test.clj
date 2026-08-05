@@ -125,7 +125,7 @@
       (fn []
         (reset! daemon
                 (proc/process
-                 {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
+                 {:dir root :env (assoc inherited "FRAM_SERVER_RUNTIME" "jvm-dev")
                   :out :inherit :err :inherit}
                  "bin/fram-server" "serve" (str daemon-port) log-path space)))]
   (try
