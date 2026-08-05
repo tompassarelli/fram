@@ -2,13 +2,13 @@
 
 The Worker is stateless. It sends authenticated JSON to the shim; the shim
 validates a closed request, converts tagged JSON Terms to FRAMRPC, and opens one
-private socket to the durable coordinator.
+private socket to the durable Fram server.
 
 ```text
-Worker -- HTTPS + bearer + JSON --> shim -- private FRAMRPC --> coordinator
+Worker -- HTTPS + bearer + JSON --> shim -- private FRAMRPC --> Fram server
 ```
 
-Only the shim is public. Never publish coordinator port 7977: FRAMRPC delegates
+Only the shim is public. Never publish the Fram server port 7977: FRAMRPC delegates
 authentication to the gateway.
 
 ## Boundary
@@ -42,8 +42,8 @@ Neither the Worker nor the shim accepts EDN or an untyped raw escape hatch.
 
 ## Start the backend
 
-The coordinator image compiles the Beagle-emitted JVM closure into one static
-Graal executable. This is a release/deployment build; normal coordinator
+The Fram server image compiles the Beagle-emitted JVM closure into one static
+Graal executable. This is a release/deployment build; normal Fram server
 development stays on `FRAM_DAEMON_RUNTIME=jvm-dev` and does not run Graal.
 The separate shim image remains Babashka.
 
@@ -56,7 +56,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The coordinator persists `/data/history.framlog`. If this deployment has an old
+The Fram server persists database history at `/data/history.framlog`. If this deployment has an old
 flat `facts.log`, stop the old daemon and migrate it once before starting the new
 image:
 
@@ -103,7 +103,7 @@ Expected shape:
 An assertion request contains the native typed write record. Applications
 normally use `worker-client.js` rather than constructing that record by hand.
 The shim exposes reads on `POST /q` and mutations on `POST /assert`; sending an
-operation to the wrong path is rejected before coordinator contact.
+operation to the wrong path is rejected before Fram server contact.
 
 ## Deploy the Worker
 

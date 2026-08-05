@@ -96,7 +96,7 @@ Compilation rejects malformed Terms, unknown relations, arity disagreement, unde
 
 Nonaggregate rows have deterministic Term ordering. An opaque page cursor binds the last row, resolved upper sequence, and lower-exclusive occurrence bound. Continuations stay on the same immutable snapshot.
 
-The coordinator caches a complete ordered result by daemon generation, SpaceId, resolved view, operation, and canonical request digest. Selector-equivalent current/as-of requests share an entry; different since lower bounds do not. Continuation slices the cached vector rather than rerunning the plan. Eviction changes cost, never the pinned answer.
+The server caches a complete ordered result by daemon generation, SpaceId, resolved view, operation, and canonical request digest. Selector-equivalent current/as-of requests share an entry; different since lower bounds do not. Continuation slices the cached vector rather than rerunning the plan. Eviction changes cost, never the pinned answer.
 
 Historical state uses the newest valid prefix-bound FRI2 checkpoint at or before `U`, then replays its tail. Corrupt or stale derived state falls back to canonical replay; sealed epochs use the same prefix proof through a fingerprinted range manifest.
 

@@ -44,13 +44,13 @@ This document is the single source for Fram's current semantic, storage, query, 
 
 **projection** — A rebuildable view of Terms or occurrences, including query relations, profiles, and indexes; never authoritative history.
 
-**SpaceId** — The immutable identity binding a coordinator, its FRAMLOG, and every accepted request into one trust domain.
+**SpaceId** — The immutable identity binding a server, its FRAMLOG, and every accepted request into one database trust domain.
 
 ## Wire and deployment
 
 **FRAMRPC** — Fram's private binary protocol for typed recursive Terms and a closed thirteen-operation data surface.
 
-**writer / standby** — The sole coordinator generation authorized to append to a SpaceId's log, and a read-only generation that may prepare to acquire authority.
+**writer / standby** — The sole server generation authorized to append to a SpaceId's log, and a read-only server generation that may prepare to acquire authority.
 
 **selector** — The operator-owned front end that holds and drains public connections, checks deployment generations, and switches all routes together.
 

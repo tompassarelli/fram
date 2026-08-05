@@ -48,7 +48,7 @@ type. See the [naming ledger](docs/naming.md).
 
 ## Current documentation
 
-- [Architecture](docs/architecture.md) — semantic kernel, physical rows, log, coordinator, and projections.
+- [Architecture](docs/architecture.md) — semantic kernel, physical rows, database, server, and projections.
 - [Glossary](docs/glossary.md) — the single vocabulary source for current documents.
 - [Query reference](docs/query-reference.md) — `triple` and `occurrence`, recursion, filters, arithmetic, and aggregates.
 - [Ontology](docs/ontology.md) — modeling rules, the canonical normalized example, profiles, and semantic hints.
@@ -59,7 +59,7 @@ type. See the [naming ledger](docs/naming.md).
 - [Tool catalog](docs/tool-catalog.md) — exactly five public MCP data verbs.
 - [Thread format](THREAD-FORMAT.md) — the current v0.3 Markdown
   import/export compatibility projection.
-- [Coordinator cutover](docs/coordinator-cutover.md) — the versioned v0.3
+- [v0.3 writer handoff](docs/v0.3-writer-handoff.md) — the versioned v0.3
   blue/green operator contract, pinned to the v0.3 runtime; the controller it
   describes no longer runs on the current host.
 
@@ -95,11 +95,11 @@ engine wire is binary FRAMRPC.
 
 ## Runtime surfaces
 
-- `bin/fram-daemon` is the native-first coordinator launcher. Its default route
+- `bin/fram-server` is the native-first server launcher. Its default route
   requires `FRAM_NATIVE_ARTIFACT_DIR` to name a READY artifact containing
-  `bin/fram-daemon-native`; it never falls back silently. `jvm-oracle` and
-  `jvm-dev` are explicit retained routes. The launched coordinator owns one
-  `SpaceId` and one `history.framlog`, accepts the closed thirteen-operation
+  `bin/fram-server-native`; it never falls back silently. `jvm-oracle` and
+  `jvm-dev` are explicit retained routes. The launched server owns one database
+  (`SpaceId` plus `history.framlog`), accepts the closed thirteen-operation
   FRAMRPC v1 set, and holds writer authority for its active lifetime.
 - `bin/fram` routes public data commands (`tell`, `retract`, `show`, `query`,
   `scan`, `occurrences`, `version`, `status`, and `validate`) over FRAMRPC.

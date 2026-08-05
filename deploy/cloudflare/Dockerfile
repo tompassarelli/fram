@@ -1,7 +1,7 @@
-# Fram coordinator release image. Graal compilation belongs to image builds,
+# Fram server release image. Graal compilation belongs to image builds,
 # never to the JVM development loop.
 # Build from the REPO ROOT (the build context is the fram checkout):
-#   docker build -f deploy/cloudflare/Dockerfile -t fram-coordinator .
+#   docker build -f deploy/cloudflare/Dockerfile -t fram-server .
 
 FROM clojure:temurin-21-tools-deps-bookworm-slim AS fram-aot
 
@@ -12,7 +12,7 @@ COPY native/deps.edn native/deps.edn
 RUN clojure -Sdeps "$(cat native/deps.edn)" -P
 
 COPY out/ out/
-COPY coord.clj coord_daemon.clj coord_writer_authority.clj ./
+COPY database.clj server.clj writer_authority.clj ./
 COPY native/build.sh native/build.sh
 COPY native/reachability-metadata.json native/reachability-metadata.json
 COPY native/src/ native/src/
@@ -31,7 +31,7 @@ FROM alpine:3.22
 RUN addgroup -S fram \
     && adduser -S -G fram fram \
     && install -d -o fram -g fram /data
-COPY --from=fram-native-image /fram/native/fram-daemon-graal /usr/local/bin/fram-daemon-graal
+COPY --from=fram-native-image /fram/native/fram-server-graal /usr/local/bin/fram-server-graal
 
 # The wire protocol is UNAUTHENTICATED — 0.0.0.0 is safe ONLY because
 # docker-compose keeps this port on a private network with the shim as the
@@ -47,5 +47,5 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
   CMD ["nc", "-z", "127.0.0.1", "7977"]
 
 USER fram
-ENTRYPOINT ["/usr/local/bin/fram-daemon-graal"]
+ENTRYPOINT ["/usr/local/bin/fram-server-graal"]
 CMD ["serve", "7977", "/data/history.framlog"]

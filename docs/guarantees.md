@@ -23,10 +23,10 @@ Vocabulary:
 
 Two runtime surfaces exist until cluster migration completes:
 
-- **head** — the occurrence-native coordinator, binary FRAMLOG, and FRAMRPC v1
+- **head** — the occurrence-native server, binary FRAMLOG, and FRAMRPC v1
   (this source tree). Every guarantee below binds to head unless marked.
 - **v0.3** — the deployed flat-log generation governed by
-  [`coordinator-cutover.md`](coordinator-cutover.md). Its guarantee suite is
+  [`v0.3-writer-handoff.md`](v0.3-writer-handoff.md). Its guarantee suite is
   excluded at head; v0.3 guarantees are frozen with that release and are not
   restated here. Head does not serve v0.3 EDN-line clients (see
   non-guarantees).
@@ -51,7 +51,7 @@ Two runtime surfaces exist until cluster migration completes:
 
 | # | Guarantee | Status | Gate |
 |---|---|---|---|
-| I1 | One active coordinator per `SpaceId`; its singleton FIFO sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
+| I1 | One active server per `SpaceId`; its singleton FIFO commit sequencer orders every mutation, while readers take only immutable published snapshots | BACKED | [`../tests/coord_writer_authority_test.clj`](../tests/coord_writer_authority_test.clj), [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) |
 | I2 | OCC: a stale or future `expected-version` returns `:rpc/conflict` without moving the version | BACKED | `native_rpc_daemon_test.clj`; race shape in `coord_test.clj` (24 racers → exactly 1 ok) |
 | I3 | K concurrent socket writers: every acked proposition is durable exactly once, per-writer issue order is preserved, tx-sequence strictly rises, each ack's version equals its frame's tx-seq, and the published root contains that transaction before its ack | BACKED | [`../tests/framrpc_write_conc_test.clj`](../tests/framrpc_write_conc_test.clj) — 8 writers × 25 + 80 OCC racers, durable-frame/barrier/publication verification |
 | I4 | Reads do not convoy writes: validate is a non-convoying read; during a 2 s slow query or validate, a lone write acks ≤ 250 ms and ten concurrent writes ack ≤ 1 s (mutations share cohort barriers — see capacity notes) | BACKED | [`../tests/framrpc_latency_convoy_test.clj`](../tests/framrpc_latency_convoy_test.clj) — injected-delay convoy + disconnect-cancels-work |

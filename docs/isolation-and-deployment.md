@@ -1,14 +1,14 @@
 # Isolation, wire, and deployment
 
-This document specifies the source-head trust domain, coordinator bind and FRAMRPC boundary, supported deployment shape, and v0.3 handoff.
+This document specifies the source-head database trust domain, server bind and FRAMRPC boundary, supported deployment shape, and v0.3 writer handoff.
 
 ## Trust domain and bind
 
 Fram has no engine accounts, authorization, or tenant policy. One [SpaceId](glossary.md#storage-and-query), one FRAMLOG, one writer process/lock, and one private network boundary form a trust domain. Separate personal, client, and public-tooling data across all four; ontology fields are not tenant isolation.
 
-`bin/fram-daemon` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-daemon-native`. `FRAM_DAEMON_RUNTIME=graal` selects the transitional self-contained coordinator at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The coordinator binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New logs require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
+`bin/fram-server` launches native by default and fails closed unless `FRAM_NATIVE_ARTIFACT_DIR` names a READY artifact containing `bin/fram-server-native`. `FRAM_DAEMON_RUNTIME=graal` selects the transitional self-contained server at the absolute `FRAM_GRAAL_ARTIFACT` path without presenting it as a Native World artifact. `jvm-oracle` selects the sealed packaged JVM differential oracle; `jvm-dev` selects the checkout-only Clojure development route. None is an automatic fallback. The server binds `127.0.0.1` by default. `FRAM_BIND` changes the listener intentionally, `FRAM_PORT` selects its port, and `FRAM_CONNECT` selects the client host. New databases require `FRAM_SPACE_ID`; every request carries the same identity or is rejected. `FRAM_LISTEN_FD` may pass an operator-owned INET listener without changing codec, operations, or writer authority.
 
-The Cloudflare coordinator image builds the Graal route as a fully static musl
+The Cloudflare server image builds the Graal route as a fully static musl
 release artifact. Graal compilation is not part of the JVM development loop;
 the authenticated HTTP shim remains a separate Babashka container.
 
@@ -20,7 +20,7 @@ FRAMRPC v1 is a bounded binary protocol. Each frame carries magic, version, requ
 
 Unknown operation, record, field, and Term tags, trailing bytes, or over-limit nesting are rejected. FRAMRPC is not EDN, JSON, HTTP, or MCP.
 
-The coordinator contract accepts exactly thirteen operations:
+The server contract accepts exactly thirteen operations:
 
 - metadata: `rpc/version`, `rpc/status`, `rpc/validate`;
 - mutation: `rpc/assert`, `rpc/retract`, `rpc/batch`;
@@ -35,13 +35,13 @@ The official zero-dependency [`clients/node/framrpc.mjs`](../clients/node/framrp
 
 ```text
 client -- HTTPS/closed JSON --> authenticated Worker or shim
-       -- private FRAMRPC --> active coordinator
-       -- append --> history.framlog
+       -- private FRAMRPC --> active Fram server
+       -- append --> database (SpaceId + FRAMLOG)
 ```
 
 The edge selects one SpaceId and maps tagged JSON to closed FRAMRPC records; it never forwards EDN or arbitrary daemon records. Cloudflare setup and probes live in [`../deploy/cloudflare/PROCEDURE.md`](../deploy/cloudflare/PROCEDURE.md).
 
-- `bin/fram-daemon` is the native-first launcher for the long-lived active or standby coordinator.
+- `bin/fram-server` is the native-first launcher for the long-lived active or standby server.
 - `bin/fram` is the local CLI and FRAMRPC client.
 - `bin/fram-mcp` is the five-tool JSON-RPC-over-stdio edge.
 - The Cloudflare shim/Worker is an optional authenticated JSON edge.
@@ -52,7 +52,7 @@ The native route consumes only a linked executable promoted behind the native ar
 
 Back up `history.framlog` as an append-only binary artifact with its SpaceId. Inspect it through scan, query, occurrences, and validate, never text scraping. Legacy flat logs enter only through the one-shot migration against explicit quiescent source and destination paths.
 
-Source head exposes no deployment control. Pinned v0.3 clusters use the live [coordinator cutover](coordinator-cutover.md) contract until migration; its flat-store and EDN control vocabulary is version-scoped, not kernel vocabulary. The current host instead uses systemd socket activation and a generation symlink.
+Source head exposes no deployment control. Pinned v0.3 clusters use the live [v0.3 writer handoff](v0.3-writer-handoff.md) contract until migration; its flat-store and EDN control vocabulary is version-scoped, not kernel vocabulary. The current host instead uses systemd socket activation and a generation symlink.
 
 Deployment worktrees stay pristine. Controller markers live in controller state, never the source tree being validated.
 
