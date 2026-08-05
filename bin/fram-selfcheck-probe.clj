@@ -10,8 +10,12 @@
 (def expected-engine
   (case (System/getenv "FRAM_SC_EXPECTED_ENGINE")
     ":rpc/native" :rpc/native
+    ":rpc/graal" :rpc/graal
     ":rpc/jvm" :rpc/jvm
-    (throw (ex-info "FRAM_SC_EXPECTED_ENGINE must be :rpc/native or :rpc/jvm" {}))))
+    (throw
+     (ex-info
+      "FRAM_SC_EXPECTED_ENGINE must be :rpc/native, :rpc/graal, or :rpc/jvm"
+      {}))))
 (def results (atom []))
 (def request-id (atom 0))
 

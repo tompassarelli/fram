@@ -39,7 +39,8 @@ SPACE="fram-selfcheck"
 LOG="$SCRATCH/history.framlog"
 case "${FRAM_DAEMON_RUNTIME:-native}" in
   native) EXPECTED_ENGINE=:rpc/native ;;
-  graal|jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm ;;
+  graal) EXPECTED_ENGINE=:rpc/graal ;;
+  jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm ;;
   *)
     echo "fram selfcheck: unsupported FRAM_DAEMON_RUNTIME: ${FRAM_DAEMON_RUNTIME}" >&2
     exit 2

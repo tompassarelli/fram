@@ -100,12 +100,13 @@
           nil)
   (check! "deep probes bind the exact runtime engine identity"
           (and (str/includes? selfcheck-runner "native) EXPECTED_ENGINE=:rpc/native")
+               (str/includes? selfcheck-runner "graal) EXPECTED_ENGINE=:rpc/graal")
                (str/includes? selfcheck-runner
-                              "graal|jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm")
+                              "jvm-oracle|jvm-dev) EXPECTED_ENGINE=:rpc/jvm")
                (str/includes? selfcheck-runner
                               "FRAM_SC_EXPECTED_ENGINE=\"$EXPECTED_ENGINE\"")
                (str/includes? selfcheck
-                              "FRAM_SC_EXPECTED_ENGINE must be :rpc/native or :rpc/jvm")
+                              "FRAM_SC_EXPECTED_ENGINE must be :rpc/native, :rpc/graal, or :rpc/jvm")
                (str/includes? selfcheck "(= expected-engine engine)"))
           nil))
 
