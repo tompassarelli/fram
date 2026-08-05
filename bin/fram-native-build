@@ -12,12 +12,12 @@ usage() {
   cat <<'USAGE'
 Usage:
   fram-native-build --entry NS/NAME SOURCE...
-  fram-native-build --host serve-flat [--adapter FILE] SOURCE...
+  fram-native-build --host server [--adapter FILE] SOURCE...
 
 Prints the absolute immutable artifact directory on success.
 Set FRAM_BEAGLE (or BEAGLE_HOME), FRAM_NATIVE_CACHE, and FRAM_NATIVE_CC as needed.
 
-The serve-flat host defaults to native/serve_flat_generated.c beside this script.
+The server host defaults to native/server_generated.c beside this script.
 
 Consumer:
   FRAM_NATIVE_ARTIFACT_DIR="$(fram-native-build --entry NS/NAME SOURCE...)"
@@ -61,11 +61,11 @@ done
 entry="${entry:-${FRAM_NATIVE_ENTRY:-}}"
 case "$host" in
   "")
-    [[ -z "$adapter" ]] || die "--adapter requires --host serve-flat"
+    [[ -z "$adapter" ]] || die "--adapter requires --host server"
     [[ "$entry" == */* && "$entry" != */ && "$entry" != /* ]] ||
       die "--entry must be a qualified NS/NAME"
     ;;
-  serve-flat)
+  server)
     [[ -z "$entry" ]] || die "--entry and --host are mutually exclusive"
     ;;
   *) die "unsupported host: $host" ;;
@@ -86,13 +86,13 @@ beagle="$(realpath "$beagle")"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 host_source=""
 host_header=""
-if [[ "$host" == "serve-flat" ]]; then
-  host_source="$repo/native/serve_flat_host.c"
-  host_header="$repo/native/serve_flat_host.h"
-  adapter="${adapter:-$repo/native/serve_flat_generated.c}"
-  [[ -f "$host_source" ]] || die "serve-flat host source is unavailable: $host_source"
-  [[ -f "$host_header" ]] || die "serve-flat host header is unavailable: $host_header"
-  [[ -f "$adapter" ]] || die "serve-flat generated adapter is unavailable: $adapter"
+if [[ "$host" == "server" ]]; then
+  host_source="$repo/native/server_host.c"
+  host_header="$repo/native/server_host.h"
+  adapter="${adapter:-$repo/native/server_generated.c}"
+  [[ -f "$host_source" ]] || die "server host source is unavailable: $host_source"
+  [[ -f "$host_header" ]] || die "server host header is unavailable: $host_header"
+  [[ -f "$adapter" ]] || die "server generated adapter is unavailable: $adapter"
   host_source="$(realpath "$host_source")"
   host_header="$(realpath "$host_header")"
   adapter="$(realpath "$adapter")"
@@ -162,7 +162,7 @@ write_input_manifest() {
   } >"$destination"
 }
 
-write_serve_flat_symbols() {
+write_server_symbols() {
   local report_path="$1" module_header="$2" destination="$3"
   local logical symbol suffix prototype prototype_regex return_type parameters
   local parameter parameter_regex source_index existing index
@@ -171,14 +171,14 @@ write_serve_flat_symbols() {
   local -a symbols=() return_types=() arena_prefixes=() capability_prefixes=()
   local -A argument_types=()
   local -a logical_names=(
-    serve-flat-generated-abi
-    serve-flat-store-boot!
-    serve-flat-store-dispatch!
-    serve-flat-store-shutdown
-    serve-flat-codec-read-request!
-    serve-flat-codec-write-response!
-    serve-flat-codec-release-request
-    serve-flat-codec-release-response
+    server-generated-abi
+    server-store-boot!
+    server-store-dispatch!
+    server-store-shutdown
+    server-codec-read-request!
+    server-codec-write-response!
+    server-codec-release-request
+    server-codec-release-response
   )
   local -a suffixes=(
     generated_abi
@@ -216,7 +216,7 @@ write_serve_flat_symbols() {
     symbol="native_m0_fn_${BASH_REMATCH[1]}"
     for existing in "${symbols[@]}"; do
       [[ "$existing" != "$symbol" ]] ||
-        die "native report maps multiple serve-flat exports to $symbol"
+        die "native report maps multiple server exports to $symbol"
     done
     symbols+=("$symbol")
 
@@ -286,20 +286,20 @@ write_serve_flat_symbols() {
 
   {
     printf '%s\n' \
-      '#ifndef FRAM_SERVE_FLAT_SYMBOLS_H' \
-      '#define FRAM_SERVE_FLAT_SYMBOLS_H' \
+      '#ifndef FRAM_SERVER_SYMBOLS_H' \
+      '#define FRAM_SERVER_SYMBOLS_H' \
       '' \
       '#include "module_0.h"' \
       ''
     for index in "${!logical_names[@]}"; do
       suffix="${suffixes[$index]}"
-      printf 'typedef %s fram_serve_flat_%s_return;\n' \
+      printf 'typedef %s fram_server_%s_return;\n' \
         "${return_types[$index]}" "$suffix"
       for ((source_index = 0; source_index < source_arities[index]; source_index += 1)); do
-        printf 'typedef %s fram_serve_flat_%s_arg_%d;\n' \
+        printf 'typedef %s fram_server_%s_arg_%d;\n' \
           "${argument_types["$index:$source_index"]}" "$suffix" "$source_index"
       done
-      printf '#define FRAM_SERVE_FLAT_SYMBOL_%s %s\n' \
+      printf '#define FRAM_SERVER_SYMBOL_%s %s\n' \
         "${macro_suffixes[$index]}" "${symbols[$index]}"
 
       call_parameters='arena, capability'
@@ -316,7 +316,7 @@ write_serve_flat_symbols() {
         [[ -z "$call_arguments" ]] || call_arguments+=', '
         call_arguments+="(arg_$source_index)"
       done
-      printf '#define FRAM_SERVE_FLAT_CALL_%s(%s) FRAM_SERVE_FLAT_SYMBOL_%s(%s)\n' \
+      printf '#define FRAM_SERVER_CALL_%s(%s) FRAM_SERVER_SYMBOL_%s(%s)\n' \
         "${macro_suffixes[$index]}" "$call_parameters" \
         "${macro_suffixes[$index]}" "$call_arguments"
       printf '\n'
@@ -358,14 +358,14 @@ if [[ -z "$host" ]]; then
   fi
 else
   native_server_entries=(
-    fram.native-server/serve-flat-generated-abi
-    fram.native-server/serve-flat-store-boot!
-    fram.native-server/serve-flat-store-dispatch!
-    fram.native-server/serve-flat-store-shutdown
-    fram.native-server/serve-flat-codec-read-request!
-    fram.native-server/serve-flat-codec-write-response!
-    fram.native-server/serve-flat-codec-release-request
-    fram.native-server/serve-flat-codec-release-response
+    fram.native-server/server-generated-abi
+    fram.native-server/server-store-boot!
+    fram.native-server/server-store-dispatch!
+    fram.native-server/server-store-shutdown
+    fram.native-server/server-codec-read-request!
+    fram.native-server/server-codec-write-response!
+    fram.native-server/server-codec-release-request
+    fram.native-server/server-codec-release-response
   )
   native_server_entry_args=()
   for native_server_entry in "${native_server_entries[@]}"; do
@@ -420,8 +420,8 @@ if [[ -z "$host" ]]; then
 else
   [[ -f "$stage/native_shim.c" && -f "$stage/native_shim.h" ]] ||
     die "native-module omitted the native shim"
-  write_serve_flat_symbols "$report" "$stage/module_0.h" \
-    "$stage/serve_flat_symbols.h"
+  write_server_symbols "$report" "$stage/module_0.h" \
+    "$stage/server_symbols.h"
   shopt -s nullglob
   module_sources=("$stage"/module_*.c)
   shopt -u nullglob
@@ -435,12 +435,12 @@ else
       -o "$stage/bin/fram-server-native" \
       >"$stage/native-host.log" 2>&1; then
     sed -n '1,240p' "$stage/native-host.log" >&2
-    die "serve-flat native host link failed"
+    die "server native host link failed"
   fi
   {
     printf 'native-host-c17 PASS compiler=%s output=%s\n' \
       "$cc" "$stage/bin/fram-server-native"
-    printf 'native-host-abi PASS host=serve-flat exports=8\n'
+    printf 'native-host-abi PASS host=server exports=8\n'
   } >"$stage/native-host.report.txt"
 fi
 [[ -x "$stage/bin/fram-server-native" ]] || die "native executable is missing"

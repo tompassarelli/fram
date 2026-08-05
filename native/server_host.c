@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #define _GNU_SOURCE
 
-#include "serve_flat_host.h"
+#include "server_host.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -28,17 +28,17 @@ enum {
   ACCEPT_POLL_MILLISECONDS = 100
 };
 
-typedef enum daemon_bind {
-  DAEMON_BIND_LOOPBACK,
-  DAEMON_BIND_IPV4_LOOPBACK,
-  DAEMON_BIND_ANY
-} daemon_bind;
+typedef enum server_bind {
+  SERVER_BIND_LOOPBACK,
+  SERVER_BIND_IPV4_LOOPBACK,
+  SERVER_BIND_ANY
+} server_bind;
 
 typedef struct server_config {
   uint16_t port;
   const char *log_path;
   const char *space_id;
-  daemon_bind bind;
+  server_bind bind;
   const char *bind_text;
 } server_config;
 
@@ -57,7 +57,7 @@ typedef struct client_job {
 } client_job;
 
 struct server_context {
-  fram_serve_flat_store *store;
+  fram_server_store *store;
   pthread_mutex_t dispatch_mutex;
   pthread_mutex_t clients_mutex;
   pthread_cond_t clients_idle;
@@ -96,17 +96,17 @@ static int parse_bind(server_config *config) {
   const char *bind = getenv("FRAM_BIND");
 
   if (!nonempty(bind) || strcmp(bind, "loopback") == 0) {
-    config->bind = DAEMON_BIND_LOOPBACK;
+    config->bind = SERVER_BIND_LOOPBACK;
     config->bind_text = "127.0.0.1";
     return 0;
   }
   if (strcmp(bind, "127.0.0.1") == 0) {
-    config->bind = DAEMON_BIND_IPV4_LOOPBACK;
+    config->bind = SERVER_BIND_IPV4_LOOPBACK;
     config->bind_text = "127.0.0.1";
     return 0;
   }
   if (strcmp(bind, "0.0.0.0") == 0) {
-    config->bind = DAEMON_BIND_ANY;
+    config->bind = SERVER_BIND_ANY;
     config->bind_text = "0.0.0.0";
     return 0;
   }
@@ -337,7 +337,7 @@ static int parse_inherited_fd(void) {
   return INHERITED_LISTEN_FD;
 }
 
-static int inherited_socket_port(int fd, daemon_bind bind_mode,
+static int inherited_socket_port(int fd, server_bind bind_mode,
                                  uint16_t *port_out) {
   struct sockaddr_storage address;
   socklen_t address_length = sizeof(address);
@@ -349,7 +349,7 @@ static int inherited_socket_port(int fd, daemon_bind bind_mode,
   if (address.ss_family == AF_INET) {
     const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)&address;
     uint32_t expected =
-        bind_mode == DAEMON_BIND_ANY ? INADDR_ANY : INADDR_LOOPBACK;
+        bind_mode == SERVER_BIND_ANY ? INADDR_ANY : INADDR_LOOPBACK;
     if (ntohl(ipv4->sin_addr.s_addr) != expected) {
       errno = EADDRNOTAVAIL;
       return -1;
@@ -359,7 +359,7 @@ static int inherited_socket_port(int fd, daemon_bind bind_mode,
   }
   if (address.ss_family == AF_INET6) {
     const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)&address;
-    if (bind_mode != DAEMON_BIND_LOOPBACK ||
+    if (bind_mode != SERVER_BIND_LOOPBACK ||
         !IN6_IS_ADDR_LOOPBACK(&ipv6->sin6_addr)) {
       errno = EADDRNOTAVAIL;
       return -1;
@@ -437,7 +437,7 @@ static int create_listener(const server_config *config) {
 
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(config->bind == DAEMON_BIND_ANY
+  address.sin_addr.s_addr = htonl(config->bind == SERVER_BIND_ANY
                                       ? INADDR_ANY
                                       : INADDR_LOOPBACK);
   address.sin_port = htons(config->port);
@@ -471,12 +471,12 @@ static const char *hook_detail(const char *error) {
 }
 
 static void terminate_hook_error(char *error) {
-  error[FRAM_SERVE_FLAT_ERROR_CAPACITY - 1u] = '\0';
+  error[FRAM_SERVER_ERROR_CAPACITY - 1u] = '\0';
 }
 
 static int serialized_dispatch(
-    server_context *server, const fram_serve_flat_request *request,
-    fram_serve_flat_response **response, char *error,
+    server_context *server, const fram_server_request *request,
+    fram_server_response **response, char *error,
     size_t error_capacity) {
   int thread_status = pthread_mutex_lock(&server->dispatch_mutex);
   int hook_status;
@@ -484,21 +484,21 @@ static int serialized_dispatch(
   if (thread_status != 0) {
     fprintf(stderr, "fram-server-native: cannot lock dispatch: %s\n",
             strerror(thread_status));
-    return FRAM_SERVE_FLAT_FATAL;
+    return FRAM_SERVER_FATAL;
   }
-  hook_status = fram_serve_flat_store_dispatch(
+  hook_status = fram_server_store_dispatch(
       server->store, request, response, error, error_capacity);
   thread_status = pthread_mutex_unlock(&server->dispatch_mutex);
   if (thread_status != 0) {
     fprintf(stderr, "fram-server-native: cannot unlock dispatch: %s\n",
             strerror(thread_status));
-    return FRAM_SERVE_FLAT_FATAL;
+    return FRAM_SERVER_FATAL;
   }
   return hook_status;
 }
 
 static int serialized_release_response(
-    server_context *server, fram_serve_flat_response *response) {
+    server_context *server, fram_server_response *response) {
   int thread_status = pthread_mutex_lock(&server->dispatch_mutex);
 
   if (thread_status != 0) {
@@ -507,7 +507,7 @@ static int serialized_release_response(
             strerror(thread_status));
     return -1;
   }
-  fram_serve_flat_codec_release_response(response);
+  fram_server_codec_release_response(response);
   thread_status = pthread_mutex_unlock(&server->dispatch_mutex);
   if (thread_status != 0) {
     fprintf(stderr,
@@ -519,36 +519,36 @@ static int serialized_release_response(
 }
 
 static int serve_client(int client_fd, server_context *server) {
-  char error[FRAM_SERVE_FLAT_ERROR_CAPACITY];
-  fram_serve_flat_request *request = NULL;
-  fram_serve_flat_response *response = NULL;
+  char error[FRAM_SERVER_ERROR_CAPACITY];
+  fram_server_request *request = NULL;
+  fram_server_response *response = NULL;
   int status;
   int release_status;
 
   error[0] = '\0';
-  status = fram_serve_flat_codec_read_request(
+  status = fram_server_codec_read_request(
       client_fd, &request, error, sizeof(error));
   terminate_hook_error(error);
-  if (status == FRAM_SERVE_FLAT_PEER_CLOSED && request == NULL) {
+  if (status == FRAM_SERVER_PEER_CLOSED && request == NULL) {
     return 0;
   }
-  if (status == FRAM_SERVE_FLAT_CLIENT_ERROR) {
+  if (status == FRAM_SERVER_CLIENT_ERROR) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_codec_read_request failed "
+            "fram-server-native: fram_server_codec_read_request failed "
             "(%d): %s\n",
             status, hook_detail(error));
     if (request != NULL) {
-      fram_serve_flat_codec_release_request(request);
+      fram_server_codec_release_request(request);
     }
     return 0;
   }
-  if (status != FRAM_SERVE_FLAT_OK || request == NULL) {
+  if (status != FRAM_SERVER_OK || request == NULL) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_codec_read_request failed "
+            "fram-server-native: fram_server_codec_read_request failed "
             "(%d): %s\n",
             status, hook_detail(error));
     if (request != NULL) {
-      fram_serve_flat_codec_release_request(request);
+      fram_server_codec_release_request(request);
     }
     return -1;
   }
@@ -557,10 +557,10 @@ static int serve_client(int client_fd, server_context *server) {
   status = serialized_dispatch(server, request, &response, error,
                                sizeof(error));
   terminate_hook_error(error);
-  fram_serve_flat_codec_release_request(request);
-  if (status != FRAM_SERVE_FLAT_OK || response == NULL) {
+  fram_server_codec_release_request(request);
+  if (status != FRAM_SERVER_OK || response == NULL) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_store_dispatch failed (%d): "
+            "fram-server-native: fram_server_store_dispatch failed (%d): "
             "%s\n",
             status, hook_detail(error));
     if (response != NULL) {
@@ -572,26 +572,26 @@ static int serve_client(int client_fd, server_context *server) {
   }
 
   error[0] = '\0';
-  status = fram_serve_flat_codec_write_response(client_fd, response, error,
+  status = fram_server_codec_write_response(client_fd, response, error,
                                                 sizeof(error));
   terminate_hook_error(error);
   release_status = serialized_release_response(server, response);
   if (release_status != 0) {
     return -1;
   }
-  if (status == FRAM_SERVE_FLAT_PEER_CLOSED) {
+  if (status == FRAM_SERVER_PEER_CLOSED) {
     return 0;
   }
-  if (status == FRAM_SERVE_FLAT_CLIENT_ERROR) {
+  if (status == FRAM_SERVER_CLIENT_ERROR) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_codec_write_response failed "
+            "fram-server-native: fram_server_codec_write_response failed "
             "(%d): %s\n",
             status, hook_detail(error));
     return 0;
   }
-  if (status != FRAM_SERVE_FLAT_OK) {
+  if (status != FRAM_SERVER_OK) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_codec_write_response failed "
+            "fram-server-native: fram_server_codec_write_response failed "
             "(%d): %s\n",
             status, hook_detail(error));
     return -1;
@@ -600,7 +600,7 @@ static int serve_client(int client_fd, server_context *server) {
 }
 
 static int initialize_server_context(server_context *server,
-                                     fram_serve_flat_store *store) {
+                                     fram_server_store *store) {
   int status;
 
   memset(server, 0, sizeof(*server));
@@ -719,7 +719,7 @@ static bool stop_clients_and_wait(server_context *server) {
   return fatal;
 }
 
-static int accept_loop(int listener_fd, fram_serve_flat_store *store) {
+static int accept_loop(int listener_fd, fram_server_store *store) {
   server_context server;
   struct pollfd listener_poll = {.fd = listener_fd,
                                  .events = POLLIN,
@@ -829,18 +829,18 @@ int main(int argc, char **argv) {
   writer_authority authority = {.fd = -1,
                                 .canonical_log_path = NULL,
                                 .lock_path = NULL};
-  fram_serve_flat_store *store = NULL;
-  char error[FRAM_SERVE_FLAT_ERROR_CAPACITY];
+  fram_server_store *store = NULL;
+  char error[FRAM_SERVER_ERROR_CAPACITY];
   int listener_fd = -1;
   int result = 1;
   int status;
-  uint32_t generated_abi = fram_serve_flat_generated_abi();
+  uint32_t generated_abi = fram_server_generated_abi();
 
-  if (generated_abi != FRAM_SERVE_FLAT_GENERATED_ABI) {
+  if (generated_abi != FRAM_SERVER_GENERATED_ABI) {
     fprintf(stderr,
             "fram-server-native: generated host ABI mismatch; expected %u, "
             "got %u\n",
-            (unsigned int)FRAM_SERVE_FLAT_GENERATED_ABI,
+            (unsigned int)FRAM_SERVER_GENERATED_ABI,
             (unsigned int)generated_abi);
     return 2;
   }
@@ -854,13 +854,13 @@ int main(int argc, char **argv) {
   }
 
   error[0] = '\0';
-  status = fram_serve_flat_store_boot(authority.canonical_log_path,
+  status = fram_server_store_boot(authority.canonical_log_path,
                                       config.space_id, &store, error,
                                       sizeof(error));
   terminate_hook_error(error);
-  if (status != FRAM_SERVE_FLAT_OK || store == NULL) {
+  if (status != FRAM_SERVER_OK || store == NULL) {
     fprintf(stderr,
-            "fram-server-native: fram_serve_flat_store_boot failed (%d): %s\n",
+            "fram-server-native: fram_server_store_boot failed (%d): %s\n",
             status, hook_detail(error));
     goto cleanup;
   }
@@ -881,11 +881,11 @@ cleanup:
   }
   if (store != NULL) {
     error[0] = '\0';
-    status = fram_serve_flat_store_shutdown(store, error, sizeof(error));
+    status = fram_server_store_shutdown(store, error, sizeof(error));
     terminate_hook_error(error);
-    if (status != FRAM_SERVE_FLAT_OK) {
+    if (status != FRAM_SERVER_OK) {
       fprintf(stderr,
-              "fram-server-native: fram_serve_flat_store_shutdown failed (%d): "
+              "fram-server-native: fram_server_store_shutdown failed (%d): "
               "%s\n",
               status, hook_detail(error));
       result = 1;

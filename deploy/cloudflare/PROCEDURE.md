@@ -74,7 +74,7 @@ content-addressed `fram-native-build` artifact; it neither invokes Graal nor
 carries a JVM:
 
 ```sh
-artifact="$(bin/fram-native-build --host serve-flat SOURCE...)"
+artifact="$(bin/fram-native-build --host server SOURCE...)"
 bin/fram-cloudflare-native-image --artifact "$artifact" --tag fram-server-native:local
 ```
 

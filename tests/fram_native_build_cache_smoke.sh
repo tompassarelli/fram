@@ -159,9 +159,9 @@ C
   duplicate_symbol=0
   bad_arity=0
   for source in "${sources[@]}"; do
-    grep -Fq MISSING_SERVE_FLAT_SYMBOL "$source" && missing_symbol=1
-    grep -Fq DUPLICATE_SERVE_FLAT_SYMBOL "$source" && duplicate_symbol=1
-    grep -Fq BAD_SERVE_FLAT_ARITY "$source" && bad_arity=1
+    grep -Fq MISSING_SERVER_SYMBOL "$source" && missing_symbol=1
+    grep -Fq DUPLICATE_SERVER_SYMBOL "$source" && duplicate_symbol=1
+    grep -Fq BAD_SERVER_ARITY "$source" && bad_arity=1
   done
   if [[ "$bad_arity" == 1 ]]; then
     sed -i \
@@ -176,17 +176,17 @@ C
       'native-lowering-result NativeLoweringCompleteV0' \
       'materialize-c17 OK module_0.h module_0.c' \
       'materialize-qbe OK module_0.ssa' \
-      'lowered fn_7 serve-flat-generated-abi 1 blocks' \
-      'lowered fn_2 serve-flat-store-boot! 1 blocks' \
-      'lowered fn_11 serve-flat-store-dispatch! 1 blocks' \
-      'lowered fn_3 serve-flat-store-shutdown 1 blocks' \
-      'lowered fn_19 serve-flat-codec-read-request! 1 blocks' \
-      'lowered fn_5 serve-flat-codec-write-response! 1 blocks' \
-      'lowered fn_13 serve-flat-codec-release-request 1 blocks'
+      'lowered fn_7 server-generated-abi 1 blocks' \
+      'lowered fn_2 server-store-boot! 1 blocks' \
+      'lowered fn_11 server-store-dispatch! 1 blocks' \
+      'lowered fn_3 server-store-shutdown 1 blocks' \
+      'lowered fn_19 server-codec-read-request! 1 blocks' \
+      'lowered fn_5 server-codec-write-response! 1 blocks' \
+      'lowered fn_13 server-codec-release-request 1 blocks'
     [[ "$missing_symbol" == 1 ]] ||
-      printf '%s\n' 'lowered fn_17 serve-flat-codec-release-response 1 blocks'
+      printf '%s\n' 'lowered fn_17 server-codec-release-response 1 blocks'
     [[ "$duplicate_symbol" == 0 ]] ||
-      printf '%s\n' 'lowered fn_23 serve-flat-store-boot! 1 blocks'
+      printf '%s\n' 'lowered fn_23 server-store-boot! 1 blocks'
     printf '%s\n' \
       'obligation-projection PASS valid-ssa' \
       'obligation-projection PASS exhaustive-matches' \
@@ -311,10 +311,10 @@ grep -Fq 'obligation-projection PASS valid-ssa' "$scratch/bad.err" ||
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   fail "temporary artifacts survived the build"
 
-adapter="$scratch/sources/serve_flat_generated.c"
+adapter="$scratch/sources/server_generated.c"
 cat >"$adapter" <<'C'
-#include "serve_flat_host.h"
-#include "serve_flat_symbols.h"
+#include "server_host.h"
+#include "server_symbols.h"
 
 static void clear_error(char *error, size_t capacity) {
   if (capacity > 0u) {
@@ -322,32 +322,32 @@ static void clear_error(char *error, size_t capacity) {
   }
 }
 
-uint32_t fram_serve_flat_generated_abi(void) {
+uint32_t fram_server_generated_abi(void) {
   native_arena arena = {0};
   native_capability capability = {0};
   native_vec bytes = {0};
-  fram_serve_flat_store_boot_return boot =
-      FRAM_SERVE_FLAT_CALL_STORE_BOOT(
+  fram_server_store_boot_return boot =
+      FRAM_SERVER_CALL_STORE_BOOT(
           &arena, &capability, "log", "space", &bytes);
-  fram_serve_flat_codec_read_request_return request =
-      FRAM_SERVE_FLAT_CALL_CODEC_READ_REQUEST(
+  fram_server_codec_read_request_return request =
+      FRAM_SERVER_CALL_CODEC_READ_REQUEST(
           &arena, &capability, &bytes);
-  fram_serve_flat_store_dispatch_return dispatched =
-      FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(
+  fram_server_store_dispatch_return dispatched =
+      FRAM_SERVER_CALL_STORE_DISPATCH(
           &arena, &capability, boot, request, 0);
-  fram_serve_flat_store_shutdown_return stopped =
-      FRAM_SERVE_FLAT_CALL_STORE_SHUTDOWN(&arena, &capability, boot);
-  fram_serve_flat_codec_write_response_return written =
-      FRAM_SERVE_FLAT_CALL_CODEC_WRITE_RESPONSE(
+  fram_server_store_shutdown_return stopped =
+      FRAM_SERVER_CALL_STORE_SHUTDOWN(&arena, &capability, boot);
+  fram_server_codec_write_response_return written =
+      FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(
           &arena, &capability, dispatched);
-  fram_serve_flat_codec_release_request_return request_released =
-      FRAM_SERVE_FLAT_CALL_CODEC_RELEASE_REQUEST(
+  fram_server_codec_release_request_return request_released =
+      FRAM_SERVER_CALL_CODEC_RELEASE_REQUEST(
           &arena, &capability, request);
-  fram_serve_flat_codec_release_response_return response_released =
-      FRAM_SERVE_FLAT_CALL_CODEC_RELEASE_RESPONSE(
+  fram_server_codec_release_response_return response_released =
+      FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(
           &arena, &capability, dispatched);
-  fram_serve_flat_generated_abi_return abi =
-      FRAM_SERVE_FLAT_CALL_GENERATED_ABI(&arena, &capability);
+  fram_server_generated_abi_return abi =
+      FRAM_SERVER_CALL_GENERATED_ABI(&arena, &capability);
   int64_t direct_status = stopped.field_0 + written.field_0;
   int64_t valid_log_bytes = boot.field_3;
   native_vec *boot_append = boot.field_4;
@@ -364,183 +364,183 @@ uint32_t fram_serve_flat_generated_abi(void) {
   return (uint32_t)abi;
 }
 
-int fram_serve_flat_store_boot(const char *log_path,
+int fram_server_store_boot(const char *log_path,
                                const char *space_id,
-                               fram_serve_flat_store **store_out,
+                               fram_server_store **store_out,
                                char *error,
                                size_t capacity) {
   (void)log_path;
   (void)space_id;
   *store_out = NULL;
   clear_error(error, capacity);
-  return FRAM_SERVE_FLAT_FATAL;
+  return FRAM_SERVER_FATAL;
 }
 
-int fram_serve_flat_store_dispatch(fram_serve_flat_store *store,
-                                   const fram_serve_flat_request *request,
-                                   fram_serve_flat_response **response_out,
+int fram_server_store_dispatch(fram_server_store *store,
+                                   const fram_server_request *request,
+                                   fram_server_response **response_out,
                                    char *error,
                                    size_t capacity) {
   (void)store;
   (void)request;
   *response_out = NULL;
   clear_error(error, capacity);
-  return FRAM_SERVE_FLAT_FATAL;
+  return FRAM_SERVER_FATAL;
 }
 
-int fram_serve_flat_store_shutdown(fram_serve_flat_store *store,
+int fram_server_store_shutdown(fram_server_store *store,
                                    char *error,
                                    size_t capacity) {
   (void)store;
   clear_error(error, capacity);
-  return FRAM_SERVE_FLAT_OK;
+  return FRAM_SERVER_OK;
 }
 
-int fram_serve_flat_codec_read_request(int fd,
-                                       fram_serve_flat_request **request_out,
+int fram_server_codec_read_request(int fd,
+                                       fram_server_request **request_out,
                                        char *error,
                                        size_t capacity) {
   (void)fd;
   *request_out = NULL;
   clear_error(error, capacity);
-  return FRAM_SERVE_FLAT_FATAL;
+  return FRAM_SERVER_FATAL;
 }
 
-int fram_serve_flat_codec_write_response(
+int fram_server_codec_write_response(
     int fd,
-    const fram_serve_flat_response *response,
+    const fram_server_response *response,
     char *error,
     size_t capacity) {
   (void)fd;
   (void)response;
   clear_error(error, capacity);
-  return FRAM_SERVE_FLAT_FATAL;
+  return FRAM_SERVER_FATAL;
 }
 
-void fram_serve_flat_codec_release_request(fram_serve_flat_request *request) {
+void fram_server_codec_release_request(fram_server_request *request) {
   (void)request;
 }
 
-void fram_serve_flat_codec_release_response(fram_serve_flat_response *response) {
+void fram_server_codec_release_response(fram_server_response *response) {
   (void)response;
 }
 C
 
 calls_before_host="$(wc -l <"$calls")"
-host_artifact="$("${build_env[@]}" "$builder" --host serve-flat \
+host_artifact="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bclj")" ||
-  fail "serve-flat host build failed"
+  fail "server host build failed"
 [[ -f "$host_artifact/READY" && -x "$host_artifact/bin/fram-server-native" ]] ||
-  fail "serve-flat host artifact is not ready and executable"
-grep -Fqx 'native-host-abi PASS host=serve-flat exports=8' \
+  fail "server host artifact is not ready and executable"
+grep -Fqx 'native-host-abi PASS host=server exports=8' \
   "$host_artifact/native-host.report.txt" ||
-  fail "serve-flat host artifact omitted its eight-export receipt"
-symbols_header="$host_artifact/serve_flat_symbols.h"
-[[ -f "$symbols_header" ]] || fail "serve-flat host omitted its generated symbol header"
-[[ "$(grep -c '^#define FRAM_SERVE_FLAT_SYMBOL_' "$symbols_header")" == "8" ]] ||
-  fail "serve-flat symbol header did not contain exactly eight symbol mappings"
-[[ "$(grep -c '^#define FRAM_SERVE_FLAT_CALL_' "$symbols_header")" == "8" ]] ||
-  fail "serve-flat symbol header did not contain exactly eight normalized calls"
-[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_serve_flat_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "19" ]] ||
-  fail "serve-flat symbol header did not contain all nineteen stable type aliases"
+  fail "server host artifact omitted its eight-export receipt"
+symbols_header="$host_artifact/server_symbols.h"
+[[ -f "$symbols_header" ]] || fail "server host omitted its generated symbol header"
+[[ "$(grep -c '^#define FRAM_SERVER_SYMBOL_' "$symbols_header")" == "8" ]] ||
+  fail "server symbol header did not contain exactly eight symbol mappings"
+[[ "$(grep -c '^#define FRAM_SERVER_CALL_' "$symbols_header")" == "8" ]] ||
+  fail "server symbol header did not contain exactly eight normalized calls"
+[[ "$(grep -Ec '^typedef [A-Za-z_][A-Za-z0-9_]* fram_server_[a-z_]+_(return|arg_[0-9]+);$' "$symbols_header")" == "19" ]] ||
+  fail "server symbol header did not contain all nineteen stable type aliases"
 required_symbol_lines=(
-  '#define FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI native_m0_fn_7'
-  '#define FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT native_m0_fn_2'
-  '#define FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH native_m0_fn_11'
-  '#define FRAM_SERVE_FLAT_SYMBOL_STORE_SHUTDOWN native_m0_fn_3'
-  '#define FRAM_SERVE_FLAT_SYMBOL_CODEC_READ_REQUEST native_m0_fn_19'
-  '#define FRAM_SERVE_FLAT_SYMBOL_CODEC_WRITE_RESPONSE native_m0_fn_5'
-  '#define FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_REQUEST native_m0_fn_13'
-  '#define FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_RESPONSE native_m0_fn_17'
-  'typedef native_m0_type_1 fram_serve_flat_store_boot_return;'
-  'typedef native_m0_type_2 fram_serve_flat_store_boot_arg_0;'
-  'typedef native_m0_type_2 fram_serve_flat_store_boot_arg_1;'
-  'typedef native_m0_type_4 fram_serve_flat_store_boot_arg_2;'
-  'typedef native_m0_type_5 fram_serve_flat_store_dispatch_return;'
-  'typedef native_m0_type_0 fram_serve_flat_store_dispatch_arg_2;'
-  'typedef native_m0_type_9 fram_serve_flat_store_shutdown_return;'
-  'typedef native_m0_type_7 fram_serve_flat_codec_read_request_return;'
-  'typedef native_m0_type_4 fram_serve_flat_codec_read_request_arg_0;'
-  'typedef native_m0_type_6 fram_serve_flat_codec_write_response_return;'
-  'typedef native_m0_type_5 fram_serve_flat_codec_write_response_arg_0;'
-  'typedef native_m0_type_8 fram_serve_flat_codec_release_request_return;'
-  'typedef native_m0_type_7 fram_serve_flat_codec_release_request_arg_0;'
-  'typedef native_m0_type_8 fram_serve_flat_codec_release_response_return;'
-  'typedef native_m0_type_5 fram_serve_flat_codec_release_response_arg_0;'
-  '#define FRAM_SERVE_FLAT_CALL_GENERATED_ABI(arena, capability) FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI()'
-  '#define FRAM_SERVE_FLAT_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2))'
-  '#define FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1), (arg_2))'
-  '#define FRAM_SERVE_FLAT_CALL_STORE_SHUTDOWN(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_STORE_SHUTDOWN((arg_0))'
-  '#define FRAM_SERVE_FLAT_CALL_CODEC_READ_REQUEST(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))'
-  '#define FRAM_SERVE_FLAT_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))'
-  '#define FRAM_SERVE_FLAT_CALL_CODEC_RELEASE_RESPONSE(arena, capability, arg_0) FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_RESPONSE((capability), (arg_0))'
+  '#define FRAM_SERVER_SYMBOL_GENERATED_ABI native_m0_fn_7'
+  '#define FRAM_SERVER_SYMBOL_STORE_BOOT native_m0_fn_2'
+  '#define FRAM_SERVER_SYMBOL_STORE_DISPATCH native_m0_fn_11'
+  '#define FRAM_SERVER_SYMBOL_STORE_SHUTDOWN native_m0_fn_3'
+  '#define FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST native_m0_fn_19'
+  '#define FRAM_SERVER_SYMBOL_CODEC_WRITE_RESPONSE native_m0_fn_5'
+  '#define FRAM_SERVER_SYMBOL_CODEC_RELEASE_REQUEST native_m0_fn_13'
+  '#define FRAM_SERVER_SYMBOL_CODEC_RELEASE_RESPONSE native_m0_fn_17'
+  'typedef native_m0_type_1 fram_server_store_boot_return;'
+  'typedef native_m0_type_2 fram_server_store_boot_arg_0;'
+  'typedef native_m0_type_2 fram_server_store_boot_arg_1;'
+  'typedef native_m0_type_4 fram_server_store_boot_arg_2;'
+  'typedef native_m0_type_5 fram_server_store_dispatch_return;'
+  'typedef native_m0_type_0 fram_server_store_dispatch_arg_2;'
+  'typedef native_m0_type_9 fram_server_store_shutdown_return;'
+  'typedef native_m0_type_7 fram_server_codec_read_request_return;'
+  'typedef native_m0_type_4 fram_server_codec_read_request_arg_0;'
+  'typedef native_m0_type_6 fram_server_codec_write_response_return;'
+  'typedef native_m0_type_5 fram_server_codec_write_response_arg_0;'
+  'typedef native_m0_type_8 fram_server_codec_release_request_return;'
+  'typedef native_m0_type_7 fram_server_codec_release_request_arg_0;'
+  'typedef native_m0_type_8 fram_server_codec_release_response_return;'
+  'typedef native_m0_type_5 fram_server_codec_release_response_arg_0;'
+  '#define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability) FRAM_SERVER_SYMBOL_GENERATED_ABI()'
+  '#define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2))'
+  '#define FRAM_SERVER_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1), (arg_2))'
+  '#define FRAM_SERVER_CALL_STORE_SHUTDOWN(arena, capability, arg_0) FRAM_SERVER_SYMBOL_STORE_SHUTDOWN((arg_0))'
+  '#define FRAM_SERVER_CALL_CODEC_READ_REQUEST(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))'
+  '#define FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))'
+  '#define FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_RELEASE_RESPONSE((capability), (arg_0))'
 )
 for required_line in "${required_symbol_lines[@]}"; do
   grep -Fqx -- "$required_line" "$symbols_header" ||
-    fail "serve-flat symbol header omitted: $required_line"
+    fail "server symbol header omitted: $required_line"
 done
 if "$host_artifact/bin/fram-server-native" serve not-a-port \
     >"$scratch/host.out" 2>"$scratch/host.err"; then
-  fail "serve-flat host accepted an invalid port"
+  fail "server host accepted an invalid port"
 fi
 grep -Fq 'fram-server-native: invalid port: not-a-port' \
-  "$scratch/host.err" || fail "linked serve-flat host main did not run"
+  "$scratch/host.err" || fail "linked server host main did not run"
 
-host_hit="$("${build_env[@]}" "$builder" --host serve-flat \
+host_hit="$("${build_env[@]}" "$builder" --host server \
   --adapter "$adapter" "$scratch/sources/good.bclj")" ||
-  fail "serve-flat host cache hit failed"
-[[ "$host_hit" == "$host_artifact" ]] || fail "serve-flat host missed the cache"
+  fail "server host cache hit failed"
+[[ "$host_hit" == "$host_artifact" ]] || fail "server host missed the cache"
 [[ "$(wc -l <"$calls")" == "$((calls_before_host + 1))" ]] ||
-  fail "serve-flat host cache hit rebuilt the native module"
+  fail "server host cache hit rebuilt the native module"
 
-printf '%s\n' '(ns demo.missing-symbol)' ';; MISSING_SERVE_FLAT_SYMBOL' \
+printf '%s\n' '(ns demo.missing-symbol)' ';; MISSING_SERVER_SYMBOL' \
   >"$scratch/sources/missing-symbol.bclj"
-if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
     "$scratch/sources/missing-symbol.bclj" \
     >"$scratch/missing-symbol.out" 2>"$scratch/missing-symbol.err"; then
-  fail "serve-flat host accepted a missing logical symbol"
+  fail "server host accepted a missing logical symbol"
 fi
 grep -Fq \
-  'exactly one lowered row for serve-flat-codec-release-response (found 0)' \
+  'exactly one lowered row for server-codec-release-response (found 0)' \
   "$scratch/missing-symbol.err" ||
-  fail "missing serve-flat logical symbol did not fail before link"
+  fail "missing server logical symbol did not fail before link"
 
-printf '%s\n' '(ns demo.duplicate-symbol)' ';; DUPLICATE_SERVE_FLAT_SYMBOL' \
+printf '%s\n' '(ns demo.duplicate-symbol)' ';; DUPLICATE_SERVER_SYMBOL' \
   >"$scratch/sources/duplicate-symbol.bclj"
-if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
     "$scratch/sources/duplicate-symbol.bclj" \
     >"$scratch/duplicate-symbol.out" 2>"$scratch/duplicate-symbol.err"; then
-  fail "serve-flat host accepted a duplicate logical symbol"
+  fail "server host accepted a duplicate logical symbol"
 fi
-grep -Fq 'exactly one lowered row for serve-flat-store-boot! (found 2)' \
+grep -Fq 'exactly one lowered row for server-store-boot! (found 2)' \
   "$scratch/duplicate-symbol.err" ||
-  fail "duplicate serve-flat logical symbol did not fail before link"
+  fail "duplicate server logical symbol did not fail before link"
 
-printf '%s\n' '(ns demo.bad-arity)' ';; BAD_SERVE_FLAT_ARITY' \
+printf '%s\n' '(ns demo.bad-arity)' ';; BAD_SERVER_ARITY' \
   >"$scratch/sources/bad-arity.bclj"
-if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
     "$scratch/sources/bad-arity.bclj" \
     >"$scratch/bad-arity.out" 2>"$scratch/bad-arity.err"; then
-  fail "serve-flat host accepted an unexpected generated arity"
+  fail "server host accepted an unexpected generated arity"
 fi
 grep -Fq \
-  'serve-flat-codec-write-response! has 2 source arguments; expected 1' \
+  'server-codec-write-response! has 2 source arguments; expected 1' \
   "$scratch/bad-arity.err" ||
-  fail "unexpected serve-flat prototype arity did not fail before link"
+  fail "unexpected server prototype arity did not fail before link"
 
-sed '/^void fram_serve_flat_codec_release_response/,/^}/d' \
+sed '/^void fram_server_codec_release_response/,/^}/d' \
   "$adapter" >"$adapter.incomplete"
 mv "$adapter.incomplete" "$adapter"
-if "${build_env[@]}" "$builder" --host serve-flat --adapter "$adapter" \
+if "${build_env[@]}" "$builder" --host server --adapter "$adapter" \
     "$scratch/sources/good.bclj" \
     >"$scratch/missing-export.out" 2>"$scratch/missing-export.err"; then
-  fail "serve-flat host linked without all eight generated ABI exports"
+  fail "server host linked without all eight generated ABI exports"
 fi
-grep -Fq 'fram_serve_flat_codec_release_response' "$scratch/missing-export.err" ||
-  fail "serve-flat host link did not name the missing ABI export"
+grep -Fq 'fram_server_codec_release_response' "$scratch/missing-export.err" ||
+  fail "server host link did not name the missing ABI export"
 [[ "$(find "$scratch/cache" -mindepth 2 -maxdepth 2 -name READY | wc -l)" == "3" ]] ||
-  fail "failed serve-flat host link exposed a READY artifact"
+  fail "failed server host link exposed a READY artifact"
 [[ -z "$(find "$scratch/cache/.tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
-  fail "failed serve-flat host link left temporary artifacts"
+  fail "failed server host link left temporary artifacts"
 
 echo "fram native build cache smoke: PASS"

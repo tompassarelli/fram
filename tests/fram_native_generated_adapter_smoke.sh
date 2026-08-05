@@ -125,63 +125,63 @@ native_m0_type_3 fram_stub_codec_release_response(
 #endif
 HEADER
 
-cat >"$scratch/serve_flat_symbols.h" <<'HEADER'
-#ifndef FRAM_SERVE_FLAT_SYMBOLS_H
-#define FRAM_SERVE_FLAT_SYMBOLS_H
+cat >"$scratch/server_symbols.h" <<'HEADER'
+#ifndef FRAM_SERVER_SYMBOLS_H
+#define FRAM_SERVER_SYMBOLS_H
 #include "module_0.h"
 
-#define FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI fram_stub_generated_abi
-#define FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT fram_stub_store_boot
-#define FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH fram_stub_store_dispatch
-#define FRAM_SERVE_FLAT_SYMBOL_STORE_SHUTDOWN fram_stub_store_shutdown
-#define FRAM_SERVE_FLAT_SYMBOL_CODEC_READ_REQUEST fram_stub_codec_read_request
-#define FRAM_SERVE_FLAT_SYMBOL_CODEC_WRITE_RESPONSE fram_stub_codec_write_response
-#define FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_REQUEST                         \
+#define FRAM_SERVER_SYMBOL_GENERATED_ABI fram_stub_generated_abi
+#define FRAM_SERVER_SYMBOL_STORE_BOOT fram_stub_store_boot
+#define FRAM_SERVER_SYMBOL_STORE_DISPATCH fram_stub_store_dispatch
+#define FRAM_SERVER_SYMBOL_STORE_SHUTDOWN fram_stub_store_shutdown
+#define FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST fram_stub_codec_read_request
+#define FRAM_SERVER_SYMBOL_CODEC_WRITE_RESPONSE fram_stub_codec_write_response
+#define FRAM_SERVER_SYMBOL_CODEC_RELEASE_REQUEST                         \
   fram_stub_codec_release_request
-#define FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_RESPONSE                        \
+#define FRAM_SERVER_SYMBOL_CODEC_RELEASE_RESPONSE                        \
   fram_stub_codec_release_response
 
-typedef native_m0_type_0 fram_serve_flat_generated_abi_return;
-typedef native_m0_type_4 fram_serve_flat_store_boot_return;
-typedef native_m0_type_1 fram_serve_flat_store_boot_arg_0;
-typedef native_m0_type_1 fram_serve_flat_store_boot_arg_1;
-typedef native_m0_type_2 fram_serve_flat_store_boot_arg_2;
-typedef native_m0_type_6 fram_serve_flat_store_dispatch_return;
-typedef native_m0_type_4 fram_serve_flat_store_dispatch_arg_0;
-typedef native_m0_type_5 fram_serve_flat_store_dispatch_arg_1;
-typedef native_m0_type_0 fram_serve_flat_store_dispatch_arg_2;
-typedef native_m0_type_8 fram_serve_flat_store_shutdown_return;
-typedef native_m0_type_4 fram_serve_flat_store_shutdown_arg_0;
-typedef native_m0_type_5 fram_serve_flat_codec_read_request_return;
-typedef native_m0_type_2 fram_serve_flat_codec_read_request_arg_0;
-typedef native_m0_type_7 fram_serve_flat_codec_write_response_return;
-typedef native_m0_type_6 fram_serve_flat_codec_write_response_arg_0;
-typedef native_m0_type_3 fram_serve_flat_codec_release_request_return;
-typedef native_m0_type_5 fram_serve_flat_codec_release_request_arg_0;
-typedef native_m0_type_3 fram_serve_flat_codec_release_response_return;
-typedef native_m0_type_6 fram_serve_flat_codec_release_response_arg_0;
+typedef native_m0_type_0 fram_server_generated_abi_return;
+typedef native_m0_type_4 fram_server_store_boot_return;
+typedef native_m0_type_1 fram_server_store_boot_arg_0;
+typedef native_m0_type_1 fram_server_store_boot_arg_1;
+typedef native_m0_type_2 fram_server_store_boot_arg_2;
+typedef native_m0_type_6 fram_server_store_dispatch_return;
+typedef native_m0_type_4 fram_server_store_dispatch_arg_0;
+typedef native_m0_type_5 fram_server_store_dispatch_arg_1;
+typedef native_m0_type_0 fram_server_store_dispatch_arg_2;
+typedef native_m0_type_8 fram_server_store_shutdown_return;
+typedef native_m0_type_4 fram_server_store_shutdown_arg_0;
+typedef native_m0_type_5 fram_server_codec_read_request_return;
+typedef native_m0_type_2 fram_server_codec_read_request_arg_0;
+typedef native_m0_type_7 fram_server_codec_write_response_return;
+typedef native_m0_type_6 fram_server_codec_write_response_arg_0;
+typedef native_m0_type_3 fram_server_codec_release_request_return;
+typedef native_m0_type_5 fram_server_codec_release_request_arg_0;
+typedef native_m0_type_3 fram_server_codec_release_response_return;
+typedef native_m0_type_6 fram_server_codec_release_response_arg_0;
 
-#define FRAM_SERVE_FLAT_CALL_GENERATED_ABI(arena, capability)                \
-  FRAM_SERVE_FLAT_SYMBOL_GENERATED_ABI()
-#define FRAM_SERVE_FLAT_CALL_STORE_BOOT(arena, capability, arg_0, arg_1,     \
+#define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability)                \
+  FRAM_SERVER_SYMBOL_GENERATED_ABI()
+#define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1,     \
                                         arg_2)                               \
-  FRAM_SERVE_FLAT_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), \
+  FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), \
                                     (arg_2))
-#define FRAM_SERVE_FLAT_CALL_STORE_DISPATCH(                                 \
+#define FRAM_SERVER_CALL_STORE_DISPATCH(                                 \
     arena, capability, arg_0, arg_1, arg_2)                                  \
-  FRAM_SERVE_FLAT_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1),      \
+  FRAM_SERVER_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1),      \
                                         (arg_2))
-#define FRAM_SERVE_FLAT_CALL_STORE_SHUTDOWN(arena, capability, arg_0)        \
-  FRAM_SERVE_FLAT_SYMBOL_STORE_SHUTDOWN((arg_0))
-#define FRAM_SERVE_FLAT_CALL_CODEC_READ_REQUEST(arena, capability, arg_0)    \
-  FRAM_SERVE_FLAT_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))
-#define FRAM_SERVE_FLAT_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0)  \
-  FRAM_SERVE_FLAT_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))
-#define FRAM_SERVE_FLAT_CALL_CODEC_RELEASE_REQUEST(arena, capability, arg_0) \
-  FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_REQUEST((arg_0))
-#define FRAM_SERVE_FLAT_CALL_CODEC_RELEASE_RESPONSE(arena, capability,       \
+#define FRAM_SERVER_CALL_STORE_SHUTDOWN(arena, capability, arg_0)        \
+  FRAM_SERVER_SYMBOL_STORE_SHUTDOWN((arg_0))
+#define FRAM_SERVER_CALL_CODEC_READ_REQUEST(arena, capability, arg_0)    \
+  FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))
+#define FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0)  \
+  FRAM_SERVER_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))
+#define FRAM_SERVER_CALL_CODEC_RELEASE_REQUEST(arena, capability, arg_0) \
+  FRAM_SERVER_SYMBOL_CODEC_RELEASE_REQUEST((arg_0))
+#define FRAM_SERVER_CALL_CODEC_RELEASE_RESPONSE(arena, capability,       \
                                                     arg_0)                   \
-  FRAM_SERVE_FLAT_SYMBOL_CODEC_RELEASE_RESPONSE((capability), (arg_0))
+  FRAM_SERVER_SYMBOL_CODEC_RELEASE_RESPONSE((capability), (arg_0))
 #endif
 HEADER
 
@@ -448,7 +448,7 @@ C
 sed -i "s|SMOKE_LOG_PATH|$scratch/fram.log|" "$scratch/generated_stub.c"
 
 cat >"$scratch/main.c" <<'C'
-#include "serve_flat_host.h"
+#include "server_host.h"
 
 #include <fcntl.h>
 #include <stdbool.h>
@@ -511,7 +511,7 @@ static bool file_is(const char *path, const char *expected) {
 }
 
 static int request_from_bytes(const uint8_t *bytes, size_t length,
-                              fram_serve_flat_request **request, char *error,
+                              fram_server_request **request, char *error,
                               size_t error_capacity) {
   int pair[2];
   int status;
@@ -520,7 +520,7 @@ static int request_from_bytes(const uint8_t *bytes, size_t length,
       !write_all(pair[1], bytes, length) || shutdown(pair[1], SHUT_WR) != 0) {
     return -1;
   }
-  status = fram_serve_flat_codec_read_request(pair[0], request, error,
+  status = fram_server_codec_read_request(pair[0], request, error,
                                                error_capacity);
   (void)close(pair[0]);
   (void)close(pair[1]);
@@ -528,20 +528,20 @@ static int request_from_bytes(const uint8_t *bytes, size_t length,
 }
 
 int main(int argc, char **argv) {
-  fram_serve_flat_store *store = NULL;
-  fram_serve_flat_request *request = NULL;
-  fram_serve_flat_request *failed = NULL;
-  fram_serve_flat_response *response = NULL;
+  fram_server_store *store = NULL;
+  fram_server_request *request = NULL;
+  fram_server_request *failed = NULL;
+  fram_server_response *response = NULL;
   uint8_t bad_frame[sizeof(request_frame)];
   uint8_t oversized_header[26];
   uint8_t received[sizeof(response_frame)];
-  char error[FRAM_SERVE_FLAT_ERROR_CAPACITY];
+  char error[FRAM_SERVER_ERROR_CAPACITY];
   int pair[2];
 
   if (argc != 2 ||
-      fram_serve_flat_generated_abi() != FRAM_SERVE_FLAT_GENERATED_ABI ||
-      fram_serve_flat_store_boot(argv[1], "smoke-space", &store, error,
-                                 sizeof(error)) != FRAM_SERVE_FLAT_OK ||
+      fram_server_generated_abi() != FRAM_SERVER_GENERATED_ABI ||
+      fram_server_store_boot(argv[1], "smoke-space", &store, error,
+                                 sizeof(error)) != FRAM_SERVER_OK ||
       store == NULL || error[0] != '\0' || !file_is(argv[1], "OLD!BOOT")) {
     return 1;
   }
@@ -550,16 +550,16 @@ int main(int argc, char **argv) {
     return 2;
   }
   (void)close(pair[1]);
-  if (fram_serve_flat_codec_read_request(pair[0], &failed, error,
+  if (fram_server_codec_read_request(pair[0], &failed, error,
                                           sizeof(error)) !=
-          FRAM_SERVE_FLAT_PEER_CLOSED ||
+          FRAM_SERVER_PEER_CLOSED ||
       failed != NULL || error[0] != '\0') {
     return 3;
   }
   (void)close(pair[0]);
 
   if (request_from_bytes(request_frame, 3u, &failed, error, sizeof(error)) !=
-          FRAM_SERVE_FLAT_CLIENT_ERROR ||
+          FRAM_SERVER_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request frame ended inside its header") != 0) {
     return 4;
@@ -572,7 +572,7 @@ int main(int argc, char **argv) {
   oversized_header[17] = 0x00;
   if (request_from_bytes(oversized_header, sizeof(oversized_header), &failed,
                          error, sizeof(error)) !=
-          FRAM_SERVE_FLAT_CLIENT_ERROR ||
+          FRAM_SERVER_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request frame exceeds the body limit") != 0) {
     return 5;
@@ -581,36 +581,36 @@ int main(int argc, char **argv) {
   memcpy(bad_frame, request_frame, sizeof(bad_frame));
   bad_frame[26] = 0xee;
   if (request_from_bytes(bad_frame, sizeof(bad_frame), &failed, error,
-                         sizeof(error)) != FRAM_SERVE_FLAT_CLIENT_ERROR ||
+                         sizeof(error)) != FRAM_SERVER_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request decode failed") != 0) {
     return 6;
   }
 
   if (request_from_bytes(request_frame, sizeof(request_frame), &request, error,
-                         sizeof(error)) != FRAM_SERVE_FLAT_OK ||
+                         sizeof(error)) != FRAM_SERVER_OK ||
       request == NULL ||
-      fram_serve_flat_store_dispatch(store, request, &response, error,
-                                     sizeof(error)) != FRAM_SERVE_FLAT_OK ||
+      fram_server_store_dispatch(store, request, &response, error,
+                                     sizeof(error)) != FRAM_SERVER_OK ||
       response == NULL || !file_is(argv[1], "OLD!BOOTTAIL")) {
     return 7;
   }
-  fram_serve_flat_codec_release_request(request);
+  fram_server_codec_release_request(request);
 
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0 ||
-      fram_serve_flat_codec_write_response(pair[0], response, error,
+      fram_server_codec_write_response(pair[0], response, error,
                                            sizeof(error)) !=
-          FRAM_SERVE_FLAT_OK ||
+          FRAM_SERVER_OK ||
       !read_all(pair[1], received, sizeof(received)) ||
       memcmp(received, response_frame, sizeof(received)) != 0) {
     return 8;
   }
   (void)close(pair[0]);
   (void)close(pair[1]);
-  fram_serve_flat_codec_release_response(response);
+  fram_server_codec_release_response(response);
 
-  if (fram_serve_flat_store_shutdown(store, error, sizeof(error)) !=
-          FRAM_SERVE_FLAT_OK ||
+  if (fram_server_store_shutdown(store, error, sizeof(error)) !=
+          FRAM_SERVER_OK ||
       !file_is(argv[1], "OLD!BOOTTAIL") ||
       !generated_stub_observed_exact_calls()) {
     return 9;
@@ -807,7 +807,7 @@ C
 
 common_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -pthread \
   -I "$scratch" -I "$repo/native")
-"$cc" "${common_flags[@]}" -c "$repo/native/serve_flat_generated.c" \
+"$cc" "${common_flags[@]}" -c "$repo/native/server_generated.c" \
   -o "$scratch/adapter.o"
 
 nm -u "$scratch/adapter.o" \
@@ -832,7 +832,7 @@ cmp "$scratch/expected-exports" "$scratch/actual-exports"
 printf 'OLD!x' >"$scratch/fram.log"
 "$scratch/smoke" "$scratch/fram.log"
 
-"$cc" "${common_flags[@]}" "$repo/native/serve_flat_host.c" \
+"$cc" "${common_flags[@]}" "$repo/native/server_host.c" \
   "$scratch/adapter.o" "$scratch/native_shim.c" \
   "$scratch/generated_stub.c" -o "$scratch/host-smoke"
 "$cc" "${common_flags[@]}" "$scratch/host_client.c" \
