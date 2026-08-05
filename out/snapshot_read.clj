@@ -1,9 +1,10 @@
 (ns snapshot-read
   (:require [fram.store :as c]
-            [fram.schema :as s]))
+            [fram.schema :as s]
+            [fram.types :as t]))
 
 (defn live-cids-lp [ctx te pid]
-  (c/by-lp ctx te pid))
+  (filterv (fn [cid] (c/live? ctx cid)) (c/raw-by-lp ctx te pid)))
 
 (defn seq-of [ctx cid]
   (let [txid (c/fact-tx ctx cid)]
@@ -13,7 +14,7 @@
   (reduce max 0 (map (fn [cid] (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
 (defn current-seq [ctx]
-  (c/current-sequence ctx))
+  (dec (t/termstore-next-sequence (deref ctx))))
 
 (defn agent-of [ctx cid]
   (let [txid (c/fact-tx ctx cid)]
@@ -48,7 +49,7 @@
   (filterv (fn [cid] (and (= (c/fact-l ctx cid) te) (= (c/fact-p ctx cid) pid))) all)))
 
 (defn live-r-on [ctx cid pid]
-  (if (nil? pid) nil (let [fcid (first (c/by-lp ctx cid pid))
+  (if (nil? pid) nil (let [fcid (first (live-cids-lp ctx cid pid))
    f (if (nil? fcid) nil (c/fact-of ctx fcid))
    r (if (nil? f) nil (:r f))]
   (if (int? r) r nil))))
@@ -76,7 +77,7 @@
    sel (s/resolve-predicate session "selects")]
   (if (or (nil? ve) (nil? sel)) nil (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
    r (if (nil? f) nil (:r f))]
-  (if (int? r) (conj acc r) acc))) #{} (c/by-lp ctx ve sel)))))
+  (if (int? r) (conj acc r) acc))) #{} (live-cids-lp ctx ve sel)))))
 
 (defn pool-of [ctx view cids]
   (if (nil? view) cids (let [sel (view-selects ctx view)]

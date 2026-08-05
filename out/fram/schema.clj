@@ -4,11 +4,55 @@
             [fram.rotation :as rot]
             [fram.txn :as txn]))
 
-(defrecord Session [store view])
+(defrecord OrderedResultSnapshot [space version lower-exclusive])
+
+(defn orderedresultsnapshot-space [r] (:space r))
+
+(defn orderedresultsnapshot-version [r] (:version r))
+
+(defn orderedresultsnapshot-lower-exclusive [r] (:lower-exclusive r))
+
+(defrecord OrderedResultKey [snapshot operation digest])
+
+(defn orderedresultkey-snapshot [r] (:snapshot r))
+
+(defn orderedresultkey-operation [r] (:operation r))
+
+(defn orderedresultkey-digest [r] (:digest r))
+
+(defrecord OrderedResultEntry [key query-rows triple-rows bytes])
+
+(defn orderedresultentry-key [r] (:key r))
+
+(defn orderedresultentry-query-rows [r] (:query-rows r))
+
+(defn orderedresultentry-triple-rows [r] (:triple-rows r))
+
+(defn orderedresultentry-bytes [r] (:bytes r))
+
+(defrecord OrderedResultCache [entries snapshots bytes hits misses evictions])
+
+(defn orderedresultcache-entries [r] (:entries r))
+
+(defn orderedresultcache-snapshots [r] (:snapshots r))
+
+(defn orderedresultcache-bytes [r] (:bytes r))
+
+(defn orderedresultcache-hits [r] (:hits r))
+
+(defn orderedresultcache-misses [r] (:misses r))
+
+(defn orderedresultcache-evictions [r] (:evictions r))
+
+(defrecord Session [store view ordered-results derived-generation])
 
 (defn session-store [r] (:store r))
 
 (defn session-view [r] (:view r))
+
+(defn session-ordered-results [r] (:ordered-results r))
+
+(defn session-derived-generation [r] (:derived-generation r))
 
 (def ^String name-predicate "name")
 
@@ -30,11 +74,32 @@
 
 (def no-terms [])
 
+(def no-ordered-result-entries [])
+
+(def no-ordered-result-snapshots [])
+
+(defn ^OrderedResultCache empty-ordered-result-cache []
+  (->OrderedResultCache no-ordered-result-entries no-ordered-result-snapshots 0 0 0 0))
+
 (defn ^Session session [ctx]
-  (->Session ctx (atom (rot/project ctx))))
+  (->Session ctx (atom (rot/project ctx)) (atom (empty-ordered-result-cache)) (atom 0)))
+
+(defn ^Session fork-session [^Session s]
+  (->Session (atom (deref (session-store s))) (atom (deref (session-view s))) (atom (deref (session-ordered-results s))) (atom (deref (session-derived-generation s)))))
 
 (defn store-of [^Session s]
   (session-store s))
+
+(defn ordered-results-of [^Session s]
+  (session-ordered-results s))
+
+(defn derived-generation-of [^Session s]
+  (deref (session-derived-generation s)))
+
+(defn mark-derived-change! [^Session s]
+  (do
+  (reset! (session-derived-generation s) (inc (deref (session-derived-generation s))))
+  nil))
 
 (defn view [^Session s]
   (deref (session-view s)))

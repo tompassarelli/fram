@@ -12,6 +12,12 @@
 (defn ^Instant instant [epoch-seconds nanos]
   (if (and (>= nanos 0) (< nanos 1000000000)) (->Instant epoch-seconds nanos) (throw (ex-info "fram: instant nanoseconds must be in [0, 1000000000)" {:type :invalid-instant}))))
 
+(defn ^Instant instant-shift-seconds [^Instant at seconds]
+  (->Instant (+ (instant-epoch-seconds at) seconds) (instant-nanos at)))
+
+(defn instant-seconds-between [^Instant earlier ^Instant later]
+  (- (instant-epoch-seconds later) (instant-epoch-seconds earlier)))
+
 (defrecord Triple [t1 t2 t3])
 
 (defn triple-t1 [r] (:t1 r))

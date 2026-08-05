@@ -1,9 +1,9 @@
 (ns fram.text-index
   (:require [fram.types :as t]))
 
-^{:line 11 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (def text-index-max-bytes ^{:line 11 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (* 64 1024 1024))
+(def text-index-max-bytes (* 64 1024 1024))
 
-^{:line 13 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defrecord TextCandidateSource [rows postings bytes])
+(defrecord TextCandidateSource [rows postings bytes])
 
 (defn textcandidatesource-rows [r] (:rows r))
 
@@ -11,73 +11,187 @@
 
 (defn textcandidatesource-bytes [r] (:bytes r))
 
-^{:line 18 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn source-weight [^TextCandidateSource source]
-  ^{:line 19 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (textcandidatesource-bytes source))
+(defrecord TextError [type code message bytes maximum limit-data])
 
-^{:line 23 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- token-set [^String value]
-  ^{:line 24 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (persistent! ^{:line 25 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (reduce ^{:line 25 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [folded token] ^{:line 28 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (conj! folded ^{:line 28 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (.toLowerCase token java.util.Locale/ROOT))) ^{:line 29 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (transient ^{:line 29 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} #{}) ^{:line 29 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (re-seq #"[\p{L}\p{Nd}]+" value))))
+(defn texterror-type [r] (:type r))
 
-^{:line 31 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn tokenize [^String value]
-  ^{:line 32 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (vec ^{:line 32 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (sort ^{:line 32 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (vec ^{:line 32 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (token-set value)))))
+(defn texterror-code [r] (:code r))
 
-^{:line 34 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn ^Boolean text-needle-valid? [needle]
-  ^{:line 35 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (and ^{:line 35 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (string? needle) ^{:line 35 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (not ^{:line 35 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (empty? ^{:line 35 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (tokenize needle)))))
+(defn texterror-message [r] (:message r))
 
-^{:line 37 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- postings-weight [postings]
-  ^{:line 38 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (reduce-kv ^{:line 38 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [total token handles] ^{:line 42 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (+ total 84 ^{:line 42 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (* 4 ^{:line 42 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count token)) ^{:line 42 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (* 42 ^{:line 42 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count handles)))) 0 postings))
+(defn texterror-bytes [r] (:bytes r))
 
-^{:line 45 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- index-limit [weight maximum]
-  ^{:line 48 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 48 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (> weight maximum) ^{:line 49 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (throw ^{:line 49 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (ex-info "text index exceeds the snapshot cache budget" ^{:line 49 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} {:type :query-text-index-limit :fram/code :query-text-index-limit :bytes weight :maximum maximum})) nil))
+(defn texterror-maximum [r] (:maximum r))
 
-^{:line 52 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn ^TextCandidateSource build-source [propositions maximum]
-  ^{:line 55 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [rows propositions
-   row-count ^{:line 56 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count rows)
-   postings ^{:line 60 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (persistent! ^{:line 61 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (loop [handle 0
-   current ^{:line 61 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (transient ^{:line 61 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} {})]
-  ^{:line 62 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 62 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (>= handle row-count) current ^{:line 64 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [value ^{:line 64 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (t/triple-t3 ^{:line 64 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (nth rows handle))]
-  ^{:line 65 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (recur ^{:line 65 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (inc handle) ^{:line 66 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 66 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (string? value) ^{:line 67 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (reduce ^{:line 67 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [index token] ^{:line 70 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (assoc! index token ^{:line 71 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (conj ^{:line 71 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (get index token ^{:line 71 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} []) handle))) current ^{:line 72 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (token-set value)) current))))))
-   weight ^{:line 74 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (+ 112 ^{:line 74 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (* 14 row-count) ^{:line 74 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (postings-weight postings))]
-  ^{:line 75 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (index-limit weight maximum)
-  ^{:line 76 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (->TextCandidateSource rows postings weight)))
+(defn texterror-limit-data [r] (:limit-data r))
 
-^{:line 78 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- needle-error [^String message]
-  ^{:line 79 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (throw ^{:line 79 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (ex-info message ^{:line 79 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} {:type :fram-query-abort :code :query-text-invalid-needle})))
+(defrecord TextCandidateSourceResult [ok source error])
 
-^{:line 81 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- needle-tokens [needle]
-  ^{:line 82 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 82 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (string? needle) ^{:line 83 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [tokens ^{:line 83 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (tokenize needle)]
-  ^{:line 84 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 84 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (empty? tokens) ^{:line 85 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (needle-error "text-match needle must contain at least one word token") tokens)) ^{:line 87 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (needle-error "text-match needle must be a string")))
+(defn textcandidatesourceresult-ok [r] (:ok r))
 
-^{:line 89 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- shortest-posting [posting-vectors]
-  ^{:line 90 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (loop [position 0
-   best nil]
-  ^{:line 91 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 91 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (>= position ^{:line 91 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count posting-vectors)) ^{:line 92 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (or best ^{:line 92 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} []) ^{:line 93 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [candidate ^{:line 93 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (nth posting-vectors position)]
-  ^{:line 94 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (recur ^{:line 94 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (inc position) ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (or ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (nil? best) ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (< ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count candidate) ^{:line 95 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count best))) candidate best))))))
+(defn textcandidatesourceresult-source [r] (:source r))
 
-^{:line 99 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn indexed-handles [^TextCandidateSource source needle]
-  ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [tokens ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (needle-tokens needle)
-   postings ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (textcandidatesource-postings source)
-   posting-vectors ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (mapv ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [token] ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (get postings token ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} [])) tokens)
-   seed ^{:line 102 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (shortest-posting posting-vectors)]
-  ^{:line 103 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 103 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (or ^{:line 103 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (empty? seed) ^{:line 103 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (= 1 ^{:line 103 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count posting-vectors))) seed ^{:line 105 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [posting-sets ^{:line 105 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (mapv ^{:line 105 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [handles] ^{:line 105 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (set handles)) posting-vectors)]
-  ^{:line 106 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (filterv ^{:line 106 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [handle] ^{:line 106 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (every? ^{:line 106 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [handles] ^{:line 106 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (contains? handles handle)) posting-sets)) seed)))))
+(defn textcandidatesourceresult-error [r] (:error r))
 
-^{:line 109 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn scan-handles [^TextCandidateSource source needle]
-  ^{:line 112 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [tokens ^{:line 112 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (needle-tokens needle)
-   rows ^{:line 112 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (textcandidatesource-rows source)]
-  ^{:line 113 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (loop [handle 0
-   matches ^{:line 113 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} []]
-  ^{:line 114 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 114 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (>= handle ^{:line 114 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (count rows)) matches ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [value ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (t/triple-t3 ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (nth rows handle))
-   matched ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (string? value) ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [haystack ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (token-set value)]
-  ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (every? ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [token] ^{:line 116 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (contains? haystack token)) tokens)) false)]
-  ^{:line 117 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (recur ^{:line 117 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (inc handle) ^{:line 117 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (if matched ^{:line 117 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (conj matches handle) matches)))))))
+(defrecord TextNeedleResult [ok tokens error])
 
-^{:line 119 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn- rows-for-handles [^TextCandidateSource source needle handles]
-  ^{:line 123 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [rows ^{:line 123 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (textcandidatesource-rows source)]
-  ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (mapv ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (fn [handle] ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (let [proposition ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (nth rows handle)]
-  ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} [^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (t/triple-t1 proposition) ^{:line 124 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (t/triple-t2 proposition) needle])) handles)))
+(defn textneedleresult-ok [r] (:ok r))
 
-^{:line 127 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn indexed-rows [^TextCandidateSource source needle]
-  ^{:line 130 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (rows-for-handles source needle ^{:line 130 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (indexed-handles source needle)))
+(defn textneedleresult-tokens [r] (:tokens r))
 
-^{:line 132 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (defn scan-rows [^TextCandidateSource source needle]
-  ^{:line 135 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (rows-for-handles source needle ^{:line 135 :file "/home/tom/code/fram/wt-native-vec-operands/src/fram/text_index.bclj"} (scan-handles source needle)))
+(defn textneedleresult-error [r] (:error r))
+
+(defrecord TextHandlesResult [ok handles error])
+
+(defn texthandlesresult-ok [r] (:ok r))
+
+(defn texthandlesresult-handles [r] (:handles r))
+
+(defn texthandlesresult-error [r] (:error r))
+
+(defrecord TextRowsResult [ok rows error])
+
+(defn textrowsresult-ok [r] (:ok r))
+
+(defn textrowsresult-rows [r] (:rows r))
+
+(defn textrowsresult-error [r] (:error r))
+
+(defn ^TextError no-text-error []
+  (->TextError :query-text-none :query-text-none "" 0 0 false))
+
+(defn ^TextError query-text-error [code ^String message]
+  (->TextError :fram-query-abort code message 0 0 false))
+
+(defn ^TextError text-index-limit-error [^String message bytes maximum]
+  (->TextError :query-text-index-limit :query-text-index-limit message bytes maximum true))
+
+(defn text-error-data [^TextError error]
+  (if (texterror-limit-data error) {:type (texterror-type error) :fram/code (texterror-code error) :bytes (texterror-bytes error) :maximum (texterror-maximum error)} {:type (texterror-type error) :code (texterror-code error)}))
+
+(defn raise-text-error [^TextError error]
+  (throw (ex-info (texterror-message error) (text-error-data error))))
+
+(defn ^Boolean source-result-ok? [^TextCandidateSourceResult result]
+  (textcandidatesourceresult-ok result))
+
+(defn source-result-source [^TextCandidateSourceResult result]
+  (textcandidatesourceresult-source result))
+
+(defn ^TextError source-result-error [^TextCandidateSourceResult result]
+  (textcandidatesourceresult-error result))
+
+(defn ^Boolean handles-result-ok? [^TextHandlesResult result]
+  (texthandlesresult-ok result))
+
+(defn handles-result-handles [^TextHandlesResult result]
+  (texthandlesresult-handles result))
+
+(defn ^TextError handles-result-error [^TextHandlesResult result]
+  (texthandlesresult-error result))
+
+(defn ^Boolean rows-result-ok? [^TextRowsResult result]
+  (textrowsresult-ok result))
+
+(defn rows-result-rows [^TextRowsResult result]
+  (textrowsresult-rows result))
+
+(defn ^TextError rows-result-error [^TextRowsResult result]
+  (textrowsresult-error result))
+
+(defn source-weight [^TextCandidateSource source]
+  (textcandidatesource-bytes source))
+
+(defn- token-set [^String value]
+  (persistent! (reduce (fn [folded token] (conj! folded (.toLowerCase token java.util.Locale/ROOT))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
+
+(defn tokenize [^String value]
+  (vec (sort (vec (token-set value)))))
+
+(defn ^Boolean text-needle-valid? [needle]
+  (and (string? needle) (not (empty? (tokenize needle)))))
+
+(defn- postings-weight [postings]
+  (reduce-kv (fn [total token handles] (+ total 84 (* 4 (count token)) (* 42 (count handles)))) 0 postings))
+
+(defn- index-limit-error [weight maximum]
+  (if (> weight maximum) (text-index-limit-error "text index exceeds the snapshot cache budget" weight maximum) nil))
+
+(defn ^TextCandidateSourceResult build-source-result [propositions maximum]
+  (let [rows propositions
+   row-count (count rows)
+   empty-postings {}
+   postings (persistent! (loop [handle 0
+   current (transient empty-postings)]
+  (if (>= handle row-count) current (let [value (t/triple-t3 (nth rows handle))]
+  (recur (inc handle) (if (string? value) (reduce (fn [index token] (assoc! index token (conj (get index token []) handle))) current (token-set value)) current))))))
+   weight (+ 112 (* 14 row-count) (postings-weight postings))
+   error (index-limit-error weight maximum)]
+  (if error (->TextCandidateSourceResult false nil error) (->TextCandidateSourceResult true (->TextCandidateSource rows postings weight) (no-text-error)))))
+
+(defn ^TextCandidateSource build-source [propositions maximum]
+  (let [result (build-source-result propositions maximum)
+   source (source-result-source result)]
+  (if source source (raise-text-error (source-result-error result)))))
+
+(defn ^TextNeedleResult needle-tokens-result [needle]
+  (if (string? needle) (let [tokens (tokenize needle)]
+  (if (empty? tokens) (->TextNeedleResult false [] (query-text-error :query-text-invalid-needle "text-match needle must contain at least one word token")) (->TextNeedleResult true tokens (no-text-error)))) (->TextNeedleResult false [] (query-text-error :query-text-invalid-needle "text-match needle must be a string"))))
+
+(defn- shortest-posting [posting-vectors]
+  (let [empty-handles []]
+  (if (empty? posting-vectors) empty-handles (loop [position 1
+   best (nth posting-vectors 0)]
+  (if (>= position (count posting-vectors)) best (let [candidate (nth posting-vectors position)]
+  (recur (inc position) (if (< (count candidate) (count best)) candidate best))))))))
+
+(defn ^TextHandlesResult indexed-handles-result [^TextCandidateSource source needle]
+  (let [needle-result (needle-tokens-result needle)]
+  (if (not (textneedleresult-ok needle-result)) (->TextHandlesResult false [] (textneedleresult-error needle-result)) (let [tokens (textneedleresult-tokens needle-result)
+   postings (textcandidatesource-postings source)
+   posting-vectors (mapv (fn [token] (get postings token [])) tokens)
+   seed (shortest-posting posting-vectors)
+   handles (if (or (empty? seed) (= 1 (count posting-vectors))) seed (let [posting-sets (mapv (fn [values] (set values)) posting-vectors)]
+  (filterv (fn [handle] (every? (fn [values] (contains? values handle)) posting-sets)) seed)))]
+  (->TextHandlesResult true handles (no-text-error))))))
+
+(defn indexed-handles [^TextCandidateSource source needle]
+  (let [result (indexed-handles-result source needle)]
+  (if (handles-result-ok? result) (handles-result-handles result) (raise-text-error (handles-result-error result)))))
+
+(defn ^TextHandlesResult scan-handles-result [^TextCandidateSource source needle]
+  (let [needle-result (needle-tokens-result needle)]
+  (if (not (textneedleresult-ok needle-result)) (->TextHandlesResult false [] (textneedleresult-error needle-result)) (let [tokens (textneedleresult-tokens needle-result)
+   rows (textcandidatesource-rows source)
+   handles (loop [handle 0
+   matches []]
+  (if (>= handle (count rows)) matches (let [value (t/triple-t3 (nth rows handle))
+   matched (if (string? value) (let [haystack (token-set value)]
+  (every? (fn [token] (contains? haystack token)) tokens)) false)]
+  (recur (inc handle) (if matched (conj matches handle) matches)))))]
+  (->TextHandlesResult true handles (no-text-error))))))
+
+(defn scan-handles [^TextCandidateSource source needle]
+  (let [result (scan-handles-result source needle)]
+  (if (handles-result-ok? result) (handles-result-handles result) (raise-text-error (handles-result-error result)))))
+
+(defn- rows-for-handles [^TextCandidateSource source needle handles]
+  (let [rows (textcandidatesource-rows source)]
+  (mapv (fn [handle] (let [proposition (nth rows handle)]
+  [(t/triple-t1 proposition) (t/triple-t2 proposition) needle])) handles)))
+
+(defn ^TextRowsResult indexed-rows-result [^TextCandidateSource source needle]
+  (let [result (indexed-handles-result source needle)]
+  (if (handles-result-ok? result) (->TextRowsResult true (rows-for-handles source needle (handles-result-handles result)) (no-text-error)) (->TextRowsResult false [] (handles-result-error result)))))
+
+(defn ^TextRowsResult scan-rows-result [^TextCandidateSource source needle]
+  (let [result (scan-handles-result source needle)]
+  (if (handles-result-ok? result) (->TextRowsResult true (rows-for-handles source needle (handles-result-handles result)) (no-text-error)) (->TextRowsResult false [] (handles-result-error result)))))
+
+(defn indexed-rows [^TextCandidateSource source needle]
+  (let [result (indexed-rows-result source needle)]
+  (if (rows-result-ok? result) (rows-result-rows result) (raise-text-error (rows-result-error result)))))
+
+(defn scan-rows [^TextCandidateSource source needle]
+  (let [result (scan-rows-result source needle)]
+  (if (rows-result-ok? result) (rows-result-rows result) (raise-text-error (rows-result-error result)))))

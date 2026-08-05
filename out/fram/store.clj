@@ -1,418 +1,566 @@
 (ns fram.store
   (:require [fram.types :as t]))
 
-^{:line 7 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-ids ^{:line 7 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-ids [])
 
-^{:line 8 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-bools ^{:line 8 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-bools [])
 
-^{:line 9 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-atoms ^{:line 9 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-atoms [])
 
-^{:line 10 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-triple-rows ^{:line 10 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-triple-rows [])
 
-^{:line 11 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-transaction-rows ^{:line 11 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-transaction-rows [])
 
-^{:line 12 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-operation-rows ^{:line 12 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-operation-rows [])
 
-^{:line 13 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-active-buckets ^{:line 13 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-commit-operations [])
 
-^{:line 14 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def empty-term-buckets ^{:line 14 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
+(def empty-transaction-frames [])
 
-^{:line 15 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def term-store-dump-version 2)
+(def empty-active-buckets [])
 
-^{:line 19 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def initial-slots 64)
+(def empty-term-buckets [])
 
-^{:line 20 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (def slot-load 4)
+(def term-store-dump-version 2)
 
-^{:line 22 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-space-id? [space-id]
-  ^{:line 23 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 23 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (string? space-id) ^{:line 23 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (pos? ^{:line 23 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count space-id))))
+(def max-transaction-sequence 9223372036854775806)
 
-^{:line 25 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- fresh-term-slots [width]
-  ^{:line 26 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [slots empty-term-buckets
+(defrecord TermStoreLoadResult [ok code message])
+
+(defn termstoreloadresult-ok [r] (:ok r))
+
+(defn termstoreloadresult-code [r] (:code r))
+
+(defn termstoreloadresult-message [r] (:message r))
+
+(defrecord TransactionReplayResult [ok code message])
+
+(defn transactionreplayresult-ok [r] (:ok r))
+
+(defn transactionreplayresult-code [r] (:code r))
+
+(defn transactionreplayresult-message [r] (:message r))
+
+(defrecord TransactionFramesResult [ok frames code message])
+
+(defn transactionframesresult-ok [r] (:ok r))
+
+(defn transactionframesresult-frames [r] (:frames r))
+
+(defn transactionframesresult-code [r] (:code r))
+
+(defn transactionframesresult-message [r] (:message r))
+
+(def initial-slots 64)
+
+(def slot-load 4)
+
+(defn- ^Boolean valid-space-id? [space-id]
+  (and (string? space-id) (pos? (count space-id))))
+
+(defn- fresh-term-slots [width]
+  (loop [slots empty-term-buckets
    position 0]
-  ^{:line 27 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 27 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position width) slots ^{:line 29 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 29 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj slots ^{:line 29 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TermBucket position empty-ids)) ^{:line 29 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position)))))
+  (if (>= position width) slots (recur (conj slots (t/->TermBucket position empty-ids)) (inc position)))))
 
-^{:line 31 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- term-slot [value width]
-  ^{:line 31 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (mod ^{:line 31 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (hash value) width))
+(defn- term-slot [value width]
+  (mod (hash value) width))
 
-^{:line 33 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- term-slot-add [slots slot position]
-  ^{:line 35 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc slots slot ^{:line 36 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TermBucket slot ^{:line 37 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 37 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termbucket-positions ^{:line 37 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth slots slot)) position))))
+(defn- term-slot-add [slots slot position]
+  (assoc slots slot (t/->TermBucket slot (conj (t/termbucket-positions (nth slots slot)) position))))
 
-^{:line 39 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- term-slots-width-for [n]
-  ^{:line 40 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [width initial-slots]
-  ^{:line 41 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 41 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= ^{:line 41 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* slot-load width) n) width ^{:line 41 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 41 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 width)))))
+(defn- term-slots-width-for [n]
+  (loop [width initial-slots]
+  (if (>= (* slot-load width) n) width (recur (* 2 width)))))
 
-^{:line 43 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- build-atom-term-slots [atoms width]
-  ^{:line 45 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [slots ^{:line 45 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots width)
+(defn- build-atom-term-slots [atoms width]
+  (loop [slots (fresh-term-slots width)
    position 0]
-  ^{:line 46 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 46 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 46 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count atoms)) slots ^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot ^{:line 48 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth atoms position) width) position) ^{:line 49 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position)))))
+  (if (>= position (count atoms)) slots (recur (term-slot-add slots (term-slot (nth atoms position) width) position) (inc position)))))
 
-^{:line 51 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- build-triple-term-slots [rows width]
-  ^{:line 53 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [slots ^{:line 53 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots width)
+(defn- build-triple-term-slots [rows width]
+  (loop [slots (fresh-term-slots width)
    position 0]
-  ^{:line 54 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 54 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 54 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count rows)) slots ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot ^{:line 56 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth rows position) width) position) ^{:line 57 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position)))))
+  (if (>= position (count rows)) slots (recur (term-slot-add slots (term-slot (nth rows position) width) position) (inc position)))))
 
-^{:line 59 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- build-active-slots [buckets width]
-  ^{:line 61 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [slots ^{:line 61 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots width)
+(defn- build-active-slots [buckets width]
+  (loop [slots (fresh-term-slots width)
    position 0]
-  ^{:line 62 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 62 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 62 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count buckets)) slots ^{:line 64 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 65 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 66 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot ^{:line 66 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/activebucket-triple-handle ^{:line 66 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth buckets position)) width) position) ^{:line 68 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position)))))
+  (if (>= position (count buckets)) slots (recur (term-slot-add slots (term-slot (t/activebucket-triple-handle (nth buckets position)) width) position) (inc position)))))
 
-^{:line 70 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn new-term-store [^String space-id]
-  ^{:line 71 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 71 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-space-id? space-id) ^{:line 72 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom ^{:line 72 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TermStore space-id 1 empty-atoms empty-triple-rows empty-transaction-rows empty-operation-rows empty-bools empty-ids empty-active-buckets ^{:line 76 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots initial-slots) ^{:line 77 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots initial-slots) ^{:line 78 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots initial-slots))) ^{:line 79 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 79 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: TermStore requires a non-empty SpaceId" ^{:line 80 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-space-id}))))
+(defn new-term-store [^String space-id]
+  (if (valid-space-id? space-id) (atom (t/->TermStore space-id 1 empty-atoms empty-triple-rows empty-transaction-rows empty-operation-rows empty-bools empty-ids empty-active-buckets (fresh-term-slots initial-slots) (fresh-term-slots initial-slots) (fresh-term-slots initial-slots))) (throw (ex-info "fram: TermStore requires a non-empty SpaceId" {:type :invalid-space-id}))))
 
-^{:line 82 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn ^String space-id [ctx]
-  ^{:line 83 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-space-id ^{:line 83 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)))
+(defn ^String space-id [ctx]
+  (t/termstore-space-id (deref ctx)))
 
-^{:line 85 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn next-sequence [ctx]
-  ^{:line 86 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-next-sequence ^{:line 86 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)))
+(defn next-sequence [ctx]
+  (t/termstore-next-sequence (deref ctx)))
 
-^{:line 88 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn current-sequence [ctx]
-  ^{:line 89 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (dec ^{:line 89 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (next-sequence ctx)))
+(defn current-sequence [ctx]
+  (dec (next-sequence ctx)))
 
-^{:line 91 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- atom-row [value]
-  ^{:line 92 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (cond
-  ^{:line 93 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (string? value) ^{:line 93 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :string value nil nil nil nil nil)
-  ^{:line 94 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (integer? value) ^{:line 94 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :int nil value nil nil nil nil)
-  ^{:line 95 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (number? value) ^{:line 95 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :float nil nil value nil nil nil)
-  ^{:line 96 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (boolean? value) ^{:line 96 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :bool nil nil nil value nil nil)
-  ^{:line 97 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (keyword? value) ^{:line 97 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :keyword nil nil nil nil value nil)
-  ^{:line 98 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/instant? value) ^{:line 98 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->AtomRow :instant nil nil nil nil nil value)
-  :else ^{:line 99 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 99 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: value outside Atom" ^{:line 99 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-atom}))))
+(defn- atom-row [value]
+  (cond
+  (string? value) (t/->AtomRow :string value nil nil nil nil nil)
+  (integer? value) (t/->AtomRow :int nil value nil nil nil nil)
+  (number? value) (t/->AtomRow :float nil nil value nil nil nil)
+  (boolean? value) (t/->AtomRow :bool nil nil nil value nil nil)
+  (keyword? value) (t/->AtomRow :keyword nil nil nil nil value nil)
+  (t/instant? value) (t/->AtomRow :instant nil nil nil nil nil value)
+  :else (throw (ex-info "fram: value outside Atom" {:type :invalid-atom}))))
 
-^{:line 101 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- atom-row-value [row]
-  ^{:line 102 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (cond
-  ^{:line 103 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :string ^{:line 103 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 103 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-string-value row)
-  ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :int ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 104 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-int-value row)
-  ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :float ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 105 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-float-value row)
-  ^{:line 106 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :bool ^{:line 106 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 106 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-bool-value row)
-  ^{:line 107 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :keyword ^{:line 107 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 107 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-keyword-value row)
-  ^{:line 108 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= :instant ^{:line 108 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-kind row)) ^{:line 108 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/atomrow-instant-value row)
+(defn- atom-row-value [row]
+  (cond
+  (= :string (t/atomrow-kind row)) (t/atomrow-string-value row)
+  (= :int (t/atomrow-kind row)) (t/atomrow-int-value row)
+  (= :float (t/atomrow-kind row)) (t/atomrow-float-value row)
+  (= :bool (t/atomrow-kind row)) (t/atomrow-bool-value row)
+  (= :keyword (t/atomrow-kind row)) (t/atomrow-keyword-value row)
+  (= :instant (t/atomrow-kind row)) (t/atomrow-instant-value row)
   :else nil))
 
-^{:line 111 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-atom-row? [row]
-  ^{:line 112 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [value ^{:line 112 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-row-value row)]
-  ^{:line 113 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 113 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? value) ^{:line 113 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= row ^{:line 113 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-row value)))))
+(defn- ^Boolean valid-atom-row? [row]
+  (let [value (atom-row-value row)]
+  (and (some? value) (= row (atom-row value)))))
 
-^{:line 115 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- find-atom-position [atoms slots value]
-  ^{:line 117 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [positions ^{:line 118 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termbucket-positions ^{:line 118 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth slots ^{:line 118 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot value ^{:line 118 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots))))]
-  ^{:line 119 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [offset 0]
-  ^{:line 120 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 120 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= offset ^{:line 120 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count positions)) -1 ^{:line 122 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 122 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth positions offset)]
-  ^{:line 123 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 123 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= ^{:line 123 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth atoms position) value) position ^{:line 125 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 125 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc offset))))))))
+(defn- find-atom-position [atoms slots value]
+  (let [positions (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+  (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
+  (if (= (nth atoms position) value) position (recur (inc offset))))))))
 
-^{:line 127 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- find-triple-position [rows slots value]
-  ^{:line 129 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [positions ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termbucket-positions ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth slots ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot value ^{:line 130 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots))))]
-  ^{:line 131 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [offset 0]
-  ^{:line 132 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 132 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= offset ^{:line 132 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count positions)) -1 ^{:line 134 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 134 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth positions offset)]
-  ^{:line 135 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 135 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= ^{:line 135 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth rows position) value) position ^{:line 137 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 137 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc offset))))))))
+(defn- find-triple-position [rows slots value]
+  (let [positions (t/termbucket-positions (nth slots (term-slot value (count slots))))]
+  (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
+  (if (= (nth rows position) value) position (recur (inc offset))))))))
 
-^{:line 139 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- index-atom-term! [ctx value position]
-  ^{:line 141 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 142 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx update :atom-slots ^{:line 143 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [slots] ^{:line 144 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 144 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot value ^{:line 144 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots)) position)))]
-  ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (> ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 145 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store)) ^{:line 146 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* slot-load ^{:line 146 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 146 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atom-slots store)))) ^{:line 147 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx assoc :atom-slots ^{:line 148 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (build-atom-term-slots ^{:line 149 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store) ^{:line 150 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 ^{:line 150 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 150 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atom-slots store))))) store)))
+(defn- index-atom-term! [ctx value position]
+  (let [store (swap! ctx update :atom-slots (fn [slots] (term-slot-add slots (term-slot value (count slots)) position)))]
+  (if (> (count (t/termstore-atoms store)) (* slot-load (count (t/termstore-atom-slots store)))) (swap! ctx assoc :atom-slots (build-atom-term-slots (t/termstore-atoms store) (* 2 (count (t/termstore-atom-slots store))))) store)))
 
-^{:line 153 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- index-triple-term! [ctx value position]
-  ^{:line 155 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 156 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx update :triple-slots ^{:line 157 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [slots] ^{:line 158 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 158 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot value ^{:line 158 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots)) position)))]
-  ^{:line 159 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 159 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (> ^{:line 159 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 159 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store)) ^{:line 160 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* slot-load ^{:line 160 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 160 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triple-slots store)))) ^{:line 161 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx assoc :triple-slots ^{:line 162 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (build-triple-term-slots ^{:line 163 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store) ^{:line 164 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 ^{:line 164 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 164 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triple-slots store))))) store)))
+(defn- index-triple-term! [ctx value position]
+  (let [store (swap! ctx update :triple-slots (fn [slots] (term-slot-add slots (term-slot value (count slots)) position)))]
+  (if (> (count (t/termstore-triples store)) (* slot-load (count (t/termstore-triple-slots store)))) (swap! ctx assoc :triple-slots (build-triple-term-slots (t/termstore-triples store) (* 2 (count (t/termstore-triple-slots store))))) store)))
 
-^{:line 167 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- atom-handle [position]
-  ^{:line 167 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 position))
+(defn- atom-handle [position]
+  (* 2 position))
 
-^{:line 168 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- triple-handle [position]
-  ^{:line 168 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc ^{:line 168 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 position)))
+(defn- triple-handle [position]
+  (inc (* 2 position)))
 
-^{:line 169 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean atom-handle? [handle]
-  ^{:line 169 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= 0 ^{:line 169 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (mod handle 2)))
+(defn- ^Boolean atom-handle? [handle]
+  (= 0 (mod handle 2)))
 
-^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- handle-position [handle]
-  ^{:line 170 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (quot handle 2))
+(defn- handle-position [handle]
+  (quot handle 2))
 
-^{:line 172 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- intern-handle! [ctx term]
-  ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 173 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term? term)) ^{:line 174 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 174 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: cannot intern a value outside Term" ^{:line 174 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-term})) ^{:line 175 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 175 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? term) ^{:line 176 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [t1 ^{:line 176 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-handle! ctx ^{:line 176 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t1 term))
-   t2 ^{:line 177 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-handle! ctx ^{:line 177 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t2 term))
-   t3 ^{:line 178 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-handle! ctx ^{:line 178 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t3 term))
-   store ^{:line 179 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)
-   rows ^{:line 180 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store)
-   value ^{:line 181 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TripleRow t1 t2 t3)
-   known ^{:line 182 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-triple-position rows ^{:line 182 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triple-slots store) value)]
-  ^{:line 183 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 183 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= known 0) ^{:line 184 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (triple-handle known) ^{:line 185 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 185 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count rows)]
-  ^{:line 186 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx update :triples ^{:line 187 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [current] ^{:line 188 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj current value)))
-  ^{:line 189 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (index-triple-term! ctx value position)
-  ^{:line 190 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (triple-handle position)))) ^{:line 191 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [value ^{:line 191 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-row term)
-   store ^{:line 192 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)
-   atoms ^{:line 193 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store)
-   known ^{:line 194 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-atom-position atoms ^{:line 194 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atom-slots store) value)]
-  ^{:line 195 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 195 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= known 0) ^{:line 196 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle known) ^{:line 197 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 197 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count atoms)]
-  ^{:line 198 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (swap! ctx update :atoms ^{:line 199 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [current] ^{:line 200 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj current value)))
-  ^{:line 201 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (index-atom-term! ctx value position)
-  ^{:line 202 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle position)))))))
+(defn- intern-handle! [ctx term]
+  (if (not (t/term? term)) (throw (ex-info "fram: cannot intern a value outside Term" {:type :invalid-term})) (if (t/triple? term) (let [t1 (intern-handle! ctx (t/triple-t1 term))
+   t2 (intern-handle! ctx (t/triple-t2 term))
+   t3 (intern-handle! ctx (t/triple-t3 term))
+   store (deref ctx)
+   rows (t/termstore-triples store)
+   value (t/->TripleRow t1 t2 t3)
+   known (find-triple-position rows (t/termstore-triple-slots store) value)]
+  (if (>= known 0) (triple-handle known) (let [position (count rows)]
+  (swap! ctx update :triples (fn [current] (conj current value)))
+  (index-triple-term! ctx value position)
+  (triple-handle position)))) (let [value (atom-row term)
+   store (deref ctx)
+   atoms (t/termstore-atoms store)
+   known (find-atom-position atoms (t/termstore-atom-slots store) value)]
+  (if (>= known 0) (atom-handle known) (let [position (count atoms)]
+  (swap! ctx update :atoms (fn [current] (conj current value)))
+  (index-atom-term! ctx value position)
+  (atom-handle position)))))))
 
-^{:line 204 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-handle? [store handle]
-  ^{:line 205 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 205 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= handle 0) ^{:line 206 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 206 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle? handle) ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle) ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 207 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store))) ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle) ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 208 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store))))))
+(defn- ^Boolean valid-handle? [store handle]
+  (and (>= handle 0) (if (atom-handle? handle) (< (handle-position handle) (count (t/termstore-atoms store))) (< (handle-position handle) (count (t/termstore-triples store))))))
 
-^{:line 210 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- resolve-handle [store handle]
-  ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 211 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-handle? store handle)) ^{:line 212 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 212 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: term handle does not resolve" ^{:line 212 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-term-handle})) ^{:line 213 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 213 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle)]
-  ^{:line 214 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 214 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle? handle) ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-row-value ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 215 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store) position)) ^{:line 216 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 216 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 216 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store) position)]
-  ^{:line 217 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple ^{:line 217 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-handle store ^{:line 217 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t1 row)) ^{:line 218 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-handle store ^{:line 218 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t2 row)) ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-handle store ^{:line 219 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t3 row))))))))
+(defn- resolve-handle [store handle]
+  (if (not (valid-handle? store handle)) (throw (ex-info "fram: term handle does not resolve" {:type :invalid-term-handle})) (let [position (handle-position handle)]
+  (if (atom-handle? handle) (atom-row-value (nth (t/termstore-atoms store) position)) (let [row (nth (t/termstore-triples store) position)]
+  (t/triple (resolve-handle store (t/triplerow-t1 row)) (resolve-handle store (t/triplerow-t2 row)) (resolve-handle store (t/triplerow-t3 row))))))))
 
-^{:line 221 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- resolve-triple-handle [store handle]
-  ^{:line 222 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [term ^{:line 222 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-handle store handle)]
-  ^{:line 223 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 223 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? term) term ^{:line 225 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 225 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: operation handle does not resolve to Triple" ^{:line 226 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-operation-handle})))))
+(defn- resolve-triple-handle [store handle]
+  (let [term (resolve-handle store handle)]
+  (if (t/triple? term) term (throw (ex-info "fram: operation handle does not resolve to Triple" {:type :invalid-operation-handle})))))
 
-^{:line 228 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn known-term-handle [store term]
-  ^{:line 229 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 229 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 229 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term? term)) nil ^{:line 231 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 231 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? term) ^{:line 232 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [t1 ^{:line 232 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (known-term-handle store ^{:line 232 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t1 term))
-   t2 ^{:line 233 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (known-term-handle store ^{:line 233 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t2 term))
-   t3 ^{:line 234 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (known-term-handle store ^{:line 234 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t3 term))]
-  ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (every? some? ^{:line 235 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [t1 t2 t3]) ^{:line 236 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 237 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-triple-position ^{:line 238 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store) ^{:line 238 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triple-slots store) ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TripleRow ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 239 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? t1) t1 0) ^{:line 240 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 240 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? t2) t2 0) ^{:line 241 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 241 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? t3) t3 0)))]
-  ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position 0) ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (do
-  ^{:line 242 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (triple-handle position)))) nil)) ^{:line 244 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 245 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-atom-position ^{:line 246 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store) ^{:line 246 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atom-slots store) ^{:line 247 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-row term))]
-  ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position 0) ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (do
-  ^{:line 248 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle position)))))))
+(defn known-term-handle [store term]
+  (if (not (t/term? term)) nil (if (t/triple? term) (let [t1 (known-term-handle store (t/triple-t1 term))
+   t2 (known-term-handle store (t/triple-t2 term))
+   t3 (known-term-handle store (t/triple-t3 term))
+   handles [t1 t2 t3]
+   all-known (loop [position 0]
+  (if (>= position (count handles)) true (if (some? (nth handles position)) (recur (inc position)) false)))]
+  (if all-known (let [position (find-triple-position (t/termstore-triples store) (t/termstore-triple-slots store) (t/->TripleRow (if (some? t1) t1 0) (if (some? t2) t2 0) (if (some? t3) t3 0)))]
+  (if (>= position 0) (do
+  (triple-handle position)))) nil)) (let [position (find-atom-position (t/termstore-atoms store) (t/termstore-atom-slots store) (atom-row term))]
+  (if (>= position 0) (do
+  (atom-handle position)))))))
 
-^{:line 250 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn intern-term! [ctx term]
-  ^{:line 251 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [handle ^{:line 251 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-handle! ctx term)]
-  ^{:line 252 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-handle ^{:line 252 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx) handle)))
+(defn intern-term! [ctx term]
+  (let [handle (intern-handle! ctx term)]
+  (resolve-handle (deref ctx) handle)))
 
-^{:line 254 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn replay-terms! [ctx terms]
-  ^{:line 255 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (do
-  ^{:line 256 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (doseq [term terms]
-  ^{:line 256 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-term! ctx term))
+(defn replay-terms! [ctx terms]
+  (do
+  (doseq [term terms]
+  (intern-term! ctx term))
   ctx))
 
-^{:line 259 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn atom-term-count [ctx]
-  ^{:line 260 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 260 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms ^{:line 260 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx))))
+(defn atom-term-count [ctx]
+  (count (t/termstore-atoms (deref ctx))))
 
-^{:line 262 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn triple-term-count [ctx]
-  ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples ^{:line 263 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx))))
+(defn triple-term-count [ctx]
+  (count (t/termstore-triples (deref ctx))))
 
-^{:line 265 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn term-count [ctx]
-  ^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ ^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-term-count ctx) ^{:line 266 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (triple-term-count ctx)))
+(defn term-count [ctx]
+  (+ (atom-term-count ctx) (triple-term-count ctx)))
 
-^{:line 268 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn transaction-count [ctx]
-  ^{:line 269 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 269 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions ^{:line 269 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx))))
+(defn transaction-count [ctx]
+  (count (t/termstore-transactions (deref ctx))))
 
-^{:line 271 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn operation-count [ctx]
-  ^{:line 272 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 272 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations ^{:line 272 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx))))
+(defn operation-count [ctx]
+  (count (t/termstore-operations (deref ctx))))
 
-^{:line 274 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn assert-operation [proposition]
-  ^{:line 275 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 275 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 275 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? proposition) ^{:line 275 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term? proposition)) ^{:line 276 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->CommitOperation t/assert-action proposition) ^{:line 277 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 277 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: assertion operation requires a Triple" ^{:line 278 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-commit-operation}))))
+(defn assert-operation [proposition]
+  (if (and (t/triple? proposition) (t/term? proposition)) (t/->CommitOperation t/assert-action proposition) (throw (ex-info "fram: assertion operation requires a Triple" {:type :invalid-commit-operation}))))
 
-^{:line 280 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn retract-operation [proposition]
-  ^{:line 281 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 281 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 281 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? proposition) ^{:line 281 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term? proposition)) ^{:line 282 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->CommitOperation t/retract-action proposition) ^{:line 283 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 283 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: retraction operation requires a Triple" ^{:line 284 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-commit-operation}))))
+(defn retract-operation [proposition]
+  (if (and (t/triple? proposition) (t/term? proposition)) (t/->CommitOperation t/retract-action proposition) (throw (ex-info "fram: retraction operation requires a Triple" {:type :invalid-commit-operation}))))
 
-^{:line 286 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-commit-operation? [operation]
-  ^{:line 287 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 287 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (or ^{:line 287 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= t/assert-action ^{:line 287 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-action operation)) ^{:line 288 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= t/retract-action ^{:line 288 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-action operation))) ^{:line 289 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 289 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple? ^{:line 289 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-proposition operation)) ^{:line 290 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term? ^{:line 290 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-proposition operation)))))
+(defn- ^Boolean valid-commit-operation? [operation]
+  (and (or (= t/assert-action (t/commitoperation-action operation)) (= t/retract-action (t/commitoperation-action operation))) (and (t/triple? (t/commitoperation-proposition operation)) (t/term? (t/commitoperation-proposition operation)))))
 
-^{:line 292 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-operations? [operations]
-  ^{:line 293 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 293 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (pos? ^{:line 293 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations)) ^{:line 294 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (every? ^{:line 294 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [operation] ^{:line 295 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-commit-operation? operation)) operations)))
+(defn- ^Boolean valid-operations? [operations]
+  (and (pos? (count operations)) (every? (fn [operation] (valid-commit-operation? operation)) operations)))
 
-^{:line 298 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn transaction-frame [sequence operations]
-  ^{:line 300 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 300 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 300 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= sequence 0) ^{:line 300 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-operations? operations)) ^{:line 301 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TransactionFrame sequence operations) ^{:line 302 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 302 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: transaction frame requires a non-negative sequence and operations" ^{:line 303 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-transaction-frame}))))
+(defn transaction-frame [sequence operations]
+  (if (and (>= sequence 0) (valid-operations? operations)) (t/->TransactionFrame sequence operations) (throw (ex-info "fram: transaction frame requires a non-negative sequence and operations" {:type :invalid-transaction-frame}))))
 
-^{:line 305 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- find-active-bucket-position [store handle]
-  ^{:line 306 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [slots ^{:line 306 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-slots store)
-   buckets ^{:line 307 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-buckets store)
-   positions ^{:line 309 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termbucket-positions ^{:line 309 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth slots ^{:line 309 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot handle ^{:line 309 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots))))]
-  ^{:line 310 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [offset 0]
-  ^{:line 311 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 311 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= offset ^{:line 311 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count positions)) -1 ^{:line 313 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 313 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth positions offset)]
-  ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= handle ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/activebucket-triple-handle ^{:line 314 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth buckets position))) position ^{:line 316 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 316 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc offset))))))))
+(defn- find-active-bucket-position [store handle]
+  (let [slots (t/termstore-active-slots store)
+   buckets (t/termstore-active-buckets store)
+   positions (t/termbucket-positions (nth slots (term-slot handle (count slots))))]
+  (loop [offset 0]
+  (if (>= offset (count positions)) -1 (let [position (nth positions offset)]
+  (if (= handle (t/activebucket-triple-handle (nth buckets position))) position (recur (inc offset))))))))
 
-^{:line 318 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- active-positions [store handle]
-  ^{:line 319 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [position ^{:line 319 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-active-bucket-position store handle)]
-  ^{:line 320 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 320 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position 0) ^{:line 321 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/activebucket-positions ^{:line 321 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 321 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-buckets store) position)) empty-ids)))
+(defn- active-positions [store handle]
+  (let [position (find-active-bucket-position store handle)]
+  (if (>= position 0) (t/activebucket-positions (nth (t/termstore-active-buckets store) position)) empty-ids)))
 
-^{:line 324 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- set-active-positions [store handle positions]
-  ^{:line 326 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [known ^{:line 326 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (find-active-bucket-position store handle)]
-  ^{:line 327 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 327 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= known 0) ^{:line 328 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :active-buckets ^{:line 329 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc ^{:line 329 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-buckets store) known ^{:line 330 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->ActiveBucket handle positions))) ^{:line 331 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [buckets ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-buckets store) ^{:line 332 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->ActiveBucket handle positions))
-   position ^{:line 333 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (dec ^{:line 333 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count buckets))
-   slots ^{:line 334 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-active-slots store)
-   store-with-bucket ^{:line 336 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :active-buckets buckets :active-slots ^{:line 339 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot-add slots ^{:line 339 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slot handle ^{:line 339 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots)) position))]
-  ^{:line 340 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 340 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (> ^{:line 340 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count buckets) ^{:line 340 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* slot-load ^{:line 340 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots))) ^{:line 341 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store-with-bucket :active-slots ^{:line 342 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (build-active-slots buckets ^{:line 342 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (* 2 ^{:line 342 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count slots)))) store-with-bucket)))))
+(defn- set-active-positions [store handle positions]
+  (let [known (find-active-bucket-position store handle)]
+  (if (>= known 0) (assoc store :active-buckets (assoc (t/termstore-active-buckets store) known (t/->ActiveBucket handle positions))) (let [buckets (conj (t/termstore-active-buckets store) (t/->ActiveBucket handle positions))
+   position (dec (count buckets))
+   slots (t/termstore-active-slots store)
+   store-with-bucket (assoc store :active-buckets buckets :active-slots (term-slot-add slots (term-slot handle (count slots)) position))]
+  (if (> (count buckets) (* slot-load (count slots))) (assoc store-with-bucket :active-slots (build-active-slots buckets (* 2 (count slots)))) store-with-bucket)))))
 
-^{:line 345 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- apply-operation-state [store operation-position row]
-  ^{:line 347 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [handle ^{:line 347 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle row)
-   action ^{:line 348 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-action row)
-   active ^{:line 349 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (active-positions store handle)]
-  ^{:line 350 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 350 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= action t/assert-action) ^{:line 351 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (set-active-positions ^{:line 352 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :operation-live ^{:line 353 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 353 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operation-live store) true) :withdrawal-targets ^{:line 354 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 354 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-withdrawal-targets store) -1)) handle ^{:line 356 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj active operation-position)) ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 357 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (empty? active) ^{:line 358 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :operation-live ^{:line 359 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 359 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operation-live store) false) :withdrawal-targets ^{:line 360 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 360 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-withdrawal-targets store) -1)) ^{:line 361 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [target ^{:line 361 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (peek active)
-   live ^{:line 362 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operation-live store)]
-  ^{:line 363 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (set-active-positions ^{:line 364 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :operation-live ^{:line 365 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 365 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc live target false) false) :withdrawal-targets ^{:line 367 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 367 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-withdrawal-targets store) target)) handle ^{:line 369 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (pop active)))))))
+(defn- apply-operation-state [store operation-position row]
+  (let [handle (t/operationrow-triple-handle row)
+   action (t/operationrow-action row)
+   active (active-positions store handle)]
+  (if (= action t/assert-action) (set-active-positions (assoc store :operation-live (conj (t/termstore-operation-live store) true) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) handle (conj active operation-position)) (if (empty? active) (assoc store :operation-live (conj (t/termstore-operation-live store) false) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) -1)) (let [target (peek active)
+   live (t/termstore-operation-live store)]
+  (set-active-positions (assoc store :operation-live (conj (assoc live target false) false) :withdrawal-targets (conj (t/termstore-withdrawal-targets store) target)) handle (pop active)))))))
 
-^{:line 371 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- operation-handles! [ctx operations]
-  ^{:line 373 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (reduce ^{:line 374 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [handles operation] ^{:line 375 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj handles ^{:line 376 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (intern-handle! ctx ^{:line 376 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-proposition operation)))) empty-ids operations))
+(defn- operation-handles! [ctx operations]
+  (reduce (fn [handles operation] (conj handles (intern-handle! ctx (t/commitoperation-proposition operation)))) empty-ids operations))
 
-^{:line 380 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- append-transaction! [ctx sequence operations]
-  ^{:line 383 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [before ^{:line 383 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 384 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-operations? operations)) ^{:line 385 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 385 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: transaction requires at least one valid operation" ^{:line 386 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-transaction-frame})) ^{:line 387 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 387 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< sequence ^{:line 387 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-next-sequence before)) ^{:line 388 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 388 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: transaction sequence must advance within its space" ^{:line 389 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :nonmonotonic-transaction-sequence})) ^{:line 390 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [handles ^{:line 390 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (operation-handles! ctx operations)
-   store ^{:line 391 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)
-   first-operation ^{:line 392 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 392 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))
-   transaction-row ^{:line 394 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TransactionRow sequence first-operation ^{:line 394 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations))
-   with-transaction ^{:line 396 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :transactions ^{:line 397 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 397 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions store) transaction-row))
-   appended ^{:line 399 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [current with-transaction
+(defn- ^TransactionReplayResult transaction-replay-ok []
+  (->TransactionReplayResult true nil nil))
+
+(defn- ^TransactionReplayResult transaction-replay-error [code ^String message]
+  (->TransactionReplayResult false code message))
+
+(defn- ^TransactionReplayResult transaction-replay-unclassified-error []
+  (->TransactionReplayResult false nil nil))
+
+(defn- append-valid-transaction! [ctx sequence operations]
+  (let [handles (operation-handles! ctx operations)
+   store (deref ctx)
+   first-operation (count (t/termstore-operations store))
+   transaction-row (t/->TransactionRow sequence first-operation (count operations))
+   with-transaction (assoc store :transactions (conj (t/termstore-transactions store) transaction-row))
+   appended (loop [current with-transaction
    ordinal 0]
-  ^{:line 400 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 400 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= ordinal ^{:line 400 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations)) current ^{:line 402 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [operation ^{:line 402 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth operations ordinal)
-   row ^{:line 404 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->OperationRow sequence ordinal ^{:line 405 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/commitoperation-action operation) ^{:line 406 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth handles ordinal))
-   operation-position ^{:line 407 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ first-operation ordinal)
-   with-row ^{:line 409 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc current :operations ^{:line 410 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 410 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations current) row))]
-  ^{:line 411 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 411 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (apply-operation-state with-row operation-position row) ^{:line 412 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc ordinal)))))
-   final-store ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc appended :next-sequence ^{:line 413 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc sequence))]
-  ^{:line 414 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (reset! ctx final-store)
-  ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transaction-coordinate ^{:line 415 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-space-id final-store) sequence))))))
+  (if (>= ordinal (count operations)) current (let [operation (nth operations ordinal)
+   row (t/->OperationRow sequence ordinal (t/commitoperation-action operation) (nth handles ordinal))
+   operation-position (+ first-operation ordinal)
+   with-row (assoc current :operations (conj (t/termstore-operations current) row))]
+  (recur (apply-operation-state with-row operation-position row) (inc ordinal)))))
+   final-store (assoc appended :next-sequence (inc sequence))]
+  (do
+  (reset! ctx final-store)
+  final-store)))
 
-^{:line 417 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn commit-transaction! [ctx operations]
-  ^{:line 419 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (append-transaction! ctx ^{:line 419 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-next-sequence ^{:line 419 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)) operations))
+(defn- ^TransactionReplayResult append-transaction-result! [ctx sequence operations]
+  (let [before (deref ctx)]
+  (cond
+  (not (valid-operations? operations)) (transaction-replay-error :invalid-transaction-frame "fram: transaction requires at least one valid operation")
+  (< sequence (t/termstore-next-sequence before)) (transaction-replay-error :nonmonotonic-transaction-sequence "fram: transaction sequence must advance within its space")
+  (> sequence max-transaction-sequence) (transaction-replay-unclassified-error)
+  :else (do
+  (append-valid-transaction! ctx sequence operations)
+  (transaction-replay-ok)))))
 
-^{:line 421 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn replay-transaction! [ctx frame]
-  ^{:line 423 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 423 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 423 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transaction-frame? frame) ^{:line 424 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 424 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= ^{:line 424 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionframe-sequence frame) 0) ^{:line 425 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-operations? ^{:line 425 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionframe-operations frame)))) ^{:line 426 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (append-transaction! ctx ^{:line 427 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionframe-sequence frame) ^{:line 428 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionframe-operations frame)) ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 429 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: invalid transaction frame" ^{:line 430 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-transaction-frame}))))
+(defn- append-transaction! [ctx sequence operations]
+  (let [before (deref ctx)]
+  (if (not (valid-operations? operations)) (throw (ex-info "fram: transaction requires at least one valid operation" {:type :invalid-transaction-frame})) (if (< sequence (t/termstore-next-sequence before)) (throw (ex-info "fram: transaction sequence must advance within its space" {:type :nonmonotonic-transaction-sequence})) (let [final-store (append-valid-transaction! ctx sequence operations)]
+  (t/transaction-coordinate (t/termstore-space-id final-store) sequence))))))
 
-^{:line 432 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- occurrence-at [store operation-position]
-  ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 433 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) operation-position)]
-  ^{:line 434 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/occurrence-coordinate ^{:line 435 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transaction-coordinate ^{:line 435 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-space-id store) ^{:line 436 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-tx-sequence row)) ^{:line 437 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-ordinal row))))
+(defn commit-transaction! [ctx operations]
+  (append-transaction! ctx (t/termstore-next-sequence (deref ctx)) operations))
 
-^{:line 439 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- event-at [store operation-position]
-  ^{:line 440 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 440 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 440 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) operation-position)
-   occurrence ^{:line 441 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (occurrence-at store operation-position)
-   proposition ^{:line 443 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-triple-handle store ^{:line 443 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle row))]
-  ^{:line 444 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 444 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= t/assert-action ^{:line 444 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-action row)) ^{:line 445 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/assertion-occurrence occurrence proposition) ^{:line 446 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/retraction-occurrence occurrence proposition))))
+(defn ^TransactionReplayResult replay-transaction-result! [ctx frame]
+  (if (and (t/transaction-frame? frame) (and (>= (t/transactionframe-sequence frame) 0) (valid-operations? (t/transactionframe-operations frame)))) (append-transaction-result! ctx (t/transactionframe-sequence frame) (t/transactionframe-operations frame)) (transaction-replay-error :invalid-transaction-frame "fram: invalid transaction frame")))
 
-^{:line 448 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- first-transaction-after [transactions sequence]
-  ^{:line 450 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [low 0
-   high ^{:line 450 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count transactions)]
-  ^{:line 451 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 451 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= low high) low ^{:line 453 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [middle ^{:line 453 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (quot ^{:line 453 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ low high) 2)
-   candidate ^{:line 454 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-sequence ^{:line 454 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth transactions middle))]
-  ^{:line 455 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 455 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (<= candidate sequence) ^{:line 456 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 456 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc middle) high) ^{:line 457 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur low middle))))))
+(defn replay-transaction! [ctx frame]
+  (if (and (t/transaction-frame? frame) (and (>= (t/transactionframe-sequence frame) 0) (valid-operations? (t/transactionframe-operations frame)))) (append-transaction! ctx (t/transactionframe-sequence frame) (t/transactionframe-operations frame)) (throw (ex-info "fram: invalid transaction frame" {:type :invalid-transaction-frame}))))
 
-^{:line 459 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn operation-range-bounds [store lower-exclusive upper-inclusive]
-  ^{:line 461 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [transactions ^{:line 461 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions store)
-   operations ^{:line 462 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store)
-   start-transaction ^{:line 463 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (first-transaction-after transactions lower-exclusive)
-   end-transaction ^{:line 464 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (first-transaction-after transactions upper-inclusive)
-   start ^{:line 465 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 465 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= start-transaction ^{:line 465 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count transactions)) ^{:line 466 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations) ^{:line 467 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-first-operation ^{:line 468 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth transactions start-transaction)))
-   end ^{:line 469 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 469 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= end-transaction ^{:line 469 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count transactions)) ^{:line 470 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations) ^{:line 471 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-first-operation ^{:line 472 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth transactions end-transaction)))]
-  ^{:line 473 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [start end]))
+(defn- occurrence-at [store operation-position]
+  (let [row (nth (t/termstore-operations store) operation-position)]
+  (t/occurrence-coordinate (t/transaction-coordinate (t/termstore-space-id store) (t/operationrow-tx-sequence row)) (t/operationrow-ordinal row))))
 
-^{:line 475 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn transaction-frames-between [store lower-exclusive upper-inclusive]
-  ^{:line 478 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [transactions ^{:line 478 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions store)
-   first ^{:line 479 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (first-transaction-after transactions lower-exclusive)
-   end ^{:line 480 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (first-transaction-after transactions upper-inclusive)]
-  ^{:line 481 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (mapv ^{:line 482 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [row] ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [start ^{:line 483 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-first-operation row)
-   stop ^{:line 484 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ start ^{:line 484 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-operation-count row))]
-  ^{:line 485 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TransactionFrame ^{:line 486 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-sequence row) ^{:line 487 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (mapv ^{:line 488 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [operation] ^{:line 489 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->CommitOperation ^{:line 490 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-action operation) ^{:line 491 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-triple-handle store ^{:line 492 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle operation)))) ^{:line 493 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (subvec ^{:line 493 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) start stop))))) ^{:line 494 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (subvec transactions first end))))
+(defn- event-at [store operation-position]
+  (let [row (nth (t/termstore-operations store) operation-position)
+   occurrence (occurrence-at store operation-position)
+   proposition (resolve-triple-handle store (t/operationrow-triple-handle row))]
+  (if (= t/assert-action (t/operationrow-action row)) (t/assertion-occurrence occurrence proposition) (t/retraction-occurrence occurrence proposition))))
 
-^{:line 496 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn operation-postings [store]
-  ^{:line 497 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   postings ^{:line 497 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {}]
-  ^{:line 498 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 498 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 498 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 498 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) postings ^{:line 500 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [handle ^{:line 501 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle ^{:line 502 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 502 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) position))]
-  ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 503 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 504 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (update postings handle ^{:line 505 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [known] ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (or known ^{:line 506 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []) position))))))))
+(defn- first-transaction-after [transactions sequence]
+  (loop [low 0
+   high (count transactions)]
+  (if (>= low high) low (let [middle (quot (+ low high) 2)
+   candidate (t/transactionrow-sequence (nth transactions middle))]
+  (if (<= candidate sequence) (recur (inc middle) high) (recur low middle))))))
 
-^{:line 508 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- lower-bound-position [positions target]
-  ^{:line 509 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [low 0
-   high ^{:line 509 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count positions)]
-  ^{:line 510 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 510 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= low high) low ^{:line 512 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [middle ^{:line 512 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (quot ^{:line 512 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ low high) 2)]
-  ^{:line 513 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 513 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 513 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth positions middle) target) ^{:line 514 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 514 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc middle) high) ^{:line 515 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur low middle))))))
+(defn operation-range-bounds [store lower-exclusive upper-inclusive]
+  (let [transactions (t/termstore-transactions store)
+   operations (t/termstore-operations store)
+   start-transaction (first-transaction-after transactions lower-exclusive)
+   end-transaction (first-transaction-after transactions upper-inclusive)
+   start (if (>= start-transaction (count transactions)) (count operations) (t/transactionrow-first-operation (nth transactions start-transaction)))
+   end (if (>= end-transaction (count transactions)) (count operations) (t/transactionrow-first-operation (nth transactions end-transaction)))]
+  [start end]))
 
-^{:line 517 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- exact-occurrence-position [store coordinate]
-  ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 518 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/occurrence-coordinate? coordinate)) -1 ^{:line 520 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [transaction ^{:line 520 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t1 coordinate)
-   space ^{:line 521 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t1 transaction)
-   sequence ^{:line 522 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t3 transaction)
-   ordinal ^{:line 523 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t3 coordinate)
-   transactions ^{:line 524 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions store)
-   position ^{:line 525 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (first-transaction-after transactions ^{:line 525 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (dec sequence))]
-  ^{:line 526 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 526 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (or ^{:line 526 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 526 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= space ^{:line 526 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-space-id store))) ^{:line 527 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 527 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count transactions))) -1 ^{:line 529 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 529 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth transactions position)]
-  ^{:line 530 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 530 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 530 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= sequence ^{:line 530 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-sequence row)) ^{:line 531 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ordinal ^{:line 531 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-operation-count row))) ^{:line 532 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ ^{:line 532 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-first-operation row) ordinal) -1))))))
+(defn transaction-frames-between [store lower-exclusive upper-inclusive]
+  (let [transactions (t/termstore-transactions store)
+   first (first-transaction-after transactions lower-exclusive)
+   end (first-transaction-after transactions upper-inclusive)]
+  (mapv (fn [row] (let [start (t/transactionrow-first-operation row)
+   stop (+ start (t/transactionrow-operation-count row))]
+  (t/->TransactionFrame (t/transactionrow-sequence row) (mapv (fn [operation] (t/->CommitOperation (t/operationrow-action operation) (resolve-triple-handle store (t/operationrow-triple-handle operation)))) (subvec (t/termstore-operations store) start stop))))) (subvec transactions first end))))
 
-^{:line 535 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn operation-candidate-positions [store lower-exclusive upper-inclusive coordinate proposition postings]
-  ^{:line 538 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [[start end] ^{:line 538 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (operation-range-bounds store lower-exclusive upper-inclusive)
-   exact ^{:line 539 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 539 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? coordinate) ^{:line 539 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (do
-  ^{:line 539 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (exact-occurrence-position store coordinate)))
-   proposition-handle ^{:line 541 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 541 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? proposition) ^{:line 541 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (do
-  ^{:line 541 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (known-term-handle store proposition)))
-   posted ^{:line 543 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 543 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? proposition-handle) ^{:line 543 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (get postings proposition-handle ^{:line 543 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []) ^{:line 543 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
-   from ^{:line 544 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (lower-bound-position posted start)
-   until ^{:line 545 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (lower-bound-position posted end)
-   candidates ^{:line 547 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (cond
-  ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? exact) ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= exact start) ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< exact end)) ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [exact] ^{:line 548 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
-  ^{:line 549 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? proposition) ^{:line 550 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 550 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? proposition-handle) ^{:line 550 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (subvec posted from until) ^{:line 550 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [])
-  :else ^{:line 551 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (vec ^{:line 551 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (range start end)))]
-  ^{:line 552 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 552 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 552 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? exact) ^{:line 552 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (some? proposition)) ^{:line 553 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (filterv ^{:line 554 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [position] ^{:line 555 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= proposition-handle ^{:line 556 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle ^{:line 557 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 557 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) position)))) candidates) candidates)))
+(defn operation-postings [store]
+  (loop [position 0
+   postings {}]
+  (if (>= position (count (t/termstore-operations store))) postings (let [handle (t/operationrow-triple-handle (nth (t/termstore-operations store) position))]
+  (recur (inc position) (update postings handle (fn [known] (if (nil? known) [position] (conj known position)))))))))
 
-^{:line 561 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn occurrence-tuple-at [store position]
-  ^{:line 562 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [event ^{:line 562 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (event-at store position)]
-  ^{:line 563 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} [^{:line 563 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t1 event) ^{:line 563 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t2 event) ^{:line 563 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triple-t3 event)]))
+(defn- lower-bound-position [positions target]
+  (loop [low 0
+   high (count positions)]
+  (if (>= low high) low (let [middle (quot (+ low high) 2)]
+  (if (< (nth positions middle) target) (recur (inc middle) high) (recur low middle))))))
 
-^{:line 565 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn operation-occurrences [ctx]
-  ^{:line 566 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 566 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 567 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   events ^{:line 567 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []]
-  ^{:line 568 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 568 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 568 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 568 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) events ^{:line 570 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 570 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 570 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj events ^{:line 570 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (event-at store position)))))))
+(defn- exact-occurrence-position [store coordinate]
+  (if (not (t/occurrence-coordinate? coordinate)) -1 (let [transaction (t/triple-t1 coordinate)
+   space (t/triple-t1 transaction)
+   sequence (t/triple-t3 transaction)
+   ordinal (t/triple-t3 coordinate)
+   transactions (t/termstore-transactions store)
+   position (first-transaction-after transactions (dec sequence))]
+  (if (or (not (= space (t/termstore-space-id store))) (>= position (count transactions))) -1 (let [row (nth transactions position)]
+  (if (and (= sequence (t/transactionrow-sequence row)) (< ordinal (t/transactionrow-operation-count row))) (+ (t/transactionrow-first-operation row) ordinal) -1))))))
 
-^{:line 572 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn withdrawal-triples [ctx]
-  ^{:line 573 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 573 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 574 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   withdrawals ^{:line 574 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []]
-  ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 575 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) withdrawals ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [target ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 577 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-withdrawal-targets store) position)]
-  ^{:line 578 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 578 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= target 0) ^{:line 579 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 579 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 580 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj withdrawals ^{:line 581 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/withdrawal ^{:line 581 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (occurrence-at store position) ^{:line 582 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (occurrence-at store target)))) ^{:line 583 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 583 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) withdrawals)))))))
+(defn operation-candidate-positions [store lower-exclusive upper-inclusive coordinate proposition postings]
+  (let [bounds (operation-range-bounds store lower-exclusive upper-inclusive)
+   start (nth bounds 0)
+   end (nth bounds 1)
+   exact (if (some? coordinate) (do
+  (exact-occurrence-position store coordinate)))
+   proposition-handle (if (some? proposition) (do
+  (known-term-handle store proposition)))
+   posted (if (some? proposition-handle) (get postings proposition-handle []) [])
+   from (lower-bound-position posted start)
+   until (lower-bound-position posted end)
+   candidates (cond
+  (some? exact) (if (and (>= exact start) (< exact end)) [exact] [])
+  (some? proposition) (if (some? proposition-handle) (subvec posted from until) [])
+  :else (vec (range start end)))]
+  (if (and (some? exact) (some? proposition)) (filterv (fn [position] (= proposition-handle (t/operationrow-triple-handle (nth (t/termstore-operations store) position)))) candidates) candidates)))
 
-^{:line 585 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn semantic-history [ctx]
-  ^{:line 586 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 586 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 587 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   history ^{:line 587 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []]
-  ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 588 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) history ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [with-event ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj history ^{:line 590 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (event-at store position))
-   target ^{:line 591 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 591 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-withdrawal-targets store) position)]
-  ^{:line 592 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 592 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= target 0) ^{:line 593 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 593 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 594 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj with-event ^{:line 595 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/withdrawal ^{:line 595 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (occurrence-at store position) ^{:line 596 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (occurrence-at store target)))) ^{:line 597 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 597 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) with-event)))))))
+(defn occurrence-tuple-at [store position]
+  (let [event (event-at store position)]
+  [(t/triple-t1 event) (t/triple-t2 event) (t/triple-t3 event)]))
 
-^{:line 599 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn live-occurrences [ctx]
-  ^{:line 600 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 600 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 601 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   live ^{:line 601 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []]
-  ^{:line 602 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 602 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 602 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 602 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) live ^{:line 604 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 604 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 604 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operation-live store) position) ^{:line 605 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 605 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 605 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj live ^{:line 605 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (event-at store position))) ^{:line 606 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 606 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) live))))))
+(defn operation-occurrences [ctx]
+  (let [store (deref ctx)]
+  (loop [position 0
+   events []]
+  (if (>= position (count (t/termstore-operations store))) events (recur (inc position) (conj events (event-at store position)))))))
 
-^{:line 608 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn live-propositions [ctx]
-  ^{:line 609 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 609 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 610 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0
-   live ^{:line 610 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} []]
-  ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 611 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))) live ^{:line 613 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 613 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 613 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store) position)]
-  ^{:line 614 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 614 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 614 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operation-live store) position) ^{:line 615 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 615 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) ^{:line 616 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (conj live ^{:line 617 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (resolve-triple-handle store ^{:line 618 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle row)))) ^{:line 619 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 619 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position) live)))))))
+(defn withdrawal-triples [ctx]
+  (let [store (deref ctx)]
+  (loop [position 0
+   withdrawals []]
+  (if (>= position (count (t/termstore-operations store))) withdrawals (let [target (nth (t/termstore-withdrawal-targets store) position)]
+  (if (>= target 0) (recur (inc position) (conj withdrawals (t/withdrawal (occurrence-at store position) (occurrence-at store target)))) (recur (inc position) withdrawals)))))))
 
-^{:line 621 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn dump-term-store [ctx]
-  ^{:line 622 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [store ^{:line 622 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (deref ctx)]
-  ^{:line 623 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TermStoreDump term-store-dump-version ^{:line 625 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-space-id store) ^{:line 626 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-next-sequence store) ^{:line 627 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-atoms store) ^{:line 628 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-triples store) ^{:line 629 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-transactions store) ^{:line 630 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations store))))
+(defn semantic-history [ctx]
+  (let [store (deref ctx)]
+  (loop [position 0
+   history []]
+  (if (>= position (count (t/termstore-operations store))) history (let [with-event (conj history (event-at store position))
+   target (nth (t/termstore-withdrawal-targets store) position)]
+  (if (>= target 0) (recur (inc position) (conj with-event (t/withdrawal (occurrence-at store position) (occurrence-at store target)))) (recur (inc position) with-event)))))))
 
-^{:line 632 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-prior-handle? [atom-count triple-position handle]
-  ^{:line 633 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 633 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= handle 0) ^{:line 634 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 634 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle? handle) ^{:line 635 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 635 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle) atom-count) ^{:line 636 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 636 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle) triple-position))))
+(defn live-occurrences [ctx]
+  (let [store (deref ctx)]
+  (loop [position 0
+   live []]
+  (if (>= position (count (t/termstore-operations store))) live (if (nth (t/termstore-operation-live store) position) (recur (inc position) (conj live (event-at store position))) (recur (inc position) live))))))
 
-^{:line 638 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-triple-rows? [atom-count rows]
-  ^{:line 639 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [position 0]
-  ^{:line 640 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 640 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 640 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count rows)) true ^{:line 642 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 642 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth rows position)]
-  ^{:line 643 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 643 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 643 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-prior-handle? atom-count position ^{:line 643 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t1 row)) ^{:line 644 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 644 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-prior-handle? atom-count position ^{:line 644 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t2 row)) ^{:line 645 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-prior-handle? atom-count position ^{:line 645 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/triplerow-t3 row)))) ^{:line 646 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 646 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position)) false)))))
+(defn live-propositions [ctx]
+  (let [store (deref ctx)]
+  (loop [position 0
+   live []]
+  (if (>= position (count (t/termstore-operations store))) live (let [row (nth (t/termstore-operations store) position)]
+  (if (nth (t/termstore-operation-live store) position) (recur (inc position) (conj live (resolve-triple-handle store (t/operationrow-triple-handle row)))) (recur (inc position) live)))))))
 
-^{:line 649 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-dump-operation? [triple-count sequence ordinal row]
-  ^{:line 651 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [handle ^{:line 651 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-triple-handle row)]
-  ^{:line 652 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 652 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= sequence ^{:line 652 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-tx-sequence row)) ^{:line 653 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 653 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= ordinal ^{:line 653 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-ordinal row)) ^{:line 654 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 654 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (or ^{:line 654 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= t/assert-action ^{:line 654 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-action row)) ^{:line 655 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= t/retract-action ^{:line 655 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/operationrow-action row))) ^{:line 656 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 656 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= handle 0) ^{:line 657 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 657 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 657 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (atom-handle? handle)) ^{:line 658 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< ^{:line 658 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (handle-position handle) triple-count))))))))
+(defn dump-term-store [ctx]
+  (let [store (deref ctx)]
+  (t/->TermStoreDump term-store-dump-version (t/termstore-space-id store) (t/termstore-next-sequence store) (t/termstore-atoms store) (t/termstore-triples store) (t/termstore-transactions store) (t/termstore-operations store))))
 
-^{:line 660 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-operation-slice? [operations triple-count sequence first-operation operation-count]
-  ^{:line 663 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [ordinal 0]
-  ^{:line 664 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 664 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= ordinal operation-count) true ^{:line 666 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 666 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-dump-operation? triple-count sequence ordinal ^{:line 667 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth operations ^{:line 667 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ first-operation ordinal))) ^{:line 668 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 668 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc ordinal)) false))))
+(defn- ^Boolean valid-prior-handle? [atom-count triple-position handle]
+  (and (>= handle 0) (if (atom-handle? handle) (< (handle-position handle) atom-count) (< (handle-position handle) triple-position))))
 
-^{:line 671 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- ^Boolean valid-history-rows? [transactions operations triple-count next-sequence-value]
-  ^{:line 674 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [transaction-position 0
+(defn- ^Boolean valid-triple-rows? [atom-count rows]
+  (loop [position 0]
+  (if (>= position (count rows)) true (let [row (nth rows position)]
+  (if (and (valid-prior-handle? atom-count position (t/triplerow-t1 row)) (and (valid-prior-handle? atom-count position (t/triplerow-t2 row)) (valid-prior-handle? atom-count position (t/triplerow-t3 row)))) (recur (inc position)) false)))))
+
+(defn- ^Boolean valid-dump-operation? [triple-count sequence ordinal row]
+  (let [handle (t/operationrow-triple-handle row)]
+  (and (= sequence (t/operationrow-tx-sequence row)) (and (= ordinal (t/operationrow-ordinal row)) (and (or (= t/assert-action (t/operationrow-action row)) (= t/retract-action (t/operationrow-action row))) (and (>= handle 0) (and (not (atom-handle? handle)) (< (handle-position handle) triple-count))))))))
+
+(defn- ^Boolean valid-operation-slice? [operations triple-count sequence first-operation operation-count]
+  (loop [ordinal 0]
+  (if (>= ordinal operation-count) true (if (valid-dump-operation? triple-count sequence ordinal (nth operations (+ first-operation ordinal))) (recur (inc ordinal)) false))))
+
+(defn- ^Boolean valid-history-rows? [transactions operations triple-count next-sequence-value]
+  (loop [transaction-position 0
    operation-position 0
    previous-sequence -1]
-  ^{:line 675 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 675 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= transaction-position ^{:line 675 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count transactions)) ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= operation-position ^{:line 676 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations)) ^{:line 677 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= next-sequence-value ^{:line 678 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 678 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (< previous-sequence 0) 1 ^{:line 678 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc previous-sequence)))) ^{:line 679 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [row ^{:line 679 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth transactions transaction-position)
-   sequence ^{:line 680 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-sequence row)
-   first-operation ^{:line 681 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-first-operation row)
-   operation-count-value ^{:line 682 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/transactionrow-operation-count row)]
-  ^{:line 683 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 683 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 683 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (> sequence previous-sequence) ^{:line 684 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 684 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= first-operation operation-position) ^{:line 685 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 685 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (pos? operation-count-value) ^{:line 686 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 686 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (<= ^{:line 686 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ first-operation operation-count-value) ^{:line 687 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count operations)) ^{:line 688 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-operation-slice? operations triple-count sequence first-operation operation-count-value))))) ^{:line 691 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 691 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc transaction-position) ^{:line 692 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (+ operation-position operation-count-value) sequence) false)))))
+  (if (>= transaction-position (count transactions)) (and (= operation-position (count operations)) (if (< previous-sequence 0) (= next-sequence-value 1) (and (> next-sequence-value 0) (= (dec next-sequence-value) previous-sequence)))) (let [row (nth transactions transaction-position)
+   sequence (t/transactionrow-sequence row)
+   first-operation (t/transactionrow-first-operation row)
+   operation-count-value (t/transactionrow-operation-count row)]
+  (if (and (> sequence previous-sequence) (and (= first-operation operation-position) (and (pos? operation-count-value) (and (<= operation-count-value (- (count operations) first-operation)) (valid-operation-slice? operations triple-count sequence first-operation operation-count-value))))) (recur (inc transaction-position) (+ operation-position operation-count-value) sequence) false)))))
 
-^{:line 696 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn- rebuild-operation-state [store]
-  ^{:line 697 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [base ^{:line 698 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (assoc store :operation-live empty-bools :withdrawal-targets empty-ids :active-buckets empty-active-buckets :active-slots ^{:line 702 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots initial-slots))]
-  ^{:line 703 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (loop [current base
+(defn- ^TransactionFramesResult transaction-frames-ok [frames]
+  (->TransactionFramesResult true frames nil nil))
+
+(defn- ^TransactionFramesResult transaction-frames-error [code ^String message]
+  (->TransactionFramesResult false empty-transaction-frames code message))
+
+(defn- operation-handle-error [store]
+  (let [atoms (t/termstore-atoms store)
+   triples (t/termstore-triples store)
+   operations (t/termstore-operations store)]
+  (loop [position 0]
+  (if (>= position (count operations)) nil (let [handle (t/operationrow-triple-handle (nth operations position))
+   handle-position-value (handle-position handle)]
+  (cond
+  (< handle 0) (transaction-frames-error :invalid-term-handle "fram: term handle does not resolve")
+  (atom-handle? handle) (if (< handle-position-value (count atoms)) (transaction-frames-error :invalid-operation-handle "fram: operation handle does not resolve to Triple") (transaction-frames-error :invalid-term-handle "fram: term handle does not resolve"))
+  (>= handle-position-value (count triples)) (transaction-frames-error :invalid-term-handle "fram: term handle does not resolve")
+  :else (recur (inc position))))))))
+
+(defn- ^Boolean valid-atom-rows? [rows]
+  (loop [position 0]
+  (if (>= position (count rows)) true (if (valid-atom-row? (nth rows position)) (recur (inc position)) false))))
+
+(defn- history-sequence-error [transactions]
+  (loop [position 0
+   previous-sequence 0]
+  (if (>= position (count transactions)) nil (let [sequence (t/transactionrow-sequence (nth transactions position))]
+  (cond
+  (< sequence 0) (transaction-frames-error :invalid-transaction-frame "fram: invalid transaction frame")
+  (<= sequence previous-sequence) (transaction-frames-error :nonmonotonic-transaction-sequence "fram: transaction sequence must advance within its space")
+  :else (recur (inc position) sequence))))))
+
+(defn- resolve-valid-handle [store handle]
+  (let [position (handle-position handle)]
+  (if (atom-handle? handle) (atom-row-value (nth (t/termstore-atoms store) position)) (let [row (nth (t/termstore-triples store) position)]
+  (t/->Triple (resolve-valid-handle store (t/triplerow-t1 row)) (resolve-valid-handle store (t/triplerow-t2 row)) (resolve-valid-handle store (t/triplerow-t3 row)))))))
+
+(defn- resolve-valid-triple-handle [store handle]
+  (let [row (nth (t/termstore-triples store) (handle-position handle))]
+  (t/->Triple (resolve-valid-handle store (t/triplerow-t1 row)) (resolve-valid-handle store (t/triplerow-t2 row)) (resolve-valid-handle store (t/triplerow-t3 row)))))
+
+(defn- valid-transaction-frame-at [store transaction-position]
+  (let [row (nth (t/termstore-transactions store) transaction-position)
+   start (t/transactionrow-first-operation row)
+   stop (+ start (t/transactionrow-operation-count row))
+   operations (loop [position start
+   current empty-commit-operations]
+  (if (>= position stop) current (let [operation (nth (t/termstore-operations store) position)]
+  (recur (inc position) (conj current (t/->CommitOperation (t/operationrow-action operation) (resolve-valid-triple-handle store (t/operationrow-triple-handle operation))))))))]
+  (t/->TransactionFrame (t/transactionrow-sequence row) operations)))
+
+(defn- valid-transaction-frames-between [store lower-exclusive upper-inclusive]
+  (let [transactions (t/termstore-transactions store)
+   first (first-transaction-after transactions lower-exclusive)
+   end (first-transaction-after transactions upper-inclusive)]
+  (loop [position first
+   frames empty-transaction-frames]
+  (if (>= position end) frames (recur (inc position) (conj frames (valid-transaction-frame-at store position)))))))
+
+(defn ^TransactionFramesResult transaction-frames-between-result [store lower-exclusive upper-inclusive]
+  (let [atoms (t/termstore-atoms store)
+   triples (t/termstore-triples store)
+   transactions (t/termstore-transactions store)
+   operations (t/termstore-operations store)]
+  (cond
+  (> lower-exclusive upper-inclusive) (transaction-frames-error :invalid-transaction-frame "fram: transaction frame range is invalid")
+  (not (valid-space-id? (t/termstore-space-id store))) (transaction-frames-error :invalid-space-id "fram: TermStore requires a non-empty SpaceId")
+  (< (t/termstore-next-sequence store) 1) (transaction-frames-error :invalid-transaction-frame "fram: invalid transaction frame")
+  :else (let [handle-error (operation-handle-error store)]
+  (if (some? handle-error) handle-error (if (not (valid-atom-rows? atoms)) (transaction-frames-error :invalid-term "fram: triple contains a value outside Term") (if (not (valid-triple-rows? (count atoms) triples)) (transaction-frames-error :invalid-term-handle "fram: term handle does not resolve") (let [sequence-error (history-sequence-error transactions)]
+  (if (some? sequence-error) sequence-error (if (not (valid-history-rows? transactions operations (count triples) (t/termstore-next-sequence store))) (transaction-frames-error :invalid-transaction-frame "fram: invalid transaction frame") (transaction-frames-ok (valid-transaction-frames-between store lower-exclusive upper-inclusive))))))))))))
+
+(defn- rebuild-operation-state [store]
+  (let [base (assoc store :operation-live empty-bools :withdrawal-targets empty-ids :active-buckets empty-active-buckets :active-slots (fresh-term-slots initial-slots))]
+  (loop [current base
    position 0]
-  ^{:line 704 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 704 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= position ^{:line 704 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count ^{:line 704 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations current))) current ^{:line 706 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (recur ^{:line 707 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (apply-operation-state current position ^{:line 708 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (nth ^{:line 708 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstore-operations current) position)) ^{:line 709 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (inc position))))))
+  (if (>= position (count (t/termstore-operations current))) current (recur (apply-operation-state current position (nth (t/termstore-operations current) position)) (inc position))))))
 
-^{:line 711 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (defn load-term-store! [ctx data]
-  ^{:line 712 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 712 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 712 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/term-store-dump? data)) ^{:line 713 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 713 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: legacy store dump requires one-shot migration" ^{:line 714 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :migration-required})) ^{:line 715 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 715 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 715 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= term-store-dump-version ^{:line 715 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-version data))) ^{:line 716 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 716 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: legacy TermStore dump requires one-shot migration" ^{:line 717 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :migration-required})) ^{:line 718 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [atoms ^{:line 718 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-atoms data)
-   rows ^{:line 719 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-triples data)
-   transactions ^{:line 720 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-transactions data)
-   operations ^{:line 721 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-operations data)
-   dump-space ^{:line 722 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-space-id data)
-   next-sequence-value ^{:line 723 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/termstoredump-next-sequence data)]
-  ^{:line 724 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 724 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 724 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 724 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-space-id? dump-space) ^{:line 725 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 725 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (>= next-sequence-value 1) ^{:line 726 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 726 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (every? ^{:line 726 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fn [row] ^{:line 727 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-atom-row? row)) atoms) ^{:line 729 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (and ^{:line 729 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-triple-rows? ^{:line 729 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count atoms) rows) ^{:line 730 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (valid-history-rows? transactions operations ^{:line 731 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count rows) next-sequence-value)))))) ^{:line 733 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 733 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: invalid TermStore dump" ^{:line 734 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :invalid-term-store-dump})) ^{:line 735 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (if ^{:line 735 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (not ^{:line 735 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (= ^{:line 735 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (space-id ctx) dump-space)) ^{:line 736 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (throw ^{:line 736 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (ex-info "fram: TermStore dump belongs to a different space" ^{:line 737 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} {:type :space-mismatch})) ^{:line 738 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (let [loaded ^{:line 739 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (t/->TermStore dump-space next-sequence-value atoms rows transactions operations empty-bools empty-ids empty-active-buckets ^{:line 742 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (build-atom-term-slots atoms ^{:line 742 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slots-width-for ^{:line 742 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count atoms))) ^{:line 743 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (build-triple-term-slots rows ^{:line 743 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (term-slots-width-for ^{:line 743 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (count rows))) ^{:line 744 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (fresh-term-slots initial-slots))]
-  ^{:line 745 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (reset! ctx ^{:line 745 :file "/tmp/main-lane-lane-msd8klej-a181f5f3-9d81-42ce-91a4-56fb1c7eca9e/src/fram/store.bclj"} (rebuild-operation-state loaded))
-  ctx)))))))
+(defn- ^TermStoreLoadResult term-store-load-ok []
+  (->TermStoreLoadResult true nil nil))
+
+(defn- ^TermStoreLoadResult term-store-load-error [code ^String message]
+  (->TermStoreLoadResult false code message))
+
+(defn ^TermStoreLoadResult load-term-store-result! [ctx data]
+  (if (not (t/term-store-dump? data)) (term-store-load-error :migration-required "fram: legacy store dump requires one-shot migration") (if (not (= term-store-dump-version (t/termstoredump-version data))) (term-store-load-error :migration-required "fram: legacy TermStore dump requires one-shot migration") (let [atoms (t/termstoredump-atoms data)
+   rows (t/termstoredump-triples data)
+   transactions (t/termstoredump-transactions data)
+   operations (t/termstoredump-operations data)
+   dump-space (t/termstoredump-space-id data)
+   next-sequence-value (t/termstoredump-next-sequence data)]
+  (if (not (and (valid-space-id? dump-space) (and (>= next-sequence-value 1) (and (every? (fn [row] (valid-atom-row? row)) atoms) (and (valid-triple-rows? (count atoms) rows) (valid-history-rows? transactions operations (count rows) next-sequence-value)))))) (term-store-load-error :invalid-term-store-dump "fram: invalid TermStore dump") (if (not (= (space-id ctx) dump-space)) (term-store-load-error :space-mismatch "fram: TermStore dump belongs to a different space") (let [loaded (t/->TermStore dump-space next-sequence-value atoms rows transactions operations empty-bools empty-ids empty-active-buckets (build-atom-term-slots atoms (term-slots-width-for (count atoms))) (build-triple-term-slots rows (term-slots-width-for (count rows))) (fresh-term-slots initial-slots))]
+  (reset! ctx (rebuild-operation-state loaded))
+  (term-store-load-ok))))))))
+
+(defn load-term-store! [ctx data]
+  (let [result (load-term-store-result! ctx data)]
+  (if (termstoreloadresult-ok result) ctx (let [code (termstoreloadresult-code result)
+   message (termstoreloadresult-message result)]
+  (throw (ex-info (if message message "fram: TermStore load failed") {:type (if code code :invalid-term-store-dump)}))))))

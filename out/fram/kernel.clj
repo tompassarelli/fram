@@ -46,8 +46,9 @@
   (not (empty? (filterv (fn [profile-id] (profile-has-rule? triples profile-id vocabulary-profile-rule)) (space-profile-ids triples space-id)))))
 
 (defn- ^Boolean namespaced-vocabulary? [value]
-  (and (keyword? value) (let [spelling (str value)]
-  (and (str/includes? spelling "/") (not (str/starts-with? spelling kernel-vocabulary-prefix))))))
+  (if (keyword? value) (let [keyword-value value
+   spelling (str keyword-value)]
+  (and (str/includes? spelling "/") (not (str/starts-with? spelling kernel-vocabulary-prefix)))) false))
 
 (defn- ^Boolean grouped-vocabulary? [triples term]
   (not (empty? (filterv (fn [value] (and (= term (t/triple-t1 value)) (= vocabulary-grouping (t/triple-t2 value)))) triples))))
