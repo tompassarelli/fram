@@ -426,7 +426,7 @@ else
   module_sources=("$stage"/module_*.c)
   shopt -u nullglob
   [[ ${#module_sources[@]} -gt 0 ]] || die "native-module omitted module_*.c"
-  if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror \
+  if ! "$cc" -std=c17 -pedantic -Wall -Wextra -Werror -pthread \
       -I"$stage" -I"$(dirname "$host_header")" \
       "${module_sources[@]}" \
       "$stage/native_shim.c" \

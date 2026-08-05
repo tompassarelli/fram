@@ -3,10 +3,23 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d)"
-trap 'rm -rf "${scratch:?}"' EXIT INT TERM
+host_pid=""
+stall_pid=""
+cleanup() {
+  if [[ -n "${stall_pid:-}" ]] && kill -0 "$stall_pid" 2>/dev/null; then
+    kill -TERM "$stall_pid" 2>/dev/null || true
+    wait "$stall_pid" 2>/dev/null || true
+  fi
+  if [[ -n "${host_pid:-}" ]] && kill -0 "$host_pid" 2>/dev/null; then
+    kill -TERM "$host_pid" 2>/dev/null || true
+    wait "$host_pid" 2>/dev/null || true
+  fi
+  rm -rf "${scratch:?}"
+}
+trap cleanup EXIT INT TERM
 cc="${CC:-cc}"
 
-for command in "$cc" awk cmp nm sed sort; do
+for command in "$cc" awk cmp grep nm sed sleep sort; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "fram native generated adapter smoke: missing $command" >&2
     exit 1
@@ -546,7 +559,7 @@ int main(int argc, char **argv) {
   (void)close(pair[0]);
 
   if (request_from_bytes(request_frame, 3u, &failed, error, sizeof(error)) !=
-          FRAM_SERVE_FLAT_FATAL ||
+          FRAM_SERVE_FLAT_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request frame ended inside its header") != 0) {
     return 4;
@@ -558,7 +571,8 @@ int main(int argc, char **argv) {
   oversized_header[16] = 0x10;
   oversized_header[17] = 0x00;
   if (request_from_bytes(oversized_header, sizeof(oversized_header), &failed,
-                         error, sizeof(error)) != FRAM_SERVE_FLAT_FATAL ||
+                         error, sizeof(error)) !=
+          FRAM_SERVE_FLAT_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request frame exceeds the body limit") != 0) {
     return 5;
@@ -567,7 +581,7 @@ int main(int argc, char **argv) {
   memcpy(bad_frame, request_frame, sizeof(bad_frame));
   bad_frame[26] = 0xee;
   if (request_from_bytes(bad_frame, sizeof(bad_frame), &failed, error,
-                         sizeof(error)) != FRAM_SERVE_FLAT_FATAL ||
+                         sizeof(error)) != FRAM_SERVE_FLAT_CLIENT_ERROR ||
       failed != NULL ||
       strcmp(error, "generated request decode failed") != 0) {
     return 6;
@@ -605,7 +619,194 @@ int main(int argc, char **argv) {
 }
 C
 
-common_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -I "$scratch" -I "$repo/native")
+cat >"$scratch/host_client.c" <<'C'
+#define _POSIX_C_SOURCE 200809L
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+
+static const uint8_t request_frame[] = {
+    0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x07, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc};
+
+static const uint8_t response_frame[] = {
+    0x46, 0x52, 0x41, 0x4d, 0x52, 0x50, 0x43, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x07, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdd, 0xee};
+
+static bool parse_port(const char *text, uint16_t *port_out) {
+  char *end = NULL;
+  long value;
+
+  errno = 0;
+  value = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || value < 1 ||
+      value > 65535) {
+    return false;
+  }
+  *port_out = (uint16_t)value;
+  return true;
+}
+
+static bool write_all(int fd, const uint8_t *bytes, size_t length) {
+  size_t position = 0u;
+
+  while (position < length) {
+    ssize_t count = write(fd, bytes + position, length - position);
+    if (count > 0) {
+      position += (size_t)count;
+    } else if (count < 0 && errno == EINTR) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool read_all(int fd, uint8_t *bytes, size_t length) {
+  size_t position = 0u;
+
+  while (position < length) {
+    ssize_t count = read(fd, bytes + position, length - position);
+    if (count > 0) {
+      position += (size_t)count;
+    } else if (count < 0 && errno == EINTR) {
+      continue;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+static int free_port(void) {
+  struct sockaddr_in address;
+  socklen_t address_length = sizeof(address);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+  if (fd < 0) {
+    return 1;
+  }
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  address.sin_port = 0;
+  if (bind(fd, (const struct sockaddr *)&address, sizeof(address)) != 0 ||
+      getsockname(fd, (struct sockaddr *)&address, &address_length) != 0 ||
+      close(fd) != 0) {
+    return 2;
+  }
+  printf("%u\n", (unsigned int)ntohs(address.sin_port));
+  return 0;
+}
+
+static int connect_retry(const char *address_text, uint16_t port) {
+  struct sockaddr_in address;
+  struct timespec delay = {.tv_sec = 0, .tv_nsec = 20000000L};
+  unsigned int attempt;
+
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(port);
+  if (inet_pton(AF_INET, address_text, &address.sin_addr) != 1) {
+    return -1;
+  }
+  for (attempt = 0u; attempt < 100u; attempt += 1u) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0) {
+      return -1;
+    }
+    if (connect(fd, (const struct sockaddr *)&address, sizeof(address)) == 0) {
+      return fd;
+    }
+    (void)close(fd);
+    (void)nanosleep(&delay, NULL);
+  }
+  return -1;
+}
+
+static int malformed_or_stall(const char *address, uint16_t port, bool stall) {
+  struct timespec hold = {.tv_sec = 5, .tv_nsec = 0};
+  uint8_t unexpected;
+  int fd = connect_retry(address, port);
+  ssize_t count;
+
+  if (fd < 0 || !write_all(fd, request_frame, 3u)) {
+    return 3;
+  }
+  if (stall) {
+    puts("READY");
+    if (fflush(stdout) != 0) {
+      return 4;
+    }
+    (void)nanosleep(&hold, NULL);
+  }
+  if (shutdown(fd, SHUT_WR) != 0) {
+    return 5;
+  }
+  do {
+    count = read(fd, &unexpected, sizeof(unexpected));
+  } while (count < 0 && errno == EINTR);
+  (void)close(fd);
+  return count == 0 ? 0 : 6;
+}
+
+static int valid(const char *address, uint16_t port) {
+  uint8_t received[sizeof(response_frame)];
+  uint8_t extra;
+  int fd = connect_retry(address, port);
+  ssize_t count;
+
+  if (fd < 0 || !write_all(fd, request_frame, sizeof(request_frame)) ||
+      shutdown(fd, SHUT_WR) != 0 ||
+      !read_all(fd, received, sizeof(received)) ||
+      memcmp(received, response_frame, sizeof(received)) != 0) {
+    return 7;
+  }
+  do {
+    count = read(fd, &extra, sizeof(extra));
+  } while (count < 0 && errno == EINTR);
+  (void)close(fd);
+  return count == 0 ? 0 : 8;
+}
+
+int main(int argc, char **argv) {
+  uint16_t port;
+
+  if (argc == 2 && strcmp(argv[1], "free-port") == 0) {
+    return free_port();
+  }
+  if (argc != 4 || !parse_port(argv[3], &port)) {
+    return 9;
+  }
+  (void)alarm(10u);
+  if (strcmp(argv[1], "malformed") == 0) {
+    return malformed_or_stall(argv[2], port, false);
+  }
+  if (strcmp(argv[1], "stall") == 0) {
+    return malformed_or_stall(argv[2], port, true);
+  }
+  if (strcmp(argv[1], "valid") == 0) {
+    return valid(argv[2], port);
+  }
+  return 10;
+}
+C
+
+common_flags=(-std=c17 -pedantic -Wall -Wextra -Werror -pthread \
+  -I "$scratch" -I "$repo/native")
 "$cc" "${common_flags[@]}" -c "$repo/native/serve_flat_generated.c" \
   -o "$scratch/adapter.o"
 
@@ -630,5 +831,114 @@ cmp "$scratch/expected-exports" "$scratch/actual-exports"
   -o "$scratch/smoke"
 printf 'OLD!x' >"$scratch/fram.log"
 "$scratch/smoke" "$scratch/fram.log"
+
+"$cc" "${common_flags[@]}" "$repo/native/serve_flat_host.c" \
+  "$scratch/adapter.o" "$scratch/native_shim.c" \
+  "$scratch/generated_stub.c" -o "$scratch/host-smoke"
+"$cc" "${common_flags[@]}" "$scratch/host_client.c" \
+  -o "$scratch/host-client"
+
+stop_host() {
+  local error_log="$1"
+
+  if ! kill -0 "$host_pid" 2>/dev/null; then
+    echo "fram native generated adapter smoke: host exited early" >&2
+    cat "$error_log" >&2
+    return 1
+  fi
+  kill -TERM "$host_pid"
+  if ! wait "$host_pid"; then
+    echo "fram native generated adapter smoke: host shutdown failed" >&2
+    cat "$error_log" >&2
+    host_pid=""
+    return 1
+  fi
+  host_pid=""
+}
+
+printf 'OLD!x' >"$scratch/fram.log"
+any_port="$("$scratch/host-client" free-port)"
+(
+  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+    FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
+    FRAM_TLS_TRUSTSTORE
+  export FRAM_BIND=0.0.0.0
+  exec "$scratch/host-smoke" serve "$any_port" "$scratch/fram.log" \
+    smoke-space
+) >"$scratch/any.out" 2>"$scratch/any.err" &
+host_pid=$!
+
+"$scratch/host-client" stall 127.0.0.1 "$any_port" \
+  >"$scratch/stall.ready" &
+stall_pid=$!
+for _ in {1..100}; do
+  [[ -s "$scratch/stall.ready" ]] && break
+  kill -0 "$stall_pid" 2>/dev/null || break
+  sleep 0.02
+done
+if [[ ! -s "$scratch/stall.ready" ]]; then
+  echo "fram native generated adapter smoke: stalled client did not connect" >&2
+  cat "$scratch/any.err" >&2
+  exit 1
+fi
+"$scratch/host-client" valid 127.0.0.2 "$any_port" || {
+  cat "$scratch/any.err" >&2
+  exit 1
+}
+if kill -0 "$stall_pid" 2>/dev/null; then
+  kill -TERM "$stall_pid"
+fi
+wait "$stall_pid" 2>/dev/null || true
+stall_pid=""
+for _ in {1..100}; do
+  grep -Fq 'generated request frame ended inside its header' \
+    "$scratch/any.err" && break
+  sleep 0.02
+done
+grep -Fq 'generated request frame ended inside its header' "$scratch/any.err"
+"$scratch/host-client" valid 127.0.0.2 "$any_port" || {
+  cat "$scratch/any.err" >&2
+  exit 1
+}
+stop_host "$scratch/any.err"
+grep -Fq "listening on 0.0.0.0:$any_port" "$scratch/any.err"
+printf 'OLD!BOOTTAILTAIL' >"$scratch/any.expected"
+cmp "$scratch/any.expected" "$scratch/fram.log"
+
+printf 'OLD!x' >"$scratch/fram.log"
+loopback_port="$("$scratch/host-client" free-port)"
+(
+  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+    FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
+    FRAM_TLS_TRUSTSTORE
+  exec "$scratch/host-smoke" serve "$loopback_port" "$scratch/fram.log" \
+    smoke-space
+) >"$scratch/loopback.out" 2>"$scratch/loopback.err" &
+host_pid=$!
+"$scratch/host-client" valid 127.0.0.1 "$loopback_port" || {
+  cat "$scratch/loopback.err" >&2
+  exit 1
+}
+stop_host "$scratch/loopback.err"
+grep -Fq "listening on 127.0.0.1:$loopback_port" \
+  "$scratch/loopback.err"
+printf 'OLD!BOOTTAIL' >"$scratch/loopback.expected"
+cmp "$scratch/loopback.expected" "$scratch/fram.log"
+
+invalid_port="$("$scratch/host-client" free-port)"
+if (
+  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+    FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
+    FRAM_TLS_TRUSTSTORE
+  export FRAM_BIND=192.0.2.1
+  exec "$scratch/host-smoke" serve "$invalid_port" "$scratch/invalid.log" \
+    smoke-space
+) >"$scratch/invalid.out" 2>"$scratch/invalid.err"; then
+  echo "fram native generated adapter smoke: invalid bind was accepted" >&2
+  exit 1
+fi
+grep -Fq \
+  'FRAM_BIND=192.0.2.1 is unsupported; expected loopback, 127.0.0.1, or 0.0.0.0' \
+  "$scratch/invalid.err"
 
 echo "fram native generated adapter smoke: PASS"

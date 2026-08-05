@@ -15,7 +15,8 @@ typedef struct fram_serve_flat_response fram_serve_flat_response;
 enum fram_serve_flat_status {
   FRAM_SERVE_FLAT_OK = 0,
   FRAM_SERVE_FLAT_PEER_CLOSED = 1,
-  FRAM_SERVE_FLAT_FATAL = 2
+  FRAM_SERVE_FLAT_FATAL = 2,
+  FRAM_SERVE_FLAT_CLIENT_ERROR = 3
 };
 
 /* Every declaration below is a required generated-module export. */

@@ -160,7 +160,7 @@ static generated_owner *owner_create(size_t input_byte_count, char *error,
 }
 
 static void owner_retain(generated_owner *owner) {
-  // The host serializes hooks, so wrapper ownership needs no atomic refcount.
+  // Store-owner calls serialize; request owners remain local to one worker.
   owner->references += 1u;
 }
 
@@ -225,6 +225,7 @@ static int realtime_milliseconds(int64_t *milliseconds_out, char *error,
 
 static int read_exact(int fd, uint8_t *destination, size_t length,
                       bool clean_eof_is_peer_closed,
+                      int failure_status,
                       const char *truncated_detail, const char *read_detail,
                       char *error, size_t error_capacity) {
   size_t position = 0u;
@@ -241,13 +242,13 @@ static int read_exact(int fd, uint8_t *destination, size_t length,
         return FRAM_SERVE_FLAT_PEER_CLOSED;
       }
       copy_error(error, error_capacity, truncated_detail);
-      return FRAM_SERVE_FLAT_FATAL;
+      return failure_status;
     }
     if (errno == EINTR) {
       continue;
     }
     copy_error(error, error_capacity, read_detail);
-    return FRAM_SERVE_FLAT_FATAL;
+    return failure_status;
   }
   return FRAM_SERVE_FLAT_OK;
 }
@@ -283,7 +284,7 @@ static int read_log(const char *path, int *fd_out, uint8_t **bytes_out,
       return FRAM_SERVE_FLAT_FATAL;
     }
   }
-  read_status = read_exact(fd, bytes, length, false,
+  read_status = read_exact(fd, bytes, length, false, FRAM_SERVE_FLAT_FATAL,
                            "canonical FRAMLOG ended while reading",
                            "cannot read the canonical FRAMLOG", error,
                            error_capacity);
@@ -320,6 +321,7 @@ static int vector_length(const native_vec *vector, size_t minimum,
 
 static int write_vector(int fd, const native_vec *vector, size_t minimum,
                         size_t maximum, bool peer_close_is_status,
+                        int write_failure_status,
                         size_t *length_out, char *error,
                         size_t error_capacity, const char *invalid_detail,
                         const char *write_detail) {
@@ -365,7 +367,7 @@ static int write_vector(int fd, const native_vec *vector, size_t minimum,
         return FRAM_SERVE_FLAT_PEER_CLOSED;
       }
       copy_error(error, error_capacity, write_detail);
-      return FRAM_SERVE_FLAT_FATAL;
+      return write_failure_status;
     }
     offset += count;
   }
@@ -390,8 +392,8 @@ static int append_log_vector(fram_serve_flat_store *store,
     copy_error(error, error_capacity, "cannot seek the canonical FRAMLOG");
     return FRAM_SERVE_FLAT_FATAL;
   }
-  status = write_vector(store->log_fd, vector, 0u, SIZE_MAX, false, NULL,
-                        error, error_capacity,
+  status = write_vector(store->log_fd, vector, 0u, SIZE_MAX, false,
+                        FRAM_SERVE_FLAT_FATAL, NULL, error, error_capacity,
                         "generated FRAMLOG append is not byte-valued",
                         "cannot append the canonical FRAMLOG");
   if (status != FRAM_SERVE_FLAT_OK) {
@@ -445,7 +447,7 @@ static int read_frame(int fd, uint8_t **frame_out, size_t *length_out,
   uint32_t body_length;
   size_t frame_length;
   int status = read_exact(
-      fd, header, sizeof(header), true,
+      fd, header, sizeof(header), true, FRAM_SERVE_FLAT_CLIENT_ERROR,
       "generated request frame ended inside its header",
       "cannot read the generated request frame header", error,
       error_capacity);
@@ -457,7 +459,7 @@ static int read_frame(int fd, uint8_t **frame_out, size_t *length_out,
   if (body_length > FRAM_SERVE_FLAT_FRAME_MAX_BODY_BYTES) {
     copy_error(error, error_capacity,
                "generated request frame exceeds the body limit");
-    return FRAM_SERVE_FLAT_FATAL;
+    return FRAM_SERVE_FLAT_CLIENT_ERROR;
   }
   frame_length = sizeof(header) + (size_t)body_length;
   frame = malloc(frame_length);
@@ -468,6 +470,7 @@ static int read_frame(int fd, uint8_t **frame_out, size_t *length_out,
   }
   memcpy(frame, header, sizeof(header));
   status = read_exact(fd, frame + sizeof(header), (size_t)body_length, false,
+                      FRAM_SERVE_FLAT_CLIENT_ERROR,
                       "generated request frame ended inside its body",
                       "cannot read the generated request frame body", error,
                       error_capacity);
@@ -717,7 +720,7 @@ int fram_serve_flat_codec_read_request(int client_fd,
         &owner->arena, &owner->capability, request->result);
     owner_release(owner);
     free(request);
-    return FRAM_SERVE_FLAT_FATAL;
+    return FRAM_SERVE_FLAT_CLIENT_ERROR;
   }
   *request_out = request;
   return FRAM_SERVE_FLAT_OK;
@@ -749,7 +752,8 @@ int fram_serve_flat_codec_write_response(
     status = write_vector(
         client_fd, generated_result.field_1,
         FRAM_SERVE_FLAT_FRAME_HEADER_BYTES,
-        FRAM_SERVE_FLAT_FRAME_MAX_BYTES, true, NULL, error, error_capacity,
+        FRAM_SERVE_FLAT_FRAME_MAX_BYTES, true,
+        FRAM_SERVE_FLAT_CLIENT_ERROR, NULL, error, error_capacity,
         "generated response frame has an invalid byte representation",
         "cannot write the generated response frame");
   }
