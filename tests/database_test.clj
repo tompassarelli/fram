@@ -21,7 +21,7 @@
 (def scratch
   (.toFile
    (java.nio.file.Files/createTempDirectory
-    "fram-term-coordinator-"
+    "fram-term-database-"
     (make-array java.nio.file.attribute.FileAttribute 0))))
 (def log-file (java.io.File. scratch "history.framlog"))
 (database/create-triple-log! (.getPath log-file) "database-space")
@@ -220,7 +220,7 @@
                 (database/current-transaction pre-append-db))
              (empty? (:frames
                       (database/read-triple-log! (.getPath pre-append-file))))))
-(check! "pre-append coordinator rejects retry until restart"
+(check! "pre-append database rejects retry until restart"
         (= :recovery-required
            (error-code
             #(database/assert! pre-append-db (t/triple "pre" :state "retry") {}))))
@@ -303,7 +303,7 @@
                            (:frames
                             (database/read-triple-log!
                              (.getPath post-force-file)))))))
-(check! "post-force coordinator rejects a stale-sequence retry"
+(check! "post-force database rejects a stale-sequence retry"
         (= :recovery-required
            (error-code
             #(database/assert! post-force-db (t/triple "post" :state "retry") {}))))
@@ -341,7 +341,7 @@
                        {:type :injected-corruption})))}
     #(error-code
       (fn [] (database/assert! corrupt-db (t/triple "bad" :frame true) {})))))
-(check! "failed durable replay permanently fences the coordinator as corrupt"
+(check! "failed durable replay permanently fences the database as corrupt"
         (and (= :database-corrupt corrupt-error)
              (= :corrupt (:status (database/database-recovery-state corrupt-db)))
              (= :database-corrupt
@@ -373,9 +373,9 @@
 (let [failures (remove second @checks)]
   (if (empty? failures)
     (do
-      (println "\nTermStore coordinator:" (count @checks) "/" (count @checks) "PASS")
+      (println "\nTermStore database:" (count @checks) "/" (count @checks) "PASS")
       (shutdown-agents))
     (do
-      (println "\nTermStore coordinator:" (count failures) "FAILED")
+      (println "\nTermStore database:" (count failures) "FAILED")
       (shutdown-agents)
       (System/exit 1))))
