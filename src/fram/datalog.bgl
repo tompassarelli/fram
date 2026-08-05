@@ -1103,7 +1103,8 @@
    context: QueryEvaluationContext] -> (Vec Substitution)
   (let [relation (literal-relation literal)
         arguments (literal-arguments literal)
-        source (get sources relation)]
+        source: (U CandidateSource VirtualCandidateSource Nil)
+        (get sources relation)]
     (if (literal-negated literal)
       (if (if (instance? CandidateSource source)
             (source-contains? source relation arguments subst)
@@ -1117,8 +1118,10 @@
           subst context)]
         [(nil? source)
          (if (contains? text-relations relation)
-           (text-rows-or-record!
-            (missing-candidate-source-result relation) context)
+           (do
+             (text-rows-or-record!
+              (missing-candidate-source-result relation) context)
+             (let [missing: (Vec Substitution) []] missing))
            (unify-tuples-controlled!
             arguments (vec (get db relation #{})) subst context))]
         [:else
