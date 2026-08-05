@@ -1,8 +1,8 @@
 #!/usr/bin/env bb
-;; Project the FRAMLOG the frozen Zig daemon persisted into the same normalized
+;; Project the FRAMLOG the frozen Zig server persisted into the same normalized
 ;; and per-transaction shapes fram.fri-replay emits, so the two independent
 ;; replays are diffed as text. Only all-String triples are oracle data: the
-;; occurrence-provenance triples the daemon writes are triples about triples.
+;; occurrence-provenance triples the server writes are triples about triples.
 (require '[clojure.java.io :as io]
          '[fram.store :as store]
          '[fram.types :as t])

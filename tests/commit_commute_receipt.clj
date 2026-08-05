@@ -7,7 +7,7 @@
 ;; DISTINCT fN positions -> no duplicate index, no render corruption, BOTH defs survive.
 ;; Pre-D (#31, commit 4c6a0bf) the clone-frozen next-n raced -> two live children at one fN.
 ;;
-;; SAFETY: isolated daemon on a /tmp COPY of .fram/code.log. Never port 7977, never the
+;; SAFETY: isolated server on a /tmp COPY of .fram/code.log. Never port 7977, never the
 ;; canonical log, never the original corpus.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])

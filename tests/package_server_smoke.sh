@@ -50,7 +50,7 @@ home="$work/home"
 mkdir -p "$home" "$work/cwd"
 log="$work/history.framlog"
 space="package-native-rpc"
-daemon_output="$work/daemon.out"
+server_output="$work/server.out"
 pid=
 cleanup() {
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -96,14 +96,14 @@ fi
     exit 1
   }
 
-start_daemon() {
+start_server() {
   (
     cd "$work/cwd"
     exec "$env_bin" -i HOME="$home" XDG_CACHE_HOME="$home/.cache" \
       FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
       FRAM_SERVER_RUNTIME=jvm-oracle \
       "$package_root/bin/fram-server" serve "$port" "$log"
-  ) >"$daemon_output" 2>&1 &
+  ) >"$server_output" 2>&1 &
   pid=$!
 }
 
@@ -124,8 +124,8 @@ wait_ready() {
   local response=
   for _ in $(seq 1 180); do
     if ! kill -0 "$pid" 2>/dev/null; then
-      echo "fram package smoke: daemon exited before readiness" >&2
-      sed -n '1,160p' "$daemon_output" >&2
+      echo "fram package smoke: server exited before readiness" >&2
+      sed -n '1,160p' "$server_output" >&2
       return 1
     fi
     if response="$("$bb" -cp "$runtime/out" -e "$native_probe" "$port" "$space" 2>/dev/null)"; then
@@ -135,21 +135,21 @@ wait_ready() {
     sleep 0.1
   done
   echo "fram package smoke: no native version response" >&2
-  sed -n '1,160p' "$daemon_output" >&2
+  sed -n '1,160p' "$server_output" >&2
   return 1
 }
 
-stop_daemon() {
+stop_server() {
   kill "$pid"
   for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
   if kill -0 "$pid" 2>/dev/null; then
-    echo "fram package smoke: daemon ignored SIGTERM" >&2; exit 1
+    echo "fram package smoke: server ignored SIGTERM" >&2; exit 1
   fi
   wait "$pid" 2>/dev/null || true
   pid=
 }
 
-start_daemon
+start_server
 initial_version="$(wait_ready)"
 [[ "$initial_version" == "0" ]] || {
   echo "fram package smoke: fresh FRAMLOG did not start at version 0: $initial_version" >&2; exit 1; }
@@ -157,11 +157,11 @@ initial_version="$(wait_ready)"
 if [[ "$require_proc" == "1" ]]; then
   cmdline="$("$tr_bin" '\0' '\n' <"/proc/$pid/cmdline")"
   ! "$grep_bin" -Fq "/home/tom" <<<"$cmdline" || {
-    echo "fram package smoke: daemon escaped into checkout" >&2; exit 1; }
+    echo "fram package smoke: server escaped into checkout" >&2; exit 1; }
   "$grep_bin" -Fq "$package_root" <<<"$cmdline" || {
-    echo "fram package smoke: daemon cmdline lacks package root" >&2; exit 1; }
+    echo "fram package smoke: server cmdline lacks package root" >&2; exit 1; }
   [[ "$("$readlink_bin" "/proc/$pid/cwd")" == "$runtime" ]] || {
-    echo "fram package smoke: daemon cwd is not packaged runtime" >&2; exit 1; }
+    echo "fram package smoke: server cwd is not packaged runtime" >&2; exit 1; }
 fi
 
 cli_env=("$env_bin" -i FRAM_SERVER_PORT="$port" FRAM_SPACE_ID="$space")
@@ -226,35 +226,35 @@ space_receipt="$("$bb" -cp "$runtime/out" -e "$wrong_space_probe" "$port")"
 version_before_restart="$(wait_ready)"
 [[ "$version_before_restart" =~ ^[1-9][0-9]*$ ]] || {
   echo "fram package smoke: writes did not advance logical version: $version_before_restart" >&2; exit 1; }
-stop_daemon
-start_daemon
+stop_server
+start_server
 restart_version="$(wait_ready)"
 [[ "$restart_version" == "$version_before_restart" ]] || {
   echo "fram package smoke: restart replay expected version $version_before_restart, got $restart_version" >&2; exit 1; }
 restart_show="$("${cli_env[@]}" "$package_root/bin/fram" show package)"
 "$grep_bin" -Fq "kind  smoke" <<<"$restart_show" || {
   echo "fram package smoke: restart lost MCP write" >&2; exit 1; }
-stop_daemon
+stop_server
 
 # Packaged default state is writable history.framlog and still needs an explicit
 # database identity; it never falls back to a legacy flat log.
 state_dir="$work/state"
 port="$(free_port)"
-daemon_output="$work/state-daemon.out"
+server_output="$work/state-server.out"
 (
   cd "$work/cwd"
   exec "$env_bin" -i HOME="$home" FRAM_STATE_DIR="$state_dir" \
     FRAM_BIND=127.0.0.1 FRAM_SPACE_ID="$space" \
     FRAM_SERVER_RUNTIME=jvm-oracle \
     "$package_root/bin/fram-server" serve "$port"
-) >"$daemon_output" 2>&1 &
+) >"$server_output" 2>&1 &
 pid=$!
 wait_ready >/dev/null
 [[ -f "$state_dir/history.framlog" ]] || {
   echo "fram package smoke: default state did not create history.framlog" >&2; exit 1; }
 [[ ! -e "$state_dir/facts.log" && ! -e "$state_dir/coordination.log" ]] || {
   echo "fram package smoke: default state created a retired log" >&2; exit 1; }
-stop_daemon
+stop_server
 
 primer_output="$("$env_bin" -i HOME="$home" "$package_root/bin/fram-primer" --beagle-catalog)"
 "$grep_bin" -Fq "define STDLIB-FRAM" <<<"$primer_output" || {

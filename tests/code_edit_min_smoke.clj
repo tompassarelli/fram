@@ -1,14 +1,14 @@
 ;; ============================================================================
 ;; code_edit_min_smoke.clj — Build A smoke: the MINIMAL-OP authoring edit.
 ;; ============================================================================
-;; Boots ONE warm code daemon over a /tmp COPY of .fram/code.log on a verified-free
+;; Boots ONE warm code server over a /tmp COPY of .fram/code.log on a verified-free
 ;; high port (NEVER 7977 / north), then drives a 1-line set-body THROUGH the
-;; daemon's NEW :edit-min wire op and reports HOW MANY fact ops it committed.
+;; server's NEW :edit-min wire op and reports HOW MANY fact ops it committed.
 ;;
 ;; GATE 1 (OPCOUNT): a 1-line set-body must commit a HANDFUL of ops (contrast: the
 ;; whole-module path commits ~7800 because emit-edn renumbers the whole module).
 ;;
-;; Reuses the warm daemon for the WHOLE run (no per-op cold-boot / 101k re-fold).
+;; Reuses the warm server for the WHOLE run (no per-op cold-boot / 101k re-fold).
 ;;   bb -cp out code_edit_min_smoke.clj
 ;; ============================================================================
 (require '[fram.store :as c] '[fram.schema :as s]
@@ -22,7 +22,7 @@
 (binding [*command-line-args* []]
   (load-file "server.clj"))
 
-;; --- throwaway daemon over a /tmp COPY of the code log ----------------------
+;; --- throwaway server over a /tmp COPY of the code log ----------------------
 (def flat (str (System/getProperty "java.io.tmpdir") "/edit-min-smoke-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (defn- port-free? [p] (try (with-open [s (java.net.Socket.)]
@@ -36,11 +36,11 @@
 (defn- shutdown! [] (try (future-cancel server) (catch Throwable _ nil)))
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 
-;; --- SANITY: the daemon serves OUR code-log copy --------------------------
+;; --- SANITY: the server serves OUR code-log copy --------------------------
 (def status (client port {:op :status}))
 (when-not (and (= flat (str (:log status))) (pos? (:facts status)))
-  (println "ABORT: daemon serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
-(println "daemon up:" (:facts status) "live facts, log=" flat ", port=" port)
+  (println "ABORT: server serves" (pr-str (:log status)) "expected" flat) (shutdown!) (System/exit 1))
+(println "server up:" (:facts status) "live facts, log=" flat ", port=" port)
 
 ;; --- the 1-line set-body edit (a GENUINELY different but equivalent body) ----
 (def new-body
@@ -63,7 +63,7 @@
     (println (format "  retracts:  %d" (:retracts resp)))
     (println (format "  TOTAL ops: %d   (whole-module baseline: ~7800)" (:ops resp)))
     (println (format "  new nodes: %d" (:new-nodes resp)))
-    (println (format "  wall-clock (warm daemon, incl. clone+verb+commit): %.1f ms" elapsed-ms))
+    (println (format "  wall-clock (warm server, incl. clone+verb+commit): %.1f ms" elapsed-ms))
     (println (format "  version: %d -> %d" v-before (:version resp))))
   (println "  EDIT FAILED:" (pr-str resp)))
 

@@ -21,5 +21,5 @@ still show the old pre-move `bb -cp out store_<file>.clj` path — prefix `tests
 ## What stays at the root (do NOT move)
 
 - `database.clj` — SpaceId + FRAMLOG database; load-file'd by `bin/fram-server`, the server, and tests.
-- `server.clj` — the warm code-graph daemon; load-file'd by `bin/fram-edit-code`,
+- `server.clj` — the warm code-graph server; load-file'd by `bin/fram-edit-code`,
   `bin/fram-render-code`, and ~31 tests. (Production code, not a test.)

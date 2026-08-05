@@ -48,7 +48,7 @@ The twelve committed corpora are:
 - `S8.tsv`: cardinality declaration and lossy multi-to-single refusal.
 - `F1.tsv`, `F2.tsv`, `F3.tsv`: deterministic 200-operation generated corpora.
 
-Conformance requires 100% line-identical JVM-daemon versus Zig replay output on
+Conformance requires 100% line-identical JVM-server versus Zig replay output on
 all twelve corpora, including every normalized outcome and final fingerprint.
 The exact bar is:
 
@@ -76,23 +76,23 @@ bash tests/fri2_replay_oracle_test.sh
 
 which per corpus diffs the module's summary line against the frozen Zig
 oracle's own byte-for-byte and then compares final state with the FRAMLOG that
-Zig daemon persisted. The two states are equal modulo one stated projection:
-the Zig daemon masks a single-cardinality displacement in its live index and
+Zig server persisted. The two states are equal modulo one stated projection:
+the Zig server masks a single-cardinality displacement in its live index and
 leaves the displaced assertion in history, while the Beagle module records the
 displacement as a retraction so the TermStore needs no projection layer.
 
 
-## Excluded incidental daemon facts (C3 record)
+## Excluded incidental server facts (C3 record)
 
 Fingerprints exclude facts whose subject matches `@snapshot:*` or `@log:*`:
-daemon snapshot/rotation bookkeeping whose values embed per-run absolute
+server snapshot/rotation bookkeeping whose values embed per-run absolute
 paths. They are not write/OCC semantics and the Zig core never emits them.
 Recorded 2026-07-31 after the determinism bar caught `@snapshot:0
 image_path <run-dir>` varying across runs.
 
 ## A3 restored (oracle runs with snapshots disabled)
 
-The plan assumed an empty-log daemon boots at version 0 minting no txs, and
+The plan assumed an empty-log server boots at version 0 minting no txs, and
 the observed JVM version 6 read as a falsification. It was not core-store
 bootstrap: it was six optional post-boot `@snapshot:*` appends. Version is
 the maximum PERSISTED transaction on both sides, so the oracle boots the JVM

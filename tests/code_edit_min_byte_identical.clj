@@ -85,7 +85,7 @@
          "cs (if (and (some? p) (some? cp)) (c/by-lp ctx p cp) [])] "
          "(if (empty? cs) \"multi\" (c/literal ctx (:r (c/fact-of ctx (first cs))))))")))
 
-;; ---- PATH 1: minimal-op (:edit-min) over a fresh daemon --------------------
+;; ---- PATH 1: minimal-op (:edit-min) over a fresh server --------------------
 (def flat-min (str (System/getProperty "java.io.tmpdir") "/byte-id-min-" (System/nanoTime) ".code.log"))
 (io/copy (io/file fixture) (io/file flat-min))
 (def port (or (some #(when (port-free? %) %) [8150 8151 8152 8153]) 8150))

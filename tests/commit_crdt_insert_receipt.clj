@@ -8,7 +8,7 @@
 ;; BOTH land strictly between the anchor and its old-next, no duplicate. This is the
 ;; thing append-only D could not do (middle-insert commute).
 ;;
-;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
+;; SAFE: isolated server on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "server.clj")

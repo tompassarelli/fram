@@ -12,7 +12,7 @@
 ;;   T3 (no read leakage)      — a :query for all triples surfaces ZERO bound_to rows even
 ;;                               with thousands of real bound_to facts present.
 ;;
-;; SAFE: a /tmp COPY of .fram/code.log + in-process daemon; NO socket, NEVER port 7977.
+;; SAFE: a /tmp COPY of .fram/code.log + in-process server; NO socket, NEVER port 7977.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.edn :as edn]
          '[fram.store :as c] '[fram.schema :as s])

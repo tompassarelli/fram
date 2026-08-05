@@ -56,7 +56,7 @@
 ;; transition rule can join claims to a manifest diff with no bespoke traversal.
 ;; (`evidence.region` is the finer locator INSIDE the region — a line/col span.)
 ;;
-;; SCOPE, held deliberately. No socket, no daemon, no port; one scratch log under
+;; SCOPE, held deliberately. No socket, no server, no port; one scratch log under
 ;; /tmp. Nothing here is a new engine surface: every write uses database.clj verbs
 ;; that shipped, and every read is fram.claims/fram.world as published. The
 ;; verification MACHINERY (queues, outboxes, what a human reads) stays app-side,

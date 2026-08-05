@@ -8,7 +8,7 @@
 # verdict (each cell exits nonzero on mismatch via r1.harness/finish!).
 #
 # SAFETY: all corpora + processes are scratch under a single /tmp dir. No fram
-# daemon is started; no port is bound; 127.0.0.1:7977, canonical logs, user state,
+# server is started; no port is bound; 127.0.0.1:7977, canonical logs, user state,
 # out/ and package files are never touched. Ports (if ever needed) start at 8500.
 # ============================================================================
 set -u

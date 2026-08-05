@@ -14,7 +14,7 @@
 ;; R3 good order (referent-first): append B then A(refs B) -> A above B -> NO forward-ref.
 ;; R4 bad  order (referent-last):  append A(refs B) then B -> A below B -> forward-ref DETECTED.
 ;;
-;; SAFETY: isolated daemon on a /tmp COPY of .fram/code.log. Never port 7977 / canonical log.
+;; SAFETY: isolated server on a /tmp COPY of .fram/code.log. Never port 7977 / canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "server.clj")

@@ -46,7 +46,7 @@ STUB
   cat >"$case_dir/bin/fram-server" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s|%s\n' "$1" "$2" >>"$TEST_STATE/daemon.calls"
+printf '%s|%s\n' "$1" "$2" >>"$TEST_STATE/server.calls"
 if [[ "${TEST_MODE:-}" != "unavailable" ]]; then
   printf '%s\n' "$FRAM_SPACE_ID" >"$TEST_STATE/served-space"
 fi
@@ -71,7 +71,7 @@ STUB
   chmod +x "$case_dir/bin/bb" "$case_dir/bin/fram-server" \
     "$case_dir/bin/fram" "$case_dir/bin/ss" "$case_dir/bin/sleep"
   : >"$case_dir/state/bb.calls"
-  : >"$case_dir/state/daemon.calls"
+  : >"$case_dir/state/server.calls"
   printf '%s\n' "$case_dir"
 }
 
@@ -99,42 +99,42 @@ ready_log="$ready_dir/work/coordination.log"
 : >"$ready_log"
 printf '%s\n' test-space >"$ready_dir/state/served-space"
 ready_output="$(run_up "$ready_dir" ready "$ready_log")" ||
-  fail "exact-log ready daemon was rejected"
+  fail "exact-log ready server was rejected"
 [[ "$ready_output" == *"server already up"* ]] ||
-  fail "exact-log ready daemon was not recognized"
-[[ ! -s "$ready_dir/state/daemon.calls" ]] ||
-  fail "exact-log ready daemon was unnecessarily restarted"
+  fail "exact-log ready server was not recognized"
+[[ ! -s "$ready_dir/state/server.calls" ]] ||
+  fail "exact-log ready server was unnecessarily restarted"
 
 wrong_dir="$(make_case wrong-log)"
 wrong_log="$wrong_dir/work/coordination.log"
 : >"$wrong_log"
 if run_up "$wrong_dir" wrong-space "$wrong_log" >"$wrong_dir/state/output" 2>&1; then
-  fail "wrong-space daemon was accepted"
+  fail "wrong-space server was accepted"
 fi
 grep -q "different FRAM_SPACE_ID" "$wrong_dir/state/output" ||
-  fail "wrong-space daemon did not report the identity mismatch"
-[[ ! -s "$wrong_dir/state/daemon.calls" ]] ||
-  fail "wrong-space daemon triggered a competing launch"
+  fail "wrong-space server did not report the identity mismatch"
+[[ ! -s "$wrong_dir/state/server.calls" ]] ||
+  fail "wrong-space server triggered a competing launch"
 
 slow_dir="$(make_case slow-start)"
 slow_log="$slow_dir/work/coordination.log"
 : >"$slow_log"
 slow_output="$(run_up "$slow_dir" slow-start "$slow_log" 2)" ||
-  fail "delayed healthy daemon missed the configured deadline"
+  fail "delayed healthy server missed the configured deadline"
 [[ "$slow_output" == *"starting server"* &&
    "$slow_output" == *"server up"* ]] ||
-  fail "delayed healthy daemon did not complete the startup path"
+  fail "delayed healthy server did not complete the startup path"
 
 down_dir="$(make_case unavailable)"
 down_log="$down_dir/work/coordination.log"
 : >"$down_log"
 down_started_ms="$(date +%s%3N)"
 if run_up "$down_dir" unavailable "$down_log" 1 >"$down_dir/state/output" 2>&1; then
-  fail "unavailable daemon was accepted as ready"
+  fail "unavailable server was accepted as ready"
 fi
 down_elapsed_ms="$(( $(date +%s%3N) - down_started_ms ))"
 grep -q "server did not come up" "$down_dir/state/output" ||
-  fail "unavailable daemon did not report the readiness deadline"
+  fail "unavailable server did not report the readiness deadline"
 (( down_elapsed_ms >= 800 && down_elapsed_ms < 3000 )) ||
   fail "readiness deadline was not absolute (elapsed ${down_elapsed_ms}ms)"
 
@@ -147,8 +147,8 @@ fi
 grep -q "FRAM_STARTUP_TIMEOUT_SECONDS must be an integer from 1 to 3600" \
   "$invalid_dir/state/output" ||
   fail "invalid startup timeout did not report its accepted range"
-[[ ! -s "$invalid_dir/state/daemon.calls" ]] ||
-  fail "invalid startup timeout launched the daemon"
+[[ ! -s "$invalid_dir/state/server.calls" ]] ||
+  fail "invalid startup timeout launched the server"
 
 for calls in "$ready_dir/state/bb.calls" \
              "$wrong_dir/state/bb.calls" \

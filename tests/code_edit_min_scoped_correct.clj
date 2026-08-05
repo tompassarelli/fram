@@ -1,6 +1,6 @@
 ;; ============================================================================
 ;; code_edit_min_scoped_correct.clj — Build B CORRECTNESS: the SCOPED re-resolve
-;; the daemon maintains after a minimal-op edit must equal the WHOLE-CORPUS
+;; the server maintains after a minimal-op edit must equal the WHOLE-CORPUS
 ;; re-resolve (refers_to set-equal). After two disjoint :edit-min edits in the
 ;; exact canonical schema module, :refers-keyset re-resolves SCOPED (off the
 ;; dirty set) and diffs it against a fresh WHOLE-CORPUS rebuild over a clone —
@@ -48,7 +48,7 @@
 (def status (client port {:op :status}))
 (when-not (and (= flat (str (:log status))) (pos? (:facts status)))
   (println "ABORT wrong log") (shutdown!) (System/exit 1))
-(println "daemon up:" (:facts status) "facts, port" port)
+(println "server up:" (:facts status) "facts, port" port)
 
 ;; warm refers_to once (cold whole-corpus), then do disjoint minimal-op edits, then
 ;; check scoped == whole-corpus ground truth.

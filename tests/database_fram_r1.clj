@@ -1,6 +1,6 @@
 ;; ============================================================================
 ;; database_fram_r1.clj — #11 R1, FRAM arm (REAL socket :edit-min, the #14 path).
-;; Batched all-pass disjoint: ONE warm daemon, fire K disjoint set-body edits to K distinct
+;; Batched all-pass disjoint: ONE warm server, fire K disjoint set-body edits to K distinct
 ;; schema functions CONCURRENTLY through the socket. Each :edit-min is its OWN integration
 ;; unit (a commit) — Fram does NOT batch. Disjoint (te,p) ⇒ no OCC conflict; acyclicity gate
 ;; inert (AST preds only, no depends_on/part_of) ⇒ OCC-retry is the sole Fram database

@@ -20,7 +20,7 @@ required_ops=(
   lease-acquire lease-renew lease-release lease-check validate
 )
 for operation in "${required_ops[@]}"; do
-  rg -q "rpc/$operation" "$repo/src/zig/daemon.zig"
+  rg -q "rpc/$operation" "$repo/src/zig/server.zig"
 done
 
 printf 'zig FRAMRPC source ratchet: framed-only transport, one Triple vocabulary, 13/13 operations\n'

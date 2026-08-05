@@ -7,11 +7,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 scratch="$(mktemp -d)"
-daemon_pid=
+server_pid=
 cleanup() {
-  if [[ -n "${daemon_pid:-}" ]]; then
-    kill "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
+  if [[ -n "${server_pid:-}" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
   fi
   rm -rf "${scratch:?}"
 }
@@ -19,8 +19,8 @@ trap cleanup EXIT
 
 port="$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')"
 bb -cp out server.clj serve "$port" "$scratch/coordination.log" test-space \
-  >"$scratch/daemon.log" 2>&1 &
-daemon_pid="$!"
+  >"$scratch/server.log" 2>&1 &
+server_pid="$!"
 
 ready=0
 for _ in $(seq 1 200); do
@@ -33,7 +33,7 @@ for _ in $(seq 1 200); do
 done
 if [[ "$ready" -ne 1 ]]; then
   printf 'fram_fast_exit_status: server failed to start\n' >&2
-  sed -n '1,80p' "$scratch/daemon.log" >&2
+  sed -n '1,80p' "$scratch/server.log" >&2
   exit 1
 fi
 

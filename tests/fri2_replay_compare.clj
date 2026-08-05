@@ -1,6 +1,6 @@
 #!/usr/bin/env bb
 ;; State agreement between the Beagle replay and the FRAMLOG the frozen Zig
-;; daemon persisted. The two are not byte-equal by construction: the Zig daemon
+;; server persisted. The two are not byte-equal by construction: the Zig server
 ;; masks a single-cardinality displacement in its live index and leaves the
 ;; displaced assertion in history, while fram.fri-replay records the
 ;; displacement as a retraction so the TermStore needs no projection layer.

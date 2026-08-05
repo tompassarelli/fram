@@ -1,7 +1,7 @@
 ;; ============================================================================
 ;; code_edit_min_speed.clj — Build B GATE 3 (SPEED): per-edit wall-clock on the
-;; WARM daemon after A+B (minimal-op commit + scoped re-resolve). Boots ONE warm
-;; code daemon over a /tmp COPY of .fram/code.log, then drives SEVERAL set-body
+;; WARM server after A+B (minimal-op commit + scoped re-resolve). Boots ONE warm
+;; code server over a /tmp COPY of .fram/code.log, then drives SEVERAL set-body
 ;; edits through :edit-min, reporting each edit's wall-clock. The FIRST edit pays a
 ;; one-time cold whole-corpus refers_to materialize (ensure-refers! cold); every
 ;; STEADY-STATE edit pays only a SCOPED re-resolve of the dirty module — that is
@@ -29,8 +29,8 @@
 (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown!))
 (def status (client port {:op :status}))
 (when-not (and (= flat (str (:log status))) (pos? (:facts status)))
-  (println "ABORT: daemon serves" (pr-str (:log status))) (shutdown!) (System/exit 1))
-(println "daemon up:" (:facts status) "live facts, port=" port)
+  (println "ABORT: server serves" (pr-str (:log status))) (shutdown!) (System/exit 1))
+(println "server up:" (:facts status) "live facts, port=" port)
 
 ;; a sequence of DISTINCT 1-line set-body edits to `cardinality` (each replaces the
 ;; prior body; same defn so the verb path is identical edit-to-edit).
@@ -48,7 +48,7 @@
         ms (/ (- (System/nanoTime) t0) 1e6)]
     [resp ms]))
 
-(println "\n=== GATE 3 — per-edit wall-clock on the WARM daemon ===")
+(println "\n=== GATE 3 — per-edit wall-clock on the WARM server ===")
 (def results
   (vec (for [tag ["cardinality" "card-a" "card-b" "card-c" "card-d"]]
          (let [[resp ms] (edit! tag)]

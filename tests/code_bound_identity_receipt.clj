@@ -3,7 +3,7 @@
 ;; FILTERED from read projections.  R1 (durable edge) + R6 (read-side unaffected).
 ;;   bb -cp out code_bound_identity_receipt.clj
 ;;
-;; After an :edit-min rename on an in-process /tmp daemon:
+;; After an :edit-min rename on an in-process /tmp server:
 ;;   R1  the flat log carries durable `bound_to` lines (count > 0).
 ;;   R6a :warm-check returns :consistent true (the incrementally-maintained warm
 ;;       cache == a fresh whole rebuild — persisting+filtering bound_to didn't
@@ -12,7 +12,7 @@
 ;;       (read-hidden-preds keeps the durable identity edge out of :query/datalog/
 ;;       warm-cache — option-1 scope: render+resolve read it off the store directly).
 ;;
-;; SAFE: a /tmp COPY of .fram/code.log + in-process daemon (boot-flat!, handle{});
+;; SAFE: a /tmp COPY of .fram/code.log + in-process server (boot-flat!, handle{});
 ;; NO socket, NEVER port 7977, NEVER the canonical north log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str]
@@ -23,7 +23,7 @@
 (when-not (.exists (io/file code-log)) (println "SKIP — missing" code-log) (System/exit 0))
 (binding [*command-line-args* []] (load-file "server.clj"))
 
-;; /tmp copy — the daemon writes bound_to back into THIS file, never the source.
+;; /tmp copy — the server writes bound_to back into THIS file, never the source.
 (def flat (str (System/getProperty "java.io.tmpdir") "/bound-identity-" (System/nanoTime) ".code.log"))
 (io/copy (io/file code-log) (io/file flat))
 (boot-flat! flat)

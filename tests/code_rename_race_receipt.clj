@@ -17,7 +17,7 @@
 ;; TEST 2 (concurrent stress): the rename and the new-ref insert race as futures; assert the
 ;;   cold render is COHERENT (compiles) and report the new ref's resolution.
 ;;
-;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
+;; SAFE: isolated server on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s] '[babashka.process :as proc])
 (load-file "server.clj")

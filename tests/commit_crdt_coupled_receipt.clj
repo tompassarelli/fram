@@ -8,7 +8,7 @@
 ;; (resolved refers_to, top-level position by ord-cmp) DETECTS it — the no-silent-
 ;; misorder bar, now over CRDT keys.
 ;;
-;; SAFE: isolated daemon on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
+;; SAFE: isolated server on a /tmp COPY of .fram/code.log; never 7977 / canonical log.
 ;; ============================================================================
 (require '[clojure.java.io :as io] '[clojure.string :as str] '[fram.store :as c] '[fram.schema :as s])
 (load-file "server.clj")

@@ -74,15 +74,15 @@ if len(matches) != 1:
     raise SystemExit("graph-edit runtime smoke: manifest has no unique Fram root")
 print(matches[0])
 ' "$manifest")"
-daemon_source="$fram_package/libexec/fram/server.clj"
-[[ -r "$daemon_source" ]] || { echo "graph-edit runtime smoke: missing server source" >&2; exit 1; }
-"$python" - "$runtime_driver" "$daemon_source" <<'PY'
+server_source="$fram_package/libexec/fram/server.clj"
+[[ -r "$server_source" ]] || { echo "graph-edit runtime smoke: missing server source" >&2; exit 1; }
+"$python" - "$runtime_driver" "$server_source" <<'PY'
 import pathlib
 import re
 import sys
 
 driver = pathlib.Path(sys.argv[1]).read_text()
-daemon = pathlib.Path(sys.argv[2]).read_text()
+server = pathlib.Path(sys.argv[2]).read_text()
 marker = 'exec "$FRAM_GRAPH_EDIT_SEALED_ENV" -i \\\n'
 try:
     final_boundary = driver.rsplit(marker, 1)[1]
@@ -112,8 +112,8 @@ for name, rhs in sealed_verifier_assignments.items():
 if "NORTH_FRAM_" in final_boundary:
     raise SystemExit("graph-edit runtime smoke: NORTH_FRAM_* crossed final env-i")
 
-if "NORTH_FRAM_" in daemon:
-    raise SystemExit("graph-edit runtime smoke: daemon retains NORTH_FRAM_* read/fallback")
+if "NORTH_FRAM_" in server:
+    raise SystemExit("graph-edit runtime smoke: server retains NORTH_FRAM_* read/fallback")
 PY
 
 checkout="$work/checkout"
