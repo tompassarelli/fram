@@ -15,7 +15,7 @@
 ;; Two structural adaptations, both forced and both behavior-preserving:
 ;;
 ;;   1. STATE IS A PARAMETER. resolve.clj's ^:dynamic vars cannot change
-;;      namespace (coord_daemon.clj and tests/coord_*.clj `binding` them by
+;;      namespace (server.clj and server tests `binding` them by
 ;;      qualified name), so — exactly as Cuts B–F — the store, view, tx,
 ;;      predicate value-ids, counters and the three resolver closures arrive
 ;;      HERE as one explicit `Walk` record, built by a one-line wrapper in

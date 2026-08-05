@@ -15,8 +15,8 @@
 ;; resolves through the SAME lexical walk.
 ;;
 ;; STRUCTURAL ADAPTATION (Cuts B–H's rule, unchanged): STATE IS A PARAMETER.
-;; resolve.clj's ^:dynamic vars cannot change namespace (coord_daemon.clj and
-;; tests/coord_*.clj `binding` them by qualified name), so the store, tx and the
+;; resolve.clj's ^:dynamic vars cannot change namespace (server.clj and
+;; server tests `binding` them by qualified name), so the store, tx and the
 ;; predicate value-ids arrive HERE as one explicit `Mint` record that resolve.clj
 ;; builds from the dynamic state at call time. `ents` is the file->ents ATOM
 ;; ITSELF (not a snapshot) — register! must mutate the var the projection reads.

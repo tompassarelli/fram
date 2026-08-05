@@ -10,8 +10,8 @@
 ;; A claim is identified by the ASSERTION OCCURRENCE COORDINATE its write
 ;; returned (the store has no fact-object cid any more), and `co` is an open
 ;; handle {:schema <fram.schema Session> :writers <occurrence -> agent>}. Agent
-;; attribution is the coordinator's, not the store's: the Term store records no
-;; writer, so :writers is the seam the coordinator port fills.
+;; attribution is the server's, not the store's: the Term store records no
+;; writer, so :writers is the seam the server port fills.
 ;; ============================================================================
 (ns fram.claims)
 
@@ -82,7 +82,7 @@
     false
     (or (= nm root) (str/starts-with? (str nm) (str root ":")))))
 
-;; The Term store records no writer, so attribution rides the coordinator handle.
+;; The Term store records no writer, so attribution rides the server handle.
 (defn- writer-of
   [co: Any
    occurrence: Any] -> Any

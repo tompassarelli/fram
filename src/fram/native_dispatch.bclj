@@ -755,4 +755,4 @@
              [:else
               (error-response
                request served-version :rpc/native-operation-unavailable false
-               "FRAMRPC operation has no typed native coordinator route")])))])))
+               "FRAMRPC operation has no typed native server route")])))])))

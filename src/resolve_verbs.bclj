@@ -20,7 +20,7 @@
 ;; STRUCTURAL ADAPTATIONS, all forced and all behavior-preserving:
 ;;
 ;;   1. STATE IS A PARAMETER (Cuts B–G's rule). resolve.clj's ^:dynamic vars
-;;      cannot change namespace (coord_daemon.clj and tests/coord_*.clj `binding`
+;;      cannot change namespace (server.clj and server tests `binding`
 ;;      them by qualified name), so the store, view, tx, the predicate value-ids,
 ;;      the corpus tables, the two reject arities and every resolve.clj-local
 ;;      helper the verbs call arrive HERE as one explicit `Verb` record that

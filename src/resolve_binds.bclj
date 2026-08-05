@@ -12,8 +12,8 @@
 ;;
 ;; Nothing here writes; it is a pure reading of the tree that resolve-read
 ;; navigates. As in Cut B the store and the view arrive as EXPLICIT parameters —
-;; resolve.clj's ^:dynamic vars cannot move namespace (coord_daemon.clj and
-;; tests/coord_*.clj `binding` them by qualified name), so resolve.clj keeps a
+;; resolve.clj's ^:dynamic vars cannot move namespace (server.clj and
+;; server tests `binding` them by qualified name), so resolve.clj keeps a
 ;; one-line wrapper per name and this module stays a function of its arguments.
 ;;
 ;; Consumed by resolve.clj — so the emitted out/resolve_binds.clj must stay on

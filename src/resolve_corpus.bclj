@@ -10,7 +10,7 @@
 ;; durable bound_to -> derived refers_to identity lift.
 ;;
 ;; STATE IS EXPLICIT. resolve.clj's ^:dynamic vars stay in that namespace
-;; because coord_daemon.clj and tests bind them by qualified name. CorpusState
+;; because server.clj and server tests bind them by qualified name. CorpusState
 ;; snapshots every value this module reads and carries small host callbacks for
 ;; the mutations that must target those thread-local bindings. CorpusHost carries
 ;; the one callback that establishes a fresh binding scope; the logic that runs

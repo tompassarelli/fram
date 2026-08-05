@@ -149,7 +149,7 @@
    :fram-edit-batch-sha])
 
 (defn classify-rewrite-crash
-  [coord: String
+  [server-path: String
    live-ino: Int?
    old-ino: Int?
    new-ino: Int?
@@ -162,7 +162,7 @@
   (U AllocationError RewriteCrashError)
   (cond
     (nil? live-ino)
-    (throw (ex-info (str "rewrite intent present but " coord " does not exist — refusing to classify") {:path coord :fram/doctor-refusal true}))
+    (throw (ex-info (str "rewrite intent present but " server-path " does not exist — refusing to classify") {:path server-path :fram/doctor-refusal true}))
     (and (some? old-ino) (= live-ino old-ino))
     :roll-back
     (and (some? new-ino) (= live-ino new-ino))
@@ -172,7 +172,7 @@
     (and (some? old-bytes) (some? old-sha) (= old-sha live-prefix-sha))
     :roll-back
     :else
-    (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
+    (throw (ex-info (str "rewrite intent does not match the live corpus at " server-path " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path server-path :fram/doctor-refusal true}))))
 
 (defn log-envelope
   [canonical-log: String
@@ -185,7 +185,7 @@
     (str/join "; " (map str rejection))
     (str rejection)))
 
-(defn coord-write-response [resp: (Map Keyword (U String Int Keyword (Vec String)))] -> String
+(defn server-write-response [resp: (Map Keyword (U String Int Keyword (Vec String)))] -> String
   (cond
     (:ok resp)
     (str "ok:" (:ok resp))
@@ -203,10 +203,10 @@
     :else
     (str "error:" (pr-str resp))))
 
-(defn coord-version-response [resp: (Map Keyword (U String Int))] -> Int
+(defn server-version-response [resp: (Map Keyword (U String Int))] -> Int
   (let [version (:version resp)] (if (integer? version) version -1)))
 
-(defn coord-version-for-log-response [resp: (Map Keyword (U String Int Keyword))] -> Int
+(defn server-version-for-log-response [resp: (Map Keyword (U String Int Keyword))] -> Int
   (cond
     (integer? (:version resp))
     (:version resp)
@@ -215,14 +215,14 @@
     :else
     -3))
 
-(defn coord-status-response
+(defn server-status-response
   [port: Int
    resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String)) (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec String))))))] -> String
   (cond
     (integer? (:version resp))
-    (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
+    (str "server UP on 127.0.0.1:" port " (v" (:version resp) ")")
     (= :log-mismatch (:code resp))
-    (str "coordinator WRONG LOG on 127.0.0.1:"
+    (str "server WRONG LOG on 127.0.0.1:"
       port
       " — expected "
       (:expected-log resp)
@@ -230,14 +230,14 @@
       (:served-log resp)
       "; refusing fenced reads and writes")
     (= "unknown op" (:error resp))
-    (str "coordinator INCOMPATIBLE on 127.0.0.1:"
+    (str "server INCOMPATIBLE on 127.0.0.1:"
       port
       " — daemon lacks required log-fence protocol; restart it with current Fram")
     :else
-    (str "coordinator UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
+    (str "server UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
 
-(defn coord-status-down [port: Int] -> String
-  (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
+(defn server-status-down [port: Int] -> String
+  (str "server DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
 
 (defn warm-read-response [resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] -> (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))

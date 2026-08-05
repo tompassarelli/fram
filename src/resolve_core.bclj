@@ -15,8 +15,8 @@
 ;; a pure function of that spelling, which is exactly why it ports first: no
 ;; store, no ctx, no locks.
 ;;
-;; Consumed by resolve.clj (load-file'd, aliases these names), coord_daemon.clj,
-;; and tests/coord_crdt_*.clj — so the emitted out/resolve_core.clj must stay on
+;; Consumed by resolve.clj (load-file'd, aliases these names), server.clj,
+;; and server tests — so the emitted out/resolve_core.clj must stay on
 ;; the classpath.
 ;; ============================================================================
 (ns resolve-core (:require [clojure.string :as str]))

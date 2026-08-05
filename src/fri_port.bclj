@@ -206,8 +206,8 @@
    context: String] -> String
   (strict-utf8-string (read-sized-bytes! buffer context) context))
 
-;; Extraction seam: this private provider is byte-identical to the coordinator's
-;; TermCodecV1. When the coordinator codec lands on this lineage, both callers
+;; Extraction seam: this private provider is byte-identical to the server's
+;; TermCodecV1. When the server codec lands on this lineage, both callers
 ;; should import one shared text-canonical module; the cross-runtime golden keeps
 ;; this temporary copy from acquiring a divergent tag table.
 (declare write-term-v1!)

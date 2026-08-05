@@ -17,9 +17,9 @@
 (defn- env-int [^String k d]
   (or (some-> (System/getenv k) Integer/parseInt) d))
 
-(defrecord DefcheckState [coord-port sidecar-port gwdir autostart? render-fn modules-fn arity-check?])
+(defrecord DefcheckState [server-port sidecar-port gwdir autostart? render-fn modules-fn arity-check?])
 
-(defn defcheckstate-coord-port [r] (:coord-port r))
+(defn defcheckstate-server-port [r] (:server-port r))
 
 (defn defcheckstate-sidecar-port [r] (:sidecar-port r))
 
@@ -46,8 +46,8 @@
   (.flush w)
   (.readLine r))))
 
-(defn coord-with-state [^DefcheckState state req]
-  (edn/read-string (rpc (:coord-port state) (pr-str req))))
+(defn server-with-state [^DefcheckState state req]
+  (edn/read-string (rpc (:server-port state) (pr-str req))))
 
 (defn sidecar-with-state [^DefcheckState state ^String line]
   (json/parse-string (rpc (:sidecar-port state) line) true))
@@ -75,7 +75,7 @@
   (recur (inc n))))))))))
 
 (defn ^String gwdir-with-state [^DefcheckState state]
-  (or (:gwdir state) (str (System/getProperty "java.io.tmpdir") "/fram-defcheck-gw-" (:coord-port state))))
+  (or (:gwdir state) (str (System/getProperty "java.io.tmpdir") "/fram-defcheck-gw-" (:server-port state))))
 
 (defn ^String src-path-with-state [^DefcheckState state ^String module]
   (str (gwdir-with-state state) "/" module ".bclj"))
@@ -84,13 +84,13 @@
   (str (gwdir-with-state state) "/.edn/" module ".edn"))
 
 (defn live-modules-with-state
-  "The live module set. Uses *modules-fn* if bound (in-process); else reads the\n  stable :srcs the coordinator attaches to a render-miss (`:index` is A1's WIP)." [^DefcheckState state]
-  (if (:modules-fn state) (vec ((:modules-fn state))) (let [r (coord-with-state state {:op :render :module "__nonexistent__"})]
+  "The live module set. Uses *modules-fn* if bound (in-process); else reads the\n  stable :srcs the server attaches to a render-miss (`:index` is A1's WIP)." [^DefcheckState state]
+  (if (:modules-fn state) (vec ((:modules-fn state))) (let [r (server-with-state state {:op :render :module "__nonexistent__"})]
   (vec (or (:srcs r) [])))))
 
 (defn ^String render-edn-with-state!
-  "Render module -> triples string, written to edn-path. Returns the path. Uses\n  *render-fn* if bound (the coordinator's in-process render), else coord :render." [^DefcheckState state ^String module]
-  (let [edn (if (:render-fn state) ((:render-fn state) module) (let [resp (coord-with-state state {:op :render :module module})]
+  "Render module -> triples string, written to edn-path. Returns the path. Uses\n  *render-fn* if bound (the server's in-process render), else server :render." [^DefcheckState state ^String module]
+  (let [edn (if (:render-fn state) ((:render-fn state) module) (let [resp (server-with-state state {:op :render :module module})]
   (if (:error resp) (do
   (throw (ex-info (str "render failed for " module ": " (:error resp)) {:module module}))))
   (:edn resp)))]
@@ -102,7 +102,7 @@
   p)))
 
 (defn ^String refresh-sibling-with-state!
-  "Render `module` fresh (coord :render) to its EDN, and warm EDN->text via the\n  sidecar to <gwdir>/<module>.bclj — so OTHER modules resolve this module's\n  CURRENT signatures on their next check. Returns the EDN path. The .bclj write\n  is best-effort (a stale sibling only weakens cross-module fidelity, never\n  corrupts a check)." [^DefcheckState state ^String module]
+  "Render `module` fresh (server :render) to its EDN, and warm EDN->text via the\n  sidecar to <gwdir>/<module>.bclj — so OTHER modules resolve this module's\n  CURRENT signatures on their next check. Returns the EDN path. The .bclj write\n  is best-effort (a stale sibling only weakens cross-module fidelity, never\n  corrupts a check)." [^DefcheckState state ^String module]
   (let [epath (render-edn-with-state! state module)]
   (io/make-parents (io/file (src-path-with-state state module)))
   (try
@@ -112,7 +112,7 @@
   epath))
 
 (defn ^String prime-gwdir-with-state!
-  "Populate <gwdir> with a .bclj for every live module (warm, via the sidecar).\n  Idempotent + cheap to repeat. Call once when an arena's coordinator comes up\n  (and internally by whole-tree-check, so cross-refs resolve current text)." [^DefcheckState state]
+  "Populate <gwdir> with a .bclj for every live module (warm, via the sidecar).\n  Idempotent + cheap to repeat. Call once when an arena's server comes up\n  (and internally by whole-tree-check, so cross-refs resolve current text)." [^DefcheckState state]
   (ensure-sidecar-with-state! state)
   (doseq [m (live-modules-with-state state)]
   (try
@@ -472,7 +472,7 @@
   (if (untyped-mode? src) (analyze-untyped-module-with-state! (:arity-check? state) module src) (check-module-errors-with-state! state module))))
 
 (defn check-def-with-state!
-  "Incremental def-level type check. Returns nil when `module` type-checks\n  against its cached sibling environment, else the adapter-v2 ERROR shape for\n  the offending def (preferring `name`), with the full diagnostic list under\n  :errors. Never throws for a type error — only for infra faults (coordinator or\n  sidecar unreachable), which surface as {:ok false :stage :type :message …}.\n\n  AUTHORITY: catches errors IN `module` (the edited def + its use of siblings).\n  A sibling in ANOTHER module that calls a now-broken `name` is NOT re-checked\n  here — that is whole-tree-check's job (adapter-v2 spec gap 3, deliverable 4b)." [^String module name ensure-sidecar-fn check-errors-fn]
+  "Incremental def-level type check. Returns nil when `module` type-checks\n  against its cached sibling environment, else the adapter-v2 ERROR shape for\n  the offending def (preferring `name`), with the full diagnostic list under\n  :errors. Never throws for a type error — only for infra faults (server or\n  sidecar unreachable), which surface as {:ok false :stage :type :message …}.\n\n  AUTHORITY: catches errors IN `module` (the edited def + its use of siblings).\n  A sibling in ANOTHER module that calls a now-broken `name` is NOT re-checked\n  here — that is whole-tree-check's job (adapter-v2 spec gap 3, deliverable 4b)." [^String module name ensure-sidecar-fn check-errors-fn]
   (try
   (ensure-sidecar-fn)
   (let [errs (check-errors-fn module)]

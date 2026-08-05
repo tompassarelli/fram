@@ -12,7 +12,7 @@
 ;;
 ;; The entity list arrives as a parameter. resolve.clj holds it in the ^:dynamic
 ;; atom `file->ents`; as in Cuts B and C the var cannot change namespace
-;; (coord_daemon.clj and tests/coord_*.clj `binding` these by qualified name), so
+;; (server.clj and server tests `binding` these by qualified name), so
 ;; resolve.clj derefs and hands the module's entities over, and every function
 ;; here is a function of its arguments.
 ;;

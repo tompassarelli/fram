@@ -241,7 +241,7 @@
    req: Any
    served-log: Any] -> Any
   (when (and required? (not= :for-log (:op req)))
-    {:reject ["this coordinator requires a :for-log envelope"]
+    {:reject ["this server requires a :for-log envelope"]
      :code :log-fence-required
      :served-log served-log}))
 
@@ -755,7 +755,7 @@
     (t/->TermCodecDecoded value (deref counter))))
 
 ;; --- FRAMRPC v1 ------------------------------------------------------------
-;; The JVM coordinator listener and native test client share this bounded codec;
+;; The JVM server listener and native test client share this bounded codec;
 ;; its header and body limits are enforced before allocation.
 
 (def rpc-v1-major: Int 1)

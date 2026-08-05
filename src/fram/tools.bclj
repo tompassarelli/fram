@@ -2,7 +2,7 @@
 
 (ns fram.tools
   "The closed AI-facing data and graph-authoring catalog. Reads use one
-  TermStore snapshot; writes return coordinator intents and never mutate the
+  TermStore snapshot; writes return commit-sequencer intents and never mutate the
   store here. Query results and write/edit/error envelopes remain open maps
   because callers discriminate them by key presence.")
 
@@ -24,7 +24,7 @@
 ;; are the single-triple KB writes (assert/retract of ANY predicate); `:query` backs
 ;; `ask`; `:show`/`:validate` are the reads. The trailing seven are GRAPH-AST EDIT ops:
 ;; they author a graph-upstream Beagle module by minting/superseding kind/v/fN facts via
-;; the engine's resolve.clj verbs (NOT a single coordinator triple), so they return a
+;; the engine's resolve.clj verbs (NOT a single commit-sequencer triple), so they return a
 ;; distinct {:edit ...} envelope the host runs out-of-band, recompile-gated and fail-closed.
 ;; :insert-after is the CRDT insert-anywhere (commute) op — insert a NEW top-level def
 ;; AFTER an anchor def, at a (path,tie) order-key strictly between the anchor and its
@@ -73,7 +73,7 @@
 
 ;; Resolve every public predicate spelling through the store's schema view. The
 ;; write intent still carries a string predicate, but aliases are normalized to
-;; the canonical display name before the coordinator sees the intent.
+;; the canonical display name before the commit sequencer sees the intent.
 (defn canonical-predicate
   [session: schema/Session
    pred: String] -> String
@@ -246,7 +246,7 @@
     (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 (concat e9 (concat e10 e11)))))))))))))
 
 ;; READ -> {:rows [...]}.  WRITE (tell/retract) -> {:write {:op :l :p :r}} (host routes it
-;; through the coordinator).  ask/query -> run result.  bad/unknown -> {:error}.
+;; through the commit sequencer).  ask/query -> run result.  bad/unknown -> {:error}.
 ;; args is a (Map Keyword Any): keyword keys -> arbitrary EDN values. The return is the
 ;; tagged result envelope (Any — open-map key-presence gap, see ns doc). The name `query`
 ;; is accepted as an alias for `ask` (same :query op) so the structured escape hatch keeps

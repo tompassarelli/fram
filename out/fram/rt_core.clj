@@ -83,14 +83,14 @@
 
 (def EDIT-BATCH-ENVELOPE-SEAL-FIELDS [:fram-edit-envelope :fram-edit-log :fram-edit-candidate :fram-edit-batch :fram-edit-module :fram-edit-path :fram-edit-base-version :fram-edit-final-version :fram-edit-ops :fram-edit-installed :fram-edit-ops-digest :fram-edit-edn-digest :fram-edit-line-count :fram-edit-batch-sha])
 
-(defn classify-rewrite-crash [^String coord live-ino old-ino new-ino old-bytes old-sha new-sha1 live-line1-sha live-prefix-sha]
+(defn classify-rewrite-crash [^String server-path live-ino old-ino new-ino old-bytes old-sha new-sha1 live-line1-sha live-prefix-sha]
   (cond
-  (nil? live-ino) (throw (ex-info (str "rewrite intent present but " coord " does not exist — refusing to classify") {:path coord :fram/doctor-refusal true}))
+  (nil? live-ino) (throw (ex-info (str "rewrite intent present but " server-path " does not exist — refusing to classify") {:path server-path :fram/doctor-refusal true}))
   (and (some? old-ino) (= live-ino old-ino)) :roll-back
   (and (some? new-ino) (= live-ino new-ino)) :roll-forward
   (and (some? new-sha1) (= new-sha1 live-line1-sha)) :roll-forward
   (and (some? old-bytes) (some? old-sha) (= old-sha live-prefix-sha)) :roll-back
-  :else (throw (ex-info (str "rewrite intent does not match the live corpus at " coord " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path coord :fram/doctor-refusal true}))))
+  :else (throw (ex-info (str "rewrite intent does not match the live corpus at " server-path " (neither source nor replacement inode/sha) — refusing to classify; operator intervention required") {:path server-path :fram/doctor-refusal true}))))
 
 (defn log-envelope [^String canonical-log req]
   (let [base {:op :for-log :expected-log canonical-log :request req}]
@@ -99,7 +99,7 @@
 (defn ^String reject-message [rejection]
   (if (sequential? rejection) (str/join "; " (map str rejection)) (str rejection)))
 
-(defn ^String coord-write-response [resp]
+(defn ^String server-write-response [resp]
   (cond
   (:ok resp) (str "ok:" (:ok resp))
   (= (:reject resp) :conflict) "conflict"
@@ -108,25 +108,25 @@
   (:reject resp) (str "reject:" (reject-message (:reject resp)))
   :else (str "error:" (pr-str resp))))
 
-(defn coord-version-response [resp]
+(defn server-version-response [resp]
   (let [version (:version resp)]
   (if (integer? version) version -1)))
 
-(defn coord-version-for-log-response [resp]
+(defn server-version-for-log-response [resp]
   (cond
   (integer? (:version resp)) (:version resp)
   (= :log-mismatch (:code resp)) -2
   :else -3))
 
-(defn ^String coord-status-response [port resp]
+(defn ^String server-status-response [port resp]
   (cond
-  (integer? (:version resp)) (str "coordinator UP on 127.0.0.1:" port " (v" (:version resp) ")")
-  (= :log-mismatch (:code resp)) (str "coordinator WRONG LOG on 127.0.0.1:" port " — expected " (:expected-log resp) "; daemon serves " (:served-log resp) "; refusing fenced reads and writes")
-  (= "unknown op" (:error resp)) (str "coordinator INCOMPATIBLE on 127.0.0.1:" port " — daemon lacks required log-fence protocol; restart it with current Fram")
-  :else (str "coordinator UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
+  (integer? (:version resp)) (str "server UP on 127.0.0.1:" port " (v" (:version resp) ")")
+  (= :log-mismatch (:code resp)) (str "server WRONG LOG on 127.0.0.1:" port " — expected " (:expected-log resp) "; daemon serves " (:served-log resp) "; refusing fenced reads and writes")
+  (= "unknown op" (:error resp)) (str "server INCOMPATIBLE on 127.0.0.1:" port " — daemon lacks required log-fence protocol; restart it with current Fram")
+  :else (str "server UNUSABLE on 127.0.0.1:" port " — " (pr-str resp))))
 
-(defn ^String coord-status-down [port]
-  (str "coordinator DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
+(defn ^String server-status-down [port]
+  (str "server DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
 
 (defn warm-read-response [resp]
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
@@ -136,3 +136,9 @@
 
 ;; error RewriteCrashError = RewriteCrash
 (defrecord RewriteCrash [message path doctor-refusal])
+
+(defn rewritecrash-message [r] (:message r))
+
+(defn rewritecrash-path [r] (:path r))
+
+(defn rewritecrash-doctor-refusal [r] (:doctor-refusal r))

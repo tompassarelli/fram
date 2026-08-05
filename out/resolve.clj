@@ -147,7 +147,7 @@
 ;; resolver renders a *branch's* line of the code, isolated from main and sibling branches.
 (def ^:dynamic *view* nil)
 ;; M1 Cut B — the view-relative READ layer is now Beagle (src/resolve_read.bclj).
-;; The ^:dynamic vars STAY here: coord_daemon.clj and tests/coord_*.clj `binding`
+;; The ^:dynamic vars STAY here: server.clj and server tests `binding`
 ;; them by qualified name (resolve/ctx, resolve/rctx, resolve/*view*, ...), and a var cannot be
 ;; moved to another namespace without breaking that — a value alias would no
 ;; longer see the binding, and a :refer alias leaves resolve/ctx unresolvable
@@ -169,7 +169,7 @@
 ;; [(inc i)*STEP], tie 0) so the resolver keeps working during corpus migration.
 ;; Library confirmed standalone in cnf_ordkey_test.clj (Stage A, 12/12).
 ;; #36 CRDT ORDER KEYS — now Beagle (src/resolve_core.bclj), aliased here so every
-;; call site in this file, in coord_daemon.clj and in tests/coord_crdt_*.clj keeps
+;; call site in this file, in server.clj and in server tests keeps
 ;; its unqualified spelling. ord-parse returns a resolve-core/OrdKey record; it
 ;; answers :path and :tie exactly as the map it replaced did.
 (def ORD-STEP rc/ORD-STEP)
@@ -279,8 +279,8 @@
 ;; descend-and-bind engine (walk / walk-all / walk-fn-arity / walk-pat-heads /
 ;; walk-quasi / walk-quasi-seq, the binding writes bind! / bind-xmod! /
 ;; bound-render!, the type-position resolvers, the comment resolver and the
-;; per-src driver). As in Cuts B–F the ^:dynamic vars STAY here — coord_daemon.clj
-;; and tests/coord_*.clj `binding` them by qualified name — so `walk-env` reads the
+;; per-src driver). As in Cuts B–F the ^:dynamic vars STAY here — server.clj
+;; and server tests `binding` them by qualified name — so `walk-env` reads the
 ;; dynamic state at call time and hands it over as ONE explicit record. Docstrings
 ;; and the per-def rationale live with the logic, in the module header.
 (defn walk-env []
@@ -777,7 +777,7 @@
 ;; (src/resolve_verbs.bclj), next to their only caller, verb-upsert-form!. Nothing
 ;; in them was host-bound — they read the corpus through the ported read/module
 ;; layers and compare through datum->canon, which moved in step 1. These wrappers
-;; stay for the ns-qualified surface (coord_daemon.clj:3893 calls
+;; stay for the ns-qualified surface (server.clj calls
 ;; resolve/writable-disp-name).
 (defn writable-victim [src datum] (rvb/writable-victim (verb-env) src datum))
 (defn writable-disp-name [datum] (rvb/writable-disp-name datum))
@@ -843,7 +843,7 @@
 ;; M1 Cut J: the logic is Beagle (src/resolve_verbs.bclj) — it was a Verb closure
 ;; only because the ord algebra used to live here, and rc/ord-parse + rc/ord-cmp
 ;; moved in Cut A. This wrapper stays for the ns-qualified surface
-;; (coord_daemon.clj:3975, tests/store_delete_reorder_test.clj).
+;; (server.clj and tests/store_delete_reorder_test.clj).
 (defn wrap-forms [parent]
   (->> (rr/events-by-subject rctx parent)
        (keep (fn [event]
@@ -855,7 +855,7 @@
 ;; ============================================================================
 ;; M1 Cut H — THE VERB LAYER is now Beagle (src/resolve_verbs.bclj): every
 ;; authoring verb's invariant order, reject codes/messages, fact mutations and
-;; emit reporting. As in Cuts B–G the ^:dynamic vars STAY here (coord_daemon.clj
+;; emit reporting. As in Cuts B–G the ^:dynamic vars STAY here (server.clj
 ;; and tests/*.clj `binding` them by qualified name), so `verb-env` reads the
 ;; dynamic state at call time and hands it over as ONE explicit record — together
 ;; with the resolve.clj-local helpers the verbs call (mint/retire/extract/

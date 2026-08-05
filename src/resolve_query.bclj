@@ -27,7 +27,7 @@
 ;; The two Datalog queries build a THROWAWAY store, which is why they carry the
 ;; `!` suffix here that the raw originals did not: they mutate, and Beagle's
 ;; purity gate says so out loud. resolve.clj's wrappers keep the old names, so
-;; coord_daemon.clj's `resolve/blast-closure` and `resolve/dead-private-bindings`
+;; server.clj's `resolve/blast-closure` and `resolve/dead-private-bindings`
 ;; are untouched. The originals' `volatile!` becomes an `atom` — the ref is
 ;; function-local and single-threaded, so the only difference is the barrier.
 ;;

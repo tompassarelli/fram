@@ -10,8 +10,8 @@
 ;; node's children in CRDT-key order.
 ;;
 ;; WHY THE STORE IS A PARAMETER HERE AND A DYNAMIC VAR THERE. resolve.clj holds
-;; `ctx`/`*view*`/`BOUND`/`REFERS`/`KIND` in ^:dynamic vars, and coord_daemon.clj
-;; plus tests/coord_*.clj `binding` them by their QUALIFIED names (resolve/ctx,
+;; `ctx`/`*view*`/`BOUND`/`REFERS`/`KIND` in ^:dynamic vars, and server.clj
+;; plus server tests `binding` them by their QUALIFIED names (resolve/ctx,
 ;; resolve/*view*, ...). A dynamic var cannot be moved to another namespace
 ;; without breaking those: a `(def ctx rr/ctx)` alias copies the value (so
 ;; `binding` no longer reaches the reader) and a `:refer` alias leaves
@@ -19,7 +19,7 @@
 ;; findInternedVar, which ignores referred vars). So the VARS stay in resolve.clj
 ;; as the host state seam and the LOGIC moves here with the state passed
 ;; explicitly; resolve.clj keeps a one-line wrapper per name that reads the var.
-;; Every call site in resolve.clj, coord_daemon.clj and the tests is unchanged.
+;; Every call site in resolve.clj, server.clj and the tests is unchanged.
 ;;
 ;; S2 WIDENED THE IDENTITIES (store-migration ruling, GAP 2). `ctx` is a
 ;; resolve-ident Graph — the store root paired with its live-occurrence rotation

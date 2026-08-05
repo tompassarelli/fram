@@ -103,7 +103,7 @@
 
 (defn strict-log-fence-rejection [^Boolean required? req served-log]
   (if (and required? (not= :for-log (:op req))) (do
-  {:reject ["this coordinator requires a :for-log envelope"] :code :log-fence-required :served-log served-log})))
+  {:reject ["this server requires a :for-log envelope"] :code :log-fence-required :served-log served-log})))
 
 (defn ^Boolean fenced-subscribe? [req]
   (let [inner (:request req)]
