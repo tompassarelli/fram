@@ -21,9 +21,7 @@
 
 (defn max-sequence [frames: (Vec t/TransactionFrame)] -> Int
   (reduce
-   (fn
-     [maximum: Int
-      frame: t/TransactionFrame] -> Int
+   (fn [maximum: Int frame: t/TransactionFrame] -> Int
      (let [sequence (t/transactionframe-sequence frame)]
        (if (> sequence maximum) sequence maximum)))
    0
@@ -37,16 +35,12 @@
           (store/current-sequence ctx)
           (store/dump-term-store ctx)))
 
-(defn fold!
-  [space-id: String
-   frames: (Vec t/TransactionFrame)] -> Fold
+(defn fold! [space-id: String frames: (Vec t/TransactionFrame)] -> Fold
   (let [ctx (store/new-term-store space-id)]
     (doseq [frame frames] (store/replay-transaction! ctx frame))
     (project ctx)))
 
-(defn refold!
-  [space-id: String
-   dump: Any] -> Fold
+(defn refold! [space-id: String dump: Any] -> Fold
   (let [ctx (store/new-term-store space-id)]
     (store/load-term-store! ctx dump)
     (project ctx)))

@@ -30,16 +30,12 @@
 
 (def ISO16-RE: Regex (re-pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}"))
 
-(defn str-index-of
-  [s: String
-   sub: String] -> Int? (str/index-of s sub))
+(defn str-index-of [s: String sub: String] -> Int? (str/index-of s sub))
 
 (defn split-comma [s: String] -> (Vec String)
   (vec (remove str/blank? (map str/trim (str/split s COMMA-RE)))))
 
-(defn str-lt?
-  [a: String
-   b: String] -> Bool (neg? (compare a b)))
+(defn str-lt? [a: String b: String] -> Bool (neg? (compare a b)))
 
 (defn split-kv [line: String] -> (Vec String)
   (let [t (str/trim line) m (re-find SPLIT-KV-RE t)]
@@ -63,9 +59,7 @@
 (defn is-iso-datetime-16 [s: String] -> Bool
   (boolean (and (= 16 (count s)) (re-matches ISO16-RE s))))
 
-(defn repeat-str
-  [s: String
-   n: Int] -> String
+(defn repeat-str [s: String n: Int] -> String
   (apply str (repeat (max 0 (long n)) s)))
 
 (def EDIT-BATCH-ENVELOPE-VERSION: Int 1)
@@ -89,7 +83,8 @@
 
 (def DIGEST-RE: Regex (re-pattern "[0-9a-f]{64}"))
 
-(defn edit-batch-envelope-marker? [record: (Map Keyword (Dyn String Int))] -> Bool
+(defn edit-batch-envelope-marker?
+  [record: (Map Keyword (Dyn String Int))] -> Bool
   (and (map? record) (contains? record :fram-edit-envelope)))
 
 (defn digest? [value: String] -> Bool
@@ -185,7 +180,8 @@
     (str/join "; " (map str rejection))
     (str rejection)))
 
-(defn server-write-response [resp: (Map Keyword (U String Int Keyword (Vec String)))] -> String
+(defn server-write-response
+  [resp: (Map Keyword (U String Int Keyword (Vec String)))] -> String
   (cond
     (:ok resp)
     (str "ok:" (:ok resp))
@@ -206,7 +202,8 @@
 (defn server-version-response [resp: (Map Keyword (U String Int))] -> Int
   (let [version (:version resp)] (if (integer? version) version -1)))
 
-(defn server-version-for-log-response [resp: (Map Keyword (U String Int Keyword))] -> Int
+(defn server-version-for-log-response
+  [resp: (Map Keyword (U String Int Keyword))] -> Int
   (cond
     (integer? (:version resp))
     (:version resp)
@@ -239,10 +236,12 @@
 (defn server-status-down [port: Int] -> String
   (str "server DOWN on 127.0.0.1:" port " — start it with bin/fram-up"))
 
-(defn warm-read-response [resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] -> (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
+(defn warm-read-response
+  [resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] -> (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (and (map? resp) (= "unknown op" (:error resp))) nil resp))
 
-(defn warm-read-for-log-response [resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] -> (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
+(defn warm-read-for-log-response
+  [resp: (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil)))))] -> (U (Map Keyword (U String Int Float Bool Keyword Nil (Vec String) (Vec (Vec (U String Int Float Bool Keyword Nil))))) Nil)
   (if (or (= "unknown op" (:error resp)) (contains? resp :reject)) nil resp))
 
 (defunion :throwable

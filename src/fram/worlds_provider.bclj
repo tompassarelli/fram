@@ -17,28 +17,20 @@
 
 (def ambiguous: Keyword :worlds/ambiguous)
 
-(defn world-id
-  [space: String
-   name: String] -> t/Triple
+(defn world-id [space: String name: String] -> t/Triple
   (if (and (pos? (count space)) (pos? (count name)))
     (t/triple space :worlds/world name)
     (throw (ex-info "world identity requires non-empty space and name" {:type :worlds/invalid-world}))))
 
-(defn blob-id
-  [space: String
-   digest: String] -> t/Triple
+(defn blob-id [space: String digest: String] -> t/Triple
   (t/triple space :worlds/blob digest))
 
-(defn candidate-id
-  [world: t/Triple
-   nonce: String] -> t/Triple
+(defn candidate-id [world: t/Triple nonce: String] -> t/Triple
   (if (pos? (count nonce))
     (t/triple world :worlds/candidate nonce)
     (throw (ex-info "candidate identity requires a non-empty nonce" {:type :worlds/invalid-candidate}))))
 
-(defn operation-id
-  [candidate: t/Triple
-   ordinal: Int] -> t/Triple
+(defn operation-id [candidate: t/Triple ordinal: Int] -> t/Triple
   (if (>= ordinal 0)
     (t/triple candidate :worlds/operation ordinal)
     (throw (ex-info "operation identity requires a non-negative ordinal" {:type :worlds/invalid-operation}))))
@@ -72,15 +64,11 @@
     (t/triple build :worlds/receipt digest)
     (throw (ex-info "receipt digest does not match canonical TermCodec input" {:type :worlds/digest-mismatch}))))
 
-(defn promotion-id
-  [candidate: t/Triple
-   expected-head: Any] -> t/Triple
+(defn promotion-id [candidate: t/Triple expected-head: Any] -> t/Triple
   (t/triple candidate :worlds/promote expected-head))
 
 (defn term-list [values: (Vec Any)] -> Any
-  (reduce (fn
-            [tail: Any
-             value: Any] -> Any (if (t/term? value) (t/triple :worlds/list value tail) (throw (ex-info "world list contains a value outside Term" {:type :worlds/invalid-term}))))
+  (reduce (fn [tail: Any value: Any] -> Any (if (t/term? value) (t/triple :worlds/list value tail) (throw (ex-info "world list contains a value outside Term" {:type :worlds/invalid-term}))))
     :worlds/list-end
     (reverse values)))
 
@@ -141,14 +129,10 @@
       [(= 1 (count values)) (first values)]
       [:else ambiguous])))
 
-(defn has-fact?
-  [live: (Vec t/Triple)
-   proposition: t/Triple] -> Bool
+(defn has-fact? [live: (Vec t/Triple) proposition: t/Triple] -> Bool
   (boolean (some (fn [fact: t/Triple] -> Bool (= proposition fact)) live)))
 
-(defn world-head
-  [live: (Vec t/Triple)
-   world: t/Triple] -> Any
+(defn world-head [live: (Vec t/Triple) world: t/Triple] -> Any
   (fact-value live world :worlds/head none))
 
 (defn candidate-present?
@@ -157,14 +141,10 @@
    candidate: t/Triple] -> Bool
   (has-fact? live (t/triple world :worlds/candidate candidate)))
 
-(defn candidate-sealed
-  [live: (Vec t/Triple)
-   candidate: t/Triple] -> Any
+(defn candidate-sealed [live: (Vec t/Triple) candidate: t/Triple] -> Any
   (fact-value live candidate :worlds/sealed-version none))
 
-(defn linked-operation-count
-  [live: (Vec t/Triple)
-   candidate: t/Triple] -> Int
+(defn linked-operation-count [live: (Vec t/Triple) candidate: t/Triple] -> Int
   (fact-count live candidate :worlds/operation))
 
 (defn operation-value
@@ -173,9 +153,7 @@
    ordinal: Int] -> Any
   (fact-value live (operation-id candidate ordinal) :worlds/value none))
 
-(defn operations-contiguous?
-  [live: (Vec t/Triple)
-   candidate: t/Triple] -> Bool
+(defn operations-contiguous? [live: (Vec t/Triple) candidate: t/Triple] -> Bool
   (let [n (linked-operation-count live candidate)]
     (loop [ordinal 0]
       (if (>= ordinal n)
@@ -199,11 +177,10 @@
                 :worlds/value
                 (operation-value live candidate ordinal)))))))))
 
-(defn seal-digest-input
-  [live: (Vec t/Triple)
-   candidate: t/Triple] -> t/Triple
+(defn seal-digest-input [live: (Vec t/Triple) candidate: t/Triple] -> t/Triple
   (if (operations-contiguous? live candidate)
-    (let [expected (fact-value live candidate :worlds/expected-head ambiguous) facts: (Vec Any) (mapv (fn [fact: t/Triple] -> Any fact) (ordered-operation-facts live candidate))]
+    (let [expected (fact-value live candidate :worlds/expected-head ambiguous) facts: (Vec Any) (mapv (fn
+                                                                                                        [fact: t/Triple] -> Any fact) (ordered-operation-facts live candidate))]
       (if (= expected ambiguous)
         (throw (ex-info "candidate has no unique expected head" {:type :worlds/candidate-invalid}))
         (t/triple candidate
@@ -211,14 +188,10 @@
           (t/triple expected :worlds/operations (term-list facts)))))
     (throw (ex-info "candidate operation sequence is not contiguous" {:type :worlds/candidate-gapped}))))
 
-(defn build-digest-input
-  [version: t/Triple
-   build-spec: Any] -> t/Triple
+(defn build-digest-input [version: t/Triple build-spec: Any] -> t/Triple
   (t/triple version :worlds/build-spec build-spec))
 
-(defn receipt-digest-input
-  [build: t/Triple
-   result: Any] -> t/Triple
+(defn receipt-digest-input [build: t/Triple result: Any] -> t/Triple
   (t/triple build :worlds/result result))
 
 (defn known-version?
@@ -268,9 +241,7 @@
                 (= 1 (fact-count live receipt :worlds/result))
                 (= :worlds/success result)))))))))
 
-(defn one-stage
-  [stage: Keyword
-   result: Keyword] -> (Vec host/ProviderStage)
+(defn one-stage [stage: Keyword result: Keyword] -> (Vec host/ProviderStage)
   [(host/provider-stage worlds-capability stage result)])
 
 (defn reject-plan
@@ -575,9 +546,7 @@
                 (vec digest)))))))
     (throw (ex-info "world digest input lies outside TermCodecV1" {:type :worlds/invalid-term}))))
 
-(defn promotion-result-marker
-  [version: t/Triple
-   receipt: t/Triple] -> t/Triple
+(defn promotion-result-marker [version: t/Triple receipt: t/Triple] -> t/Triple
   (t/triple version :worlds/authorized-by receipt))
 
 (defn promotion-recovery

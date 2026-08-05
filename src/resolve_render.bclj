@@ -74,14 +74,10 @@
       (let [fixed? (and (some? ctx) (some? FIXED) (some? e) (not (empty? (ri/by-subject-predicate ctx e FIXED)))) qual (rr/pred-val ctx view e "qualifier") cpfx (rr/pred-val ctx view e "ctor_prefix") afield (rr/pred-val ctx view e "accessor_field") nm0 (binding-name ctx view BOUND REFERS D) nm (cond (some? cpfx) (str (str cpfx) (str nm0)) (some? afield) (str (str/lower-case (str nm0)) "-" (str afield)) :else nm0)]
         (cond fixed? v (some? qual) (str (str qual) "/" (str nm)) :else nm)))))
 
-(defn ord-edges
-  [ctx: (U ri/Graph Nil)
-   n: Any] -> (Vec Any)
+(defn ord-edges [ctx: (U ri/Graph Nil) n: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? n))
     []
-    (let [rows (reduce (fn
-                         [acc: (Vec Any)
-                          cid: Any] -> (Vec Any) (let [p: Any (ri/predicate-at ctx cid) r: Any (ri/target-at ctx cid)] (if (and (string? p) (rc/ord-pos? p) (some? r)) (conj acc [(rc/ord-parse p) p cid r]) acc))) [] (ri/by-subject ctx n))]
+    (let [rows (reduce (fn [acc: (Vec Any) cid: Any] -> (Vec Any) (let [p: Any (ri/predicate-at ctx cid) r: Any (ri/target-at ctx cid)] (if (and (string? p) (rc/ord-pos? p) (some? r)) (conj acc [(rc/ord-parse p) p cid r]) acc))) [] (ri/by-subject ctx n))]
       (vec (sort-by (fn [row: Any] -> Any (nth row 0)) rc/ord-cmp rows)))))
 
 (defn node->str
@@ -94,7 +90,9 @@
   (let [k (rr/kind-of ctx view n)]
     (cond
       (= "list" k)
-      (let [kids (rr/ordered-children ctx n) h (nth kids 0 nil) hs (if (and (some? h) (= "symbol" (rr/kind-of ctx view h))) (render-sym ctx view BOUND REFERS FIXED h) nil) kidstr (fn [ks: (Vec Any)] -> String (str/join " " (mapv (fn [c: Any] -> String (node->str ctx view BOUND REFERS FIXED c)) ks)))]
+      (let [kids (rr/ordered-children ctx n) h (nth kids 0 nil) hs (if (and (some? h) (= "symbol" (rr/kind-of ctx view h))) (render-sym ctx view BOUND REFERS FIXED h) nil) kidstr (fn
+                                                                                                                                                                                     [ks: (Vec Any)] -> String (str/join " " (mapv (fn
+                                                                                                                                                                                                                                       [c: Any] -> String (node->str ctx view BOUND REFERS FIXED c)) ks)))]
         (cond
           (= hs "#%brackets")
           (str "[" (kidstr (vec (rest kids))) "]")

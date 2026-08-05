@@ -33,9 +33,7 @@
             (profile-header profile-id relational-profile-kind
                             observe-profile-mode)))
 
-(defn profile-rule
-  [profile-id: Any
-   rule: String] -> t/Triple
+(defn profile-rule [profile-id: Any rule: String] -> t/Triple
   (t/triple profile-id profile-includes rule))
 
 (defn- profile-anchor? [value: t/Triple] -> Bool
@@ -74,9 +72,7 @@
                                    relational-profile-rules))))))))
      triples))))
 
-(defn- space-profile-ids
-  [triples: (Vec t/Triple)
-   space-id: String] -> (Vec Any)
+(defn- space-profile-ids [triples: (Vec t/Triple) space-id: String] -> (Vec Any)
   (mapv (fn [value: t/Triple] -> Any (t/triple-slot0 (t/triple-slot2 value)))
         (filterv (fn [value: t/Triple] -> Bool
                    (and (= space-id (t/triple-slot0 value))
@@ -103,9 +99,7 @@
            (not (str/starts-with? spelling kernel-vocabulary-prefix))))
     false))
 
-(defn- grouped-vocabulary?
-  [triples: (Vec t/Triple)
-   term: Any] -> Bool
+(defn- grouped-vocabulary? [triples: (Vec t/Triple) term: Any] -> Bool
   (not (empty?
         (filterv (fn [value: t/Triple] -> Bool
                    (and (= term (t/triple-slot0 value))
@@ -168,9 +162,7 @@
     []
     (let [vocabulary?: Bool (declared-vocabulary-rule? triples space-id)]
       (reduce
-       (fn
-         [violations: (Vec t/Triple)
-          proposition: t/Triple] -> (Vec t/Triple)
+       (fn [violations: (Vec t/Triple) proposition: t/Triple] -> (Vec t/Triple)
          (if (profile-anchor? proposition)
            violations
            (let [relational: (Vec String) (relational-lint-errors proposition)
@@ -180,37 +172,27 @@
                          (vocabulary-lint-errors triples proposition))
                    relational)]
              (reduce
-              (fn
-                [rows: (Vec t/Triple)
-                 rule: String] -> (Vec t/Triple)
+              (fn [rows: (Vec t/Triple) rule: String] -> (Vec t/Triple)
                 (conj rows (t/triple proposition profile-violation rule)))
               violations
               rules))))
        []
        triples))))
 
-(defn triple-eq?
-  [left: t/Triple
-   right: t/Triple] -> Bool
+(defn triple-eq? [left: t/Triple right: t/Triple] -> Bool
   (= left right))
 
-(defn by-slot0
-  [triples: (Vec t/Triple)
-   term: Any] -> (Vec t/Triple)
+(defn by-slot0 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot0 value)))
            triples))
 
-(defn by-slot1
-  [triples: (Vec t/Triple)
-   term: Any] -> (Vec t/Triple)
+(defn by-slot1 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot1 value)))
            triples))
 
-(defn by-slot2
-  [triples: (Vec t/Triple)
-   term: Any] -> (Vec t/Triple)
+(defn by-slot2 [triples: (Vec t/Triple) term: Any] -> (Vec t/Triple)
   (filterv (fn [value: t/Triple] -> Bool
              (= term (t/triple-slot2 value)))
            triples))

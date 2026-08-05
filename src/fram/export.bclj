@@ -40,9 +40,7 @@
 (defn- triple-right [value: t/Triple] -> String
   (string-term (t/triple-slot2 value)))
 
-(defn- vec-contains?
-  [values: (Vec String)
-   wanted: String] -> Bool
+(defn- vec-contains? [values: (Vec String) wanted: String] -> Bool
   (loop [remaining values]
     (if (empty? remaining)
       false
@@ -52,9 +50,7 @@
 
 (defn- distinct-strings [values: (Vec String)] -> (Vec String)
   (reduce
-   (fn
-     [distinct: (Vec String)
-      value: String] -> (Vec String)
+   (fn [distinct: (Vec String) value: String] -> (Vec String)
      (if (vec-contains? distinct value) distinct (conj distinct value)))
    []
    values))
@@ -80,9 +76,7 @@
   (let [registry-triples: (Vec t/Triple) (filterv identity-triple? triples)
         canonical: (Map String String)
         (reduce
-         (fn
-           [names: (Map String String)
-            value: t/Triple] -> (Map String String)
+         (fn [names: (Map String String) value: t/Triple] -> (Map String String)
            (if (= "predicate_name" (triple-predicate value))
              (assoc names (triple-left value) (triple-right value))
              names))
@@ -103,18 +97,14 @@
 (defn- strip-at [spelling: String] -> String
   (if (str/starts-with? spelling "@") (subs spelling 1) spelling))
 
-(defn- predicate-id
-  [registry: PredicateRegistry
-   spelling: String] -> String
+(defn- predicate-id [registry: PredicateRegistry spelling: String] -> String
   (if (str/starts-with? spelling "@")
     spelling
     (let [identity: String?
           (get (predicateregistry-by-name registry) spelling)]
       (if (some? identity) identity (str "@" spelling)))))
 
-(defn- predicate-name
-  [registry: PredicateRegistry
-   spelling: String] -> String
+(defn- predicate-name [registry: PredicateRegistry spelling: String] -> String
   (let [identity (predicate-id registry spelling)
         canonical: String?
         (get (predicateregistry-canonical registry) identity)]
@@ -128,9 +118,7 @@
   (let [identity (predicate-id registry predicate)
         property-id (predicate-id registry property)]
     (reduce
-     (fn
-       [found: String?
-        value: t/Triple] -> String?
+     (fn [found: String? value: t/Triple] -> String?
        (if (and (= identity (predicate-id registry (triple-left value)))
                 (= property-id
                    (predicate-id registry (triple-predicate value))))
@@ -139,9 +127,7 @@
      nil
      triples)))
 
-(defn- fallback-ref?
-  [registry: PredicateRegistry
-   predicate: String] -> Bool
+(defn- fallback-ref? [registry: PredicateRegistry predicate: String] -> Bool
   (let [identity (predicate-id registry predicate)]
     (loop [remaining ref-predicates]
       (if (empty? remaining)
@@ -184,9 +170,7 @@
       (fram.rt/edn-quote value)
       value)))
 
-(defn thread-md
-  [triples: (Vec t/Triple)
-   subject: String] -> String
+(defn thread-md [triples: (Vec t/Triple) subject: String] -> String
   (let [registry (predicate-registry triples)
         selected (subject-triples triples subject)
         present
@@ -205,9 +189,7 @@
         predicates (vec (concat ordered extra))
         lines: (Vec String)
         (reduce
-         (fn
-           [acc: (Vec String)
-            predicate: String] -> (Vec String)
+         (fn [acc: (Vec String) predicate: String] -> (Vec String)
            (let [identity (predicate-id registry predicate)
                  values
                  (mapv

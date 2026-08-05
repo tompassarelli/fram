@@ -52,9 +52,7 @@
    event: t/Triple] -> Bucket
   (assoc bucket key (conj (get bucket key empty-events) event)))
 
-(defn- without-event
-  [events: (Vec t/Triple)
-   target: t/Triple] -> (Vec t/Triple)
+(defn- without-event [events: (Vec t/Triple) target: t/Triple] -> (Vec t/Triple)
   (filterv (fn [event: t/Triple] -> Bool (not (= event target))) events))
 
 (defn- bucket-del
@@ -64,9 +62,7 @@
   (let [remaining: (Vec t/Triple) (without-event (get bucket key empty-events) event)]
     (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
 
-(defn- rotate-add
-  [rotation: Rotation
-   event: t/Triple] -> Rotation
+(defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
   (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
@@ -82,9 +78,7 @@
         [slot2 slot0]
         event))))
 
-(defn- rotate-del
-  [rotation: Rotation
-   event: t/Triple] -> Rotation
+(defn- rotate-del [rotation: Rotation event: t/Triple] -> Rotation
   (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
@@ -100,9 +94,7 @@
         [slot2 slot0]
         event))))
 
-(defn- empty-rotation
-  [space-id: String
-   version: Int] -> Rotation
+(defn- empty-rotation [space-id: String version: Int] -> Rotation
   (->Rotation space-id
     version
     empty-events
@@ -123,9 +115,7 @@
 
 ;; Every bound subset resolves to exactly one bucket key; results stay in commit
 ;; order, so `last` is the newest live occurrence of that pattern.
-(defn by-slot0
-  [rotation: Rotation
-   slot0: Any] -> (Vec t/Triple)
+(defn by-slot0 [rotation: Rotation slot0: Any] -> (Vec t/Triple)
   (get (rotation-spo rotation) [slot0] empty-events))
 
 (defn by-slot01
@@ -134,9 +124,7 @@
    slot1: Any] -> (Vec t/Triple)
   (get (rotation-spo rotation) [slot0 slot1] empty-events))
 
-(defn by-slot1
-  [rotation: Rotation
-   slot1: Any] -> (Vec t/Triple)
+(defn by-slot1 [rotation: Rotation slot1: Any] -> (Vec t/Triple)
   (get (rotation-pos rotation) [slot1] empty-events))
 
 (defn by-slot12
@@ -145,9 +133,7 @@
    slot2: Any] -> (Vec t/Triple)
   (get (rotation-pos rotation) [slot1 slot2] empty-events))
 
-(defn by-slot2
-  [rotation: Rotation
-   slot2: Any] -> (Vec t/Triple)
+(defn by-slot2 [rotation: Rotation slot2: Any] -> (Vec t/Triple)
   (get (rotation-osp rotation) [slot2] empty-events))
 
 (defn by-slot02
@@ -183,14 +169,10 @@
     [(some? slot2) (by-slot2 rotation slot2)]
     [:else (rotation-events rotation)]))
 
-(defn live-occurrence?
-  [rotation: Rotation
-   occurrence: t/Triple] -> Bool
+(defn live-occurrence? [rotation: Rotation occurrence: t/Triple] -> Bool
   (contains? (rotation-by-occurrence rotation) occurrence))
 
-(defn event-at
-  [rotation: Rotation
-   occurrence: t/Triple] -> t/Triple?
+(defn event-at [rotation: Rotation occurrence: t/Triple] -> t/Triple?
   (get (rotation-by-occurrence rotation) occurrence))
 
 (defn newest-first [events: (Vec t/Triple)] -> (Vec t/Triple)
@@ -214,9 +196,7 @@
   (mapv (fn [event: t/Triple] -> t/Triple (occurrence-of event)) events))
 
 (defn project [ctx: (Atom t/TermStore)] -> Rotation
-  (reduce (fn
-            [rotation: Rotation
-             event: t/Triple] -> Rotation (rotate-add rotation event))
+  (reduce (fn [rotation: Rotation event: t/Triple] -> Rotation (rotate-add rotation event))
     (empty-rotation (store/space-id ctx) (store/current-sequence ctx))
     (store/live-occurrences ctx)))
 
@@ -249,9 +229,7 @@
    operations: (Vec t/CommitOperation)] -> Rotation
   (apply-frame rotation space-id (t/->TransactionFrame sequence operations)))
 
-(defn refresh
-  [rotation: Rotation
-   ctx: (Atom t/TermStore)] -> Rotation
+(defn refresh [rotation: Rotation ctx: (Atom t/TermStore)] -> Rotation
   (let [space: String (store/space-id ctx) target (store/current-sequence ctx) pinned (rotation-version rotation)]
     (if (not (= space (rotation-space-id rotation)))
       (throw (ex-info "fram: rotation belongs to a different space" {:type :rotation-space-mismatch}))
@@ -267,8 +245,6 @@
 
 ;; The projection must travel with the root it was built from; a caller holding
 ;; an unpinned rotation is reading a version that no longer exists.
-(defn pinned?
-  [rotation: Rotation
-   ctx: (Atom t/TermStore)] -> Bool
+(defn pinned? [rotation: Rotation ctx: (Atom t/TermStore)] -> Bool
   (and (= (store/space-id ctx) (rotation-space-id rotation))
     (= (store/current-sequence ctx) (rotation-version rotation))))

@@ -159,9 +159,7 @@
   (or (contains? req :te)
       (and (contains? req :module) (contains? req :name))))
 
-(defn request-validation-errors
-  [req: Any
-   decision: Any] -> Any
+(defn request-validation-errors [req: Any decision: Any] -> Any
   (cond
     (not (map? req))
     ["request must be a map"]
@@ -198,9 +196,7 @@
 (defn json-format? [fmt: Any] -> Bool
   (or (= fmt :json) (= fmt "json")))
 
-(defn edn-too-deep?
-  [s: String
-   max-depth: Int] -> Bool
+(defn edn-too-deep? [s: String max-depth: Int] -> Bool
   (loop [i 0 depth 0 mx 0 in-str false esc false]
     (if (>= i (count s))
       (> mx max-depth)
@@ -228,9 +224,7 @@
           :else
           (recur (inc i) depth mx in-str false))))))
 
-(defn parse-request
-  [line: String
-   max-depth: Int] -> Any
+(defn parse-request [line: String max-depth: Int] -> Any
   (do
     (when (edn-too-deep? line max-depth)
       (throw (ex-info "edn too deep" {:type :edn-too-deep})))
@@ -408,9 +402,7 @@
 (defn unknown-op-response [] -> Any
   {:error "unknown op"})
 
-(defn bad-request-response
-  [error-data: Any
-   class-name: String] -> Any
+(defn bad-request-response [error-data: Any class-name: String] -> Any
   {:error (str "bad request: " (or (:type error-data) class-name))})
 
 ;; Catching exceptions and writing/closing sockets are host mechanisms. This
@@ -438,9 +430,7 @@
 
 (def term-codec-v1-depth-limit: Int 256)
 
-(defn- codec-fail!
-  [code: Keyword
-   message: String] -> Any
+(defn- codec-fail! [code: Keyword message: String] -> Any
   (throw (ex-info message {:type code :fram/code code})))
 
 (defn- require-codec-limits!
@@ -503,9 +493,7 @@
         (codec-fail! :term-codec-invalid-utf8
                      (str label " is not valid UTF-8 text"))))))
 
-(defn- strict-utf8-string!
-  [bytes: Any
-   label: String] -> String
+(defn- strict-utf8-string! [bytes: Any label: String] -> String
   (try
     (let [decoder (doto (.newDecoder StandardCharsets/UTF_8)
                     (.onMalformedInput CodingErrorAction/REPORT)
@@ -515,15 +503,11 @@
       (codec-fail! :term-codec-invalid-utf8
                    (str label " is not valid UTF-8")))))
 
-(defn- codec-write-u8!
-  [out: Any
-   value: Int] -> Nil
+(defn- codec-write-u8! [out: Any value: Int] -> Nil
   (.write out (int (bit-and 255 value)))
   nil)
 
-(defn- codec-write-u32-le!
-  [out: Any
-   value: Int] -> Nil
+(defn- codec-write-u32-le! [out: Any value: Int] -> Nil
   (if (and (>= value 0) (<= value 4294967295))
     (do
       (loop [offset 0]
@@ -535,9 +519,7 @@
       nil)
     (codec-fail! :term-codec-integer-range "u32 value is out of range")))
 
-(defn- codec-write-i64-le!
-  [out: Any
-   value: Int] -> Nil
+(defn- codec-write-i64-le! [out: Any value: Int] -> Nil
   (loop [offset 0]
     (if (< offset 8)
       (do
@@ -545,9 +527,7 @@
         (recur (+ offset 1)))
       nil)))
 
-(defn- codec-node!
-  [counter: Any
-   maximum: Int] -> Nil
+(defn- codec-node! [counter: Any maximum: Int] -> Nil
   (let [count-value (swap! counter inc)]
     (if (> count-value maximum)
       (codec-fail! :term-codec-node-limit
@@ -665,17 +645,13 @@
                  (str "TermCodecV1 ended inside " context))
     nil))
 
-(defn- codec-read-u8!
-  [buffer: Any
-   context: String] -> Int
+(defn- codec-read-u8! [buffer: Any context: String] -> Int
   (codec-ensure! buffer 1 context)
   (let [one (byte-array 1)]
     (.get buffer one)
     (bit-and 255 (int (aget one 0)))))
 
-(defn- codec-read-u32-le!
-  [buffer: Any
-   context: String] -> Int
+(defn- codec-read-u32-le! [buffer: Any context: String] -> Int
   (codec-ensure! buffer 4 context)
   (Integer/toUnsignedLong (.getInt buffer)))
 
@@ -770,9 +746,7 @@
 (def rpc-v1-magic: Any
   (.getBytes "FRAMRPC\u0000" StandardCharsets/UTF_8))
 
-(defn- rpc-fail!
-  [code: Keyword
-   message: String] -> Any
+(defn- rpc-fail! [code: Keyword message: String] -> Any
   (throw (ex-info message {:type code :fram/code code})))
 
 (defn- rpc-u32? [value: Int] -> Bool
@@ -798,51 +772,37 @@
     [(= code 4) :event]
     [:else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")]))
 
-(defn- require-rpc-term!
-  [value: Any
-   label: String] -> Nil
+(defn- require-rpc-term! [value: Any label: String] -> Nil
   (if (t/term? value)
     nil
     (rpc-fail! :rpc-invalid-term (str label " must be a Term"))))
 
-(defn- require-rpc-optional-term!
-  [value: Any
-   label: String] -> Nil
+(defn- require-rpc-optional-term! [value: Any label: String] -> Nil
   (if (or (nil? value) (t/term? value))
     nil
     (rpc-fail! :rpc-invalid-term (str label " must be nil or a Term"))))
 
-(defn- require-rpc-string!
-  [value: Any
-   label: String] -> Nil
+(defn- require-rpc-string! [value: Any label: String] -> Nil
   (if (string? value)
     nil
     (rpc-fail! :rpc-invalid-field (str label " must be a String"))))
 
-(defn- require-rpc-keyword!
-  [value: Any
-   label: String] -> Nil
+(defn- require-rpc-keyword! [value: Any label: String] -> Nil
   (if (keyword? value)
     nil
     (rpc-fail! :rpc-invalid-field (str label " must be a Keyword"))))
 
-(defn- require-rpc-u32!
-  [value: Int
-   label: String] -> Nil
+(defn- require-rpc-u32! [value: Int label: String] -> Nil
   (if (rpc-u32? value)
     nil
     (rpc-fail! :rpc-integer-range (str label " is outside u32"))))
 
-(defn- require-rpc-i64!
-  [value: Int
-   label: String] -> Nil
+(defn- require-rpc-i64! [value: Int label: String] -> Nil
   (if (rpc-i64? value)
     nil
     (rpc-fail! :rpc-integer-range (str label " is outside i64"))))
 
-(defn rpc-page-request!
-  [limit: Int
-   cursor: Any] -> t/RpcPageRequest
+(defn rpc-page-request! [limit: Int cursor: Any] -> t/RpcPageRequest
   (require-rpc-u32! limit "page limit")
   (require-rpc-optional-term! cursor "page cursor")
   (t/->RpcPageRequest limit cursor))
@@ -894,9 +854,7 @@
   (require-rpc-optional-term! payload "response payload")
   (t/->RpcResponse space op served-version page error payload))
 
-(defn rpc-request-frame
-  [request-id: Int
-   request: t/RpcRequest] -> t/RpcFrameV1
+(defn rpc-request-frame [request-id: Int request: t/RpcRequest] -> t/RpcFrameV1
   (t/->RpcFrameV1 :request 0 request-id request nil))
 
 (defn rpc-response-frame
@@ -907,9 +865,7 @@
 (defn rpc-cancel-frame [request-id: Int] -> t/RpcFrameV1
   (t/->RpcFrameV1 :cancel 0 request-id nil nil))
 
-(defn rpc-event-frame
-  [request-id: Int
-   event: t/RpcResponse] -> t/RpcFrameV1
+(defn rpc-event-frame [request-id: Int event: t/RpcResponse] -> t/RpcFrameV1
   (t/->RpcFrameV1 :event 0 request-id nil event))
 
 (defn- validate-rpc-page-request! [page: t/RpcPageRequest] -> Nil
@@ -976,9 +932,7 @@
          (rpc-fail! :rpc-invalid-shape "cancel frame body must be empty"))]
       [:else (rpc-fail! :rpc-invalid-kind "FRAMRPC frame kind is unknown")])))
 
-(defn- rpc-add-measured-term!
-  [term: Any
-   nodes: Any] -> Int
+(defn- rpc-add-measured-term! [term: Any nodes: Any] -> Int
   (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
     (if (<= remaining 0)
       (rpc-fail! :rpc-term-node-limit
@@ -989,30 +943,22 @@
         (swap! nodes + (t/termcodecmeasure-nodes measure))
         (t/termcodecmeasure-bytes measure)))))
 
-(defn- rpc-page-request-bytes!
-  [page: t/RpcPageRequest
-   nodes: Any] -> Int
+(defn- rpc-page-request-bytes! [page: t/RpcPageRequest nodes: Any] -> Int
   (let [cursor (t/rpc-page-request-cursor-value page)]
     (+ 5 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-page-response-bytes!
-  [page: t/RpcPageResponse
-   nodes: Any] -> Int
+(defn- rpc-page-response-bytes! [page: t/RpcPageResponse nodes: Any] -> Int
   (let [cursor (t/rpc-page-response-cursor-value page)]
     (+ 6 (if (nil? cursor) 0 (rpc-add-measured-term! cursor nodes)))))
 
-(defn- rpc-error-bytes!
-  [error: t/RpcError
-   nodes: Any] -> Int
+(defn- rpc-error-bytes! [error: t/RpcError nodes: Any] -> Int
   (let [detail (t/rpc-error-detail-value error)]
     (+ 2
        (+ (rpc-add-measured-term! (t/rpcerror-code error) nodes)
           (+ (rpc-add-measured-term! (t/rpcerror-message error) nodes)
              (if (nil? detail) 0 (rpc-add-measured-term! detail nodes)))))))
 
-(defn- rpc-request-body-bytes!
-  [request: t/RpcRequest
-   nodes: Any] -> Int
+(defn- rpc-request-body-bytes! [request: t/RpcRequest nodes: Any] -> Int
   (let [expected (t/rpcrequest-expected-version request)
         page (t/rpcrequest-page request)
         timeout (t/rpcrequest-timeout-ms request)]
@@ -1025,9 +971,7 @@
                       (rpc-add-measured-term! (t/rpc-request-payload-value request)
                                               nodes)))))))))
 
-(defn- rpc-response-body-bytes!
-  [response: t/RpcResponse
-   nodes: Any] -> Int
+(defn- rpc-response-body-bytes! [response: t/RpcResponse nodes: Any] -> Int
   (let [page (t/rpcresponse-page response)
         error (t/rpcresponse-error response)
         payload (t/rpc-response-payload-value response)]
@@ -1057,44 +1001,32 @@
                  "FRAMRPC body exceeds the configured byte limit")
       size)))
 
-(defn- rpc-write-u16-le!
-  [out: Any
-   value: Int] -> Nil
+(defn- rpc-write-u16-le! [out: Any value: Int] -> Nil
   (codec-write-u8! out value)
   (codec-write-u8! out (unsigned-bit-shift-right value 8)))
 
-(defn- rpc-write-present!
-  [out: Any
-   value: Any] -> Nil
+(defn- rpc-write-present! [out: Any value: Any] -> Nil
   (codec-write-u8! out (if (nil? value) 0 1)))
 
-(defn- rpc-write-term!
-  [out: Any
-   value: Any] -> Nil
+(defn- rpc-write-term! [out: Any value: Any] -> Nil
   (write-term-codec-v1! out value rpc-v1-max-string-bytes
                         rpc-v1-max-term-nodes rpc-v1-max-term-depth)
   nil)
 
-(defn- write-rpc-page-request!
-  [out: Any
-   page: t/RpcPageRequest] -> Nil
+(defn- write-rpc-page-request! [out: Any page: t/RpcPageRequest] -> Nil
   (codec-write-u32-le! out (t/rpcpagerequest-limit page))
   (let [cursor (t/rpc-page-request-cursor-value page)]
     (rpc-write-present! out cursor)
     (if (nil? cursor) nil (rpc-write-term! out cursor))))
 
-(defn- write-rpc-page-response!
-  [out: Any
-   page: t/RpcPageResponse] -> Nil
+(defn- write-rpc-page-response! [out: Any page: t/RpcPageResponse] -> Nil
   (codec-write-u32-le! out (t/rpcpageresponse-ordinal page))
   (let [cursor (t/rpc-page-response-cursor-value page)]
     (rpc-write-present! out cursor)
     (if (nil? cursor) nil (rpc-write-term! out cursor)))
   (codec-write-u8! out (if (t/rpcpageresponse-done page) 1 0)))
 
-(defn- write-rpc-error!
-  [out: Any
-   error: t/RpcError] -> Nil
+(defn- write-rpc-error! [out: Any error: t/RpcError] -> Nil
   (rpc-write-term! out (t/rpcerror-code error))
   (codec-write-u8! out (if (t/rpcerror-retryable error) 1 0))
   (rpc-write-term! out (t/rpcerror-message error))
@@ -1102,9 +1034,7 @@
     (rpc-write-present! out detail)
     (if (nil? detail) nil (rpc-write-term! out detail))))
 
-(defn- write-rpc-request!
-  [out: Any
-   request: t/RpcRequest] -> Nil
+(defn- write-rpc-request! [out: Any request: t/RpcRequest] -> Nil
   (rpc-write-term! out (t/rpcrequest-space request))
   (rpc-write-term! out (t/rpcrequest-op request))
   (let [expected (t/rpcrequest-expected-version request)
@@ -1118,9 +1048,7 @@
     (if timeout (codec-write-u32-le! out timeout) nil)
     (rpc-write-term! out (t/rpc-request-payload-value request))))
 
-(defn- write-rpc-response!
-  [out: Any
-   response: t/RpcResponse] -> Nil
+(defn- write-rpc-response! [out: Any response: t/RpcResponse] -> Nil
   (rpc-write-term! out (t/rpcresponse-space response))
   (rpc-write-term! out (t/rpcresponse-op response))
   (codec-write-i64-le! out (t/rpcresponse-served-version response))
@@ -1168,35 +1096,25 @@
     (rpc-fail! :rpc-truncated (str "FRAMRPC ended inside " context))
     nil))
 
-(defn- rpc-read-u8!
-  [buffer: Any
-   context: String] -> Int
+(defn- rpc-read-u8! [buffer: Any context: String] -> Int
   (rpc-ensure! buffer 1 context)
   (let [one (byte-array 1)]
     (.get buffer one)
     (bit-and 255 (int (aget one 0)))))
 
-(defn- rpc-read-u16-le!
-  [buffer: Any
-   context: String] -> Int
+(defn- rpc-read-u16-le! [buffer: Any context: String] -> Int
   (rpc-ensure! buffer 2 context)
   (bit-and 65535 (int (.getShort buffer))))
 
-(defn- rpc-read-u32-le!
-  [buffer: Any
-   context: String] -> Int
+(defn- rpc-read-u32-le! [buffer: Any context: String] -> Int
   (rpc-ensure! buffer 4 context)
   (Integer/toUnsignedLong (.getInt buffer)))
 
-(defn- rpc-read-i64-le!
-  [buffer: Any
-   context: String] -> Int
+(defn- rpc-read-i64-le! [buffer: Any context: String] -> Int
   (rpc-ensure! buffer 8 context)
   (.getLong buffer))
 
-(defn- rpc-read-presence!
-  [buffer: Any
-   context: String] -> Bool
+(defn- rpc-read-presence! [buffer: Any context: String] -> Bool
   (let [value (rpc-read-u8! buffer context)]
     (cond
       [(= value 0) false]
@@ -1205,9 +1123,7 @@
        (rpc-fail! :rpc-invalid-presence
                   (str context " must be the strict byte 0 or 1"))])))
 
-(defn- rpc-read-bool!
-  [buffer: Any
-   context: String] -> Bool
+(defn- rpc-read-bool! [buffer: Any context: String] -> Bool
   (let [value (rpc-read-u8! buffer context)]
     (cond
       [(= value 0) false]
@@ -1216,9 +1132,7 @@
        (rpc-fail! :rpc-invalid-boolean
                   (str context " must be the strict byte 0 or 1"))])))
 
-(defn- rpc-read-term!
-  [buffer: Any
-   nodes: Any] -> Any
+(defn- rpc-read-term! [buffer: Any nodes: Any] -> Any
   (let [remaining (- rpc-v1-max-term-nodes (deref nodes))]
     (if (<= remaining 0)
       (rpc-fail! :rpc-term-node-limit
@@ -1229,9 +1143,7 @@
         (swap! nodes + (t/termcodecdecoded-nodes decoded))
         (t/termcodecdecoded-value decoded)))))
 
-(defn- rpc-read-space-term!
-  [buffer: Any
-   nodes: Any] -> String
+(defn- rpc-read-space-term! [buffer: Any nodes: Any] -> String
   (if (>= (deref nodes) rpc-v1-max-term-nodes)
     (rpc-fail! :rpc-term-node-limit
                "FRAMRPC body exceeds the aggregate Term node limit")
@@ -1260,26 +1172,20 @@
       value
       (rpc-fail! :rpc-invalid-field (str context " must be a String Term")))))
 
-(defn- read-rpc-page-request!
-  [buffer: Any
-   nodes: Any] -> t/RpcPageRequest
+(defn- read-rpc-page-request! [buffer: Any nodes: Any] -> t/RpcPageRequest
   (let [limit (rpc-read-u32-le! buffer "page limit")
         cursor? (rpc-read-presence! buffer "page cursor presence")
         cursor (if cursor? (rpc-read-term! buffer nodes) nil)]
     (rpc-page-request! limit cursor)))
 
-(defn- read-rpc-page-response!
-  [buffer: Any
-   nodes: Any] -> t/RpcPageResponse
+(defn- read-rpc-page-response! [buffer: Any nodes: Any] -> t/RpcPageResponse
   (let [ordinal (rpc-read-u32-le! buffer "page ordinal")
         cursor? (rpc-read-presence! buffer "next cursor presence")
         cursor (if cursor? (rpc-read-term! buffer nodes) nil)
         done (rpc-read-bool! buffer "page done")]
     (rpc-page-response! ordinal cursor done)))
 
-(defn- read-rpc-error!
-  [buffer: Any
-   nodes: Any] -> t/RpcError
+(defn- read-rpc-error! [buffer: Any nodes: Any] -> t/RpcError
   (let [code (rpc-read-keyword-term! buffer nodes "error code")
         retryable (rpc-read-bool! buffer "error retryable")
         message (rpc-read-string-term! buffer nodes "error message")
@@ -1287,9 +1193,7 @@
         detail (if detail? (rpc-read-term! buffer nodes) nil)]
     (rpc-error! code retryable message detail)))
 
-(defn- read-rpc-request!
-  [buffer: Any
-   nodes: Any] -> t/RpcRequest
+(defn- read-rpc-request! [buffer: Any nodes: Any] -> t/RpcRequest
   (let [space (rpc-read-space-term! buffer nodes)
         op (rpc-read-keyword-term! buffer nodes "request op")
         expected? (rpc-read-presence! buffer "expected-version presence")
@@ -1302,9 +1206,7 @@
         payload (rpc-read-term! buffer nodes)]
     (rpc-request! space op expected page timeout payload)))
 
-(defn- read-rpc-response!
-  [buffer: Any
-   nodes: Any] -> t/RpcResponse
+(defn- read-rpc-response! [buffer: Any nodes: Any] -> t/RpcResponse
   (let [space (rpc-read-space-term! buffer nodes)
         op (rpc-read-keyword-term! buffer nodes "response op")
         served (rpc-read-i64-le! buffer "served-version")
@@ -1393,9 +1295,7 @@
 (def query-current: Keyword :query/current)
 
 (defn rpc-list! [values: (Vec Any)] -> Any
-  (reduce (fn
-            [tail: Any
-             value: Any] -> Any
+  (reduce (fn [tail: Any value: Any] -> Any
             (require-rpc-term! value "RPC list value")
             (t/triple :rpc/list value tail))
           rpc-list-end (reverse values)))
@@ -1434,9 +1334,7 @@
 (defn rpc-option-value! [value: Any] -> Any
   (if (rpc-option-present?! value) (t/triple-slot1 value) nil))
 
-(defn rpc-record!
-  [tag: Keyword
-   fields: (Vec Any)] -> t/Triple
+(defn rpc-record! [tag: Keyword fields: (Vec Any)] -> t/Triple
   (t/triple tag (rpc-list! fields) :rpc/record))
 
 (defn rpc-record-fields!
@@ -1492,9 +1390,7 @@
     (rpc-fail! :rpc-invalid-policy "RPC subject policy is invalid"))
   (rpc-record! :rpc/write [proposition policy (rpc-option! fence)]))
 
-(defn rpc-batch!
-  [actions: (Vec Any)
-   fence: Any] -> t/Triple
+(defn rpc-batch! [actions: (Vec Any) fence: Any] -> t/Triple
   (rpc-record! :rpc/batch [(rpc-list! actions) (rpc-option! fence)]))
 
 (defn rpc-triple-pattern!
@@ -1523,32 +1419,22 @@
    ttl-ms: Int] -> t/Triple
   (rpc-record! :lease/acquire [resource holder ttl-ms]))
 
-(defn rpc-lease-renew!
-  [fence: t/Triple
-   ttl-ms: Int] -> t/Triple
+(defn rpc-lease-renew! [fence: t/Triple ttl-ms: Int] -> t/Triple
   (rpc-record! :lease/renew [fence ttl-ms]))
 
-(defn rpc-lease-grant!
-  [fence: t/Triple
-   expires: t/Instant] -> t/Triple
+(defn rpc-lease-grant! [fence: t/Triple expires: t/Instant] -> t/Triple
   (rpc-record! :lease/grant [fence expires]))
 
 (defn rpc-lease-released! [released: Bool] -> t/Triple
   (rpc-record! :lease/released [released]))
 
-(defn rpc-lease-check!
-  [valid: Bool
-   expires: Any] -> t/Triple
+(defn rpc-lease-check! [valid: Bool expires: Any] -> t/Triple
   (rpc-record! :lease/check [valid (rpc-option! expires)]))
 
-(defn rpc-violation!
-  [code: Keyword
-   detail: Any] -> t/Triple
+(defn rpc-violation! [code: Keyword detail: Any] -> t/Triple
   (rpc-record! :rpc/violation [code detail]))
 
-(defn rpc-validation!
-  [valid: Bool
-   violations: (Vec Any)] -> t/Triple
+(defn rpc-validation! [valid: Bool violations: (Vec Any)] -> t/Triple
   (rpc-record! :rpc/validation [valid (rpc-list! violations)]))
 
 (defn rpc-query-variable! [name: String] -> t/Triple
@@ -1557,9 +1443,7 @@
 (defn rpc-query-constant! [value: Any] -> t/Triple
   (rpc-record! :query/const [value]))
 
-(defn rpc-query-head!
-  [relation: String
-   terms: (Vec Any)] -> t/Triple
+(defn rpc-query-head! [relation: String terms: (Vec Any)] -> t/Triple
   (rpc-record! :query/head [relation (rpc-list! terms)]))
 
 (defn rpc-query-relation!
@@ -1581,9 +1465,7 @@
   (rpc-record! :query/function
                [operation (rpc-list! terms) bind-variable]))
 
-(defn rpc-query-rule!
-  [head: t/Triple
-   clauses: (Vec Any)] -> t/Triple
+(defn rpc-query-rule! [head: t/Triple clauses: (Vec Any)] -> t/Triple
   (rpc-record! :query/rule [head (rpc-list! clauses)]))
 
 (defn rpc-query-stratum! [rules: (Vec Any)] -> t/Triple
@@ -1592,9 +1474,7 @@
 (defn rpc-query-find-relation! [relation: String] -> t/Triple
   (rpc-record! :query/find-relation [relation]))
 
-(defn rpc-query-aggregate!
-  [operation: Keyword
-   argument-index: Any] -> t/Triple
+(defn rpc-query-aggregate! [operation: Keyword argument-index: Any] -> t/Triple
   (rpc-record! :query/aggregate [operation (rpc-option! argument-index)]))
 
 (defn rpc-query-having!
@@ -1612,22 +1492,16 @@
                [relation (rpc-list! grouping) (rpc-list! aggregates)
                 (rpc-list! having)]))
 
-(defn rpc-query-plan!
-  [find: t/Triple
-   strata: (Vec Any)] -> t/Triple
+(defn rpc-query-plan! [find: t/Triple strata: (Vec Any)] -> t/Triple
   (rpc-record! :query/plan [find (rpc-list! strata)]))
 
 (defn rpc-query-as-of! [version: Int] -> t/Triple
   (rpc-record! :query/as-of [version]))
 
-(defn rpc-query-since!
-  [lower-exclusive: Int
-   upper: Any] -> t/Triple
+(defn rpc-query-since! [lower-exclusive: Int upper: Any] -> t/Triple
   (rpc-record! :query/since [lower-exclusive upper]))
 
-(defn rpc-query-request!
-  [plan: t/Triple
-   snapshot: Any] -> t/Triple
+(defn rpc-query-request! [plan: t/Triple snapshot: Any] -> t/Triple
   (rpc-record! :query/request [plan snapshot]))
 
 (defn rpc-query-row! [values: (Vec Any)] -> t/Triple

@@ -29,9 +29,7 @@
    bytes: (Vec Int)
    error: String?])
 
-(defrecord FrameDecodeResult
-  [frame: t/TransactionFrame?
-   error: String?])
+(defrecord FrameDecodeResult [frame: t/TransactionFrame? error: String?])
 
 (defn failed-boot [message: String] -> BootResult
   (->BootResult status-fatal nil 0 [] message))
@@ -39,9 +37,7 @@
 (defn failed-bytes [message: String] -> BytesResult
   (->BytesResult status-fatal [] message))
 
-(defn error-or
-  [error: String?
-   fallback: String] -> String
+(defn error-or [error: String? fallback: String] -> String
   (if error error fallback))
 
 (defn valid-byte-vector? [bytes: (Vec Int)] -> Bool
@@ -226,9 +222,7 @@
                      (term-store/replay-transaction! root frame)
                      (recur (deref (wire/decoder-position decoder))))]))]))]))))
 
-(defn boot-framlog!
-  [configured-space-id: String
-   bytes: (Vec Int)] -> BootResult
+(defn boot-framlog! [configured-space-id: String bytes: (Vec Int)] -> BootResult
   (cond
     [(not (valid-byte-vector? bytes))
      (failed-boot "FRAMLOG byte vector contains a value outside u8")]

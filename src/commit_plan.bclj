@@ -77,13 +77,9 @@
 
 (defrecord GroupBatchItem [path: String?])
 
-(defrecord GroupBatch
-  [path: String?
-   indices: (Vec Int)])
+(defrecord GroupBatch [path: String? indices: (Vec Int)])
 
-(defn- group-index
-  [groups: (Vec GroupBatch)
-   path: String?] -> Int?
+(defn- group-index [groups: (Vec GroupBatch) path: String?] -> Int?
   (loop [remaining: (Vec GroupBatch) groups index 0]
     (if (empty? remaining)
       nil
@@ -112,9 +108,7 @@
    exp: Int
    epoch: Int])
 
-(defn lease-expired?
-  [lease: LeaseSnapshot?
-   now-ms: Int] -> Bool
+(defn lease-expired? [lease: LeaseSnapshot? now-ms: Int] -> Bool
   (if (nil? lease) false (<= (:exp lease) now-ms)))
 
 (defn valid-lease-request?
@@ -132,9 +126,7 @@
     (pos? ttl-ms)
     (<= ttl-ms (- max-ms now-ms))))
 
-(defn valid-lease-epoch?
-  [epoch: Any
-   max-epoch: Int] -> Bool
+(defn valid-lease-epoch? [epoch: Any max-epoch: Int] -> Bool
   (and (integer? epoch) (pos? epoch) (<= epoch max-epoch)))
 
 (defn lease-fence-ok?
@@ -147,9 +139,7 @@
     (= (:holder lease) holder)
     (= (:epoch lease) epoch)))
 
-(defn lease-held?
-  [lease: LeaseSnapshot?
-   now-ms: Int] -> Bool
+(defn lease-held? [lease: LeaseSnapshot? now-ms: Int] -> Bool
   (if (nil? lease) false (> (:exp lease) now-ms)))
 
 (defn lease-grant-decision
@@ -199,16 +189,12 @@
     {:retract true}
     {:ok version :noop true}))
 
-(defrecord GroupFlushPolicy
-  [min-items: Int
-   drain-limit: Int])
+(defrecord GroupFlushPolicy [min-items: Int drain-limit: Int])
 
 (defn group-flush-policy [pending-count: Int] -> GroupFlushPolicy
   (->GroupFlushPolicy 1 2147483647))
 
-(defn group-flush-ready?
-  [policy: GroupFlushPolicy
-   batch-count: Int] -> Bool
+(defn group-flush-ready? [policy: GroupFlushPolicy batch-count: Int] -> Bool
   (>= batch-count (:min-items policy)))
 
 (defn queue-admission-decision [deferred: Bool] -> Keyword
@@ -216,9 +202,7 @@
 
 (defn group-lock-order [] -> (Vec Keyword) [:group-io :append-admission])
 
-(defn snapshot-replay-decision
-  [enabled: Bool
-   validation-reason: Any] -> Keyword
+(defn snapshot-replay-decision [enabled: Bool validation-reason: Any] -> Keyword
   (if (or (not enabled) (some? validation-reason)) :fold :replay))
 
 (defn boot-install-decision
@@ -310,7 +294,8 @@
     :return))
 
 (defn migrate-input-plan [raw: (Vec Any)] -> (Map Keyword Any)
-  (let [flat-max-tx (reduce max 0 (map (fn [line: Any] -> Int (let [tx (get line :tx)] (if (int? tx) tx 0))) raw)) asserts (filterv (fn [line: Any] -> Bool (boolean (and (get line :l) (get line :p) (get line :r)))) raw)]
+  (let [flat-max-tx (reduce max 0 (map (fn [line: Any] -> Int (let [tx (get line :tx)] (if (int? tx) tx 0))) raw)) asserts (filterv (fn
+                                                                                                                                      [line: Any] -> Bool (boolean (and (get line :l) (get line :p) (get line :r)))) raw)]
     {:flat-max-tx flat-max-tx :asserts asserts}))
 
 (defn migrate-schema-plan
@@ -336,15 +321,14 @@
 (defn tail-input-plan
   [lines: (Vec Any)
    schema-preds: (Set String)] -> (Map Keyword Any)
-  (let [valid (filterv (fn [line: Any] -> Bool (boolean (and (get line :l) (get line :p) (get line :r) (int? (get line :tx)) (not (contains? schema-preds (get line :p)))))) lines) max-tx (reduce max 0 (map (fn [line: Any] -> Int (get line :tx)) valid))]
+  (let [valid (filterv (fn [line: Any] -> Bool (boolean (and (get line :l) (get line :p) (get line :r) (int? (get line :tx)) (not (contains? schema-preds (get line :p)))))) lines) max-tx (reduce max 0 (map (fn
+                                                                                                                                                                                                                [line: Any] -> Int (get line :tx)) valid))]
     {:valid valid :max-tx max-tx}))
 
 (defn tail-keyed-latest
   [single-preds: (Set String)
    lines: (Vec Any)] -> (Map Any Any)
-  (reduce (fn
-            [latest: (Map Any Any)
-             line: Any] -> (Map Any Any) (let [pred: String (get line :p) key: Any (if (contains? single-preds pred) [(get line :l) pred] [(get line :l) pred (get line :r)]) previous (get latest key) previous-tx: Any (if (nil? previous) nil (get previous :tx)) line-tx: Any (get line :tx)] (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line))))
+  (reduce (fn [latest: (Map Any Any) line: Any] -> (Map Any Any) (let [pred: String (get line :p) key: Any (if (contains? single-preds pred) [(get line :l) pred] [(get line :l) pred (get line :r)]) previous (get latest key) previous-tx: Any (if (nil? previous) nil (get previous :tx)) line-tx: Any (get line :tx)] (if (and (int? previous-tx) (int? line-tx) (>= previous-tx line-tx)) latest (assoc latest key line))))
     {}
     lines))
 

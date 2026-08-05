@@ -135,53 +135,31 @@
 
 (def UNQUOTE-TOKENS: (Set String) #{"~" "," "~@" ",@"})
 
-(defn- sv
-  [w: Walk
-   e: Any] -> Any (rr/sym-val (:ctx w) (:view w) e))
+(defn- sv [w: Walk e: Any] -> Any (rr/sym-val (:ctx w) (:view w) e))
 
-(defn- kd
-  [w: Walk
-   e: Any] -> Any (rr/kind-of (:ctx w) (:view w) e))
+(defn- kd [w: Walk e: Any] -> Any (rr/kind-of (:ctx w) (:view w) e))
 
-(defn- hd
-  [w: Walk
-   e: Any] -> Any (rr/head-sym (:ctx w) (:view w) e))
+(defn- hd [w: Walk e: Any] -> Any (rr/head-sym (:ctx w) (:view w) e))
 
-(defn- kids
-  [w: Walk
-   e: Any] -> (Vec Any) (rr/ordered-children (:ctx w) e))
+(defn- kids [w: Walk e: Any] -> (Vec Any) (rr/ordered-children (:ctx w) e))
 
-(defn- brk?
-  [w: Walk
-   e: Any] -> Bool (rb/brackets? (:ctx w) (:view w) e))
+(defn- brk? [w: Walk e: Any] -> Bool (rb/brackets? (:ctx w) (:view w) e))
 
-(defn- list?
-  [w: Walk
-   e: Any] -> Bool (= "list" (kd w e)))
+(defn- list? [w: Walk e: Any] -> Bool (= "list" (kd w e)))
 
-(defn- xr
-  [w: Walk
-   nm: Any] -> Any (let [f (:xres w)] (f nm)))
+(defn- xr [w: Walk nm: Any] -> Any (let [f (:xres w)] (f nm)))
 
-(defn- tr
-  [w: Walk
-   nm: Any] -> Any (let [f (:tres w)] (f nm)))
+(defn- tr [w: Walk nm: Any] -> Any (let [f (:tres w)] (f nm)))
 
-(defn- ar
-  [w: Walk
-   nm: Any] -> Any (let [f (:ares w)] (f nm)))
+(defn- ar [w: Walk nm: Any] -> Any (let [f (:ares w)] (f nm)))
 
-(defn- scope-lookup
-  [scope: (Vec Any)
-   nm: Any] -> Any
+(defn- scope-lookup [scope: (Vec Any) nm: Any] -> Any
   (loop [i 0]
     (if (>= i (count scope))
       nil
       (let [hit (get (nth scope i) nm)] (if (nil? hit) (recur (inc i)) hit)))))
 
-(defn- push
-  [frame: Any
-   scope: (Vec Any)] -> (Vec Any) (into [frame] scope))
+(defn- push [frame: Any scope: (Vec Any)] -> (Vec Any) (into [frame] scope))
 
 (defn bind!
   [w: Walk
@@ -241,9 +219,7 @@
         :else
         nil))))
 
-(defn walk-type!
-  [w: Walk
-   node: Any] -> Any
+(defn walk-type! [w: Walk node: Any] -> Any
   (cond
     (some? (sv w node))
     (let [nm (sv w node) b (tr w nm)]
@@ -260,14 +236,10 @@
     :else
     nil))
 
-(defn- colon?
-  [w: Walk
-   e: Any] -> Bool
+(defn- colon? [w: Walk e: Any] -> Bool
   (let [v (sv w e)] (and (some? v) (contains? rc/TYPE-COLON (str v)))))
 
-(defn resolve-type-after-colon!
-  [w: Walk
-   nodes: (Vec Any)] -> Any
+(defn resolve-type-after-colon! [w: Walk nodes: (Vec Any)] -> Any
   (loop [xs: (Vec Any) nodes]
     (if (empty? xs)
       nil
@@ -275,9 +247,7 @@
         (let [nxt (nth xs 1 nil)] (when (some? nxt) (walk-type! w nxt)))
         (recur (vec (rest xs)))))))
 
-(defn resolve-types-in-bracket!
-  [w: Walk
-   bracket: Any] -> Any
+(defn resolve-types-in-bracket! [w: Walk bracket: Any] -> Any
   (loop [ks: (Vec Any) (vec (rest (kids w bracket)))]
     (if (empty? ks)
       nil
@@ -415,9 +385,7 @@
         (swap! (:ntype w) (fn [n: Int] -> Int (inc n)))
         true))))
 
-(defn- walk-type-def!
-  [w: Walk
-   ks: (Vec Any)] -> Any
+(defn- walk-type-def! [w: Walk ks: (Vec Any)] -> Any
   (doseq [ch (vec (drop (inc (rc/type-name-index (sv w (nth ks 0 nil)) (sv w (nth ks 1 nil)))) ks))]
     (cond
       (brk? w ch)
@@ -506,7 +474,9 @@
                       scope)
                     walk!)))))
           (= "letfn" hs)
-          (let [bracket (nth ks 1 nil) fnlists (if (and (some? bracket) (brk? w bracket)) (vec (filter (fn [f: Any] -> Bool (= "list" (kd w f))) (vec (rest (kids w bracket))))) []) frame (rb/frame-of (:ctx w) (:view w) (vec (keep (fn [f: Any] -> Any (nth (kids w f) 0 nil)) fnlists))) bodyscope (push frame scope)]
+          (let [bracket (nth ks 1 nil) fnlists (if (and (some? bracket) (brk? w bracket)) (vec (filter (fn
+                                                                                                         [f: Any] -> Bool (= "list" (kd w f))) (vec (rest (kids w bracket))))) []) frame (rb/frame-of (:ctx w) (:view w) (vec (keep (fn
+                                                                                                                                                                                                                                        [f: Any] -> Any (nth (kids w f) 0 nil)) fnlists))) bodyscope (push frame scope)]
             (do
               (doseq [fl fnlists]
                 (walk-fn-arity! w (vec (rest (kids w fl))) bodyscope walk!))
@@ -616,7 +586,9 @@
    ents-of: Any] -> (Map Keyword Any)
   (let [per (fn [f: Any] -> Any (reduce (fn
                                           [m: (Map Any Any)
-                                           s: Any] -> (Map Any Any) (assoc m s (f (vec (get ents-of s []))))) {} srcs)) named (vec (filter (fn [s: Any] -> Bool (some? (rm/module-name ctx view (vec (get ents-of s []))))) srcs)) by-mod (fn [f: Any] -> Any (reduce (fn
+                                           s: Any] -> (Map Any Any) (assoc m s (f (vec (get ents-of s []))))) {} srcs)) named (vec (filter (fn
+                                                                                                                                             [s: Any] -> Bool (some? (rm/module-name ctx view (vec (get ents-of s []))))) srcs)) by-mod (fn
+                                                                                                                                                                                                                                            [f: Any] -> Any (reduce (fn
                                                                                                                                                                                                                                                                         [m: (Map Any Any)
                                                                                                                                                                                                                                                                          s: Any] -> (Map Any Any) (let [ents (vec (get ents-of s []))] (assoc m (rm/module-name ctx view ents) (f ents)))) {} named))]
     {:modframe
@@ -638,9 +610,7 @@
    name->module: Any] -> Any
   (if (some? cache)
     cache
-    (reduce (fn
-              [groups: Any
-               occ: Any] -> Any (let [node-name (ri/value-at ctx occ) module (name->module node-name)] (if (some? module) (update groups module (fnil conj []) (ri/subject-at ctx occ)) groups)))
+    (reduce (fn [groups: Any occ: Any] -> Any (let [node-name (ri/value-at ctx occ) module (name->module node-name)] (if (some? module) (update groups module (fnil conj []) (ri/subject-at ctx occ)) groups)))
       {}
       (ri/by-predicate ctx "name"))))
 
@@ -649,9 +619,12 @@
    view: Any
    groups: Any
    scope: Any] -> (Map Keyword Any)
-  (let [srcs (vec (keys groups)) frame-srcs (if (some? scope) (vec (filter scope srcs)) srcs) per-frame (fn [f: Any] -> Any (reduce (fn
+  (let [srcs (vec (keys groups)) frame-srcs (if (some? scope) (vec (filter scope srcs)) srcs) per-frame (fn
+                                                                                                          [f: Any] -> Any (reduce (fn
                                                                                                                                       [table: Any
-                                                                                                                                       src: Any] -> Any (assoc table src (f (vec (get groups src []))))) {} frame-srcs)) named (vec (filter (fn [src: Any] -> Bool (some? (rm/module-name ctx view (vec (get groups src []))))) srcs)) by-module (fn [f: Any] -> Any (if (some? scope) {} (reduce (fn
+                                                                                                                                       src: Any] -> Any (assoc table src (f (vec (get groups src []))))) {} frame-srcs)) named (vec (filter (fn
+                                                                                                                                                                                                                                              [src: Any] -> Bool (some? (rm/module-name ctx view (vec (get groups src []))))) srcs)) by-module (fn
+                                                                                                                                                                                                                                                                                                                                                   [f: Any] -> Any (if (some? scope) {} (reduce (fn
                                                                                                                                                                                                                                                                                                                                                                                                     [table: Any
                                                                                                                                                                                                                                                                                                                                                                                                      src: Any] -> Any (let [ents (vec (get groups src []))] (assoc table (rm/module-name ctx view ents) (f ents)))) {} named)))]
     {:srcs

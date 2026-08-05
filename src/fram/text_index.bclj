@@ -46,9 +46,7 @@
 (defn no-text-error [] -> TextError
   (->TextError :query-text-none :query-text-none "" 0 0 false))
 
-(defn query-text-error
-  [code: Keyword
-   message: String] -> TextError
+(defn query-text-error [code: Keyword message: String] -> TextError
   (->TextError :fram-query-abort code message 0 0 false))
 
 (defn text-index-limit-error
@@ -73,7 +71,8 @@
 (defn source-result-ok? [result: TextCandidateSourceResult] -> Bool
   (textcandidatesourceresult-ok result))
 
-(defn source-result-source [result: TextCandidateSourceResult] -> TextCandidateSource?
+(defn source-result-source
+  [result: TextCandidateSourceResult] -> TextCandidateSource?
   (textcandidatesourceresult-source result))
 
 (defn source-result-error [result: TextCandidateSourceResult] -> TextError
@@ -104,9 +103,7 @@
 ;; allocate their own collection per row, which the corpus build pays 50k times.
 (defn- token-set [value: String] -> (Set String)
   (persistent!
-   (reduce (fn
-             [folded: Any
-              token: String] -> Any
+   (reduce (fn [folded: Any token: String] -> Any
              (conj! folded (.toLowerCase token java.util.Locale/ROOT)))
            (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
 
@@ -124,9 +121,7 @@
                (+ total 84 (* 4 (count token)) (* 42 (count handles))))
              0 postings))
 
-(defn- index-limit-error
-  [weight: Int
-   maximum: Int] -> TextError?
+(defn- index-limit-error [weight: Int maximum: Int] -> TextError?
   (if (> weight maximum)
     (text-index-limit-error "text index exceeds the snapshot cache budget"
                             weight maximum)
@@ -148,9 +143,7 @@
              (let [value: Any (t/triple-slot2 (nth rows handle))]
                (recur (inc handle)
                       (if (string? value)
-                        (reduce (fn
-                                  [index: Any
-                                   token: String] -> Any
+                        (reduce (fn [index: Any token: String] -> Any
                                   (assoc! index token
                                           (conj (get index token []) handle)))
                                 current (token-set value))
@@ -225,9 +218,7 @@
                  seed)))]
         (->TextHandlesResult true handles (no-text-error))))))
 
-(defn indexed-handles
-  [source: TextCandidateSource
-   needle: Any] -> (Vec Int)
+(defn indexed-handles [source: TextCandidateSource needle: Any] -> (Vec Int)
   (let [result: TextHandlesResult (indexed-handles-result source needle)]
     (if (handles-result-ok? result)
       (handles-result-handles result)
@@ -257,9 +248,7 @@
                          (if matched (conj matches handle) matches)))))]
         (->TextHandlesResult true handles (no-text-error))))))
 
-(defn scan-handles
-  [source: TextCandidateSource
-   needle: Any] -> (Vec Int)
+(defn scan-handles [source: TextCandidateSource needle: Any] -> (Vec Int)
   (let [result: TextHandlesResult (scan-handles-result source needle)]
     (if (handles-result-ok? result)
       (handles-result-handles result)
@@ -293,17 +282,13 @@
        (no-text-error))
       (->TextRowsResult false [] (handles-result-error result)))))
 
-(defn indexed-rows
-  [source: TextCandidateSource
-   needle: Any] -> (Vec (Vec Any))
+(defn indexed-rows [source: TextCandidateSource needle: Any] -> (Vec (Vec Any))
   (let [result: TextRowsResult (indexed-rows-result source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
       (raise-text-error (rows-result-error result)))))
 
-(defn scan-rows
-  [source: TextCandidateSource
-   needle: Any] -> (Vec (Vec Any))
+(defn scan-rows [source: TextCandidateSource needle: Any] -> (Vec (Vec Any))
   (let [result: TextRowsResult (scan-rows-result source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)

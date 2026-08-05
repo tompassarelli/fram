@@ -15,13 +15,9 @@
 (def status-fatal: Int 2)
 (def empty-bytes: (Vec Int) [])
 
-(defrecord Status
-  [code: Int
-   error: String?])
+(defrecord Status [code: Int error: String?])
 
-(defrecord Store
-  [canonical-log-path: String
-   session: schema/Session])
+(defrecord Store [canonical-log-path: String session: schema/Session])
 
 (defrecord Request [frame: t/RpcFrameV1])
 (defrecord Response [frame: t/RpcFrameV1])
@@ -46,13 +42,9 @@
    error: String?
    append-bytes: (Vec Int)])
 
-(defrecord BytesResult
-  [status: Int
-   bytes: (Vec Int)])
+(defrecord BytesResult [status: Int bytes: (Vec Int)])
 
-(defn error-or
-  [error: String?
-   fallback: String] -> String
+(defn error-or [error: String? fallback: String] -> String
   (if error error fallback))
 
 (defn ok-status [] -> Status (->Status status-ok nil))
@@ -171,7 +163,8 @@
 (defn server-codec-read-request! [request-bytes: (Vec Int)] -> RequestResult
   (read-request! request-bytes))
 
-(defn server-codec-write-response! [response-result: ResponseResult] -> BytesResult
+(defn server-codec-write-response!
+  [response-result: ResponseResult] -> BytesResult
   (let [response-value (responseresult-response response-result)]
     (if (and (= status-ok (responseresult-status response-result))
              response-value)

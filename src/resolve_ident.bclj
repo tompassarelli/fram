@@ -63,9 +63,7 @@
    writers: Any
    ordinals: (Atom (Map Any Int))])
 
-(defn graph
-  [store: (Atom t/TermStore)
-   writers: Any] -> Graph
+(defn graph [store: (Atom t/TermStore) writers: Any] -> Graph
   (->Graph store (atom (rot/project store)) writers (atom no-ordinals)))
 
 (defn new-graph [space-id: String] -> Graph
@@ -82,18 +80,14 @@
 
 ;; An explicitly supplied view: the staging layer publishes a committed
 ;; rotation plus its uncommitted overlay here.
-(defn with-view!
-  [g: Graph
-   rotation: rot/Rotation] -> Graph
+(defn with-view! [g: Graph rotation: rot/Rotation] -> Graph
   (do (reset! (graph-view g) rotation) g))
 
 ;; --------------------------------------------------------------- view keys ---
 
 ;; The projection's dense integer for a node, assigned on first sight in mint
 ;; order: a coordinate inside one emitted EDN file, never read back as identity.
-(defn ordinal
-  [g: Graph
-   node: Any] -> Int
+(defn ordinal [g: Graph node: Any] -> Int
   (let [book: (Map Any Int) (deref (graph-ordinals g)) hit: Int? (get book node)]
     (if (some? hit)
       hit
@@ -102,9 +96,7 @@
 
 ;; ------------------------------------------------------------------- reads ---
 
-(defn by-subject
-  [g: Graph
-   subject: Any] -> (Vec Any)
+(defn by-subject [g: Graph subject: Any] -> (Vec Any)
   (rot/occurrences (rot/by-slot0 (view g) subject)))
 
 (defn by-subject-predicate
@@ -113,9 +105,7 @@
    predicate: Any] -> (Vec Any)
   (rot/occurrences (rot/by-slot01 (view g) subject predicate)))
 
-(defn by-predicate
-  [g: Graph
-   predicate: Any] -> (Vec Any)
+(defn by-predicate [g: Graph predicate: Any] -> (Vec Any)
   (rot/occurrences (rot/by-slot1 (view g) predicate)))
 
 (defn by-predicate-value
@@ -124,44 +114,32 @@
    value: Any] -> (Vec Any)
   (rot/occurrences (rot/by-slot12 (view g) predicate value)))
 
-(defn proposition-at
-  [g: Graph
-   occurrence: Any] -> Any
+(defn proposition-at [g: Graph occurrence: Any] -> Any
   (let [event: t/Triple? (rot/event-at (view g) occurrence)]
     (if (nil? event) nil (rot/proposition-of event))))
 
-(defn subject-at
-  [g: Graph
-   occurrence: Any] -> Any
+(defn subject-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
     (if (nil? p) nil (t/triple-slot0 p))))
 
-(defn predicate-at
-  [g: Graph
-   occurrence: Any] -> Any
+(defn predicate-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
     (if (nil? p) nil (t/triple-slot1 p))))
 
-(defn value-at
-  [g: Graph
-   occurrence: Any] -> Any
+(defn value-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
     (if (nil? p) nil (t/triple-slot2 p))))
 
 ;; The value slot AS A NODE REFERENCE: nil when the slot holds a literal — the
 ;; old fact-r nil-propagation, decided by shape instead of by int?.
-(defn target-at
-  [g: Graph
-   occurrence: Any] -> Any
+(defn target-at [g: Graph occurrence: Any] -> Any
   (let [r: Any (if (nil? occurrence) nil (value-at g occurrence))]
     (if (node-id? r) r nil)))
 
 (defn live-propositions [g: Graph] -> (Vec t/Triple)
   (rot/propositions (rot/all-occurrences (view g))))
 
-(defn live?
-  [g: Graph
-   occurrence: Any] -> Bool
+(defn live? [g: Graph occurrence: Any] -> Bool
   (rot/live-occurrence? (view g) occurrence))
 
 ;; Total order on occurrences within one space (sequence, then ordinal), in
@@ -174,9 +152,7 @@
 
 ;; The Term store records no writer (S1), so attribution rides on the handle's
 ;; writers map; an unattributed occurrence reads "", as (str nil) did.
-(defn writer-of
-  [g: Graph
-   occurrence: Any] -> String
+(defn writer-of [g: Graph occurrence: Any] -> String
   (if (t/occurrence-coordinate? occurrence)
     (let [hit: Any (get (graph-writers g) (t/triple-slot0 occurrence))]
       (if (nil? hit) "" (str hit)))
@@ -195,9 +171,7 @@
 
 ;; Emits no operation: an ordinal against the builder's pinned transaction
 ;; coordinate, durable as soon as that transaction commits anything else.
-(defn mint!
-  [g: Graph
-   b: (Atom txn/Builder)] -> Any
+(defn mint! [g: Graph b: (Atom txn/Builder)] -> Any
   (let [node: t/Triple (txn/mint! b)] (do (ordinal g node) node)))
 
 (defn assert-on!
@@ -214,9 +188,7 @@
   (let [p: Any (proposition-at g occurrence)]
     (if (nil? p) nil (txn/retract! b p))))
 
-(defn commit!
-  [g: Graph
-   b: (Atom txn/Builder)] -> Graph
+(defn commit! [g: Graph b: (Atom txn/Builder)] -> Graph
   (do
     (when (pos? (txn/operation-count b)) (txn/commit! (graph-store g) b))
     (refresh! g)))
@@ -233,8 +205,6 @@
 ;; A retraction withdraws the NEWEST live occurrence of its proposition, so
 ;; retiring one of several EQUAL duplicates withdraws the newest rather than the
 ;; named one — the choice fram.rotation and store/apply-operation-state make.
-(defn retire!
-  [g: Graph
-   occurrence: Any] -> Any
+(defn retire! [g: Graph occurrence: Any] -> Any
   (let [b: (Atom txn/Builder) (open g) target: Any (retract-on! g b occurrence)]
     (do (commit! g b) target)))

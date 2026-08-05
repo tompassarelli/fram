@@ -40,16 +40,12 @@
 
 (defn rpc-list [values: (Vec Any)] -> Any
   (reduce
-   (fn
-     [tail: Any
-      value: Any] -> Any
+   (fn [tail: Any value: Any] -> Any
      (t/triple :rpc/list value tail))
    :rpc/list-end
    (reverse values)))
 
-(defn rpc-record
-  [tag: Keyword
-   fields: (Vec Any)] -> t/Triple
+(defn rpc-record [tag: Keyword fields: (Vec Any)] -> t/Triple
   (t/triple tag (rpc-list fields) :rpc/record))
 
 (defn rpc-option [value: Any] -> Any
@@ -133,9 +129,7 @@
 (defn released-record [released: Bool] -> t/Triple
   (rpc-record :lease/released [released]))
 
-(defn check-record
-  [valid: Bool
-   expires-ms: Int?] -> t/Triple
+(defn check-record [valid: Bool expires-ms: Int?] -> t/Triple
   (rpc-record :lease/check
               [valid
                (rpc-option
@@ -181,9 +175,7 @@
           nil))
       nil)))
 
-(defn current-lease
-  [session: schema/Session
-   resource: Any] -> LeaseState?
+(defn current-lease [session: schema/Session resource: Any] -> LeaseState?
   (loop [remaining: (Vec t/Triple)
          (rot/by-slot01 (schema/view session) resource :kernel/lease)
          current: LeaseState? nil]
@@ -198,16 +190,12 @@
                           (leasestate-expires-ms lease)
                           (leasestate-epoch lease)))
 
-(defn held?
-  [lease: LeaseState?
-   now-ms: Int] -> Bool
+(defn held? [lease: LeaseState? now-ms: Int] -> Bool
   (if (nil? lease)
     false
     (plan/lease-held? (decision-snapshot lease) now-ms)))
 
-(defn matching-fence?
-  [lease: LeaseState?
-   fence: FenceResult] -> Bool
+(defn matching-fence? [lease: LeaseState? fence: FenceResult] -> Bool
   (and (not (nil? lease))
        (and (= (leasestate-resource lease) (fenceresult-resource fence))
             (and (= (leasestate-holder lease) (fenceresult-holder fence))
@@ -250,9 +238,7 @@
       (schema/refresh! session)
       (store/current-sequence root))))
 
-(defn retract-lease!
-  [session: schema/Session
-   lease: LeaseState?] -> Int
+(defn retract-lease! [session: schema/Session lease: LeaseState?] -> Int
   (let [root (schema/store-of session)]
     (if (nil? lease)
       (store/current-sequence root)
@@ -262,9 +248,7 @@
         (schema/refresh! session)
         (store/current-sequence root)))))
 
-(defn matching-expiry
-  [lease: LeaseState?
-   fence: FenceResult] -> Int?
+(defn matching-expiry [lease: LeaseState? fence: FenceResult] -> Int?
   (if (nil? lease)
     nil
     (if (matching-fence? lease fence)

@@ -30,9 +30,7 @@
 (defn- reserved-pred? [p: Any] -> Bool
   (contains? reserved-preds p))
 
-(defn- clamp
-  [v: Any
-   default: Int] -> Int
+(defn- clamp [v: Any default: Int] -> Int
   (if (and (integer? v) (pos? v)) (min v default) default))
 
 (defn- valid-elem? [e: Any] -> Bool
@@ -175,9 +173,7 @@
                                   (t/triple-slot2 candidate))))
                             withdrawals))]
                     withdrawal))
-                (metadata-value
-                  [owner: Any
-                   predicate: Keyword] -> Any
+                (metadata-value [owner: Any predicate: Keyword] -> Any
                   (let [event: t/Triple?
                         (last
                           (filterv
@@ -207,9 +203,7 @@
                   (s/resolve-predicate schema p))
                 (nm-of [term: Any] -> Any
                   (or (s/name-of schema term) term))
-                (fwd-events
-                  [left: Any
-                   predicate: Any] -> (Vec t/Triple)
+                (fwd-events [left: Any predicate: Any] -> (Vec t/Triple)
                   (let [candidates: (Vec t/Triple)
                         (cond
                           (some? asof) (snapshot-events)
@@ -233,9 +227,7 @@
                               (= predicate
                                 (t/triple-slot1 proposition))))))
                       candidates)))
-                (rev-events
-                  [predicate: Any
-                   right: Any] -> (Vec t/Triple)
+                (rev-events [predicate: Any right: Any] -> (Vec t/Triple)
                   (filterv
                     (fn [event: t/Triple] -> Bool
                       (if-not (assertion-event? event)
@@ -253,9 +245,7 @@
                         (= left
                           (t/triple-slot0 (event-proposition event)))))
                     (snapshot-events)))
-                (leaf
-                  [predicate: Any
-                   event: t/Triple] -> Any
+                (leaf [predicate: Any event: t/Triple] -> Any
                   (let [proposition: t/Triple (event-proposition event)
                         right: Any (t/triple-slot2 proposition)
                         value: Any
@@ -303,9 +293,7 @@
                         (if (= "single" (s/cardinality schema pname))
                           (last rendered)
                           rendered)))))
-                (subpat->pattern
-                  [key: String
-                   subpattern: Any] -> Any
+                (subpat->pattern [key: String subpattern: Any] -> Any
                   (cond
                     (vector? subpattern) subpattern
                     (integer? subpattern)
@@ -332,9 +320,7 @@
                   (cond
                     (= element :*)
                     (reduce
-                      (fn
-                        [result: Any
-                         predicate: Any] -> Any
+                      (fn [result: Any predicate: Any] -> Any
                         (let [pname: String
                               (s/predicate-name schema predicate)]
                           (if (reserved-pred? pname)
@@ -379,9 +365,7 @@
 
                     (map? element)
                     (reduce
-                      (fn
-                        [result: Any
-                         key: String] -> Any
+                      (fn [result: Any key: String] -> Any
                         (let [subpattern (get element key)]
                           (if (str/starts-with? key "_")
                             (let [predicate (pid-of (subs key 1))]
@@ -443,9 +427,7 @@
                     (do
                       (swap! state (fn [count: Int] -> Int (inc count)))
                       (reduce
-                        (fn
-                          [acc: Any
-                           element: Any] -> Any
+                        (fn [acc: Any element: Any] -> Any
                           (elem acc subject depth
                             (conj visited subject) element))
                         {:fram/id name}

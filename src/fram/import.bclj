@@ -18,9 +18,7 @@
 (declare-extern fram.rt/split-kv [String -> (Vec String)])
 (declare-extern fram.rt/edn-unquote [String -> String])
 
-(defrecord Doc
-  [head: String
-   body: String])
+(defrecord Doc [head: String body: String])
 
 (defrecord PredicateRegistry
   [by-name: (Map String String)
@@ -84,9 +82,7 @@
   (let [registry-triples: (Vec t/Triple) (filterv identity-triple? triples)
         canonical: (Map String String)
         (reduce
-         (fn
-           [names: (Map String String)
-            value: t/Triple] -> (Map String String)
+         (fn [names: (Map String String) value: t/Triple] -> (Map String String)
            (if (= "predicate_name" (triple-predicate value))
              (assoc names (triple-left value) (triple-right value))
              names))
@@ -107,18 +103,14 @@
 (defn- strip-at [spelling: String] -> String
   (if (str/starts-with? spelling "@") (subs spelling 1) spelling))
 
-(defn- predicate-id
-  [registry: PredicateRegistry
-   spelling: String] -> String
+(defn- predicate-id [registry: PredicateRegistry spelling: String] -> String
   (if (str/starts-with? spelling "@")
     spelling
     (let [identity: String?
           (get (predicateregistry-by-name registry) spelling)]
       (if (some? identity) identity (str "@" spelling)))))
 
-(defn- predicate-name
-  [registry: PredicateRegistry
-   spelling: String] -> String
+(defn- predicate-name [registry: PredicateRegistry spelling: String] -> String
   (let [identity (predicate-id registry spelling)
         canonical: String?
         (get (predicateregistry-canonical registry) identity)]
@@ -132,9 +124,7 @@
   (let [identity (predicate-id registry predicate)
         property-id (predicate-id registry property)]
     (reduce
-     (fn
-       [found: String?
-        value: t/Triple] -> String?
+     (fn [found: String? value: t/Triple] -> String?
        (if (and (= identity (predicate-id registry (triple-left value)))
                 (= property-id
                    (predicate-id registry (triple-predicate value))))
@@ -143,9 +133,7 @@
      nil
      triples)))
 
-(defn- fallback-ref?
-  [registry: PredicateRegistry
-   predicate: String] -> Bool
+(defn- fallback-ref? [registry: PredicateRegistry predicate: String] -> Bool
   (let [identity (predicate-id registry predicate)]
     (loop [remaining ref-predicates]
       (if (empty? remaining)
@@ -188,9 +176,7 @@
 (defn- warn [message: String] -> Nil
   (binding [*out* *err*] (println (str "WARN import: " message))))
 
-(defn- file->triples
-  [path: String
-   content: String] -> (Vec t/Triple)
+(defn- file->triples [path: String content: String] -> (Vec t/Triple)
   (let [doc (split-doc content)
         lines (fram.rt/split-on (doc-head doc) "\n")
         n (count lines)
@@ -247,9 +233,7 @@
   (let [files (fram.rt/list-md threads-dir)
         triples: (Vec t/Triple)
         (reduce
-         (fn
-           [acc: (Vec t/Triple)
-            path: String] -> (Vec t/Triple)
+         (fn [acc: (Vec t/Triple) path: String] -> (Vec t/Triple)
            (vec (concat acc (safe-file->triples path))))
          []
          files)]

@@ -45,9 +45,7 @@
    e: Any] -> Bool
   (= "#%map" (rr/head-sym ctx view e)))
 
-(defn- tail
-  [ctx: (U ri/Graph Nil)
-   e: Any] -> (Vec Any)
+(defn- tail [ctx: (U ri/Graph Nil) e: Any] -> (Vec Any)
   (vec (rest (rr/ordered-children ctx e))))
 
 (defn collect-bind-syms
@@ -61,9 +59,7 @@
         (some? v)
         (if (contains? #{"_" "&"} (str v)) [] [n])
         (brackets? ctx view n)
-        (reduce (fn
-                  [acc: (Vec Any)
-                   k: Any] -> (Vec Any) (into acc (collect-bind-syms ctx view k)))
+        (reduce (fn [acc: (Vec Any) k: Any] -> (Vec Any) (into acc (collect-bind-syms ctx view k)))
           []
           (tail ctx n))
         (map-node? ctx view n)
@@ -115,9 +111,7 @@
               (recur ks2
                 (into acc
                   (if (and (some? v2) (map-node? ctx view v2))
-                    (vec (keep-indexed (fn
-                                         [i: Int
-                                          cc: Any] -> Any (if (odd? i) cc nil)) (tail ctx v2)))
+                    (vec (keep-indexed (fn [i: Int cc: Any] -> Any (if (odd? i) cc nil)) (tail ctx v2)))
                     [])))
               (contains? #{":as" ":keys" ":strs" ":syms"} (str kv))
               (recur ks2 acc)
@@ -126,9 +120,7 @@
               :else
               (recur ks2 (into acc (collect-or-vals ctx view k)))))))
       (brackets? ctx view node)
-      (reduce (fn
-                [acc: (Vec Any)
-                 k: Any] -> (Vec Any) (into acc (collect-or-vals ctx view k)))
+      (reduce (fn [acc: (Vec Any) k: Any] -> (Vec Any) (into acc (collect-or-vals ctx view k)))
         []
         (tail ctx node))
       :else
@@ -201,9 +193,7 @@
   [ctx: (U ri/Graph Nil)
    view: Any
    bsyms: (Vec Any)] -> (Map Any Any)
-  (reduce (fn
-            [acc: (Map Any Any)
-             b: Any] -> (Map Any Any) (assoc acc (sv ctx view b) b))
+  (reduce (fn [acc: (Map Any Any) b: Any] -> (Map Any Any) (assoc acc (sv ctx view b) b))
     {}
     bsyms))
 
@@ -218,9 +208,7 @@
         (some? v)
         (if (= "_" (str v)) [] [n])
         (or (= "list" (rr/kind-of ctx view n)) (brackets? ctx view n))
-        (reduce (fn
-                  [acc: (Vec Any)
-                   k: Any] -> (Vec Any) (into acc (match-pat-binds ctx view k)))
+        (reduce (fn [acc: (Vec Any) k: Any] -> (Vec Any) (into acc (match-pat-binds ctx view k)))
           []
           (tail ctx n))
         :else

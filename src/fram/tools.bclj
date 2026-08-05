@@ -45,13 +45,9 @@
   :edit-transaction)
 
 ;; row-result records (one per read arm; each producing lambda is homogeneous)
-(defrecord PredVal
-  [pred: Any
-   value: Any])
+(defrecord PredVal [pred: Any value: Any])
 
-(defrecord ProfileViolation
-  [proposition: Any
-   rule: Any])
+(defrecord ProfileViolation [proposition: Any rule: Any])
 
 ;; tool-spec records — a catalog entry + its params
 (defrecord Param
@@ -74,9 +70,7 @@
 ;; Resolve every public predicate spelling through the store's schema view. The
 ;; write intent still carries a string predicate, but aliases are normalized to
 ;; the canonical display name before the commit sequencer sees the intent.
-(defn canonical-predicate
-  [session: schema/Session
-   pred: String] -> String
+(defn canonical-predicate [session: schema/Session pred: String] -> String
   (let [pid (schema/resolve-predicate session pred)]
     (if (some? pid) (schema/predicate-name session pid) pred)))
 
@@ -229,9 +223,7 @@
        "")]))
 
 ;; --- dispatch ---------------------------------------------------------------
-(defn- spec-by-name
-  [cat: (Vec ToolSpec)
-   name: String] -> ToolSpec?
+(defn- spec-by-name [cat: (Vec ToolSpec) name: String] -> ToolSpec?
   (loop [cs cat]
     (if (empty? cs)
       nil
@@ -239,9 +231,7 @@
 
 ;; required params by op — server-side enforcement (the "can't emit a broken call"
 ;; guarantee, not just an advisory schema): a missing required param is rejected.
-(defn- missing-req
-  [op: Op
-   args: (Map Keyword Any)] -> (Vec String)
+(defn- missing-req [op: Op args: (Map Keyword Any)] -> (Vec String)
   (let [need-spo (or (= op :tell) (= op :retract)) need-module (or (= op :upsert-form) (or (= op :set-body) (or (= op :rename-def) (or (= op :insert-after) (or (= op :insert-before) (or (= op :replace-in-body) (= op :edit-transaction))))))) e1 (if (and need-spo (or (nil? (:subject args)) (or (nil? (:predicate args)) (nil? (:object args))))) ["missing required param 'subject' and/or 'predicate' and/or 'object'"] []) e2 (if (and (= op :show) (nil? (:subject args))) ["missing required param 'subject'"] []) e3 (if (and (= op :query) (nil? (:query args))) ["missing required param 'query'"] []) e4 (if (and need-module (nil? (:module args))) ["missing required param 'module'"] []) e5 (if (and (= op :upsert-form) (nil? (:form args))) ["missing required param 'form'"] []) e6 (if (and (= op :set-body) (or (nil? (:name args)) (nil? (:body args)))) ["missing required param 'name' and/or 'body'"] []) e7 (if (and (= op :rename-def) (or (nil? (:name args)) (nil? (:new-name args)))) ["missing required param 'name' and/or 'new-name'"] []) e8 (if (and (= op :insert-after) (or (nil? (:after args)) (nil? (:form args)))) ["missing required param 'after' and/or 'form'"] []) e9 (if (and (= op :insert-before) (or (nil? (:before args)) (nil? (:form args)))) ["missing required param 'before' and/or 'form'"] []) e10 (if (and (= op :replace-in-body) (or (nil? (:name args)) (or (nil? (:old args)) (nil? (:new args))))) ["missing required param 'name' and/or 'old' and/or 'new'"] []) e11 (if (and (= op :edit-transaction) (nil? (:edits args))) ["missing required param 'edits'"] [])]
     (vec (concat e1 (concat e2 (concat e3 (concat e4 (concat e5 (concat e6 (concat e7 (concat e8 (concat e9 (concat e10 e11)))))))))))))
 

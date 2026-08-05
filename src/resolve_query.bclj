@@ -62,9 +62,7 @@
   (if (some? (rr/refers-target ctx view BOUND REFERS node))
     (if (nil? node) [] [node])
     (if (= "list" (rr/kind-of ctx view node))
-      (reduce (fn
-                [acc: (Vec Any)
-                 ch: Any] -> (Vec Any) (into acc (call-refs ctx view BOUND REFERS ch)))
+      (reduce (fn [acc: (Vec Any) ch: Any] -> (Vec Any) (into acc (call-refs ctx view BOUND REFERS ch)))
         []
         (rr/ordered-children ctx node))
       [])))
@@ -85,9 +83,7 @@
    srcs: (Vec String)
    file-modframe: Any
    ents-of: Any] -> (Map Any Any)
-  (reduce (fn
-            [acc: (Map Any Any)
-             src: String] -> (Map Any Any) (let [frame (get file-modframe src {}) label (src-label ctx view src (get ents-of src []))] (reduce (fn
+  (reduce (fn [acc: (Map Any Any) src: String] -> (Map Any Any) (let [frame (get file-modframe src {}) label (src-label ctx view src (get ents-of src []))] (reduce (fn
                                                                                                                                                  [a: (Map Any Any)
                                                                                                                                                   nm: Any] -> (Map Any Any) (let [leaf (get frame nm)] (assoc a leaf {:key (str src "#" (str leaf)) :file src :module label :name nm}))) acc (set (keys frame)))))
     {}
@@ -101,9 +97,7 @@
    srcs: (Vec String)
    ents-of: Any
    defn-meta: (Map Any Any)] -> (Vec Any)
-  (reduce (fn
-            [acc: (Vec Any)
-             src: String] -> (Vec Any) (reduce (fn
+  (reduce (fn [acc: (Vec Any) src: String] -> (Vec Any) (reduce (fn
                                                  [a: (Vec Any)
                                                   form: Any] -> (Vec Any) (let [d (rm/unwrap-def ctx view form) h (str (rr/head-sym ctx view d))] (cond (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [cl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (contains? defn-meta cl) (conj a [cl d]) a)) (contains? #{"extend-protocol" "extend-type"} h) (reduce (fn
                                                                                                                                                                                                                                                                                                                                                                                            [b: (Vec Any)
@@ -131,9 +125,7 @@
    view: Any
    srcs: (Vec String)
    ents-of: Any] -> (Map Any Keyword)
-  (reduce (fn
-            [acc: (Map Any Keyword)
-             src: String] -> (Map Any Keyword) (reduce (fn
+  (reduce (fn [acc: (Map Any Keyword) src: String] -> (Map Any Keyword) (reduce (fn
                                                          [a: (Map Any Keyword)
                                                           f: Any] -> (Map Any Keyword) (let [d (rm/unwrap-def ctx view f) h (str (rr/head-sym ctx view d))] (if (contains? rc/TOPLEVEL-VALUE-DEFS h) (let [nl (rm/logical-name-leaf ctx view (nth (rr/ordered-children ctx d) 1 nil))] (if (some? (rr/sym-val ctx view nl)) (assoc a nl (if (contains? #{"def-" "defn-"} h) :private :public)) a)) a))) acc (rm/forms-of ctx view (get ents-of src []))))
     {}
@@ -149,9 +141,7 @@
 ;; coordinate, a legacy integer node, or a "src#leaf" string — so the Datalog EDB
 ;; is built straight from propositions and no id interning (and no inverse map)
 ;; stands between a query answer and the identity it names.
-(defn- edge-propositions
-  [edges: (Vec Any)
-   predicate: String] -> (Vec Any)
+(defn- edge-propositions [edges: (Vec Any) predicate: String] -> (Vec Any)
   (mapv (fn [e: Any] -> Any (t/triple (nth e 0) predicate (nth e 1))) edges))
 
 (defn blast-closure! [edges: (Vec Any)] -> (Map Keyword Any)
@@ -165,15 +155,15 @@
                 [(d/relation-literal d/triple-relation
                    [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")])
                  (d/relation-literal "reaches"
-                   [(d/variable "y") (d/variable "z")])])]) reaches (set (mapv (fn [row: Any] -> Any [(nth row 0) (nth row 1)]) (vec (d/facts db "reaches")))) blast (reduce (fn
+                   [(d/variable "y") (d/variable "z")])])]) reaches (set (mapv (fn
+                                                                                 [row: Any] -> Any [(nth row 0) (nth row 1)]) (vec (d/facts db "reaches")))) blast (reduce (fn
                                                                                                                                                                                [m: (Map Any Any)
                                                                                                                                                                                 row: Any] -> (Map Any Any) (let [x (nth row 0) y (nth row 1)] (assoc m y (conj (get m y #{}) x)))) {} (vec reaches))]
     {:reaches reaches :blast blast}))
 
-(defn dead-private-bindings!
-  [cg: (Map Keyword Any)
-   privacy: Any] -> (Set Any)
-  (let [defn-meta (get cg :defn-meta {}) edges (get cg :edges []) marks (mapv (fn [leaf: Any] -> Any (t/triple leaf (if (= :private (get privacy leaf)) IS-PRIV IS-ROOT) leaf)) (vec (set (keys defn-meta)))) db (d/run-strata-db! (d/edb (vec (concat (edge-propositions edges CALLS-DEFN) marks))) [[(d/rule "live" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant IS-ROOT) (d/variable "x")])]) (d/rule "live" [(d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")]) (d/relation-literal "live" [(d/variable "x")])])] [(d/rule "dead" [(d/variable "p")] [(d/relation-literal d/triple-relation [(d/variable "p") (d/constant IS-PRIV) (d/variable "p")]) (d/negated-literal "live" [(d/variable "p")])])]])]
+(defn dead-private-bindings! [cg: (Map Keyword Any) privacy: Any] -> (Set Any)
+  (let [defn-meta (get cg :defn-meta {}) edges (get cg :edges []) marks (mapv (fn
+                                                                                [leaf: Any] -> Any (t/triple leaf (if (= :private (get privacy leaf)) IS-PRIV IS-ROOT) leaf)) (vec (set (keys defn-meta)))) db (d/run-strata-db! (d/edb (vec (concat (edge-propositions edges CALLS-DEFN) marks))) [[(d/rule "live" [(d/variable "x")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant IS-ROOT) (d/variable "x")])]) (d/rule "live" [(d/variable "y")] [(d/relation-literal d/triple-relation [(d/variable "x") (d/constant CALLS-DEFN) (d/variable "y")]) (d/relation-literal "live" [(d/variable "x")])])] [(d/rule "dead" [(d/variable "p")] [(d/relation-literal d/triple-relation [(d/variable "p") (d/constant IS-PRIV) (d/variable "p")]) (d/negated-literal "live" [(d/variable "p")])])]])]
     (set (vec (keep (fn [row: Any] -> Any (nth row 0)) (vec (d/facts db "dead")))))))
 
 ;; ------------------------------------------------------------ call-edges ---

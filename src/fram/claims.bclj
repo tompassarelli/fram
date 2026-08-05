@@ -61,46 +61,34 @@
 
 (def default-views: Any {:verified verified-view :rejected rejected-view})
 
-(defn scoped-view
-  [root: String
-   agent: String] -> String
+(defn scoped-view [root: String agent: String] -> String
   (str root ":" agent))
 
 (defn- sess [co: Any] -> Any (get co :schema))
 
 (defn- vw [co: Any] -> Any (s/view (sess co)))
 
-(defn- pid
-  [co: Any
-   spelling: String] -> Any
+(defn- pid [co: Any spelling: String] -> Any
   (s/resolve-predicate (sess co) spelling))
 
-(defn- family?
-  [root: String
-   nm: Any] -> Bool
+(defn- family? [root: String nm: Any] -> Bool
   (if (nil? nm)
     false
     (or (= nm root) (str/starts-with? (str nm) (str root ":")))))
 
 ;; The Term store records no writer, so attribution rides the server handle.
-(defn- writer-of
-  [co: Any
-   occurrence: Any] -> Any
+(defn- writer-of [co: Any occurrence: Any] -> Any
   (get (get co :writers) occurrence))
 
 ;; Occurrence order IS ascending order, so the legacy cid-ascending sort is the
 ;; identity here — and Terms have no total order to sort by.
-(defn evidence-nodes
-  [co: Any
-   claim: Any] -> Any
+(defn evidence-nodes [co: Any claim: Any] -> Any
   (let [p (pid co evidence-pred)]
     (if (nil? p)
       []
       (vec (distinct (rot/values (rot/by-slot01 (vw co) claim p)))))))
 
-(defn evidence
-  [co: Any
-   node: Any] -> Any
+(defn evidence [co: Any node: Any] -> Any
   (let [st (sess co)]
     {:node
      node
@@ -113,14 +101,10 @@
      :world
      (s/lookup st node world-pred)}))
 
-(defn provenance
-  [co: Any
-   claim: Any] -> Any
+(defn provenance [co: Any claim: Any] -> Any
   (mapv (fn [n: Any] -> Any (evidence co n)) (evidence-nodes co claim)))
 
-(defn- selections-of
-  [co: Any
-   claim: Any] -> Any
+(defn- selections-of [co: Any claim: Any] -> Any
   (let [p (pid co select-pred)]
     (if (nil? p) [] (rot/by-slot12 (vw co) p claim))))
 
@@ -150,27 +134,20 @@
         occurrence}]
       [:else nil])))
 
-(defn verdict ([co: Any
-                claim: Any] -> Any (verdict co default-views claim))
+(defn verdict ([co: Any claim: Any] -> Any (verdict co default-views claim))
   ([co: Any
     views: Any
     claim: Any] :-
    Any
-   (reduce (fn
-             [best: Any
-              selection: Any] -> Any (let [v (verdict-of co views selection)] (cond [(nil? v) best] [(nil? best) v] [(t/occurrence-before? (get best :cid) (get v :cid)) v] [:else best])))
+   (reduce (fn [best: Any selection: Any] -> Any (let [v (verdict-of co views selection)] (cond [(nil? v) best] [(nil? best) v] [(t/occurrence-before? (get best :cid) (get v :cid)) v] [:else best])))
      nil
      (selections-of co claim))))
 
-(defn verifier
-  [co: Any
-   claim: Any] -> Any
+(defn verifier [co: Any claim: Any] -> Any
   (let [v (verdict co claim)]
     (if (and (some? v) (= :verified (get v :verdict))) (get v :by) nil)))
 
-(defn rejection
-  [co: Any
-   claim: Any] -> Any
+(defn rejection [co: Any claim: Any] -> Any
   (let [v (verdict co claim)]
     (if (and (some? v) (= :rejected (get v :verdict)))
       {:reason
@@ -181,8 +158,7 @@
        (get v :cid)}
       nil)))
 
-(defn status ([co: Any
-               claim: Any] -> Any (status co default-views claim))
+(defn status ([co: Any claim: Any] -> Any (status co default-views claim))
   ([co: Any
     views: Any
     claim: Any] :-
@@ -195,30 +171,22 @@
          [(not (empty? (evidence-nodes co claim))) :pending]
          [:else nil])))))
 
-(defn- version-record-of
-  [co: Any
-   vid: Any] -> Any
+(defn- version-record-of [co: Any vid: Any] -> Any
   (let [e (s/resolve-name (sess co) (str version-prefix vid))]
     (if (nil? e)
       nil
       (let [t (s/lookup (sess co) e world-record-pred)]
         (if (nil? t) nil (fram.rt/parse-edn (str t)))))))
 
-(defn- version-chain
-  [co: Any
-   vid: Any] -> Any
+(defn- version-chain [co: Any vid: Any] -> Any
   (loop [v vid acc {}]
     (if (or (nil? v) (contains? acc v))
       acc
       (let [r (version-record-of co v)]
         (if (nil? r) acc (recur (get r :base) (assoc acc v r)))))))
 
-(defn- slot-blobs
-  [co: Any
-   vid: Any] -> Any
-  (reduce (fn
-            [m: Any
-             e: Any] -> Any (assoc m (get e :slot) (get e :blob-id)))
+(defn- slot-blobs [co: Any vid: Any] -> Any
+  (reduce (fn [m: Any e: Any] -> Any (assoc m (get e :slot) (get e :blob-id)))
     {}
     (w/manifest (version-chain co vid) vid)))
 
@@ -229,15 +197,11 @@
   (let [a (slot-blobs co from) b (slot-blobs co to)]
     (vec (filterv (fn [k: Any] -> Bool (not (= (get a k) (get b k)))) (vec (sort (vec (keys a))))))))
 
-(defn- verdict-view-ids
-  [co: Any
-   views: Any] -> Any
+(defn- verdict-view-ids [co: Any views: Any] -> Any
   (let [p (pid co select-pred)]
     (if (nil? p)
       []
-      (vec (distinct (reduce (fn
-                               [acc: Any
-                                selection: Any] -> Any (let [l (t/triple-slot0 (rot/proposition-of selection))] (if (family? (get views :verified) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-slot1 (vw co) p)))))))
+      (vec (distinct (reduce (fn [acc: Any selection: Any] -> Any (let [l (t/triple-slot0 (rot/proposition-of selection))] (if (family? (get views :verified) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-slot1 (vw co) p)))))))
 
 ;; `occurrence` keeps the head restricted to LIVE assertions — the successor of
 ;; the retired fact-id literal, which typed ?x as a fact object.
@@ -252,7 +216,8 @@
    (let [evp (pid co evidence-pred) srp (pid co source-pred) wlp (pid co world-pred) selp (pid co select-pred) slots (if (nil? from) [] (changed-slots co from to)) vids (verdict-view-ids co views)]
      (if (or (nil? evp) (or (nil? srp) (or (nil? wlp) (or (nil? selp) (or (nil? from) (or (empty? slots) (empty? vids)))))))
        [[] []]
-       [(vec (concat (mapv (fn [sid: Any] -> Any (d/rule changed-slot-relation [(d/constant sid)] [])) slots) (mapv (fn [v: Any] -> Any (d/rule verdict-view-relation [(d/constant v)] [])) vids)))
+       [(vec (concat (mapv (fn [sid: Any] -> Any (d/rule changed-slot-relation [(d/constant sid)] [])) slots) (mapv (fn
+                                                                                                                      [v: Any] -> Any (d/rule verdict-view-relation [(d/constant v)] [])) vids)))
         [(d/rule reverification-relation
            [(d/variable "x")]
            [(d/relation-literal d/triple-relation

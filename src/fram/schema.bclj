@@ -129,26 +129,18 @@
 (defn refresh! [s: Session] -> Session
   (do (reset! (session-view s) (rot/refresh (view s) (store-of s))) s))
 
-(defn- commit!
-  [s: Session
-   builder: (Atom txn/Builder)] -> Session
+(defn- commit! [s: Session builder: (Atom txn/Builder)] -> Session
   (do (txn/commit! (store-of s) builder) (refresh! s)))
 
-(defn- interned?
-  [s: Session
-   term: Any] -> Bool
+(defn- interned? [s: Session term: Any] -> Bool
   (some? (c/known-term-handle (deref (store-of s)) term)))
 
-(defn predicate-ids
-  [s: Session
-   spelling: String] -> (Vec Any)
+(defn predicate-ids [s: Session spelling: String] -> (Vec Any)
   (vec (distinct (concat (rot/subjects (rot/by-slot12 (view s) predicate-name-predicate spelling)) (rot/subjects (rot/by-slot12 (view s) predicate-alias-predicate spelling))))))
 
 ;; An unregistered spelling resolves to the Term itself when the store already
 ;; knows it, and to nil otherwise — the legacy value-id fallback, unchanged.
-(defn resolve-predicate
-  [s: Session
-   spelling: String] -> Any
+(defn resolve-predicate [s: Session spelling: String] -> Any
   (let [ids: (Vec Any) (predicate-ids s spelling)]
     (cond
       [(> (count ids) 1)
@@ -156,15 +148,11 @@
       [(= (count ids) 1) (first ids)]
       [:else (if (interned? s spelling) spelling nil)])))
 
-(defn predicate-name
-  [s: Session
-   pid: Any] -> String
+(defn predicate-name [s: Session pid: Any] -> String
   (let [events: (Vec t/Triple) (rot/by-slot01 (view s) pid predicate-name-predicate) raw: Any (if (empty? events) pid (t/triple-slot2 (rot/proposition-of (last events))))]
     (if (string? raw) raw (str raw))))
 
-(defn register-predicate!
-  [s: Session
-   spelling: String] -> Any
+(defn register-predicate! [s: Session spelling: String] -> Any
   (let [candidate (resolve-predicate s spelling) canonical (if (some? candidate) (predicate-name s candidate) spelling) default-alias (str ":" canonical) alias-ids: (Vec Any) (predicate-ids s default-alias)]
     (do
       (when (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids))))))
@@ -180,9 +168,7 @@
           (when (pos? (txn/operation-count builder)) (commit! s builder))
           pid)))))
 
-(defn cardinality
-  [s: Session
-   pname: String] -> String
+(defn cardinality [s: Session pname: String] -> String
   (let [pid (resolve-predicate s pname) card (resolve-predicate s cardinality-predicate) events: (Vec t/Triple) (if (and (some? pid) (some? card)) (rot/by-slot01 (view s) pid card) [])]
     (if (empty? events)
       multi
@@ -258,14 +244,10 @@
    nm: String] -> t/Triple
   (assert! s subject name-predicate nm))
 
-(defn name-of
-  [s: Session
-   subject: Any] -> Any
+(defn name-of [s: Session subject: Any] -> Any
   (lookup s subject name-predicate))
 
-(defn resolve-name
-  [s: Session
-   nm: String] -> Any
+(defn resolve-name [s: Session nm: String] -> Any
   (let [ls: (Vec Any) (find-by s name-predicate nm)]
     (if (empty? ls) nil (first ls))))
 

@@ -42,13 +42,9 @@
 
 (def SEG-RE: Any (re-pattern "seg\\d+"))
 
-(defrecord OrdPair
-  [key: rc/OrdKey
-   child: Any])
+(defrecord OrdPair [key: rc/OrdKey child: Any])
 
-(defrecord SegPair
-  [idx: Int
-   child: Any])
+(defrecord SegPair [idx: Int child: Any])
 
 (defn view-cids
   [ctx: ri/Graph
@@ -56,9 +52,7 @@
    cids: (Vec Any)] -> (U (Vec Any) Nil)
   (if (nil? v)
     nil
-    (let [sel (reduce (fn
-                        [acc: (Set Any)
-                         occ: Any] -> (Set Any) (let [r (ri/value-at ctx occ)] (if (nil? r) acc (conj acc r)))) #{} (ri/by-subject-predicate ctx v "selects"))]
+    (let [sel (reduce (fn [acc: (Set Any) occ: Any] -> (Set Any) (let [r (ri/value-at ctx occ)] (if (nil? r) acc (conj acc r)))) #{} (ri/by-subject-predicate ctx v "selects"))]
       (filterv (fn [cid: Any] -> Bool (contains? sel cid)) cids))))
 
 (defn- pool-of
@@ -68,9 +62,7 @@
   (let [in-view (if (nil? view) nil (view-cids ctx view cids))]
     (if (or (nil? in-view) (empty? in-view)) cids in-view)))
 
-(defn- occ-key
-  [ctx: ri/Graph
-   occ: Any] -> (Vec Any)
+(defn- occ-key [ctx: ri/Graph occ: Any] -> (Vec Any)
   [(ri/occurrence-order occ) (ri/writer-of ctx occ)])
 
 (defn select-main-1
@@ -95,9 +87,7 @@
       (first (sort-by (fn [cid: Any] -> (Vec Any) (occ-key ctx cid))
                (pool-of ctx view cids))))))
 
-(defn- fact-r
-  [ctx: (U ri/Graph Nil)
-   cid: Any] -> Any
+(defn- fact-r [ctx: (U ri/Graph Nil) cid: Any] -> Any
   (if (or (nil? ctx) (nil? cid)) nil (ri/target-at ctx cid)))
 
 (defn pred-val
@@ -122,25 +112,17 @@
    e: Any] -> Any
   (if (= "symbol" (kind-of ctx view e)) (pred-val ctx view e "v") nil))
 
-(defn ordered-children
-  [ctx: (U ri/Graph Nil)
-   e: Any] -> (Vec Any)
+(defn ordered-children [ctx: (U ri/Graph Nil) e: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? e))
     []
-    (let [pairs (reduce (fn
-                          [acc: (Vec OrdPair)
-                           cid: Any] -> (Vec OrdPair) (let [k (rc/ord-parse (ri/predicate-at ctx cid)) r (fact-r ctx cid)] (if (or (nil? k) (nil? r)) acc (conj acc (->OrdPair k r))))) [] (ri/by-subject ctx e))]
+    (let [pairs (reduce (fn [acc: (Vec OrdPair) cid: Any] -> (Vec OrdPair) (let [k (rc/ord-parse (ri/predicate-at ctx cid)) r (fact-r ctx cid)] (if (or (nil? k) (nil? r)) acc (conj acc (->OrdPair k r))))) [] (ri/by-subject ctx e))]
       (mapv (fn [pr: OrdPair] -> Any (:child pr))
         (sort-by (fn [pr: OrdPair] -> rc/OrdKey (:key pr)) rc/ord-cmp pairs)))))
 
-(defn ordered-segs
-  [ctx: (U ri/Graph Nil)
-   e: Any] -> (Vec Any)
+(defn ordered-segs [ctx: (U ri/Graph Nil) e: Any] -> (Vec Any)
   (if (or (nil? ctx) (nil? e))
     []
-    (let [pairs (reduce (fn
-                          [acc: (Vec SegPair)
-                           cid: Any] -> (Vec SegPair) (let [p: Any (ri/predicate-at ctx cid) r (fact-r ctx cid)] (if (and (string? p) (some? (re-matches SEG-RE (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))] (if (nil? n) acc (conj acc (->SegPair n r)))) acc))) [] (ri/by-subject ctx e))]
+    (let [pairs (reduce (fn [acc: (Vec SegPair) cid: Any] -> (Vec SegPair) (let [p: Any (ri/predicate-at ctx cid) r (fact-r ctx cid)] (if (and (string? p) (some? (re-matches SEG-RE (str p))) (some? r)) (let [n (parse-long (subs (str p) 3))] (if (nil? n) acc (conj acc (->SegPair n r)))) acc))) [] (ri/by-subject ctx e))]
       (mapv (fn [pr: SegPair] -> Any (:child pr))
         (sort-by (fn [pr: SegPair] -> Int (:idx pr)) pairs)))))
 
@@ -341,9 +323,7 @@
         (resync! context)
         coordinate)))
 
-(defn events-by-subject
-  [context: ri/Graph
-   subject: Any] -> (Vec t/Triple)
+(defn events-by-subject [context: ri/Graph subject: Any] -> (Vec t/Triple)
   (rot/by-slot0 (ri/view context) subject))
 
 (defn events-by-subject-predicate

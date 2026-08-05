@@ -74,7 +74,8 @@
 (defn source-result-source [result: TextSearchSourceResult] -> TextSearchSource?
   (textsearchsourceresult-source result))
 
-(defn source-result-error [result: TextSearchSourceResult] -> text-index/TextError
+(defn source-result-error
+  [result: TextSearchSourceResult] -> text-index/TextError
   (textsearchsourceresult-error result))
 
 (defn handles-result-ok? [result: TextSearchHandlesResult] -> Bool
@@ -83,7 +84,8 @@
 (defn handles-result-handles [result: TextSearchHandlesResult] -> (Vec Int)
   (textsearchhandlesresult-handles result))
 
-(defn handles-result-error [result: TextSearchHandlesResult] -> text-index/TextError
+(defn handles-result-error
+  [result: TextSearchHandlesResult] -> text-index/TextError
   (textsearchhandlesresult-error result))
 
 (defn rows-result-ok? [result: TextSearchRowsResult] -> Bool
@@ -120,17 +122,13 @@
                    tokens
                    (conj tokens (lower token)))))))))
 
-(defn- drop-last
-  [value: String
-   amount: Int] -> String
+(defn- drop-last [value: String amount: Int] -> String
   (subs value 0 (- (count value) amount)))
 
 (defn- vowel? [character: String] -> Bool
   (contains? #{"a" "e" "i" "o" "u"} character))
 
-(defn- vowel-at?
-  [value: String
-   index: Int] -> Bool
+(defn- vowel-at? [value: String index: Int] -> Bool
   (vowel? (subs value index (inc index))))
 
 (defn- has-vowel? [value: String] -> Bool
@@ -211,9 +209,7 @@
   [postings: PostingMap
    keys: (Vec String)
    handle: Int] -> PostingMap
-  (reduce (fn
-            [current: PostingMap
-             key: String] -> PostingMap
+  (reduce (fn [current: PostingMap key: String] -> PostingMap
             (assoc current key (conj (get current key []) handle)))
           postings keys))
 
@@ -226,35 +222,25 @@
              0 postings))
 
 (defn- token-rows-weight [rows: (Vec (Vec String))] -> Int
-  (reduce (fn
-            [total: Int
-             tokens: (Vec String)] -> Int
+  (reduce (fn [total: Int tokens: (Vec String)] -> Int
             (+ total 42
-               (reduce (fn
-                         [subtotal: Int
-                          token: String] -> Int
+               (reduce (fn [subtotal: Int token: String] -> Int
                          (+ subtotal 42 (* 4 (count token))))
                        0 tokens)))
           0 rows))
 
 (defn- strings-weight [values: (Vec String)] -> Int
-  (reduce (fn
-            [total: Int
-             value: String] -> Int
+  (reduce (fn [total: Int value: String] -> Int
             (+ total 70 (* 4 (count value))))
           0 values))
 
-(defn- index-limit-error
-  [weight: Int
-   maximum: Int] -> text-index/TextError?
+(defn- index-limit-error [weight: Int maximum: Int] -> text-index/TextError?
   (if (> weight maximum)
     (text-index/text-index-limit-error
      "text search index exceeds the snapshot cache budget" weight maximum)
     nil))
 
-(defn- index-limit
-  [weight: Int
-   maximum: Int] -> Nil
+(defn- index-limit [weight: Int maximum: Int] -> Nil
   (if (> weight maximum)
     (text-index/raise-text-error
      (text-index/text-index-limit-error
@@ -367,9 +353,7 @@
       (searchanalyzersresult-analyzers result)
       (text-index/raise-text-error (searchanalyzersresult-error result)))))
 
-(defn- string-needle-result
-  [relation: String
-   needle: Any] -> StringNeedleResult
+(defn- string-needle-result [relation: String needle: Any] -> StringNeedleResult
   (if (string? needle)
     (->StringNeedleResult true needle (text-index/no-text-error))
     (->StringNeedleResult
@@ -378,17 +362,13 @@
       :query-text-invalid-needle
       (str relation " needle must be a string")))))
 
-(defn- string-needle
-  [relation: String
-   needle: Any] -> String
+(defn- string-needle [relation: String needle: Any] -> String
   (let [result: StringNeedleResult (string-needle-result relation needle)]
     (if (stringneedleresult-ok result)
       (stringneedleresult-value result)
       (text-index/raise-text-error (stringneedleresult-error result)))))
 
-(defn- word-needle-result
-  [relation: String
-   needle: Any] -> WordNeedleResult
+(defn- word-needle-result [relation: String needle: Any] -> WordNeedleResult
   (let [string-result: StringNeedleResult
         (string-needle-result relation needle)]
     (if (not (stringneedleresult-ok string-result))
@@ -403,9 +383,7 @@
             (str relation " needle must contain at least one word token")))
           (->WordNeedleResult true tokens (text-index/no-text-error)))))))
 
-(defn- word-needle
-  [relation: String
-   needle: Any] -> (Vec String)
+(defn- word-needle [relation: String needle: Any] -> (Vec String)
   (let [result: WordNeedleResult (word-needle-result relation needle)]
     (if (wordneedleresult-ok result)
       (wordneedleresult-tokens result)
@@ -427,9 +405,7 @@
             (str relation " needle must contain non-whitespace text")))
           (->StringNeedleResult true value (text-index/no-text-error)))))))
 
-(defn- substring-needle
-  [relation: String
-   needle: Any] -> String
+(defn- substring-needle [relation: String needle: Any] -> String
   (let [result: StringNeedleResult (substring-needle-result relation needle)]
     (if (stringneedleresult-ok result)
       (stringneedleresult-value result)
@@ -457,9 +433,7 @@
                    (if (< (count candidate) (count best))
                      candidate best))))))))
 
-(defn- postings-handles
-  [postings: PostingMap
-   keys: (Vec String)] -> (Vec Int)
+(defn- postings-handles [postings: PostingMap keys: (Vec String)] -> (Vec Int)
   (let [wanted: (Vec String) (vec (sort (vec (set keys))))]
     (if (empty? wanted)
       []
@@ -490,9 +464,7 @@
         (recur (inc offset))
         false))))
 
-(defn- sequence-contains?
-  [haystack: (Vec String)
-   needle: (Vec String)] -> Bool
+(defn- sequence-contains? [haystack: (Vec String) needle: (Vec String)] -> Bool
   (if (or (empty? needle) (> (count needle) (count haystack)))
     false
     (loop [start 0]
@@ -542,9 +514,7 @@
                             (sequence-contains? (nth rows handle) tokens))
                           candidates))))))))))
 
-(defn phrase-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn phrase-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (phrase-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -571,9 +541,7 @@
                         (sequence-contains? (nth rows handle) tokens))
                       (all-handles source)))))))))
 
-(defn phrase-scan-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn phrase-scan-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (phrase-scan-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -607,9 +575,7 @@
                         (str/includes? (nth rows handle) value))
                       candidates))))))))
 
-(defn substring-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn substring-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (substring-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -664,9 +630,7 @@
              (searchanalyzersresult-analyzers analyzers-result))
             keys)))))))
 
-(defn stem-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn stem-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult (stem-handles-result! source needle)]
     (if (handles-result-ok? result)
       (handles-result-handles result)
@@ -697,21 +661,15 @@
                                   keys)))
                       (all-handles source)))))))))
 
-(defn stem-scan-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn stem-scan-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (stem-scan-handles-result! source needle)]
     (if (handles-result-ok? result)
       (handles-result-handles result)
       (text-index/raise-text-error (handles-result-error result)))))
 
-(defn- count-token
-  [tokens: (Vec String)
-   wanted: String] -> Int
-  (reduce (fn
-            [total: Int
-             token: String] -> Int
+(defn- count-token [tokens: (Vec String) wanted: String] -> Int
+  (reduce (fn [total: Int token: String] -> Int
             (if (= token wanted) (inc total) total))
           0 tokens))
 
@@ -754,9 +712,7 @@
                   0
                   (let [token-score: Int
                         (reduce
-                         (fn
-                           [total: Int
-                            token: String] -> Int
+                         (fn [total: Int token: String] -> Int
                            (+ total
                               (cond
                                 [(contains? document-token-set token) 100]
@@ -789,9 +745,7 @@
       (textsearchscoreresult-score result)
       (text-index/raise-text-error (textsearchscoreresult-error result)))))
 
-(defn- union-handles
-  [left: (Vec Int)
-   right: (Vec Int)] -> (Vec Int)
+(defn- union-handles [left: (Vec Int) right: (Vec Int)] -> (Vec Int)
   (vec (sort (vec (set (concat left right))))))
 
 (defn- matching-score-handles-result!
@@ -842,9 +796,7 @@
                 (union-handles stem-candidates substring-candidates)]
             (matching-score-handles-result! source needle candidates)))))))
 
-(defn ranked-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn ranked-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (ranked-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -856,9 +808,7 @@
    needle: Any] -> TextSearchHandlesResult
   (matching-score-handles-result! source needle (all-handles source)))
 
-(defn ranked-scan-handles!
-  [source: TextSearchSource
-   needle: Any] -> (Vec Int)
+(defn ranked-scan-handles! [source: TextSearchSource needle: Any] -> (Vec Int)
   (let [result: TextSearchHandlesResult
         (ranked-scan-handles-result! source needle)]
     (if (handles-result-ok? result)
@@ -935,9 +885,7 @@
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn exact-scan-rows
-  [source: TextSearchSource
-   needle: Any] -> (Vec (Vec Any))
+(defn exact-scan-rows [source: TextSearchSource needle: Any] -> (Vec (Vec Any))
   (let [result: TextSearchRowsResult (exact-scan-rows-result source needle)]
     (if (rows-result-ok? result)
       (rows-result-rows result)
@@ -1052,9 +1000,7 @@
       (rows-result-rows result)
       (text-index/raise-text-error (rows-result-error result)))))
 
-(defn stem-scan-rows!
-  [source: TextSearchSource
-   needle: Any] -> (Vec (Vec Any))
+(defn stem-scan-rows! [source: TextSearchSource needle: Any] -> (Vec (Vec Any))
   (let [result: TextSearchRowsResult
         (stem-scan-rows-result! source needle)]
     (if (rows-result-ok? result)

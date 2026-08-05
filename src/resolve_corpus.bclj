@@ -104,7 +104,8 @@
         (let [[m source-name] (get rename nm)]
           {:target (xport m source-name) :mode :fixed})
         (str/includes? nm "/")
-        (let [[alias public-name] (str/split nm SLASH-RE 2) module (or (get as alias) (when (some (fn [table: Any] -> Bool (contains? table alias)) [exports type-exports accessor-exports]) alias))]
+        (let [[alias public-name] (str/split nm SLASH-RE 2) module (or (get as alias) (when (some (fn
+                                                                                                    [table: Any] -> Bool (contains? table alias)) [exports type-exports accessor-exports]) alias))]
           (when module
             (if-let [target (xport module public-name)]
               {:target target :mode :qual :alias alias}
@@ -230,9 +231,7 @@
                 (:REFERS fresh)))
             (body)))))))
 
-(defn file-entities
-  [file-ents: (Atom Any)
-   src: Any] -> Any
+(defn file-entities [file-ents: (Atom Any) src: Any] -> Any
   (get (deref file-ents) src []))
 
 (defn file-entity-map [file-ents: (Atom Any)] -> Any (deref file-ents))
@@ -280,7 +279,9 @@
   [ctx: ri/Graph
    file-ents: (Atom Any)
    path: Any] -> Any
-  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn [line: Any] -> Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) builder (ri/open ctx) ent (fn [lid: Any] -> Any (or (get (deref local) lid) (let [e (ri/mint! ctx builder)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
+  (let [lines (str/split-lines (slurp path)) src (-> (first (filter (fn
+                                                                      [line: Any] -> Bool (str/starts-with? line "@file")) lines)) (subs 6)) local (atom {}) read-edn (requiring-resolve (quote clojure.edn/read-string)) builder (ri/open ctx) ent (fn
+                                                                                                                                                                                                                                                        [lid: Any] -> Any (or (get (deref local) lid) (let [e (ri/mint! ctx builder)] (do (swap! local assoc lid e) (swap! file-ents update src (fnil conj []) e) e))))]
     (do
       (doseq [line lines :when (str/starts-with? line "[")]
         (let [[s p o] (read-edn line)]
