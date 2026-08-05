@@ -226,7 +226,8 @@
         (+ (text-index/source-weight exact)
            112
            (* 28 (count rows)))
-        cell: (Atom (U SearchAnalyzers Nil)) (atom nil)]
+        empty-analyzers: (U SearchAnalyzers Nil) nil
+        cell: (Atom (U SearchAnalyzers Nil)) (atom empty-analyzers)]
     (index-limit weight maximum)
     (->TextSearchSource exact rows maximum cell weight)))
 
@@ -258,7 +259,12 @@
         analyzers)
       current)))
 
-(defn- needle-error [message: String] -> Any
+(defn- needle-error [message: String] -> String
+  (throw (ex-info message
+                  {:type :fram-query-abort
+                   :code :query-text-invalid-needle})))
+
+(defn- word-needle-error [message: String] -> (Vec String)
   (throw (ex-info message
                   {:type :fram-query-abort
                    :code :query-text-invalid-needle})))
@@ -275,7 +281,8 @@
    needle: Any] -> (Vec String)
   (let [tokens: (Vec String) (word-tokens (string-needle relation needle))]
     (if (empty? tokens)
-      (needle-error (str relation " needle must contain at least one word token"))
+      (word-needle-error
+       (str relation " needle must contain at least one word token"))
       tokens)))
 
 (defn- substring-needle
@@ -296,13 +303,17 @@
     false))
 
 (defn- shortest-posting [vectors: (Vec (Vec Int))] -> (Vec Int)
-  (loop [index 0 best: (U (Vec Int) Nil) nil]
-    (if (>= index (count vectors))
-      (or best [])
-      (let [candidate: (Vec Int) (nth vectors index)]
-        (recur (inc index)
-               (if (or (nil? best) (< (count candidate) (count best)))
-                 candidate best))))))
+  (let [empty-handles: (Vec Int) []]
+    (if (empty? vectors)
+      empty-handles
+      (loop [index 1
+             best: (Vec Int) (nth vectors 0)]
+        (if (>= index (count vectors))
+          best
+          (let [candidate: (Vec Int) (nth vectors index)]
+            (recur (inc index)
+                   (if (< (count candidate) (count best))
+                     candidate best))))))))
 
 (defn- postings-handles
   [postings: PostingMap
@@ -407,7 +418,7 @@
 (defn stem-scan-handles!
   [source: TextSearchSource
    needle: Any] -> (Vec Int)
-  (let [keys: (Set String) (stems (word-needle "text-stem" needle))
+  (let [keys: (Vec String) (vec (stems (word-needle "text-stem" needle)))
         rows: (Vec (Vec String))
         (searchanalyzers-token-rows (analyzers-of! source))]
     (filterv (fn [handle: Int] -> Bool
@@ -432,7 +443,7 @@
    needle: Any] -> Int
   (let [value: String (substring-needle "text-search" needle)
         query-tokens: (Vec String) (word-tokens value)
-        query-stems: (Set String) (stems query-tokens)
+        query-stems: (Vec String) (vec (stems query-tokens))
         analyzers: SearchAnalyzers (analyzers-of! source)
         document-tokens: (Vec String)
         (nth (searchanalyzers-token-rows analyzers) handle)

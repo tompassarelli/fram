@@ -54,11 +54,12 @@
    maximum: Int] -> TextCandidateSource
   (let [rows: (Vec t/Triple) propositions
         row-count: Int (count rows)
+        empty-postings: (Map String (Vec Int)) {}
         ;; One transient posting map for the whole corpus: the per-row persistent
         ;; assoc dominated the build at corpus scale.
         postings: (Map String (Vec Int))
         (persistent!
-         (loop [handle 0 current: Any (transient {})]
+         (loop [handle 0 current: Any (transient empty-postings)]
            (if (>= handle row-count)
              current
              (let [value: Any (t/triple-slot2 (nth rows handle))]
@@ -75,7 +76,7 @@
     (index-limit weight maximum)
     (->TextCandidateSource rows postings weight)))
 
-(defn- needle-error [message: String] -> Any
+(defn- needle-error [message: String] -> (Vec String)
   (throw (ex-info message {:type :fram-query-abort :code :query-text-invalid-needle})))
 
 (defn- needle-tokens [needle: Any] -> (Vec String)
@@ -87,14 +88,16 @@
     (needle-error "text-match needle must be a string")))
 
 (defn- shortest-posting [posting-vectors: (Vec (Vec Int))] -> (Vec Int)
-  (loop [position 0 best: (U (Vec Int) Nil) nil]
-    (if (>= position (count posting-vectors))
-      (or best [])
-      (let [candidate: (Vec Int) (nth posting-vectors position)]
-        (recur (inc position)
-          (if (or (nil? best) (< (count candidate) (count best)))
-            candidate
-            best))))))
+  (let [empty-handles: (Vec Int) []]
+    (if (empty? posting-vectors)
+      empty-handles
+      (loop [position 1
+             best: (Vec Int) (nth posting-vectors 0)]
+        (if (>= position (count posting-vectors))
+          best
+          (let [candidate: (Vec Int) (nth posting-vectors position)]
+            (recur (inc position)
+              (if (< (count candidate) (count best)) candidate best))))))))
 
 (defn indexed-handles
   [source: TextCandidateSource
