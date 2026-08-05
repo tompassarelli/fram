@@ -888,7 +888,7 @@
 (defn- abort-result [problem: Any] -> QueryResult
   (let [data (ex-data problem)]
     (if (= :fram-query-abort (:type data))
-      (failure-result [(query-error (:code data) (.getMessage problem))])
+      (failure-result [(query-error (:code data) (ex-message problem))])
       (throw problem))))
 
 ;; --- aggregates -------------------------------------------------------------
@@ -1205,6 +1205,8 @@
 (def max-page-cursor-bytes: Int 524288)
 (def page-cursor-prefix: String "fram-query-term-page-v1.")
 
+;; Stays on JVM interop: utf8-encode is portable and lowers natively, but the
+;; Clojure emitter has no binding for it, so the hosted runtime cannot load it.
 (defn- utf8-size [value: String] -> Int (count (.getBytes value "UTF-8")))
 
 (defn page-cursor [row: d/Tuple] -> String
@@ -1257,7 +1259,7 @@
 (defn- abort-page [problem: Any] -> QueryPage
   (let [data (ex-data problem)]
     (if (= :fram-query-abort (:type data))
-      (failure-page [(query-error (:code data) (.getMessage problem))])
+      (failure-page [(query-error (:code data) (ex-message problem))])
       (throw problem))))
 
 (defn- evaluation-error-page-or-raise!

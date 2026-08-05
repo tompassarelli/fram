@@ -540,7 +540,7 @@
 
 (defn- ^QueryResult abort-result [problem]
   (let [data (ex-data problem)]
-  (if (= :fram-query-abort (:type data)) (failure-result [(query-error (:code data) (.getMessage problem))]) (throw problem))))
+  (if (= :fram-query-abort (:type data)) (failure-result [(query-error (:code data) (ex-message problem))]) (throw problem))))
 
 (def numeric-aggregate-operators #{:sum :avg :min :max})
 
@@ -750,7 +750,7 @@
 
 (defn- ^QueryPage abort-page [problem]
   (let [data (ex-data problem)]
-  (if (= :fram-query-abort (:type data)) (failure-page [(query-error (:code data) (.getMessage problem))]) (throw problem))))
+  (if (= :fram-query-abort (:type data)) (failure-page [(query-error (:code data) (ex-message problem))]) (throw problem))))
 
 (defn- ^QueryPage evaluation-error-page-or-raise! [error-value]
   (if (= :fram-query-abort (d/query-evaluation-error-type error-value)) (failure-page [(query-error (d/query-evaluation-error-code error-value) (d/query-evaluation-error-message error-value))]) (d/raise-query-evaluation-error! error-value)))

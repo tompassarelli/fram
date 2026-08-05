@@ -1,5 +1,6 @@
 (ns commit-plan
-  (:require [fram.types :as t]))
+  (:require [clojure.string :as str]
+            [fram.types :as t]))
 
 (defn ^Boolean version-conflict? [^Boolean single base-version expected-version]
   (if (nil? expected-version) false (and single (> base-version expected-version))))
@@ -77,7 +78,7 @@
   (if (nil? lease) false (<= (:exp lease) now-ms)))
 
 (defn ^Boolean valid-lease-request? [holder resource ttl-ms now-ms max-ms]
-  (and (string? holder) (not (.isBlank holder)) (not (.contains holder "|")) (string? resource) (not (.isBlank resource)) (integer? ttl-ms) (pos? ttl-ms) (<= ttl-ms (- max-ms now-ms))))
+  (and (string? holder) (not (str/blank? holder)) (not (str/includes? holder "|")) (string? resource) (not (str/blank? resource)) (integer? ttl-ms) (pos? ttl-ms) (<= ttl-ms (- max-ms now-ms))))
 
 (defn ^Boolean valid-lease-epoch? [epoch max-epoch]
   (and (integer? epoch) (pos? epoch) (<= epoch max-epoch)))

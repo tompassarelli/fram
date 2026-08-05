@@ -1,5 +1,6 @@
 (ns fram.text-index
-  (:require [fram.types :as t]))
+  (:require [clojure.string :as str]
+            [fram.types :as t]))
 
 (def text-index-max-bytes (* 64 1024 1024))
 
@@ -103,7 +104,7 @@
   (textcandidatesource-bytes source))
 
 (defn- token-set [^String value]
-  (persistent! (reduce (fn [folded token] (conj! folded (.toLowerCase token java.util.Locale/ROOT))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
+  (persistent! (reduce (fn [folded token] (conj! folded (str/lower-case token))) (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
 
 (defn tokenize [^String value]
   (vec (sort (vec (token-set value)))))

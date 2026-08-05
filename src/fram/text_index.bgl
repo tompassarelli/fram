@@ -4,9 +4,8 @@
 
 (define-mode strict)
 
+(require clojure.string :as str)
 (require fram.types :as t)
-
-(declare-extern java.util.Locale/ROOT Any)
 
 (def text-index-max-bytes: Int (* 64 1024 1024))
 
@@ -104,7 +103,7 @@
 (defn- token-set [value: String] -> (Set String)
   (persistent!
    (reduce (fn [folded: Any token: String] -> Any
-             (conj! folded (.toLowerCase token java.util.Locale/ROOT)))
+             (conj! folded (str/lower-case token)))
            (transient #{}) (re-seq #"[\p{L}\p{Nd}]+" value))))
 
 (defn tokenize [value: String] -> (Vec String)

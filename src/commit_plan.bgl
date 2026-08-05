@@ -7,7 +7,7 @@
 ;; locks, queues, futures, promises, fsync, group commit, and dynamic vars stay
 ;; in the server runtime.
 ;; ============================================================================
-(ns commit-plan (:require [fram.types :as t]))
+(ns commit-plan (:require [clojure.string :as str] [fram.types :as t]))
 
 (define-mode strict)
 
@@ -116,10 +116,10 @@
    now-ms: Int
    max-ms: Int] -> Bool
   (and (string? holder)
-    (not (.isBlank holder))
-    (not (.contains holder "|"))
+    (not (str/blank? holder))
+    (not (str/includes? holder "|"))
     (string? resource)
-    (not (.isBlank resource))
+    (not (str/blank? resource))
     (integer? ttl-ms)
     (pos? ttl-ms)
     (<= ttl-ms (- max-ms now-ms))))
