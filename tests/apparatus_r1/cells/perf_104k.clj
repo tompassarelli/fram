@@ -71,11 +71,11 @@
 ;; ≤ 512 MiB. Whole-process VmHWM additionally carries the irreducible JVM/SCI
 ;; baseline (code cache, metaspace, threads) which is NOT the index's memory, so
 ;; it is reported as a note, not asserted.
-(let [database (m/read-bytes plain)
+(let [coord (m/read-bytes plain)
       rt (Runtime/getRuntime)
       _ (do (System/gc) (Thread/sleep 50))
       base-used (- (.totalMemory rt) (.freeMemory rt))
-      [t-idx kv] (timed #(m/kev-vector (m/logical-events :b2 database (byte-array 0))))
+      [t-idx kv] (timed #(m/kev-vector (m/logical-events :b2 coord (byte-array 0))))
       _ (do (System/gc) (Thread/sleep 50))
       idx-used-mib (/ (- (- (.totalMemory rt) (.freeMemory rt)) base-used) 1048576.0)
       vmhwm (peak-rss-mib)]

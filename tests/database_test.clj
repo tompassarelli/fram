@@ -342,12 +342,12 @@
     #(error-code
       (fn [] (database/assert! corrupt-db (t/triple "bad" :frame true) {})))))
 (check! "failed durable replay permanently fences the coordinator as corrupt"
-        (and (= :coordinator-corrupt corrupt-error)
+        (and (= :database-corrupt corrupt-error)
              (= :corrupt (:status (database/database-recovery-state corrupt-db)))
-             (= :coordinator-corrupt
+             (= :database-corrupt
                 (error-code
                  #(database/assert! corrupt-db (t/triple "bad" :retry true) {})))
-             (= :coordinator-corrupt
+             (= :database-corrupt
                 (error-code #(database/current-transaction corrupt-db)))))
 
 (def legacy-file (java.io.File. scratch "legacy.log"))

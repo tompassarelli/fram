@@ -14,7 +14,7 @@
 set -u
 cd "$(dirname "$0")"
 HERE="$(pwd -P)"
-export FRAM_SERVER_PORT_BASE=8500                       # scratch floor; nothing binds it here
+export FRAM_PORT_BASE=8500                       # scratch floor; nothing binds it here
 
 SCRATCH="${R1_SCRATCH:-/tmp/r1-apparatus-$$}"
 mkdir -p "$SCRATCH"

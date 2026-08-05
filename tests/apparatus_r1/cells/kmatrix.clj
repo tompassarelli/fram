@@ -16,8 +16,8 @@
 (def gen (m/bytes->str (m/gen-record-bytes {:tx 4 :gen-n 1 :telem-prefix prefix})))
 (def store-mode 0600)
 
-(defn kev-of [database-str telem-str]
-  (m/kev-vector (m/logical-events :b2 (m/str->bytes database-str) (m/str->bytes telem-str))))
+(defn kev-of [coord-str telem-str]
+  (m/kev-vector (m/logical-events :b2 (m/str->bytes coord-str) (m/str->bytes telem-str))))
 
 (defn drop-gen
   "Drop the generation control event (:p generation, tx 4) so two states are
@@ -31,30 +31,30 @@
 (def post-flip (drop-gen (kev-of (str gen "\n" prefix) "")))
 
 (defn phase-state
-  "Return {:database :telem :intent? :renamed?} bytes-on-disk for a kill phase."
+  "Return {:coord :telem :intent? :renamed?} bytes-on-disk for a kill phase."
   [phase]
   (case phase
     ;; before durable intent: original split store, nothing to recover
-    ("K0" "K1") {:database "" :telem prefix :intent? false :renamed? false}
+    ("K0" "K1") {:coord "" :telem prefix :intent? false :renamed? false}
     ;; intent durable, coordination NOT yet renamed => roll-back to split store
-    ("K2" "K3" "K3b" "K4" "K4b") {:database "" :telem prefix :intent? true :renamed? false}
+    ("K2" "K3" "K3b" "K4" "K4b") {:coord "" :telem prefix :intent? true :renamed? false}
     ;; K4 mid-compose leaves a torn tmp (swept on roll-back) — modeled as not-renamed
     ;; coordination renamed, telemetry not yet => roll-forward
-    "K5" {:database (str gen "\n" prefix) :telem prefix :intent? true :renamed? true}
+    "K5" {:coord (str gen "\n" prefix) :telem prefix :intent? true :renamed? true}
     ;; both renamed, pre-dirsync / pre-mode-restore / pre-intent-delete => roll-forward
-    ("K6" "K6b" "K7") {:database (str gen "\n" prefix) :telem "" :intent? true :renamed? true}
+    ("K6" "K6b" "K7") {:coord (str gen "\n" prefix) :telem "" :intent? true :renamed? true}
     ;; intent deleted => completed generation, plain reload
-    "K8" {:database (str gen "\n" prefix) :telem "" :intent? false :renamed? true}))
+    "K8" {:coord (str gen "\n" prefix) :telem "" :intent? false :renamed? true}))
 
-(defn lay-state! [d {:keys [database telem intent? renamed?]}]
+(defn lay-state! [d {:keys [coord telem intent? renamed?]}]
   (.mkdirs (io/file d))
   (let [cf (io/file d "coordination.log") tf (io/file d "telemetry.log")]
-    (spit cf database) (spit tf telem)
+    (spit cf coord) (spit tf telem)
     ;; crash leaves clobbered 0644 modes on disk; doctor must restore exact
     (m/set-mode! (.getPath cf) 0644) (m/set-mode! (.getPath tf) 0644)
     (when intent?
       (spit (io/file d ".fram.rewrite.intent")
-            (m/bytes->str (m/intent-bytes {:gen-n 1 :phase "advisory" :database-mode store-mode
+            (m/bytes->str (m/intent-bytes {:gen-n 1 :phase "advisory" :coord-mode store-mode
                                            :telem-mode store-mode :telem-bytes (count (m/str->bytes prefix))
                                            :telem-sha (m/sha256-16hex (m/str->bytes prefix))}))))))
 
@@ -74,7 +74,7 @@
         (h/check! (str phase " healed projection == pre-flip modulo one flip event")
                   pre-flip (drop-gen (if (= :roll-forward (:action r)) post-flip pre-flip))))
       ;; no intent: plain reload, projection must already equal pre-flip modulo gen.
-      (let [proj (drop-gen (kev-of (:database st) (:telem st)))]
+      (let [proj (drop-gen (kev-of (:coord st) (:telem st)))]
         (h/check! (str phase " plain reload projection == pre-flip") pre-flip proj)))))
 
 (h/section "Reverse-pin fixture — post-revert append beyond emptied boundary")
@@ -83,17 +83,17 @@
 ;; OLD consumed prefix, so the boundary sha no longer verifies => nothing shadowed
 ;; => the post-revert append is a REAL authored event even if byte-identical to a
 ;; coordination line. B-prime's byte-equality would have SUPPRESSED it.
-(let [database (str gen "\n" prefix)
+(let [coord (str gen "\n" prefix)
       revert-append "{:tx 2 :p \"note\" :r \"two\"}\n" ; byte-identical to retained line 2
-      bnd (m/b2-shadow-boundary (remove :torn (m/split-lines (m/str->bytes database)))
+      bnd (m/b2-shadow-boundary (remove :torn (m/split-lines (m/str->bytes coord)))
                                 (m/str->bytes revert-append))]
   (h/check! "reverse-pin: emptied-telemetry boundary is INVALID (sha mismatch)"
             false (:valid bnd))
   (let [b2n (count (filter (fn [[tx _ _]] (= tx 2))
-                           (m/kev-vector (m/logical-events :b2 (m/str->bytes database) (m/str->bytes revert-append)))))
+                           (m/kev-vector (m/logical-events :b2 (m/str->bytes coord) (m/str->bytes revert-append)))))
         bpn (count (filter (fn [[tx _ _]] (= tx 2))
-                           (m/kev-vector (m/logical-events :bprime (m/str->bytes database) (m/str->bytes revert-append)))))]
-    ;; B2: retained line (database) + post-revert append both present => 2.
+                           (m/kev-vector (m/logical-events :bprime (m/str->bytes coord) (m/str->bytes revert-append)))))]
+    ;; B2: retained line (coord) + post-revert append both present => 2.
     (h/check! "reverse-pin B2 GREEN: post-revert byte-identical append preserved" 2 b2n)
     ;; B-prime: append suppressed by byte-equality => only the retained line => 1.
     (h/check! "reverse-pin B-prime RED: post-revert append suppressed" 1 bpn)))

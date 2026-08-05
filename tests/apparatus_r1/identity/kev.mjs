@@ -111,7 +111,7 @@ function kevVector(events) {
 }
 
 const [model, coordPath, telemPath] = process.argv.slice(2);
-const database = readFileSync(coordPath);
+const coord = readFileSync(coordPath);
 const telem = readFileSync(telemPath);
-const kv = kevVector(logicalEvents(model, database, telem));
+const kv = kevVector(logicalEvents(model, coord, telem));
 process.stdout.write(kv.map(([tx, sha, rank]) => `${tx}\t${sha}\t${rank}`).join("\n") + "\n");

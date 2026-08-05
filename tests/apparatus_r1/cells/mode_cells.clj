@@ -20,7 +20,7 @@
           tf (io/file d "telemetry.log")]
       ;; roll-forward states carry the composed coordination (gen line-1); roll-back
       ;; states do not. Phase drives which we lay down.
-      (if (#{"database-renamed" "telem-renamed" "dirsynced" "modes-restored"} phase)
+      (if (#{"coord-renamed" "telem-renamed" "dirsynced" "modes-restored"} phase)
         (spit cf (str gen "\n" telem-prefix))
         (spit cf telem-prefix))
       (spit tf "")
@@ -28,14 +28,14 @@
       (m/set-mode! (.getPath cf) 0644)
       (m/set-mode! (.getPath tf) 0644)
       (spit (io/file d ".fram.rewrite.intent")
-            (m/bytes->str (m/intent-bytes {:gen-n 1 :phase phase :database-mode mode
+            (m/bytes->str (m/intent-bytes {:gen-n 1 :phase phase :coord-mode mode
                                            :telem-mode mode :telem-bytes (count (m/str->bytes telem-prefix))
                                            :telem-sha (m/sha256-16hex (m/str->bytes telem-prefix))})))
       (.getPath d))))
 
 (h/section "Exact-mode doctor crash cells (real chmod)")
 (doseq [mode [0600 0660]
-        phase ["fenced" "read" "composed" "database-renamed" "telem-renamed"
+        phase ["fenced" "read" "composed" "coord-renamed" "telem-renamed"
                "dirsynced" "modes-restored"]]
   (let [d (fresh-store! (format "m%o-%s" mode phase) mode phase)
         r (m/doctor! :b2 d)

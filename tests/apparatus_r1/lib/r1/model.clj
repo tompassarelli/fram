@@ -93,8 +93,8 @@
 ;; ---------------------------------------------------------------------------
 (defn generation-record
   "Line 1 of coordination.log parsed as a generation control record, or nil."
-  [database-lines]
-  (let [m (some-> database-lines first parse-edn-line)]
+  [coord-lines]
+  (let [m (some-> coord-lines first parse-edn-line)]
     (when (and (map? m) (= "generation" (:p m))) m)))
 
 (defn b2-shadow-boundary
@@ -102,8 +102,8 @@
    Valid iff line1 is a generation record with :gen_n>=1 AND sha256-16hex of the
    first :src_telem_bytes bytes of telemetry == :src_telem_sha. Only then are
    lines wholly within that boundary shadows. sha mismatch => nothing shadowed."
-  [database-lines ^bytes telem-buf]
-  (let [g (generation-record database-lines)]
+  [coord-lines ^bytes telem-buf]
+  (let [g (generation-record coord-lines)]
     (if (and g (>= (long (:gen_n g 0)) 1))
       (let [b   (long (:src_telem_bytes g 0))
             sha (:src_telem_sha g)
@@ -119,11 +119,11 @@
   [{:keys [boundary valid]} line]
   (and valid (<= (long (:end line)) (long boundary))))
 
-(defn database-line-byteset
+(defn coord-line-byteset
   "B-prime helper: set of (tx, sha-of-bytes) pairs over coordination lines."
-  [database-lines]
+  [coord-lines]
   (into #{}
-        (for [l database-lines
+        (for [l coord-lines
               :let [m (parse-edn-line l)]]
           [(:tx m) (sha256-hex (:bytes l))])))
 
@@ -131,9 +131,9 @@
   "B-prime (REVOKED): a telemetry line is a shadow iff it is byte-equal to some
    coordination line at the SAME tx — regardless of physical position. This is
    the marker-aware byte-equality shadow the sixth review rejected."
-  [database-byteset line]
+  [coord-byteset line]
   (let [m (parse-edn-line line)]
-    (contains? database-byteset [(:tx m) (sha256-hex (:bytes line))])))
+    (contains? coord-byteset [(:tx m) (sha256-hex (:bytes line))])))
 
 ;; ---------------------------------------------------------------------------
 ;; K_ev — the identity key. [tx-or-0, exact record bytes (unsigned-byte-lex),
@@ -144,21 +144,21 @@
   "Given raw coordination + telemetry bytes and a model (:b2 | :bprime), return
    the logical event sequence (coordination lines are always authored; telemetry
    lines that are NOT shadows are authored). Each event: {:tx :bytes}."
-  [model ^bytes database-buf ^bytes telem-buf]
-  (let [database-lines (remove :torn (split-lines database-buf))
+  [model ^bytes coord-buf ^bytes telem-buf]
+  (let [coord-lines (remove :torn (split-lines coord-buf))
         telem-lines (remove :torn (split-lines telem-buf))
-        database-evs   (for [l database-lines]
+        coord-evs   (for [l coord-lines]
                       {:tx (:tx (parse-edn-line l) 0) :bytes (:bytes l)})
         telem-evs   (case model
-                      :b2 (let [bnd (b2-shadow-boundary database-lines telem-buf)]
+                      :b2 (let [bnd (b2-shadow-boundary coord-lines telem-buf)]
                             (for [l telem-lines
                                   :when (not (b2-telem-shadow? bnd l))]
                               {:tx (:tx (parse-edn-line l) 0) :bytes (:bytes l)}))
-                      :bprime (let [cs (database-line-byteset database-lines)]
+                      :bprime (let [cs (coord-line-byteset coord-lines)]
                                 (for [l telem-lines
                                       :when (not (bprime-telem-shadow? cs l))]
                                   {:tx (:tx (parse-edn-line l) 0) :bytes (:bytes l)})))]
-    (vec (concat database-evs telem-evs))))
+    (vec (concat coord-evs telem-evs))))
 
 (defn kev-vector
   "Total order by K = [tx, bytes(unsigned-lex), rank], rank assigned to equal
@@ -265,11 +265,11 @@
 
 (defn intent-bytes
   "§3 .fram.rewrite.intent single-line EDN, recording exact modes/inodes/boundaries."
-  [{:keys [gen-n phase database-mode telem-mode telem-bytes telem-sha]}]
+  [{:keys [gen-n phase coord-mode telem-mode telem-bytes telem-sha]}]
   (str->bytes
    (str "{:v 1 :gen \"gen-" gen-n "\" :gen_n " gen-n " :verb \"unify\""
         " :phase \"" phase "\" :pid 8500 :ts \"2026-07-19T00:00:00Z\""
-        " :database {:ino 100 :mode " database-mode " :bytes 0 :sha \"none\"}"
+        " :coord {:ino 100 :mode " coord-mode " :bytes 0 :sha \"none\"}"
         " :telem {:ino 101 :mode " telem-mode " :bytes " telem-bytes " :sha \"" telem-sha "\"}"
         " :new_coord {:ino 200 :sha1 \"none\"}"
         " :new_telem {:ino 201}}")))
@@ -279,7 +279,7 @@
 ;; classifies + restores. B2 restores the EXACT recorded modes; B-prime clobbers
 ;; both logs to the 0644 constant (the revoked hardcoded restore).
 ;; Classification is by inode/sha state, never by :phase (advisory only).
-;; Returns {:action :roll-forward|:roll-back :database-mode m :telem-mode m}.
+;; Returns {:action :roll-forward|:roll-back :coord-mode m :telem-mode m}.
 ;; ---------------------------------------------------------------------------
 (defn read-intent
   "Parse <dir>/.fram.rewrite.intent, or nil if absent/unparsable."
@@ -299,15 +299,15 @@
     (when-not intent (throw (ex-info "no intent record" {:dir dir})))
     (when-not (= 1 (:v intent))
       (throw (ex-info "unknown intent version — refuse" {:v (:v intent)})))
-    (let [database-f (File. (str dir) "coordination.log")
+    (let [coord-f (File. (str dir) "coordination.log")
           telem-f (File. (str dir) "telemetry.log")
-          database-lines (when (.exists database-f) (remove :torn (split-lines (read-bytes (.getPath database-f)))))
-          renamed? (boolean (generation-record database-lines))
+          coord-lines (when (.exists coord-f) (remove :torn (split-lines (read-bytes (.getPath coord-f)))))
+          renamed? (boolean (generation-record coord-lines))
           action (cond classify-fn (classify-fn intent renamed?)
                        renamed? :roll-forward
                        :else :roll-back)
-          cmode (doctor-restore-mode model (get-in intent [:database :mode]))
+          cmode (doctor-restore-mode model (get-in intent [:coord :mode]))
           tmode (doctor-restore-mode model (get-in intent [:telem :mode]))]
-      (when (.exists database-f) (set-mode! (.getPath database-f) cmode))
+      (when (.exists coord-f) (set-mode! (.getPath coord-f) cmode))
       (when (.exists telem-f) (set-mode! (.getPath telem-f) tmode))
-      {:action action :database-mode cmode :telem-mode tmode})))
+      {:action action :coord-mode cmode :telem-mode tmode})))
