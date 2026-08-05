@@ -4,6 +4,7 @@
 (ns fram.datalog)
 (define-mode strict)
 (require fram.kernel :as kernel)
+(require fram.rotation :as rot)
 (require fram.store :as store)
 (require fram.types :as t)
 (require fram.text-index :as text-index)
@@ -72,7 +73,8 @@
    spo: HandleTrie
    pos: HandleTrie
    osp: HandleTrie
-   occurrence: OccurrenceCandidateSource?])
+   occurrence: OccurrenceCandidateSource?
+   rotation: rot/Rotation?])
 (defrecord VirtualCandidateSource
   [relation: String
    source: text-search/TextSearchSource])
@@ -811,7 +813,7 @@
                    (get second-node (nth prefix 2) [])))))))])))
 
 (defn- empty-candidate-source [] -> CandidateSource
-  (->CandidateSource [] {} {} {} {} nil))
+  (->CandidateSource [] {} {} {} {} nil nil))
 
 (defn occurrence-candidate-source
   [root: t/TermStore
@@ -819,7 +821,11 @@
    upper-inclusive: Int] -> CandidateSource
   (->CandidateSource [] {} {} {} {}
     (->OccurrenceCandidateSource
-      root lower-exclusive upper-inclusive (store/operation-postings root))))
+      root lower-exclusive upper-inclusive (store/operation-postings root))
+    nil))
+
+(defn rotation-candidate-source [rotation: rot/Rotation] -> CandidateSource
+  (->CandidateSource [] {} {} {} {} nil rotation))
 
 (defn- candidate-source-add
   [relation: String
@@ -1004,11 +1010,48 @@
    relation: String
    arguments: (Vec QueryTerm)
    subst: Substitution] -> Bool
-  (let [wanted (ground arguments subst)
-        handles (source-handles source relation arguments subst)]
-    (some? (some (fn [handle: Int] -> Any
-                   (when (= wanted (source-row source handle)) handle))
-                 (or handles [])))))
+  (let [rotation (candidatesource-rotation source)]
+    (if (some? rotation)
+      (let [wanted: Tuple (ground arguments subst)]
+        (not
+         (empty?
+          (rot/matching rotation
+                        (nth wanted 0)
+                        (nth wanted 1)
+                        (nth wanted 2)))))
+      (let [wanted (ground arguments subst)
+            handles (source-handles source relation arguments subst)]
+        (some? (some (fn [handle: Int] -> Any
+                       (when (= wanted (source-row source handle)) handle))
+                     (or handles [])))))))
+
+(defn- rotation-results-indexed!
+  [rotation: rot/Rotation
+   arguments: (Vec QueryTerm)
+   subst: Substitution
+   context: QueryEvaluationContext] -> (Vec Substitution)
+  (let [events: (Vec t/Triple)
+        (rot/matching rotation
+                      (bound-term-value (nth arguments 0) subst)
+                      (bound-term-value (nth arguments 1) subst)
+                      (bound-term-value (nth arguments 2) subst))]
+    (loop [remaining events
+           seen: (Set t/Triple) #{}
+           results: (Vec Substitution) []]
+      (if (or (empty? remaining)
+              (not (query-evaluation-context-open? context)))
+        results
+        (let [proposition: t/Triple (rot/proposition-of (first remaining))]
+          (if (contains? seen proposition)
+            (recur (rest remaining) seen results)
+            (let [matched
+                  (unify-arguments-controlled!
+                   arguments (triple-row proposition) subst context)]
+              (if (query-evaluation-context-open? context)
+                (recur (rest remaining)
+                       (conj seen proposition)
+                       (if (some? matched) (conj results matched) results))
+                results))))))))
 
 (defn- relation-results-indexed!
   [db: Db
@@ -1039,23 +1082,26 @@
            (unify-tuples-controlled!
             arguments (vec (get db relation #{})) subst context))]
         [:else
-         (let [rows-value (candidatesource-rows source)
-               handles (source-handles source relation arguments subst)]
-           (if (nil? handles)
-             (unify-tuples-controlled! arguments rows-value subst context)
-             (loop [remaining handles results: (Vec Substitution) []]
-               (if (or (empty? remaining)
-                       (not (query-evaluation-context-open? context)))
-                 results
-                 (let [tuple (source-row source (first remaining))
-                       matched
-                       (unify-arguments-controlled!
-                        arguments tuple subst context)]
-                   (if (query-evaluation-context-open? context)
-                     (recur
-                      (rest remaining)
-                      (if (some? matched) (conj results matched) results))
-                     results))))))]))))
+         (let [rotation (candidatesource-rotation source)]
+           (if (some? rotation)
+             (rotation-results-indexed! rotation arguments subst context)
+             (let [rows-value (candidatesource-rows source)
+                   handles (source-handles source relation arguments subst)]
+               (if (nil? handles)
+                 (unify-tuples-controlled! arguments rows-value subst context)
+                 (loop [remaining handles results: (Vec Substitution) []]
+                   (if (or (empty? remaining)
+                           (not (query-evaluation-context-open? context)))
+                     results
+                     (let [tuple (source-row source (first remaining))
+                           matched
+                           (unify-arguments-controlled!
+                            arguments tuple subst context)]
+                       (if (query-evaluation-context-open? context)
+                         (recur
+                          (rest remaining)
+                          (if (some? matched) (conj results matched) results))
+                         results))))))))]))))
 
 (defn- literal-results-indexed!
   [db: Db
