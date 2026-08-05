@@ -97,14 +97,14 @@
 ;; ----------------------------------------------------------- op generation
 
 (defn- live-coordinates [m]
-  (mapv t/triple-slot0 (model/live-occurrences m)))
+  (mapv t/triple-t1 (model/live-occurrences m)))
 
 (defn- all-coordinates [m]
-  (mapv t/triple-slot0 (model/all-events m)))
+  (mapv t/triple-t1 (model/all-events m)))
 
 (defn- retraction-coordinates [m]
-  (into [] (comp (filter #(= :kernel/retracts (t/triple-slot1 %)))
-                 (map t/triple-slot0))
+  (into [] (comp (filter #(= :kernel/retracts (t/triple-t2 %)))
+                 (map t/triple-t1))
         (model/all-events m)))
 
 (defn- unknown-coordinate [m]
@@ -124,7 +124,7 @@
 
 (defn- gen-base [rand-int m]
   (let [current (model/current-transaction m)
-        sequence (t/triple-slot2 current)]
+        sequence (t/triple-t3 current)]
     (case (rand-int 3)
       0 current
       1 (model/tx-coordinate space-id (max 0 (- sequence 1 (rand-int 3))))
@@ -236,9 +236,9 @@
 
 (defn render-term [value]
   (cond
-    (t/triple? value) (str "(" (render-term (t/triple-slot0 value)) " "
-                           (render-term (t/triple-slot1 value)) " "
-                           (render-term (t/triple-slot2 value)) ")")
+    (t/triple? value) (str "(" (render-term (t/triple-t1 value)) " "
+                           (render-term (t/triple-t2 value)) " "
+                           (render-term (t/triple-t3 value)) ")")
     (t/instant? value) (str "#inst[" (t/instant-epoch-seconds value) "."
                             (t/instant-nanos value) "]")
     :else (pr-str value)))
@@ -300,7 +300,7 @@
 
 (defn compare-occurrence-resolution [db receipt]
   (some (fn [event]
-          (let [coordinate (t/triple-slot0 event)]
+          (let [coordinate (t/triple-t1 event)]
             (diff :occurrence-resolution event (database/occurrence db coordinate))))
         (:occurrences receipt)))
 
@@ -442,9 +442,9 @@
         opened-model (reduce (fn [acc op] (:model (model-apply acc op)))
                              (model/new-model space-id) opened)
         latest (fn [m projection]
-                 (some-> (filterv #(= deep (t/triple-slot2 %)) (projection m))
+                 (some-> (filterv #(= deep (t/triple-t3 %)) (projection m))
                          peek
-                         t/triple-slot0))
+                         t/triple-t1))
         withdrawn (conj opened {:kind :withdraw
                                 :target (latest opened-model
                                                 model/store-live-occurrences)

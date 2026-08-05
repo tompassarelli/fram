@@ -18,10 +18,10 @@
 (def node-a (t/triple :node :key "a"))
 (def node-b (t/triple :node :key "b"))
 (def node-c (t/triple :node :key "c"))
-(def nested-slot1 (t/triple :relation :key "label"))
+(def nested-t2 (t/triple :relation :key "label"))
 (def edge-ab (t/triple node-a :edge node-b))
 (def edge-bc (t/triple node-b :edge node-c))
-(def nested-middle (t/triple "left" nested-slot1 "right"))
+(def nested-middle (t/triple "left" nested-t2 "right"))
 (def nested-right (t/triple "container" :contains node-a))
 
 (def term-store (store/new-term-store "msa-space"))
@@ -39,8 +39,8 @@
 (def slot-rules
   [(rule "slot-matches" [(c node-a) (v "s1") (v "s2")]
          [(rel "triple" [(c node-a) (v "s1") (v "s2")])])
-   (rule "slot-matches" [(v "s0") (c nested-slot1) (v "s2")]
-         [(rel "triple" [(v "s0") (c nested-slot1) (v "s2")])])
+   (rule "slot-matches" [(v "s0") (c nested-t2) (v "s2")]
+         [(rel "triple" [(v "s0") (c nested-t2) (v "s2")])])
    (rule "slot-matches" [(v "s0") (v "s1") (c node-a)]
          [(rel "triple" [(v "s0") (v "s1") (c node-a)])])])
 (def slot-plan (plan "slot-matches" [slot-rules]))
@@ -50,9 +50,9 @@
       found (rows result)]
   (check! "typed plan compiles" (and (q/compile-ok? compiled)
                                       (q/query-plan? (q/compiled-plan compiled))))
-  (check! "recursive constant matches slot0" (contains? found [node-a :edge node-b]))
-  (check! "recursive constant matches slot1" (contains? found ["left" nested-slot1 "right"]))
-  (check! "recursive constant matches slot2" (contains? found ["container" :contains node-a])))
+  (check! "recursive constant matches t1" (contains? found [node-a :edge node-b]))
+  (check! "recursive constant matches t2" (contains? found ["left" nested-t2 "right"]))
+  (check! "recursive constant matches t3" (contains? found ["container" :contains node-a])))
 
 (def closure-rules
   [(rule "reaches" [(v "from") (v "to")]
@@ -122,9 +122,9 @@
               (and (q/page-ok? page)
                    (= (set collected2)
                       (set (map (fn [value]
-                                  [(t/triple-slot0 value)
-                                   (t/triple-slot1 value)
-                                   (t/triple-slot2 value)])
+                                  [(t/triple-t1 value)
+                                   (t/triple-t2 value)
+                                   (t/triple-t3 value)])
                                 live))))))))
 
 (doseq [[label passed] @checks]

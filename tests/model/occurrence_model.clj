@@ -38,27 +38,27 @@
 
 (defn tx-coordinate? [value]
   (and (t/triple? value)
-       (string? (t/triple-slot0 value))
-       (pos? (count (t/triple-slot0 value)))
-       (= tx-sequence-predicate (t/triple-slot1 value))
-       (integer? (t/triple-slot2 value))
-       (not (neg? (t/triple-slot2 value)))))
+       (string? (t/triple-t1 value))
+       (pos? (count (t/triple-t1 value)))
+       (= tx-sequence-predicate (t/triple-t2 value))
+       (integer? (t/triple-t3 value))
+       (not (neg? (t/triple-t3 value)))))
 
 (defn occ-coordinate? [value]
   (and (t/triple? value)
-       (tx-coordinate? (t/triple-slot0 value))
-       (= op-ordinal-predicate (t/triple-slot1 value))
-       (integer? (t/triple-slot2 value))
-       (not (neg? (t/triple-slot2 value)))))
+       (tx-coordinate? (t/triple-t1 value))
+       (= op-ordinal-predicate (t/triple-t2 value))
+       (integer? (t/triple-t3 value))
+       (not (neg? (t/triple-t3 value)))))
 
 ;; Int atoms widen to Long and non-integral numbers to Double before a
 ;; proposition is durable, so equal-proposition identity is decided on the
 ;; canonical form.
 (defn canonical [value]
   (cond
-    (t/triple? value) (t/triple (canonical (t/triple-slot0 value))
-                                (canonical (t/triple-slot1 value))
-                                (canonical (t/triple-slot2 value)))
+    (t/triple? value) (t/triple (canonical (t/triple-t1 value))
+                                (canonical (t/triple-t2 value))
+                                (canonical (t/triple-t3 value)))
     (integer? value) (long value)
     (t/instant? value) value
     (number? value) (double value)
@@ -167,9 +167,9 @@
 
 (defn- relation-proposition? [predicate value]
   (and (t/triple? value)
-       (occ-coordinate? (t/triple-slot0 value))
-       (= predicate (t/triple-slot1 value))
-       (occ-coordinate? (t/triple-slot2 value))))
+       (occ-coordinate? (t/triple-t1 value))
+       (= predicate (t/triple-t2 value))
+       (occ-coordinate? (t/triple-t3 value))))
 
 (defn supersession-triples [model]
   (filterv #(relation-proposition? supersedes-predicate %)
@@ -198,20 +198,20 @@
 ;; relation is no longer effective, even though its store row stays live.
 (defn- suppressed-coordinates [model]
   (into #{}
-        (map t/triple-slot2)
+        (map t/triple-t3)
         (concat (supersession-triples model)
                 (live-withdrawal-propositions model))))
 
 (defn live-occurrences [model]
   (let [suppressed (suppressed-coordinates model)]
-    (filterv #(not (contains? suppressed (t/triple-slot0 %)))
+    (filterv #(not (contains? suppressed (t/triple-t1 %)))
              (store-live-occurrences model))))
 
 (defn live-propositions [model]
-  (mapv t/triple-slot2 (live-occurrences model)))
+  (mapv t/triple-t3 (live-occurrences model)))
 
 (defn occurrence-event [model coordinate]
-  (some #(when (= coordinate (t/triple-slot0 %)) %) (all-events model)))
+  (some #(when (= coordinate (t/triple-t1 %)) %) (all-events model)))
 
 ;; ------------------------------------------------------------------ mutation
 
@@ -271,7 +271,7 @@
         {:model committed
          :receipt {:ok tx
                    :occurrences (mapv #(op-event committed %) source-positions)
-                   :withdrawals (filterv #(contains? coordinates (t/triple-slot0 %))
+                   :withdrawals (filterv #(contains? coordinates (t/triple-t1 %))
                                          (withdrawal-triples committed))
                    :operation-count (count all)}}))))
 
@@ -289,12 +289,12 @@
 
 (defn withdraw-occurrence [model target options]
   (let [event (occurrence-event model target)
-        effective (into #{} (map t/triple-slot0) (live-occurrences model))]
+        effective (into #{} (map t/triple-t1) (live-occurrences model))]
     (cond
       (nil? event)
       {:model model :receipt {:reject :unknown-occurrence :occurrence target}}
 
-      (not= asserts-predicate (t/triple-slot1 event))
+      (not= asserts-predicate (t/triple-t2 event))
       {:model model :receipt {:reject :not-assertion-occurrence :occurrence target}}
 
       (not (contains? effective target))
@@ -303,10 +303,10 @@
       :else
       ;; The public target must be the same occurrence a bare retract would
       ;; withdraw: the latest store-live equal one.
-      (let [proposition (t/triple-slot2 event)
-            matching (filterv #(= proposition (t/triple-slot2 %))
+      (let [proposition (t/triple-t3 event)
+            matching (filterv #(= proposition (t/triple-t3 %))
                               (store-live-occurrences model))
-            current (some-> (peek matching) t/triple-slot0)]
+            current (some-> (peek matching) t/triple-t1)]
         (if (not= target current)
           {:model model
            :receipt {:reject :withdrawal-target-not-current
@@ -315,6 +315,6 @@
                                (assoc options :withdraws target)))))))
 
 (defn supersede [model target replacement options]
-  (if-not (some #{target} (map t/triple-slot0 (live-occurrences model)))
+  (if-not (some #{target} (map t/triple-t1 (live-occurrences model)))
     {:model model :receipt {:reject :occurrence-not-live :occurrence target}}
     (assert-proposition model replacement (assoc options :supersedes target))))

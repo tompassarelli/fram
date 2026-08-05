@@ -566,22 +566,22 @@ fn keywordTerm(value: []const u8) log.Term {
 test "v1 golden covers every message kind, atom, recursive option, and typed error" {
     const allocator = std.testing.allocator;
     const cursor_triple: log.Triple = .{
-        .slot0 = stringTerm("cursor"),
-        .slot1 = keywordTerm("after"),
-        .slot2 = .{ .atom = .{ .integer = 7 } },
+        .t1 = stringTerm("cursor"),
+        .t2 = keywordTerm("after"),
+        .t3 = .{ .atom = .{ .integer = 7 } },
     };
     const numeric_triple: log.Triple = .{
-        .slot0 = .{ .atom = .{ .integer = -42 } },
-        .slot1 = .{ .atom = .{ .float = 1.5 } },
-        .slot2 = .{ .atom = .{ .instant = .{
+        .t1 = .{ .atom = .{ .integer = -42 } },
+        .t2 = .{ .atom = .{ .float = 1.5 } },
+        .t3 = .{ .atom = .{ .instant = .{
             .epoch_seconds = 1_775_000_000,
             .nanosecond = 123_456_789,
         } } },
     };
     const payload_triple: log.Triple = .{
-        .slot0 = stringTerm("Alice"),
-        .slot1 = .{ .triple = &numeric_triple },
-        .slot2 = .{ .atom = .{ .boolean = true } },
+        .t1 = stringTerm("Alice"),
+        .t2 = .{ .triple = &numeric_triple },
+        .t3 = .{ .atom = .{ .boolean = true } },
     };
     const request_id: u64 = 0x0102030405060708;
     const frames = [_]Frame{

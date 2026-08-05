@@ -14,7 +14,7 @@
          '[clojure.string :as str])
 
 (defn triple-signature [value]
-  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
+  [(t/triple-t1 value) (t/triple-t2 value) (t/triple-t3 value)])
 
 (defn live-triples [space frames]
   (:live-propositions (fold/fold! space frames)))
@@ -28,13 +28,13 @@
 
 (defn identity-triple? [value]
   (contains? #{"predicate_name" "predicate_alias"}
-             (t/triple-slot1 value)))
+             (t/triple-t2 value)))
 
 (defn title-of [triples subject]
   (some (fn [value]
-          (when (and (= subject (t/triple-slot0 value))
-                     (= "title" (t/triple-slot1 value)))
-            (t/triple-slot2 value)))
+          (when (and (= subject (t/triple-t1 value))
+                     (= "title" (t/triple-t2 value)))
+            (t/triple-t3 value)))
         triples))
 
 ;; The legacy exporter included title-bearing subjects and predicate metadata
@@ -43,9 +43,9 @@
   (vec
    (distinct
     (concat
-     (map t/triple-slot0
-          (filter #(= "title" (t/triple-slot1 %)) triples))
-     (map t/triple-slot0 (filter identity-triple? triples))))))
+     (map t/triple-t1
+          (filter #(= "title" (t/triple-t2 %)) triples))
+     (map t/triple-t1 (filter identity-triple? triples))))))
 
 (defn export-corpus! [triples out]
   (.mkdirs (io/file out))

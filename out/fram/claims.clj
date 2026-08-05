@@ -57,7 +57,7 @@
 
 (defn evidence-nodes [co claim]
   (let [p (pid co evidence-pred)]
-  (if (nil? p) [] (vec (distinct (rot/values (rot/by-slot01 (vw co) claim p)))))))
+  (if (nil? p) [] (vec (distinct (rot/values (rot/by-t12 (vw co) claim p)))))))
 
 (defn evidence [co node]
   (let [st (sess co)]
@@ -68,11 +68,11 @@
 
 (defn- selections-of [co claim]
   (let [p (pid co select-pred)]
-  (if (nil? p) [] (rot/by-slot12 (vw co) p claim))))
+  (if (nil? p) [] (rot/by-t23 (vw co) p claim))))
 
 (defn- verdict-of [co views selection]
   (let [occurrence (rot/occurrence-of selection)
-   nm (s/name-of (sess co) (t/triple-slot0 (rot/proposition-of selection)))]
+   nm (s/name-of (sess co) (t/triple-t1 (rot/proposition-of selection)))]
   (cond
   (family? (:verified views) nm) {:verdict :verified :view nm :by (writer-of co occurrence) :cid occurrence}
   (family? (:rejected views) nm) {:verdict :rejected :view nm :by (writer-of co occurrence) :cid occurrence}
@@ -128,8 +128,8 @@
 
 (defn- verdict-view-ids [co views]
   (let [p (pid co select-pred)]
-  (if (nil? p) [] (vec (distinct (reduce (fn [acc selection] (let [l (t/triple-slot0 (rot/proposition-of selection))]
-  (if (family? (:verified views) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-slot1 (vw co) p)))))))
+  (if (nil? p) [] (vec (distinct (reduce (fn [acc selection] (let [l (t/triple-t1 (rot/proposition-of selection))]
+  (if (family? (:verified views) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-t2 (vw co) p)))))))
 
 (defn reverification-rules
   ([co from to]

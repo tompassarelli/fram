@@ -95,9 +95,9 @@
   (let [subject (str "@" module "#root")
         paths (->> triples
                    (keep (fn [triple]
-                           (when (and (= subject (t/triple-slot0 triple))
-                                      (= "file" (t/triple-slot1 triple)))
-                             (t/triple-slot2 triple))))
+                           (when (and (= subject (t/triple-t1 triple))
+                                      (= "file" (t/triple-t2 triple)))
+                             (t/triple-t3 triple))))
                    vec)]
     (when-not (= 1 (count paths))
       (invalid! "module must have exactly one registered root path"
@@ -120,7 +120,7 @@
   (when-not (and (integer? version) (integer? pages) (vector? triples))
     (invalid! "module selection requires a pinned corpus snapshot"
               {:module module :version version :pages pages}))
-  (let [module-triples (filterv #(module-subject? module (t/triple-slot0 %))
+  (let [module-triples (filterv #(module-subject? module (t/triple-t1 %))
                                 triples)
         root (registered-root! checkout-root module module-triples)]
     {:module module
@@ -154,11 +154,11 @@
         (->> triples
              (keep (fn [triple]
                      (when-let [subject (local-node-id module
-                                                       (t/triple-slot0 triple))]
+                                                       (t/triple-t1 triple))]
                        [subject
-                        (t/triple-slot1 triple)
-                        (or (local-node-id module (t/triple-slot2 triple))
-                            (t/triple-slot2 triple))])))
+                        (t/triple-t2 triple)
+                        (or (local-node-id module (t/triple-t3 triple))
+                            (t/triple-t3 triple))])))
              (sort-by (fn [[subject predicate object]]
                         [subject (str predicate) (pr-str object)])))]
     (str "@file " (:root snapshot) "\n"

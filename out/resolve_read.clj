@@ -90,7 +90,7 @@
   (let [open (deref (builder context))
    coordinate (txn/builder-coordinate open)
    store (ri/store-of context)]
-  (ri/with-view! context (rot/staged (rot/project store) (t/triple-slot0 coordinate) (t/triple-slot2 coordinate) (txn/builder-operations open)))))
+  (ri/with-view! context (rot/staged (rot/project store) (t/triple-t1 coordinate) (t/triple-t3 coordinate) (txn/builder-operations open)))))
 
 (defn context [store]
   (ri/graph store {builder-key (txn/open store)}))
@@ -120,13 +120,13 @@
   coordinate)))
 
 (defn events-by-subject [context subject]
-  (rot/by-slot0 (ri/view context) subject))
+  (rot/by-t1 (ri/view context) subject))
 
 (defn events-by-subject-predicate [context subject predicate]
-  (rot/by-slot01 (ri/view context) subject predicate))
+  (rot/by-t12 (ri/view context) subject predicate))
 
 (defn event-predicate [event]
-  (t/triple-slot1 (rot/proposition-of event)))
+  (t/triple-t2 (rot/proposition-of event)))
 
 (defn event-value [event]
-  (t/triple-slot2 (rot/proposition-of event)))
+  (t/triple-t3 (rot/proposition-of event)))

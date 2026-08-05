@@ -205,12 +205,12 @@
   (if (not (t/term? term))
     (throw (ex-info "fram: cannot intern a value outside Term" {:type :invalid-term}))
     (if (t/triple? term)
-      (let [slot0 (intern-handle! ctx (t/triple-slot0 term))
-            slot1 (intern-handle! ctx (t/triple-slot1 term))
-            slot2 (intern-handle! ctx (t/triple-slot2 term))
+      (let [t1 (intern-handle! ctx (t/triple-t1 term))
+            t2 (intern-handle! ctx (t/triple-t2 term))
+            t3 (intern-handle! ctx (t/triple-t3 term))
             store: t/TermStore (deref ctx)
             rows: (Vec t/TripleRow) (t/termstore-triples store)
-            value: t/TripleRow (t/->TripleRow slot0 slot1 slot2)
+            value: t/TripleRow (t/->TripleRow t1 t2 t3)
             known (find-triple-position rows (t/termstore-triple-slots store) value)]
         (if (>= known 0)
           (triple-handle known)
@@ -246,9 +246,9 @@
       (if (atom-handle? handle)
         (atom-row-value (nth (t/termstore-atoms store) position))
         (let [row: t/TripleRow (nth (t/termstore-triples store) position)]
-          (t/triple (resolve-handle store (t/triplerow-slot0 row))
-                    (resolve-handle store (t/triplerow-slot1 row))
-                    (resolve-handle store (t/triplerow-slot2 row))))))))
+          (t/triple (resolve-handle store (t/triplerow-t1 row))
+                    (resolve-handle store (t/triplerow-t2 row))
+                    (resolve-handle store (t/triplerow-t3 row))))))))
 
 (defn- resolve-triple-handle [store: t/TermStore handle: Int] -> t/Triple
   (let [term (resolve-handle store handle)]
@@ -261,10 +261,10 @@
   (if (not (t/term? term))
     nil
     (if (t/triple? term)
-      (let [slot0 (known-term-handle store (t/triple-slot0 term))
-            slot1 (known-term-handle store (t/triple-slot1 term))
-            slot2 (known-term-handle store (t/triple-slot2 term))
-            handles: (Vec Int?) [slot0 slot1 slot2]
+      (let [t1 (known-term-handle store (t/triple-t1 term))
+            t2 (known-term-handle store (t/triple-t2 term))
+            t3 (known-term-handle store (t/triple-t3 term))
+            handles: (Vec Int?) [t1 t2 t3]
             all-known
             (loop [position 0]
               (if (>= position (count handles))
@@ -276,9 +276,9 @@
           (let [position
                 (find-triple-position
                  (t/termstore-triples store) (t/termstore-triple-slots store)
-                 (t/->TripleRow (if (some? slot0) slot0 0)
-                                (if (some? slot1) slot1 0)
-                                (if (some? slot2) slot2 0)))]
+                 (t/->TripleRow (if (some? t1) t1 0)
+                                (if (some? t2) t2 0)
+                                (if (some? t3) t3 0)))]
             (when (>= position 0) (triple-handle position)))
           nil))
       (let [position
@@ -629,10 +629,10 @@
 (defn- exact-occurrence-position [store: t/TermStore coordinate: Any] -> Int
   (if (not (t/occurrence-coordinate? coordinate))
     -1
-    (let [transaction: t/Triple (t/triple-slot0 coordinate)
-          space: String (t/triple-slot0 transaction)
-          sequence: Int (t/triple-slot2 transaction)
-          ordinal: Int (t/triple-slot2 coordinate)
+    (let [transaction: t/Triple (t/triple-t1 coordinate)
+          space: String (t/triple-t1 transaction)
+          sequence: Int (t/triple-t3 transaction)
+          ordinal: Int (t/triple-t3 coordinate)
           transactions: (Vec t/TransactionRow) (t/termstore-transactions store)
           position (first-transaction-after transactions (dec sequence))]
       (if (or (not (= space (t/termstore-space-id store)))
@@ -679,7 +679,7 @@
 
 (defn occurrence-tuple-at [store: t/TermStore position: Int] -> (Vec Any)
   (let [event: t/Triple (event-at store position)]
-    [(t/triple-slot0 event) (t/triple-slot1 event) (t/triple-slot2 event)]))
+    [(t/triple-t1 event) (t/triple-t2 event) (t/triple-t3 event)]))
 
 (defn operation-occurrences [ctx: (Atom t/TermStore)] -> (Vec t/Triple)
   (let [store: t/TermStore (deref ctx)]
@@ -762,9 +762,9 @@
     (if (>= position (count rows))
       true
       (let [row: t/TripleRow (nth rows position)]
-        (if (and (valid-prior-handle? atom-count position (t/triplerow-slot0 row))
-                 (and (valid-prior-handle? atom-count position (t/triplerow-slot1 row))
-                      (valid-prior-handle? atom-count position (t/triplerow-slot2 row))))
+        (if (and (valid-prior-handle? atom-count position (t/triplerow-t1 row))
+                 (and (valid-prior-handle? atom-count position (t/triplerow-t2 row))
+                      (valid-prior-handle? atom-count position (t/triplerow-t3 row))))
           (recur (inc position))
           false)))))
 
@@ -893,17 +893,17 @@
       (atom-row-value (nth (t/termstore-atoms store) position))
       (let [row: t/TripleRow (nth (t/termstore-triples store) position)]
         (t/->Triple
-         (resolve-valid-handle store (t/triplerow-slot0 row))
-         (resolve-valid-handle store (t/triplerow-slot1 row))
-         (resolve-valid-handle store (t/triplerow-slot2 row)))))))
+         (resolve-valid-handle store (t/triplerow-t1 row))
+         (resolve-valid-handle store (t/triplerow-t2 row))
+         (resolve-valid-handle store (t/triplerow-t3 row)))))))
 
 (defn- resolve-valid-triple-handle [store: t/TermStore handle: Int] -> t/Triple
   (let [row: t/TripleRow
         (nth (t/termstore-triples store) (handle-position handle))]
     (t/->Triple
-     (resolve-valid-handle store (t/triplerow-slot0 row))
-     (resolve-valid-handle store (t/triplerow-slot1 row))
-     (resolve-valid-handle store (t/triplerow-slot2 row)))))
+     (resolve-valid-handle store (t/triplerow-t1 row))
+     (resolve-valid-handle store (t/triplerow-t2 row))
+     (resolve-valid-handle store (t/triplerow-t3 row)))))
 
 (defn- valid-transaction-frame-at
   [store: t/TermStore

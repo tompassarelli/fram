@@ -102,20 +102,20 @@
          (= [proposition] (fri/live-propositions image)))]
    ["nested recursive Triple and typed Instant survive cache decode"
     (= proposition (first (fri/live-propositions image)))]
-   ["slot0/slot1/slot2 indexes return recursive structural Triples"
+   ["t1/t2/t3 indexes return recursive structural Triples"
     (and (= [proposition]
-            (fri/by-slot0 image (t/triple "Alice" :account "primary")))
+            (fri/by-t1 image (t/triple "Alice" :account "primary")))
          (= [(t/triple "Alice" :account "primary")]
-            (fri/by-slot1 image :account))
+            (fri/by-t2 image :account))
          (= [(t/triple "alice@example.com" :observed-at (t/instant 1785561000 7))]
-            (fri/by-slot2 image (t/instant 1785561000 7))))]
+            (fri/by-t3 image (t/instant 1785561000 7))))]
    ["pair indexes are slot-addressed without subject/predicate/object roles"
     (and (= [proposition]
-            (fri/by-slot01 image
+            (fri/by-t12 image
                            (t/triple "Alice" :account "primary")
                            (t/triple :slot "email" 2)))
          (= [proposition]
-            (fri/by-slot12 image
+            (fri/by-t23 image
                            (t/triple :slot "email" 2)
                            (t/triple "alice@example.com" :observed-at
                                      (t/instant 1785561000 7)))))]

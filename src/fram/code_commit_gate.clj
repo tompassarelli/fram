@@ -26,7 +26,7 @@
     (apply str (map #(format "%02x" %) digest))))
 
 (defn- triple->row [triple]
-  [(t/triple-slot0 triple) (t/triple-slot1 triple) (t/triple-slot2 triple)])
+  [(t/triple-t1 triple) (t/triple-t2 triple) (t/triple-t3 triple)])
 
 (defn transformer-snapshot
   "Adapt a cited native reader result to the stage-2 transformer's immutable input."
@@ -41,7 +41,7 @@
     {:version version :module module :facts facts}))
 
 (defn- rows->triples [rows]
-  (mapv (fn [[slot0 slot1 slot2]] (t/triple slot0 slot1 slot2)) rows))
+  (mapv (fn [[t1 t2 t3]] (t/triple t1 t2 t3)) rows))
 
 (defn candidate-edn
   "Project one stage-2 candidate through the native reader's Beagle projection."
@@ -178,9 +178,9 @@
                  :errors [(str/trim (str (:err result)))]}})))
 
 (defn- batch-actions [candidate]
-  (mapv (fn [[operation [slot0 slot1 slot2]]]
+  (mapv (fn [[operation [t1 t2 t3]]]
           (framrpc/rpc-action! operation
-                            (t/triple slot0 slot1 slot2)
+                            (t/triple t1 t2 t3)
                             framrpc/rpc-subject-any))
         (action-rows candidate)))
 

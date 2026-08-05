@@ -70,8 +70,8 @@
 
 (check! "begin identity is a recursive world/candidate Triple"
         (and (t/triple? candidate)
-             (= world (t/triple-slot0 candidate))
-             (= :worlds/candidate (t/triple-slot1 candidate))))
+             (= world (t/triple-t1 candidate))
+             (= :worlds/candidate (t/triple-t2 candidate))))
 (check! "begin emits one expected-version batch, not a special daemon verb"
         (let [request (host/plan-request space begin)]
           (and (= :rpc/batch (t/rpcrequest-op request))
@@ -113,7 +113,7 @@
 
 (check! "version identity nests world and canonical TermCodec digest"
         (and (= version (worlds/version-id world seal-input seal-digest))
-             (worlds/digest? (t/triple-slot2 version))))
+             (worlds/digest? (t/triple-t3 version))))
 (check! "TermCodec digest is stable and structure-sensitive"
         (and (= seal-digest (sha256-term seal-input))
              (not= seal-digest

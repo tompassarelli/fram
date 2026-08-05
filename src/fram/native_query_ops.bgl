@@ -491,9 +491,9 @@
          (record-read-error!
           context :rpc-invalid-list "RPC list exceeds the Term node bound")
          values)]
-      [(and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor)))
-       (recur (t/triple-slot2 cursor)
-              (conj values (t/triple-slot1 cursor))
+      [(and (t/triple? cursor) (= :rpc/list (t/triple-t1 cursor)))
+       (recur (t/triple-t3 cursor)
+              (conj values (t/triple-t2 cursor))
               (inc count-value))]
       [:else
        (do
@@ -508,10 +508,10 @@
    tag: Keyword
    field-count: Int] -> (Vec Any)
   (if (and (t/triple? value)
-           (and (= tag (t/triple-slot0 value))
-                (= :rpc/record (t/triple-slot2 value))))
+           (and (= tag (t/triple-t1 value))
+                (= :rpc/record (t/triple-t3 value))))
     (let [fields: (Vec Any)
-          (read-list! context (t/triple-slot1 value))]
+          (read-list! context (t/triple-t2 value))]
       (if (and (read-context-ok? context)
                (= field-count (count fields)))
         fields
@@ -531,9 +531,9 @@
   (cond
     [(= value :rpc/none) (->OptionValue false nil)]
     [(and (t/triple? value)
-          (and (= :rpc/some (t/triple-slot0 value))
-               (= :rpc/option (t/triple-slot2 value))))
-     (->OptionValue true (t/triple-slot1 value))]
+          (and (= :rpc/some (t/triple-t1 value))
+               (= :rpc/option (t/triple-t3 value))))
+     (->OptionValue true (t/triple-t2 value))]
     [:else
      (do
        (record-read-error!
@@ -605,9 +605,9 @@
 
 (defn query-record-tag [value: Any] -> Keyword?
   (if (and (t/triple? value)
-           (and (keyword? (t/triple-slot0 value))
-                (= :rpc/record (t/triple-slot2 value))))
-    (t/triple-slot0 value)
+           (and (keyword? (t/triple-t1 value))
+                (= :rpc/record (t/triple-t3 value))))
+    (t/triple-t1 value)
     nil))
 
 (defn fallback-query-term [] -> d/QueryTerm

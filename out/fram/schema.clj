@@ -53,7 +53,7 @@
   (some? (c/known-term-handle (deref (store-of s)) term)))
 
 (defn predicate-ids [^Session s ^String spelling]
-  (vec (distinct (concat (rot/subjects (rot/by-slot12 (view s) predicate-name-predicate spelling)) (rot/subjects (rot/by-slot12 (view s) predicate-alias-predicate spelling))))))
+  (vec (distinct (concat (rot/subjects (rot/by-t23 (view s) predicate-name-predicate spelling)) (rot/subjects (rot/by-t23 (view s) predicate-alias-predicate spelling))))))
 
 (defn resolve-predicate [^Session s ^String spelling]
   (let [ids (predicate-ids s spelling)]
@@ -63,8 +63,8 @@
   :else (if (interned? s spelling) spelling nil))))
 
 (defn ^String predicate-name [^Session s pid]
-  (let [events (rot/by-slot01 (view s) pid predicate-name-predicate)
-   raw (if (empty? events) pid (t/triple-slot2 (rot/proposition-of (last events))))]
+  (let [events (rot/by-t12 (view s) pid predicate-name-predicate)
+   raw (if (empty? events) pid (t/triple-t3 (rot/proposition-of (last events))))]
   (if (string? raw) raw (str raw))))
 
 (defn register-predicate! [^Session s ^String spelling]
@@ -76,7 +76,7 @@
   (if (and (not (empty? alias-ids)) (or (nil? candidate) (not (and (= 1 (count alias-ids)) (= candidate (first alias-ids)))))) (do
   (throw (ex-info (str "predicate alias collision: " default-alias) {:predicate canonical :alias default-alias :ids alias-ids}))))
   (let [pid (if (some? candidate) candidate spelling)
-   named (rot/by-slot01 (view s) pid predicate-name-predicate)
+   named (rot/by-t12 (view s) pid predicate-name-predicate)
    builder (txn/open (store-of s))]
   (do
   (if (empty? named) (do
@@ -90,8 +90,8 @@
 (defn ^String cardinality [^Session s ^String pname]
   (let [pid (resolve-predicate s pname)
    card (resolve-predicate s cardinality-predicate)
-   events (if (and (some? pid) (some? card)) (rot/by-slot01 (view s) pid card) [])]
-  (if (empty? events) multi (let [value (t/triple-slot2 (rot/proposition-of (first events)))]
+   events (if (and (some? pid) (some? card)) (rot/by-t12 (view s) pid card) [])]
+  (if (empty? events) multi (let [value (t/triple-t3 (rot/proposition-of (first events)))]
   (if (string? value) value multi)))))
 
 (defn assert! [^Session s subject ^String pname value]
@@ -107,7 +107,7 @@
 
 (defn lookup-all [^Session s subject ^String pname]
   (let [pid (resolve-predicate s pname)]
-  (if (nil? pid) no-terms (rot/values (rot/by-slot01 (view s) subject pid)))))
+  (if (nil? pid) no-terms (rot/values (rot/by-t12 (view s) subject pid)))))
 
 (defn lookup [^Session s subject ^String pname]
   (let [all (lookup-all s subject pname)]
@@ -115,7 +115,7 @@
 
 (defn find-by [^Session s ^String pname value]
   (let [pid (resolve-predicate s pname)]
-  (if (nil? pid) no-terms (rot/subjects (rot/by-slot12 (view s) pid value)))))
+  (if (nil? pid) no-terms (rot/subjects (rot/by-t23 (view s) pid value)))))
 
 (defn def-predicate! [^Session s ^String pname ^String card ^String kind]
   (let [pid (register-predicate! s pname)]
@@ -175,7 +175,7 @@
   (if (not (= old-name new-name)) (do
   (do
   (let [old-ids (predicate-ids s old-name)
-   aliases (rot/by-slot12 (view s) predicate-alias-predicate old-name)]
+   aliases (rot/by-t23 (view s) predicate-alias-predicate old-name)]
   (if (and (= 1 (count old-ids)) (and (= pid (first old-ids)) (empty? aliases))) (do
   (let [builder (txn/open (store-of s))]
   (do

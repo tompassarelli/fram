@@ -121,7 +121,7 @@
 (def stable-ref-occ (s/link! sess stable-subj "points_to" stable-target))
 
 (defn- predicate-written [occurrence]
-  (t/triple-slot1 (rot/proposition-of (rot/event-at (s/view sess) occurrence))))
+  (t/triple-t2 (rot/proposition-of (rot/event-at (s/view sess) occurrence))))
 
 (def checks
   [["assert! then lookup"                  (= "First" title1)]
@@ -160,7 +160,7 @@
     (and (= ["done"] (s/lookup-all sess status-subj "status"))
          (= ["done"] (s/lookup-all sess status-subj "state"))
          (= ["done"] (s/lookup-all sess status-subj "phase"))
-         (= 1 (count (rot/by-slot01 (s/view sess) status-subj status-pid))))]
+         (= 1 (count (rot/by-t12 (s/view sess) status-subj status-pid))))]
    ["alias collision with another canonical rejects loudly"
     alias-collision-rejected]
    ["rename collision with another canonical rejects loudly"

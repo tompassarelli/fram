@@ -123,7 +123,7 @@
     (let [rows (json/parse-string (call-text (get by-id 5)))]
       (check! "show reads live recursive Triples through rpc/scan"
               (= #{["title" "A"] ["depends_on" "@b"]}
-                 (set (map (fn [row] [(get row "slot1") (get row "slot2")]) rows)))))
+                 (set (map (fn [row] [(get row "t2") (get row "t3")]) rows)))))
     (let [rows (json/parse-string (call-text (get by-id 6)))]
       (check! "ask lowers structured JSON to the typed query plan"
               (contains? (set (map vec rows)) ["@a" "@b"])))
@@ -132,7 +132,7 @@
                  (= 3 (direct-version port space))))
     (let [rows (json/parse-string (call-text (get by-id 8)))]
       (check! "retracted proposition is absent from the next show"
-              (= [{"slot1" "depends_on" "slot2" "@b"}] rows)))
+              (= [{"t2" "depends_on" "t3" "@b"}] rows)))
     (check! "validate returns the typed validation result"
             (= true (get (json/parse-string (call-text (get by-id 9))) "valid")))
     (check! "missing required arguments fail before socket dispatch"

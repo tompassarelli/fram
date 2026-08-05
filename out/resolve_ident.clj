@@ -67,16 +67,16 @@
   n)))))
 
 ^{:line 105 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn by-subject [^Graph g subject]
-  ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-slot0 ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) subject)))
+  ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-t1 ^{:line 108 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) subject)))
 
 ^{:line 110 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn by-subject-predicate [^Graph g subject predicate]
-  ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-slot01 ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) subject predicate)))
+  ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-t12 ^{:line 114 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) subject predicate)))
 
 ^{:line 116 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn by-predicate [^Graph g predicate]
-  ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-slot1 ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) predicate)))
+  ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-t2 ^{:line 119 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) predicate)))
 
 ^{:line 121 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn by-predicate-value [^Graph g predicate value]
-  ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-slot12 ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) predicate value)))
+  ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/occurrences ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/by-t23 ^{:line 125 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) predicate value)))
 
 ^{:line 127 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn proposition-at [^Graph g occurrence]
   ^{:line 130 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [event ^{:line 130 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/event-at ^{:line 130 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) occurrence)]
@@ -84,15 +84,15 @@
 
 ^{:line 133 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn subject-at [^Graph g occurrence]
   ^{:line 136 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [p ^{:line 136 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (proposition-at g occurrence)]
-  ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot0 p))))
+  ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 137 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t1 p))))
 
 ^{:line 139 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn predicate-at [^Graph g occurrence]
   ^{:line 142 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [p ^{:line 142 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (proposition-at g occurrence)]
-  ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot1 p))))
+  ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 143 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t2 p))))
 
 ^{:line 145 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn value-at [^Graph g occurrence]
   ^{:line 148 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [p ^{:line 148 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (proposition-at g occurrence)]
-  ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot2 p))))
+  ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? p) nil ^{:line 149 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t3 p))))
 
 ^{:line 153 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn target-at [^Graph g occurrence]
   ^{:line 156 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [r ^{:line 156 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 156 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? occurrence) nil ^{:line 156 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (value-at g occurrence))]
@@ -105,10 +105,10 @@
   ^{:line 165 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (rot/live-occurrence? ^{:line 165 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (view g) occurrence))
 
 ^{:line 170 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn occurrence-order [occurrence]
-  ^{:line 171 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 171 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/occurrence-coordinate? occurrence) ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} [1 ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot2 ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot0 occurrence)) ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot2 occurrence)] ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} [0 ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (integer? occurrence) occurrence 0) 0]))
+  ^{:line 171 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 171 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/occurrence-coordinate? occurrence) ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} [1 ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t3 ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t1 occurrence)) ^{:line 172 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t3 occurrence)] ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} [0 ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 173 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (integer? occurrence) occurrence 0) 0]))
 
 ^{:line 177 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn ^String writer-of [^Graph g occurrence]
-  ^{:line 180 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 180 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/occurrence-coordinate? occurrence) ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [hit ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (get ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (graph-writers g) ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-slot0 occurrence))]
+  ^{:line 180 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 180 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/occurrence-coordinate? occurrence) ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (let [hit ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (get ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (graph-writers g) ^{:line 181 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (t/triple-t1 occurrence))]
   ^{:line 182 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (if ^{:line 182 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (nil? hit) "" ^{:line 182 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (str hit))) ""))
 
 ^{:line 187 :file "/home/tom/code/fram/wt-engine-fixes/src/resolve_ident.bclj"} (defn minted-count [^Graph g]

@@ -180,9 +180,9 @@
   (if (> depth MAX-TERM-DEPTH) (do
   (fail "fri: TermCodecV1 depth exceeds 256" :invalid-fri-cache)))
   (write-u8! out 7)
-  (write-term-v1! out (t/triple-slot0 value) (inc depth))
-  (write-term-v1! out (t/triple-slot1 value) (inc depth))
-  (write-term-v1! out (t/triple-slot2 value) (inc depth))))
+  (write-term-v1! out (t/triple-t1 value) (inc depth))
+  (write-term-v1! out (t/triple-t2 value) (inc depth))
+  (write-term-v1! out (t/triple-t3 value) (inc depth))))
 
 (defn- write-term-v1! [out term depth]
   (cond
@@ -269,7 +269,7 @@
 
 (defn- index-data [rows]
   (let [with-handles (map-indexed (fn [position row] [(triple-handle position) row]) rows)]
-  [(vec (sort (map (fn [entry] [(t/triplerow-slot0 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-slot1 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-slot2 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-slot0 (nth entry 1)) (t/triplerow-slot1 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-slot1 (nth entry 1)) (t/triplerow-slot2 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-slot0 (nth entry 1)) (t/triplerow-slot2 (nth entry 1)) (nth entry 0)]) with-handles)))]))
+  [(vec (sort (map (fn [entry] [(t/triplerow-t1 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-t2 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-t3 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-t1 (nth entry 1)) (t/triplerow-t2 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-t2 (nth entry 1)) (t/triplerow-t3 (nth entry 1)) (nth entry 0)]) with-handles))) (vec (sort (map (fn [entry] [(t/triplerow-t1 (nth entry 1)) (t/triplerow-t3 (nth entry 1)) (nth entry 0)]) with-handles)))]))
 
 (declare atom-value resolve-handle)
 
@@ -337,7 +337,7 @@
    rows []
    handles (initial-handles atoms)]
   (if (>= position row-count) rows (let [term (read-term-row! buffer)]
-  (if (not (t/triple? term)) (fail "fri: TripleRow decoded as Atom" :invalid-fri-cache) (if (contains? handles term) (fail "fri: duplicate structural TripleRow" :invalid-fri-cache) (let [row (t/->TripleRow (required-handle handles (t/triple-slot0 term)) (required-handle handles (t/triple-slot1 term)) (required-handle handles (t/triple-slot2 term)))]
+  (if (not (t/triple? term)) (fail "fri: TripleRow decoded as Atom" :invalid-fri-cache) (if (contains? handles term) (fail "fri: duplicate structural TripleRow" :invalid-fri-cache) (let [row (t/->TripleRow (required-handle handles (t/triple-t1 term)) (required-handle handles (t/triple-t2 term)) (required-handle handles (t/triple-t3 term)))]
   (recur (inc position) (conj rows row) (assoc handles term (triple-handle position)))))))))))
 
 (defn- read-transactions! [buffer]
@@ -462,7 +462,7 @@
 (defn- resolve-handle [dump handle]
   (let [position (handle-position handle)]
   (if (atom-handle? handle) (atom-value (nth (t/termstoredump-atoms dump) position)) (let [row (nth (t/termstoredump-triples dump) position)]
-  (t/triple (resolve-handle dump (t/triplerow-slot0 row)) (resolve-handle dump (t/triplerow-slot1 row)) (resolve-handle dump (t/triplerow-slot2 row)))))))
+  (t/triple (resolve-handle dump (t/triplerow-t1 row)) (resolve-handle dump (t/triplerow-t2 row)) (resolve-handle dump (t/triplerow-t3 row)))))))
 
 (defn- term-handles [dump]
   (into {} (concat (map-indexed (fn [position row] [(atom-value row) (atom-handle position)]) (t/termstoredump-atoms dump)) (map-indexed (fn [position row] [(resolve-handle dump (triple-handle position)) (triple-handle position)]) (t/termstoredump-triples dump)))))
@@ -528,23 +528,23 @@
 (defn live-propositions [image]
   (store/live-propositions (cacheimage-store image)))
 
-(defn by-slot0 [image term]
+(defn by-t1 [image term]
   (index-matches image 0 [term]))
 
-(defn by-slot1 [image term]
+(defn by-t2 [image term]
   (index-matches image 1 [term]))
 
-(defn by-slot2 [image term]
+(defn by-t3 [image term]
   (index-matches image 2 [term]))
 
-(defn by-slot01 [image slot0 slot1]
-  (index-matches image 3 [slot0 slot1]))
+(defn by-t12 [image t1 t2]
+  (index-matches image 3 [t1 t2]))
 
-(defn by-slot12 [image slot1 slot2]
-  (index-matches image 4 [slot1 slot2]))
+(defn by-t23 [image t2 t3]
+  (index-matches image 4 [t2 t3]))
 
-(defn by-slot02 [image slot0 slot2]
-  (index-matches image 5 [slot0 slot2]))
+(defn by-t13 [image t1 t3]
+  (index-matches image 5 [t1 t3]))
 
 (defn live-occurrences-as-of [image sequence]
   (let [dump (cacheimage-dump image)]

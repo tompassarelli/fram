@@ -422,8 +422,8 @@
     (ri/with-view!
      context
      (rot/staged (rot/project (ri/store-of context))
-                 (t/triple-slot0 coordinate)
-                 (t/triple-slot2 coordinate)
+                 (t/triple-t1 coordinate)
+                 (t/triple-t3 coordinate)
                  (txn/builder-operations open)))))
 
 ;; The compiled ports still call ri's immediate-write surface; redirect those Vars

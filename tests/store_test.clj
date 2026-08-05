@@ -64,7 +64,7 @@
   (assoc (deref ctx) :triples
          (assoc (t/termstore-triples (deref ctx)) 0
                 (assoc (first (t/termstore-triples (deref ctx)))
-                       :slot0 999999))))
+                       :t1 999999))))
 (def corrupt-triple-frames
   (store/transaction-frames-between-result corrupt-triple-store -1 5))
 

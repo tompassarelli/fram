@@ -36,13 +36,13 @@
                     {:type :invalid-thread-triple}))))
 
 (defn- triple-left [value: t/Triple] -> String
-  (string-term (t/triple-slot0 value)))
+  (string-term (t/triple-t1 value)))
 
 (defn- triple-predicate [value: t/Triple] -> String
-  (string-term (t/triple-slot1 value)))
+  (string-term (t/triple-t2 value)))
 
 (defn- triple-right [value: t/Triple] -> String
-  (string-term (t/triple-slot2 value)))
+  (string-term (t/triple-t3 value)))
 
 (defn- split-doc [content: String] -> Doc
   (let [lines (fram.rt/split-on content "\n")

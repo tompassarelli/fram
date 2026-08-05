@@ -104,10 +104,10 @@
 
 (defn contract-valid? [descriptor-value: ProviderDescriptor] -> Bool
   (let [contract: t/Triple (providerdescriptor-contract descriptor-value)]
-    (and (= (providerdescriptor-capability descriptor-value) (t/triple-slot0 contract))
-      (and (= :provider/contract (t/triple-slot1 contract))
-        (and (integer? (t/triple-slot2 contract))
-          (pos? (t/triple-slot2 contract)))))))
+    (and (= (providerdescriptor-capability descriptor-value) (t/triple-t1 contract))
+      (and (= :provider/contract (t/triple-t2 contract))
+        (and (integer? (t/triple-t3 contract))
+          (pos? (t/triple-t3 contract)))))))
 
 (defn import-violations
   [descriptor-value: ProviderDescriptor

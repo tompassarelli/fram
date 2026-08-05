@@ -40,9 +40,9 @@ pub const Term = union(enum) {
 /// “Turtles all the way down” is the architectural preference for that
 /// recursive uniformity where it fits; it never names a runtime or storage type.
 pub const Triple = struct {
-    slot0: Term,
-    slot1: Term,
-    slot2: Term,
+    t1: Term,
+    t2: Term,
+    t3: Term,
 };
 
 pub const TermLimits = struct {
@@ -590,9 +590,9 @@ pub fn rewriteDurableAtomic(
 }
 
 pub fn tripleEql(left: Triple, right: Triple) bool {
-    return termEql(left.slot0, right.slot0) and
-        termEql(left.slot1, right.slot1) and
-        termEql(left.slot2, right.slot2);
+    return termEql(left.t1, right.t1) and
+        termEql(left.t2, right.t2) and
+        termEql(left.t3, right.t3);
 }
 
 pub fn termEql(left: Term, right: Term) bool {
@@ -621,9 +621,9 @@ pub fn cloneTerm(allocator: Allocator, term: Term) Allocator.Error!Term {
 
 pub fn cloneTriple(allocator: Allocator, triple: Triple) Allocator.Error!Triple {
     return .{
-        .slot0 = try cloneTerm(allocator, triple.slot0),
-        .slot1 = try cloneTerm(allocator, triple.slot1),
-        .slot2 = try cloneTerm(allocator, triple.slot2),
+        .t1 = try cloneTerm(allocator, triple.t1),
+        .t2 = try cloneTerm(allocator, triple.t2),
+        .t3 = try cloneTerm(allocator, triple.t3),
     };
 }
 
@@ -697,9 +697,9 @@ fn validateTerm(term: Term, depth: usize) EncodeError!void {
             else => {},
         },
         .triple => |triple| {
-            try validateTerm(triple.slot0, depth + 1);
-            try validateTerm(triple.slot1, depth + 1);
-            try validateTerm(triple.slot2, depth + 1);
+            try validateTerm(triple.t1, depth + 1);
+            try validateTerm(triple.t2, depth + 1);
+            try validateTerm(triple.t3, depth + 1);
         },
     }
 }
@@ -744,9 +744,9 @@ fn writeTerm(writer: *Writer, term: Term, depth: usize) EncodeError!void {
         },
         .triple => |triple| {
             try writeByte(writer, @intFromEnum(TermTag.triple));
-            try writeTerm(writer, triple.slot0, depth + 1);
-            try writeTerm(writer, triple.slot1, depth + 1);
-            try writeTerm(writer, triple.slot2, depth + 1);
+            try writeTerm(writer, triple.t1, depth + 1);
+            try writeTerm(writer, triple.t2, depth + 1);
+            try writeTerm(writer, triple.t3, depth + 1);
         },
     }
 }
@@ -955,9 +955,9 @@ const TermDecoder = struct {
         depth: usize,
     ) TermDecodeError!Triple {
         return .{
-            .slot0 = try decoder.parse(depth + 1),
-            .slot1 = try decoder.parse(depth + 1),
-            .slot2 = try decoder.parse(depth + 1),
+            .t1 = try decoder.parse(depth + 1),
+            .t2 = try decoder.parse(depth + 1),
+            .t3 = try decoder.parse(depth + 1),
         };
     }
 
@@ -1008,9 +1008,9 @@ const TermMeter = struct {
                 },
             },
             .triple => |triple| {
-                try meter.visit(triple.slot0, depth + 1);
-                try meter.visit(triple.slot1, depth + 1);
-                try meter.visit(triple.slot2, depth + 1);
+                try meter.visit(triple.t1, depth + 1);
+                try meter.visit(triple.t2, depth + 1);
+                try meter.visit(triple.t3, depth + 1);
             },
         }
     }
@@ -1052,32 +1052,32 @@ fn keywordTerm(value: []const u8) Term {
 test "recursive triples and typed atoms roundtrip deterministically" {
     const allocator = std.testing.allocator;
 
-    const in_slot0: Triple = .{
-        .slot0 = stringTerm("Alice"),
-        .slot1 = keywordTerm("contact/email"),
-        .slot2 = .{ .atom = .{ .boolean = true } },
+    const in_t1: Triple = .{
+        .t1 = stringTerm("Alice"),
+        .t2 = keywordTerm("contact/email"),
+        .t3 = .{ .atom = .{ .boolean = true } },
     };
-    const in_slot1: Triple = .{
-        .slot0 = .{ .atom = .{ .integer = -42 } },
-        .slot1 = .{ .atom = .{ .float = -0.0 } },
-        .slot2 = .{ .atom = .{ .instant = .{
+    const in_t2: Triple = .{
+        .t1 = .{ .atom = .{ .integer = -42 } },
+        .t2 = .{ .atom = .{ .float = -0.0 } },
+        .t3 = .{ .atom = .{ .instant = .{
             .epoch_seconds = 1_775_000_000,
             .nanosecond = 123_456_789,
         } } },
     };
-    const in_slot2: Triple = .{
-        .slot0 = keywordTerm("kernel/tx-sequence"),
-        .slot1 = stringTerm("same bytes, different atom type"),
-        .slot2 = .{ .atom = .{ .integer = 7 } },
+    const in_t3: Triple = .{
+        .t1 = keywordTerm("kernel/tx-sequence"),
+        .t2 = stringTerm("same bytes, different atom type"),
+        .t3 = .{ .atom = .{ .integer = 7 } },
     };
     const root: Triple = .{
-        .slot0 = .{ .triple = &in_slot0 },
-        .slot1 = .{ .triple = &in_slot1 },
-        .slot2 = .{ .triple = &in_slot2 },
+        .t1 = .{ .triple = &in_t1 },
+        .t2 = .{ .triple = &in_t2 },
+        .t3 = .{ .triple = &in_t3 },
     };
     const ops = [_]Op{
         .{ .ordinal = 0, .action = .assert, .triple = root },
-        .{ .ordinal = 1, .action = .retract, .triple = in_slot0 },
+        .{ .ordinal = 1, .action = .retract, .triple = in_t1 },
     };
     const transactions = [_]Transaction{.{
         .tx_seq = 1842,
@@ -1147,9 +1147,9 @@ test "missing legacy and incompatible headers require migration" {
 test "v1 byte fixture locks the cross-runtime ABI" {
     const allocator = std.testing.allocator;
     const triple: Triple = .{
-        .slot0 = stringTerm("Alice"),
-        .slot1 = keywordTerm("email"),
-        .slot2 = stringTerm("alice@example.com"),
+        .t1 = stringTerm("Alice"),
+        .t2 = keywordTerm("email"),
+        .t3 = stringTerm("alice@example.com"),
     };
     const ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
     const transactions = [_]Transaction{.{ .tx_seq = 1842, .ops = &ops }};
@@ -1172,9 +1172,9 @@ test "v1 byte fixture locks the cross-runtime ABI" {
 test "a torn final frame drops its whole transaction and completed damage corrupts" {
     const allocator = std.testing.allocator;
     const triple: Triple = .{
-        .slot0 = stringTerm("Alice"),
-        .slot1 = keywordTerm("email"),
-        .slot2 = stringTerm("alice@example.com"),
+        .t1 = stringTerm("Alice"),
+        .t2 = keywordTerm("email"),
+        .t3 = stringTerm("alice@example.com"),
     };
     const first_ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
     const second_ops = [_]Op{
@@ -1225,9 +1225,9 @@ test "a torn final frame drops its whole transaction and completed damage corrup
 test "transaction canonicality and instant bounds are enforced" {
     const allocator = std.testing.allocator;
     const triple: Triple = .{
-        .slot0 = stringTerm("s"),
-        .slot1 = keywordTerm("p"),
-        .slot2 = stringTerm("o"),
+        .t1 = stringTerm("s"),
+        .t2 = keywordTerm("p"),
+        .t3 = stringTerm("o"),
     };
     try std.testing.expectError(
         error.EmptyTransaction,
@@ -1239,12 +1239,12 @@ test "transaction canonicality and instant bounds are enforced" {
         encodeTransactionFrame(allocator, .{ .tx_seq = 1, .ops = &bad_ordinal }),
     );
     const bad_instant: Triple = .{
-        .slot0 = .{ .atom = .{ .instant = .{
+        .t1 = .{ .atom = .{ .instant = .{
             .epoch_seconds = 0,
             .nanosecond = 1_000_000_000,
         } } },
-        .slot1 = keywordTerm("recorded-at"),
-        .slot2 = stringTerm("invalid"),
+        .t2 = keywordTerm("recorded-at"),
+        .t3 = stringTerm("invalid"),
     };
     const bad_instant_ops = [_]Op{.{
         .ordinal = 0,
@@ -1286,9 +1286,9 @@ test "durable append fences space and size and atomic rewrite stays replayable" 
     );
 
     const triple: Triple = .{
-        .slot0 = stringTerm("Alice"),
-        .slot1 = keywordTerm("email"),
-        .slot2 = stringTerm("alice@example.com"),
+        .t1 = stringTerm("Alice"),
+        .t2 = keywordTerm("email"),
+        .t3 = stringTerm("alice@example.com"),
     };
     const ops = [_]Op{.{ .ordinal = 0, .action = .assert, .triple = triple }};
     const transaction: Transaction = .{ .tx_seq = 1, .ops = &ops };

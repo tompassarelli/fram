@@ -155,7 +155,7 @@
   (->Rule head-relation head-arguments body))
 
 (defn- triple-row [value]
-  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
+  [(t/triple-t1 value) (t/triple-t2 value) (t/triple-t3 value)])
 
 (defn- rows [triples]
   (reduce (fn [acc value] (conj acc (triple-row value))) #{} triples))

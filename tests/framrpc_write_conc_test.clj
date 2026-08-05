@@ -170,8 +170,8 @@
 
       ;; durable FRAMLOG bytes, read through the database log reader
       (let [durable (assert-frames log-path)
-            noted (filterv #(= :note (t/triple-slot1 (:triple %))) (:asserts durable))
-            by-writer (group-by #(t/triple-slot0 (:triple %)) noted)
+            noted (filterv #(= :note (t/triple-t2 (:triple %))) (:asserts durable))
+            by-writer (group-by #(t/triple-t1 (:triple %)) noted)
             version-of (into {} (map (juxt :proposition :version) all-acks))
             sequencer @server/commit-sequencer-stats]
         (check! "A: FRAMLOG is a whole, untorn generation of one frame per write"
@@ -189,7 +189,7 @@
         (check! "A: per-writer file order == issue order (no reorder within a subject)"
                 (every? (fn [w]
                           (= (mapv #(note-value w %) (range per-writer))
-                             (mapv #(t/triple-slot2 (:triple %))
+                             (mapv #(t/triple-t3 (:triple %))
                                    (get by-writer (str "writer-" w)))))
                         (range writers)))
         (check! "A: per-writer :tx-seq is strictly increasing in the log"
@@ -238,7 +238,7 @@
           head (t/rpcresponse-served-version
                 (request! port space :rpc/version wire/rpc-unit))
           durable (assert-frames log-path)
-          titles (filterv #(= :title (t/triple-slot1 (:triple %))) (:asserts durable))]
+          titles (filterv #(= :title (t/triple-t2 (:triple %))) (:asserts durable))]
       (check! "B: no writer thread threw on the racing socket path" (empty? @failures))
       (check! (str "B: every one of " attempts
                    " racing attempts is acked or typed-conflict, none vanish")
@@ -276,7 +276,7 @@
             (= (+ stale-base 5) head))
     (check! "C: the refused write left no trace in the durable log"
             (and (= head (count (:frames durable)))
-                 (not-any? #(= "stale-write" (t/triple-slot2 (:triple %)))
+                 (not-any? #(= "stale-write" (t/triple-t3 (:triple %)))
                            (:asserts durable))))
     (check! "C: the live view holds the five advances and not the stale write"
             (and (nil? (:error live))

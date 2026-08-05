@@ -12,9 +12,9 @@
 
 (def instructions
   (str
-   "Fram is a recursive Triple engine: every proposition has slot0/slot1/slot2. "
+   "Fram is a recursive Triple engine: every proposition has t1/t2/t3. "
    "The public data interface is exactly tell, retract, show, ask, and validate. "
-   "tell and retract write one Triple; show scans live Triples by slot0; ask runs "
+   "tell and retract write one Triple; show scans live Triples by t1; ask runs "
    "a validated typed recursive query; validate reports structural integrity. "
    "Graph authoring is available only through a separate sealed control service."))
 
@@ -25,7 +25,7 @@
 (def ^:private closed-catalog
   [{:name "tell" :desc "Assert one recursive Triple." :params [(param "subject" "string") (param "predicate" "string") (param "object" "string")]}
    {:name "retract" :desc "Retract one exact recursive Triple." :params [(param "subject" "string") (param "predicate" "string") (param "object" "string")]}
-   {:name "show" :desc "Read every live Triple whose slot0 matches subject." :params [(param "subject" "string")]}
+   {:name "show" :desc "Read every live Triple whose t1 matches subject." :params [(param "subject" "string")]}
    {:name "ask" :desc "Run a typed recursive query." :params [(param "query" "object")]}
    {:name "validate" :desc "Report structural integrity violations." :params []}])
 
@@ -121,9 +121,9 @@
 (defn- term-json [value]
   (cond
     (terms/triple? value)
-    {:triple [(term-json (terms/triple-slot0 value))
-              (term-json (terms/triple-slot1 value))
-              (term-json (terms/triple-slot2 value))]}
+    {:triple [(term-json (terms/triple-t1 value))
+              (term-json (terms/triple-t2 value))
+              (term-json (terms/triple-t3 value))]}
     (terms/instant? value)
     {:instant {:epochSeconds (str (terms/instant-epoch-seconds value))
                :nanos (terms/instant-nanos value)}}
@@ -202,8 +202,8 @@
              (json/generate-string
               (mapv
                (fn [triple]
-                 {:slot1 (term-json (terms/triple-slot1 triple))
-                  :slot2 (term-json (terms/triple-slot2 triple))})
+                 {:t2 (term-json (terms/triple-t2 triple))
+                  :t3 (term-json (terms/triple-t3 triple))})
                (fram.rt/rpc-list-values! values)))})))
     (catch Throwable error
       {:isError true :text (or (.getMessage error) (str (class error)))})))

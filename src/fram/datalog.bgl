@@ -1,6 +1,6 @@
 #lang beagle
 ;; Typed Datalog over homogeneous rows of recursive Fram Terms. Relation names
-;; are query-local; the kernel assigns no role to slot0, slot1, or slot2.
+;; are query-local; the kernel assigns no role to t1, t2, or t3.
 (ns fram.datalog)
 (define-mode strict)
 (require fram.kernel :as kernel)
@@ -314,7 +314,7 @@
   (->Rule head-relation head-arguments body))
 
 (defn- triple-row [value: t/Triple] -> Tuple
-  [(t/triple-slot0 value) (t/triple-slot1 value) (t/triple-slot2 value)])
+  [(t/triple-t1 value) (t/triple-t2 value) (t/triple-t3 value)])
 
 (defn- rows [triples: (Vec t/Triple)] -> (Set Tuple)
   (reduce (fn [acc: (Set Tuple) value: t/Triple] -> (Set Tuple)

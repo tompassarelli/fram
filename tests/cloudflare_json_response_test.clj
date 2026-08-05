@@ -45,9 +45,9 @@
     ["instant" (str (terms/instant-epoch-seconds value))
      (str (terms/instant-nanos value))]
     (terms/triple? value)
-    ["triple" (term-json (terms/triple-slot0 value))
-     (term-json (terms/triple-slot1 value))
-     (term-json (terms/triple-slot2 value))]
+    ["triple" (term-json (terms/triple-t1 value))
+     (term-json (terms/triple-t2 value))
+     (term-json (terms/triple-t3 value))]
     :else (throw (ex-info "not a Term" {:value value}))))
 
 (defn list-json-values [value]
@@ -100,15 +100,15 @@
       (terms/rpcresponse-served-version response))))
 
 (defn all-triples-plan []
-  (let [slot0 (wire/rpc-query-variable! "slot0")
-        slot1 (wire/rpc-query-variable! "slot1")
-        slot2 (wire/rpc-query-variable! "slot2")]
+  (let [t1 (wire/rpc-query-variable! "t1")
+        t2 (wire/rpc-query-variable! "t2")
+        t3 (wire/rpc-query-variable! "t3")]
     (wire/rpc-query-plan!
      (wire/rpc-query-find-relation! "all")
      [(wire/rpc-query-stratum!
        [(wire/rpc-query-rule!
-         (wire/rpc-query-head! "all" [slot0 slot1 slot2])
-         [(wire/rpc-query-relation! "triple" [slot0 slot1 slot2] false)])])])))
+         (wire/rpc-query-head! "all" [t1 t2 t3])
+         [(wire/rpc-query-relation! "triple" [t1 t2 t3] false)])])])))
 
 (let [daemon-port (free-port)
       shim-port (free-port)

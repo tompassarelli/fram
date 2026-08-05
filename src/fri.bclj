@@ -30,24 +30,24 @@
 (defn operation-occurrences [image: Any] -> Any (fp/operation-occurrences image))
 (defn live-occurrences [image: Any] -> Any (fp/live-occurrences image))
 (defn live-propositions [image: Any] -> Any (fp/live-propositions image))
-(defn by-slot0 [image: Any term: Any] -> Any (fp/by-slot0 image term))
-(defn by-slot1 [image: Any term: Any] -> Any (fp/by-slot1 image term))
-(defn by-slot2 [image: Any term: Any] -> Any (fp/by-slot2 image term))
-(defn by-slot01
+(defn by-t1 [image: Any term: Any] -> Any (fp/by-t1 image term))
+(defn by-t2 [image: Any term: Any] -> Any (fp/by-t2 image term))
+(defn by-t3 [image: Any term: Any] -> Any (fp/by-t3 image term))
+(defn by-t12
   [image: Any
-   slot0: Any
-   slot1: Any] -> Any
-  (fp/by-slot01 image slot0 slot1))
-(defn by-slot12
+   t1: Any
+   t2: Any] -> Any
+  (fp/by-t12 image t1 t2))
+(defn by-t23
   [image: Any
-   slot1: Any
-   slot2: Any] -> Any
-  (fp/by-slot12 image slot1 slot2))
-(defn by-slot02
+   t2: Any
+   t3: Any] -> Any
+  (fp/by-t23 image t2 t3))
+(defn by-t13
   [image: Any
-   slot0: Any
-   slot2: Any] -> Any
-  (fp/by-slot02 image slot0 slot2))
+   t1: Any
+   t3: Any] -> Any
+  (fp/by-t13 image t1 t3))
 (defn live-occurrences-as-of [image: Any sequence: Int] -> Any
   (fp/live-occurrences-as-of image sequence))
 (defn live-propositions-as-of [image: Any sequence: Int] -> Any

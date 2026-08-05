@@ -271,7 +271,7 @@
   (if (> depth max-depth) (codec-fail! :term-depth-exceeded "recursive Term exceeds the TermCodecV1 depth bound") (do
   (codec-node! counter max-nodes)
   (cond
-  (t/triple? term) (+ 1 (+ (measure-term-core! (t/triple-slot0 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (+ (measure-term-core! (t/triple-slot1 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (measure-term-core! (t/triple-slot2 term) (+ depth 1) max-string-bytes max-nodes max-depth counter))))
+  (t/triple? term) (+ 1 (+ (measure-term-core! (t/triple-t1 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (+ (measure-term-core! (t/triple-t2 term) (+ depth 1) max-string-bytes max-nodes max-depth counter) (measure-term-core! (t/triple-t3 term) (+ depth 1) max-string-bytes max-nodes max-depth counter))))
   (string? term) (+ 5 (utf8-length! term max-string-bytes "String atom"))
   (integer? term) 9
   (and (number? term) (not (integer? term))) 9
@@ -297,9 +297,9 @@
   (cond
   (t/triple? term) (do
   (codec-write-u8! out 7)
-  (write-term-core! out (t/triple-slot0 term) max-string-bytes)
-  (write-term-core! out (t/triple-slot1 term) max-string-bytes)
-  (write-term-core! out (t/triple-slot2 term) max-string-bytes))
+  (write-term-core! out (t/triple-t1 term) max-string-bytes)
+  (write-term-core! out (t/triple-t2 term) max-string-bytes)
+  (write-term-core! out (t/triple-t3 term) max-string-bytes))
   (string? term) (do
   (codec-write-u8! out 1)
   (write-sized-text-core! out term max-string-bytes "String atom"))
@@ -810,8 +810,8 @@
   (cond
   (= cursor rpc-list-end) result
   (>= count-value rpc-v1-max-term-nodes) (rpc-fail! :rpc-invalid-list "RPC list exceeds the Term node bound")
-  (and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor))) (let [head (t/triple-slot1 cursor)
-   tail (t/triple-slot2 cursor)]
+  (and (t/triple? cursor) (= :rpc/list (t/triple-t1 cursor))) (let [head (t/triple-t2 cursor)
+   tail (t/triple-t3 cursor)]
   (require-rpc-term! head "RPC list head")
   (require-rpc-term! tail "RPC list tail")
   (recur tail (conj result head) (+ count-value 1)))
@@ -827,17 +827,17 @@
 (defn ^Boolean rpc-option-present?! [value]
   (cond
   (= value rpc-none) false
-  (and (t/triple? value) (and (= :rpc/some (t/triple-slot0 value)) (= :rpc/option (t/triple-slot2 value)))) true
+  (and (t/triple? value) (and (= :rpc/some (t/triple-t1 value)) (= :rpc/option (t/triple-t3 value)))) true
   :else (rpc-fail! :rpc-invalid-option "RPC option must be :rpc/none or (:rpc/some value :rpc/option)")))
 
 (defn rpc-option-value! [value]
-  (if (rpc-option-present?! value) (t/triple-slot1 value) nil))
+  (if (rpc-option-present?! value) (t/triple-t2 value) nil))
 
 (defn rpc-record! [tag fields]
   (t/triple tag (rpc-list! fields) :rpc/record))
 
 (defn rpc-record-fields! [value tag field-count]
-  (if (and (t/triple? value) (and (= tag (t/triple-slot0 value)) (= :rpc/record (t/triple-slot2 value)))) (let [fields (rpc-list-values! (t/triple-slot1 value))]
+  (if (and (t/triple? value) (and (= tag (t/triple-t1 value)) (= :rpc/record (t/triple-t3 value)))) (let [fields (rpc-list-values! (t/triple-t2 value))]
   (if (= field-count (count fields)) fields (rpc-fail! :rpc-invalid-record "RPC record contains the wrong number of fields"))) (rpc-fail! :rpc-invalid-record "RPC record tag or marker is invalid")))
 
 (defn rpc-fence! [resource holder epoch]
@@ -863,8 +863,8 @@
 (defn rpc-batch! [actions fence]
   (rpc-record! :rpc/batch [(rpc-list! actions) (rpc-option! fence)]))
 
-(defn rpc-triple-pattern! [slot0 slot1 slot2]
-  (rpc-record! :rpc/triple-pattern [(rpc-option! slot0) (rpc-option! slot1) (rpc-option! slot2)]))
+(defn rpc-triple-pattern! [t1 t2 t3]
+  (rpc-record! :rpc/triple-pattern [(rpc-option! t1) (rpc-option! t2) (rpc-option! t3)]))
 
 (defn rpc-status! [state live-count engine cache]
   (rpc-record! :rpc/status [state live-count engine cache]))

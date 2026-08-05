@@ -99,15 +99,15 @@
        [(wire/rpc-query-relation! "triple" body-terms false)])])]))
 
 (defn all-triples-plan []
-  (let [slot0 (wire/rpc-query-variable! "slot0")
-        slot1 (wire/rpc-query-variable! "slot1")
-        slot2 (wire/rpc-query-variable! "slot2")]
+  (let [t1 (wire/rpc-query-variable! "t1")
+        t2 (wire/rpc-query-variable! "t2")
+        t3 (wire/rpc-query-variable! "t3")]
     (wire/rpc-query-plan!
      (wire/rpc-query-find-relation! "all")
      [(wire/rpc-query-stratum!
        [(wire/rpc-query-rule!
-         (wire/rpc-query-head! "all" [slot0 slot1 slot2])
-         [(wire/rpc-query-relation! "triple" [slot0 slot1 slot2] false)])])])))
+         (wire/rpc-query-head! "all" [t1 t2 t3])
+         [(wire/rpc-query-relation! "triple" [t1 t2 t3] false)])])])))
 
 (defn all-occurrences-plan []
   (let [coordinate (wire/rpc-query-variable! "coordinate")
@@ -279,7 +279,7 @@
                               occurrence-plan
                               (wire/rpc-query-since! 1 wire/query-current)))
               row-sequence (fn [row]
-                             (-> row first t/triple-slot0 t/triple-slot2))]
+                             (-> row first t/triple-t1 t/triple-t3))]
           (check! "query since composes deterministic (L,U] occurrence history"
                   (and (= 2 (t/rpcresponse-served-version at-two))
                        (= (set (query-rows at-two))
@@ -605,19 +605,19 @@
                            (let [[code detail]
                                  (fields advisory :rpc/violation 2)]
                              (and (= :rpc/profile-violation code)
-                                  (= violating (t/triple-slot0 detail)))))
+                                  (= violating (t/triple-t1 detail)))))
                          advisories)
                    (not-any? (fn [advisory]
                                (let [[_ detail]
                                      (fields advisory :rpc/violation 2)]
-                                 (= declaration (t/triple-slot0 detail))))
+                                 (= declaration (t/triple-t1 detail))))
                              advisories))))
 
     (let [predicate :page-fixture
           fixture-count 400
           scan-payload (wire/rpc-triple-pattern! nil predicate nil)
           scan-reference (fn []
-                           (filterv #(= predicate (t/triple-slot1 %))
+                           (filterv #(= predicate (t/triple-t2 %))
                                     (database/live-propositions
                                      @server/database)))
           occurrence-reference (fn []
@@ -719,7 +719,7 @@
                              (t/triple "tail" :page-dup 2)]]
           (request! port space :rpc/assert
                     (wire/rpc-write! proposition wire/rpc-subject-any nil)))
-        (let [reference (filterv #(= :page-dup (t/triple-slot1 %))
+        (let [reference (filterv #(= :page-dup (t/triple-t2 %))
                                  (database/live-propositions
                                   @server/database))
               paged (paged-read port space :rpc/scan dup-payload

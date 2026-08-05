@@ -97,22 +97,22 @@
 ;; ------------------------------------------------------------------- reads ---
 
 (defn by-subject [g: Graph subject: Any] -> (Vec Any)
-  (rot/occurrences (rot/by-slot0 (view g) subject)))
+  (rot/occurrences (rot/by-t1 (view g) subject)))
 
 (defn by-subject-predicate
   [g: Graph
    subject: Any
    predicate: Any] -> (Vec Any)
-  (rot/occurrences (rot/by-slot01 (view g) subject predicate)))
+  (rot/occurrences (rot/by-t12 (view g) subject predicate)))
 
 (defn by-predicate [g: Graph predicate: Any] -> (Vec Any)
-  (rot/occurrences (rot/by-slot1 (view g) predicate)))
+  (rot/occurrences (rot/by-t2 (view g) predicate)))
 
 (defn by-predicate-value
   [g: Graph
    predicate: Any
    value: Any] -> (Vec Any)
-  (rot/occurrences (rot/by-slot12 (view g) predicate value)))
+  (rot/occurrences (rot/by-t23 (view g) predicate value)))
 
 (defn proposition-at [g: Graph occurrence: Any] -> Any
   (let [event: t/Triple? (rot/event-at (view g) occurrence)]
@@ -120,15 +120,15 @@
 
 (defn subject-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
-    (if (nil? p) nil (t/triple-slot0 p))))
+    (if (nil? p) nil (t/triple-t1 p))))
 
 (defn predicate-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
-    (if (nil? p) nil (t/triple-slot1 p))))
+    (if (nil? p) nil (t/triple-t2 p))))
 
 (defn value-at [g: Graph occurrence: Any] -> Any
   (let [p: Any (proposition-at g occurrence)]
-    (if (nil? p) nil (t/triple-slot2 p))))
+    (if (nil? p) nil (t/triple-t3 p))))
 
 ;; The value slot AS A NODE REFERENCE: nil when the slot holds a literal — the
 ;; old fact-r nil-propagation, decided by shape instead of by int?.
@@ -147,14 +147,14 @@
 ;; coordinate, as the oldest facts did.
 (defn occurrence-order [occurrence: Any] -> (Vec Any)
   (if (t/occurrence-coordinate? occurrence)
-    [1 (t/triple-slot2 (t/triple-slot0 occurrence)) (t/triple-slot2 occurrence)]
+    [1 (t/triple-t3 (t/triple-t1 occurrence)) (t/triple-t3 occurrence)]
     [0 (if (integer? occurrence) occurrence 0) 0]))
 
 ;; The Term store records no writer (S1), so attribution rides on the handle's
 ;; writers map; an unattributed occurrence reads "", as (str nil) did.
 (defn writer-of [g: Graph occurrence: Any] -> String
   (if (t/occurrence-coordinate? occurrence)
-    (let [hit: Any (get (graph-writers g) (t/triple-slot0 occurrence))]
+    (let [hit: Any (get (graph-writers g) (t/triple-t1 occurrence))]
       (if (nil? hit) "" (str hit)))
     ""))
 

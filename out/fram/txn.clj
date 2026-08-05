@@ -22,7 +22,7 @@
   (builder-coordinate (deref builder)))
 
 (defn sequence-of [builder]
-  (t/triple-slot2 (coordinate builder)))
+  (t/triple-t3 (coordinate builder)))
 
 (defn operations [builder]
   (builder-operations (deref builder)))
@@ -37,7 +37,7 @@
   (if (and (t/transaction-coordinate? transaction) (>= ordinal 0)) (t/triple transaction mint-ordinal ordinal) (throw (ex-info "fram: a mint coordinate requires a transaction coordinate and non-negative ordinal" {:type :invalid-mint-coordinate}))))
 
 (defn ^Boolean mint-coordinate? [value]
-  (and (t/triple? value) (and (t/transaction-coordinate? (t/triple-slot0 value)) (and (= mint-ordinal (t/triple-slot1 value)) (and (integer? (t/triple-slot2 value)) (>= (t/triple-slot2 value) 0))))))
+  (and (t/triple? value) (and (t/transaction-coordinate? (t/triple-t1 value)) (and (= mint-ordinal (t/triple-t2 value)) (and (integer? (t/triple-t3 value)) (>= (t/triple-t3 value) 0))))))
 
 (defn mint! [builder]
   (let [before (deref builder)
@@ -60,7 +60,7 @@
   (append! builder [(store/retract-operation proposition)]))
 
 (defn compile-single-update [view subject predicate value]
-  (conj (mapv (fn [event] (store/retract-operation (rot/proposition-of event))) (rot/newest-first (rot/by-slot01 view subject predicate))) (store/assert-operation (t/triple subject predicate value))))
+  (conj (mapv (fn [event] (store/retract-operation (rot/proposition-of event))) (rot/newest-first (rot/by-t12 view subject predicate))) (store/assert-operation (t/triple subject predicate value))))
 
 (defn update-single! [builder view subject predicate value]
   (append! builder (compile-single-update view subject predicate value)))
@@ -68,4 +68,4 @@
 (defn commit! [ctx builder]
   (let [current (deref builder)
    pinned (builder-coordinate current)]
-  (if (not (= (t/triple-slot0 pinned) (store/space-id ctx))) (throw (ex-info "fram: transaction belongs to a different space" {:type :transaction-space-mismatch})) (if (not (= (t/triple-slot2 pinned) (store/next-sequence ctx))) (throw (ex-info "fram: the store advanced under this transaction" {:type :transaction-sequence-drift :pinned (t/triple-slot2 pinned) :observed (store/next-sequence ctx)})) (store/commit-transaction! ctx (builder-operations current))))))
+  (if (not (= (t/triple-t1 pinned) (store/space-id ctx))) (throw (ex-info "fram: transaction belongs to a different space" {:type :transaction-space-mismatch})) (if (not (= (t/triple-t3 pinned) (store/next-sequence ctx))) (throw (ex-info "fram: the store advanced under this transaction" {:type :transaction-sequence-drift :pinned (t/triple-t3 pinned) :observed (store/next-sequence ctx)})) (store/commit-transaction! ctx (builder-operations current))))))

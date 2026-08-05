@@ -12,13 +12,13 @@
 (defn ^Instant instant [epoch-seconds nanos]
   (if (and (>= nanos 0) (< nanos 1000000000)) (->Instant epoch-seconds nanos) (throw (ex-info "fram: instant nanoseconds must be in [0, 1000000000)" {:type :invalid-instant}))))
 
-(defrecord Triple [slot0 slot1 slot2])
+(defrecord Triple [t1 t2 t3])
 
-(defn triple-slot0 [r] (:slot0 r))
+(defn triple-t1 [r] (:t1 r))
 
-(defn triple-slot1 [r] (:slot1 r))
+(defn triple-t2 [r] (:t2 r))
 
-(defn triple-slot2 [r] (:slot2 r))
+(defn triple-t3 [r] (:t3 r))
 
 (defrecord RpcPageRequest [limit cursor])
 
@@ -148,13 +148,13 @@
 
 (defn atomrow-instant-value [r] (:instant-value r))
 
-(defrecord TripleRow [slot0 slot1 slot2])
+(defrecord TripleRow [t1 t2 t3])
 
-(defn triplerow-slot0 [r] (:slot0 r))
+(defn triplerow-t1 [r] (:t1 r))
 
-(defn triplerow-slot1 [r] (:slot1 r))
+(defn triplerow-t2 [r] (:t2 r))
 
-(defn triplerow-slot2 [r] (:slot2 r))
+(defn triplerow-t3 [r] (:t3 r))
 
 (defrecord TermBucket [key positions])
 
@@ -269,23 +269,23 @@
   (or (string? v) (or (integer? v) (or (and (number? v) (not (integer? v))) (or (boolean? v) (or (keyword? v) (instant? v)))))))
 
 (defn ^Boolean term? [v]
-  (if (triple? v) (and (term? (triple-slot0 v)) (and (term? (triple-slot1 v)) (term? (triple-slot2 v)))) (atom? v)))
+  (if (triple? v) (and (term? (triple-t1 v)) (and (term? (triple-t2 v)) (term? (triple-t3 v)))) (atom? v)))
 
-(defn ^Triple triple [slot0 slot1 slot2]
-  (let [value (->Triple slot0 slot1 slot2)]
+(defn ^Triple triple [t1 t2 t3]
+  (let [value (->Triple t1 t2 t3)]
   (if (term? value) value (throw (ex-info "fram: triple contains a value outside Term" {:type :invalid-term})))))
 
 (defn ^Triple transaction-coordinate [^String space-id sequence]
   (if (and (pos? (count space-id)) (>= sequence 0)) (triple space-id tx-sequence sequence) (throw (ex-info "fram: transaction coordinate requires a non-empty space and non-negative sequence" {:type :invalid-transaction-coordinate}))))
 
 (defn ^Boolean transaction-coordinate? [v]
-  (and (triple? v) (and (string? (triple-slot0 v)) (and (pos? (count (triple-slot0 v))) (and (= tx-sequence (triple-slot1 v)) (and (integer? (triple-slot2 v)) (>= (triple-slot2 v) 0)))))))
+  (and (triple? v) (and (string? (triple-t1 v)) (and (pos? (count (triple-t1 v))) (and (= tx-sequence (triple-t2 v)) (and (integer? (triple-t3 v)) (>= (triple-t3 v) 0)))))))
 
 (defn ^Triple occurrence-coordinate [^Triple tx ordinal]
   (if (and (transaction-coordinate? tx) (>= ordinal 0)) (triple tx op-ordinal ordinal) (throw (ex-info "fram: occurrence coordinate requires a transaction coordinate and non-negative ordinal" {:type :invalid-occurrence-coordinate}))))
 
 (defn ^Boolean occurrence-coordinate? [v]
-  (and (triple? v) (and (transaction-coordinate? (triple-slot0 v)) (and (= op-ordinal (triple-slot1 v)) (and (integer? (triple-slot2 v)) (>= (triple-slot2 v) 0))))))
+  (and (triple? v) (and (transaction-coordinate? (triple-t1 v)) (and (= op-ordinal (triple-t2 v)) (and (integer? (triple-t3 v)) (>= (triple-t3 v) 0))))))
 
 (defn ^Triple assertion-occurrence [^Triple occurrence ^Triple proposition]
   (if (and (occurrence-coordinate? occurrence) (triple? proposition)) (triple occurrence asserts proposition) (throw (ex-info "fram: assertion requires an occurrence coordinate" {:type :invalid-assertion-occurrence}))))
@@ -300,12 +300,12 @@
   (if (and (triple? source) (instant? at)) (triple source recorded-at-predicate at) (throw (ex-info "fram: recorded-at requires a triple source and Instant" {:type :invalid-recorded-at}))))
 
 (defn ^Boolean occurrence-before? [^Triple left ^Triple right]
-  (if (and (occurrence-coordinate? left) (occurrence-coordinate? right)) (let [left-tx (triple-slot0 left)
-   right-tx (triple-slot0 right)
-   left-space (triple-slot0 left-tx)
-   right-space (triple-slot0 right-tx)
-   left-seq (triple-slot2 left-tx)
-   right-seq (triple-slot2 right-tx)
-   left-ordinal (triple-slot2 left)
-   right-ordinal (triple-slot2 right)]
+  (if (and (occurrence-coordinate? left) (occurrence-coordinate? right)) (let [left-tx (triple-t1 left)
+   right-tx (triple-t1 right)
+   left-space (triple-t1 left-tx)
+   right-space (triple-t1 right-tx)
+   left-seq (triple-t3 left-tx)
+   right-seq (triple-t3 right-tx)
+   left-ordinal (triple-t3 left)
+   right-ordinal (triple-t3 right)]
   (if (= left-space right-space) (or (< left-seq right-seq) (and (= left-seq right-seq) (< left-ordinal right-ordinal))) (throw (ex-info "fram: occurrences from different spaces have no shared order" {:type :incomparable-occurrence-spaces})))) (throw (ex-info "fram: occurrence ordering requires occurrence coordinates" {:type :invalid-occurrence-order}))))

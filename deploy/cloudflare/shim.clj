@@ -157,9 +157,9 @@
     ["instant" (str (terms/instant-epoch-seconds value))
      (str (terms/instant-nanos value))]
     (terms/triple? value)
-    ["triple" (encode-json-term (terms/triple-slot0 value))
-     (encode-json-term (terms/triple-slot1 value))
-     (encode-json-term (terms/triple-slot2 value))]
+    ["triple" (encode-json-term (terms/triple-t1 value))
+     (encode-json-term (terms/triple-t2 value))
+     (encode-json-term (terms/triple-t3 value))]
     :else (fail! "shim/invalid-upstream-term"
                  (str "server returned a value outside Term: " (class value)))))
 

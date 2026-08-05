@@ -96,7 +96,7 @@
           (code-reader/read-module-snapshot!
            port space checkout-root "known" 20)
           citation (:snapshot module-snapshot)
-          subjects (mapv t/triple-slot0 (:triples module-snapshot))
+          subjects (mapv t/triple-t1 (:triples module-snapshot))
           projected (code-reader/project-module-edn module-snapshot)
           rendered (code-reader/render-module! beagle module-snapshot)]
       (check! "page drain spans multiple FRAMRPC responses"

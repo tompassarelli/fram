@@ -96,7 +96,7 @@
 
 (defn ^Boolean contract-valid? [^ProviderDescriptor descriptor-value]
   (let [contract (providerdescriptor-contract descriptor-value)]
-  (and (= (providerdescriptor-capability descriptor-value) (t/triple-slot0 contract)) (and (= :provider/contract (t/triple-slot1 contract)) (and (integer? (t/triple-slot2 contract)) (pos? (t/triple-slot2 contract)))))))
+  (and (= (providerdescriptor-capability descriptor-value) (t/triple-t1 contract)) (and (= :provider/contract (t/triple-t2 contract)) (and (integer? (t/triple-t3 contract)) (pos? (t/triple-t3 contract)))))))
 
 (defn import-violations [^ProviderDescriptor descriptor-value selected]
   (reduce (fn [violations imported] (if (= 1 (count (providers-for selected imported))) violations (conj violations (violation :provider/import-unavailable descriptor-value (t/triple imported :provider/required-by (providerdescriptor-identity descriptor-value)))))) [] (providerdescriptor-imports descriptor-value)))

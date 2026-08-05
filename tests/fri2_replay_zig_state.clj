@@ -11,14 +11,14 @@
 
 (defn data-triple? [value]
   (and (t/triple? value)
-       (string? (t/triple-slot0 value))
-       (string? (t/triple-slot1 value))
-       (string? (t/triple-slot2 value))))
+       (string? (t/triple-t1 value))
+       (string? (t/triple-t2 value))
+       (string? (t/triple-t3 value))))
 
 (defn fact-line [value]
-  (str "fact\t" (t/triple-slot0 value)
-       "\t" (t/triple-slot1 value)
-       "\t" (t/triple-slot2 value)))
+  (str "fact\t" (t/triple-t1 value)
+       "\t" (t/triple-t2 value)
+       "\t" (t/triple-t3 value)))
 
 (let [[log-path output-dir & extra] *command-line-args*]
   (when (or (nil? log-path) (nil? output-dir) (seq extra))
@@ -42,7 +42,7 @@
                        :when (data-triple? proposition)]
                    (str "tx\t" (t/transactionframe-sequence frame)
                         "\t" (name (t/commitoperation-action operation))
-                        "\t" (t/triple-slot0 proposition)
-                        "\t" (t/triple-slot1 proposition)
-                        "\t" (t/triple-slot2 proposition) "\n"))))
+                        "\t" (t/triple-t1 proposition)
+                        "\t" (t/triple-t2 proposition)
+                        "\t" (t/triple-t3 proposition) "\n"))))
     (println (str "zig-log: version " version ", " (count facts) " live triples"))))

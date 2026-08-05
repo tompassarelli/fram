@@ -86,7 +86,7 @@
   (let [p (pid co evidence-pred)]
     (if (nil? p)
       []
-      (vec (distinct (rot/values (rot/by-slot01 (vw co) claim p)))))))
+      (vec (distinct (rot/values (rot/by-t12 (vw co) claim p)))))))
 
 (defn evidence [co: Any node: Any] -> Any
   (let [st (sess co)]
@@ -106,13 +106,13 @@
 
 (defn- selections-of [co: Any claim: Any] -> Any
   (let [p (pid co select-pred)]
-    (if (nil? p) [] (rot/by-slot12 (vw co) p claim))))
+    (if (nil? p) [] (rot/by-t23 (vw co) p claim))))
 
 (defn- verdict-of
   [co: Any
    views: Any
    selection: Any] -> Any
-  (let [occurrence (rot/occurrence-of selection) nm (s/name-of (sess co) (t/triple-slot0 (rot/proposition-of selection)))]
+  (let [occurrence (rot/occurrence-of selection) nm (s/name-of (sess co) (t/triple-t1 (rot/proposition-of selection)))]
     (cond
       [(family? (get views :verified) nm)
        {:verdict
@@ -201,7 +201,7 @@
   (let [p (pid co select-pred)]
     (if (nil? p)
       []
-      (vec (distinct (reduce (fn [acc: Any selection: Any] -> Any (let [l (t/triple-slot0 (rot/proposition-of selection))] (if (family? (get views :verified) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-slot1 (vw co) p)))))))
+      (vec (distinct (reduce (fn [acc: Any selection: Any] -> Any (let [l (t/triple-t1 (rot/proposition-of selection))] (if (family? (get views :verified) (s/name-of (sess co) l)) (conj acc l) acc))) [] (rot/by-t2 (vw co) p)))))))
 
 ;; `occurrence` keeps the head restricted to LIVE assertions — the successor of
 ;; the retired fact-id literal, which typed ?x as a fact object.

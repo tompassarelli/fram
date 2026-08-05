@@ -31,15 +31,15 @@
 
 (def empty-occurrences: (Map t/Triple t/Triple) {})
 
-(defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-slot0 event))
+(defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-t1 event))
 
-(defn proposition-of [event: t/Triple] -> t/Triple (t/triple-slot2 event))
+(defn proposition-of [event: t/Triple] -> t/Triple (t/triple-t3 event))
 
 (defn assertion-occurrence? [event: Any] -> Bool
   (and (t/triple? event)
-    (and (= t/asserts (t/triple-slot1 event))
-      (and (t/occurrence-coordinate? (t/triple-slot0 event))
-        (t/triple? (t/triple-slot2 event))))))
+    (and (= t/asserts (t/triple-t2 event))
+      (and (t/occurrence-coordinate? (t/triple-t1 event))
+        (t/triple? (t/triple-t3 event))))))
 
 (defn- checked-assertion [event: t/Triple] -> t/Triple
   (if (assertion-occurrence? event)
@@ -63,35 +63,35 @@
     (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
 
 (defn- rotate-add [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1 (t/triple-t1 proposition) t2 (t/triple-t2 proposition) t3 (t/triple-t3 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (conj (rotation-events rotation) event)
       (assoc (rotation-by-occurrence rotation) (occurrence-of event) event)
-      (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [slot0] event) [slot0 slot1] event)
-        [slot0 slot1 slot2]
+      (bucket-add (bucket-add (bucket-add (rotation-spo rotation) [t1] event) [t1 t2] event)
+        [t1 t2 t3]
         event)
-      (bucket-add (bucket-add (rotation-pos rotation) [slot1] event)
-        [slot1 slot2]
+      (bucket-add (bucket-add (rotation-pos rotation) [t2] event)
+        [t2 t3]
         event)
-      (bucket-add (bucket-add (rotation-osp rotation) [slot2] event)
-        [slot2 slot0]
+      (bucket-add (bucket-add (rotation-osp rotation) [t3] event)
+        [t3 t1]
         event))))
 
 (defn- rotate-del [rotation: Rotation event: t/Triple] -> Rotation
-  (let [proposition: t/Triple (proposition-of (checked-assertion event)) slot0 (t/triple-slot0 proposition) slot1 (t/triple-slot1 proposition) slot2 (t/triple-slot2 proposition)]
+  (let [proposition: t/Triple (proposition-of (checked-assertion event)) t1 (t/triple-t1 proposition) t2 (t/triple-t2 proposition) t3 (t/triple-t3 proposition)]
     (->Rotation (rotation-space-id rotation)
       (rotation-version rotation)
       (without-event (rotation-events rotation) event)
       (dissoc (rotation-by-occurrence rotation) (occurrence-of event))
-      (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [slot0] event) [slot0 slot1] event)
-        [slot0 slot1 slot2]
+      (bucket-del (bucket-del (bucket-del (rotation-spo rotation) [t1] event) [t1 t2] event)
+        [t1 t2 t3]
         event)
-      (bucket-del (bucket-del (rotation-pos rotation) [slot1] event)
-        [slot1 slot2]
+      (bucket-del (bucket-del (rotation-pos rotation) [t2] event)
+        [t2 t3]
         event)
-      (bucket-del (bucket-del (rotation-osp rotation) [slot2] event)
-        [slot2 slot0]
+      (bucket-del (bucket-del (rotation-osp rotation) [t3] event)
+        [t3 t1]
         event))))
 
 (defn- empty-rotation [space-id: String version: Int] -> Rotation
@@ -115,58 +115,58 @@
 
 ;; Every bound subset resolves to exactly one bucket key; results stay in commit
 ;; order, so `last` is the newest live occurrence of that pattern.
-(defn by-slot0 [rotation: Rotation slot0: Any] -> (Vec t/Triple)
-  (get (rotation-spo rotation) [slot0] empty-events))
+(defn by-t1 [rotation: Rotation t1: Any] -> (Vec t/Triple)
+  (get (rotation-spo rotation) [t1] empty-events))
 
-(defn by-slot01
+(defn by-t12
   [rotation: Rotation
-   slot0: Any
-   slot1: Any] -> (Vec t/Triple)
-  (get (rotation-spo rotation) [slot0 slot1] empty-events))
+   t1: Any
+   t2: Any] -> (Vec t/Triple)
+  (get (rotation-spo rotation) [t1 t2] empty-events))
 
-(defn by-slot1 [rotation: Rotation slot1: Any] -> (Vec t/Triple)
-  (get (rotation-pos rotation) [slot1] empty-events))
+(defn by-t2 [rotation: Rotation t2: Any] -> (Vec t/Triple)
+  (get (rotation-pos rotation) [t2] empty-events))
 
-(defn by-slot12
+(defn by-t23
   [rotation: Rotation
-   slot1: Any
-   slot2: Any] -> (Vec t/Triple)
-  (get (rotation-pos rotation) [slot1 slot2] empty-events))
+   t2: Any
+   t3: Any] -> (Vec t/Triple)
+  (get (rotation-pos rotation) [t2 t3] empty-events))
 
-(defn by-slot2 [rotation: Rotation slot2: Any] -> (Vec t/Triple)
-  (get (rotation-osp rotation) [slot2] empty-events))
+(defn by-t3 [rotation: Rotation t3: Any] -> (Vec t/Triple)
+  (get (rotation-osp rotation) [t3] empty-events))
 
-(defn by-slot02
+(defn by-t13
   [rotation: Rotation
-   slot0: Any
-   slot2: Any] -> (Vec t/Triple)
-  (get (rotation-osp rotation) [slot2 slot0] empty-events))
+   t1: Any
+   t3: Any] -> (Vec t/Triple)
+  (get (rotation-osp rotation) [t3 t1] empty-events))
 
 (defn by-proposition
   [rotation: Rotation
    proposition: t/Triple] -> (Vec t/Triple)
   (get (rotation-spo rotation)
-    [(t/triple-slot0 proposition)
-     (t/triple-slot1 proposition)
-     (t/triple-slot2 proposition)]
+    [(t/triple-t1 proposition)
+     (t/triple-t2 proposition)
+     (t/triple-t3 proposition)]
     empty-events))
 
 ;; nil in a slot means UNBOUND. This is the semantic entry point; the bucket
 ;; layout above is private detail every caller is expected to route through.
 (defn matching
   [rotation: Rotation
-   slot0: Any
-   slot1: Any
-   slot2: Any] -> (Vec t/Triple)
+   t1: Any
+   t2: Any
+   t3: Any] -> (Vec t/Triple)
   (cond
-    [(and (some? slot0) (and (some? slot1) (some? slot2)))
-     (by-proposition rotation (t/triple slot0 slot1 slot2))]
-    [(and (some? slot0) (some? slot1)) (by-slot01 rotation slot0 slot1)]
-    [(and (some? slot1) (some? slot2)) (by-slot12 rotation slot1 slot2)]
-    [(and (some? slot0) (some? slot2)) (by-slot02 rotation slot0 slot2)]
-    [(some? slot0) (by-slot0 rotation slot0)]
-    [(some? slot1) (by-slot1 rotation slot1)]
-    [(some? slot2) (by-slot2 rotation slot2)]
+    [(and (some? t1) (and (some? t2) (some? t3)))
+     (by-proposition rotation (t/triple t1 t2 t3))]
+    [(and (some? t1) (some? t2)) (by-t12 rotation t1 t2)]
+    [(and (some? t2) (some? t3)) (by-t23 rotation t2 t3)]
+    [(and (some? t1) (some? t3)) (by-t13 rotation t1 t3)]
+    [(some? t1) (by-t1 rotation t1)]
+    [(some? t2) (by-t2 rotation t2)]
+    [(some? t3) (by-t3 rotation t3)]
     [:else (rotation-events rotation)]))
 
 (defn live-occurrence? [rotation: Rotation occurrence: t/Triple] -> Bool
@@ -185,11 +185,11 @@
   (mapv (fn [event: t/Triple] -> t/Triple (proposition-of event)) events))
 
 (defn subjects [events: (Vec t/Triple)] -> (Vec Any)
-  (mapv (fn [event: t/Triple] -> Any (t/triple-slot0 (proposition-of event)))
+  (mapv (fn [event: t/Triple] -> Any (t/triple-t1 (proposition-of event)))
     events))
 
 (defn values [events: (Vec t/Triple)] -> (Vec Any)
-  (mapv (fn [event: t/Triple] -> Any (t/triple-slot2 (proposition-of event)))
+  (mapv (fn [event: t/Triple] -> Any (t/triple-t3 (proposition-of event)))
     events))
 
 (defn occurrences [events: (Vec t/Triple)] -> (Vec t/Triple)

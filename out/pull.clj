@@ -46,24 +46,24 @@
    max-depth (clamp (:max-depth opts) default-max-depth)
    max-nodes (clamp (:max-nodes opts) default-max-nodes)
    state (atom 0)]
-  (letfn [(event-occurrence [event] (t/triple-slot0 event))
-          (event-proposition [event] (t/triple-slot2 event))
+  (letfn [(event-occurrence [event] (t/triple-t1 event))
+          (event-proposition [event] (t/triple-t3 event))
           (event-sequence [event] (let [occurrence (event-occurrence event)
-   transaction (t/triple-slot0 occurrence)]
-  (t/triple-slot2 transaction)))
-          (assertion-event? [event] (= t/asserts (t/triple-slot1 event)))
+   transaction (t/triple-t1 occurrence)]
+  (t/triple-t3 transaction)))
+          (assertion-event? [event] (= t/asserts (t/triple-t2 event)))
           (events-at [cutoff] (reduce (fn [active event] (if (> (event-sequence event) cutoff) active (if (assertion-event? event) (conj active event) (let [proposition (event-proposition event)
    target (last (filterv (fn [candidate] (= proposition (event-proposition candidate))) active))]
   (if (nil? target) active (filterv (fn [candidate] (not= (event-occurrence target) (event-occurrence candidate))) active)))))) [] history))
           (snapshot-events [] (if (some? asof) (events-at asof) live-now))
           (live-event? [event] (boolean (some (fn [candidate] (= (event-occurrence event) (event-occurrence candidate))) live-now)))
-          (withdrawal-for [occurrence] (let [withdrawal (first (filterv (fn [candidate] (and (= t/withdraws (t/triple-slot1 candidate)) (= occurrence (t/triple-slot2 candidate)))) withdrawals))]
+          (withdrawal-for [occurrence] (let [withdrawal (first (filterv (fn [candidate] (and (= t/withdraws (t/triple-t2 candidate)) (= occurrence (t/triple-t3 candidate)))) withdrawals))]
   withdrawal))
           (metadata-value [owner predicate] (let [event (last (filterv (fn [candidate] (if (assertion-event? candidate) (let [proposition (event-proposition candidate)]
-  (and (= owner (t/triple-slot0 proposition)) (= predicate (t/triple-slot1 proposition)) (or (nil? asof) (<= (event-sequence candidate) asof)))) false)) (snapshot-events)))]
-  (if (nil? event) nil (t/triple-slot2 (event-proposition event)))))
-          (agent-of [occurrence] (or (metadata-value occurrence :kernel/asserted-by) (metadata-value (t/triple-slot0 occurrence) :kernel/asserted-by)))
-          (recorded-at-of [occurrence] (or (metadata-value occurrence :kernel/recorded-at) (metadata-value (t/triple-slot0 occurrence) :kernel/recorded-at)))
+  (and (= owner (t/triple-t1 proposition)) (= predicate (t/triple-t2 proposition)) (or (nil? asof) (<= (event-sequence candidate) asof)))) false)) (snapshot-events)))]
+  (if (nil? event) nil (t/triple-t3 (event-proposition event)))))
+          (agent-of [occurrence] (or (metadata-value occurrence :kernel/asserted-by) (metadata-value (t/triple-t1 occurrence) :kernel/asserted-by)))
+          (recorded-at-of [occurrence] (or (metadata-value occurrence :kernel/recorded-at) (metadata-value (t/triple-t1 occurrence) :kernel/recorded-at)))
           (pid-of [p] (s/resolve-predicate schema p))
           (nm-of [term] (or (s/name-of schema term) term))
           (fwd-events [left predicate] (let [candidates (cond
@@ -71,18 +71,18 @@
   prov? (filterv (fn [event] (and (assertion-event? event) (or (live-event? event) (some? (withdrawal-for (event-occurrence event)))))) history)
   :else live-now)]
   (filterv (fn [event] (if (assertion-event? event) (let [proposition (event-proposition event)]
-  (and (= left (t/triple-slot0 proposition)) (= predicate (t/triple-slot1 proposition)))) false)) candidates)))
+  (and (= left (t/triple-t1 proposition)) (= predicate (t/triple-t2 proposition)))) false)) candidates)))
           (rev-events [predicate right] (filterv (fn [event] (if (assertion-event? event) (let [proposition (event-proposition event)]
-  (and (= predicate (t/triple-slot1 proposition)) (= right (t/triple-slot2 proposition)))) false)) (snapshot-events)))
-          (subject-events [left] (filterv (fn [event] (and (assertion-event? event) (= left (t/triple-slot0 (event-proposition event))))) (snapshot-events)))
+  (and (= predicate (t/triple-t2 proposition)) (= right (t/triple-t3 proposition)))) false)) (snapshot-events)))
+          (subject-events [left] (filterv (fn [event] (and (assertion-event? event) (= left (t/triple-t1 (event-proposition event))))) (snapshot-events)))
           (leaf [predicate event] (let [proposition (event-proposition event)
-   right (t/triple-slot2 proposition)
+   right (t/triple-t3 proposition)
    value (if (= s/ref-kind (s/lookup schema predicate s/value-kind-predicate)) (nm-of right) right)]
   (if prov? (let [occurrence (event-occurrence event)
    withdrawal (if (some? asof) nil (withdrawal-for occurrence))
    recorded-at (recorded-at-of occurrence)
    base (cond-> {:val value :cid occurrence :by (agent-of occurrence) :seq (event-sequence event) :withdrawn (boolean withdrawal)} (some? recorded-at) (assoc :ts recorded-at))]
-  (if (nil? withdrawal) base (let [retraction (t/triple-slot0 withdrawal)]
+  (if (nil? withdrawal) base (let [retraction (t/triple-t1 withdrawal)]
   (assoc base :withdrawn_by (agent-of retraction) :withdrawn_at retraction)))) value)))
           (values [pname predicate left] (let [events (fwd-events left predicate)]
   (if (seq events) (do
@@ -97,18 +97,18 @@
           (elem [acc left depth visited element] (cond
   (= element :*) (reduce (fn [result predicate] (let [pname (s/predicate-name schema predicate)]
   (if (reserved-pred? pname) result (let [value (values pname predicate left)]
-  (if (nil? value) result (assoc result pname value)))))) acc (distinct (mapv (fn [event] (t/triple-slot1 (event-proposition event))) (subject-events left))))
+  (if (nil? value) result (assoc result pname value)))))) acc (distinct (mapv (fn [event] (t/triple-t2 (event-proposition event))) (subject-events left))))
   (and (string? element) (str/starts-with? element "_")) (let [predicate (pid-of (subs element 1))]
-  (if (nil? predicate) acc (let [subjects (mapv (fn [event] (t/triple-slot0 (event-proposition event))) (rev-events predicate left))]
+  (if (nil? predicate) acc (let [subjects (mapv (fn [event] (t/triple-t1 (event-proposition event))) (rev-events predicate left))]
   (assoc acc element (mapv (fn [subject] (node subject (nm-of subject) [] (inc depth) visited)) subjects)))))
   (string? element) (let [predicate (pid-of element)]
   (if (nil? predicate) acc (let [value (values element predicate left)]
   (if (nil? value) acc (assoc acc element value)))))
   (map? element) (reduce (fn [result key] (let [subpattern (get element key)]
   (if (str/starts-with? key "_") (let [predicate (pid-of (subs key 1))]
-  (if (nil? predicate) result (let [subjects (mapv (fn [event] (t/triple-slot0 (event-proposition event))) (rev-events predicate left))]
+  (if (nil? predicate) result (let [subjects (mapv (fn [event] (t/triple-t1 (event-proposition event))) (rev-events predicate left))]
   (assoc result key (mapv (fn [subject] (recur-target subject (subpat->pattern key subpattern) depth visited)) subjects))))) (let [predicate (pid-of key)]
-  (if (nil? predicate) result (let [rendered (mapv (fn [event] (let [right (t/triple-slot2 (event-proposition event))
+  (if (nil? predicate) result (let [rendered (mapv (fn [event] (let [right (t/triple-t3 (event-proposition event))
    target-name (s/name-of schema right)]
   (if (nil? target-name) right (recur-target right (subpat->pattern key subpattern) depth visited)))) (fwd-events left predicate))]
   (if (seq rendered) (assoc result key (if (= "single" (s/cardinality schema key)) (first rendered) rendered)) result))))))) acc (keys element))

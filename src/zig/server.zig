@@ -67,9 +67,9 @@ const LatestDeclaration = struct {
 };
 
 const StringTripleView = struct {
-    slot0: []const u8,
-    slot1: []const u8,
-    slot2: []const u8,
+    t1: []const u8,
+    t2: []const u8,
+    t3: []const u8,
 };
 
 fn stringAtom(term: flat_log.Term) ?[]const u8 {
@@ -84,17 +84,17 @@ fn stringAtom(term: flat_log.Term) ?[]const u8 {
 
 fn stringTripleView(triple: flat_log.Triple) ?StringTripleView {
     return .{
-        .slot0 = stringAtom(triple.slot0) orelse return null,
-        .slot1 = stringAtom(triple.slot1) orelse return null,
-        .slot2 = stringAtom(triple.slot2) orelse return null,
+        .t1 = stringAtom(triple.t1) orelse return null,
+        .t2 = stringAtom(triple.t2) orelse return null,
+        .t3 = stringAtom(triple.t3) orelse return null,
     };
 }
 
-fn stringTriple(slot0: []const u8, slot1: []const u8, slot2: []const u8) flat_log.Triple {
+fn stringTriple(t1: []const u8, t2: []const u8, t3: []const u8) flat_log.Triple {
     return .{
-        .slot0 = .{ .atom = .{ .string = slot0 } },
-        .slot1 = .{ .atom = .{ .string = slot1 } },
-        .slot2 = .{ .atom = .{ .string = slot2 } },
+        .t1 = .{ .atom = .{ .string = t1 } },
+        .t2 = .{ .atom = .{ .string = t2 } },
+        .t3 = .{ .atom = .{ .string = t3 } },
     };
 }
 
@@ -168,12 +168,12 @@ fn tripleValue(term: flat_log.Term) ?flat_log.Triple {
 
 fn tripleTerm(
     arena: Allocator,
-    slot0: flat_log.Term,
-    slot1: flat_log.Term,
-    slot2: flat_log.Term,
+    t1: flat_log.Term,
+    t2: flat_log.Term,
+    t3: flat_log.Term,
 ) !flat_log.Term {
     const value = try arena.create(flat_log.Triple);
-    value.* = .{ .slot0 = slot0, .slot1 = slot1, .slot2 = slot2 };
+    value.* = .{ .t1 = t1, .t2 = t2, .t3 = t3 };
     return .{ .triple = value };
 }
 
@@ -197,11 +197,11 @@ fn collectList(arena: Allocator, root: flat_log.Term) ![]const flat_log.Term {
     var cursor = root;
     while (!isKeyword(cursor, "rpc/list-end")) {
         const cell = tripleValue(cursor) orelse return error.InvalidPayload;
-        if (!isKeyword(cell.slot0, "rpc/list")) return error.InvalidPayload;
+        if (!isKeyword(cell.t1, "rpc/list")) return error.InvalidPayload;
         if (items.items.len >= rpc.term_limits.max_nodes)
             return error.InvalidPayload;
-        try items.append(arena, cell.slot1);
-        cursor = cell.slot2;
+        try items.append(arena, cell.t2);
+        cursor = cell.t3;
     }
     return items.toOwnedSlice(arena);
 }
@@ -226,9 +226,9 @@ fn recordFields(
     expected: usize,
 ) ![]const flat_log.Term {
     const triple = tripleValue(value) orelse return error.InvalidPayload;
-    if (!isKeyword(triple.slot0, tag) or
-        !isKeyword(triple.slot2, "rpc/record")) return error.InvalidPayload;
-    const fields = try collectList(arena, triple.slot1);
+    if (!isKeyword(triple.t1, tag) or
+        !isKeyword(triple.t3, "rpc/record")) return error.InvalidPayload;
+    const fields = try collectList(arena, triple.t2);
     if (fields.len != expected) return error.InvalidPayload;
     return fields;
 }
@@ -241,9 +241,9 @@ const OptionTerm = union(enum) {
 fn optionValue(value: flat_log.Term) !OptionTerm {
     if (isKeyword(value, "rpc/none")) return .none;
     const triple = tripleValue(value) orelse return error.InvalidPayload;
-    if (!isKeyword(triple.slot0, "rpc/some") or
-        !isKeyword(triple.slot2, "rpc/option")) return error.InvalidPayload;
-    return .{ .some = triple.slot1 };
+    if (!isKeyword(triple.t1, "rpc/some") or
+        !isKeyword(triple.t3, "rpc/option")) return error.InvalidPayload;
+    return .{ .some = triple.t2 };
 }
 
 fn option(arena: Allocator, value: ?flat_log.Term) !flat_log.Term {
@@ -364,13 +364,13 @@ const ServerState = struct {
         defer declarations.deinit();
         for (state.events.items) |event| {
             const triple = stringTripleView(event.triple) orelse continue;
-            if (!std.mem.eql(u8, triple.slot1, "cardinality")) continue;
-            const predicate = kernel_classify.stripAt(triple.slot0);
+            if (!std.mem.eql(u8, triple.t2, "cardinality")) continue;
+            const predicate = kernel_classify.stripAt(triple.t1);
             const declaration: LatestDeclaration = .{
                 .tx_seq = event.tx_seq,
                 .ordinal = event.ordinal,
                 .operation = event.operation,
-                .single = std.mem.eql(u8, triple.slot2, "single"),
+                .single = std.mem.eql(u8, triple.t3, "single"),
             };
             if (declarations.get(predicate)) |previous| {
                 if (previous.tx_seq > event.tx_seq or
@@ -406,9 +406,9 @@ const ServerState = struct {
         event: TripleRow,
     ) !void {
         if (stringTripleView(event.triple)) |triple| {
-            try state.subjects.put(triple.slot0, {});
-            if (!std.mem.eql(u8, triple.slot1, "v") and refShape(triple.slot2)) {
-                try state.subjects.put(triple.slot2, {});
+            try state.subjects.put(triple.t1, {});
+            if (!std.mem.eql(u8, triple.t2, "v") and refShape(triple.t3)) {
+                try state.subjects.put(triple.t3, {});
             }
         }
         const key = try state.eventKey(event);
@@ -425,7 +425,7 @@ const ServerState = struct {
         try state.events.append(state.allocator, event);
         state.version = @max(state.version, event.tx_seq);
         const changes_cardinality = if (stringTripleView(event.triple)) |triple|
-            std.mem.eql(u8, triple.slot1, "cardinality")
+            std.mem.eql(u8, triple.t2, "cardinality")
         else
             false;
         if (changes_cardinality) {
@@ -447,7 +447,7 @@ const ServerState = struct {
             state.version = @max(state.version, event.tx_seq);
             if (stringTripleView(event.triple)) |triple| {
                 changes_cardinality = changes_cardinality or
-                    std.mem.eql(u8, triple.slot1, "cardinality");
+                    std.mem.eql(u8, triple.t2, "cardinality");
             }
         }
         if (changes_cardinality) {
@@ -481,8 +481,8 @@ const ServerState = struct {
         triple: flat_log.Triple,
     ) ![]const u8 {
         if (stringTripleView(triple)) |view| {
-            if (state.isSingle(view.slot1)) {
-                return groupKeyAlloc(allocator, view.slot0, view.slot1);
+            if (state.isSingle(view.t2)) {
+                return groupKeyAlloc(allocator, view.t1, view.t2);
             }
         }
         return flat_log.encodeTripleKey(allocator, triple);
@@ -506,8 +506,8 @@ const ServerState = struct {
             const event = state.events.items[entry.value_ptr.*];
             const triple = stringTripleView(event.triple) orelse continue;
             if (event.operation == .assert and
-                std.mem.eql(u8, triple.slot0, l) and
-                std.mem.eql(u8, triple.slot1, p))
+                std.mem.eql(u8, triple.t1, l) and
+                std.mem.eql(u8, triple.t2, p))
             {
                 return event;
             }
@@ -525,11 +525,11 @@ const ServerState = struct {
             const event = state.events.items[entry.value_ptr.*];
             const triple = stringTripleView(event.triple) orelse continue;
             if (event.operation != .assert or
-                !std.mem.eql(u8, triple.slot1, predicate))
+                !std.mem.eql(u8, triple.t2, predicate))
             {
                 continue;
             }
-            if (!refShape(triple.slot2)) return false;
+            if (!refShape(triple.t3)) return false;
             seen = true;
         }
         return seen;
@@ -544,7 +544,7 @@ const ServerState = struct {
         defer scratch.free(subject);
         const event = try state.liveGroup(scratch, subject, "lease") orelse return null;
         const triple = stringTripleView(event.triple) orelse return null;
-        return parseLease(triple.slot2);
+        return parseLease(triple.t3);
     }
 };
 
@@ -1189,9 +1189,9 @@ fn occurrenceCoordinate(
 ) !flat_log.Term {
     const tx_coord = try allocator.create(flat_log.Triple);
     tx_coord.* = .{
-        .slot0 = stringTerm(space_id),
-        .slot1 = keywordTerm("kernel/tx-sequence"),
-        .slot2 = integerTerm(tx_seq),
+        .t1 = stringTerm(space_id),
+        .t2 = keywordTerm("kernel/tx-sequence"),
+        .t3 = integerTerm(tx_seq),
     };
     return tripleTerm(
         allocator,
@@ -1220,9 +1220,9 @@ fn occurrenceTerm(
             "kernel/retracts"),
         try tripleTerm(
             allocator,
-            event.triple.slot0,
-            event.triple.slot1,
-            event.triple.slot2,
+            event.triple.t1,
+            event.triple.t2,
+            event.triple.t3,
         ),
     );
 }
@@ -1278,18 +1278,18 @@ fn commitTransaction(
             .ordinal = @intCast(offset),
             .action = .assert,
             .triple = .{
-                .slot0 = occurrence,
-                .slot1 = keywordTerm("kernel/recorded-at"),
-                .slot2 = .{ .atom = .{ .instant = recorded_at } },
+                .t1 = occurrence,
+                .t2 = keywordTerm("kernel/recorded-at"),
+                .t3 = .{ .atom = .{ .instant = recorded_at } },
             },
         };
         operations[offset + 1] = .{
             .ordinal = @intCast(offset + 1),
             .action = .assert,
             .triple = .{
-                .slot0 = occurrence,
-                .slot1 = keywordTerm("kernel/asserted-by"),
-                .slot2 = stringTerm("coord"),
+                .t1 = occurrence,
+                .t2 = keywordTerm("kernel/asserted-by"),
+                .t3 = stringTerm("coord"),
             },
         };
     }
@@ -1508,7 +1508,7 @@ fn parsePattern(
 }
 
 fn patternMatches(pattern: [3]OptionTerm, triple: flat_log.Triple) bool {
-    const values = [_]flat_log.Term{ triple.slot0, triple.slot1, triple.slot2 };
+    const values = [_]flat_log.Term{ triple.t1, triple.t2, triple.t3 };
     for (pattern, values) |slot, value| switch (slot) {
         .none => {},
         .some => |wanted| if (!flat_log.termEql(wanted, value)) return false,
@@ -1560,9 +1560,9 @@ fn scanRequest(
             arena,
             try tripleTerm(
                 arena,
-                event.triple.slot0,
-                event.triple.slot1,
-                event.triple.slot2,
+                event.triple.t1,
+                event.triple.t2,
+                event.triple.t3,
             ),
         );
     }
@@ -1950,8 +1950,8 @@ const ParsedQuery = struct {
 
 fn parseQueryTerm(arena: Allocator, value: flat_log.Term) !QueryTerm {
     const triple = tripleValue(value) orelse return error.InvalidPayload;
-    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
-    if (!isKeyword(triple.slot2, "rpc/record")) return error.InvalidPayload;
+    const tag = keywordValue(triple.t1) orelse return error.InvalidPayload;
+    if (!isKeyword(triple.t3, "rpc/record")) return error.InvalidPayload;
     if (std.mem.eql(u8, tag, "query/var")) {
         const fields = try recordFields(arena, value, "query/var", 1);
         const name = stringValue(fields[0]) orelse return error.InvalidPayload;
@@ -1987,7 +1987,7 @@ fn parseQueryHead(arena: Allocator, value: flat_log.Term) !QueryHead {
 
 fn parseQueryClause(arena: Allocator, value: flat_log.Term) !QueryClause {
     const triple = tripleValue(value) orelse return error.InvalidPayload;
-    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
+    const tag = keywordValue(triple.t1) orelse return error.InvalidPayload;
     if (std.mem.eql(u8, tag, "query/relation")) {
         const fields = try recordFields(arena, value, "query/relation", 3);
         const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
@@ -2091,7 +2091,7 @@ fn parseHaving(arena: Allocator, value: flat_log.Term) !HavingSpec {
 
 fn parseQueryFind(arena: Allocator, value: flat_log.Term) !QueryFind {
     const triple = tripleValue(value) orelse return error.InvalidPayload;
-    const tag = keywordValue(triple.slot0) orelse return error.InvalidPayload;
+    const tag = keywordValue(triple.t1) orelse return error.InvalidPayload;
     if (std.mem.eql(u8, tag, "query/find-relation")) {
         const fields = try recordFields(arena, value, "query/find-relation", 1);
         const relation = stringValue(fields[0]) orelse return error.InvalidPayload;
@@ -2265,9 +2265,9 @@ fn buildBaseRows(
         const occurrence_values = try arena.alloc(flat_log.Term, 3);
         const occurrence = try occurrenceTerm(arena, state, event);
         const occurrence_triple = tripleValue(occurrence).?;
-        occurrence_values[0] = occurrence_triple.slot0;
-        occurrence_values[1] = occurrence_triple.slot1;
-        occurrence_values[2] = occurrence_triple.slot2;
+        occurrence_values[0] = occurrence_triple.t1;
+        occurrence_values[1] = occurrence_triple.t2;
+        occurrence_values[2] = occurrence_triple.t3;
         try rows.append(arena, .{
             .relation = "occurrence",
             .values = occurrence_values,
@@ -2277,12 +2277,12 @@ fn buildBaseRows(
         const live_index = latest.get(key) orelse continue;
         if (live_index != index or event.operation != .assert) continue;
         const values = try arena.alloc(flat_log.Term, 3);
-        values[0] = event.triple.slot0;
-        values[1] = event.triple.slot1;
-        values[2] = event.triple.slot2;
+        values[0] = event.triple.t1;
+        values[1] = event.triple.t2;
+        values[2] = event.triple.t3;
         try rows.append(arena, .{ .relation = "triple", .values = values });
         if (stringTripleView(event.triple)) |view|
-            try predicates.put(view.slot1, {});
+            try predicates.put(view.t2, {});
     }
 
     var predicate_iterator = predicates.iterator();
@@ -2985,11 +2985,11 @@ fn subjectExists(
 ) !bool {
     for (pending) |item| {
         if (item.operation == .assert and
-            flat_log.termEql(item.triple.slot0, subject)) return true;
+            flat_log.termEql(item.triple.t1, subject)) return true;
     }
     for (state.events.items) |event| {
         if (event.operation != .assert or
-            !flat_log.termEql(event.triple.slot0, subject)) continue;
+            !flat_log.termEql(event.triple.t1, subject)) continue;
         if (try currentEvent(state, allocator, event)) return true;
     }
     return false;
@@ -2997,9 +2997,9 @@ fn subjectExists(
 
 fn cardinalityDeclaration(triple: flat_log.Triple) ?[]const u8 {
     const view = stringTripleView(triple) orelse return null;
-    if (!std.mem.eql(u8, view.slot1, "cardinality") or
-        !std.mem.eql(u8, view.slot2, "single")) return null;
-    return kernel_classify.stripAt(view.slot0);
+    if (!std.mem.eql(u8, view.t2, "cardinality") or
+        !std.mem.eql(u8, view.t3, "single")) return null;
+    return kernel_classify.stripAt(view.t1);
 }
 
 fn projectedCardinalityCollapse(
@@ -3034,8 +3034,8 @@ fn projectedCardinalityCollapse(
     defer counts.deinit();
     for (live.items) |triple| {
         const view = stringTripleView(triple) orelse continue;
-        if (!std.mem.eql(u8, view.slot1, predicate)) continue;
-        const result = try counts.getOrPut(view.slot0);
+        if (!std.mem.eql(u8, view.t2, predicate)) continue;
+        const result = try counts.getOrPut(view.t1);
         if (!result.found_existing) result.value_ptr.* = 0;
         result.value_ptr.* += 1;
         if (result.value_ptr.* > 1) return true;
@@ -3055,7 +3055,7 @@ fn prepareAction(
             scratch,
             state,
             pending.items,
-            action.triple.slot0,
+            action.triple.t1,
         ))) return error.MissingSubject;
 
     const effective = try effectiveEvent(
@@ -3215,7 +3215,7 @@ fn executeActions(
                 "rpc/missing-subject",
                 false,
                 "subject-existing requires a live subject",
-                action.triple.slot0,
+                action.triple.t1,
             ),
             error.CardinalityCollapse => failure(
                 arena,
@@ -3224,9 +3224,9 @@ fn executeActions(
                 "single cardinality would collapse live values",
                 try tripleTerm(
                     arena,
-                    action.triple.slot0,
-                    action.triple.slot1,
-                    action.triple.slot2,
+                    action.triple.t1,
+                    action.triple.t2,
+                    action.triple.t3,
                 ),
             ),
             else => return err,
@@ -3260,9 +3260,9 @@ fn executeActions(
             "single cardinality would collapse live values",
             try tripleTerm(
                 arena,
-                item.triple.slot0,
-                item.triple.slot1,
-                item.triple.slot2,
+                item.triple.t1,
+                item.triple.t2,
+                item.triple.t3,
             ),
         );
     }
@@ -3405,13 +3405,13 @@ const key_sep = "\x01";
 
 fn groupKeyAlloc(
     allocator: Allocator,
-    slot0: []const u8,
-    slot1: []const u8,
+    t1: []const u8,
+    t2: []const u8,
 ) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
         "\x00{s}" ++ key_sep ++ "{s}",
-        .{ slot0, slot1 },
+        .{ t1, t2 },
     );
 }
 
@@ -3481,25 +3481,25 @@ test "occurrence is a direct coordinate operation proposition triple" {
         &state,
         event,
     )).?;
-    try std.testing.expect(isKeyword(occurrence.slot1, "kernel/asserts"));
-    const coordinate = tripleValue(occurrence.slot0).?;
+    try std.testing.expect(isKeyword(occurrence.t2, "kernel/asserts"));
+    const coordinate = tripleValue(occurrence.t1).?;
     try std.testing.expect(isKeyword(
-        coordinate.slot1,
+        coordinate.t2,
         "kernel/op-ordinal",
     ));
-    const transaction = tripleValue(coordinate.slot0).?;
+    const transaction = tripleValue(coordinate.t1).?;
     try std.testing.expectEqualStrings(
         "test-space",
-        stringValue(transaction.slot0).?,
+        stringValue(transaction.t1).?,
     );
     try std.testing.expect(isKeyword(
-        transaction.slot1,
+        transaction.t2,
         "kernel/tx-sequence",
     ));
-    try std.testing.expectEqual(@as(i64, 9), integerValue(transaction.slot2).?);
-    try std.testing.expectEqual(@as(i64, 4), integerValue(coordinate.slot2).?);
+    try std.testing.expectEqual(@as(i64, 9), integerValue(transaction.t3).?);
+    try std.testing.expectEqual(@as(i64, 4), integerValue(coordinate.t3).?);
     try std.testing.expect(flat_log.tripleEql(
         event.triple,
-        tripleValue(occurrence.slot2).?,
+        tripleValue(occurrence.t3).?,
     ));
 }

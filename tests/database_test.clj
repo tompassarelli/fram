@@ -70,7 +70,7 @@
                       (filter #(= email (kernel/proposition-of %))
                               (database/live-occurrences db))))))
 (check! "withdrawal history points to the exact occurrence coordinate"
-        (some #(= duplicate-coordinate (t/triple-slot2 %))
+        (some #(= duplicate-coordinate (t/triple-t3 %))
               (:withdrawals withdrawn)))
 
 (def draft (t/triple "Task" :status "draft"))
@@ -155,7 +155,7 @@
   (database/assert! db (t/triple "measurement" :value (float 1.5)) {}))
 (check! "commit canonicalizes Float atoms before memory and FRAMLOG diverge"
         (instance? Double
-                   (t/triple-slot2
+                   (t/triple-t3
                     (kernel/proposition-of
                      (first (:occurrences numeric-result))))))
 

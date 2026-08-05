@@ -140,7 +140,7 @@
          (loop [handle 0 current: Any (transient empty-postings)]
            (if (>= handle row-count)
              current
-             (let [value: Any (t/triple-slot2 (nth rows handle))]
+             (let [value: Any (t/triple-t3 (nth rows handle))]
                (recur (inc handle)
                       (if (string? value)
                         (reduce (fn [index: Any token: String] -> Any
@@ -236,7 +236,7 @@
             (loop [handle 0 matches: (Vec Int) []]
               (if (>= handle (count rows))
                 matches
-                (let [value: Any (t/triple-slot2 (nth rows handle))
+                (let [value: Any (t/triple-t3 (nth rows handle))
                       matched: Bool
                       (if (string? value)
                         (let [haystack: (Set String) (token-set value)]
@@ -259,7 +259,7 @@
    needle: Any
    handles: (Vec Int)] -> (Vec (Vec Any))
   (let [rows: (Vec t/Triple) (textcandidatesource-rows source)]
-    (mapv (fn [handle: Int] -> (Vec Any) (let [proposition: t/Triple (nth rows handle)] [(t/triple-slot0 proposition) (t/triple-slot1 proposition) needle]))
+    (mapv (fn [handle: Int] -> (Vec Any) (let [proposition: t/Triple (nth rows handle)] [(t/triple-t1 proposition) (t/triple-t2 proposition) needle]))
       handles)))
 
 (defn indexed-rows-result

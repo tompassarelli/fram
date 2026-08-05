@@ -47,23 +47,23 @@
 (defn live-propositions [image]
   (fp/live-propositions image))
 
-(defn by-slot0 [image term]
-  (fp/by-slot0 image term))
+(defn by-t1 [image term]
+  (fp/by-t1 image term))
 
-(defn by-slot1 [image term]
-  (fp/by-slot1 image term))
+(defn by-t2 [image term]
+  (fp/by-t2 image term))
 
-(defn by-slot2 [image term]
-  (fp/by-slot2 image term))
+(defn by-t3 [image term]
+  (fp/by-t3 image term))
 
-(defn by-slot01 [image slot0 slot1]
-  (fp/by-slot01 image slot0 slot1))
+(defn by-t12 [image t1 t2]
+  (fp/by-t12 image t1 t2))
 
-(defn by-slot12 [image slot1 slot2]
-  (fp/by-slot12 image slot1 slot2))
+(defn by-t23 [image t2 t3]
+  (fp/by-t23 image t2 t3))
 
-(defn by-slot02 [image slot0 slot2]
-  (fp/by-slot02 image slot0 slot2))
+(defn by-t13 [image t1 t3]
+  (fp/by-t13 image t1 t3))
 
 (defn live-occurrences-as-of [image sequence]
   (fp/live-occurrences-as-of image sequence))

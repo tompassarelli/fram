@@ -440,7 +440,7 @@
    (.toPath tmp-dir) "recursive-space"
    [{:tx-seq 9
      :operations [{:ordinal 0 :action 1 :triple nested-triple}]}]))
-(check! "recursive Triple terms round-trip in slot0, slot1, and slot2"
+(check! "recursive Triple terms round-trip in t1, t2, and t3"
         (= [[["left" :edge "one"]
              ["middle" :edge "two"]
              ["right" :edge "three"]]]

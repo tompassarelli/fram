@@ -26,9 +26,9 @@
 (def events-before (:events index-before))
 (def first-event (first events-before))
 (def second-event (second events-before))
-(def triple0 (t/triple-slot0 proposition))
-(def triple1 (t/triple-slot1 proposition))
-(def triple2 (t/triple-slot2 proposition))
+(def triple0 (t/triple-t1 proposition))
+(def triple1 (t/triple-t2 proposition))
+(def triple2 (t/triple-t3 proposition))
 
 (rotations/close-set! opened-before)
 (.delete (java.io.File. path))

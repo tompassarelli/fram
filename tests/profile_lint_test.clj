@@ -14,7 +14,7 @@
 (def profile-triples (into [declaration] rule-triples))
 
 (defn violation-rules [violations]
-  (mapv t/triple-slot2 violations))
+  (mapv t/triple-t3 violations))
 
 (defn lint-one [proposition]
   (violation-rules
@@ -59,7 +59,7 @@
 
 (def checks
   [["profile declaration uses the one primitive anchoring predicate"
-    (= kernel/profile-anchor (t/triple-slot1 declaration))]
+    (= kernel/profile-anchor (t/triple-t2 declaration))]
    ["profile header and R1-R4 are ordinary reachable triples"
     (kernel/declared-relational-profile? profile-triples space-id)]
    ["missing one declared rule leaves the profile unbound"
@@ -102,7 +102,7 @@
       (conj live proposition))))
 
 (defn predicate-label [proposition]
-  (pr-str (t/triple-slot1 proposition)))
+  (pr-str (t/triple-t2 proposition)))
 
 (defn corpus-census! [path]
   (let [rows (read-corpus path)
@@ -111,7 +111,7 @@
         lint-input (into profile-triples live)
         violations (kernel/lint-declared-profile lint-input space-id)
         by-predicate (frequencies
-                      (map #(predicate-label (t/triple-slot0 %)) violations))
+                      (map #(predicate-label (t/triple-t1 %)) violations))
         p3-mismatches (count (remove p3-agrees? asserted))]
     (println "CORPUS" path)
     (println "ROWS" (count rows))

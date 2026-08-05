@@ -50,10 +50,10 @@
 (check! "single-valued replacement is recorded as ordinary supersession"
         (= 1
            (count
-            (filter #(= :kernel/supersedes (t/triple-slot1 %))
+            (filter #(= :kernel/supersedes (t/triple-t2 %))
                     (database/supersession-triples runtime)))))
 (check! "alias-spelled retract is recorded as an exact withdrawal relation"
-        (some #(= :kernel/withdraws (t/triple-slot1 %))
+        (some #(= :kernel/withdraws (t/triple-t2 %))
               (database/withdrawal-triples runtime)))
 (check! "explicit multi cardinality preserves distinct proposition values"
         (and (contains? live (t/triple "Alice" "tag" "red"))

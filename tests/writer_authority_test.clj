@@ -103,7 +103,7 @@
           [event] (wire/rpc-list-values! occurrences)]
       (check! "active write returns logical version and direct occurrence"
               (and changed (= 1 (t/rpcresponse-served-version response))
-                   (= proposition (t/triple-slot2 event))))
+                   (= proposition (t/triple-t3 event))))
       (check! "native response contains no physical content handle"
               (not (str/includes? (pr-str response) "cid"))))
     (let [append-var (ns-resolve 'database 'append-frame-cohort-durable!)

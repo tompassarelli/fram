@@ -17,13 +17,13 @@
   (if (string? value) value (throw (ex-info "thread projection requires string Triple terms" {:type :invalid-thread-triple}))))
 
 (defn- ^String triple-left [value]
-  (string-term (t/triple-slot0 value)))
+  (string-term (t/triple-t1 value)))
 
 (defn- ^String triple-predicate [value]
-  (string-term (t/triple-slot1 value)))
+  (string-term (t/triple-t2 value)))
 
 (defn- ^String triple-right [value]
-  (string-term (t/triple-slot2 value)))
+  (string-term (t/triple-t3 value)))
 
 (defn- ^Boolean vec-contains? [values ^String wanted]
   (loop [remaining values]

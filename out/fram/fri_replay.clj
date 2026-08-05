@@ -143,13 +143,13 @@
 
 (def act-retract 2)
 
-(defrecord ModelTriple [slot0 slot1 slot2])
+(defrecord ModelTriple [t1 t2 t3])
 
-(defn modeltriple-slot0 [r] (:slot0 r))
+(defn modeltriple-t1 [r] (:t1 r))
 
-(defn modeltriple-slot1 [r] (:slot1 r))
+(defn modeltriple-t2 [r] (:t2 r))
 
-(defn modeltriple-slot2 [r] (:slot2 r))
+(defn modeltriple-t3 [r] (:t3 r))
 
 (defrecord Model [triples version])
 
@@ -157,15 +157,15 @@
 
 (defn model-version [r] (:version r))
 
-(defrecord Action [operation slot0 slot1 slot2 local-base])
+(defrecord Action [operation t1 t2 t3 local-base])
 
 (defn action-operation [r] (:operation r))
 
-(defn action-slot0 [r] (:slot0 r))
+(defn action-t1 [r] (:t1 r))
 
-(defn action-slot1 [r] (:slot1 r))
+(defn action-t2 [r] (:t2 r))
 
-(defn action-slot2 [r] (:slot2 r))
+(defn action-t3 [r] (:t3 r))
 
 (defn action-local-base [r] (:local-base r))
 
@@ -186,15 +186,15 @@
 (defn- ^String strip-at [^String text]
   (if (and (> (count text) 0) (= "@" (char-at text 0))) (subs text 1 (count text)) text))
 
-(defn- find-exact [triples ^String slot0 ^String slot1 ^String slot2]
+(defn- find-exact [triples ^String t1 ^String t2 ^String t3]
   (loop [index 0]
   (if (>= index (count triples)) -1 (let [row (nth triples index)]
-  (if (and (= slot0 (modeltriple-slot0 row)) (= slot1 (modeltriple-slot1 row)) (= slot2 (modeltriple-slot2 row))) index (recur (+ index 1)))))))
+  (if (and (= t1 (modeltriple-t1 row)) (= t2 (modeltriple-t2 row)) (= t3 (modeltriple-t3 row))) index (recur (+ index 1)))))))
 
-(defn- find-group [triples ^String slot0 ^String slot1]
+(defn- find-group [triples ^String t1 ^String t2]
   (loop [index 0]
   (if (>= index (count triples)) -1 (let [row (nth triples index)]
-  (if (and (= slot0 (modeltriple-slot0 row)) (= slot1 (modeltriple-slot1 row))) index (recur (+ index 1)))))))
+  (if (and (= t1 (modeltriple-t1 row)) (= t2 (modeltriple-t2 row))) index (recur (+ index 1)))))))
 
 (defn- remove-at [triples position]
   (loop [index 0
@@ -204,21 +204,21 @@
 (defn- ^Boolean single-predicate? [triples ^String predicate]
   (loop [index 0]
   (if (>= index (count triples)) false (let [row (nth triples index)]
-  (if (and (= "cardinality" (modeltriple-slot1 row)) (= "single" (modeltriple-slot2 row)) (= predicate (strip-at (modeltriple-slot0 row)))) true (recur (+ index 1)))))))
+  (if (and (= "cardinality" (modeltriple-t2 row)) (= "single" (modeltriple-t3 row)) (= predicate (strip-at (modeltriple-t1 row)))) true (recur (+ index 1)))))))
 
 (defn- subject-predicate-count [triples ^String subject ^String predicate]
   (loop [index 0
    total 0]
   (if (>= index (count triples)) total (let [row (nth triples index)]
-  (recur (+ index 1) (if (and (= subject (modeltriple-slot0 row)) (= predicate (modeltriple-slot1 row))) (+ total 1) total))))))
+  (recur (+ index 1) (if (and (= subject (modeltriple-t1 row)) (= predicate (modeltriple-t2 row))) (+ total 1) total))))))
 
 (defn- ^Boolean collapses? [triples ^String predicate]
   (loop [index 0]
   (if (>= index (count triples)) false (let [row (nth triples index)]
-  (if (and (= predicate (modeltriple-slot1 row)) (> (subject-predicate-count triples (modeltriple-slot0 row) predicate) 1)) true (recur (+ index 1)))))))
+  (if (and (= predicate (modeltriple-t2 row)) (> (subject-predicate-count triples (modeltriple-t1 row) predicate) 1)) true (recur (+ index 1)))))))
 
 (defn- ^Boolean declaration-collapse? [^Model model ^Action action]
-  (and (= act-assert (action-operation action)) (= "cardinality" (action-slot1 action)) (= "single" (action-slot2 action)) (collapses? (model-triples model) (strip-at (action-slot0 action)))))
+  (and (= act-assert (action-operation action)) (= "cardinality" (action-t2 action)) (= "single" (action-t3 action)) (collapses? (model-triples model) (strip-at (action-t1 action)))))
 
 (defrecord GroupRemoval [triples commits])
 
@@ -226,10 +226,10 @@
 
 (defn groupremoval-commits [r] (:commits r))
 
-(defn- ^GroupRemoval remove-group [triples ^String slot0 ^String slot1]
+(defn- ^GroupRemoval remove-group [triples ^String t1 ^String t2]
   (loop [current triples
    commits no-commits]
-  (let [position (find-group current slot0 slot1)]
+  (let [position (find-group current t1 t2)]
   (if (< position 0) (->GroupRemoval current commits) (recur (remove-at current position) (conj commits (->ReplayCommit act-retract (nth current position))))))))
 
 (defrecord ApplyResult [model changed collapse commits])
@@ -244,18 +244,18 @@
 
 (defn- ^ApplyResult apply-assert [^Model model ^Action action]
   (let [triples (model-triples model)
-   slot0 (action-slot0 action)
-   slot1 (action-slot1 action)
-   slot2 (action-slot2 action)]
-  (if (>= (find-exact triples slot0 slot1 slot2) 0) (->ApplyResult model false false no-commits) (let [removal (if (single-predicate? triples slot1) (remove-group triples slot0 slot1) (->GroupRemoval triples no-commits))
-   row (->ModelTriple slot0 slot1 slot2)]
+   t1 (action-t1 action)
+   t2 (action-t2 action)
+   t3 (action-t3 action)]
+  (if (>= (find-exact triples t1 t2 t3) 0) (->ApplyResult model false false no-commits) (let [removal (if (single-predicate? triples t2) (remove-group triples t1 t2) (->GroupRemoval triples no-commits))
+   row (->ModelTriple t1 t2 t3)]
   (->ApplyResult (->Model (conj (groupremoval-triples removal) row) (model-version model)) true false (conj (groupremoval-commits removal) (->ReplayCommit act-assert row)))))))
 
 (defn- ^ApplyResult apply-retract [^Model model ^Action action]
   (let [triples (model-triples model)
-   slot0 (action-slot0 action)
-   slot1 (action-slot1 action)
-   position (if (single-predicate? triples slot1) (find-group triples slot0 slot1) (find-exact triples slot0 slot1 (action-slot2 action)))]
+   t1 (action-t1 action)
+   t2 (action-t2 action)
+   position (if (single-predicate? triples t2) (find-group triples t1 t2) (find-exact triples t1 t2 (action-t3 action)))]
   (if (< position 0) (->ApplyResult model false false no-commits) (->ApplyResult (->Model (remove-at triples position) (model-version model)) true false (conj no-commits (->ReplayCommit act-retract (nth triples position)))))))
 
 (defn- ^ApplyResult apply-action [^Model model ^Action action]
@@ -321,7 +321,7 @@
   (if (or collapsed (>= index (count actions))) (if collapsed (reject model batch reason-cardinality-collapse) (let [version (if (> (count written) 0) (+ (model-version model) 1) (model-version model))]
   (->MutationResult (->Model (model-triples trial) version) (->Outcome kind-ok batch version "" written idempotent) commits))) (let [action (nth actions index)
    result (apply-action trial action)]
-  (if (applyresult-collapse result) (recur (count actions) trial commits written idempotent true) (recur (+ index 1) (applyresult-model result) (vec (concat commits (applyresult-commits result))) (if (applyresult-changed result) (conj written (action-slot1 action)) written) (if (applyresult-changed result) idempotent (conj idempotent (action-slot1 action))) false))))))
+  (if (applyresult-collapse result) (recur (count actions) trial commits written idempotent true) (recur (+ index 1) (applyresult-model result) (vec (concat commits (applyresult-commits result))) (if (applyresult-changed result) (conj written (action-t2 action)) written) (if (applyresult-changed result) idempotent (conj idempotent (action-t2 action))) false))))))
 
 (defn- ^MutationResult mutate [^Model model ^ParsedOp op]
   (let [actions (op-actions op)
@@ -363,7 +363,7 @@
   (recur (+ index 1) next-model (conj outcomes (mutationresult-outcome result)) (if (> (count commits) 0) (conj frames (->ReplayFrame (model-version next-model) commits)) frames) error)))))))))))
 
 (defn- to-triple [^ModelTriple row]
-  (t/->Triple (modeltriple-slot0 row) (modeltriple-slot1 row) (modeltriple-slot2 row)))
+  (t/->Triple (modeltriple-t1 row) (modeltriple-t2 row) (modeltriple-t3 row)))
 
 (defn- to-commit-operation [^ReplayCommit commit]
   (t/->CommitOperation (if (= act-assert (replaycommit-action commit)) t/assert-action t/retract-action) (to-triple (replaycommit-triple commit))))
@@ -384,7 +384,7 @@
   (fold/fold! space-id (transaction-frames result)))
 
 (defn- ^Boolean string-slots? [triple]
-  (and (string? (t/triple-slot0 triple)) (string? (t/triple-slot1 triple)) (string? (t/triple-slot2 triple))))
+  (and (string? (t/triple-t1 triple)) (string? (t/triple-t2 triple)) (string? (t/triple-t3 triple))))
 
 (defn- ^String slot-text [value]
   (str value))
@@ -394,10 +394,10 @@
   (loop [index 0
    rows no-triples]
   (if (>= index (count live)) rows (let [triple (nth live index)]
-  (recur (+ index 1) (if (string-slots? triple) (conj rows (->ModelTriple (slot-text (t/triple-slot0 triple)) (slot-text (t/triple-slot1 triple)) (slot-text (t/triple-slot2 triple)))) rows)))))))
+  (recur (+ index 1) (if (string-slots? triple) (conj rows (->ModelTriple (slot-text (t/triple-t1 triple)) (slot-text (t/triple-t2 triple)) (slot-text (t/triple-t3 triple)))) rows)))))))
 
 (defn- ^Boolean triple-member? [rows ^ModelTriple row]
-  (>= (find-exact rows (modeltriple-slot0 row) (modeltriple-slot1 row) (modeltriple-slot2 row)) 0))
+  (>= (find-exact rows (modeltriple-t1 row) (modeltriple-t2 row) (modeltriple-t3 row)) 0))
 
 (defn ^Boolean store-agrees? [^ReplayResult result facts]
   (let [modelled (model-triples (replayresult-model result))]
@@ -418,7 +418,7 @@
   (loop [index 0
    text ""]
   (if (>= index (count facts)) text (let [row (nth facts index)]
-  (recur (+ index 1) (str text "fact\t" (modeltriple-slot0 row) "\t" (modeltriple-slot1 row) "\t" (modeltriple-slot2 row) "\n"))))))
+  (recur (+ index 1) (str text "fact\t" (modeltriple-t1 row) "\t" (modeltriple-t2 row) "\t" (modeltriple-t3 row) "\n"))))))
 
 (defn ^String render-frames [^ReplayResult result]
   (let [frames (replayresult-frames result)]
@@ -430,7 +430,7 @@
    body text]
   (if (>= position (count commits)) body (let [commit (nth commits position)
    row (replaycommit-triple commit)]
-  (recur (+ position 1) (str body "tx\t" (replayframe-sequence frame) "\t" (if (= act-assert (replaycommit-action commit)) "assert" "retract") "\t" (modeltriple-slot0 row) "\t" (modeltriple-slot1 row) "\t" (modeltriple-slot2 row) "\n")))))))))))
+  (recur (+ position 1) (str body "tx\t" (replayframe-sequence frame) "\t" (if (= act-assert (replaycommit-action commit)) "assert" "retract") "\t" (modeltriple-t1 row) "\t" (modeltriple-t2 row) "\t" (modeltriple-t3 row) "\n")))))))))))
 
 (defn ^String summary-line [^String path ^ReplayResult result folded facts]
   (str "oracle " path ": " (replayresult-operations result) " operations, version " (fold/fold-version folded) ", " (count facts) " live triples"))

@@ -18,10 +18,10 @@
 ;; A Triple may occupy every slot. `/` inside a keyword is spelling only: it
 ;; asserts no grouping and gets no kernel behavior, which is what the probe atom
 ;; below is here to hold.
-(def nested-slot0 (t/triple proposition-a :not-a/grouping "slot0"))
-(def nested-slot1 (t/triple "slot1" proposition-a true))
-(def nested-slot2 (t/triple :slot2 42 proposition-a))
-(def nested-all (t/triple nested-slot0 nested-slot1 nested-slot2))
+(def nested-t1 (t/triple proposition-a :not-a/grouping "t1"))
+(def nested-t2 (t/triple "t2" proposition-a true))
+(def nested-t3 (t/triple :t3 42 proposition-a))
+(def nested-all (t/triple nested-t1 nested-t2 nested-t3))
 
 (def tx-1842 (t/transaction-coordinate "msa-space" 1842))
 (def tx-1843 (t/transaction-coordinate "msa-space" 1843))
@@ -76,11 +76,11 @@
 (def checks
   [["Atom includes portable Instant" (and (t/atom? instant) (= 123456789 (t/instant-nanos instant)))]
    ["Atom rejects compound legacy containers" (and (not (t/atom? [1 2 3])) (not (t/term? nil)))]
-   ["Triple recursively accepts Triple in slot0" (= proposition-a (t/triple-slot0 nested-slot0))]
-   ["Triple recursively accepts Triple in slot1" (= proposition-a (t/triple-slot1 nested-slot1))]
-   ["Triple recursively accepts Triple in slot2" (= proposition-a (t/triple-slot2 nested-slot2))]
+   ["Triple recursively accepts Triple in t1" (= proposition-a (t/triple-t1 nested-t1))]
+   ["Triple recursively accepts Triple in t2" (= proposition-a (t/triple-t2 nested-t2))]
+   ["Triple recursively accepts Triple in t3" (= proposition-a (t/triple-t3 nested-t3))]
    ["nested Triple remains a Term" (t/term? nested-all)]
-   ["namespaced atoms carry no special slot behavior" (= :not-a/grouping (t/triple-slot1 nested-slot0))]
+   ["namespaced atoms carry no special slot behavior" (= :not-a/grouping (t/triple-t2 nested-t1))]
    ["equal proposition content is structural identity" (= proposition-a proposition-b)]
    ["transaction coordinate is an ordinary Triple"
     (= tx-1842 (t/triple "msa-space" :kernel/tx-sequence 1842))]
@@ -88,26 +88,26 @@
     (= occurrence-1 (t/triple tx-1842 :kernel/op-ordinal 1))]
    ["same proposition has distinct occurrence coordinates" (not= assertion-0 assertion-1)]
    ["assertion occurrence carries proposition unchanged"
-    (and (= proposition-a (t/triple-slot2 assertion-0))
-         (= :kernel/asserts (t/triple-slot1 assertion-0)))]
+    (and (= proposition-a (t/triple-t3 assertion-0))
+         (= :kernel/asserts (t/triple-t2 assertion-0)))]
    ["ordinal orders occurrences within a transaction" (t/occurrence-before? occurrence-0 occurrence-1)]
    ["transaction sequence orders occurrences within a space" (t/occurrence-before? occurrence-1 occurrence-next-tx)]
    ["different spaces have no shared order"
     (= :incomparable-occurrence-spaces
        (error-type #(t/occurrence-before? occurrence-0 other-space-occurrence)))]
    ["wall clock is ordinary metadata, not occurrence identity"
-    (and (= occurrence-0 (t/triple-slot0 recorded))
-         (= :kernel/recorded-at (t/triple-slot1 recorded))
-         (= instant (t/triple-slot2 recorded)))]
+    (and (= occurrence-0 (t/triple-t1 recorded))
+         (= :kernel/recorded-at (t/triple-t2 recorded))
+         (= instant (t/triple-t3 recorded)))]
    ["retraction and withdrawal use ordinary Triples"
-    (and (= :kernel/retracts (t/triple-slot1 retraction-1))
-         (= :kernel/withdraws (t/triple-slot1 withdrawal-1)))]
+    (and (= :kernel/retracts (t/triple-t2 retraction-1))
+         (= :kernel/withdraws (t/triple-t2 withdrawal-1)))]
    ["slot-addressed query assigns no positional roles"
-    (and (= [nested-slot0] (kernel/by-slot0 [nested-slot0 nested-slot1 nested-slot2]
+    (and (= [nested-t1] (kernel/by-t1 [nested-t1 nested-t2 nested-t3]
                                            proposition-a))
-         (= [nested-slot1] (kernel/by-slot1 [nested-slot0 nested-slot1 nested-slot2]
+         (= [nested-t2] (kernel/by-t2 [nested-t1 nested-t2 nested-t3]
                                            proposition-a))
-         (= [nested-slot2] (kernel/by-slot2 [nested-slot0 nested-slot1 nested-slot2]
+         (= [nested-t3] (kernel/by-t3 [nested-t1 nested-t2 nested-t3]
                                            proposition-a)))]
    ["replay interns a finite structural store" (pos? first-count)]
    ["dump is deterministic" (= first-dump second-dump)]

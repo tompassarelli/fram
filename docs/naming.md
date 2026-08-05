@@ -47,7 +47,7 @@ The old `chartroom` name survives only where provenance would otherwise become f
 
 **Turtle** invokes “turtles all the way down”: use ordinary recursive Triples for data, coordinates, history, and metadata when the model permits. It never names a record, identifier, log, or second stored type; the literal semantic vocabulary is linked from the [glossary](glossary.md#semantic-kernel).
 
-**Superseded 2026-08-04:** the original clause called the positions `slot0`/`slot1`/`slot2`; [positions of the Triple — t1/t2/t3](#positions-of-the-triple--t1t2t3--chosen-2026-08-04) now governs public vocabulary. Roles remain ontology conventions, not kernel position. The 2026-08-03 reconciliation also superseded the original `plangrep/page` grounding example: grouping implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
+Roles remain ontology conventions, not kernel positions. Grouping implied by spelling must be asserted, as [ontology](ontology.md#normalization) specifies.
 
 Atoms terminate recursion honestly. When components need queries or descriptions, use more Triples instead of opaque compounds. Tagged handles, tables, and rows remain private representations; `TurtleRow`, `turtle-id`, and “turtle log” remain category errors.
 
@@ -104,14 +104,14 @@ The deciding prior is boundary ownership: at that revision no in-scope family wa
 
 The thing is the three neutral positional addresses of `Triple := (Term, Term, Term)`. **t1**, **t2**, and **t3** follow 1-based tuple coordinates: projections π1/π2/π3, Prolog `arg(1,...)`, Erlang `element(1,...)`, RDF `rdf:_1`, and Scala `_1`; **t** comes directly from the kernel grammar, so t1 is the first Term.
 
-The names never touch the binary wire, where triples encode as positional tagged arrays. This is client-API and documentation vocabulary, not a wire migration. Engine-internal Zig, `.bclj`, and `out/` identifiers remain `slot0`/`slot1`/`slot2` as private storage mechanics, in the same category as `TripleRow` and `SPO`/`POS`/`OSP` tries.
+The names do not change the binary wire, where triples encode as positional tagged arrays. They apply consistently across the client API, engine, Zig implementation, generated output, tests, and documentation. `TripleRow` and the `SPO`/`POS`/`OSP` tries remain private storage mechanics, but their three coordinates use the same t1/t2/t3 vocabulary.
 
 Rejected bench:
 
-- **`slot0`/`slot1`/`slot2`** — combines a frame-language word with array-offset indexing, a hybrid with no single tradition behind it, and the owner retired it from public vocabulary.
+- **zero-based slot vocabulary** — combines a frame-language word with array-offset indexing, a hybrid with no single tradition behind it.
 - **`s0`/`s1`/`s2`** — an abbreviation that needs a correction sentence.
 - **bare `0`/`1`/`2`** — ungreppable and unpronounceable in prose.
-- **1-based `slot1`/`slot2`/`slot3`** — keeps the invented word while changing only the defensible part.
+- **one-based slot vocabulary** — keeps the invented word while changing only the defensible part.
 
 ## profile — and the EAV reading — chosen 2026-08-04
 

@@ -305,7 +305,7 @@
    depth: Int
    max-string-bytes: Int
    max-nodes: Int
-   max-depth: Int] -> Any
+   max-depth: Int] -> t/Term
   (if (decoder-node-limited! decoder depth max-nodes max-depth)
     (let [tag (read-u8! decoder "Term tag")]
       (cond
@@ -347,7 +347,7 @@
            :rpc/invalid)]))
     :rpc/invalid))
 
-(defn read-term! [decoder: Decoder depth: Int] -> Any
+(defn read-term! [decoder: Decoder depth: Int] -> t/Term
   (read-term-limited! decoder depth rpc-v1-max-string-bytes
                       rpc-v1-max-term-nodes rpc-v1-max-term-depth))
 
@@ -363,11 +363,11 @@
       [(t/triple? term)
        (do
          (append-u8! encoder 7)
-         (append-term-limited! encoder (t/triple-slot0 term) (+ depth 1)
+         (append-term-limited! encoder (t/triple-t1 term) (+ depth 1)
                                max-string-bytes max-nodes max-depth)
-         (append-term-limited! encoder (t/triple-slot1 term) (+ depth 1)
+         (append-term-limited! encoder (t/triple-t2 term) (+ depth 1)
                                max-string-bytes max-nodes max-depth)
-         (append-term-limited! encoder (t/triple-slot2 term) (+ depth 1)
+         (append-term-limited! encoder (t/triple-t3 term) (+ depth 1)
                                max-string-bytes max-nodes max-depth))]
       [(string? term)
        (do

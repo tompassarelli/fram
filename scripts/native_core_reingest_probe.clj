@@ -52,8 +52,8 @@
 (defn- module-names [corpus]
   (->> (:triples corpus)
        (keep (fn [tr]
-               (let [s (t/triple-slot0 tr)]
-                 (when (and (= "file" (t/triple-slot1 tr))
+               (let [s (t/triple-t1 tr)]
+                 (when (and (= "file" (t/triple-t2 tr))
                             (string? s)
                             (str/starts-with? s "@")
                             (str/ends-with? s "#root"))

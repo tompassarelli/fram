@@ -71,9 +71,9 @@
 
 (defrecord PatternResult
   [ok: Bool
-   slot0: OptionResult
-   slot1: OptionResult
-   slot2: OptionResult
+   t1: OptionResult
+   t2: OptionResult
+   t3: OptionResult
    message: String?])
 
 (defrecord ScanCursorResult
@@ -151,9 +151,9 @@
       [(= cursor :rpc/list-end) (values-ok values)]
       [(>= count-value max-list-values)
        (values-error "RPC list exceeds the Term node bound")]
-      [(and (t/triple? cursor) (= :rpc/list (t/triple-slot0 cursor)))
-       (recur (t/triple-slot2 cursor)
-              (conj values (t/triple-slot1 cursor))
+      [(and (t/triple? cursor) (= :rpc/list (t/triple-t1 cursor)))
+       (recur (t/triple-t3 cursor)
+              (conj values (t/triple-t2 cursor))
               (inc count-value))]
       [:else (values-error "RPC list must end with :rpc/list-end")])))
 
@@ -162,9 +162,9 @@
    tag: Keyword
    field-count: Int] -> ValuesResult
   (if (and (t/triple? value)
-           (and (= tag (t/triple-slot0 value))
-                (= :rpc/record (t/triple-slot2 value))))
-    (let [result: ValuesResult (read-list (t/triple-slot1 value))]
+           (and (= tag (t/triple-t1 value))
+                (= :rpc/record (t/triple-t3 value))))
+    (let [result: ValuesResult (read-list (t/triple-t2 value))]
       (if (and (valuesresult-ok result)
                (= field-count (count (valuesresult-values result))))
         result
@@ -177,9 +177,9 @@
   (cond
     [(= value :rpc/none) (->OptionResult true false nil nil)]
     [(and (t/triple? value)
-          (and (= :rpc/some (t/triple-slot0 value))
-               (= :rpc/option (t/triple-slot2 value))))
-     (->OptionResult true true (t/triple-slot1 value) nil)]
+          (and (= :rpc/some (t/triple-t1 value))
+               (= :rpc/option (t/triple-t3 value))))
+     (->OptionResult true true (t/triple-t2 value) nil)]
     [:else
      (->OptionResult false false nil
                      "RPC option must be :rpc/none or a :rpc/some record")]))
@@ -234,13 +234,13 @@
       (= (optionresult-value option) value)))
 
 (defn triple-matches?
-  [slot0: OptionResult
-   slot1: OptionResult
-   slot2: OptionResult
+  [t1: OptionResult
+   t2: OptionResult
+   t3: OptionResult
    proposition: t/Triple] -> Bool
-  (and (option-matches? slot0 (t/triple-slot0 proposition))
-       (and (option-matches? slot1 (t/triple-slot1 proposition))
-            (option-matches? slot2 (t/triple-slot2 proposition)))))
+  (and (option-matches? t1 (t/triple-t1 proposition))
+       (and (option-matches? t2 (t/triple-t2 proposition))
+            (option-matches? t3 (t/triple-t3 proposition)))))
 
 (defn parse-pattern [payload: Any] -> PatternResult
   (let [fields: ValuesResult (read-record payload :rpc/triple-pattern 3)]
@@ -252,13 +252,13 @@
                        (or (valuesresult-message fields)
                            "scan pattern is malformed"))
       (let [values: (Vec Any) (valuesresult-values fields)
-            slot0: OptionResult (read-option (nth values 0))
-            slot1: OptionResult (read-option (nth values 1))
-            slot2: OptionResult (read-option (nth values 2))]
-        (if (and (optionresult-ok slot0)
-                 (and (optionresult-ok slot1) (optionresult-ok slot2)))
-          (->PatternResult true slot0 slot1 slot2 nil)
-          (->PatternResult false slot0 slot1 slot2
+            t1: OptionResult (read-option (nth values 0))
+            t2: OptionResult (read-option (nth values 1))
+            t3: OptionResult (read-option (nth values 2))]
+        (if (and (optionresult-ok t1)
+                 (and (optionresult-ok t2) (optionresult-ok t3)))
+          (->PatternResult true t1 t2 t3 nil)
+          (->PatternResult false t1 t2 t3
                            "scan pattern contains a malformed option"))))))
 
 (defn scan-rows
@@ -266,9 +266,9 @@
    pattern: PatternResult] -> (Vec t/Triple)
   (filterv
    (fn [proposition: t/Triple] -> Bool
-     (triple-matches? (patternresult-slot0 pattern)
-                      (patternresult-slot1 pattern)
-                      (patternresult-slot2 pattern)
+     (triple-matches? (patternresult-t1 pattern)
+                      (patternresult-t2 pattern)
+                      (patternresult-t3 pattern)
                       proposition))
    (store/live-propositions root)))
 
@@ -471,11 +471,11 @@
 (defn subject-known?
   [propositions: (Vec t/Triple)
    proposition: t/Triple] -> Bool
-  (let [subject (t/triple-slot0 proposition)]
+  (let [subject (t/triple-t1 proposition)]
     (boolean
      (some
       (fn [known: t/Triple] -> Bool
-        (= subject (t/triple-slot0 known)))
+        (= subject (t/triple-t1 known)))
       propositions))))
 
 (defn remove-last-equal [values: (Vec t/Triple) target: t/Triple] -> Removal
@@ -505,7 +505,7 @@
                  (not (subject-known? simulated proposition)))
           (prepared-error
            :rpc/subject-not-found
-           "subject-existing policy requires a live slot0")
+           "subject-existing policy requires a live t1")
           (if (= :rpc/assert (action-operation action))
             (recur (vec (rest remaining))
                    (conj simulated proposition)
@@ -546,30 +546,30 @@
 
 (defn occurrence-sequence [occurrence: Any] -> Int
   (if (and (t/occurrence-coordinate? occurrence)
-           (t/transaction-coordinate? (t/triple-slot0 occurrence)))
-    (t/triple-slot2 (t/triple-slot0 occurrence))
+           (t/transaction-coordinate? (t/triple-t1 occurrence)))
+    (t/triple-t3 (t/triple-t1 occurrence))
     0))
 
 (defn lease-event? [event: t/Triple] -> Bool
-  (let [proposition (t/triple-slot2 event)]
+  (let [proposition (t/triple-t3 event)]
     (and (t/triple? proposition)
-         (let [value (t/triple-slot2 proposition)]
-           (and (= :kernel/lease (t/triple-slot1 proposition))
+         (let [value (t/triple-t3 proposition)]
+           (and (= :kernel/lease (t/triple-t2 proposition))
                 (and (t/triple? value)
-                     (and (= :kernel/expires-at (t/triple-slot1 value))
-                          (integer? (t/triple-slot2 value)))))))))
+                     (and (= :kernel/expires-at (t/triple-t2 value))
+                          (integer? (t/triple-t3 value)))))))))
 
 (defn current-lease [root: (Atom t/TermStore) resource: Any] -> LeaseState
   (reduce
    (fn [known: LeaseState event: t/Triple] -> LeaseState
      (if (lease-event? event)
-       (let [proposition: t/Triple (t/triple-slot2 event)
-             value: t/Triple (t/triple-slot2 proposition)]
-         (if (= resource (t/triple-slot0 proposition))
+       (let [proposition: t/Triple (t/triple-t3 event)
+             value: t/Triple (t/triple-t3 proposition)]
+         (if (= resource (t/triple-t1 proposition))
            (->LeaseState true
-                         (t/triple-slot0 value)
-                         (t/triple-slot2 value)
-                         (occurrence-sequence (t/triple-slot0 event)))
+                         (t/triple-t1 value)
+                         (t/triple-t3 value)
+                         (occurrence-sequence (t/triple-t1 event)))
            known))
        known))
    (->LeaseState false nil 0 0)

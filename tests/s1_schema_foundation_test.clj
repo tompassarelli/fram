@@ -26,9 +26,9 @@
 (defn- brute [s p o]
   (filterv (fn [event]
              (let [prop (rot/proposition-of event)]
-               (and (or (nil? s) (= s (t/triple-slot0 prop)))
-                    (or (nil? p) (= p (t/triple-slot1 prop)))
-                    (or (nil? o) (= o (t/triple-slot2 prop))))))
+               (and (or (nil? s) (= s (t/triple-t1 prop)))
+                    (or (nil? p) (= p (t/triple-t2 prop)))
+                    (or (nil? o) (= o (t/triple-t3 prop))))))
            (rot/all-occurrences covering)))
 
 (check! "covering: all 8 bound subsets match a brute-force filter"
@@ -86,7 +86,7 @@
 (check! "a minted identity is the (tx-coordinate :mint-ordinal n) Term"
         (and (every? txn/mint-coordinate? minted)
              (every? t/term? minted)
-             (every? #(t/transaction-coordinate? (t/triple-slot0 %)) minted)))
+             (every? #(t/transaction-coordinate? (t/triple-t1 %)) minted)))
 (txn/assert! builder (t/triple (first minted) "kind" "node"))
 (txn/commit! mint-ctx builder)
 (def next-builder (txn/open mint-ctx))
@@ -108,7 +108,7 @@
         (and (= [:retract :retract :retract :assert]
                 (mapv :action compiled))
              (= ["old" "other" "old" "new"]
-                (mapv #(t/triple-slot2 (:proposition %)) compiled))))
+                (mapv #(t/triple-t3 (:proposition %)) compiled))))
 
 (def upd-builder (txn/open upd-ctx))
 (def write-identity (txn/update-single! upd-builder upd-view "n" "single-pred" "new"))
@@ -118,7 +118,7 @@
 (check! "the whole update lands as ONE transaction"
         (= 1 (- (c/transaction-count upd-ctx) transactions-before)))
 (check! "exactly the new value is live afterwards"
-        (= ["new"] (rot/values (rot/by-slot01 upd-after "n" "single-pred"))))
+        (= ["new"] (rot/values (rot/by-t12 upd-after "n" "single-pred"))))
 (check! "the write identity is the new assertion occurrence"
         (and (rot/live-occurrence? upd-after write-identity)
              (= (t/triple "n" "single-pred" "new")
@@ -129,7 +129,7 @@
 (txn/commit! upd-ctx same-builder)
 (def upd-same (rot/refresh upd-after upd-ctx))
 (check! "an update to the SAME value still retracts and re-asserts"
-        (and (= ["new"] (rot/values (rot/by-slot01 upd-same "n" "single-pred")))
+        (and (= ["new"] (rot/values (rot/by-t12 upd-same "n" "single-pred")))
              (not (= same-identity write-identity))
              (not (rot/live-occurrence? upd-same write-identity))
              (rot/live-occurrence? upd-same same-identity)))

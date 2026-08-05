@@ -321,7 +321,7 @@
   (if (contains? native-rpc-operations operation) :supported :unsupported))
 
 (defn- current-version [db]
-  (t/triple-slot2 (database/current-transaction db)))
+  (t/triple-t3 (database/current-transaction db)))
 
 (defn- require-term! [value label]
   (when-not (t/term? value)
@@ -384,7 +384,7 @@
   (require-version-expected! (current-version db) expected))
 
 (defn- occurrence-epoch [coordinate]
-  (t/triple-slot2 (t/triple-slot0 coordinate)))
+  (t/triple-t3 (t/triple-t1 coordinate)))
 
 (defn- millis->instant [value]
   (let [seconds (quot value 1000)
@@ -440,8 +440,8 @@
       [(into (subvec values 0 position) (subvec values (inc position))) true])))
 
 (defn- subject-known? [propositions proposition]
-  (let [slot0 (t/triple-slot0 proposition)]
-    (boolean (some #(= slot0 (t/triple-slot0 %)) propositions))))
+  (let [t1 (t/triple-t1 proposition)]
+    (boolean (some #(= t1 (t/triple-t1 %)) propositions))))
 
 (defn- prepare-actions! [propositions actions]
   (loop [remaining actions index 0 simulated propositions
@@ -452,7 +452,7 @@
         (when (and (= policy framrpc/rpc-subject-existing)
                    (not (subject-known? simulated proposition)))
           (server-fail! :rpc/subject-not-found
-                        "subject-existing policy requires a live slot0" {}))
+                        "subject-existing policy requires a live t1" {}))
         (if (= operation :rpc/assert)
           (recur (rest remaining) (inc index) (conj simulated proposition)
                  (conj operations {:action :assert :proposition proposition})
@@ -533,9 +533,9 @@
            (fn [index [present value]]
              (or (not present)
                  (= value ((case index
-                             0 t/triple-slot0
-                             1 t/triple-slot1
-                             t/triple-slot2)
+                             0 t/triple-t1
+                             1 t/triple-t2
+                             t/triple-t3)
                            proposition))))
            options)))
 
@@ -543,8 +543,8 @@
   (filterv kernel/operation-occurrence? (database/history db)))
 
 (defn- query-record-tag [value]
-  (when (and (t/triple? value) (= :rpc/record (t/triple-slot2 value)))
-    (t/triple-slot0 value)))
+  (when (and (t/triple? value) (= :rpc/record (t/triple-t3 value)))
+    (t/triple-t1 value)))
 
 (defn- parse-query-term! [value]
   (case (query-record-tag value)
@@ -997,15 +997,15 @@
 
 (defn- native-term-handle [root value]
   (if (t/triple? value)
-    (let [slot0 (native-term-handle root (t/triple-slot0 value))
-          slot1 (native-term-handle root (t/triple-slot1 value))
-          slot2 (native-term-handle root (t/triple-slot2 value))]
-      (when (every? some? [slot0 slot1 slot2])
+    (let [t1 (native-term-handle root (t/triple-t1 value))
+          t2 (native-term-handle root (t/triple-t2 value))
+          t3 (native-term-handle root (t/triple-t3 value))]
+      (when (every? some? [t1 t2 t3])
         (when-let [position
                    (native-index-position
                     (t/termstore-triples root)
                     (t/termstore-triple-slots root)
-                    (t/->TripleRow slot0 slot1 slot2))]
+                    (t/->TripleRow t1 t2 t3))]
           (inc (* 2 position)))))
     (let [row (native-atom-row value)]
       (when row
@@ -1030,9 +1030,9 @@
       (native-atom-value (nth (t/termstore-atoms root) position))
       (let [row (nth (t/termstore-triples root) position)]
         (t/triple
-         (native-resolve-handle root (t/triplerow-slot0 row))
-         (native-resolve-handle root (t/triplerow-slot1 row))
-         (native-resolve-handle root (t/triplerow-slot2 row)))))))
+         (native-resolve-handle root (t/triplerow-t1 row))
+         (native-resolve-handle root (t/triplerow-t2 row))
+         (native-resolve-handle root (t/triplerow-t3 row)))))))
 
 (defn- native-active-handle? [root handle]
   (let [slots (t/termstore-active-slots root)
@@ -1062,9 +1062,9 @@
           (map (fn [wanted actual]
                  (or (= native-unbound wanted) (= wanted actual)))
                expected
-               [(t/triplerow-slot0 row)
-                (t/triplerow-slot1 row)
-                (t/triplerow-slot2 row)])))
+               [(t/triplerow-t1 row)
+                (t/triplerow-t2 row)
+                (t/triplerow-t3 row)])))
 
 (defn- native-candidate-handles [root arguments cancellation]
   (let [expected (native-pattern-handles root arguments)]
@@ -1119,9 +1119,9 @@
          (reduce (fn [acc handle]
                    (cancelled! cancellation)
                    (let [proposition (native-resolve-handle root handle)
-                         row [(t/triple-slot0 proposition)
-                              (t/triple-slot1 proposition)
-                              (t/triple-slot2 proposition)]]
+                         row [(t/triple-t1 proposition)
+                              (t/triple-t2 proposition)
+                              (t/triple-t3 proposition)]]
                      (if-let [bindings (match-query-row (:arguments pattern) row)]
                        (conj! acc (ground-query-row
                                    (:head-arguments pattern) bindings))
@@ -1521,9 +1521,9 @@
 
 (defn- handle-scan! [request cancellation snapshot]
   (let [payload (t/rpc-request-payload-value request)
-        [slot0-option slot1-option slot2-option]
+        [t1-option t2-option t3-option]
         (record-fields! payload :rpc/triple-pattern 3)
-        options (mapv option-value! [slot0-option slot1-option slot2-option])
+        options (mapv option-value! [t1-option t2-option t3-option])
         page (t/rpcrequest-page request)
         version (page-version snapshot page)
         cache-snapshot (assoc (select-keys snapshot [:generation :space])

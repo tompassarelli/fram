@@ -118,15 +118,15 @@
             (clamp (get opts :max-nodes) default-max-nodes)
             state: (Atom Int) (atom 0)]
         (letfn [(event-occurrence [event: t/Triple] -> t/Triple
-                  (t/triple-slot0 event))
+                  (t/triple-t1 event))
                 (event-proposition [event: t/Triple] -> t/Triple
-                  (t/triple-slot2 event))
+                  (t/triple-t3 event))
                 (event-sequence [event: t/Triple] -> Int
                   (let [occurrence: t/Triple (event-occurrence event)
-                        transaction: t/Triple (t/triple-slot0 occurrence)]
-                    (t/triple-slot2 transaction)))
+                        transaction: t/Triple (t/triple-t1 occurrence)]
+                    (t/triple-t3 transaction)))
                 (assertion-event? [event: t/Triple] -> Bool
-                  (= t/asserts (t/triple-slot1 event)))
+                  (= t/asserts (t/triple-t2 event)))
                 (events-at [cutoff: Int] -> (Vec t/Triple)
                   (reduce
                     (fn
@@ -168,9 +168,9 @@
                           (filterv
                             (fn [candidate: t/Triple] -> Bool
                               (and (= t/withdraws
-                                     (t/triple-slot1 candidate))
+                                     (t/triple-t2 candidate))
                                 (= occurrence
-                                  (t/triple-slot2 candidate))))
+                                  (t/triple-t3 candidate))))
                             withdrawals))]
                     withdrawal))
                 (metadata-value [owner: Any predicate: Keyword] -> Any
@@ -182,22 +182,22 @@
                                 false
                                 (let [proposition: t/Triple
                                       (event-proposition candidate)]
-                                  (and (= owner (t/triple-slot0 proposition))
+                                  (and (= owner (t/triple-t1 proposition))
                                     (= predicate
-                                      (t/triple-slot1 proposition))
+                                      (t/triple-t2 proposition))
                                     (or (nil? asof)
                                       (<= (event-sequence candidate) asof))))))
                             (snapshot-events)))]
                     (if (nil? event)
                       nil
-                      (t/triple-slot2 (event-proposition event)))))
+                      (t/triple-t3 (event-proposition event)))))
                 (agent-of [occurrence: t/Triple] -> Any
                   (or (metadata-value occurrence :kernel/asserted-by)
-                    (metadata-value (t/triple-slot0 occurrence)
+                    (metadata-value (t/triple-t1 occurrence)
                       :kernel/asserted-by)))
                 (recorded-at-of [occurrence: t/Triple] -> Any
                   (or (metadata-value occurrence :kernel/recorded-at)
-                    (metadata-value (t/triple-slot0 occurrence)
+                    (metadata-value (t/triple-t1 occurrence)
                       :kernel/recorded-at)))
                 (pid-of [p: String] -> Any
                   (s/resolve-predicate schema p))
@@ -223,9 +223,9 @@
                           false
                           (let [proposition: t/Triple
                                 (event-proposition event)]
-                            (and (= left (t/triple-slot0 proposition))
+                            (and (= left (t/triple-t1 proposition))
                               (= predicate
-                                (t/triple-slot1 proposition))))))
+                                (t/triple-t2 proposition))))))
                       candidates)))
                 (rev-events [predicate: Any right: Any] -> (Vec t/Triple)
                   (filterv
@@ -235,19 +235,19 @@
                         (let [proposition: t/Triple
                               (event-proposition event)]
                           (and (= predicate
-                                 (t/triple-slot1 proposition))
-                            (= right (t/triple-slot2 proposition))))))
+                                 (t/triple-t2 proposition))
+                            (= right (t/triple-t3 proposition))))))
                     (snapshot-events)))
                 (subject-events [left: Any] -> (Vec t/Triple)
                   (filterv
                     (fn [event: t/Triple] -> Bool
                       (and (assertion-event? event)
                         (= left
-                          (t/triple-slot0 (event-proposition event)))))
+                          (t/triple-t1 (event-proposition event)))))
                     (snapshot-events)))
                 (leaf [predicate: Any event: t/Triple] -> Any
                   (let [proposition: t/Triple (event-proposition event)
-                        right: Any (t/triple-slot2 proposition)
+                        right: Any (t/triple-t3 proposition)
                         value: Any
                         (if (= s/ref-kind
                                (s/lookup schema predicate
@@ -274,7 +274,7 @@
                         (if (nil? withdrawal)
                           base
                           (let [retraction: t/Triple
-                                (t/triple-slot0 withdrawal)]
+                                (t/triple-t1 withdrawal)]
                             (assoc base
                               :withdrawn_by (agent-of retraction)
                               :withdrawn_at retraction)))))))
@@ -333,7 +333,7 @@
                       (distinct
                         (mapv
                           (fn [event: t/Triple] -> Any
-                            (t/triple-slot1 (event-proposition event)))
+                            (t/triple-t2 (event-proposition event)))
                           (subject-events left))))
 
                     (and (string? element)
@@ -344,7 +344,7 @@
                         (let [subjects: (Vec Any)
                               (mapv
                                 (fn [event: t/Triple] -> Any
-                                  (t/triple-slot0
+                                  (t/triple-t1
                                     (event-proposition event)))
                                 (rev-events predicate left))]
                           (assoc acc element
@@ -374,7 +374,7 @@
                                 (let [subjects: (Vec Any)
                                       (mapv
                                         (fn [event: t/Triple] -> Any
-                                          (t/triple-slot0
+                                          (t/triple-t1
                                             (event-proposition event)))
                                         (rev-events predicate left))]
                                   (assoc result key
@@ -391,7 +391,7 @@
                                       (mapv
                                         (fn [event: t/Triple] -> Any
                                           (let [right: Any
-                                                (t/triple-slot2
+                                                (t/triple-t3
                                                   (event-proposition event))
                                                 target-name
                                                 (s/name-of schema right)]

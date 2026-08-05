@@ -15,8 +15,8 @@
 (def empty-index
   {:events []
    :event-set #{}
-   :slot0 {} :slot1 {} :slot2 {}
-   :slot01 {} :slot12 {} :slot02 {}
+   :t1 {} :t2 {} :t3 {}
+   :t12 {} :t23 {} :t13 {}
    :novelty []
    :watermark -1})
 
@@ -47,18 +47,18 @@
   (if (contains? (:event-set index) event)
     index
     (let [triple (proposition event)
-          slot0 (t/triple-slot0 triple)
-          slot1 (t/triple-slot1 triple)
-          slot2 (t/triple-slot2 triple)]
+          t1 (t/triple-t1 triple)
+          t2 (t/triple-t2 triple)
+          t3 (t/triple-t3 triple)]
       (-> index
           (update :events conj event)
           (update :event-set conj event)
-          (update :slot0 bucket-add slot0 event)
-          (update :slot1 bucket-add slot1 event)
-          (update :slot2 bucket-add slot2 event)
-          (update :slot01 bucket-add [slot0 slot1] event)
-          (update :slot12 bucket-add [slot1 slot2] event)
-          (update :slot02 bucket-add [slot0 slot2] event)))))
+          (update :t1 bucket-add t1 event)
+          (update :t2 bucket-add t2 event)
+          (update :t3 bucket-add t3 event)
+          (update :t12 bucket-add [t1 t2] event)
+          (update :t23 bucket-add [t2 t3] event)
+          (update :t13 bucket-add [t1 t3] event)))))
 
 (defn del
   "Remove one exact occurrence. Equal propositions at other coordinates remain."
@@ -67,18 +67,18 @@
   (if-not (contains? (:event-set index) event)
     index
     (let [triple (proposition event)
-          slot0 (t/triple-slot0 triple)
-          slot1 (t/triple-slot1 triple)
-          slot2 (t/triple-slot2 triple)]
+          t1 (t/triple-t1 triple)
+          t2 (t/triple-t2 triple)
+          t3 (t/triple-t3 triple)]
       (-> index
           (update :events remove-event event)
           (update :event-set disj event)
-          (update :slot0 bucket-del slot0 event)
-          (update :slot1 bucket-del slot1 event)
-          (update :slot2 bucket-del slot2 event)
-          (update :slot01 bucket-del [slot0 slot1] event)
-          (update :slot12 bucket-del [slot1 slot2] event)
-          (update :slot02 bucket-del [slot0 slot2] event)))))
+          (update :t1 bucket-del t1 event)
+          (update :t2 bucket-del t2 event)
+          (update :t3 bucket-del t3 event)
+          (update :t12 bucket-del [t1 t2] event)
+          (update :t23 bucket-del [t2 t3] event)
+          (update :t13 bucket-del [t1 t3] event)))))
 
 (defn build
   "Build a covering index from live assertion occurrence Triples."
@@ -91,19 +91,19 @@
 
 (defn occurrence-count [index] (count (:events index)))
 
-;; Every bound subset of slot0/slot1/slot2 has one exact bucket. Results are
+;; Every bound subset of t1/t2/t3 has one exact bucket. Results are
 ;; occurrence events, so equal propositions at distinct coordinates survive.
-(defn matching [index [slot0 slot1 slot2]]
+(defn matching [index [t1 t2 t3]]
   (cond
-    (and (some? slot0) (and (some? slot1) (some? slot2)))
-    (filterv #(= (t/triple slot0 slot1 slot2) (proposition %)) (:events index))
+    (and (some? t1) (and (some? t2) (some? t3)))
+    (filterv #(= (t/triple t1 t2 t3) (proposition %)) (:events index))
 
-    (and (some? slot0) (some? slot1)) (get (:slot01 index) [slot0 slot1] [])
-    (and (some? slot1) (some? slot2)) (get (:slot12 index) [slot1 slot2] [])
-    (and (some? slot0) (some? slot2)) (get (:slot02 index) [slot0 slot2] [])
-    (some? slot0) (get (:slot0 index) slot0 [])
-    (some? slot1) (get (:slot1 index) slot1 [])
-    (some? slot2) (get (:slot2 index) slot2 [])
+    (and (some? t1) (some? t2)) (get (:t12 index) [t1 t2] [])
+    (and (some? t2) (some? t3)) (get (:t23 index) [t2 t3] [])
+    (and (some? t1) (some? t3)) (get (:t13 index) [t1 t3] [])
+    (some? t1) (get (:t1 index) t1 [])
+    (some? t2) (get (:t2 index) t2 [])
+    (some? t3) (get (:t3 index) t3 [])
     :else (:events index)))
 
 (defn matching-propositions [index pattern]

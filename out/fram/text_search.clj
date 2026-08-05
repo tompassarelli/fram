@@ -130,7 +130,7 @@
 (defn- ^SearchBuildState build-state [rows]
   (loop [handle 0
    state (->SearchBuildState [] [] {} {})]
-  (if (>= handle (count rows)) state (let [value (t/triple-slot2 (nth rows handle))]
+  (if (>= handle (count rows)) state (let [value (t/triple-t3 (nth rows handle))]
   (if (string? value) (let [tokens (word-tokens value)
    normalized (lower value)
    stem-keys (stems tokens)
@@ -278,12 +278,12 @@
 (defn- rows-for-handles [^TextSearchSource source needle handles]
   (let [rows (textsearchsource-rows source)]
   (mapv (fn [handle] (let [proposition (nth rows handle)]
-  [(t/triple-slot0 proposition) (t/triple-slot1 proposition) needle])) handles)))
+  [(t/triple-t1 proposition) (t/triple-t2 proposition) needle])) handles)))
 
 (defn- ranked-rows-for-handles! [^TextSearchSource source needle handles]
   (let [rows (textsearchsource-rows source)]
   (mapv (fn [handle] (let [proposition (nth rows handle)]
-  [(t/triple-slot0 proposition) (t/triple-slot1 proposition) needle (score-at! source handle needle)])) handles)))
+  [(t/triple-t1 proposition) (t/triple-t2 proposition) needle (score-at! source handle needle)])) handles)))
 
 (defn exact-indexed-rows [^TextSearchSource source needle]
   (text-index/indexed-rows (textsearchsource-exact source) needle))

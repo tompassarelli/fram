@@ -97,9 +97,9 @@
         (->> triples
              (keep (fn [triple]
                      (when-let [[_ module]
-                                (and (string? (t/triple-slot0 triple))
+                                (and (string? (t/triple-t1 triple))
                                      (re-matches #"^@(.+)#[0-9]+$"
-                                                 (t/triple-slot0 triple)))]
+                                                 (t/triple-t1 triple)))]
                        module)))
              set)
         roots
@@ -107,11 +107,11 @@
              (keep
               (fn [triple]
                 (when-let [[_ module]
-                           (and (= "file" (t/triple-slot1 triple))
-                                (string? (t/triple-slot0 triple))
+                           (and (= "file" (t/triple-t2 triple))
+                                (string? (t/triple-t1 triple))
                                 (re-matches #"^@(.+)#root$"
-                                            (t/triple-slot0 triple)))]
-                  [module (t/triple-slot2 triple)])))
+                                            (t/triple-t1 triple)))]
+                  [module (t/triple-t3 triple)])))
              (group-by first))]
     (when (empty? ast-modules)
       (fail! :module-roots-missing
@@ -286,8 +286,8 @@
 (defn- candidate-snapshot [snapshot candidate]
   {:module (:module snapshot)
    :snapshot (:snapshot snapshot)
-   :triples (mapv (fn [[slot0 slot1 slot2]]
-                    (t/triple slot0 slot1 slot2))
+   :triples (mapv (fn [[t1 t2 t3]]
+                    (t/triple t1 t2 t3))
                   (:ast candidate))})
 
 (defn- sorted-delta [rows]

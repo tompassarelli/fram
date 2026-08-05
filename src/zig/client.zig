@@ -75,26 +75,26 @@ fn tripleValue(term: log.Term) ?log.Triple {
 
 fn tripleTerm(
     arena: Allocator,
-    slot0: log.Term,
-    slot1: log.Term,
-    slot2: log.Term,
+    t1: log.Term,
+    t2: log.Term,
+    t3: log.Term,
 ) !log.Term {
     const value = try arena.create(log.Triple);
-    value.* = .{ .slot0 = slot0, .slot1 = slot1, .slot2 = slot2 };
+    value.* = .{ .t1 = t1, .t2 = t2, .t3 = t3 };
     return .{ .triple = value };
 }
 
 fn stringTriple(
     arena: Allocator,
-    slot0: []const u8,
-    slot1: []const u8,
-    slot2: []const u8,
+    t1: []const u8,
+    t2: []const u8,
+    t3: []const u8,
 ) !log.Term {
     return tripleTerm(
         arena,
-        stringTerm(slot0),
-        stringTerm(slot1),
-        stringTerm(slot2),
+        stringTerm(t1),
+        stringTerm(t2),
+        stringTerm(t3),
     );
 }
 
@@ -118,9 +118,9 @@ fn collectList(arena: Allocator, root: log.Term) ![]const log.Term {
     var cursor = root;
     while (!isKeyword(cursor, "rpc/list-end")) {
         const cell = tripleValue(cursor) orelse return error.InvalidResponse;
-        if (!isKeyword(cell.slot0, "rpc/list")) return error.InvalidResponse;
-        try items.append(arena, cell.slot1);
-        cursor = cell.slot2;
+        if (!isKeyword(cell.t1, "rpc/list")) return error.InvalidResponse;
+        try items.append(arena, cell.t2);
+        cursor = cell.t3;
     }
     return items.toOwnedSlice(arena);
 }
@@ -145,9 +145,9 @@ fn recordFields(
     expected: usize,
 ) ![]const log.Term {
     const triple = tripleValue(value) orelse return error.InvalidResponse;
-    if (!isKeyword(triple.slot0, tag) or
-        !isKeyword(triple.slot2, "rpc/record")) return error.InvalidResponse;
-    const fields = try collectList(arena, triple.slot1);
+    if (!isKeyword(triple.t1, tag) or
+        !isKeyword(triple.t3, "rpc/record")) return error.InvalidResponse;
+    const fields = try collectList(arena, triple.t2);
     if (fields.len != expected) return error.InvalidResponse;
     return fields;
 }
@@ -308,8 +308,8 @@ fn mutationChanged(
             if (occurrences.len != 3) return error.ProtocolAssertion;
             const binding = tripleValue(occurrences[0]) orelse
                 return error.ProtocolAssertion;
-            if (!(isKeyword(binding.slot1, "kernel/asserts") or
-                isKeyword(binding.slot1, "kernel/retracts")))
+            if (!(isKeyword(binding.t2, "kernel/asserts") or
+                isKeyword(binding.t2, "kernel/retracts")))
                 return error.ProtocolAssertion;
         } else if (occurrences.len != 0) return error.ProtocolAssertion;
     }
@@ -347,17 +347,17 @@ fn batchAction(
 
 fn pattern(
     arena: Allocator,
-    slot0: ?log.Term,
-    slot1: ?log.Term,
-    slot2: ?log.Term,
+    t1: ?log.Term,
+    t2: ?log.Term,
+    t3: ?log.Term,
 ) !log.Term {
     return record(
         arena,
         "rpc/triple-pattern",
         &.{
-            try option(arena, slot0),
-            try option(arena, slot1),
-            try option(arena, slot2),
+            try option(arena, t1),
+            try option(arena, t2),
+            try option(arena, t3),
         },
     );
 }
@@ -716,7 +716,7 @@ fn bootstrap(
     if (occurrence_rows.len != 9) return error.ProtocolAssertion;
     const direct = tripleValue(occurrence_rows[0]) orelse
         return error.ProtocolAssertion;
-    if (!isKeyword(direct.slot1, "kernel/asserts"))
+    if (!isKeyword(direct.t2, "kernel/asserts"))
         return error.ProtocolAssertion;
 
     var query = try peer.exchange(
@@ -1055,15 +1055,15 @@ const ModelOperation = enum {
 
 const ModelAction = struct {
     operation: ModelOperation,
-    slot0: []const u8,
-    slot1: []const u8,
-    slot2: []const u8,
+    t1: []const u8,
+    t2: []const u8,
+    t3: []const u8,
 };
 
 const ModelTriple = struct {
-    slot0: []const u8,
-    slot1: []const u8,
-    slot2: []const u8,
+    t1: []const u8,
+    t2: []const u8,
+    t3: []const u8,
 };
 
 const Model = struct {
@@ -1103,30 +1103,30 @@ const Model = struct {
     fn rebuildSingles(model: *Model) !void {
         model.singles.clearRetainingCapacity();
         for (model.triples.items) |triple| {
-            if (!std.mem.eql(u8, triple.slot1, "cardinality") or
-                !std.mem.eql(u8, triple.slot2, "single")) continue;
-            const predicate = if (triple.slot0.len != 0 and
-                triple.slot0[0] == '@')
-                triple.slot0[1..]
+            if (!std.mem.eql(u8, triple.t2, "cardinality") or
+                !std.mem.eql(u8, triple.t3, "single")) continue;
+            const predicate = if (triple.t1.len != 0 and
+                triple.t1[0] == '@')
+                triple.t1[1..]
             else
-                triple.slot0;
+                triple.t1;
             try model.singles.put(predicate, {});
         }
     }
 
     fn exactIndex(model: *const Model, action: ModelAction) ?usize {
         for (model.triples.items, 0..) |triple, index| {
-            if (std.mem.eql(u8, triple.slot0, action.slot0) and
-                std.mem.eql(u8, triple.slot1, action.slot1) and
-                std.mem.eql(u8, triple.slot2, action.slot2)) return index;
+            if (std.mem.eql(u8, triple.t1, action.t1) and
+                std.mem.eql(u8, triple.t2, action.t2) and
+                std.mem.eql(u8, triple.t3, action.t3)) return index;
         }
         return null;
     }
 
     fn groupIndex(model: *const Model, action: ModelAction) ?usize {
         for (model.triples.items, 0..) |triple, index| {
-            if (std.mem.eql(u8, triple.slot0, action.slot0) and
-                std.mem.eql(u8, triple.slot1, action.slot1)) return index;
+            if (std.mem.eql(u8, triple.t1, action.t1) and
+                std.mem.eql(u8, triple.t2, action.t2)) return index;
         }
         return null;
     }
@@ -1136,17 +1136,17 @@ const Model = struct {
         action: ModelAction,
     ) bool {
         if (action.operation != .assert or
-            !std.mem.eql(u8, action.slot1, "cardinality") or
-            !std.mem.eql(u8, action.slot2, "single")) return false;
-        const predicate = if (action.slot0.len != 0 and action.slot0[0] == '@')
-            action.slot0[1..]
+            !std.mem.eql(u8, action.t2, "cardinality") or
+            !std.mem.eql(u8, action.t3, "single")) return false;
+        const predicate = if (action.t1.len != 0 and action.t1[0] == '@')
+            action.t1[1..]
         else
-            action.slot0;
+            action.t1;
         var counts = std.StringHashMap(usize).init(model.allocator);
         defer counts.deinit();
         for (model.triples.items) |triple| {
-            if (!std.mem.eql(u8, triple.slot1, predicate)) continue;
-            const result = counts.getOrPut(triple.slot0) catch
+            if (!std.mem.eql(u8, triple.t2, predicate)) continue;
+            const result = counts.getOrPut(triple.t1) catch
                 return true;
             if (!result.found_existing) result.value_ptr.* = 0;
             result.value_ptr.* += 1;
@@ -1156,24 +1156,24 @@ const Model = struct {
     }
 
     fn apply(model: *Model, action: ModelAction) !bool {
-        try model.predicates.put(action.slot1, {});
+        try model.predicates.put(action.t2, {});
         if (model.declarationCollapse(action))
             return error.CardinalityCollapse;
         if (action.operation == .assert) {
             if (model.exactIndex(action) != null) return false;
-            if (model.singles.contains(action.slot1)) {
+            if (model.singles.contains(action.t2)) {
                 while (model.groupIndex(action)) |index|
                     _ = model.triples.orderedRemove(index);
             }
             try model.triples.append(model.allocator, .{
-                .slot0 = action.slot0,
-                .slot1 = action.slot1,
-                .slot2 = action.slot2,
+                .t1 = action.t1,
+                .t2 = action.t2,
+                .t3 = action.t3,
             });
             try model.rebuildSingles();
             return true;
         }
-        const index = if (model.singles.contains(action.slot1))
+        const index = if (model.singles.contains(action.t2))
             model.groupIndex(action)
         else
             model.exactIndex(action);
@@ -1344,7 +1344,7 @@ fn runObservedMutation(
         null,
         try writePayload(
             arena,
-            try tripleTerm(arena, triple.slot0, triple.slot1, triple.slot2),
+            try tripleTerm(arena, triple.t1, triple.t2, triple.t3),
             "rpc/subject-any",
             null,
         ),
@@ -1370,9 +1370,9 @@ fn modelActionTerm(
         "rpc/retract");
     const triple = try stringTriple(
         arena,
-        action.slot0,
-        action.slot1,
-        action.slot2,
+        action.t1,
+        action.t2,
+        action.t3,
     );
     if (malformed_local_base) |base| return record(
         arena,
@@ -1421,9 +1421,9 @@ fn runModelMutation(
             arena,
             try stringTriple(
                 arena,
-                actions[0].slot0,
-                actions[0].slot1,
-                actions[0].slot2,
+                actions[0].t1,
+                actions[0].t2,
+                actions[0].t3,
             ),
             "rpc/subject-any",
             null,
@@ -1519,9 +1519,9 @@ fn oracleLine(
                 .retract
             else
                 .assert,
-            .slot0 = fields[1],
-            .slot1 = fields[2],
-            .slot2 = fields[3],
+            .t1 = fields[1],
+            .t2 = fields[2],
+            .t3 = fields[3],
         };
         const expected = if (fields.len == 5)
             std.fmt.parseInt(i64, fields[4], 10) catch
@@ -1569,9 +1569,9 @@ fn oracleLine(
     for (facts, 0..) |fact, index| {
         actions[index] = .{
             .operation = .assert,
-            .slot0 = subject,
-            .slot1 = fact.predicate,
-            .slot2 = fact.value,
+            .t1 = subject,
+            .t2 = fact.predicate,
+            .t3 = fact.value,
         };
         local_bases[index] = fact.local_base;
     }
@@ -1612,7 +1612,7 @@ fn verifyModel(
         const actual = try collectList(arena, payload_fields[0]);
         var expected_count: usize = 0;
         for (model.triples.items) |triple| {
-            if (!std.mem.eql(u8, triple.slot1, predicate)) continue;
+            if (!std.mem.eql(u8, triple.t2, predicate)) continue;
             expected_count += 1;
             var found = false;
             for (actual) |term| {
@@ -1620,18 +1620,18 @@ fn verifyModel(
                 found = found or
                     std.mem.eql(
                         u8,
-                        stringValue(candidate.slot0) orelse "",
-                        triple.slot0,
+                        stringValue(candidate.t1) orelse "",
+                        triple.t1,
                     ) and
                         std.mem.eql(
                             u8,
-                            stringValue(candidate.slot1) orelse "",
-                            triple.slot1,
+                            stringValue(candidate.t2) orelse "",
+                            triple.t2,
                         ) and
                         std.mem.eql(
                             u8,
-                            stringValue(candidate.slot2) orelse "",
-                            triple.slot2,
+                            stringValue(candidate.t3) orelse "",
+                            triple.t3,
                         );
             }
             if (!found) return error.ProtocolAssertion;
@@ -1660,8 +1660,8 @@ fn verifyModel(
     for (rows) |term| {
         const binding = tripleValue(term) orelse
             return error.ProtocolAssertion;
-        if (!(isKeyword(binding.slot1, "kernel/asserts") or
-            isKeyword(binding.slot1, "kernel/retracts")))
+        if (!(isKeyword(binding.t2, "kernel/asserts") or
+            isKeyword(binding.t2, "kernel/retracts")))
             return error.ProtocolAssertion;
     }
 
@@ -1709,8 +1709,8 @@ fn verifyObservationModel(
     var logical_count: usize = 0;
     for (actual) |term| {
         const candidate = tripleValue(term) orelse return error.ProtocolAssertion;
-        if (isKeyword(candidate.slot1, "kernel/recorded-at") or
-            isKeyword(candidate.slot1, "kernel/asserted-by")) continue;
+        if (isKeyword(candidate.t2, "kernel/recorded-at") or
+            isKeyword(candidate.t2, "kernel/asserted-by")) continue;
         logical_count += 1;
     }
     if (logical_count != model.live.items.len) return error.ProtocolAssertion;
@@ -1718,8 +1718,8 @@ fn verifyObservationModel(
         var found = false;
         for (actual) |term| {
             const candidate = tripleValue(term) orelse continue;
-            if (isKeyword(candidate.slot1, "kernel/recorded-at") or
-                isKeyword(candidate.slot1, "kernel/asserted-by")) continue;
+            if (isKeyword(candidate.t2, "kernel/recorded-at") or
+                isKeyword(candidate.t2, "kernel/asserted-by")) continue;
             found = found or log.tripleEql(expected, candidate);
         }
         if (!found) return error.ProtocolAssertion;
@@ -1742,8 +1742,8 @@ fn verifyObservationModel(
     const rows = try collectList(arena, occurrence_fields[0]);
     for (rows) |term| {
         const binding = tripleValue(term) orelse return error.ProtocolAssertion;
-        if (!(isKeyword(binding.slot1, "kernel/asserts") or
-            isKeyword(binding.slot1, "kernel/retracts")))
+        if (!(isKeyword(binding.t2, "kernel/asserts") or
+            isKeyword(binding.t2, "kernel/retracts")))
             return error.ProtocolAssertion;
     }
 
@@ -1811,9 +1811,9 @@ const DumpBuilder = struct {
             },
             .triple => |triple| {
                 const handles = [3]i64{
-                    try dump.intern(triple.slot0),
-                    try dump.intern(triple.slot1),
-                    try dump.intern(triple.slot2),
+                    try dump.intern(triple.t1),
+                    try dump.intern(triple.t2),
+                    try dump.intern(triple.t3),
                 };
                 for (dump.triples.items, 0..) |known, position| {
                     if (known.handles[0] == handles[0] and
@@ -2024,9 +2024,9 @@ fn eventTerm(
             "kernel/retracts"),
         try tripleTerm(
             arena,
-            event.triple.slot0,
-            event.triple.slot1,
-            event.triple.slot2,
+            event.triple.t1,
+            event.triple.t2,
+            event.triple.t3,
         ),
     );
 }
@@ -2112,9 +2112,9 @@ fn buildObservationChannels(
                 allocator,
                 try tripleTerm(
                     arena,
-                    event.triple.slot0,
-                    event.triple.slot1,
-                    event.triple.slot2,
+                    event.triple.t1,
+                    event.triple.t2,
+                    event.triple.t3,
                 ),
             );
         }
@@ -2128,17 +2128,17 @@ fn buildObservationChannels(
 
 fn validTransactionCoordinate(term: log.Term) bool {
     const triple = tripleValue(term) orelse return false;
-    const space = stringValue(triple.slot0) orelse return false;
-    const sequence = integerValue(triple.slot2) orelse return false;
+    const space = stringValue(triple.t1) orelse return false;
+    const sequence = integerValue(triple.t3) orelse return false;
     return space.len != 0 and
-        isKeyword(triple.slot1, "kernel/tx-sequence") and sequence >= 0;
+        isKeyword(triple.t2, "kernel/tx-sequence") and sequence >= 0;
 }
 
 fn validOccurrenceCoordinate(term: log.Term) bool {
     const triple = tripleValue(term) orelse return false;
-    const ordinal = integerValue(triple.slot2) orelse return false;
-    return validTransactionCoordinate(triple.slot0) and
-        isKeyword(triple.slot1, "kernel/op-ordinal") and ordinal >= 0;
+    const ordinal = integerValue(triple.t3) orelse return false;
+    return validTransactionCoordinate(triple.t1) and
+        isKeyword(triple.t2, "kernel/op-ordinal") and ordinal >= 0;
 }
 
 const RejectionChannels = struct {

@@ -16,9 +16,9 @@
 (defn- term-datum [value]
   (cond
     (t/triple? value)
-    [(term-datum (t/triple-slot0 value))
-     (term-datum (t/triple-slot1 value))
-     (term-datum (t/triple-slot2 value))]
+    [(term-datum (t/triple-t1 value))
+     (term-datum (t/triple-t2 value))
+     (term-datum (t/triple-t3 value))]
     (t/instant? value)
     {:instant [(t/instant-epoch-seconds value) (t/instant-nanos value)]}
     :else value))
@@ -103,8 +103,8 @@
       (if (empty? triples)
         (println (str "no triples for " (render-term subject)))
         (doseq [triple triples]
-          (println (str "  " (render-term (t/triple-slot1 triple))
-                        "  " (render-term (t/triple-slot2 triple))))))
+          (println (str "  " (render-term (t/triple-t2 triple))
+                        "  " (render-term (t/triple-t3 triple))))))
       true)))
 
 (defn- parse-query! [text]
@@ -156,7 +156,7 @@
 
 (defn- scan! [arguments]
   (when-not (= 3 (count arguments))
-    (throw (ex-info "usage: fram scan SLOT0|_ SLOT1|_ SLOT2|_" {})))
+    (throw (ex-info "usage: fram scan T1|_ T2|_ T3|_" {})))
   (let [slots (mapv #(when-not (= "_" %) (rt/parse-human-term! %)) arguments)
         response (rt/native-call! (server-port) :rpc/scan
                                   (apply wire/rpc-triple-pattern! slots))]

@@ -573,9 +573,9 @@
 
 (defn- relation-proposition? [predicate value]
   (and (t/triple? value)
-       (t/occurrence-coordinate? (t/triple-slot0 value))
-       (= predicate (t/triple-slot1 value))
-       (t/occurrence-coordinate? (t/triple-slot2 value))))
+       (t/occurrence-coordinate? (t/triple-t1 value))
+       (= predicate (t/triple-t2 value))
+       (t/occurrence-coordinate? (t/triple-t3 value))))
 
 (defn supersession-triples [db]
   (filterv #(relation-proposition? :kernel/supersedes %)
@@ -603,7 +603,7 @@
 
 (defn- suppressed-occurrences [db]
   (into #{}
-        (map t/triple-slot2)
+        (map t/triple-t3)
         (concat (supersession-triples db)
                 (filter #(relation-proposition? :kernel/withdraws %)
                         (term-store/live-propositions
@@ -622,7 +622,7 @@
     (when-not (t/transaction-coordinate? base)
       (fail! :invalid-base "OCC base must be a transaction-coordinate Triple"
              {:base base}))
-    (when-not (= (database-space db) (t/triple-slot0 base))
+    (when-not (= (database-space db) (t/triple-t1 base))
       (fail! :space-mismatch "OCC base belongs to a different SpaceId"
              {:base base :space-id (database-space db)})))
   base)
@@ -634,9 +634,9 @@
 (defn- canonical-term! [value]
   (cond
     (t/triple? value)
-    (t/triple (canonical-term! (t/triple-slot0 value))
-              (canonical-term! (t/triple-slot1 value))
-              (canonical-term! (t/triple-slot2 value)))
+    (t/triple (canonical-term! (t/triple-t1 value))
+              (canonical-term! (t/triple-t2 value))
+              (canonical-term! (t/triple-t3 value)))
     (integer? value) (long (require-i64! value "Int atom"))
     (and (number? value) (not (integer? value))) (double value)
     (t/instant? value)
@@ -663,8 +663,8 @@
       (fail! :invalid-occurrence-coordinate
              (str field " must be an occurrence-coordinate Triple")
              {field coordinate}))
-    (let [tx (t/triple-slot0 coordinate)]
-      (when-not (= (database-space db) (t/triple-slot0 tx))
+    (let [tx (t/triple-t1 coordinate)]
+      (when-not (= (database-space db) (t/triple-t1 tx))
         (fail! :space-mismatch "occurrence coordinate belongs to another SpaceId"
                {field coordinate :space-id (database-space db)})))
     (when-not (occurrence db coordinate)
@@ -823,7 +823,7 @@
                             db before (+ before (count source-operations)))
                     event-coordinates (into #{} (map kernel/occurrence-of) events)
                     withdrawals (filterv #(contains? event-coordinates
-                                                      (t/triple-slot0 %))
+                                                      (t/triple-t1 %))
                                          (frame-withdrawal-triples
                                           db all-operations))]
                 {:ok committed
@@ -942,11 +942,11 @@
         by-coordinate (into {} (map (juxt kernel/occurrence-of identity)) effective)
         selected (for [event effective
                        :let [proposition (kernel/proposition-of event)]
-                       :when (and (= view (t/triple-slot0 proposition))
-                                  (= :kernel/selects (t/triple-slot1 proposition))
+                       :when (and (= view (t/triple-t1 proposition))
+                                  (= :kernel/selects (t/triple-t2 proposition))
                                   (t/occurrence-coordinate?
-                                   (t/triple-slot2 proposition)))]
-                   (t/triple-slot2 proposition))]
+                                   (t/triple-t3 proposition)))]
+                   (t/triple-t3 proposition))]
     (into [] (keep by-coordinate) selected)))
 
 (defn- lease-value [holder expires-ms]
@@ -954,14 +954,14 @@
 
 (defn- lease-record [event]
   (let [proposition (kernel/proposition-of event)
-        value (t/triple-slot2 proposition)]
-    (when (and (= :kernel/lease (t/triple-slot1 proposition))
+        value (t/triple-t3 proposition)]
+    (when (and (= :kernel/lease (t/triple-t2 proposition))
                (t/triple? value)
-               (= :kernel/expires-at (t/triple-slot1 value))
-               (integer? (t/triple-slot2 value)))
-      {:resource (t/triple-slot0 proposition)
-       :holder (t/triple-slot0 value)
-       :expires-ms (t/triple-slot2 value)
+               (= :kernel/expires-at (t/triple-t2 value))
+               (integer? (t/triple-t3 value)))
+      {:resource (t/triple-t1 proposition)
+       :holder (t/triple-t1 value)
+       :expires-ms (t/triple-t3 value)
        :occurrence (kernel/occurrence-of event)
        :proposition proposition})))
 

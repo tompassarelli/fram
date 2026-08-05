@@ -99,10 +99,10 @@
   (cond
   (= op :tell) {:write {:op "assert" :l te :p pred :r (ref-value session pred (:object args))}}
   (= op :retract) {:write {:op "retract" :l te :p pred :r (ref-value session pred (:object args))}}
-  (= op :show) {:rows (mapv (fn [value] (->PredVal (t/triple-slot1 value) (t/triple-slot2 value))) (k/by-slot0 propositions te))}
+  (= op :show) {:rows (mapv (fn [value] (->PredVal (t/triple-t2 value) (t/triple-t3 value))) (k/by-t1 propositions te))}
   (= op :query) (let [result (q/run-syntax! propositions (:query args))]
   (if (q/result-ok? result) {:ok (q/result-rows result)} {:error (mapv q/error-message (q/result-errors result))}))
-  (= op :validate) {:rows (mapv (fn [value] (->ProfileViolation (t/triple-slot0 value) (t/triple-slot2 value))) (k/lint-declared-profile propositions (store/space-id ctx)))}
+  (= op :validate) {:rows (mapv (fn [value] (->ProfileViolation (t/triple-t1 value) (t/triple-t3 value))) (k/lint-declared-profile propositions (store/space-id ctx)))}
   (= op :upsert-form) {:edit {:op "upsert-form" :module (:module args) :form (:form args)}}
   (= op :set-body) {:edit {:op "set-body" :module (:module args) :name (:name args) :body (:body args)}}
   (= op :rename-def) {:edit {:op "rename" :module (:module args) :name (:name args) :new-name (:new-name args)}}

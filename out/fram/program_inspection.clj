@@ -98,17 +98,17 @@
   (str file "#" node))
 
 (defn- index-by [predicate triples]
-  (reduce (fn [result [slot0 slot1 slot2]]
-            (if (= predicate slot1) (assoc result slot0 slot2) result))
+  (reduce (fn [result [t1 t2 t3]]
+            (if (= predicate t2) (assoc result t1 t3) result))
           {} triples))
 
 (defn- derive-block [{:keys [file triples]}]
   (let [kinds (index-by "form-kind" triples)
         names (index-by "name" triples)
         calls (index-by "calls" triples)
-        children (reduce (fn [result [slot0 slot1 slot2]]
-                           (if (= "child" slot1)
-                             (update result slot0 (fnil conj []) slot2)
+        children (reduce (fn [result [t1 t2 t3]]
+                           (if (= "child" t2)
+                             (update result t1 (fnil conj []) t3)
                              result))
                          {} triples)
         child-set (set (mapcat identity (vals children)))

@@ -252,7 +252,7 @@
          state: SearchBuildState (->SearchBuildState [] [] {} {})]
     (if (>= handle (count rows))
       state
-      (let [value: Any (t/triple-slot2 (nth rows handle))]
+      (let [value: Any (t/triple-t3 (nth rows handle))]
         (if (string? value)
           (let [tokens: (Vec String) (word-tokens value)
                 normalized: String (lower value)
@@ -822,8 +822,8 @@
   (let [rows: (Vec t/Triple) (textsearchsource-rows source)]
     (mapv (fn [handle: Int] -> (Vec Any)
             (let [proposition: t/Triple (nth rows handle)]
-              [(t/triple-slot0 proposition)
-               (t/triple-slot1 proposition)
+              [(t/triple-t1 proposition)
+               (t/triple-t2 proposition)
                needle]))
           handles)))
 
@@ -844,8 +844,8 @@
               (recur
                (inc position)
                (conj result-rows
-                     [(t/triple-slot0 proposition)
-                      (t/triple-slot1 proposition)
+                     [(t/triple-t1 proposition)
+                      (t/triple-t2 proposition)
                       needle
                       (textsearchscoreresult-score score-result)])))))))))
 

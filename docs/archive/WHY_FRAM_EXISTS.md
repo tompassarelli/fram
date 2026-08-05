@@ -18,7 +18,7 @@ Term   := Atom | Triple
 Triple := (Term, Term, Term)
 ```
 
-A Triple can occupy `slot0`, `slot1`, or `slot2` of another Triple. The slots
+A Triple can occupy `t1`, `t2`, or `t3` of another Triple. The positions
 have no kernel-assigned roles. This gives Fram recursive propositions,
 coordinates, history, and metadata without a privileged attribute position or a
 second statement-object mechanism.
@@ -119,7 +119,7 @@ The FRAMLOG and FRAMRPC codecs preserve that boundary exactly.
 “Turtles” means *turtles all the way down*: prefer uniform recursive Triples
 where the model permits. It is an architectural prior, not a type, row, id, or
 log format. Code therefore says `Term`, `Triple`, `TripleRow`, and
-`slot0`/`slot1`/`slot2`. The binding terminology decision is recorded in
+`t1`/`t2`/`t3`. The binding terminology decision is recorded in
 [`naming.md`](../naming.md).
 
 ## Decision

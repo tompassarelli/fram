@@ -30,7 +30,7 @@
         (and (txn/mint-coordinate? node-a) (t/term? node-a) (not (int? node-a))))
 (check! "two nodes minted by one builder have distinct Term identities"
         (and (not= node-a node-b)
-             (= (t/triple-slot0 node-a) (t/triple-slot0 node-b))))
+             (= (t/triple-t1 node-a) (t/triple-t1 node-b))))
 (check! "predicate identity accepts a non-Int Term"
         (= [node-b]
            (mapv rr/event-value
@@ -59,7 +59,7 @@
         (= #{[node-a predicate node-b] [17 predicate node-a] [node-a "line" 42]}
            (set (map (fn [event]
                        (let [p (rot/proposition-of event)]
-                         [(t/triple-slot0 p) (t/triple-slot1 p) (t/triple-slot2 p)]))
+                         [(t/triple-t1 p) (t/triple-t2 p) (t/triple-t3 p)]))
                      (rot/all-occurrences committed-view)))))
 
 (rr/update-single! context node-a predicate 99)
@@ -72,7 +72,7 @@
 (check! "the update compiler retires and asserts in one transaction"
         (and (= 1 (- (c/transaction-count store) transactions-before-update))
              (= [99]
-                (rot/values (rot/by-slot01 (rot/project store) node-a predicate)))))
+                (rot/values (rot/by-t12 (rot/project store) node-a predicate)))))
 
 ;; ---------------------------------------------- EDN boundary + verb + emit
 (def input (java.io.File/createTempFile "fram-s2-authoring-" ".edn"))
