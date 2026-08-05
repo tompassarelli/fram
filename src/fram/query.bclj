@@ -1133,6 +1133,15 @@
           (aggregate-value rows spec))
         specs))
 
+(defn- append-aggregate-values
+  [row: d/Tuple
+   values: (Vec NumericAtom)] -> d/Tuple
+  (reduce (fn
+            [current: d/Tuple
+             value: NumericAtom] -> d/Tuple
+            (conj current value))
+          row values))
+
 (defn- having-passes?
   [row: d/Tuple
    grouping-count: Int
@@ -1169,7 +1178,7 @@
                          key (aggregategroup-key group)
                          members (aggregategroup-members group)
                          values (aggregate-values members (findspec-aggregates find))]
-                     (conj acc (vec (concat key values)))))
+                     (conj acc (append-aggregate-values key values))))
                  [] (aggregategroups-order groups))
                 survivors
                 (filterv (fn [row: d/Tuple] -> Bool
