@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # bench/beyond-ram/run.sh — FRAM_MMAP_IMAGE RSS bench driver (thread 019f82d9).
-# Generates one synthetic code-graph corpus, then boots THREE measured daemons
+# Generates one synthetic code-graph corpus, then boots THREE measured servers
 # SEQUENTIALLY (fresh JVM each, so heaps + RSS don't cross-contaminate) and prints
 # a comparison table:
 #   off     baseline (whole-log fold + warm cache)
 #   on      FRAM_MMAP_IMAGE mmap-cold, NO whole-corpus op (the RSS scenario)
 #   on-mat  mmap-cold + one whole-corpus op (documents lazy-materialize cost)
-# The daemon runs on the JVM (clojure -M) — the representative runtime, matching prod.
+# The server runs on the JVM (clojure -M) — the representative runtime, matching prod.
 #   BENCH_FACTS=1000000 bench/beyond-ram/run.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

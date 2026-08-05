@@ -1,7 +1,12 @@
 # Index-rotations benchmark (thread 019f9e66)
 
+This is a retained 2026-07 benchmark receipt. Its flat-log runners and
+`FRAM_SNAPSHOT_BOOT` mode were removed; commands and paths below are historical
+reproduction coordinates, not instructions for the current FRAMRPC/FRAMLOG
+server.
+
 Measures the three covering-rotations bars against an ISOLATED scratch fram
-home — never the live daemon, never :7977. Copy the >=80MB replayed corpus
+home — never the live server, never :7977. Copy the >=80MB replayed corpus
 first:
 
 ```
@@ -13,7 +18,7 @@ cp ~/.local/state/north/backups/pre-clean-slate-20260726-220841/telemetry.log \
 ```
 
 Sandbox env vars `FRAM_LOG`/`FRAM_TELEMETRY_LOG`/`FRAM_SINGLE_VALUED` leak the
-live corpus paths into every daemon boot in this environment — unset them
+live corpus paths into every server boot in this environment — unset them
 before running (`env -u FRAM_LOG -u FRAM_TELEMETRY_LOG -u FRAM_SINGLE_VALUED`).
 
 ## Bar 1 + bar 2: cold query + write throughput
@@ -23,7 +28,7 @@ bb -cp out bench/index-rotations/cold-query-and-write-throughput.clj before 8931
 bb -cp out bench/index-rotations/cold-query-and-write-throughput.clj after  8932   # on this branch
 ```
 
-Boots a fresh daemon over a reset copy of the pristine corpus, measures cold
+Boots a fresh server over a reset copy of the pristine corpus, measures cold
 query latency per workload shape (predicate scan / object scan / 2-literal
 join / subject pull / non-simple 2-rule scan — the last is the one query
 shape that bypasses the incrementally-maintained `:idx` cache and used to pay
@@ -93,13 +98,13 @@ telemetry-routed subset excluded by design):
   read + JVM start dominate at this scale — the speedup is structural
   (O(tail) not O(corpus)) and grows with corpus size, not yet visible as a
   wall-clock win on this ~150k-fact slice. Log-split routing (the live
-  daemon's actual layout: `coordination.log` + `telemetry.log`) forces
-  whole-log-merge fold unconditionally regardless of `FRAM_SNAPSHOT_BOOT`.
+  then-current server's actual layout: `coordination.log` + `telemetry.log`)
+  forces whole-log-merge fold unconditionally regardless of `FRAM_SNAPSHOT_BOOT`.
   Horizon-2 removed that split-routing limitation.
 
 ## Horizon-2 snapshot boot result (2026-07-28)
 
-Scratch copies of the current canonical logs, never the live daemon/files:
+Scratch copies of the then-canonical logs, never the live server/files:
 coordination 23 MiB + telemetry 33 MiB, 203,700 visible facts, version 206,993.
 Host load was 13.19 / 11.95 / 9.94 on 24 CPUs, so timings are directional.
 

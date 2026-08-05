@@ -7,15 +7,15 @@
 ;; thread 019fa01d-ee47-7344-ba27-e7b0e63c86d2
 ;;
 ;; DataScript is an in-process embedded library, not a server -- there is no
-;; daemon/socket boundary to cross, so this script drives it directly in the
+;; server/socket boundary to cross, so this script drives it directly in the
 ;; SAME jvm process (no bin/fram-server involved on this side). The corpus is
 ;; folded to its final live-fact set with fram's OWN fold code
-;; (fram.rt/read-log + fram.fold/fold -- the exact function the daemon calls
-;; at boot) so both systems see byte-identical input facts; only the storage
-;; engine differs.
+;; (fram.rt/read-log + fram.fold/fold -- the exact function the benchmarked
+;; server called at boot) so both systems see byte-identical input facts; only
+;; the storage engine differs.
 ;;
 ;; fram's own numbers are NOT reproduced by this script (fram needs its
-;; daemon+socket harness, bench/index-rotations/cold-query-and-write-throughput.clj) --
+;; server+socket harness, bench/index-rotations/cold-query-and-write-throughput.clj) --
 ;; run that separately; this script prints the DataScript column, and
 ;; run-all.sh stitches both into one table.
 ;;
@@ -39,7 +39,7 @@
 (def out (atom []))
 (defn emit! [k v] (swap! out conj [k v]) (println (format "%-34s %s" (str k) v)))
 
-;; --- load + fold the SAME corpus fram's daemon folds at boot ----------------
+;; --- load + fold the SAME corpus fram's benchmarked server folded at boot --
 (defn load-corpus! []
   (let [raw (into (rt/read-log (str home "/coordination.log"))
                   (rt/read-log (str home "/telemetry.log")))
