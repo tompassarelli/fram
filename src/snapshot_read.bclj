@@ -6,7 +6,10 @@
 ;; OCC, leases, locks, queues, promises, fsync, and group commit remain in the
 ;; server runtime. This module owns only read-time derivations over database state.
 ;; ============================================================================
-(ns snapshot-read (:require [fram.store :as c] [fram.schema :as s]))
+(ns snapshot-read
+  (:require [fram.store :as c]
+            [fram.schema :as s]
+            [fram.types :as t]))
 
 (define-mode strict)
 
@@ -31,8 +34,8 @@
     0
     (map (fn [cid: Int] -> Int (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
-(defn current-seq [ctx: (Atom fram.types/TermStore)] -> Int
-  (c/current-sequence ctx))
+(defn current-seq [ctx: (Atom t/TermStore)] -> Int
+  (dec (t/termstore-next-sequence (deref ctx))))
 
 (defn agent-of
   [ctx: (Atom fram.types/TermStore)
