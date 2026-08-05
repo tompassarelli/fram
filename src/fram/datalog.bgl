@@ -47,12 +47,18 @@
 (defalias Substitution (Map String Any))
 (defalias HandleBucket (Map Any (Vec Int)))
 (defalias PositionIndex (Map Int HandleBucket))
-(defalias HandleTrie (Map Any Any))
+(defalias HandleTrieLeaf (Map Any (Vec Int)))
+(defalias HandleTrieBranch (Map Any HandleTrieLeaf))
+(defalias HandleTrie (Map Any HandleTrieBranch))
 
 (defrecord QueryEvaluationContext
   [control: QueryControl?
    error: (Atom QueryEvaluationError?)])
 (defrecord QueryEvaluationResult [db: Db error: QueryEvaluationError?])
+
+(defrecord BuiltinValueResult
+  [int-value: Int?
+   double-value: Double?])
 
 (defrecord OccurrenceCandidateSource
   [root: t/TermStore
@@ -251,7 +257,13 @@
                      [:else nil])]
           (if (nil? code)
             true
-            (let [message (str "query evaluation stopped: " (name code))]
+            (let [message
+                  (cond
+                    [(= code :query-cancelled)
+                     "query evaluation stopped: query-cancelled"]
+                    [(= code :query-work-limit)
+                     "query evaluation stopped: query-work-limit"]
+                    [:else "query evaluation stopped: query-time-limit"])]
               (record-query-evaluation-error!
                context
                (->QueryEvaluationError
@@ -416,36 +428,96 @@
                [(= operator :ge) (>= left-number right-number)]
                [:else false])))]))))
 
+(defn- integer-builtin-value
+  [operator: Keyword
+   left: Int
+   right: Int] -> Int
+  (cond
+    [(= operator :mod) (mod left right)]
+    [(= operator :+) (+ left right)]
+    [(= operator subtract-operator) (- left right)]
+    [:else (* left right)]))
+
+(defn- double-builtin-value
+  [operator: Keyword
+   left: Double
+   right: Double] -> Double
+  (cond
+    [(= operator :/) (/ left right)]
+    [(= operator :+) (+ left right)]
+    [(= operator subtract-operator) (- left right)]
+    [:else (* left right)]))
+
 (defn- builtin-value
   [operator: Keyword
    left: Any
-   right: Any] -> Any
+   right: Any] -> BuiltinValueResult
   (let [left-int (integer-value left)
         right-int (integer-value right)
         left-number (numeric-value left)
-        right-number (numeric-value right)]
+        right-number (numeric-value right)
+        invalid: BuiltinValueResult (->BuiltinValueResult nil nil)]
     (cond
       [(= operator :mod)
-       (if (or (nil? left-int) (nil? right-int) (= right-int 0))
-         nil
-         (mod left-int right-int))]
+       (if (nil? left-int)
+         invalid
+         (if (nil? right-int)
+           invalid
+           (if (= right-int 0)
+             invalid
+             (->BuiltinValueResult
+              (integer-builtin-value operator left-int right-int) nil))))]
       [(= operator :/)
-       (if (or (nil? left-number) (nil? right-number) (= right-number 0.0))
-         nil
-         (/ left-number right-number))]
+       (if (nil? left-number)
+         invalid
+         (if (nil? right-number)
+           invalid
+           (if (= right-number 0.0)
+             invalid
+             (->BuiltinValueResult
+              nil (double-builtin-value operator left-number right-number)))))]
       [(or (= operator :+) (or (= operator subtract-operator) (= operator :*)))
-       (if (and (some? left-int) (some? right-int))
-         (cond
-           [(= operator :+) (+ left-int right-int)]
-           [(= operator subtract-operator) (- left-int right-int)]
-           [:else (* left-int right-int)])
-         (if (or (nil? left-number) (nil? right-number))
-           nil
+       (if (nil? left-int)
+         (if (nil? left-number)
+           invalid
+           (if (nil? right-number)
+             invalid
+             (cond
+               [(= operator :+)
+                (->BuiltinValueResult
+                 nil (double-builtin-value operator left-number right-number))]
+               [(= operator subtract-operator)
+                (->BuiltinValueResult
+                 nil (double-builtin-value operator left-number right-number))]
+               [:else
+                (->BuiltinValueResult
+                 nil (double-builtin-value operator left-number right-number))])))
+         (if (nil? right-int)
+           (if (nil? left-number)
+             invalid
+             (if (nil? right-number)
+               invalid
+               (cond
+                 [(= operator :+)
+                  (->BuiltinValueResult
+                   nil (double-builtin-value operator left-number right-number))]
+                 [(= operator subtract-operator)
+                  (->BuiltinValueResult
+                   nil (double-builtin-value operator left-number right-number))]
+                 [:else
+                  (->BuiltinValueResult
+                   nil (double-builtin-value operator left-number right-number))])))
            (cond
-             [(= operator :+) (+ left-number right-number)]
-             [(= operator subtract-operator) (- left-number right-number)]
-             [:else (* left-number right-number)])))]
-      [:else nil])))
+             [(= operator :+)
+              (->BuiltinValueResult
+               (integer-builtin-value operator left-int right-int) nil)]
+             [(= operator subtract-operator)
+              (->BuiltinValueResult
+               (integer-builtin-value operator left-int right-int) nil)]
+             [:else
+              (->BuiltinValueResult
+               (integer-builtin-value operator left-int right-int) nil)])))]
+      [:else invalid])))
 
 (defn- builtin-results
   [literal: Literal
@@ -456,9 +528,14 @@
     (if (or (nil? left) (nil? right))
       []
       (let [result (builtin-value (literal-operator literal) left right)]
-        (if (nil? result)
-          []
-          [(assoc subst (literal-binding literal) result)])))))
+        (let [int-value (builtinvalueresult-int-value result)
+              double-value (builtinvalueresult-double-value result)]
+          (cond
+            [(some? int-value)
+             [(assoc subst (literal-binding literal) int-value)]]
+            [(some? double-value)
+             [(assoc subst (literal-binding literal) double-value)]]
+            [:else []]))))))
 
 (defn- unify-tuples-controlled!
   [arguments: (Vec QueryTerm)
@@ -700,7 +777,9 @@
    handle: Int] -> HandleBucket
   (update index key
           (fn [current: (U (Vec Int) Nil)] -> (Vec Int)
-            (conj (or current []) handle))))
+            (if (nil? current)
+              [handle]
+              (conj current handle)))))
 
 (defn- add-position-handles
   [index: PositionIndex
@@ -729,21 +808,66 @@
            (assoc first-node second-key
                   (assoc second-node third-key (conj leaf handle))))))
 
-(defn- trie-node-handles [node: Any] -> (Vec Int)
-  (cond
-    [(nil? node) []]
-    [(vector? node) node]
-    [(map? node)
-     (reduce (fn [handles: (Vec Int) child: Any] -> (Vec Int)
-               (into handles (trie-node-handles child)))
-             [] (vec (vals node)))]
-    [:else []]))
+(defn- add-handle-values
+  [handles: (Set Int)
+   values: (Vec Int)] -> (Set Int)
+  (reduce (fn
+            [current: (Set Int)
+             handle: Int] -> (Set Int)
+            (conj current handle))
+          handles values))
 
-(defn- trie-probe [trie: HandleTrie prefix: (Vec Any)] -> (Vec Int)
-  (loop [node: Any trie remaining prefix]
-    (if (or (nil? node) (empty? remaining))
-      (trie-node-handles node)
-      (recur (get node (first remaining)) (rest remaining)))))
+(defn- ordered-handles [handles: (Set Int)] -> (Vec Int)
+  (sort (vec handles)))
+
+(defn- trie-leaf-handles [node: HandleTrieLeaf] -> (Vec Int)
+  (ordered-handles
+   (reduce-kv (fn
+                [handles: (Set Int)
+                 key: Any
+                 child: (Vec Int)] -> (Set Int)
+                (add-handle-values handles child))
+              #{} node)))
+
+(defn- trie-branch-handles [node: HandleTrieBranch] -> (Vec Int)
+  (ordered-handles
+   (reduce-kv (fn
+                [handles: (Set Int)
+                 key: Any
+                 child: HandleTrieLeaf] -> (Set Int)
+                (add-handle-values handles (trie-leaf-handles child)))
+              #{} node)))
+
+(defn- trie-node-handles [node: HandleTrie] -> (Vec Int)
+  (ordered-handles
+   (reduce-kv (fn
+                [handles: (Set Int)
+                 key: Any
+                 child: HandleTrieBranch] -> (Set Int)
+                (add-handle-values handles (trie-branch-handles child)))
+              #{} node)))
+
+(defn- trie-probe
+  [trie: HandleTrie
+   prefix: (Vec Any)] -> (Vec Int)
+  (let [depth (count prefix)]
+    (cond
+      [(= 0 depth) (trie-node-handles trie)]
+      [(> depth 3) []]
+      [:else
+       (let [first-node: (U HandleTrieBranch Nil)
+             (get trie (nth prefix 0))]
+         (if (nil? first-node)
+           []
+           (if (= 1 depth)
+             (trie-branch-handles first-node)
+             (let [second-node: (U HandleTrieLeaf Nil)
+                   (get first-node (nth prefix 1))]
+               (if (nil? second-node)
+                 []
+                 (if (= 2 depth)
+                   (trie-leaf-handles second-node)
+                   (get second-node (nth prefix 2) [])))))))])))
 
 (defn- empty-candidate-source [] -> CandidateSource
   (->CandidateSource [] {} {} {} {} nil nil))
@@ -892,14 +1016,15 @@
   [source: CandidateSource
    arguments: (Vec QueryTerm)
    subst: Substitution] -> (U (Vec Int) Nil)
-  (loop [position 0 best: (U (Vec Int) Nil) nil found false]
+  (loop [position 0 best: (Vec Int) [] found false]
     (if (>= position (count arguments))
       (if found best nil)
       (let [value (bound-term-value (nth arguments position) subst)]
         (if (nil? value)
           (recur (inc position) best found)
-          (let [candidate
-                (get (get (candidatesource-positions source) position {}) value [])]
+          (let [bucket: HandleBucket
+                (get (candidatesource-positions source) position {})
+                candidate: (Vec Int) (get bucket value [])]
             (recur (inc position)
                    (if (or (not found) (< (count candidate) (count best)))
                      candidate best)
