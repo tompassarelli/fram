@@ -14,13 +14,13 @@
 
 (require fram.store :as store)
 
-(defalias Bucket (Map Any (Vec t/Triple)))
+(defalias Bucket (Map (Vec Any) (Vec t/Triple)))
 
 (defrecord Rotation
   [space-id: String
    version: Int
    events: (Vec t/Triple)
-   by-occurrence: (Map Any t/Triple)
+   by-occurrence: (Map t/Triple t/Triple)
    spo: Bucket
    pos: Bucket
    osp: Bucket])
@@ -29,7 +29,7 @@
 
 (def empty-bucket: Bucket {})
 
-(def empty-occurrences: (Map Any t/Triple) {})
+(def empty-occurrences: (Map t/Triple t/Triple) {})
 
 (defn occurrence-of [event: t/Triple] -> t/Triple (t/triple-slot0 event))
 
@@ -48,7 +48,7 @@
 
 (defn- bucket-add
   [bucket: Bucket
-   key: Any
+   key: (Vec Any)
    event: t/Triple] -> Bucket
   (assoc bucket key (conj (get bucket key empty-events) event)))
 
@@ -59,7 +59,7 @@
 
 (defn- bucket-del
   [bucket: Bucket
-   key: Any
+   key: (Vec Any)
    event: t/Triple] -> Bucket
   (let [remaining: (Vec t/Triple) (without-event (get bucket key empty-events) event)]
     (if (empty? remaining) (dissoc bucket key) (assoc bucket key remaining))))
@@ -185,12 +185,12 @@
 
 (defn live-occurrence?
   [rotation: Rotation
-   occurrence: Any] -> Bool
+   occurrence: t/Triple] -> Bool
   (contains? (rotation-by-occurrence rotation) occurrence))
 
 (defn event-at
   [rotation: Rotation
-   occurrence: Any] -> t/Triple?
+   occurrence: t/Triple] -> t/Triple?
   (get (rotation-by-occurrence rotation) occurrence))
 
 (defn newest-first [events: (Vec t/Triple)] -> (Vec t/Triple)
