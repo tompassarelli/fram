@@ -2,7 +2,6 @@
 
 (ns fram.native-dispatch
   (:require [commit-plan :as plan]
-            [snapshot-read :as snapshot]
             [fram.native-lease-ops :as lease]
             [fram.native-query-ops :as query-ops]
             [fram.native-wire-codec :as native-wire]
@@ -103,24 +102,54 @@
 (defn rpc-record [tag: Keyword fields: (Vec Any)] -> t/Triple
   (t/triple tag (rpc-list fields) :rpc/record))
 
+(defn rpc-triple-list [values: (Vec t/Triple)] -> Any
+  (reduce
+   (fn
+     [tail: Any
+      value: t/Triple] -> Any
+     (t/triple :rpc/list value tail))
+   :rpc/list-end
+   (reverse values)))
+
 (defn rpc-action-result
   [input-index: Int
    changed: Bool
-   occurrences: (Vec Any)] -> t/Triple
+   occurrences: (Vec t/Triple)] -> t/Triple
   (rpc-record :rpc/action-result
-              [input-index changed (rpc-list occurrences)]))
+              [input-index changed (rpc-triple-list occurrences)]))
 
-(defn rpc-mutation-result [results: (Vec Any)] -> t/Triple
-  (rpc-record :rpc/mutation-result [(rpc-list results)]))
+(defn rpc-mutation-result [results: (Vec t/Triple)] -> t/Triple
+  (rpc-record :rpc/mutation-result [(rpc-triple-list results)]))
 
-(defn rpc-triples [values: (Vec Any)] -> t/Triple
-  (rpc-record :rpc/triples [(rpc-list values)]))
+(defn rpc-triples [values: (Vec t/Triple)] -> t/Triple
+  (rpc-record :rpc/triples [(rpc-triple-list values)]))
 
-(defn rpc-status [live-count: Int cache-stats: (Vec Int)] -> t/Triple
-  (rpc-record
-   :rpc/status
-   [:ready live-count :rpc/native
-    (rpc-record :rpc/result-cache cache-stats)]))
+(defn rpc-int-list [values: (Vec Int)] -> Any
+  (reduce
+   (fn
+     [tail: Any
+      value: Int] -> Any
+     (t/triple :rpc/list value tail))
+   :rpc/list-end
+   (reverse values)))
+
+(defn rpc-status
+  [live-count: Int
+   cache-stats: (Vec Int)] -> t/Triple
+  (let [cache-record: t/Triple
+        (t/triple :rpc/result-cache
+                  (rpc-int-list cache-stats)
+                  :rpc/record)]
+    (t/triple
+     :rpc/status
+     (t/triple
+      :rpc/list :ready
+      (t/triple
+       :rpc/list live-count
+       (t/triple
+        :rpc/list :rpc/native
+        (t/triple :rpc/list cache-record :rpc/list-end))))
+     :rpc/record)))
 
 (defn read-list [value: Any] -> ValuesResult
   (loop [cursor value values: (Vec Any) [] count-value 0]
@@ -164,7 +193,7 @@
 (defn response
   [request: t/RpcRequest
    served-version: Int
-   payload: Any] -> t/RpcResponse
+   payload: t/Term] -> t/RpcResponse
   (t/->RpcResponse (t/rpcrequest-space request)
                    (t/rpcrequest-op request)
                    served-version nil nil payload))
@@ -173,7 +202,7 @@
   [request: t/RpcRequest
    served-version: Int
    page: t/RpcPageResponse
-   payload: Any] -> t/RpcResponse
+   payload: t/Term] -> t/RpcResponse
   (t/->RpcResponse (t/rpcrequest-space request)
                    (t/rpcrequest-op request)
                    served-version page nil payload))
@@ -200,7 +229,7 @@
 (defn unit-response
   [request: t/RpcRequest
    served-version: Int
-   payload: Any] -> t/RpcResponse
+   payload: t/Term] -> t/RpcResponse
   (if (= :rpc/unit (t/rpc-request-payload-value request))
     (response request served-version payload)
     (error-response request served-version :rpc-invalid-payload false
@@ -382,15 +411,18 @@
                                  (subvec rows offset end)
                                  done (= end (count rows))
                                  ordinal (scancursorresult-ordinal cursor)
-                                 next-cursor
+                                 page-response: t/RpcPageResponse
                                  (if done
-                                   nil
-                                   (scan-cursor
-                                    (t/rpcrequest-space request)
-                                    snapshot-version (inc ordinal) end payload))
-                                 page-response
-                                 (t/->RpcPageResponse
-                                  ordinal next-cursor done)]
+                                   (t/->RpcPageResponse ordinal nil true)
+                                   (let [next-cursor: t/Term
+                                         (scan-cursor
+                                          (t/rpcrequest-space request)
+                                          snapshot-version
+                                          (inc ordinal)
+                                          end
+                                          payload)]
+                                     (t/->RpcPageResponse
+                                      ordinal next-cursor false)))]
                              (paged-response
                               request snapshot-version page-response
                               (rpc-triples selected)))))))])))))))))
@@ -434,8 +466,9 @@
         (let [parsed: ActionResult (parse-action (first remaining) index)
               action (actionresult-action parsed)]
           (if (and (actionresult-ok parsed) action)
-            (recur (vec (rest remaining)) (inc index)
-                   (conj actions action))
+            (let [present-action: Action action]
+              (recur (vec (rest remaining)) (inc index)
+                     (conj actions present-action)))
             (actions-error
              (or (actionresult-code parsed) :rpc-invalid-payload)
              (or (actionresult-message parsed)
@@ -564,8 +597,8 @@
 (defn mutation-results
   [transaction: t/Triple?
    decisions: (Vec Decision)] -> t/Triple
-  (let [results: (Vec Any)
-        (loop [remaining decisions ordinal 0 values: (Vec Any) []]
+  (let [results: (Vec t/Triple)
+        (loop [remaining decisions ordinal 0 values: (Vec t/Triple) []]
           (if (empty? remaining)
             values
             (let [decision: Decision (first remaining)
@@ -606,7 +639,7 @@
           (do
             (schema/refresh! session)
             (response
-             request (snapshot/current-seq root)
+             request (store/current-sequence root)
              (mutation-results transaction
                                (preparedmutation-decisions prepared)))))))))
 
@@ -706,7 +739,7 @@
    request: t/RpcRequest
    now-ms: Int] -> t/RpcResponse
   (let [root (schema/store-of session)
-        served-version (snapshot/current-seq root)
+        served-version (store/current-sequence root)
         operation (t/rpcrequest-op request)]
     (cond
       [(not (= (store/space-id root) (t/rpcrequest-space request)))
@@ -722,7 +755,8 @@
          (if (query-ops/nativereadresult-handled read-result)
            (let [read-response (query-ops/nativereadresult-response read-result)]
              (if read-response
-               read-response
+               (let [present-response: t/RpcResponse read-response]
+                 present-response)
                (error-response
                 request served-version :rpc/native-query-failed false
                 "native read route returned no response")))
