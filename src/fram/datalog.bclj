@@ -4,6 +4,7 @@
 (ns fram.datalog)
 (define-mode strict)
 (require fram.kernel :as kernel)
+(require fram.store :as store)
 (require fram.types :as t)
 (require fram.text-index :as text-index)
 (require fram.text-search :as text-search)
@@ -38,8 +39,12 @@
 (defalias HandleBucket (Map Any (Vec Int)))
 (defalias PositionIndex (Map Int HandleBucket))
 (defalias HandleTrie (Map Any Any))
-(defalias SourceSelector [(Vec Any) -> (Vec Int)])
-(defalias SourceResolver [Int -> Tuple])
+
+(defrecord OccurrenceCandidateSource
+  [root: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int
+   postings: (Map Int (Vec Int))])
 
 ;; Candidate handles are private positions in one immutable relation vector.
 (defrecord CandidateSource
@@ -48,11 +53,10 @@
    spo: HandleTrie
    pos: HandleTrie
    osp: HandleTrie
-   selector: SourceSelector?
-   resolver: SourceResolver?])
+   occurrence: OccurrenceCandidateSource?])
 (defrecord VirtualCandidateSource
-  [indexed: [(Vec QueryTerm) Substitution -> (Vec Tuple)]
-   scan: [(Vec QueryTerm) Substitution -> (Vec Tuple)]])
+  [relation: String
+   source: text-search/TextSearchSource])
 (defalias CandidateSourceValue (U CandidateSource VirtualCandidateSource))
 (defalias CandidateSources (Map String CandidateSourceValue))
 
@@ -330,20 +334,49 @@
               (if (some? matched) (conj acc matched) acc)))
           [] tuples))
 
-(defn- virtual-source-rows!
-  [source: VirtualCandidateSource
-   indexed: Bool
-   arguments: (Vec QueryTerm)
-   subst: Substitution] -> (Vec Tuple)
-  (let [rows-fn (if indexed
-                  (virtualcandidatesource-indexed source)
-                  (virtualcandidatesource-scan source))]
-    (rows-fn arguments subst)))
+(defn- bound-term-value
+  [term: QueryTerm
+   subst: Substitution] -> Any
+  (let [name (queryterm-variable term)]
+    (if (some? name)
+      (if (contains? subst name) (get subst name) nil)
+      (queryterm-value term))))
 
 (defn- missing-candidate-source! [relation: String] -> Any
   (throw (ex-info (str "candidate source is unavailable for relation '" relation "'")
                   {:type :fram-query-abort
                    :code :query-text-index-unavailable})))
+
+(defn- virtual-source-rows!
+  [candidate: VirtualCandidateSource
+   indexed: Bool
+   arguments: (Vec QueryTerm)
+   subst: Substitution] -> (Vec Tuple)
+  (let [relation (virtualcandidatesource-relation candidate)
+        source (virtualcandidatesource-source candidate)
+        needle (bound-term-value (nth arguments 2) subst)]
+    (cond
+      [(= relation text-match-relation)
+       (if indexed
+         (text-search/exact-indexed-rows source needle)
+         (text-search/exact-scan-rows source needle))]
+      [(= relation text-phrase-relation)
+       (if indexed
+         (text-search/phrase-indexed-rows! source needle)
+         (text-search/phrase-scan-rows! source needle))]
+      [(= relation text-substring-relation)
+       (if indexed
+         (text-search/substring-indexed-rows! source needle)
+         (text-search/substring-scan-rows! source needle))]
+      [(= relation text-stem-relation)
+       (if indexed
+         (text-search/stem-indexed-rows! source needle)
+         (text-search/stem-scan-rows! source needle))]
+      [(= relation text-search-relation)
+       (if indexed
+         (text-search/ranked-indexed-rows! source needle)
+         (text-search/ranked-scan-rows! source needle))]
+      [:else (missing-candidate-source! relation)])))
 
 (defn- relation-results!
   [db: Db
@@ -514,12 +547,15 @@
       (recur (get node (first remaining)) (rest remaining)))))
 
 (defn- empty-candidate-source [] -> CandidateSource
-  (->CandidateSource [] {} {} {} {} nil nil))
+  (->CandidateSource [] {} {} {} {} nil))
 
-(defn external-candidate-source
-  [selector: SourceSelector
-   resolver: SourceResolver] -> CandidateSource
-  (->CandidateSource [] {} {} {} {} selector resolver))
+(defn occurrence-candidate-source
+  [root: t/TermStore
+   lower-exclusive: Int
+   upper-inclusive: Int] -> CandidateSource
+  (->CandidateSource [] {} {} {} {}
+    (->OccurrenceCandidateSource
+      root lower-exclusive upper-inclusive (store/operation-postings root))))
 
 (defn- candidate-source-add
   [relation: String
@@ -581,14 +617,6 @@
                         relation base tuples)))))
           sources relations))
 
-(defn- bound-term-value
-  [term: QueryTerm
-   subst: Substitution] -> Any
-  (let [name (queryterm-variable term)]
-    (if (some? name)
-      (if (contains? subst name) (get subst name) nil)
-      (queryterm-value term))))
-
 (defn text-relation-needle-valid?
   [relation: String
    needle: Any] -> Bool
@@ -607,45 +635,15 @@
 ;; append without changing the physical relation index.
 (defn text-candidate-sources [source: text-search/TextSearchSource] -> CandidateSources
   {text-match-relation
-   (->VirtualCandidateSource
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/exact-indexed-rows
-       source (bound-term-value (nth arguments 2) subst)))
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/exact-scan-rows
-       source (bound-term-value (nth arguments 2) subst))))
+   (->VirtualCandidateSource text-match-relation source)
    text-phrase-relation
-   (->VirtualCandidateSource
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/phrase-indexed-rows!
-       source (bound-term-value (nth arguments 2) subst)))
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/phrase-scan-rows!
-       source (bound-term-value (nth arguments 2) subst))))
+   (->VirtualCandidateSource text-phrase-relation source)
    text-substring-relation
-   (->VirtualCandidateSource
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/substring-indexed-rows!
-       source (bound-term-value (nth arguments 2) subst)))
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/substring-scan-rows!
-       source (bound-term-value (nth arguments 2) subst))))
+   (->VirtualCandidateSource text-substring-relation source)
    text-stem-relation
-   (->VirtualCandidateSource
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/stem-indexed-rows!
-       source (bound-term-value (nth arguments 2) subst)))
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/stem-scan-rows!
-       source (bound-term-value (nth arguments 2) subst))))
+   (->VirtualCandidateSource text-stem-relation source)
    text-search-relation
-   (->VirtualCandidateSource
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/ranked-indexed-rows!
-       source (bound-term-value (nth arguments 2) subst)))
-    (fn [arguments: (Vec QueryTerm) subst: Substitution] -> (Vec Tuple)
-      (text-search/ranked-scan-rows!
-       source (bound-term-value (nth arguments 2) subst))))})
+   (->VirtualCandidateSource text-search-relation source)})
 
 (defn build-text-candidates [propositions: (Vec t/Triple)] -> CandidateSources
   (text-candidate-sources
@@ -703,11 +701,15 @@
    relation: String
    arguments: (Vec QueryTerm)
    subst: Substitution] -> (U (Vec Int) Nil)
-  (let [selector (candidatesource-selector source)]
-    (if (some? selector)
-      (selector (mapv (fn [term: QueryTerm] -> Any
-                        (bound-term-value term subst))
-                      arguments))
+  (let [occurrence (candidatesource-occurrence source)]
+    (if (some? occurrence)
+      (store/operation-candidate-positions
+        (occurrencecandidatesource-root occurrence)
+        (occurrencecandidatesource-lower-exclusive occurrence)
+        (occurrencecandidatesource-upper-inclusive occurrence)
+        (bound-term-value (nth arguments 0) subst)
+        (bound-term-value (nth arguments 2) subst)
+        (occurrencecandidatesource-postings occurrence))
       (if (and (= relation triple-relation) (= 3 (count arguments)))
         (triple-prefix-handles source arguments subst)
         (positional-handles source arguments subst)))))
@@ -715,9 +717,10 @@
 (defn- source-row
   [source: CandidateSource
    handle: Int] -> Tuple
-  (let [resolver (candidatesource-resolver source)]
-    (if (some? resolver)
-      (resolver handle)
+  (let [occurrence (candidatesource-occurrence source)]
+    (if (some? occurrence)
+      (store/occurrence-tuple-at
+        (occurrencecandidatesource-root occurrence) handle)
       (nth (candidatesource-rows source) handle))))
 
 (defn- source-contains?

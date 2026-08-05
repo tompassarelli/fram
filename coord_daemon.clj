@@ -871,15 +871,7 @@
      :propositions (term-store/live-propositions context)}))
 
 (defn- occurrence-candidate-source [root lower-exclusive upper-inclusive]
-  (let [postings (atom nil)]
-    (datalog/external-candidate-source
-     (fn [values]
-       (let [known (or @postings
-                       (reset! postings (term-store/operation-postings root)))]
-         (term-store/operation-candidate-positions
-          root lower-exclusive upper-inclusive
-          (nth values 0 nil) (nth values 2 nil) known)))
-     (fn [position] (term-store/occurrence-tuple-at root position)))))
+  (datalog/occurrence-candidate-source root lower-exclusive upper-inclusive))
 
 (defn- one-triple-pattern [plan]
   (let [find (query/queryplan-find plan)
@@ -908,6 +900,17 @@
                    (some #(and (= :relation (datalog/literal-kind %))
                                (contains? datalog/text-relations
                                           (datalog/literal-relation %)))
+                         (datalog/rule-body rule)))
+                 stratum))
+         (query/queryplan-strata plan))))
+
+(defn- plan-uses-occurrence? [plan]
+  (boolean
+   (some (fn [stratum]
+           (some (fn [rule]
+                   (some #(and (= :relation (datalog/literal-kind %))
+                               (= datalog/occurrence-relation
+                                  (datalog/literal-relation %)))
                          (datalog/rule-body rule)))
                  stratum))
          (query/queryplan-strata plan))))
@@ -1576,6 +1579,7 @@
                               (retain-query-page-root!
                                version (replayed-store-root! co version)))
                      text? (plan-uses-text? plan)
+                     occurrence? (plan-uses-occurrence? plan)
                      only-text? (and text? (plan-uses-only-text-base? plan))
                      source
                      (when text?
@@ -1584,9 +1588,11 @@
                         (fn [] (term-store/live-propositions (atom root)))))
                      candidates
                      (cond->
-                      {datalog/occurrence-relation
-                       (occurrence-candidate-source
-                        root lower-exclusive version)}
+                      {}
+                       occurrence?
+                       (assoc datalog/occurrence-relation
+                              (occurrence-candidate-source
+                               root lower-exclusive version))
                        source (merge (datalog/text-candidate-sources source)))
                      snapshot-data (when-not only-text?
                                      (snapshot-image version root))

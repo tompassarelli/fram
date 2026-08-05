@@ -176,12 +176,7 @@
 (def temporal-postings (store/operation-postings temporal-root))
 
 (defn temporal-source [lower upper]
-  (d/external-candidate-source
-   (fn [values]
-     (store/operation-candidate-positions
-      temporal-root lower upper (nth values 0 nil) (nth values 2 nil)
-      temporal-postings))
-   (fn [position] (store/occurrence-tuple-at temporal-root position))))
+  (d/occurrence-candidate-source temporal-root lower upper))
 
 (defn temporal-rows [lower upper]
   (into #{}
