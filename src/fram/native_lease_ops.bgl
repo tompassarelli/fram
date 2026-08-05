@@ -164,9 +164,9 @@
                        (and (integer? (t/triple-t3 value))
                             (t/occurrence-coordinate? occurrence)))))
       (let [transaction (t/triple-t1 occurrence)
-            epoch (if (t/triple? transaction)
-                    (t/triple-t3 transaction)
-                    nil)]
+            epoch: Any (if (t/triple? transaction)
+                         (t/triple-t3 transaction)
+                         nil)]
         (if (integer? epoch)
           (->LeaseState (t/triple-t1 proposition)
                         (t/triple-t1 value)
