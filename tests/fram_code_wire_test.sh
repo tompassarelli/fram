@@ -146,11 +146,11 @@ assert "fram-code-status honors GRAPH_UPSTREAM_REGISTRY override" \
 assert "fram-code-status carries the configured SpaceId" \
   'echo "$STATUS_LINE" | grep -q "space=wire-test-space"'
 
-  > "$DIR/some/adopted.bclj"
+printf '%s\n' '(define-target clj)' '(defn unregistered [] 1)' > "$DIR/some/unregistered.bclj"
 printf '%s\n' '/stale/pre-container/file.bclj' > "$REG"
 STATUS_LINE="$(GRAPH_UPSTREAM_REGISTRY="$REG" "$HERE/bin/fram-code-status" "$DIR")"
-assert "fram-code-status counts an in-band adopted file and ignores a stale registry row" \
-  'echo "$STATUS_LINE" | grep -q "canonical=1"'
+assert "fram-code-status ignores an unregistered file and a stale registry row" \
+  'echo "$STATUS_LINE" | grep -q "canonical=0"'
 
 PRIMARY="$TMP/status-main"
 LINKED="$TMP/status-linked"
