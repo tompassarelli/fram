@@ -14,7 +14,9 @@
   [ctx: (Atom fram.types/TermStore)
    te: Int
    pid: Int] -> (Vec Int)
-  (c/by-lp ctx te pid))
+  (filterv
+    (fn [cid: Int] -> Bool (c/live? ctx cid))
+    (c/raw-by-lp ctx te pid)))
 
 (defn seq-of
   [ctx: (Atom fram.types/TermStore)
@@ -88,7 +90,7 @@
    pid: Int?] -> Int?
   (if (nil? pid)
     nil
-    (let [fcid (first (c/by-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
+    (let [fcid (first (live-cids-lp ctx cid pid)) f (if (nil? fcid) nil (c/fact-of ctx fcid)) r: Any (if (nil? f) nil (get f :r))]
       (if (int? r) r nil))))
 
 (defn withdrawal-of
@@ -138,7 +140,7 @@
                 [acc: (Set Int)
                  cid: Int] -> (Set Int) (let [f (c/fact-of ctx cid) r: Any (if (nil? f) nil (get f :r))] (if (int? r) (conj acc r) acc)))
         #{}
-        (c/by-lp ctx ve sel)))))
+        (live-cids-lp ctx ve sel)))))
 
 (defn pool-of
   [ctx: (Atom fram.types/TermStore)
