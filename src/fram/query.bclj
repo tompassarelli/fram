@@ -369,18 +369,19 @@
                                     head-relation "'"))]
                  (empty-query-errors))
                (term-errors head-arguments "rule head"))))]
-    (loop [remaining (d/rule-body rule)
+    (let [body (d/rule-body rule)]
+      (loop [position: Int 0
            bound: (Set String) (empty-string-set)
            errors: (Vec QueryError) head-errors]
-      (if (empty? remaining)
-        (vec (concat errors (unbound-errors head-arguments bound "rule head")))
-        (let [literal (first remaining)]
-          (recur (rest remaining)
-                 (set-union bound (literal-bindings literal))
-                 (vec
-                  (concat errors
-                          (concat (literal-errors literal known arities bound)
-                                  (text-literal-errors literal bound))))))))))
+        (if (>= position (count body))
+          (vec (concat errors (unbound-errors head-arguments bound "rule head")))
+          (let [literal (nth body position)]
+            (recur (inc position)
+                   (set-union bound (literal-bindings literal))
+                   (vec
+                    (concat errors
+                            (concat (literal-errors literal known arities bound)
+                                    (text-literal-errors literal bound)))))))))))
 
 (defn- arity-errors [rules: (Vec d/Rule)] -> (Vec QueryError)
   (let [arities (head-arities rules)]
@@ -1066,6 +1067,13 @@
       [(= operator :ge) (>= left-number right-number)]
       [:else false])))
 
+(defn- aggregate-values
+  [rows: (Vec d/Tuple)
+   specs: (Vec AggregateSpec)] -> (Vec NumericAtom)
+  (mapv (fn [spec: AggregateSpec] -> NumericAtom
+          (aggregate-value rows spec))
+        specs))
+
 (defn- having-passes?
   [row: d/Tuple
    grouping-count: Int
@@ -1101,10 +1109,7 @@
                            (->AggregateGroup [] []))
                          key (aggregategroup-key group)
                          members (aggregategroup-members group)
-                         values
-                         (mapv (fn [spec: AggregateSpec] -> NumericAtom
-                                 (aggregate-value members spec))
-                               (findspec-aggregates find))]
+                         values (aggregate-values members (findspec-aggregates find))]
                      (conj acc (vec (concat key values)))))
                  [] (aggregategroups-order groups))
                 survivors
