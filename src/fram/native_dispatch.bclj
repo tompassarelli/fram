@@ -6,6 +6,7 @@
             [fram.native-lease-ops :as lease]
             [fram.native-query-ops :as query-ops]
             [fram.native-wire-codec :as native-wire]
+            [fram.rotation :as rot]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -216,21 +217,6 @@
     (error-response request served-version :rpc-invalid-payload false
                     "operation payload must be :rpc/unit")))
 
-(defn option-matches?
-  [option: OptionResult
-   value: Any] -> Bool
-  (or (not (optionresult-present option))
-      (= (optionresult-value option) value)))
-
-(defn triple-matches?
-  [slot0: OptionResult
-   slot1: OptionResult
-   slot2: OptionResult
-   proposition: t/Triple] -> Bool
-  (and (option-matches? slot0 (t/triple-slot0 proposition))
-       (and (option-matches? slot1 (t/triple-slot1 proposition))
-            (option-matches? slot2 (t/triple-slot2 proposition)))))
-
 (defn parse-pattern [payload: Any] -> PatternResult
   (let [fields: ValuesResult (read-record payload :rpc/triple-pattern 3)]
     (if (not (valuesresult-ok fields))
@@ -251,15 +237,20 @@
                            "scan pattern contains a malformed option"))))))
 
 (defn scan-rows
-  [root: (Atom t/TermStore)
+  [rotation: rot/Rotation
    pattern: PatternResult] -> (Vec t/Triple)
-  (filterv
-   (fn [proposition: t/Triple] -> Bool
-     (triple-matches? (patternresult-slot0 pattern)
-                      (patternresult-slot1 pattern)
-                      (patternresult-slot2 pattern)
-                      proposition))
-   (store/live-propositions root)))
+  (let [slot0: OptionResult (patternresult-slot0 pattern)
+        slot1: OptionResult (patternresult-slot1 pattern)
+        slot2: OptionResult (patternresult-slot2 pattern)
+        events: (Vec t/Triple)
+        (rot/matching
+         rotation
+         (if (optionresult-present slot0) (optionresult-value slot0) nil)
+         (if (optionresult-present slot1) (optionresult-value slot1) nil)
+         (if (optionresult-present slot2) (optionresult-value slot2) nil))]
+    (mapv
+     (fn [event: t/Triple] -> t/Triple (rot/proposition-of event))
+     events)))
 
 (defn scan-cursor
   [space: String
@@ -315,6 +306,14 @@
         (doseq [frame frames] (store/replay-transaction! copy frame))
         copy))))
 
+(defn scan-rotation!
+  [session: schema/Session
+   version: Int] -> rot/Rotation
+  (let [root (schema/store-of session)]
+    (if (= version (store/current-sequence root))
+      (schema/view session)
+      (rot/project (historical-root! root version)))))
+
 (defn scan-response!
   [session: schema/Session
    request: t/RpcRequest
@@ -328,7 +327,7 @@
       (let [page (t/rpcrequest-page request)]
         (if (nil? page)
           (let [rows: (Vec t/Triple)
-                (scan-rows (schema/store-of session) pattern)]
+                (scan-rows (schema/view session) pattern)]
             (if (> (count rows) effective-page-limit)
               (error-response
                request current-version :rpc/native-page-required false
@@ -374,12 +373,10 @@
                              rows: (Vec t/Triple)
                              (if (query-ops/resultcachelookup-found cached)
                                (query-ops/resultcachelookup-triple-rows cached)
-                               (let [root
-                                     (historical-root!
-                                      (schema/store-of session)
-                                      snapshot-version)
-                                     built: (Vec t/Triple)
-                                     (scan-rows root pattern)]
+                               (let [built: (Vec t/Triple)
+                                     (scan-rows
+                                      (scan-rotation! session snapshot-version)
+                                      pattern)]
                                  (do
                                    (query-ops/retain-triple-result!
                                     session key built)
