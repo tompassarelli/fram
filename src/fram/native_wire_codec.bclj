@@ -453,6 +453,13 @@
                             (sha256-bytes (deref (encoder-bytes encoder)))
                             :rpc/none "")))))
 
+(defn canonical-term-byte-count! [term: Any] -> Int
+  (let [encoder (->Encoder (empty-byte-cell) (atom 0) (empty-error-cell))]
+    (append-term! encoder term 0)
+    (if (deref (encoder-error encoder))
+      0
+      (count (deref (encoder-bytes encoder))))))
+
 (defn canonical-term-sha256! [term: Any] -> String
   (let [result: TermDigestResult (canonical-term-sha256-result! term)]
     (if (termdigestresult-ok result)

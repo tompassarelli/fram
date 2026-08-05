@@ -5,6 +5,7 @@
             [snapshot-read :as snapshot]
             [fram.native-lease-ops :as lease]
             [fram.native-query-ops :as query-ops]
+            [fram.native-wire-codec :as native-wire]
             [fram.schema :as schema]
             [fram.store :as store]
             [fram.types :as t]))
@@ -123,11 +124,13 @@
 (defn rpc-triples [values: (Vec Any)] -> t/Triple
   (rpc-record :rpc/triples [(rpc-list values)]))
 
-(defn rpc-status [live-count: Int] -> t/Triple
+(defn rpc-status
+  [live-count: Int
+   cache-stats: (Vec Int)] -> t/Triple
   (rpc-record
    :rpc/status
    [:ready live-count :rpc/native
-    (rpc-record :rpc/result-cache [0 0 0 0])]))
+    (rpc-record :rpc/result-cache cache-stats)]))
 
 (defn read-list [value: Any] -> ValuesResult
   (loop [cursor value values: (Vec Any) [] count-value 0]
@@ -355,28 +358,54 @@
                     "scan cursor names a future store version")]
                   [:else
                    (let [snapshot-version (scancursorresult-version cursor)
-                         root (historical-root!
-                               (schema/store-of session) snapshot-version)
-                         rows: (Vec t/Triple) (scan-rows root pattern)
-                         offset (scancursorresult-offset cursor)]
-                     (if (> offset (count rows))
+                         digest-result: native-wire/TermDigestResult
+                         (native-wire/canonical-term-sha256-result! payload)]
+                     (if (not (native-wire/termdigestresult-ok digest-result))
                        (error-response
-                        request snapshot-version :query-cursor-mismatch false
-                        "scan cursor offset is past the result")
-                       (let [end (min (count rows) (+ offset limit))
-                             selected: (Vec t/Triple) (subvec rows offset end)
-                             done (= end (count rows))
-                             ordinal (scancursorresult-ordinal cursor)
-                             next-cursor
-                             (if done
-                               nil
-                               (scan-cursor
-                                (t/rpcrequest-space request)
-                                snapshot-version (inc ordinal) end payload))
-                             page-response
-                             (t/->RpcPageResponse ordinal next-cursor done)]
-                         (paged-response request snapshot-version page-response
-                                         (rpc-triples selected)))))])))))))))
+                        request snapshot-version :rpc-invalid-payload false
+                        (native-wire/termdigestresult-message digest-result))
+                       (let [digest
+                             (native-wire/termdigestresult-digest digest-result)
+                             key
+                             (query-ops/result-cache-key
+                              session snapshot-version -1 :rpc/scan digest)
+                             cached: query-ops/ResultCacheLookup
+                             (query-ops/result-cache-lookup! session key)
+                             rows: (Vec t/Triple)
+                             (if (query-ops/resultcachelookup-found cached)
+                               (query-ops/resultcachelookup-triple-rows cached)
+                               (let [root
+                                     (historical-root!
+                                      (schema/store-of session)
+                                      snapshot-version)
+                                     built: (Vec t/Triple)
+                                     (scan-rows root pattern)]
+                                 (do
+                                   (query-ops/retain-triple-result!
+                                    session key built)
+                                   built)))
+                             offset (scancursorresult-offset cursor)]
+                         (if (> offset (count rows))
+                           (error-response
+                            request snapshot-version :query-cursor-mismatch false
+                            "scan cursor offset is past the result")
+                           (let [end (min (count rows) (+ offset limit))
+                                 selected: (Vec t/Triple)
+                                 (subvec rows offset end)
+                                 done (= end (count rows))
+                                 ordinal (scancursorresult-ordinal cursor)
+                                 next-cursor
+                                 (if done
+                                   nil
+                                   (scan-cursor
+                                    (t/rpcrequest-space request)
+                                    snapshot-version (inc ordinal) end payload))
+                                 page-response
+                                 (t/->RpcPageResponse
+                                  ordinal next-cursor done)]
+                             (paged-response
+                              request snapshot-version page-response
+                              (rpc-triples selected)))))))])))))))))
 
 (defn action-error
   [code: Keyword
@@ -743,7 +772,9 @@
                                 "rpc/status does not support paging")
                 (unit-response
                  request served-version
-                 (rpc-status (count (store/live-propositions root)))))]
+                 (rpc-status
+                  (count (store/live-propositions root))
+                  (query-ops/result-cache-stats session))))]
              [(= :rpc/scan operation)
               (scan-response! session request served-version)]
              [(or (= :rpc/assert operation) (= :rpc/retract operation))
