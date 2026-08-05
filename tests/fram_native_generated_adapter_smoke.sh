@@ -859,7 +859,7 @@ stop_host() {
 printf 'OLD!x' >"$scratch/fram.log"
 any_port="$("$scratch/host-client" free-port)"
 (
-  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+  unset FRAM_BIND FRAM_SERVER_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_SERVER_PORT \
     FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
     FRAM_TLS_TRUSTSTORE
   export FRAM_BIND=0.0.0.0
@@ -908,7 +908,7 @@ cmp "$scratch/any.expected" "$scratch/fram.log"
 printf 'OLD!x' >"$scratch/fram.log"
 loopback_port="$("$scratch/host-client" free-port)"
 (
-  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+  unset FRAM_BIND FRAM_SERVER_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_SERVER_PORT \
     FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
     FRAM_TLS_TRUSTSTORE
   exec "$scratch/host-smoke" serve "$loopback_port" "$scratch/fram.log" \
@@ -927,7 +927,7 @@ cmp "$scratch/loopback.expected" "$scratch/fram.log"
 
 invalid_port="$("$scratch/host-client" free-port)"
 if (
-  unset FRAM_BIND FRAM_COORD_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_PORT \
+  unset FRAM_BIND FRAM_SERVER_ROLE FRAM_LISTEN_FD FRAM_LOG FRAM_SERVER_PORT \
     FRAM_SPACE_ID FRAM_TLS_KEYSTORE FRAM_TLS_PASS FRAM_TLS_PASS_FILE \
     FRAM_TLS_TRUSTSTORE
   export FRAM_BIND=192.0.2.1
