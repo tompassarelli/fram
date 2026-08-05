@@ -7,10 +7,10 @@
          '[fram.store :as c])
 
 (binding [*command-line-args* []]
-  (load-file (str (System/getProperty "user.dir") "/coord_daemon.clj")))
+  (load-file (str (System/getProperty "user.dir") "/server.clj")))
 
 (defn daemon-private [sym]
-  (var-get (ns-resolve 'coord-daemon sym)))
+  (var-get (ns-resolve 'server sym)))
 
 (def apply-ops (daemon-private 'apply-candidate-ops!))
 (def annotate-lines (daemon-private 'annotate-edit-batch-lines))
@@ -25,7 +25,7 @@
 (def bootstrap-tx (c/begin-tx! st "receipt-producer-test"))
 (s/setup! st bootstrap-tx)
 (def clone {:store st :log nil :lock (Object.)})
-(def base (coord/current-seq clone))
+(def base (database/current-seq clone))
 (def no-op-retract
   [:retract "@receipt-probe#1" "f0" "@receipt-probe#2"])
 (def advancing-assert
@@ -34,7 +34,7 @@
   (apply-ops clone [no-op-retract advancing-assert] base nil))
 (def raw-lines (get-in applied [:ok :lines]))
 (def installed-ops (get-in applied [:ok :installed-ops]))
-(def final-version (coord/current-seq clone))
+(def final-version (database/current-seq clone))
 
 (chk "a successful no-op retract is not an installed operation"
      (= [advancing-assert] installed-ops))
@@ -50,7 +50,7 @@
 (chk "existing idempotent assert behavior remains zero-movement"
      (= {:lines [] :events [] :installed-ops []} (:ok idempotent)))
 (chk "idempotent assertion leaves the clone version unchanged"
-     (= final-version (coord/current-seq clone)))
+     (= final-version (database/current-seq clone)))
 
 (def temp-dir
   (.toFile

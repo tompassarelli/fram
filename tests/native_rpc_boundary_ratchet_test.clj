@@ -37,7 +37,7 @@
                (not (re-find #"(?m)^    raw:" worker)))
           nil))
 
-(let [daemon (file-source "coord_daemon.clj")]
+(let [daemon (file-source "server.clj")]
   (check! "daemon listener has no line/EDN compatibility parser"
           (absent? daemon ["clojure.edn" "edn/read" "readLine" "io/reader"])
           nil)
@@ -52,8 +52,8 @@
                       ";; The human syntax is deliberately")]
   (check! "shared binary client section has no legacy socket dependency"
           (and native
-               (absent? native ["edn/read" "coord-request-for-log"
-                                "coord-version-for-log" "readLine"]))
+               (absent? native ["edn/read" "database-request-for-log"
+                                "database-version-for-log" "readLine"]))
           nil)
   (check! "human Term parsing is explicitly local"
           (and (str/includes? runtime "defn parse-human-term!")
@@ -71,8 +71,8 @@
   (check! "MCP public data dispatch is FRAMRPC-only"
           (and public
                (str/includes? public "fram.rt/native-call!")
-               (absent? public ["coord-request-for-log" "coord-version-for-log"
-                                "coord-assert-for-log" "coord-retract-for-log"
+               (absent? public ["database-request-for-log" "database-version-for-log"
+                                "database-assert-for-log" "database-retract-for-log"
                                 "edn/read"]))
           nil)
   (check! "MCP runtime closure contains no graph-control implementation"
@@ -87,8 +87,8 @@
       selfcheck-runner (file-source "bin/fram-selfcheck")
       selfcheck (file-source "bin/fram-selfcheck-probe.clj")]
   (check! "CLI data client has no legacy coordinator helper"
-          (absent? fast ["coord-request-for-log" "coord-version-for-log"
-                         "coord-assert-for-log" "coord-retract-for-log"])
+          (absent? fast ["database-request-for-log" "database-version-for-log"
+                         "database-assert-for-log" "database-retract-for-log"])
           nil)
   (check! "CLI EDN use is confined to the local human query parser"
           (= 2 (count (re-seq #"(?:clojure\.edn|edn/read-string)" fast)))
@@ -96,7 +96,7 @@
   (check! "readiness and deep probes speak native version frames"
           (and (str/includes? up "native-call!")
                (str/includes? selfcheck "native-request-to!")
-               (absent? (str up selfcheck) ["coord-version-for-log" "edn/read" "readLine"]))
+               (absent? (str up selfcheck) ["database-version-for-log" "edn/read" "readLine"]))
           nil)
   (check! "deep probes bind the exact runtime engine identity"
           (and (str/includes? selfcheck-runner "native) EXPECTED_ENGINE=:rpc/native")
@@ -129,8 +129,8 @@
                (str/includes? code-on "--space-id \"$SPACE_ID\"")
                (absent? code-on ["serve-flat" "edn/read" ":edit-protocol"])
                (every? #(str/includes? ingest %)
-                       ["coord/create-triple-log!" "coord/open-coordinator!"
-                        "coord/commit!" "replace-atomically!"])
+                       ["database/create-triple-log!" "database/open-database!"
+                        "database/commit!" "replace-atomically!"])
                (str/includes? status "\"$HERE/bin/fram\" status")
                (absent? status ["wc -l" "serve-flat"]))
           nil))

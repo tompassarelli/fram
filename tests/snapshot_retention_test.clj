@@ -4,12 +4,12 @@
 ;; directory. On 2026-07-29 that directory held 102 images of ~41.8 MB — 3.7 GB
 ;; of checkpoints for a 34 MB log, never pruned.
 ;;
-;; Loads the REAL coord_daemon.clj function; a copied reimplementation would
+;; Loads the REAL server.clj function; a copied reimplementation would
 ;; drift from the code that actually deletes files.
 ;;   bb -cp out tests/snapshot_retention_test.clj
 ;; ============================================================================
 (require '[clojure.java.io :as io])
-(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "server.clj"))
 
 (def failures (atom 0))
 (def checks (atom 0))
@@ -25,29 +25,29 @@
 ;; --- ordering: seq is numeric, and "10" sorts before "9" as text ------------
 (check! "orders by seq numerically, not lexicographically"
         (= #{"snap-9.v2log"}
-           (names (coord-daemon/snapshots-to-prune (snaps 9 10 100) 2))))
+           (names (server/snapshots-to-prune (snaps 9 10 100) 2))))
 
 ;; --- retention count --------------------------------------------------------
 (check! "keeps exactly `retain` newest"
         (= #{"snap-1.v2log" "snap-2.v2log"}
-           (names (coord-daemon/snapshots-to-prune (snaps 1 2 3 4 5) 3))))
+           (names (server/snapshots-to-prune (snaps 1 2 3 4 5) 3))))
 
 (check! "fewer checkpoints than `retain` deletes nothing"
-        (empty? (coord-daemon/snapshots-to-prune (snaps 1 2) 3)))
+        (empty? (server/snapshots-to-prune (snaps 1 2) 3)))
 
 (check! "empty directory is a no-op"
-        (empty? (coord-daemon/snapshots-to-prune [] 3)))
+        (empty? (server/snapshots-to-prune [] 3)))
 
 ;; --- an image and its sidecar are ONE checkpoint -----------------------------
 ;; A .fri without its .v2log is unusable, so they must never be split.
 (check! "image and sidecar of the same seq drop together"
         (= #{"snap-1.v2log" "snap-1.fri"}
-           (names (coord-daemon/snapshots-to-prune
+           (names (server/snapshots-to-prune
                    [(f "snap-1.v2log") (f "snap-1.fri")
                     (f "snap-2.v2log") (f "snap-2.fri")] 1))))
 
 (check! "a seq PAIR counts as one retained checkpoint, not two"
-        (= 2 (count (coord-daemon/snapshots-to-prune
+        (= 2 (count (server/snapshots-to-prune
                      [(f "snap-1.v2log") (f "snap-1.fri")
                       (f "snap-2.v2log") (f "snap-2.fri")] 1))))
 
@@ -55,20 +55,20 @@
 ;; This function's output is fed straight to .delete. Anything it does not
 ;; recognise must be invisible to it, even at retain=0.
 (check! "never selects a file outside the exact snap-<digits>.<ext> shape"
-        (empty? (coord-daemon/snapshots-to-prune
+        (empty? (server/snapshots-to-prune
                  [(f "README") (f "coordination.log") (f "snap-.v2log")
                   (f "snap-1.v2log.tmp") (f "snapshot-1.v2log") (f "snap-abc.v2log")]
                  0)))
 
 (check! "retain=1 still keeps the newest"
         (= #{"snap-1.v2log" "snap-2.v2log"}
-           (names (coord-daemon/snapshots-to-prune (snaps 1 2 3) 1))))
+           (names (server/snapshots-to-prune (snaps 1 2 3) 1))))
 
 ;; --- the configured default -------------------------------------------------
 ;; 3, not 1: an interrupted or corrupt newest image must still have an intact
 ;; fallback before a boot falls all the way back to folding the log.
 (check! "default retention keeps more than one checkpoint"
-        (>= coord-daemon/snapshot-retain 2))
+        (>= server/snapshot-retain 2))
 
 (println (format "snapshot_retention: %d / %d PASS"
                  (- @checks @failures) @checks))

@@ -86,7 +86,7 @@ run_up() {
       TEST_STATE="$case_dir/state" \
       TEST_MODE="$mode" \
       TEST_SLEEP="$real_sleep" \
-      FRAM_PORT=43129 \
+      FRAM_SERVER_PORT=43129 \
       FRAM_SPACE_ID=test-space \
       FRAM_LOG="$log" \
       FRAM_STARTUP_TIMEOUT_SECONDS="$timeout_seconds" \

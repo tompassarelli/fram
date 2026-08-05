@@ -1,13 +1,13 @@
 ;; A slow read must not convoy FRAMRPC writers, and a client disconnect must
 ;; stop the delayed work instead of leaving it running for a caller that is gone.
 ;; Run from the repository root: bb -cp out tests/framrpc_latency_convoy_test.clj
-(require '[coord-daemon-wire :as wire]
+(require '[framrpc :as wire]
          '[fram.datalog :as datalog]
          '[fram.query :as query]
          '[fram.store :as store]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (def checks (atom []))
@@ -50,7 +50,7 @@
     (make-array java.nio.file.attribute.FileAttribute 0))))
 (def log-path (str (java.io.File. scratch "history.framlog")))
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (def watchdog
   (future
@@ -154,7 +154,7 @@
                                  :timeout 30000)))]
           (check! "A: the two-second read delay is observably in flight"
                   (and (deref entered 10000 nil)
-                       (some? (eventually #(pos? (count @coord-daemon/active-requests))))))
+                       (some? (eventually #(pos? (count @server/active-requests))))))
           (let [[solo-ms solo] (elapsed-ms #(write! "during-delay-solo" 0))]
             (check! (format "A: a lone write acks in %.1fms during the %dms read delay (<=%.0fms)"
                             solo-ms delay-ms solo-bound-ms)
@@ -196,7 +196,7 @@
         (check! "B: the expensive read is observably running for the connected client"
                 (some? (eventually #(and @captured
                                          (pos? (datalog/query-steps @captured))
-                                         (pos? (count @coord-daemon/active-requests))))))
+                                         (pos? (count @server/active-requests))))))
         (.close socket)
         (let [[cancel-ms reason]
               (elapsed-ms #(eventually (fn [] @(datalog/querycontrol-cancelled @captured))))
@@ -211,7 +211,7 @@
           (check! (str "B: the cancelled read stops stepping (" steps " -> " settled ")")
                   (= steps settled))
           (check! "B: the abandoned request drains from the active set"
-                  (some? (eventually #(empty? @coord-daemon/active-requests))))))
+                  (some? (eventually #(empty? @server/active-requests))))))
       (let [[post-ms response] (elapsed-ms #(write! "after-disconnect" 0))]
         (check! (format "B: a post-disconnect write still acks in %.1fms (<=%.0fms)"
                         post-ms solo-bound-ms)
@@ -249,7 +249,7 @@
 
   (finally
     (future-cancel watchdog)
-    (coord-daemon/shutdown!)
+    (server/shutdown!)
     (deref server 3000 nil)))
 
 (let [failures (remove second @checks)]

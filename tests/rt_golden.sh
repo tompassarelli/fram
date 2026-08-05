@@ -44,7 +44,7 @@ cat >"$WORK/probe.clj" <<'EOF'
                       :sha (rt/sha256-text "fram")}))
   "paths" (emit {:lock (rt/rewrite-lock-path fixture)
                   :intent (rt/rewrite-intent-path fixture)
-                  :coord-tmp (rt/rewrite-coord-tmp-path fixture)
+                  :database-tmp (rt/rewrite-database-tmp-path fixture)
                   :telem-tmp (rt/rewrite-telem-tmp-path fixture)
                   :floor (rt/rollback-floor-id)})
   "generation" (do (spit fixture (str (pr-str {:tx 1 :op "assert" :l "@log:gen" :p "generation" :r "g"}) "\n"))

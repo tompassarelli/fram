@@ -7,7 +7,7 @@ vocab-residue	bench/in-class/results/2026-07-28-index-architecture.jsonl
 vocab-residue	bench/in-class/scenario-contract.edn
 vocab-residue	bin/fram-code-status
 vocab-residue	build/generated-targets.d/00-current.tsv
-vocab-residue	coord_daemon.clj
+vocab-residue	server.clj
 vocab-residue	deploy/cloudflare/PROCEDURE.md
 vocab-residue	docs/WHY_FRAM_EXISTS.md
 vocab-residue	docs/architecture.md

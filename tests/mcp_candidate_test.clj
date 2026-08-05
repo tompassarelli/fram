@@ -63,7 +63,7 @@
 ;;      closed unless its consumer is coherently rewritten in the same batch;
 ;;      provider-first edit order is valid because only the final world matters.
 ;;
-;;   FRAM_COORD_READ_TIMEOUT_MS=180000 bb -cp out tests/mcp_candidate_test.clj
+;;   FRAM_SERVER_READ_TIMEOUT_MS=180000 bb -cp out tests/mcp_candidate_test.clj
 ;;   (run from the repo root; coherent-world verification owns the long bound)
 ;; Needs: bb + out/ + clojure (JVM daemons) + racket + beagle. Boots throwaway
 ;; coordinators; NEVER touches a live daemon (fresh high ports, hermetic tmp).
@@ -77,13 +77,13 @@
 
 (def root (System/getProperty "user.dir"))
 (when (= "1" (System/getenv "FRAM_CANDIDATE_FORWARD_CLOSURE_ONLY"))
-  (load-file (str root "/coord_daemon.clj"))
+  (load-file (str root "/server.clj"))
   (let [imports {"consumer" #{"provider-a" "provider-b"}
                  "provider-a" #{"shared"}
                  "provider-b" #{}
                  "shared" #{"consumer"}
                  "unrelated" #{}}
-        closure-fn (ns-resolve 'coord-daemon 'forward-import-closure)
+        closure-fn (ns-resolve 'server 'forward-import-closure)
         closure (closure-fn imports #{"consumer"})]
     (chk "forward closure includes every transitive and ambiguous provider"
          (= #{"consumer" "provider-a" "provider-b" "shared"} closure))
@@ -225,7 +225,7 @@
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home "BEAGLE_HOME" beagle-home
            ;; A coherent full-world verification is deliberately allowed to
            ;; take as long as its coordinator-side 120s verifier budget.
-           "FRAM_COORD_READ_TIMEOUT_MS" "180000"}
+           "FRAM_SERVER_READ_TIMEOUT_MS" "180000"}
     fram-racket (assoc "FRAM_RACKET" fram-racket)))
 
 (println "ingesting" (count modules) "nested fixture modules …")
@@ -310,7 +310,7 @@
                                        ;; legitimate stale-version writer here.
                                        "FRAM_SNAPSHOT_BOOT" "0"}
                                       extra-env)}
-                         "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
+                         "clojure" "-M" "server.clj" "serve-flat" (str port) log)]
      (loop [i 0]
        (cond
          (and (.exists (io/file outf)) (str/includes? (slurp outf) "listening on")) proc
@@ -332,31 +332,31 @@
 (def bad-daemon  (boot-daemon! bad-port bad-log))
 (def transaction-daemon (boot-daemon! transaction-port transaction-log))
 
-(defn coord-raw [port log req]
-  (rt/coord-request-for-log port log req))
-(defn coord
-  ([req] (coord main-port code-log req))
+(defn database-raw [port log req]
+  (rt/database-request-for-log port log req))
+(defn database
+  ([req] (database main-port code-log req))
   ([port log req]
    ;; Keep legacy candidate regressions focused on their original durability/OCC
    ;; subject while exercising the new hard gate. An exact first commit attempt
    ;; must say :candidate-unverified; only then does this test helper request
    ;; coordinator-owned verification and retry the byte-identical commit.
    (if (= :edit-commit (:op req))
-     (let [first-result (coord-raw port log req)]
+     (let [first-result (database-raw port log req)]
        (if (= :candidate-unverified (:code first-result))
-         (let [verified (coord-raw port log
+         (let [verified (database-raw port log
                                    {:op :edit-verify
                                     :candidate (:candidate req)})]
            (if (:ok verified)
-             (coord-raw port log req)
+             (database-raw port log req)
              verified))
          first-result))
-     (coord-raw port log req))))
-(defn cur-version [] (:version (coord {:op :version})))
-(defn transaction-coord [req]
-  (coord transaction-port transaction-log req))
+     (database-raw port log req))))
+(defn cur-version [] (:version (database {:op :version})))
+(defn transaction-database [req]
+  (database transaction-port transaction-log req))
 (defn transaction-version []
-  (:version (transaction-coord {:op :version})))
+  (:version (transaction-database {:op :version})))
 
 (defn verifier-invocation-count []
   (if (.isFile (io/file verifier-count-file))
@@ -369,13 +369,13 @@
 ;;     scoped; and selected checks still receive the complete provider overlay.
 ;; ============================================================================
 (let [configured (:configured-logs
-                  (transaction-coord {:op :edit-protocol}))]
+                  (transaction-database {:op :edit-protocol}))]
   (chk "V0: edit protocol exposes the exact single-log coordinator identity"
        (= {:coordination (.getCanonicalPath (io/file transaction-log))
            :telemetry nil}
           configured)))
 
-(let [prep (transaction-coord
+(let [prep (transaction-database
             {:op :edit-prepare
              :spec {:op "set-body" :module "src.fram.wkfix"
                     :name "double-it" :datum 6}})
@@ -388,8 +388,8 @@
                   :edn-digest (:edn-digest prep)}
       log0 (vec (read-bytes transaction-log))
       v0 (transaction-version)
-      unverified (coord-raw transaction-port transaction-log commit-req)
-      fake (coord-raw
+      unverified (database-raw transaction-port transaction-log commit-req)
+      fake (database-raw
             transaction-port transaction-log
             (assoc commit-req
                    :verification-state :verified
@@ -399,14 +399,14 @@
       (and (= v0 (transaction-version))
            (= log0 (vec (read-bytes transaction-log))))
       calls0 (verifier-invocation-count)
-      verified (coord-raw transaction-port transaction-log
+      verified (database-raw transaction-port transaction-log
                           {:op :edit-verify
                            :candidate (:candidate prep)})
-      cached (coord-raw transaction-port transaction-log
+      cached (database-raw transaction-port transaction-log
                         {:op :edit-verify
                          :candidate (:candidate prep)})
       calls1 (verifier-invocation-count)
-      commit (coord-raw transaction-port transaction-log commit-req)
+      commit (database-raw transaction-port transaction-log commit-req)
       proof (:verification verified)]
   (chk "V0: direct prepared→commit is hard-rejected with zero canonical writes"
        (and (= :candidate-unverified (:code unverified))
@@ -448,13 +448,13 @@
                            {"FRAM_EDIT_VERIFIER_REQUIRE_SOURCE"
                             "src.fram.overlaythird"})]
   (try
-    (let [prep (coord-raw overlay-port overlay-log
+    (let [prep (database-raw overlay-port overlay-log
                           {:op :edit-prepare
                            :spec {:op "set-body" :module "src.fram.overlayroot"
                                   :name "root-value" :datum 41}})
           checked (set (:checked-modules prep))
           calls0 (verifier-invocation-count)
-          verified (coord-raw overlay-port overlay-log
+          verified (database-raw overlay-port overlay-log
                               {:op :edit-verify
                                :candidate (:candidate prep)})
           calls1 (verifier-invocation-count)]
@@ -472,18 +472,18 @@
                            {"FRAM_EDIT_VERIFIER_FIXTURE_MODE" "accept"
                             "FRAM_EDIT_VERIFIER_SLEEP_MS" "1500"})]
   (try
-    (let [prep (coord-raw slow-port slow-log
+    (let [prep (database-raw slow-port slow-log
                           {:op :edit-prepare
                            :spec {:op "set-body" :module "src.fram.wkfix"
                                   :name "double-it" :datum 12}})
           verification (future
-                         (coord-raw slow-port slow-log
+                         (database-raw slow-port slow-log
                                     {:op :edit-verify
                                      :candidate (:candidate prep)}))
           deadline (+ (System/currentTimeMillis) 2000)
           active
           (loop []
-            (let [status (coord-raw slow-port slow-log
+            (let [status (database-raw slow-port slow-log
                                     {:op :edit-candidate-status
                                      :candidate (:candidate prep)})]
               (cond
@@ -492,7 +492,7 @@
                 (do (Thread/sleep 10) (recur))
                 :else status)))
           started (System/nanoTime)
-          in-progress (coord-raw slow-port slow-log
+          in-progress (database-raw slow-port slow-log
                                  {:op :edit-verify
                                   :candidate (:candidate prep)})
           elapsed-ms (/ (- (System/nanoTime) started) 1000000.0)
@@ -508,13 +508,13 @@
                 (true? (:ok completed)))))
     (finally (stop-daemon! daemon))))
 
-(let [prep (transaction-coord
+(let [prep (transaction-database
             {:op :edit-prepare
              :spec {:op "set-body" :module "src.fram.wkfix"
                     :name "double-it" :datum "\"not-an-int\""}})
-      rejected (coord-raw transaction-port transaction-log
+      rejected (database-raw transaction-port transaction-log
                           {:op :edit-verify :candidate (:candidate prep)})
-      status (transaction-coord
+      status (transaction-database
               {:op :edit-candidate-status :candidate (:candidate prep)})
       rows (->> (str/split-lines (:edn prep))
                 rest
@@ -541,19 +541,19 @@
             (vector? (:errors diagnostic))
             (string? (:stderr diagnostic)))))
 
-(let [stale-prep (transaction-coord
+(let [stale-prep (transaction-database
                   {:op :edit-prepare
                    :spec {:op "set-body" :module "src.fram.wkfix"
                           :name "double-it" :datum 7}})
-      stale-verified (coord-raw transaction-port transaction-log
+      stale-verified (database-raw transaction-port transaction-log
                                 {:op :edit-verify
                                  :candidate (:candidate stale-prep)})
-      winner (transaction-coord
+      winner (transaction-database
               {:op :edit-prepare
                :spec {:op "set-body" :module "src.fram.wkfix"
                       :name "plus-both" :datum 8}})
       winner-commit
-      (transaction-coord
+      (transaction-database
        {:op :edit-commit
         :candidate (:candidate winner)
         :version (:version winner)
@@ -562,7 +562,7 @@
         :ops-digest (:ops-digest winner)
         :edn-digest (:edn-digest winner)})
       stale-commit
-      (coord-raw
+      (database-raw
        transaction-port transaction-log
        {:op :edit-commit
         :candidate (:candidate stale-prep)
@@ -586,14 +586,14 @@
              {:op "set-body" :module "src.fram.wkfix"
               :name "plus-both" :datum 22}]
       log0 (read-bytes transaction-log)
-      prep (transaction-coord {:op :edit-prepare :specs specs})
+      prep (transaction-database {:op :edit-prepare :specs specs})
       cand-edn (str tmp "/transaction-candidate.bclj.edn")
       cand-src (str tmp "/transaction-candidate.bclj")
       _ (spit cand-edn (:edn prep))
       rendered (p/shell {:continue true :out (io/file cand-src) :err :string :env scrub-env}
                         beagle-bin "facts-roundtrip" "--render" cand-edn)
       text (when (zero? (:exit rendered)) (slurp cand-src))
-      commit (transaction-coord
+      commit (transaction-database
               {:op :edit-commit :candidate (:candidate prep)
                :version (:version prep) :module (:module prep)
                :path (:path prep) :ops-digest (:ops-digest prep)
@@ -624,24 +624,24 @@
   (chk "T0: one transaction emits exactly one durable batch envelope"
        (= 1 (count (re-seq #":fram-edit-envelope" appended)))))
 
-(let [batch (transaction-coord
+(let [batch (transaction-database
              {:op :edit-prepare
               :specs [{:op "set-body" :module "src.fram.wkfix"
                        :name "double-it" :datum 31}
                       {:op "set-body" :module "src.fram.wkfix"
                        :name "plus-both" :datum 32}]})
-      single (transaction-coord
+      single (transaction-database
               {:op :edit-prepare
                :spec {:op "set-body" :module "src.fram.wkfix"
                       :name "double-it" :datum 33}})
-      single-commit (transaction-coord
+      single-commit (transaction-database
                      {:op :edit-commit :candidate (:candidate single)
                       :version (:version single) :module (:module single)
                       :path (:path single) :ops-digest (:ops-digest single)
                       :edn-digest (:edn-digest single)})
       log-after-single (vec (read-bytes transaction-log))
       version-after-single (transaction-version)
-      batch-commit (transaction-coord
+      batch-commit (transaction-database
                     {:op :edit-commit :candidate (:candidate batch)
                      :version (:version batch) :module (:module batch)
                      :path (:path batch) :ops-digest (:ops-digest batch)
@@ -656,7 +656,7 @@
 
 (let [log0 (vec (read-bytes transaction-log))
       v0 (transaction-version)
-      duplicate (transaction-coord
+      duplicate (transaction-database
                  {:op :edit-prepare
                   :specs [{:op "set-body" :module "src.fram.wkfix"
                            :name "double-it" :datum 41}
@@ -671,10 +671,10 @@
 ;; --- spawning the MCP hermetically --------------------------------------------
 (def base-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home
-           "FRAM_COORD_READ_TIMEOUT_MS" "180000"
-           ;; graph-edit mode fences the adapter to ONE coordinator: FRAM_PORT/FRAM_LOG
+           "FRAM_SERVER_READ_TIMEOUT_MS" "180000"
+           ;; graph-edit mode fences the adapter to ONE coordinator: FRAM_SERVER_PORT/FRAM_LOG
            ;; must name the same port and canonical file as their FRAM_CODE_* twins.
-           "FRAM_LOG" code-log "FRAM_THREADS" tmp "FRAM_PORT" (str main-port)
+           "FRAM_LOG" code-log "FRAM_THREADS" tmp "FRAM_SERVER_PORT" (str main-port)
            "FRAM_MCP_PROFILE" "graph-edit-v1"
            "FRAM_GRAPH_EDIT" "1" "FRAM_FLIP" "1"
            "FRAM_CODE_PORT" (str main-port)
@@ -688,7 +688,7 @@
     (System/getenv "FRAM_RACKET") (assoc "FRAM_RACKET" (System/getenv "FRAM_RACKET"))))
 (def transaction-env
   (assoc base-env
-         "FRAM_PORT" (str transaction-port)
+         "FRAM_SERVER_PORT" (str transaction-port)
          "FRAM_CODE_PORT" (str transaction-port)
          "FRAM_LOG" transaction-log
          "FRAM_CODE_LOG" transaction-log))
@@ -796,7 +796,7 @@
 (defn transaction-binding-targets []
   (into {}
         (map (fn [nm]
-               [nm (:target (transaction-coord
+               [nm (:target (transaction-database
                              {:op :callers :module "src.fram.typedtxn" :name nm}))])
              retained-typed-bindings)))
 
@@ -988,7 +988,7 @@
               :name "shared-name" :datum 101}
              {:op "set-body" :module txbeta-module
               :name "shared-name" :datum 202}]
-      prep (transaction-coord {:op :edit-prepare :specs specs})
+      prep (transaction-database {:op :edit-prepare :specs specs})
       touched [txalpha-module txbeta-module]
       paths {txalpha-module txalpha-file txbeta-module txbeta-file}]
   (chk "T3: duplicate target spellings are scoped by module during prepare"
@@ -1064,7 +1064,7 @@
 (def use-created-without-provider-form
   "(defn use-created [x :- Int] :- Int x)")
 
-(let [prep (transaction-coord
+(let [prep (transaction-database
             {:op :edit-prepare
              :spec {:op "set-body"
                     :module txvariant-provider-module
@@ -1110,10 +1110,10 @@
       log0 (vec (read-bytes transaction-log))
       v0 (transaction-version)
       provider-first
-      (transaction-coord
+      (transaction-database
        {:op :edit-prepare :specs [provider-spec consumer-spec]})
       consumer-first
-      (transaction-coord
+      (transaction-database
        {:op :edit-prepare :specs [consumer-spec provider-spec]})
       touched [txvariant-consumer-module txvariant-provider-module]]
   (chk "T3: coherent final-world acceptance is invariant under provider/consumer edit order"
@@ -1225,7 +1225,7 @@
       expected-modules [txalpha-module txbeta-module]
       expected-paths {txalpha-module txalpha-file txbeta-module txbeta-file}
       before (read-bytes transaction-log)
-      prep (transaction-coord {:op :edit-prepare :specs specs})
+      prep (transaction-database {:op :edit-prepare :specs specs})
       req {:op :edit-commit
            :candidate (:candidate prep)
            :version (:version prep)
@@ -1234,7 +1234,7 @@
            :ops-digest (:ops-digest prep)
            :edn-digest (:edn-digest prep)}
       commit (if (:ok prep)
-               (transaction-coord req)
+               (transaction-database req)
                prep)
       after (read-bytes transaction-log)
       appended (String. ^bytes
@@ -1280,10 +1280,10 @@
     (let [{:keys [req commit expected-modules expected-paths]}
           @durable-multi-recovery
           bytes-before-retry (vec (read-bytes transaction-log))
-          recovered (transaction-coord req)
+          recovered (transaction-database req)
           bytes-after-retry (vec (read-bytes transaction-log))
           cold-targets (transaction-binding-targets)
-          reconcile (transaction-coord {:op :snapshot-reconcile})]
+          reconcile (transaction-database {:op :snapshot-reconcile})]
       (chk "T3: cold exact retry reconstructs the committed multi-module receipt from its envelope"
            (and (true? (:ok recovered))
                 (true? (:committed recovered))
@@ -1401,7 +1401,7 @@
 ;; C. STALE CAS — candidate A prepared, edit B lands (full MCP cycle), commit A
 ;;    rejects :stale-version with zero canonical operations.
 ;; ============================================================================
-(let [pa (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+(let [pa (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                           :name "double-it" :datum '(* 31 x)}})
       _ (chk "C: candidate A prepared (zero writes)" (true? (:ok pa)))
       rb (mcp-edit base-env 30 "set-body" {:module "src.fram.wkfix" :name "double-it" :body "(* 32 x)"})
@@ -1409,7 +1409,7 @@
       bytes1 (vec (read-bytes code-log))
       v1 (cur-version)
       file1 (slurp wkfix-file)
-      ca (coord {:op :edit-commit :candidate (:candidate pa) :version (:version pa)
+      ca (database {:op :edit-commit :candidate (:candidate pa) :version (:version pa)
                  :module "src.fram.wkfix" :path (:path pa)
                  :ops-digest (:ops-digest pa) :edn-digest (:edn-digest pa)})]
   (chk "C: commit A -> typed :stale-version rejection" (= :stale-version (:code ca)))
@@ -1427,16 +1427,16 @@
 ;; ============================================================================
 (let [bytes0 (vec (read-bytes code-log))
       v0 (cur-version)
-      n (:ops (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+      n (:ops (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                :name "double-it" :datum '(* 41 x)}}))
       _ (chk "D: probe candidate seals a multi-op batch (n >= 4)" (and (integer? n) (>= n 4)))
       ;; EVERY operation boundary, 0 through n inclusive — before the first op,
       ;; between every adjacent pair, and after the last op pre-install.
       boundaries (range 0 (inc n))]
   (doseq [b boundaries]
-    (let [prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+    (let [prep (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                 :name "double-it" :datum '(* 41 x)}})
-          r (coord {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+          r (database {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                     :module "src.fram.wkfix" :path (:path prep)
                     :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)
                     :inject-fail-at b})]
@@ -1446,9 +1446,9 @@
        (= bytes0 (vec (read-bytes code-log))))
   (chk "D: canonical version UNCHANGED across every injected failure" (= v0 (cur-version)))
   ;; digest tampering on a FRESH candidate also rejects with zero ops.
-  (let [prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+  (let [prep (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                               :name "double-it" :datum '(* 41 x)}})
-        r (coord {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+        r (database {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                   :module "src.fram.wkfix" :path (:path prep)
                   :ops-digest "0000000000000000" :edn-digest (:edn-digest prep)})]
     (chk "D: ops-digest tampering -> typed :digest-mismatch, zero canonical operations"
@@ -1456,9 +1456,9 @@
               (= bytes0 (vec (read-bytes code-log))))))
   ;; one clean batch commits COMPLETELY: version advances by exactly the installed
   ;; op count and the whole batch is durable in one append.
-  (let [prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+  (let [prep (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                               :name "double-it" :datum '(* 42 x)}})
-        r (coord {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+        r (database {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                   :module "src.fram.wkfix" :path (:path prep)
                   :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)})]
     (chk "D: clean batch commits completely (ok, all ops installed)"
@@ -1482,12 +1482,12 @@
 (defn recover! [log-path]
   (p/shell {:continue true :out :string :err :string :env scrub-env :dir root}
            "bb" "-cp" "out" "-e"
-           (str "(load-file \"coord_daemon.clj\") (recover-edit-journal! " (pr-str log-path) ")")))
+           (str "(load-file \"server.clj\") (recover-edit-journal! " (pr-str log-path) ")")))
 (let [pre-bytes (read-bytes code-log)
       pre-len (count pre-bytes)
-      prep (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+      prep (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                             :name "double-it" :datum '(* 51 x)}})
-      cm (coord {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+      cm (database {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                  :module "src.fram.wkfix" :path (:path prep)
                  :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)})
       _ (chk "E: reference batch committed live" (true? (:ok cm)))
@@ -1541,7 +1541,7 @@
     (let [d (boot-daemon! replay-port elog3)]
       (try
         (chk "E: rebooted daemon serves the WHOLE redone batch (version == live post-commit)"
-             (= v-after (:version (coord replay-port elog3 {:op :version}))))
+             (= v-after (:version (database replay-port elog3 {:op :version}))))
         (chk "E: journal consumed by the boot recovery" (not (.exists (io/file (str elog3 ".edit-batch")))))
         (chk "E: recovered log byte-identical to the live post-commit log"
              (= (vec post-bytes) (vec (read-bytes elog3))))
@@ -1607,11 +1607,11 @@
       v0 (cur-version)
       file0 (slurp wkfix-file)
       commit! (fn [prep extra]
-                (coord (merge {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
+                (database (merge {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                                :module "src.fram.wkfix" :path (:path prep)
                                :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)}
                               extra)))
-      prep1 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+      prep1 (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                              :name "double-it" :datum '(* 81 x)}})
       r1 (commit! prep1 {:inject-durable-fail true})]
   (chk "I: injected append/fsync failure (partial write) -> typed :durability-failure"
@@ -1638,7 +1638,7 @@
                 (= bytes0 (vec (read-bytes cp)))))))
   ;; directory-fsync failure at intent PUBLICATION: fail-closed typed rejection,
   ;; zero canonical mutation, no journal residue (nothing of the batch touched the log).
-  (let [prep2 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+  (let [prep2 (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                :name "double-it" :datum '(* 81 x)}})
         r2 (commit! prep2 {:inject-dirsync-fail true})]
     (chk "I: injected directory-fsync failure -> typed :durability-failure (fail closed, nothing committed)"
@@ -1649,7 +1649,7 @@
     (chk "I: no journal residue after the dirsync failure"
          (not (.exists (io/file (str code-log ".edit-batch"))))))
   ;; the daemon is CONSISTENT after the restores: a clean commit still lands whole.
-  (let [prep3 (coord {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
+  (let [prep3 (database {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                :name "double-it" :datum '(* 82 x)}})
         r3 (commit! prep3 {})]
     (chk "I: clean commit after the restores lands completely (daemon consistent)"
@@ -1666,18 +1666,18 @@
 (def poison-before-version
   (let [daemon (boot-daemon! poison-port poison-log)]
     (try
-      (let [v0 (:version (coord poison-port poison-log {:op :version}))
-            prep (coord poison-port poison-log
+      (let [v0 (:version (database poison-port poison-log {:op :version}))
+            prep (database poison-port poison-log
                         {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                   :name "double-it" :datum '(* 83 x)}})
-            r (coord poison-port poison-log
+            r (database poison-port poison-log
                      {:op :edit-commit :candidate (:candidate prep) :version (:version prep)
                       :module "src.fram.wkfix" :path (:path prep)
                       :ops-digest (:ops-digest prep) :edn-digest (:edn-digest prep)
                       :inject-durable-fail true :inject-restore-fail true})
-            status (coord poison-port poison-log {:op :status})
-            protocol (coord poison-port poison-log {:op :edit-protocol})
-            later (coord poison-port poison-log
+            status (database poison-port poison-log {:op :status})
+            protocol (database poison-port poison-log {:op :edit-protocol})
+            later (database poison-port poison-log
                          {:op :edit-prepare :spec {:op "set-body" :module "src.fram.wkfix"
                                                    :name "double-it" :datum '(* 84 x)}})
             mcp (run-mcp (assoc base-env
@@ -1709,7 +1709,7 @@
 (Thread/sleep 250)
 (let [daemon (boot-daemon! poison-restart-port poison-log)]
   (try
-    (let [status (coord poison-restart-port poison-log {:op :status})]
+    (let [status (database poison-restart-port poison-log {:op :status})]
       (chk "I: sole-writer restart consumes the valid recovery intent"
            (not (.exists (io/file (str poison-log ".edit-batch")))))
       (chk "I: restart deterministically lands the indeterminate batch and returns healthy"
@@ -1724,7 +1724,7 @@
 ;; ============================================================================
 (let [probe-file (str tmp "/j_probe.clj")
       _ (spit probe-file (str
-        "(load-file \"coord_daemon.clj\")\n"
+        "(load-file \"server.clj\")\n"
         "(let [dir \"" tmp "/jdir\"\n"
         "      _ (.mkdirs (java.io.File. ^String dir))\n"
         "      log (str dir \"/j.log\")\n"
@@ -1916,14 +1916,14 @@
         daemon (boot-daemon! post-port seam-log)]
     (try
       (let [datum 'pname
-            prep (coord post-port seam-log
+            prep (database post-port seam-log
                         {:op :edit-prepare
                          :spec {:op "set-body" :module "src.fram.schema"
                                 :name "cardinality" :datum datum}})
             req (candidate-commit-req prep {:inject-post-publication-at stage})
             v0 (:version prep)
             bytes0 (count (read-bytes seam-log))
-            r (coord post-port seam-log req)
+            r (database post-port seam-log req)
             final (+ v0 (:installed r))
             warning (some #(when (= stage (:stage %)) %) (:warnings r))
             committed-bytes (vec (read-bytes seam-log))]
@@ -1936,14 +1936,14 @@
                   (= v0 (:base-version r)) (= final (:version r))
                   (= stage (:stage warning))))
         (chk (str "L: " (name stage) " advanced version/log exactly and retired the journal")
-             (and (= final (:version (coord post-port seam-log {:op :version})))
+             (and (= final (:version (database post-port seam-log {:op :version})))
                   (> (count committed-bytes) bytes0)
                   (not (.exists (io/file (str seam-log ".edit-batch"))))))
         (when (= :notify stage)
           (chk "L: notify seam directly reproduces the verifier's escaped failure text"
                (= "forced post-publication notification failure" (:message warning))))
         (chk (str "L: " (name stage) " exact live retry returns same receipt with zero duplicate bytes")
-             (let [again (coord post-port seam-log req)]
+             (let [again (database post-port seam-log req)]
                (and (true? (:committed again))
                     (= (:candidate r) (:candidate again))
                     (= (:version r) (:version again))
@@ -1953,8 +1953,8 @@
         (let [restarted (boot-daemon! post-restart-port seam-log)]
           (try
             (let [restart-bytes (vec (read-bytes seam-log))
-                  recovered (coord post-restart-port seam-log req)
-                  status (coord post-restart-port seam-log {:op :status})]
+                  recovered (database post-restart-port seam-log req)
+                  status (database post-restart-port seam-log {:op :status})]
               (chk (str "L: " (name stage) " cold retry reconstructs exact committed receipt after one restart")
                    (and (true? (:ok recovered)) (true? (:committed recovered))
                         (= :committed-recovered (:code recovered))
@@ -1971,17 +1971,17 @@
       _ (write-bytes repair-log (read-bytes code-log))
       daemon (boot-daemon! post-port repair-log)]
   (try
-    (let [prep (coord post-port repair-log
+    (let [prep (database post-port repair-log
                       {:op :edit-prepare
                        :spec {:op "set-body" :module "src.fram.schema"
                               :name "cardinality" :datum 'pname}})
           req (candidate-commit-req
                prep {:inject-post-publication-permanent-at :root-swap})
           bytes0 (count (read-bytes repair-log))
-          r (coord post-port repair-log req)
-          status (coord post-port repair-log {:op :status})
-          again (coord post-port repair-log req)
-          blocked (coord post-port repair-log
+          r (database post-port repair-log req)
+          status (database post-port repair-log {:op :status})
+          again (database post-port repair-log req)
+          blocked (database post-port repair-log
                          {:op :edit-prepare
                           :spec {:op "set-body" :module "src.fram.schema"
                                  :name "cardinality" :datum 999}})]
@@ -2005,8 +2005,8 @@
       (stop-daemon! daemon)
       (let [restarted (boot-daemon! post-restart-port repair-log)]
         (try
-          (let [recovered (coord post-restart-port repair-log req)
-                healthy (coord post-restart-port repair-log {:op :status})]
+          (let [recovered (database post-restart-port repair-log req)
+                healthy (database post-restart-port repair-log {:op :status})]
             (chk "L: one restart repairs the root and reconstructs the exact committed receipt"
                  (and (= :healthy (get-in healthy [:durability :state]))
                       (= (:version r) (:version recovered) (:version healthy))
@@ -2018,14 +2018,14 @@
 (let [crash-log (str tmp "/post-append-hard-crash.log")
       _ (write-bytes crash-log (read-bytes code-log))
       daemon (boot-daemon! crash-port crash-log)
-      prep (coord crash-port crash-log
+      prep (database crash-port crash-log
                   {:op :edit-prepare
                    :spec {:op "set-body" :module "src.fram.schema"
                           :name "cardinality" :datum 'pname}})
       req (candidate-commit-req prep {:inject-crash-after-append-ack true})
       v0 (:version prep)
       bytes0 (count (read-bytes crash-log))
-      response (try (coord crash-port crash-log req)
+      response (try (database crash-port crash-log req)
                     (catch Throwable t {:transport-error (.getMessage t)}))]
   (Thread/sleep 250)
   (chk "L: hard-crash candidate is the exact three-op effective schema/cardinality batch"
@@ -2039,8 +2039,8 @@
   (let [restarted (boot-daemon! crash-restart-port crash-log)]
     (try
       (let [before-retry (vec (read-bytes crash-log))
-            recovered (coord crash-restart-port crash-log req)
-            status (coord crash-restart-port crash-log {:op :status})
+            recovered (database crash-restart-port crash-log req)
+            status (database crash-restart-port crash-log {:op :status})
             exact-final (+ v0 (:ops prep))]
         (chk "L: one restart retires the crash journal and boots the exact committed final version"
              (and (= exact-final (:version status))
@@ -2067,14 +2067,14 @@
       pre-len (count before)
       daemon (boot-daemon! post-port seal-log)]
   (try
-    (let [prep (coord post-port seal-log
+    (let [prep (database post-port seal-log
                       {:op :edit-prepare
                        :spec {:op "set-body" :module "src.fram.schema"
                               :name "cardinality" :datum 'pname}})
           req (candidate-commit-req prep {})
-          committed (coord post-port seal-log req)
+          committed (database post-port seal-log req)
           committed-bytes (vec (read-bytes seal-log))
-          retry (coord post-port seal-log req)
+          retry (database post-port seal-log req)
           after (read-bytes seal-log)
           region (String. ^bytes
                           (java.util.Arrays/copyOfRange ^bytes after pre-len (count after))
@@ -2190,7 +2190,7 @@
           _ (spit cases-file (pr-str cases))
           _ (spit probe-file
                   (str "(require '[clojure.edn :as edn])\n"
-                       "(binding [*command-line-args* []] (load-file " (pr-str (str root "/coord_daemon.clj")) "))\n"
+                       "(binding [*command-line-args* []] (load-file " (pr-str (str root "/server.clj")) "))\n"
                        "(let [cases (edn/read-string (slurp (first *command-line-args*)))]\n"
                        "  (println (pr-str (into {} (map (fn [[k v]] [k (boolean (persisted-edit-outcome (:path v) (:req v)))]) cases)))))\n"))
           probe (p/shell {:continue true :out :string :err :string :env scrub-env :dir root}
@@ -2318,7 +2318,7 @@
 ;; ============================================================================
 (def bad-env (assoc base-env "FRAM_CODE_PORT" (str bad-port) "FRAM_CODE_LOG" bad-log))
 (let [bytes0 (vec (read-bytes bad-log))
-      v0 (:version (coord bad-port bad-log {:op :version}))
+      v0 (:version (database bad-port bad-log {:op :version}))
       case! (fn [id mod marker label]
               (let [r (mcp-edit bad-env id "set-body" {:module (str "src.fram." mod)
                                                        :name "double-it" :body "(* 71 x)"})
@@ -2334,7 +2334,7 @@
   (chk "H: pathology log BYTE-IDENTICAL across every rejection"
        (= bytes0 (vec (read-bytes bad-log))))
   (chk "H: pathology daemon version UNCHANGED across every rejection"
-       (= v0 (:version (coord bad-port bad-log {:op :version}))))
+       (= v0 (:version (database bad-port bad-log {:op :version}))))
   (chk "H: no module-name artifacts created (root-level or outside)"
        (and (empty? (filter #(str/includes? (str %) "src.fram.") (.listFiles (io/file src-dir))))
             (not (.exists (io/file (str outside-dir "/outmod.bclj"))))

@@ -4,7 +4,7 @@
 (require '[clojure.java.io :as io]
          '[fram.store :as store]
          '[fram.types :as t])
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (def failures (atom 0))
 (defn check! [label ok]
@@ -28,12 +28,12 @@
 
 (def plain-path (str (io/file scratch "plain.framlog")))
 (def gz-path (str (io/file scratch "deflate.framlog")))
-(coord/create-triple-log! plain-path "deflate-parity")
-(coord/create-triple-log! gz-path "deflate-parity" {:deflate? true})
+(database/create-triple-log! plain-path "deflate-parity")
+(database/create-triple-log! gz-path "deflate-parity" {:deflate? true})
 
 (doseq [path [plain-path gz-path]]
-  (let [co (coord/open-coordinator! path "deflate-parity")
-        result (coord/commit! co {:operations (mapv store/assert-operation corpus)})]
+  (let [db (database/open-database! path "deflate-parity")
+        result (database/commit! db {:operations (mapv store/assert-operation corpus)})]
     (check! (str "commit accepted on " (if (= path gz-path) "deflate" "plain") " log")
             (:ok result))))
 
@@ -44,33 +44,33 @@
         (> plain-bytes (* 5 gz-bytes)))
 
 (defn fold-propositions [path]
-  (let [co (coord/open-coordinator! path "deflate-parity")]
-    (set (map #(t/triple-slot2 %) (coord/live-occurrences co)))))
+  (let [db (database/open-database! path "deflate-parity")]
+    (set (map #(t/triple-slot2 %) (database/live-occurrences db)))))
 
 (check! "deflate and plain generations fold to identical propositions"
         (= (fold-propositions plain-path) (fold-propositions gz-path)))
 
 ;; a second transaction appends compressed and reads back
-(let [co (coord/open-coordinator! gz-path "deflate-parity")
+(let [db (database/open-database! gz-path "deflate-parity")
       more (vec (for [i (range 100)]
                   (t/triple (str "extra-" i) "kind" "late")))
-      result (coord/commit! co {:operations (mapv store/assert-operation more)})]
+      result (database/commit! db {:operations (mapv store/assert-operation more)})]
   (check! "second deflate transaction commits" (:ok result))
   (check! "reopen folds both deflate frames"
           (= (+ 4000 100)
-             (count (coord/live-occurrences
-                     (coord/open-coordinator! gz-path "deflate-parity"))))))
+             (count (database/live-occurrences
+                     (database/open-database! gz-path "deflate-parity"))))))
 
 ;; torn tail: truncate mid-frame, passive open reports, repair recovers
 (let [bytes (java.nio.file.Files/readAllBytes (.toPath (io/file gz-path)))
       torn (str (io/file scratch "torn.framlog"))]
   (with-open [out (io/output-stream torn)]
     (.write out bytes 0 (- (alength bytes) 7)))
-  (let [passive (coord/open-coordinator! torn "deflate-parity")]
+  (let [passive (database/open-database! torn "deflate-parity")]
     (check! "torn deflate tail is reported" (some? (:torn-tail passive))))
-  (let [repaired (coord/open-coordinator! torn "deflate-parity" {:repair-torn? true})]
+  (let [repaired (database/open-database! torn "deflate-parity" {:repair-torn? true})]
     (check! "torn deflate tail repairs to the valid prefix"
-            (= 4000 (count (coord/live-occurrences repaired))))))
+            (= 4000 (count (database/live-occurrences repaired))))))
 
 ;; corrupt compressed payload fails closed as corruption, not garbage data
 (let [bytes (java.nio.file.Files/readAllBytes (.toPath (io/file gz-path)))
@@ -80,7 +80,7 @@
   (with-open [out (io/output-stream broken)]
     (.write out bytes))
   (check! "bit-flipped deflate frame fails closed"
-          (try (coord/open-coordinator! broken "deflate-parity") false
+          (try (database/open-database! broken "deflate-parity") false
                (catch clojure.lang.ExceptionInfo e
                  (= :corrupt-triple-log (:fram/code (ex-data e)))))))
 

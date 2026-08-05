@@ -13,7 +13,7 @@
 ;;    fail closed — an explicit error naming file + byte offset, never a silent skip.
 ;; 4. DISTINCTION GUARD: an EDN-VALID-but-incomplete final line (parses, missing :r)
 ;;    is NOT torn and NOT corrupt — it is returned as a FactOp (fold filters it,
-;;    max-tx counts its :tx) with no warning and no throw. Preserves migrate-flat->co.
+;;    max-tx counts its :tx) with no warning and no throw. Preserves migrate-flat->database.
 (require '[fram.rt :as rt]
          '[fram.fold :as fold]
          '[clojure.java.io :as io])

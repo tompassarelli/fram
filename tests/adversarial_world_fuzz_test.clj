@@ -4,7 +4,7 @@
 (require '[clojure.java.io :as io]
          '[fram.store :as c]
          '[fram.world :as w])
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (def failures (atom 0))
 (def total (atom 0))
@@ -40,13 +40,13 @@
     path))
 
 (def log (str scratch "/fixture.log"))
-(def co (new-coord log))
-(register-pred! co "status" "single" "literal")
-(commit! co "w7" "fuzz-fixture" "status" :assert "ready" nil)
+(def db (new-database log))
+(register-pred! db "status" "single" "literal")
+(commit! db "w7" "fuzz-fixture" "status" :assert "ready" nil)
 (def root (w/version-id nil []))
-(world-create! co "w7" "A" root)
+(world-create! db "w7" "A" root)
 (def candidate
-  (:ok (world-begin! co "w7" "A" root
+  (:ok (world-begin! db "w7" "A" root
                      "0123456789abcdef0123456789abcdef")))
 (def baseline (c/dump-store (replay log)))
 
@@ -97,7 +97,7 @@
 (def name-results
   (mapv
    (fn [{:keys [label value expect]}]
-     (let [result (safe-call #(world-create! co "w7" value root))]
+     (let [result (safe-call #(world-create! db "w7" value root))]
        {:label label :expect expect :result result}))
    hostile-names))
 
@@ -120,7 +120,7 @@
    (fn [{:keys [label value expect]}]
      {:label label :expect expect
       :result (safe-call
-               #(world-append! co "w7" candidate
+               #(world-append! db "w7" candidate
                                {:op :delete :slot value}))})
    hostile-slots))
 
@@ -131,7 +131,7 @@
 (def record-results
   (mapv (fn [record]
           {:record record
-           :result (safe-call #(world-append! co "w7" candidate record))})
+           :result (safe-call #(world-append! db "w7" candidate record))})
         malformed-records))
 
 (defn random-bytes ^bytes [n seed]
@@ -148,7 +148,7 @@
    (fn [n]
      (let [sha0 (log-sha log)
            len0 (flen log)
-           result (safe-call #(world-blob-put! co "w7"
+           result (safe-call #(world-blob-put! db "w7"
                                                 (random-bytes n (+ 7000 n))))]
        {:size n :result result
         :bytes-pure? (and (= sha0 (log-sha log)) (= len0 (flen log)))}))

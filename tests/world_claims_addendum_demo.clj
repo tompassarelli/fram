@@ -57,14 +57,14 @@
 ;; (`evidence.region` is the finer locator INSIDE the region — a line/col span.)
 ;;
 ;; SCOPE, held deliberately. No socket, no daemon, no port; one scratch log under
-;; /tmp. Nothing here is a new engine surface: every write uses coord.clj verbs
+;; /tmp. Nothing here is a new engine surface: every write uses database.clj verbs
 ;; that shipped, and every read is fram.claims/fram.world as published. The
 ;; verification MACHINERY (queues, outboxes, what a human reads) stays app-side,
 ;; per docs/archive/claims-design.md; this file only proves the substrate answers.
 (require '[fram.store :as c] '[fram.schema :as s] '[fram.datalog :as d]
          '[fram.world :as w] '[fram.claims :as cl]
          '[clojure.string :as str] '[clojure.set :as set])
-(load-file "coord.clj")   ; new-coord / commit! / select! / the world verbs (into THIS ns)
+(load-file "database.clj")   ; new-database / commit! / select! / the world verbs (into THIS ns)
 
 ;; ---------------------------------------------------------------------------
 ;; harness — the worlds suites', unchanged: one claim per bar, a failures atom,
@@ -157,11 +157,11 @@
 (defn cid-of
   "The cid of the NEWEST live fact on (subject, predicate). Called immediately
    after a write, so it names that write even when rivals coexist."
-  [co subj pred]
-  (let [st (store co)]
-    (apply max (live-cids-lp co (s/resolve-name st subj) (c/value-id st pred)))))
+  [db subj pred]
+  (let [st (store db)]
+    (apply max (live-cids-lp db (s/resolve-name st subj) (c/value-id st pred)))))
 
-;; The subject-is-a-cid write is now the real coordinator verb — coord.clj
+;; The subject-is-a-cid write is now the real coordinator verb — database.clj
 ;; `about!` (loaded above). :link takes the target's NAME (about! resolves it);
 ;; a fresh write returns {:ok seq :subject-cid cid :cid new-fact-cid}.
 
@@ -169,14 +169,14 @@
   "Retire ONE fact by cid with the store's own supersession marker — the same
    marker retract! writes internally. Used for a withdrawn verdict and a stale
    citation: nothing is deleted, the fact simply stops being live."
-  [co agent victim]
-  (locking (:lock co)
-    (let [st    (store co)
+  [db agent victim]
+  (locking (:lock db)
+    (let [st    (store db)
           since (:next-id @st)
           tx    (c/begin-tx! st agent)
           sup   (c/value! st "store-supersedes")
           mark  (c/fact! st victim sup victim tx)]
-      (append-tx! co (delta-records co since tx))
+      (append-tx! db (delta-records db since tx))
       mark)))
 
 (defn strike!
@@ -185,31 +185,31 @@
    supersedes edge points FROM the replacement TO the victim (fram.schema's own
    replace! shape), so the log records what replaced what — not merely that
    something died."
-  [co agent subj pred new-text victim]
-  (locking (:lock co)
-    (let [st    (store co)
+  [db agent subj pred new-text victim]
+  (locking (:lock db)
+    (let [st    (store db)
           since (:next-id @st)
           tx    (c/begin-tx! st agent)
-          te    (ent! co tx subj)
+          te    (ent! db tx subj)
           new   (s/assert! st te pred new-text tx)
           sup   (c/value! st "store-supersedes")
           mark  (c/fact! st new sup victim tx)]
-      (append-tx! co (delta-records co since tx))
+      (append-tx! db (delta-records db since tx))
       {:new new :mark mark})))
 
 (defn revise!
   "One ingestion of a world, end to end and WITHOUT A CHECKOUT: open a candidate
    at the world's current head, append the region ops, seal into a Version,
    lock + build it, then promote. Returns every durable id the bars need."
-  [co agent nm nonce ops]
-  (let [head (world-head co nm)
-        cid  (:ok (world-begin! co agent nm head nonce))
-        _    (doseq [op ops] (world-append! co agent cid op))
-        v    (:ok (world-seal! co agent cid))
-        lock (:ok (world-lock! co v build-spec))
-        rcpt (:ok (world-build! co agent lock))]
+  [db agent nm nonce ops]
+  (let [head (world-head db nm)
+        cid  (:ok (world-begin! db agent nm head nonce))
+        _    (doseq [op ops] (world-append! db agent cid op))
+        v    (:ok (world-seal! db agent cid))
+        lock (:ok (world-lock! db v build-spec))
+        rcpt (:ok (world-build! db agent lock))]
     {:from head :cid cid :version v :lock lock :receipt rcpt
-     :promote (world-promote! co agent nm head cid rcpt)}))
+     :promote (world-promote! db agent nm head cid rcpt)}))
 
 (println "worlds + claims — the addendum demo (incremental ingestion, end to end)")
 (println (str "  scratch: " scratch))
@@ -226,14 +226,14 @@
 
 (def fx
   (delay
-    (let [co   (new-coord demo-log)
+    (let [db   (new-database demo-log)
           root (w/version-id nil [])
           ;; ---- MARCH: ingest the permit set as world "trenton" -------------
-          _    (world-create! co "ingest" job root)
-          b-notes    (:ok (world-blob-put! co "ingest" notes-march))
-          b-fixtures (:ok (world-blob-put! co "ingest" fixtures-march))
-          b-finish   (:ok (world-blob-put! co "ingest" finish-march))
-          genA (revise! co "ingest" job n-march
+          _    (world-create! db "ingest" job root)
+          b-notes    (:ok (world-blob-put! db "ingest" notes-march))
+          b-fixtures (:ok (world-blob-put! db "ingest" fixtures-march))
+          b-finish   (:ok (world-blob-put! db "ingest" finish-march))
+          genA (revise! db "ingest" job n-march
                         [(w/put-op (slot-of rk-notes)    mode b-notes)
                          (w/put-op (slot-of rk-fixtures) mode b-fixtures)
                          (w/put-op (slot-of rk-finish)   mode b-finish)])
@@ -242,8 +242,8 @@
           ;; region-shaped subjects: the region key IS the identity, so the same
           ;; region carries the same subject across every generation.
           fact! (fn [agent subj pred v]
-                  (commit! co agent subj pred :assert v nil)
-                  (cid-of co subj pred))
+                  (commit! db agent subj pred :assert v nil)
+                  (cid-of db subj pred))
           f-note3 (fact! "extract" (subj-of rk-notes) "note.3" note3-march)
           f-note4 (fact! "extract" (subj-of rk-notes) "note.4" note4-march)
           f-qty   (fact! "extract" (subj-of rk-fixtures) "schedule.f1-qty" "18")
@@ -251,11 +251,11 @@
                          "EGGSHELL LATEX OVER GYPSUM BOARD")
           ;; ---- evidence nodes: source = the region SLOT, world = the version
           ev! (fn [nm rk span fp wld]
-                (commit! co "extract" nm cl/source-pred :assert (slot-of rk) nil)
-                (commit! co "extract" nm cl/region-pred :assert span nil)
-                (commit! co "extract" nm cl/fingerprint-pred :assert fp nil)
-                (commit! co "extract" nm cl/world-pred :assert wld nil)
-                (s/resolve-name (store co) nm))
+                (commit! db "extract" nm cl/source-pred :assert (slot-of rk) nil)
+                (commit! db "extract" nm cl/region-pred :assert span nil)
+                (commit! db "extract" nm cl/fingerprint-pred :assert fp nil)
+                (commit! db "extract" nm cl/world-pred :assert wld nil)
+                (s/resolve-name (store db) nm))
           e-gfci    (ev! "@ev:e101-note3@A"   rk-notes    "L2:C1-L2:C53" b-notes vA)
           e-emt     (ev! "@ev:e101-note4@A"   rk-notes    "L3:C1-L3:C41" b-notes vA)
           e-qty     (ev! "@ev:e101-f1qty@A"   rk-fixtures "L2:C31-L2:C33" b-fixtures vA)
@@ -263,10 +263,10 @@
           e-panel   (ev! "@ev:e101-panel@A"   rk-notes    "L1:C1-L1:C52" b-notes vA)
           e-misread (ev! "@ev:e101-f1misread@A" rk-fixtures "L2:C31-L2:C34" b-fixtures vA)
           ;; ---- the extracted claims (ordinary facts) -----------------------
-          claim! (fn [subj pred v] (commit! co "extract" subj pred :assert v nil)
-                   (cid-of co subj pred))
-          cite!  (fn [claim node] (about! co "extract" claim cl/evidence-pred :link (s/name-of (store co) node)))
-          verdict! (fn [view claim] (select! co view claim) (cid-of co view "selects"))
+          claim! (fn [subj pred v] (commit! db "extract" subj pred :assert v nil)
+                   (cid-of db subj pred))
+          cite!  (fn [claim node] (about! db "extract" claim cl/evidence-pred :link (s/name-of (store db) node)))
+          verdict! (fn [view claim] (select! db view claim) (cid-of db view "selects"))
           k-gfci    (claim! "@takeoff:E-101" "requires" "GFCI protection at every exterior receptacle")
           k-emt     (claim! "@takeoff:E-101" "requires" "EMT for all branch circuit conduit")
           k-qty     (claim! "@takeoff:E-101" "counts"   "18 type-F1 recessed fixtures")
@@ -286,48 +286,48 @@
           _       (verdict! sam-v    k-paint)     ; a second reviewer, same family
           ;; k-panel stays PENDING: evidence, nobody has read it.
           s-misread (verdict! jordan-r k-misread)
-          _ (about! co "jordan" k-misread cl/reason-pred :assert
+          _ (about! db "jordan" k-misread cl/reason-pred :assert
                     "the schedule row reads 18, not 180")
           ;; the seq the March world was reviewed at — the as-of probe's anchor
-          seq-march (current-seq co)
+          seq-march (current-seq db)
           ;; ---- MAY: Addendum 1 — fork the sealed head, O(1) ----------------
           len-pre-fork (flen demo-log)
-          _         (world-fork! co "addendum-1" job-add1 (world-head co job))
+          _         (world-fork! db "addendum-1" job-add1 (world-head db job))
           len-post-fork (flen demo-log)
           fork-tail (subs (slurp8 demo-log) len-pre-fork)
-          fork-obs  {:head-job  (world-head co job)
-                     :head-add1 (world-head co job-add1)
-                     :man-job   (world-manifest co (world-head co job))
-                     :man-add1  (world-manifest co (world-head co job-add1))}
+          fork-obs  {:head-job  (world-head db job)
+                     :head-add1 (world-head db job-add1)
+                     :man-job   (world-manifest db (world-head db job))
+                     :man-add1  (world-manifest db (world-head db job-add1))}
           ;; overlay ONLY the reprinted region; the other two are INHERITED.
-          b-notes-1 (:ok (world-blob-put! co "addendum-1" notes-add1))
-          genB (revise! co "addendum-1" job-add1 n-add1
+          b-notes-1 (:ok (world-blob-put! db "addendum-1" notes-add1))
+          genB (revise! db "addendum-1" job-add1 n-add1
                         [(w/put-op (slot-of rk-notes) mode b-notes-1)])
           vB   (:version genB)
           ;; the strikethrough, on the fact side: assert + supersede, one tx.
-          strike (strike! co "addendum-1" (subj-of rk-notes) "note.3" note3-add1 f-note3)
+          strike (strike! db "addendum-1" (subj-of rk-notes) "note.3" note3-add1 f-note3)
           ;; ---- THE QUEUE, asked the moment Addendum 1 lands ----------------
-          rv-ab-at-b (set (cl/needs-reverification co vA vB))
-          rv-ba-at-b (set (cl/needs-reverification co vB vA))
+          rv-ab-at-b (set (cl/needs-reverification db vA vB))
+          rv-ba-at-b (set (cl/needs-reverification db vB vA))
           ;; ---- re-verification, OPTION A: re-extract at the new head -------
-          _          (withdraw! co "jordan" s-gfci)          ; the verdict is re-pended
-          status-repended (cl/status co k-gfci)
-          rv-ab-repended (set (cl/needs-reverification co vA vB))
-          stale-cite (first (c/by-lp (store co) k-gfci (c/value-id (store co) cl/evidence-pred)))
-          _          (withdraw! co "extract" stale-cite)      ; the A citation is retired
+          _          (withdraw! db "jordan" s-gfci)          ; the verdict is re-pended
+          status-repended (cl/status db k-gfci)
+          rv-ab-repended (set (cl/needs-reverification db vA vB))
+          stale-cite (first (c/by-lp (store db) k-gfci (c/value-id (store db) cl/evidence-pred)))
+          _          (withdraw! db "extract" stale-cite)      ; the A citation is retired
           e-gfci-B   (ev! "@ev:e101-note3@B" rk-notes "L2:C1-L2:C97" b-notes-1 vB)
           _          (cite! k-gfci e-gfci-B)
           s-gfci-B   (verdict! jordan-v k-gfci)              ; re-verified AT B
-          rv-ab-final (set (cl/needs-reverification co vA vB))
+          rv-ab-final (set (cl/needs-reverification db vA vB))
           ;; ---- JUNE: Addendum 2 — the SAME region moves again --------------
-          _         (world-fork! co "addendum-2" job-add2 (world-head co job-add1))
-          b-notes-2 (:ok (world-blob-put! co "addendum-2" notes-add2))
-          genC (revise! co "addendum-2" job-add2 n-add2
+          _         (world-fork! db "addendum-2" job-add2 (world-head db job-add1))
+          b-notes-2 (:ok (world-blob-put! db "addendum-2" notes-add2))
+          genC (revise! db "addendum-2" job-add2 n-add2
                         [(w/put-op (slot-of rk-notes) mode b-notes-2)])
           vC   (:version genC)
-          rv-bc (set (cl/needs-reverification co vB vC))
-          rv-ac (set (cl/needs-reverification co vA vC))]
-      {:co co :log demo-log :root root :vA vA :vB vB :vC vC
+          rv-bc (set (cl/needs-reverification db vB vC))
+          rv-ac (set (cl/needs-reverification db vA vC))]
+      {:db db :log demo-log :root root :vA vA :vB vB :vC vC
        :genA genA :genB genB :genC genC
        :b-notes b-notes :b-notes-1 b-notes-1 :b-notes-2 b-notes-2
        :b-fixtures b-fixtures :b-finish b-finish
@@ -350,31 +350,31 @@
 (bar "ingest: the job world sealed a content-addressed Version and promoted it"
      (let [f @fx]
        (and (re-matches #"[0-9a-f]{64}" (str (:vA f)))
-            (= (:vA f) (world-head (:co f) job)))))
+            (= (:vA f) (world-head (:db f) job)))))
 (bar "ingest: generation A holds exactly the three regions that were cut"
      (let [f @fx]
        (= [(slot-of rk-finish) (slot-of rk-fixtures) (slot-of rk-notes)]
-          (sort (mapv :slot (world-manifest (:co f) (:vA f)))))))
+          (sort (mapv :slot (world-manifest (:db f) (:vA f)))))))
 (bar "ingest: each region resolves to the EXACT bytes the ingester put"
      (let [f @fx
            at (fn [rk] (:blob-id (first (filter #(= (slot-of rk) (:slot %))
-                                                (world-manifest (:co f) (:vA f))))))]
+                                                (world-manifest (:db f) (:vA f))))))]
        (and (= (:b-notes f) (at rk-notes))
             (java.util.Arrays/equals ^bytes notes-march
-                                     ^bytes (world-blob (:co f) (at rk-notes))))))
+                                     ^bytes (world-blob (:db f) (at rk-notes))))))
 (bar "regions: the extracted facts hang off REGION-shaped subjects (region_key identity)"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (= (s/resolve-name st (subj-of rk-notes)) (:l (c/fact-of st (:f-note3 f))))))
 (bar "regions: the region key spells BOTH encodings — world slot and graph subject"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (and (some? (s/resolve-name st (subj-of rk-notes)))
             (some? (first (filter #(= (slot-of rk-notes) (:slot %))
-                                  (world-manifest (:co f) (:vA f))))))))
+                                  (world-manifest (:db f) (:vA f))))))))
 (bar "regions: note 3 and note 4 are separate facts INSIDE one region subject"
      (let [f  @fx
-           st (store (:co f))
+           st (store (:db f))
            n3 (c/fact-of st (:f-note3 f))
            n4 (c/fact-of st (:f-note4 f))]
        (and (= (:l n3) (:l n4))                     ; one region
@@ -386,27 +386,27 @@
 ;; ===========================================================================
 (bar "claims: every extraction cites evidence whose SOURCE is the region slot"
      (let [f @fx]
-       (= [(slot-of rk-notes)] (mapv :source (cl/provenance (:co f) (:k-gfci f))))))
+       (= [(slot-of rk-notes)] (mapv :source (cl/provenance (:db f) (:k-gfci f))))))
 (bar "claims: the evidence records the generation it was extracted against"
-     (let [f @fx] (= (:vA f) (:world (cl/evidence (:co f) (:e-gfci f))))))
+     (let [f @fx] (= (:vA f) (:world (cl/evidence (:db f) (:e-gfci f))))))
 (bar "claims: ... and the fingerprint of the region content it read"
-     (let [f @fx] (= (:b-notes f) (:fingerprint (cl/evidence (:co f) (:e-gfci f))))))
+     (let [f @fx] (= (:b-notes f) (:fingerprint (cl/evidence (:db f) (:e-gfci f))))))
 (bar "claims: four extractions were VERIFIED by a reviewer-scoped view selection"
      (let [f @fx]
        (= [:verified :verified :verified :verified]
-          (mapv #(cl/status (:co f) %) [(:k-gfci f) (:k-emt f) (:k-qty f) (:k-paint f)]))))
+          (mapv #(cl/status (:db f) %) [(:k-gfci f) (:k-emt f) (:k-qty f) (:k-paint f)]))))
 (bar "claims: the verifier is the selecting view's writing agent — no extra schema"
-     (let [f @fx] (= jordan-v (cl/verifier (:co f) (:k-emt f)))))
+     (let [f @fx] (= jordan-v (cl/verifier (:db f) (:k-emt f)))))
 (bar "claims: a second reviewer verifies in the SAME family under her own name"
-     (let [f @fx] (= sam-v (cl/verifier (:co f) (:k-paint f)))))
+     (let [f @fx] (= sam-v (cl/verifier (:db f) (:k-paint f)))))
 (bar "claims: the unread extraction is :pending — evidence, no verdict"
-     (let [f @fx] (= :pending (cl/status (:co f) (:k-panel f)))))
+     (let [f @fx] (= :pending (cl/status (:db f) (:k-panel f)))))
 (bar "claims: the misread is :rejected, with the reviewer's reason on the record"
      (let [f @fx]
-       (and (= :rejected (cl/status (:co f) (:k-misread f)))
+       (and (= :rejected (cl/status (:db f) (:k-misread f)))
             (= "the schedule row reads 18, not 180"
-               (:reason (cl/rejection (:co f) (:k-misread f))))
-            (= (:s-misread f) (:cid (cl/rejection (:co f) (:k-misread f)))))))
+               (:reason (cl/rejection (:db f) (:k-misread f))))
+            (= (:s-misread f) (:cid (cl/rejection (:db f) (:k-misread f)))))))
 
 ;; ===========================================================================
 (println "\n-- 3. MAY: Addendum 1 forks the head in O(1) and overlays ONE region --")
@@ -430,26 +430,26 @@
             (= (get-in f [:fork-obs :man-job]) (get-in f [:fork-obs :man-add1])))))
 (bar "overlay: generation B is SPARSE — one op over an inherited base"
      (let [f @fx
-           r (world-version (:co f) (:vB f))]
+           r (world-version (:db f) (:vB f))]
        (and (= 1 (count (:overlay r)))
             (= [(slot-of rk-notes)] (mapv :slot (:overlay r)))
             (= (:vA f) (:base r)))))
 (bar "overlay: the revised region resolves to the ADDENDUM's bytes at B"
      (let [f @fx
            row (first (filter #(= (slot-of rk-notes) (:slot %))
-                              (world-manifest (:co f) (:vB f))))]
+                              (world-manifest (:db f) (:vB f))))]
        (and (= (:b-notes-1 f) (:blob-id row))
             (java.util.Arrays/equals ^bytes notes-add1
-                                     ^bytes (world-blob (:co f) (:blob-id row))))))
+                                     ^bytes (world-blob (:db f) (:blob-id row))))))
 (bar "inherit: the untouched regions resolve to the SAME blobs at B, ORIGIN A"
      (let [f @fx
-           rows (filter #(not= (slot-of rk-notes) (:slot %)) (world-manifest (:co f) (:vB f)))]
+           rows (filter #(not= (slot-of rk-notes) (:slot %)) (world-manifest (:db f) (:vB f)))]
        (and (= 2 (count rows))
             (= #{(:b-fixtures f) (:b-finish f)} (set (map :blob-id rows)))
             (every? #(= (:vA f) (:origin %)) rows))))
 (bar "seal: B is a new head on the addendum world, and a DIFFERENT Version than A"
      (let [f @fx]
-       (and (= (:vB f) (world-head (:co f) job-add1))
+       (and (= (:vB f) (world-head (:db f) job-add1))
             (not= (:vA f) (:vB f)))))
 
 ;; ===========================================================================
@@ -457,36 +457,36 @@
 ;; ===========================================================================
 (bar "strike: the addendum's reading of note 3 is now the live one"
      (let [f @fx]
-       (= note3-add1 (s/lookup (store (:co f))
-                               (s/resolve-name (store (:co f)) (subj-of rk-notes))
+       (= note3-add1 (s/lookup (store (:db f))
+                               (s/resolve-name (store (:db f)) (subj-of rk-notes))
                                "note.3"))))
 (bar "strike: the struck fact is NOT live — superseded, not deleted"
      (let [f @fx]
-       (and (not (c/live? (store (:co f)) (:f-note3 f)))
-            (map? (c/fact-of (store (:co f)) (:f-note3 f))))))
+       (and (not (c/live? (store (:db f)) (:f-note3 f)))
+            (map? (c/fact-of (store (:db f)) (:f-note3 f))))))
 (bar "strike: the ADDENDUM authored both halves — assertion and supersedes edge"
      (let [f @fx]
        (= ["addendum-1" "addendum-1"]
-          [(agent-of (:co f) (get-in f [:strike :new]))
-           (agent-of (:co f) (get-in f [:strike :mark]))])))
+          [(agent-of (:db f) (get-in f [:strike :new]))
+           (agent-of (:db f) (get-in f [:strike :mark]))])))
 (bar "strike: both halves landed in ONE tx — a strikethrough is atomic"
      (let [f @fx]
-       (= (c/fact-tx (store (:co f)) (get-in f [:strike :new]))
-          (c/fact-tx (store (:co f)) (get-in f [:strike :mark])))))
+       (= (c/fact-tx (store (:db f)) (get-in f [:strike :new]))
+          (c/fact-tx (store (:db f)) (get-in f [:strike :mark])))))
 (bar "strike: the supersedes edge names WHAT replaced the struck reading"
      (let [f  @fx
-           st (store (:co f))
+           st (store (:db f))
            m  (c/fact-of st (get-in f [:strike :mark]))]
        (and (= (get-in f [:strike :new]) (:l m)) (= (:f-note3 f) (:r m)))))
 (bar "strike: note 4 was NOT touched — the addendum reprinted one line, not a region"
      (let [f @fx]
-       (and (c/live? (store (:co f)) (:f-note4 f))
-            (= note4-march (s/lookup (store (:co f))
-                                     (s/resolve-name (store (:co f)) (subj-of rk-notes))
+       (and (c/live? (store (:db f)) (:f-note4 f))
+            (= note4-march (s/lookup (store (:db f))
+                                     (s/resolve-name (store (:db f)) (subj-of rk-notes))
                                      "note.4")))))
 (bar "strike: the region SUBJECT is unchanged across generations (region_key identity)"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (= (:l (c/fact-of st (:f-note3 f))) (:l (c/fact-of st (get-in f [:strike :new]))))))
 
 ;; ===========================================================================
@@ -505,27 +505,27 @@
        (and (not (contains? (:rv-ab-at-b f) (:k-qty f)))
             (not (contains? (:rv-ab-at-b f) (:k-paint f))))))
 (bar "queue: the identity transition A -> A is EMPTY (no addendum, no work)"
-     (let [f @fx] (empty? (cl/needs-reverification (:co f) (:vA f) (:vA f)))))
+     (let [f @fx] (empty? (cl/needs-reverification (:db f) (:vA f) (:vA f)))))
 ;; DIRECTIONAL, not chronological: the query asks "which claims were extracted at
 ;; FROM and cite a region that reads differently at TO". Rolling the addendum BACK
 ;; is that same question with the ends swapped — and at the end of this fixture
 ;; only the re-verified claim was extracted at B, so only it is flagged.
 (bar "queue: it is a TRANSITION, not an arrow of time — rolling B -> A flags the B-cut claim"
-     (let [f @fx] (= #{(:k-gfci f)} (set (cl/needs-reverification (:co f) (:vB f) (:vA f))))))
+     (let [f @fx] (= #{(:k-gfci f)} (set (cl/needs-reverification (:db f) (:vB f) (:vA f))))))
 (bar "queue: ... and B -> A was EMPTY before anything had been extracted at B"
      (let [f @fx] (empty? (:rv-ba-at-b f))))
 (bar "queue: it is a pure READ — asking twice is identical, and the log is unmoved"
      (let [f      @fx
            before (log-sha (:log f))
-           a      (set (cl/needs-reverification (:co f) (:vA f) (:vB f)))
-           b      (set (cl/needs-reverification (:co f) (:vA f) (:vB f)))]
+           a      (set (cl/needs-reverification (:db f) (:vA f) (:vB f)))
+           b      (set (cl/needs-reverification (:db f) (:vA f) (:vB f)))]
        (and (= a b) (= before (log-sha (:log f))))))
 (bar "queue: the rule is DATA — a stratified program the shipped engine runs"
      (let [f @fx
-           p (cl/reverification-rules (:co f) (:vA f) (:vB f))]
+           p (cl/reverification-rules (:db f) (:vA f) (:vB f))]
        (and (vector? p) (empty? (d/strata-violations p))
             (= (:rv-ab-final f)
-               (set (map first (d/facts (d/run-strata (store (:co f)) p)
+               (set (map first (d/facts (d/run-strata (store (:db f)) p)
                                         cl/reverification-relation)))))))
 
 ;; ===========================================================================
@@ -536,22 +536,22 @@
 (bar "re-verify: ... and a re-pended claim leaves the queue while it is being worked"
      (let [f @fx] (not (contains? (:rv-ab-repended f) (:k-gfci f)))))
 (bar "re-verify: the claim FACT survived the flip — only the verdict moved"
-     (let [f @fx] (c/live? (store (:co f)) (:k-gfci f))))
+     (let [f @fx] (c/live? (store (:db f)) (:k-gfci f))))
 (bar "re-verify: re-extraction cites the ADDENDUM's content at generation B"
      (let [f @fx
-           e (cl/evidence (:co f) (:e-gfci-B f))]
+           e (cl/evidence (:db f) (:e-gfci-B f))]
        (and (= (:vB f) (:world e)) (= (:b-notes-1 f) (:fingerprint e))
             (= (slot-of rk-notes) (:source e)))))
 (bar "re-verify: the stale A-citation is withdrawn — the live chain is B evidence only"
-     (let [f @fx] (= [(:e-gfci-B f)] (vec (cl/evidence-nodes (:co f) (:k-gfci f))))))
+     (let [f @fx] (= [(:e-gfci-B f)] (vec (cl/evidence-nodes (:db f) (:k-gfci f))))))
 (bar "re-verify: ... but the withdrawn citation is STILL IN THE LOG (auditable)"
      (let [f @fx]
-       (and (map? (c/fact-of (store (:co f)) (:stale-cite f)))
-            (not (c/live? (store (:co f)) (:stale-cite f))))))
+       (and (map? (c/fact-of (store (:db f)) (:stale-cite f)))
+            (not (c/live? (store (:db f)) (:stale-cite f))))))
 (bar "re-verify: the claim is :verified again, on the NEW selection"
      (let [f @fx]
-       (and (= :verified (cl/status (:co f) (:k-gfci f)))
-            (= (:s-gfci-B f) (:cid (cl/verdict (:co f) (:k-gfci f)))))))
+       (and (= :verified (cl/status (:db f) (:k-gfci f)))
+            (= (:s-gfci-B f) (:cid (cl/verdict (:db f) (:k-gfci f)))))))
 (bar "queue DRAINS: A -> B now owes only the claim nobody re-verified"
      (let [f @fx] (= #{(:k-emt f)} (:rv-ab-final f))))
 (bar "option A: Addendum 2 moves that region again — B -> C RE-PENDS the re-verified claim"
@@ -562,9 +562,9 @@
      (let [f @fx] (= #{(:k-emt f)} (:rv-ac f))))
 (bar "option A: generation C is sparse over B, and B's own history is intact"
      (let [f @fx
-           r (world-version (:co f) (:vC f))]
+           r (world-version (:db f) (:vC f))]
        (and (= (:vB f) (:base r)) (= 1 (count (:overlay r)))
-            (= (:vB f) (world-head (:co f) job-add1)))))
+            (= (:vB f) (world-head (:db f) job-add1)))))
 
 ;; ===========================================================================
 (println "\n-- 7. PAYOFF (b): untouched regions were never re-read --")
@@ -572,22 +572,22 @@
 (bar "untouched: the fixture-schedule and finish-schedule claims are STILL verified"
      (let [f @fx]
        (= [:verified :verified]
-          [(cl/status (:co f) (:k-qty f)) (cl/status (:co f) (:k-paint f))])))
+          [(cl/status (:db f) (:k-qty f)) (cl/status (:db f) (:k-paint f))])))
 (bar "untouched: their verdicts are the ORIGINAL March selections — nobody re-reviewed"
      (let [f @fx]
-       (< (:cid (cl/verdict (:co f) (:k-qty f))) (:s-gfci-B f))))
+       (< (:cid (cl/verdict (:db f) (:k-qty f))) (:s-gfci-B f))))
 (bar "untouched: their evidence still cites generation A, and still resolves"
      (let [f @fx
-           e (cl/evidence (:co f) (:e-qty f))]
+           e (cl/evidence (:db f) (:e-qty f))]
        (and (= (:vA f) (:world e))
             (= (:b-fixtures f) (:fingerprint e))
             (java.util.Arrays/equals
               ^bytes fixtures-march
-              ^bytes (world-blob (:co f) (:fingerprint e))))))
+              ^bytes (world-blob (:db f) (:fingerprint e))))))
 (bar "untouched: their regions resolve to the same blob at A, B and C"
      (let [f @fx
            at (fn [v rk] (:blob-id (first (filter #(= (slot-of rk) (:slot %))
-                                                  (world-manifest (:co f) v)))))]
+                                                  (world-manifest (:db f) v)))))]
        (= #{(:b-fixtures f)}
           (set (map #(at % rk-fixtures) [(:vA f) (:vB f) (:vC f)])))))
 (bar "untouched: they never appeared in ANY transition queue"
@@ -600,35 +600,35 @@
 (println "\n-- 8. PAYOFF (c): the March world still answers the March question --")
 ;; ===========================================================================
 (bar "history: the permit-set world's head is STILL generation A after two addenda"
-     (let [f @fx] (= (:vA f) (world-head (:co f) job))))
+     (let [f @fx] (= (:vA f) (world-head (:db f) job))))
 (bar "history: A's manifest still resolves the notes region to the MARCH bytes"
      (let [f @fx
            row (first (filter #(= (slot-of rk-notes) (:slot %))
-                              (world-manifest (:co f) (:vA f))))]
+                              (world-manifest (:db f) (:vA f))))]
        (and (= (:b-notes f) (:blob-id row))
             (java.util.Arrays/equals ^bytes notes-march
-                                     ^bytes (world-blob (:co f) (:blob-id row))))))
+                                     ^bytes (world-blob (:db f) (:blob-id row))))))
 (bar "history: the struck sentence is still READABLE at A — 'GFCI protected.' unqualified"
      (let [f @fx]
-       (str/includes? (String. ^bytes (world-blob (:co f) (:b-notes f)) "UTF-8")
+       (str/includes? (String. ^bytes (world-blob (:db f) (:b-notes f)) "UTF-8")
                       "3. All exterior receptacles shall be GFCI protected.\n")))
 (bar "history: all three generations of the ONE region are recoverable side by side"
      (let [f @fx]
-       (= 3 (count (set (map #(vec (world-blob (:co f) %))
+       (= 3 (count (set (map #(vec (world-blob (:db f) %))
                              [(:b-notes f) (:b-notes-1 f) (:b-notes-2 f)]))))))
 (bar "history: AS OF the March review, the struck fact was the live reading"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (= [(:f-note3 f)]
-          (vec (live-as-of-lp (:co f) (:seq-march f)
+          (vec (live-as-of-lp (:db f) (:seq-march f)
                               (s/resolve-name st (subj-of rk-notes))
                               (c/value-id st "note.3"))))))
 (bar "history: ... and the addendum's reading did not exist yet at that seq"
      (let [f @fx]
-       (not (contains? (live-as-of (:co f) (:seq-march f)) (get-in f [:strike :new])))))
+       (not (contains? (live-as-of (:db f) (:seq-march f)) (get-in f [:strike :new])))))
 (bar "history: the March evidence node is IMMUTABLE — same source, world, fingerprint"
      (let [f @fx
-           e (cl/evidence (:co f) (:e-gfci f))]
+           e (cl/evidence (:db f) (:e-gfci f))]
        (and (= (:vA f) (:world e)) (= (:b-notes f) (:fingerprint e))
             (= "L2:C1-L2:C53" (:region e)))))
 
@@ -637,28 +637,28 @@
 ;; ===========================================================================
 (bar "recover: the struck fact's text reads back out of the log verbatim"
      (let [f  @fx
-           st (store (:co f))
+           st (store (:db f))
            fc (c/fact-of st (:f-note3 f))]
        (= note3-march (c/literal st (:r fc)))))
 (bar "recover: it is marked NOT LIVE at B — retired, present, attributable"
      (let [f @fx]
-       (and (not (c/live? (store (:co f)) (:f-note3 f)))
-            (= "extract" (agent-of (:co f) (:f-note3 f)))
-            (= "addendum-1" (agent-of (:co f) (get-in f [:strike :mark]))))))
+       (and (not (c/live? (store (:db f)) (:f-note3 f)))
+            (= "extract" (agent-of (:db f) (:f-note3 f)))
+            (= "addendum-1" (agent-of (:db f) (get-in f [:strike :mark]))))))
 (bar "recover: the strikethrough is a DIFF — both readings, in one region subject"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (= [note3-march note3-add1]
           [(c/literal st (:r (c/fact-of st (:f-note3 f))))
            (c/literal st (:r (c/fact-of st (get-in f [:strike :new]))))])))
 (bar "recover: the withdrawn March VERDICT is likewise recoverable, not erased"
      (let [f @fx]
-       (and (map? (c/fact-of (store (:co f)) (:s-gfci f)))
-            (not (c/live? (store (:co f)) (:s-gfci f)))
-            (contains? (live-as-of (:co f) (:seq-march f)) (:s-gfci f)))))
+       (and (map? (c/fact-of (store (:db f)) (:s-gfci f)))
+            (not (c/live? (store (:db f)) (:s-gfci f)))
+            (contains? (live-as-of (:db f) (:seq-march f)) (:s-gfci f)))))
 (bar "recover: nothing in this demo DELETED a fact — the log only ever grew"
      (let [f  @fx
-           st (store (:co f))]
+           st (store (:db f))]
        (every? #(map? (c/fact-of st %))
                [(:f-note3 f) (:s-gfci f) (:stale-cite f) (:k-gfci f)
                 (get-in f [:strike :mark])])))
@@ -668,19 +668,19 @@
 ;; ===========================================================================
 (bar "replay: a cold restart derives the SAME three heads"
      (let [f  @fx
-           co {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
+           db {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
        (= [(:vA f) (:vB f) (:vC f)]
-          (mapv #(world-head co %) [job job-add1 job-add2]))))
+          (mapv #(world-head db %) [job job-add1 job-add2]))))
 (bar "replay: ... and recomputes the SAME A -> B review queue"
      (let [f  @fx
-           co {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
-       (= (:rv-ab-final f) (set (cl/needs-reverification co (:vA f) (:vB f))))))
+           db {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
+       (= (:rv-ab-final f) (set (cl/needs-reverification db (:vA f) (:vB f))))))
 (bar "replay: ... and the SAME claim statuses, verdicts and reasons"
      (let [f  @fx
-           co {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
-       (and (= :verified (cl/status co (:k-gfci f)))
-            (= :pending (cl/status co (:k-panel f)))
-            (= "the schedule row reads 18, not 180" (:reason (cl/rejection co (:k-misread f)))))))
+           db {:store (replay (:log f)) :log (:log f) :lock (Object.)}]
+       (and (= :verified (cl/status db (:k-gfci f)))
+            (= :pending (cl/status db (:k-panel f)))
+            (= "the schedule row reads 18, not 180" (:reason (cl/rejection db (:k-misread f)))))))
 
 ;; ---------------------------------------------------------------------------
 (let [pass (- @total @failures)]

@@ -7,7 +7,7 @@
 ;; something it never named, which is the whole reason the cause stayed unknown.
 ;;   bb -cp out tests/slow_read_attribution_test.clj
 ;; ============================================================================
-(binding [*command-line-args* []] (load-file "coord_daemon.clj"))
+(binding [*command-line-args* []] (load-file "server.clj"))
 (require '[clojure.string :as str])
 
 (def failures (atom 0))
@@ -17,8 +17,8 @@
   (if pass? (println "PASS" label)
       (do (swap! failures inc) (println "FAIL" label))))
 
-(def report! #'coord-daemon/report-slow-read!)
-(def report-query! #'coord-daemon/report-query-execution!)
+(def report! #'server/report-slow-read!)
+(def report-query! #'server/report-query-execution!)
 (def MS 1000000)
 
 (defn emit
@@ -35,11 +35,11 @@
 ;; all; a log line per query would be its own performance problem.
 (check! "fast read prints nothing" (= "" (emit 1 2 3)))
 (check! "read just under the threshold prints nothing"
-        (= "" (emit 0 0 (dec coord-daemon/slow-read-ms))))
+        (= "" (emit 0 0 (dec server/slow-read-ms))))
 
 ;; --- past the threshold, attribute ------------------------------------------
 (check! "read at the threshold reports"
-        (str/includes? (emit 0 0 coord-daemon/slow-read-ms) "slow read"))
+        (str/includes? (emit 0 0 server/slow-read-ms) "slow read"))
 
 (let [out (emit 10 5000 30)]
   (check! "reports the total" (str/includes? out "5040ms"))
@@ -69,20 +69,20 @@
                      :query {:find "x" :rules []}}}
       response
       (with-redefs-fn
-        {#'coord-daemon/maybe-reload!
+        {#'server/maybe-reload!
          (fn [& _] (swap! events conj :reload))
-         #'coord-daemon/log-fence-rejection
+         #'server/log-fence-rejection
          (fn [_] nil)
-         #'coord-daemon/capture-query-roots!
+         #'server/capture-query-roots!
          (fn [] (swap! events conj :capture) :roots)
-         #'coord-daemon/execute-query
+         #'server/execute-query
          (fn [inner roots]
            (swap! events conj [:execute (:op inner) roots])
            {:ok []})
-         #'coord-daemon/report-slow-read!
+         #'server/report-slow-read!
          (fn [op t0 t1 t2 t3]
            (swap! events conj [:report op (<= t0 t1 t2 t3)]))}
-        (fn [] ((deref #'coord-daemon/handle*) req)))]
+        (fn [] ((deref #'server/handle*) req)))]
   (check! "fenced query preserves the query response" (= {:ok []} response))
   (check! "fenced query attributes reload, lock capture, and execution"
           (= [:reload
@@ -101,14 +101,14 @@
       req {:op :show :te "@swarm"}
       response
       (with-redefs-fn
-        {#'coord-daemon/prepare-request-reload!
+        {#'server/prepare-request-reload!
          (fn [& _] (swap! events conj :reload))
-         #'coord-daemon/subject-wire-snapshot
+         #'server/subject-wire-snapshot
          (fn [te] (swap! events conj [:snapshot te]) {:rows []})
-         #'coord-daemon/report-slow-read!
+         #'server/report-slow-read!
          (fn [op t0 t1 t2 t3]
            (swap! events conj [:report op (= t1 t2) (<= t0 t1 t3)]))}
-        (fn [] ((deref #'coord-daemon/handle*) req)))]
+        (fn [] ((deref #'server/handle*) req)))]
   (check! "show preserves its response" (= {:rows []} response))
   (check! "show is attributed, with lock-wait reported as the zero it is"
           (= [:reload [:snapshot "@swarm"] [:report :show true true]] @events)))
@@ -116,7 +116,7 @@
 ;; The detailed query line carries fixed-cardinality shape data and phase
 ;; allocation, never query text/predicate values.  Counts clamp at 32 so a
 ;; hostile query cannot manufacture an unbounded metrics label vocabulary.
-(reset! coord-daemon/query-execution-stats
+(reset! server/query-execution-stats
         {:slow 0 :last nil :max-ms 0 :max-allocated-bytes 0})
 (let [rules
       (mapv
@@ -128,7 +128,7 @@
       req {:op :query-page :query {:find "derived-0" :strata [rules]}}
       out
       (with-redefs-fn
-        {#'coord-daemon/query-profile-ms 1}
+        {#'server/query-profile-ms 1}
         (fn []
           (with-out-str
             (report-query!
@@ -137,7 +137,7 @@
              (* 2 MS) 200
              (* 7 MS) 600
              (* 10 MS) 1000))))
-      sample (:last @coord-daemon/query-execution-stats)]
+      sample (:last @server/query-execution-stats)]
   (check! "slow query names snapshot/evaluate/encode phases"
           (and (str/includes? out "snapshot 2ms")
                (str/includes? out "evaluate 5ms")

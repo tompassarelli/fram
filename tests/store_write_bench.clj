@@ -30,14 +30,14 @@
   (io/copy (io/file seed) (io/file log))
   (spit log ""))
 
-(def fram-root (let [d (io/file "coord_daemon.clj")]
+(def fram-root (let [d (io/file "server.clj")]
                  (if (.exists d) "." (str (System/getProperty "user.home") "/code/fram"))))
 
 ;; ---- daemon lifecycle -------------------------------------------------------
 (defn start-daemon! []
   (let [cmd (if (= runtime "bb")
-              ["bb" "-cp" "out" "coord_daemon.clj" "serve-flat" (str port) log]
-              ["clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log])
+              ["bb" "-cp" "out" "server.clj" "serve-flat" (str port) log]
+              ["clojure" "-M" "server.clj" "serve-flat" (str port) log])
         pb (doto (ProcessBuilder. ^java.util.List cmd)
              (.directory (io/file fram-root))
              (.redirectErrorStream true)

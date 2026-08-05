@@ -6,7 +6,7 @@
          '[clojure.string :as str])
 
 (binding [*command-line-args* []]
-  (load-file "coord_daemon.clj"))
+  (load-file "server.clj"))
 
 (def fixture "tests/fixtures/edit-min/schema.code.factlog")
 (def tmp-dir

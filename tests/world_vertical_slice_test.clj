@@ -29,10 +29,10 @@
 ;; section asserts exactly what the thread bar asks: rejection plus zero head
 ;; mutation. No socket, no daemon, no port is touched.
 ;;
-;; NORMATIVE SURFACE — the 13 world verbs coord.clj already carries (see
+;; NORMATIVE SURFACE — the 13 world verbs database.clj already carries (see
 ;; tests/world_persistence_test.clj for the full signature list), plus the one
 ;; piece of glue this slice needs:
-;;   (world-compose co base-version-id [[slot source-version-id] ...])
+;;   (world-compose db base-version-id [[slot source-version-id] ...])
 ;;       -> an ORDINARY Version record whose :overlay is exactly the op list a
 ;;          candidate on `base-version-id` must append to become that version.
 ;;       It gathers each participating version's chain out of the LOG and hands
@@ -41,7 +41,7 @@
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as proc])
-(load-file "coord.clj")   ; new-coord / replay / the world verbs (loaded into THIS ns)
+(load-file "database.clj")   ; new-database / replay / the world verbs (loaded into THIS ns)
 
 ;; ---------------------------------------------------------------------------
 ;; harness — identical in shape to tests/world_persistence_test.clj: one claim
@@ -73,10 +73,10 @@
 (defn k [nm & args] (apply (kv nm) args))
 
 (defn uv
-  "The Var for a world verb defined by coord.clj, or a catchable absence."
+  "The Var for a world verb defined by database.clj, or a catchable absence."
   [nm]
   (or (resolve (symbol nm))
-      (throw (ex-info (str nm " ABSENT — coord.clj does not define this world verb")
+      (throw (ex-info (str nm " ABSENT — database.clj does not define this world verb")
                       {:missing nm}))))
 (defn u [nm & args] (apply (uv nm) args))
 
@@ -150,15 +150,15 @@
   "One graph edit of a world, end to end and WITHOUT A CHECKOUT: open a candidate
   at the world's current head, append ops, seal it into a Version, lock+build it,
   then promote. Returns every durable id the bars need."
-  [co nm nonce ops]
-  (let [head (u "world-head" co nm)
-        cid  (:ok (u "world-begin!" co "w" nm head nonce))
-        _    (doseq [op ops] (u "world-append!" co "w" cid op))
-        v    (:ok (u "world-seal!" co "w" cid))
-        lock (u "world-lock!" co v build-spec)
-        rcpt (:ok (u "world-build!" co "w" (:ok lock)))]
+  [db nm nonce ops]
+  (let [head (u "world-head" db nm)
+        cid  (:ok (u "world-begin!" db "w" nm head nonce))
+        _    (doseq [op ops] (u "world-append!" db "w" cid op))
+        v    (:ok (u "world-seal!" db "w" cid))
+        lock (u "world-lock!" db v build-spec)
+        rcpt (:ok (u "world-build!" db "w" (:ok lock)))]
     {:from head :cid cid :version v :lock (:ok lock) :receipt rcpt
-     :promote (u "world-promote!" co "w" nm head cid rcpt)}))
+     :promote (u "world-promote!" db "w" nm head cid rcpt)}))
 
 (println "worlds vertical slice — executable specification (A/B/C, end to end)")
 (println (str "  scratch: " scratch))
@@ -167,51 +167,51 @@
 (def slice-log (str wdir "/slice.log"))
 (def fx
   (delay
-    (let [co    (new-coord slice-log)
+    (let [db    (new-database slice-log)
           root  (k "version-id" nil [])
           ;; 1. create A, then graph-edit it into a two-slot manifest
-          _     (u "world-create!" co "w" "A" root)
-          head0 (u "world-head" co "A")
-          bc1   (:ok (u "world-blob-put!" co "w" raw-core1))
-          bu1   (:ok (u "world-blob-put!" co "w" raw-util1))
-          eA1   (edit! co "A" n-a1 [(k "put-op" slot-core mode bc1)
+          _     (u "world-create!" db "w" "A" root)
+          head0 (u "world-head" db "A")
+          bc1   (:ok (u "world-blob-put!" db "w" raw-core1))
+          bu1   (:ok (u "world-blob-put!" db "w" raw-util1))
+          eA1   (edit! db "A" n-a1 [(k "put-op" slot-core mode bc1)
                                     (k "put-op" slot-util mode bu1)])
           ;; 2. fork B from A — measured
           len-pre-fork (flen slice-log)
-          forkB (u "world-fork!" co "w" "B" (u "world-head" co "A"))
+          forkB (u "world-fork!" db "w" "B" (u "world-head" db "A"))
           len-post-fork (flen slice-log)
           fork-tail (subs (slurp8 slice-log) len-pre-fork)
           ;; observed AT FORK TIME — both names diverge later in this same log,
           ;; so the fork-time facts must be captured here, not re-read later.
-          fork-obs {:head-a (u "world-head" co "A")
-                    :head-b (u "world-head" co "B")
-                    :man-a (u "world-manifest" co (u "world-head" co "A"))
-                    :man-b (u "world-manifest" co (u "world-head" co "B"))}
+          fork-obs {:head-a (u "world-head" db "A")
+                    :head-b (u "world-head" db "B")
+                    :man-a (u "world-manifest" db (u "world-head" db "A"))
+                    :man-b (u "world-manifest" db (u "world-head" db "B"))}
           ;; 3. graph-edit BOTH, divergently: B rewrites util, A rewrites core
-          bu2   (:ok (u "world-blob-put!" co "w" raw-util2))
-          eB1   (edit! co "B" n-b1 [(k "put-op" slot-util mode bu2)])
-          bc2   (:ok (u "world-blob-put!" co "w" raw-core2))
-          eA2   (edit! co "A" n-a2 [(k "put-op" slot-core mode bc2)])
+          bu2   (:ok (u "world-blob-put!" db "w" raw-util2))
+          eB1   (edit! db "B" n-b1 [(k "put-op" slot-util mode bu2)])
+          bc2   (:ok (u "world-blob-put!" db "w" raw-core2))
+          eA2   (edit! db "A" n-a2 [(k "put-op" slot-core mode bc2)])
           ;; 4. compose a MIXED C: A's base, B's util slot
-          _     (u "world-fork!" co "w" "C" (u "world-head" co "A"))
-          crec  (u "world-compose" co (u "world-head" co "A")
-                   [[slot-util (u "world-head" co "B")]])
-          eC1   (edit! co "C" n-c1 (:overlay crec))
+          _     (u "world-fork!" db "w" "C" (u "world-head" db "A"))
+          crec  (u "world-compose" db (u "world-head" db "A")
+                   [[slot-util (u "world-head" db "B")]])
+          eC1   (edit! db "C" n-c1 (:overlay crec))
           ;; 5. a stale rival: it opens at A's CURRENT head and seals honestly,
           ;;    then the winner moves A's head underneath it.
-          riv-from (u "world-head" co "A")
-          riv-cid  (:ok (u "world-begin!" co "w" "A" riv-from n-riv))
-          bnew     (:ok (u "world-blob-put!" co "w" raw-new))
-          _        (u "world-append!" co "w" riv-cid (k "put-op" slot-core mode bnew))
-          riv-v    (:ok (u "world-seal!" co "w" riv-cid))
-          riv-rcpt (:ok (u "world-build!" co "w" (:ok (u "world-lock!" co riv-v build-spec))))
-          eA3      (edit! co "A" n-a3 [(k "put-op" slot-new mode bnew)])
+          riv-from (u "world-head" db "A")
+          riv-cid  (:ok (u "world-begin!" db "w" "A" riv-from n-riv))
+          bnew     (:ok (u "world-blob-put!" db "w" raw-new))
+          _        (u "world-append!" db "w" riv-cid (k "put-op" slot-core mode bnew))
+          riv-v    (:ok (u "world-seal!" db "w" riv-cid))
+          riv-rcpt (:ok (u "world-build!" db "w" (:ok (u "world-lock!" db riv-v build-spec))))
+          eA3      (edit! db "A" n-a3 [(k "put-op" slot-new mode bnew)])
           ;; the rival now promotes against the head it was begun at: STALE.
-          head-pre (u "world-head" co "A")
+          head-pre (u "world-head" db "A")
           sha-pre  (log-sha slice-log)
           len-pre  (flen slice-log)
-          riv-r    (u "world-promote!" co "w" "A" riv-from riv-cid riv-rcpt)]
-      {:co co :log slice-log :root root :head0 head0
+          riv-r    (u "world-promote!" db "w" "A" riv-from riv-cid riv-rcpt)]
+      {:db db :log slice-log :root root :head0 head0
        :bc1 bc1 :bc2 bc2 :bu1 bu1 :bu2 bu2 :bnew bnew
        :A1 eA1 :A2 eA2 :A3 eA3 :B1 eB1 :C1 eC1
        :fork-b forkB :fork-bytes (- len-post-fork len-pre-fork) :fork-tail fork-tail
@@ -219,12 +219,12 @@
        :crec crec
        :rival {:from riv-from :cid riv-cid :version riv-v :receipt riv-rcpt
                :result riv-r :head-pre head-pre :sha-pre sha-pre :len-pre len-pre
-               :head-post (u "world-head" co "A")
+               :head-post (u "world-head" db "A")
                :sha-post (log-sha slice-log) :len-post (flen slice-log)}
        ;; the three FINAL heads the cold-restart section reproduces
-       :heads {"A" (u "world-head" co "A")
-               "B" (u "world-head" co "B")
-               "C" (u "world-head" co "C")}
+       :heads {"A" (u "world-head" db "A")
+               "B" (u "world-head" db "B")
+               "C" (u "world-head" db "C")}
        :locks {"A" (:lock eA3) "B" (:lock eB1) "C" (:lock eC1)}})))
 
 ;; ===========================================================================
@@ -232,7 +232,7 @@
 ;; ===========================================================================
 (bar "substrate: the pure world kernel is on the classpath"
      (:ok kernel))
-(bar "substrate: coord.clj defines all 13 world verbs plus the compose glue"
+(bar "substrate: database.clj defines all 13 world verbs plus the compose glue"
      (every? #(some? (uv %))
              ["world-create!" "world-fork!" "world-head" "world-blob-put!" "world-blob"
               "world-version" "world-manifest" "world-begin!" "world-append!" "world-seal!"
@@ -241,7 +241,7 @@
 (bar "substrate: world-compose is a READ — it never appends to the log"
      (let [f      @fx
            before (log-sha (:log f))
-           _      (u "world-compose" (:co f) (get-in f [:heads "A"])
+           _      (u "world-compose" (:db f) (get-in f [:heads "A"])
                      [[slot-util (get-in f [:heads "B"])]])]
        (= before (log-sha (:log f)))))
 
@@ -251,21 +251,21 @@
 (bar "create: A's derived head starts at the EMPTY root Version"
      (let [f @fx] (= (:root f) (:head0 f))))
 (bar "create: the newborn world has an EMPTY manifest (nothing materialized)"
-     (let [f @fx] (= [] (vec (u "world-manifest" (:co f) (:head0 f))))))
+     (let [f @fx] (= [] (vec (u "world-manifest" (:db f) (:head0 f))))))
 (bar "create: re-creating an existing world is rejected :world-exists"
-     (let [f @fx] (= :world-exists (:reject (u "world-create!" (:co f) "w" "A" (:root f))))))
+     (let [f @fx] (= :world-exists (:reject (u "world-create!" (:db f) "w" "A" (:root f))))))
 (bar "edit A: the seal produced a content-addressed VersionId"
      (let [f @fx] (hex64? (get-in f [:A1 :version]))))
 (bar "edit A: promotion moved A's head to exactly that Version"
      (let [f @fx] (= (get-in f [:A1 :version]) (:ok (get-in f [:A1 :promote])))))
 (bar "edit A: A's manifest resolves BOTH slots to the exact blobs that were put"
      (let [f @fx
-           m (u "world-manifest" (:co f) (get-in f [:A1 :version]))]
+           m (u "world-manifest" (:db f) (get-in f [:A1 :version]))]
        (and (= [slot-core slot-util] (mapv :slot m))
             (= [(:bc1 f) (:bu1 f)] (mapv :blob-id m)))))
 (bar "edit A: the blob bytes round-trip out of the LOG, byte-identically"
      (let [f @fx]
-       (java.util.Arrays/equals ^bytes raw-core1 ^bytes (u "world-blob" (:co f) (:bc1 f)))))
+       (java.util.Arrays/equals ^bytes raw-core1 ^bytes (u "world-blob" (:db f) (:bc1 f)))))
 
 ;; ===========================================================================
 (println "\n-- 2. FORK B from A in O(1), with NO PERSISTENT CHECKOUT --")
@@ -306,21 +306,21 @@
   (delay
     (letfn [(cost [tag n]
               (let [log  (str wdir "/" tag ".log")
-                    co   (new-coord log)
+                    db   (new-database log)
                     root (k "version-id" nil [])
-                    _    (u "world-create!" co "w" "Wrld" root)
-                    bid  (:ok (u "world-blob-put!" co "w" raw-core1))
-                    cid  (:ok (u "world-begin!" co "w" "Wrld" root n-a1))
+                    _    (u "world-create!" db "w" "Wrld" root)
+                    bid  (:ok (u "world-blob-put!" db "w" raw-core1))
+                    cid  (:ok (u "world-begin!" db "w" "Wrld" root n-a1))
                     _    (doseq [i (range n)]
-                           (u "world-append!" co "w" cid
+                           (u "world-append!" db "w" cid
                               (k "put-op" (str "src/pkg/f" i ".bclj") mode bid)))
-                    v    (:ok (u "world-seal!" co "w" cid))
-                    rc   (:ok (u "world-build!" co "w" (:ok (u "world-lock!" co v build-spec))))
-                    _    (u "world-promote!" co "w" "Wrld" root cid rc)
+                    v    (:ok (u "world-seal!" db "w" cid))
+                    rc   (:ok (u "world-build!" db "w" (:ok (u "world-lock!" db v build-spec))))
+                    _    (u "world-promote!" db "w" "Wrld" root cid rc)
                     pre  (flen log)
-                    _    (u "world-fork!" co "w" "Fork" (u "world-head" co "Wrld"))]
+                    _    (u "world-fork!" db "w" "Fork" (u "world-head" db "Wrld"))]
                 {:bytes (- (flen log) pre)
-                 :slots (count (u "world-manifest" co v))}))]
+                 :slots (count (u "world-manifest" db v))}))]
       {:thin (cost "thin" 1) :wide (cost "wide" 512)})))
 (bar "fork B: the two measured bases really do differ 512x in manifest size"
      (let [c @fork-cost] (and (= 1 (:slots (:thin c))) (= 512 (:slots (:wide c))))))
@@ -338,7 +338,7 @@
 (println "\n-- 3. graph-edit BOTH and build EXACT per-world locks (no bleed) --")
 ;; ===========================================================================
 (bar "edit both: B's head advanced to B's own sealed Version"
-     (let [f @fx] (= (get-in f [:B1 :version]) (u "world-head" (:co f) "B"))))
+     (let [f @fx] (= (get-in f [:B1 :version]) (u "world-head" (:db f) "B"))))
 (bar "edit both: editing B did NOT move A's head"
      (let [f @fx] (not= (get-in f [:B1 :version]) (get-in f [:A2 :version]))))
 (bar "edit both: A advanced to its OWN Version, distinct from B's"
@@ -347,29 +347,29 @@
             (not= (get-in f [:A2 :version]) (get-in f [:B1 :version])))))
 (bar "edit both: B's edit is SPARSE — one overlay op over an inherited 2-slot base"
      (let [f @fx
-           r (u "world-version" (:co f) (get-in f [:B1 :version]))]
+           r (u "world-version" (:db f) (get-in f [:B1 :version]))]
        (and (= 1 (count (:overlay r)))
             (= (get-in f [:A1 :version]) (:base r)))))
 (bar "no bleed: A resolves util to the ORIGINAL blob (B's edit is invisible)"
      (let [f @fx
-           m (u "world-manifest" (:co f) (get-in f [:A2 :version]))]
+           m (u "world-manifest" (:db f) (get-in f [:A2 :version]))]
        (= (:bu1 f) (:blob-id (first (filter #(= slot-util (:slot %)) m))))))
 (bar "no bleed: A resolves core to A's OWN edited blob"
      (let [f @fx
-           m (u "world-manifest" (:co f) (get-in f [:A2 :version]))]
+           m (u "world-manifest" (:db f) (get-in f [:A2 :version]))]
        (= (:bc2 f) (:blob-id (first (filter #(= slot-core (:slot %)) m))))))
 (bar "no bleed: B resolves util to B's OWN edited blob"
      (let [f @fx
-           m (u "world-manifest" (:co f) (get-in f [:B1 :version]))]
+           m (u "world-manifest" (:db f) (get-in f [:B1 :version]))]
        (= (:bu2 f) (:blob-id (first (filter #(= slot-util (:slot %)) m))))))
 (bar "no bleed: B resolves core to the ORIGINAL blob (A's edit is invisible)"
      (let [f @fx
-           m (u "world-manifest" (:co f) (get-in f [:B1 :version]))]
+           m (u "world-manifest" (:db f) (get-in f [:B1 :version]))]
        (= (:bc1 f) (:blob-id (first (filter #(= slot-core (:slot %)) m))))))
 (bar "no bleed: the two manifests share NO blob on any common slot"
      (let [f  @fx
-           ma (u "world-manifest" (:co f) (get-in f [:A2 :version]))
-           mb (u "world-manifest" (:co f) (get-in f [:B1 :version]))]
+           ma (u "world-manifest" (:db f) (get-in f [:A2 :version]))
+           mb (u "world-manifest" (:db f) (get-in f [:B1 :version]))]
        (and (= (mapv :slot ma) (mapv :slot mb))
             (empty? (filter true? (map #(= (:blob-id %1) (:blob-id %2)) ma mb))))))
 (bar "locks: A and B get DIFFERENT locks under the IDENTICAL build spec"
@@ -377,11 +377,11 @@
 (bar "locks: a lock is a PURE function of (version, spec) — recomputing repeats it"
      (let [f @fx]
        (= (get-in f [:A2 :lock])
-          (:ok (u "world-lock!" (:co f) (get-in f [:A2 :version]) build-spec)))))
+          (:ok (u "world-lock!" (:db f) (get-in f [:A2 :version]) build-spec)))))
 (bar "locks: recomputing a lock appends NOTHING (it is already durable)"
      (let [f      @fx
            before (log-sha (:log f))]
-       (u "world-lock!" (:co f) (get-in f [:B1 :version]) build-spec)
+       (u "world-lock!" (:db f) (get-in f [:B1 :version]) build-spec)
        (= before (log-sha (:log f)))))
 (bar "build: A's receipt names A's EXACT version and A's EXACT lock"
      (let [f @fx
@@ -399,16 +399,16 @@
 (bar "build: rebuilding the same lock re-attests the IDENTICAL receipt id"
      (let [f @fx]
        (= (:receipt (get-in f [:B1 :receipt]))
-          (:receipt (:ok (u "world-build!" (:co f) "w" (get-in f [:B1 :lock])))))))
+          (:receipt (:ok (u "world-build!" (:db f) "w" (get-in f [:B1 :lock])))))))
 (bar "build: an unknown lock is rejected :world-lock-unknown"
      (let [f @fx]
        (= :world-lock-unknown
-          (:reject (u "world-build!" (:co f) "w" (apply str (repeat 64 "0")))))))
+          (:reject (u "world-build!" (:db f) "w" (apply str (repeat 64 "0")))))))
 (bar "build: every build INPUT is durable — each manifest blob reads back from the log"
      (let [f @fx]
-       (every? (fn [row] (some? (u "world-blob" (:co f) (:blob-id row))))
-               (concat (u "world-manifest" (:co f) (get-in f [:A2 :version]))
-                       (u "world-manifest" (:co f) (get-in f [:B1 :version]))))))
+       (every? (fn [row] (some? (u "world-blob" (:db f) (:blob-id row))))
+               (concat (u "world-manifest" (:db f) (get-in f [:A2 :version]))
+                       (u "world-manifest" (:db f) (get-in f [:B1 :version]))))))
 
 ;; ===========================================================================
 (println "\n-- 4. COMPOSE a MIXED C from A and B, and build it --")
@@ -428,30 +428,30 @@
           (get-in f [:C1 :version]))))
 (bar "compose C: C's head is DISTINCT from both A's and B's — a genuine mixture"
      (let [f @fx]
-       (and (= (get-in f [:C1 :version]) (u "world-head" (:co f) "C"))
+       (and (= (get-in f [:C1 :version]) (u "world-head" (:db f) "C"))
             (not= (get-in f [:C1 :version]) (get-in f [:A2 :version]))
             (not= (get-in f [:C1 :version]) (get-in f [:B1 :version])))))
 (bar "compose C: C takes core from A — exact blob AND exact origin Version"
      (let [f @fx
            row (first (filter #(= slot-core (:slot %))
-                              (u "world-manifest" (:co f) (get-in f [:C1 :version]))))]
+                              (u "world-manifest" (:db f) (get-in f [:C1 :version]))))]
        (and (= (:bc2 f) (:blob-id row))
             (= (get-in f [:A2 :version]) (:origin row)))))
 (bar "compose C: C takes util from B — exact blob AND B's version as origin"
      (let [f @fx
            row (first (filter #(= slot-util (:slot %))
-                              (u "world-manifest" (:co f) (get-in f [:C1 :version]))))]
+                              (u "world-manifest" (:db f) (get-in f [:C1 :version]))))]
        (and (= (:bu2 f) (:blob-id row))
             (= (get-in f [:C1 :version]) (:origin row)))))
 (bar "compose C: composition is DETERMINISTIC — recomposing yields the same record"
      (let [f @fx]
-       (= (:crec f) (u "world-compose" (:co f) (get-in f [:A2 :version])
+       (= (:crec f) (u "world-compose" (:db f) (get-in f [:A2 :version])
                        [[slot-util (get-in f [:B1 :version])]]))))
 (bar "compose C: composition is INDEPENDENT of selection order"
      (let [f @fx
-           a (u "world-compose" (:co f) (get-in f [:A2 :version])
+           a (u "world-compose" (:db f) (get-in f [:A2 :version])
                 [[slot-util (get-in f [:B1 :version])] [slot-core (get-in f [:A2 :version])]])
-           b (u "world-compose" (:co f) (get-in f [:A2 :version])
+           b (u "world-compose" (:db f) (get-in f [:A2 :version])
                 [[slot-core (get-in f [:A2 :version])] [slot-util (get-in f [:B1 :version])]])]
        (= a b)))
 (bar "compose C: C gets its OWN lock and a receipt naming its OWN version"
@@ -461,8 +461,8 @@
             (= (get-in f [:C1 :version]) (:version (get-in f [:C1 :receipt]))))))
 (bar "compose C: composing moved NEITHER A's nor B's head"
      (let [f @fx]
-       (and (= (get-in f [:B1 :version]) (u "world-head" (:co f) "B"))
-            (= (get-in f [:A3 :version]) (u "world-head" (:co f) "A")))))
+       (and (= (get-in f [:B1 :version]) (u "world-head" (:db f) "B"))
+            (= (get-in f [:A3 :version]) (u "world-head" (:db f) "A")))))
 (bar "compose C: STILL no persistent checkout after composing three worlds"
      (do @fx (only-logs?)))
 
@@ -477,7 +477,7 @@
      (let [f @fx]
        (and (hex64? (get-in f [:rival :version]))
             (= (get-in f [:rival :version])
-               (:sealed (u "world-candidate" (:co f) (get-in f [:rival :cid])))))))
+               (:sealed (u "world-candidate" (:db f) (get-in f [:rival :cid])))))))
 (bar "rival: the winner moved A's head out from under it first"
      (let [f @fx]
        (and (= (get-in f [:rival :from]) (get-in f [:A2 :version]))
@@ -495,7 +495,7 @@
             (= (get-in f [:rival :len-pre]) (get-in f [:rival :len-post])))))
 (bar "rival: the winner's slot still resolves — the loser overwrote nothing"
      (let [f @fx
-           m (u "world-manifest" (:co f) (u "world-head" (:co f) "A"))]
+           m (u "world-manifest" (:db f) (u "world-head" (:db f) "A"))]
        (= (:bnew f) (:blob-id (first (filter #(= slot-new (:slot %)) m))))))
 (bar "rival: A's head replays as the WINNER's version after a cold restart"
      (let [f @fx]
@@ -503,9 +503,9 @@
           (u "world-head" (reopen (copy-log (:log f) "rival-restart")) "A"))))
 (bar "rival: B and C were untouched by A's contested promotion"
      (let [f  @fx
-           co (reopen (copy-log (:log f) "rival-others"))]
-       (and (= (get-in f [:B1 :version]) (u "world-head" co "B"))
-            (= (get-in f [:C1 :version]) (u "world-head" co "C")))))
+           db (reopen (copy-log (:log f) "rival-others"))]
+       (and (= (get-in f [:B1 :version]) (u "world-head" db "B"))
+            (= (get-in f [:C1 :version]) (u "world-head" db "C")))))
 
 ;; ===========================================================================
 (println "\n-- 6. COLD RESTART reproduces the SAME lock, in a FRESH PROCESS --")
@@ -517,14 +517,14 @@
 ;; already durable, the probe would fail rather than silently mint one.
 (def probe-path (str scratch "/slice_lock_probe.clj"))
 (def probe-src
-  (str "(load-file \"coord.clj\")\n"
+  (str "(load-file \"database.clj\")\n"
        "(let [[log nm spec] *command-line-args*\n"
-       "      co   {:store (replay log) :log nil :lock (Object.)}\n"
-       "      head (world-head co nm)\n"
-       "      lock (:ok (world-lock! co head (clojure.edn/read-string spec)))\n"
-       "      man  (world-manifest co head)\n"
+       "      db   {:store (replay log) :log nil :lock (Object.)}\n"
+       "      head (world-head db nm)\n"
+       "      lock (:ok (world-lock! db head (clojure.edn/read-string spec)))\n"
+       "      man  (world-manifest db head)\n"
        "      md   (java.security.MessageDigest/getInstance \"SHA-256\")]\n"
-       "  (doseq [row man] (.update md ^bytes (world-blob co (:blob-id row))))\n"
+       "  (doseq [row man] (.update md ^bytes (world-blob db (:blob-id row))))\n"
        "  (println (str head \"\\t\" lock \"\\t\" (w/render-record (vec man)) \"\\t\"\n"
        "                (apply str (map #(format \"%02x\" %) (.digest md))))))\n"))
 (spit probe-path probe-src)
@@ -545,18 +545,18 @@
 (defn inputs-sha
   "The build inputs of a world, in-process: every manifest blob's bytes in
   manifest order, hashed as one stream."
-  [co head]
+  [db head]
   (let [md (java.security.MessageDigest/getInstance "SHA-256")]
-    (doseq [row (u "world-manifest" co head)]
-      (.update md ^bytes (u "world-blob" co (:blob-id row))))
+    (doseq [row (u "world-manifest" db head)]
+      (.update md ^bytes (u "world-blob" db (:blob-id row))))
     (apply str (map #(format "%02x" %) (.digest md)))))
 
 (bar "restart: an IN-PROCESS replay reproduces all three derived heads"
      (let [f  @fx
-           co (reopen (copy-log (:log f) "restart-heads"))]
-       (= (:heads f) {"A" (u "world-head" co "A")
-                      "B" (u "world-head" co "B")
-                      "C" (u "world-head" co "C")})))
+           db (reopen (copy-log (:log f) "restart-heads"))]
+       (= (:heads f) {"A" (u "world-head" db "A")
+                      "B" (u "world-head" db "B")
+                      "C" (u "world-head" db "C")})))
 (bar "restart: replay is idempotent — two independent replays agree on every head"
      (let [f  @fx
            r1 (reopen (copy-log (:log f) "idem-a"))
@@ -565,9 +565,9 @@
           (mapv #(u "world-head" r2 %) ["A" "B" "C"]))))
 (bar "restart: the in-process replay recomputes A's IDENTICAL lock"
      (let [f  @fx
-           co (reopen (copy-log (:log f) "restart-lock-a"))]
+           db (reopen (copy-log (:log f) "restart-lock-a"))]
        (= (get-in f [:locks "A"])
-          (:ok (u "world-lock!" co (u "world-head" co "A") build-spec)))))
+          (:ok (u "world-lock!" db (u "world-head" db "A") build-spec)))))
 (bar "restart: FRESH PROCESS — A's head is byte-identical"
      (let [f @fx] (= (get-in f [:heads "A"]) (:head (get @cold "A")))))
 (bar "restart: FRESH PROCESS — A's WorldLockId is byte-identical"
@@ -583,12 +583,12 @@
 (bar "restart: FRESH PROCESS — every resolved manifest is identical, C's mixture included"
      (let [f @fx]
        (every? (fn [nm]
-                 (= (k "render-record" (vec (u "world-manifest" (:co f) (get-in f [:heads nm]))))
+                 (= (k "render-record" (vec (u "world-manifest" (:db f) (get-in f [:heads nm]))))
                     (:manifest (get @cold nm))))
                ["A" "B" "C"])))
 (bar "restart: FRESH PROCESS — the BUILD INPUT bytes hash identically for all three"
      (let [f @fx]
-       (every? (fn [nm] (= (inputs-sha (:co f) (get-in f [:heads nm]))
+       (every? (fn [nm] (= (inputs-sha (:db f) (get-in f [:heads nm]))
                            (:inputs (get @cold nm))))
                ["A" "B" "C"])))
 (bar "restart: the cold probe never wrote — its log copy is byte-unchanged"

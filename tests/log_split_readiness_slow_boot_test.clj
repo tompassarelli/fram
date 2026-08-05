@@ -10,21 +10,21 @@
 
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-readiness-slow-boot-" (System/nanoTime)))
 (.mkdirs (java.io.File. tmp))
-(def coord (str tmp "/coordination.log"))
-(spit coord "")
+(def database (str tmp "/coordination.log"))
+(spit database "")
 (def port (free-port))
 (def boot-delay-s 8) ;; > old fixed 5s window; well inside the new bounded deadline
 
 (def child
   (p/process [(str (System/getProperty "user.dir") "/tests/fixtures/slow_daemon_wrapper.sh")
-              (str port) coord]
+              (str port) database]
              {:dir (System/getProperty "user.dir")
               :extra-env {"FRAM_TEST_BOOT_DELAY_S" (str boot-delay-s)}
               :out :string :err :string}))
 
 (try
   (let [start (System/currentTimeMillis)
-        result (await-ready child port #(not (neg? (rt/coord-version %))))
+        result (await-ready child port #(not (neg? (rt/database-version %))))
         elapsed (- (System/currentTimeMillis) start)]
     (assert (= :ready result))
     (assert (>= elapsed (* boot-delay-s 1000))

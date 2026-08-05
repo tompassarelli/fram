@@ -6,11 +6,11 @@
 
 (def prefix "{:tx 1 :p \"e\" :r \"a\"}\n{:tx 2 :p \"e\" :r \"b\"}\n")
 (def gen (m/bytes->str (m/gen-record-bytes {:tx 3 :gen-n 1 :telem-prefix prefix})))
-(def coord (m/str->bytes (str gen "\n" prefix)))
+(def database (m/str->bytes (str gen "\n" prefix)))
 (def telem (m/str->bytes (str prefix "{:tx 2 :p \"e\" :r \"b\"}\n")))
 (def bp-mult
   (count (filter (fn [[tx _ _]] (= tx 2))
-                 (m/kev-vector (m/logical-events :bprime coord telem)))))
+                 (m/kev-vector (m/logical-events :bprime database telem)))))
 
 (h/section "NEGATIVE CONTROL (must fail)")
 ;; DELIBERATELY WRONG: claim B-prime preserves the append (it suppresses it).

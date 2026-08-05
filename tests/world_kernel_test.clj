@@ -274,7 +274,7 @@
 (bar "bound: max-record-bytes is EXACTLY 786432" (= 786432 (kd "max-record-bytes")))
 (bar "bound: max-name-bytes is EXACTLY 63" (= 63 (kd "max-name-bytes")))
 (bar "bound: max-slot-bytes is EXACTLY 1024" (= 1024 (kd "max-slot-bytes")))
-;; coord_daemon.clj:290 (def ^:const max-line-bytes (* 1024 1024)) is the wire cap
+;; server.clj:290 (def ^:const max-line-bytes (* 1024 1024)) is the wire cap
 ;; the world record must stay strictly under, with the margin the design states.
 (bar "bound: the record ceiling is exactly 262144 B below the 1 MiB wire cap"
      (= 262144 (- (* 1024 1024) (kd "max-record-bytes"))))

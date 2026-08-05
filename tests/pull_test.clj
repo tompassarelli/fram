@@ -1,11 +1,11 @@
-;; pull_test.clj — PULL API gate (in-process, mirrors coord_test.clj bootstrap).
-;; Drives pull/validate + pull/run against a store built through the coord API; no
-;; network daemon. A dispatch-level test at the end boots the daemon's `co`/`schema`
+;; pull_test.clj — PULL API gate (in-process, mirrors database_test.clj bootstrap).
+;; Drives pull/validate + pull/run against a store built through the database API; no
+;; network daemon. A dispatch-level test at the end boots the daemon's `db`/`schema`
 ;; state in-process and exercises execute-query for {:op :pull}.
 ;;   bb -cp out tests/pull_test.clj
 (require '[fram.store :as c] '[fram.schema :as s])
-(load-file "coord.clj")   ; coord readers land in `user` (pull references them as user/…)
-(require 'pull)           ; the graph-authored module (out/pull.clj). MUST follow coord.clj
+(load-file "database.clj")   ; database readers land in `user` (pull references them as user/…)
+(require 'pull)           ; the graph-authored module (out/pull.clj). MUST follow database.clj
                           ; (analysis-time qualified-symbol resolution)
 
 (def checks (atom []))
@@ -13,24 +13,24 @@
 (defn throws? [f] (try (f) false (catch Throwable _ true)))
 
 (let [log "/tmp/pull-test.log"
-      co  (new-coord log)
-      st  (:store co)]
-  (register-pred! co "title" "single" "literal")
-  (register-pred! co "status" "single" "literal")
-  (register-pred! co "tag" "multi" "literal")
-  (register-pred! co "depends_on" "multi" "ref")
-  (register-pred! co "part_of" "single" "ref")
-  (register-pred! co "rel" "multi" "ref")            ; unguarded ref: for cycle/depth tests
+      db  (new-database log)
+      st  (:store db)]
+  (register-pred! db "title" "single" "literal")
+  (register-pred! db "status" "single" "literal")
+  (register-pred! db "tag" "multi" "literal")
+  (register-pred! db "depends_on" "multi" "ref")
+  (register-pred! db "part_of" "single" "ref")
+  (register-pred! db "rel" "multi" "ref")            ; unguarded ref: for cycle/depth tests
 
   ;; --- corpus ---------------------------------------------------------------
-  (commit! co "u" "@x" "title" :assert "Ship v1" nil)
-  (commit! co "u" "@x" "status" :assert "open" nil)
-  (commit! co "u" "@x" "tag" :assert "red" nil)
-  (commit! co "u" "@x" "tag" :assert "blue" nil)
-  (commit! co "u" "@x" "depends_on" :link "@dep1" nil)
-  (commit! co "u" "@dep1" "title" :assert "Design" nil)
-  (commit! co "u" "@a" "part_of" :link "@x" nil)     ; reverse: (@a part_of @x)
-  (commit! co "u" "@b" "part_of" :link "@x" nil)
+  (commit! db "u" "@x" "title" :assert "Ship v1" nil)
+  (commit! db "u" "@x" "status" :assert "open" nil)
+  (commit! db "u" "@x" "tag" :assert "red" nil)
+  (commit! db "u" "@x" "tag" :assert "blue" nil)
+  (commit! db "u" "@x" "depends_on" :link "@dep1" nil)
+  (commit! db "u" "@dep1" "title" :assert "Design" nil)
+  (commit! db "u" "@a" "part_of" :link "@x" nil)     ; reverse: (@a part_of @x)
+  (commit! db "u" "@b" "part_of" :link "@x" nil)
 
   ;; --- (1) flat scalar attrs ------------------------------------------------
   (let [r (pull/run st "@x" ["title" "status"] {})]
@@ -76,7 +76,7 @@
     (chk "prov: live value :withdrawn false" (= false (:withdrawn p))))
 
   ;; --- (7) provenance surfaces a WITHDRAWN value with attribution ------------
-  (retract! co "w" "@x" "tag" "red" nil "no longer relevant")
+  (retract! db "w" "@x" "tag" "red" nil "no longer relevant")
   (let [plain (pull/run st "@x" ["tag"] {})
         prov  (pull/run st "@x" ["tag"] {:provenance true})
         red   (first (filter #(= "red" (:val %)) (get prov "tag")))]
@@ -93,23 +93,23 @@
          (not= (:ts red) (:withdrawn_at red))))
 
   ;; --- (8) as-of: historical value + historical withdrawal state ------------
-  (let [r1 (commit! co "u" "@y" "status" :assert "s1" nil)
-        r2 (commit! co "u" "@y" "status" :assert "s2" nil)
+  (let [r1 (commit! db "u" "@y" "status" :assert "s1" nil)
+        r2 (commit! db "u" "@y" "status" :assert "s2" nil)
         atS1 (pull/run st "@y" ["status"] {:as-of (:ok r1)})
         now  (pull/run st "@y" ["status"] {})]
     (chk "as-of: sees the historical value at S1" (= "s1" (get atS1 "status")))
     (chk "as-of: current view sees the latest" (= "s2" (get now "status"))))
-  (let [rt (commit! co "u" "@y" "tag" :assert "T" nil)
-        _  (retract! co "u" "@y" "tag" "T" nil)                 ; withdrawn AFTER seqT
+  (let [rt (commit! db "u" "@y" "tag" :assert "T" nil)
+        _  (retract! db "u" "@y" "tag" "T" nil)                 ; withdrawn AFTER seqT
         atT (pull/run st "@y" ["tag"] {:provenance true :as-of (:ok rt)})
         tv  (first (filter #(= "T" (:val %)) (get atT "tag")))]
     (chk "as-of: value withdrawn after S is live at S" (some? tv))
     (chk "as-of: withdrawal after S renders :withdrawn false at S" (= false (:withdrawn tv))))
 
   ;; --- (9) caps: max-depth truncation ---------------------------------------
-  (commit! co "u" "@c1" "rel" :link "@c2" nil)
-  (commit! co "u" "@c2" "rel" :link "@c3" nil)
-  (commit! co "u" "@c3" "rel" :link "@c4" nil)
+  (commit! db "u" "@c1" "rel" :link "@c2" nil)
+  (commit! db "u" "@c2" "rel" :link "@c3" nil)
+  (commit! db "u" "@c3" "rel" :link "@c4" nil)
   (let [r (pull/run st "@c1" [{"rel" :...}] {:max-depth 2})
         c2 (first (get r "rel"))
         c3 (first (get c2 "rel"))
@@ -124,8 +124,8 @@
          (and (= "@dep1" (:fram/id dep)) (:fram/truncated dep) (not (contains? dep "title")))))
 
   ;; --- (11) cycle: :fram/cycle stub + termination ---------------------------
-  (commit! co "u" "@k1" "rel" :link "@k2" nil)
-  (commit! co "u" "@k2" "rel" :link "@k1" nil)
+  (commit! db "u" "@k1" "rel" :link "@k2" nil)
+  (commit! db "u" "@k2" "rel" :link "@k1" nil)
   (let [r (pull/run st "@k1" [{"rel" :...}] {})            ; terminating IS the evidence
         k2 (first (get r "rel"))
         back (first (get k2 "rel"))]
@@ -158,16 +158,16 @@
          (= ["Ship v1" "Design"] (mapv #(get % "title") r)))))
 
 ;; --- (14b) :ts SURVIVES BOOT REPLAY from the v2 log ---------------------------
-;; Commit through a coord (v2 log), capture the LIVE-rendered :ts, then rebuild a fresh
-;; store from that log ALONE via coord/replay and pull the same fact: identical :ts proves
+;; Commit through a database (v2 log), capture the LIVE-rendered :ts, then rebuild a fresh
+;; store from that log ALONE via database/replay and pull the same fact: identical :ts proves
 ;; the wall-clock stamp is durable (recovered from the logged :tx record), not a per-read
-;; clock call. This is the "restart case" — the cheapest coord re-boot idiom (replay a log
+;; clock call. This is the "restart case" — the cheapest database re-boot idiom (replay a log
 ;; into a new store), no socket daemon needed.
 (let [rlog "/tmp/pull-ts-replay.log"
-      co   (new-coord rlog)]
-  (register-pred! co "title" "single" "literal")
-  (commit! co "u" "@r" "title" :assert "Persisted" nil)
-  (let [live    (pull/run (:store co) "@r" ["title"] {:provenance true})
+      db   (new-database rlog)]
+  (register-pred! db "title" "single" "literal")
+  (commit! db "u" "@r" "title" :assert "Persisted" nil)
+  (let [live    (pull/run (:store db) "@r" ["title"] {:provenance true})
         live-ts (:ts (get live "title"))
         st2     (replay rlog)                       ; fresh store rebuilt from the log alone
         boot    (pull/run st2 "@r" ["title"] {:provenance true})
@@ -177,30 +177,30 @@
     (chk "replay: same fact renders the SAME :ts after boot" (= live-ts boot-ts))))
 
 ;; --- (15) WIRE: dispatch-level {:op :pull} through the daemon's execute-query -
-;; Boot the daemon's co/schema/cache state in-process (no socket) and drive the real
+;; Boot the daemon's db/schema/cache state in-process (no socket) and drive the real
 ;; execute-query path, proving edits #2/#3 (query-request? + the :pull case branch) wire
-;; the op end-to-end. If loading coord_daemon.clj fails standalone (it also load-files
+;; the op end-to-end. If loading server.clj fails standalone (it also load-files
 ;; resolve.clj + requires fram.{fold,query,datalog,rt}), we SKIP loudly
 ;; rather than fake the dispatch.
-(let [loaded? (try (load-file "coord_daemon.clj") true
+(let [loaded? (try (load-file "server.clj") true
                    (catch Throwable t
-                     (println "  [SKIP]  wire dispatch: coord_daemon.clj not loadable standalone —"
+                     (println "  [SKIP]  wire dispatch: server.clj not loadable standalone —"
                               (.getMessage t))
                      false))]
   (when loaded?
     ;; Daemon globals don't exist at THIS file's analysis time (coord_daemon loads at
     ;; runtime), so reach them through runtime `resolve` — keeps the core suite above
     ;; decoupled from coord_daemon's own load-time dependencies.
-    (let [co-var     (resolve 'co)
+    (let [db-var     (resolve 'db)
           schema-var (resolve 'schema-view)
           cache-var  (resolve 'cache)
           capture    (resolve 'capture-query-roots!)
           exec       (resolve 'execute-query)
           dlog "/tmp/pull-wire-test.log"
-          dco  (new-coord dlog)]
+          dco  (new-database dlog)]
       (register-pred! dco "title" "single" "literal")
       (commit! dco "u" "@w1" "title" :assert "Wired" nil)
-      (reset! @co-var dco)                      ; the daemon's global coordinator atom
+      (reset! @db-var dco)                      ; the daemon's global coordinator atom
       (reset! @schema-var {})
       (reset! @cache-var {:index nil :version -1})
       (let [roots (capture)

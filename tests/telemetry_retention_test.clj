@@ -56,7 +56,7 @@
             (make-array java.nio.file.attribute.FileAttribute 0)))
       coordination (io/file dir "coordination.log")
       telemetry (io/file dir "telemetry.log")
-      coord-rows [(row 1 "@thread:seed-a" "a")
+      database-rows [(row 1 "@thread:seed-a" "a")
                   (row 2 "@thread:seed-b" "b")]
       old-rows (mapv (fn [i]
                        (row (+ 3 i) (str "@session:old-" i)
@@ -71,7 +71,7 @@
       padding (- 9800 fresh-bytes)
       fresh-rows (update fresh-base (dec (count fresh-base))
                          update :r str (apply str (repeat padding "f")))
-      _ (write-rows! coordination coord-rows)
+      _ (write-rows! coordination database-rows)
       _ (write-rows! telemetry (into old-rows fresh-rows))
       coordination-bytes (.length coordination)
       port (free-port)
@@ -83,7 +83,7 @@
                      "FRAM_REQUIRE_LOG_FENCE" "1"
                      "FRAM_SNAPSHOT_BOOT" "0"))
       daemon (proc/process {:dir root :out :string :err :string :env env}
-                           "clojure" "-M" "coord_daemon.clj" "serve-flat"
+                           "clojure" "-M" "server.clj" "serve-flat"
                            (str port) (.getPath coordination))]
   (try
     (when-not (eventually #(integer? (:version

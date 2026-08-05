@@ -4,7 +4,7 @@
          '[cheshire.core :as json]
          '[clojure.java.io :as io]
          '[clojure.string :as str]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.rt :as rt]
          '[fram.types :as terms])
 (import '[java.net ServerSocket])
@@ -52,7 +52,7 @@
 (def inherited
   (apply dissoc (into {} (System/getenv))
          ["FRAM_LOG" "FRAM_THREADS" "FRAM_TELEMETRY_LOG" "FRAM_GRAPH_EDIT"
-          "FRAM_FLIP" "FRAM_MCP_PROFILE" "FRAM_COORD_TLS"]))
+          "FRAM_FLIP" "FRAM_MCP_PROFILE" "FRAM_SERVER_TLS"]))
 (def daemon
   (proc/process {:dir root :env (assoc inherited "FRAM_SNAPSHOT_BOOT" "0")
                  :out :inherit :err :inherit}
@@ -94,7 +94,7 @@
         run @(proc/process
               {:dir root :in input :out :string :err :string
                :env (assoc inherited
-                           "FRAM_PORT" (str port)
+                           "FRAM_SERVER_PORT" (str port)
                            "FRAM_SPACE_ID" space
                            "FRAM_GRAPH_OPS_LOG" "off")}
               "bin/fram-mcp")
@@ -155,7 +155,7 @@
                          {:jsonrpc "2.0" :id 22 :method "tools/list"})]) "\n")
         run @(proc/process
               {:dir root :in input :out :string :err :string
-               :env (assoc inherited "FRAM_PORT" (str port)
+               :env (assoc inherited "FRAM_SERVER_PORT" (str port)
                            "FRAM_SPACE_ID" space "FRAM_GRAPH_OPS_LOG" "off")}
               "bin/fram-mcp")
         responses (parse-responses (:out run))]

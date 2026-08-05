@@ -11,7 +11,7 @@
 
 (def e2e-args *command-line-args*)
 (binding [*command-line-args* []]
-  (load-file "coord_daemon.clj"))
+  (load-file "server.clj"))
 
 (def checks (atom []))
 (def program-version-before (atom nil))
@@ -69,7 +69,7 @@
 
 (defn version! [port space]
   (-> (rt/native-call! port space :rpc/version
-                       coord-daemon-wire/rpc-unit nil nil nil)
+                       framrpc/rpc-unit nil nil nil)
       rt/require-native-success!
       t/rpcresponse-served-version))
 
@@ -132,7 +132,7 @@
       result)))
 (def server
   (when (zero? (:exit ingest))
-    (future (coord-daemon/serve! port code-log space :active))))
+    (future (server/serve! port code-log space :active))))
 
 (def launch-env
   {"NORTH_FRAM_AUTHORITY_INSTANCE_ID" "123e4567-e89b-42d3-a456-426614174000"
@@ -158,7 +158,7 @@
             {:mcpServers
             {:fram {:command (str (io/file fram-root "bin/fram-mcp"))
                     :args []
-                    :env {:FRAM_SPACE_ID space :FRAM_PORT (str port)
+                    :env {:FRAM_SPACE_ID space :FRAM_SERVER_PORT (str port)
                           :FRAM_LOG code-log}}
              :fram-graph-control {:command runtime :args ["mcp"]
                                   :env launch-env}}}))

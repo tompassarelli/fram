@@ -7,7 +7,7 @@
          '[fram.store :as store]
          '[fram.types :as t])
 
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (defn data-triple? [value]
   (and (t/triple? value)
@@ -26,10 +26,10 @@
       (println "usage: bb tests/fri2_replay_zig_state.clj FRAMLOG OUTPUT-DIR"))
     (System/exit 2))
   (.mkdirs (io/file output-dir))
-  (let [co (coord/open-coordinator! log-path)
-        context (:term-store co)
+  (let [db (database/open-database! log-path)
+        context (:term-store db)
         version (store/current-sequence context)
-        facts (filterv data-triple? (coord/live-propositions co))
+        facts (filterv data-triple? (database/live-propositions db))
         frames (store/transaction-frames-between @context 0 version)]
     (spit (io/file output-dir "state")
           (str "final-version\t" version "\n"

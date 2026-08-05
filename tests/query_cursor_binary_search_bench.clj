@@ -1,10 +1,10 @@
 ;; BENCH: time a full :rpc/query drain (10k rows, page limit 100).
 ;; Run: bb -cp out tests/query_cursor_binary_search_bench.clj
 (require '[clojure.java.io :as io]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (defn free-port []
@@ -60,7 +60,7 @@
 (def log-path (str (io/file scratch "history.framlog")))
 (def space "query-cursor-bench")
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (eventually #(request! port space :rpc/version wire/rpc-unit))
 

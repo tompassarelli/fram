@@ -4,7 +4,7 @@
 (require '[clojure.java.io :as io]
          '[fram.store :as c]
          '[fram.world :as w])
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (def failures (atom 0))
 (def total (atom 0))
@@ -30,23 +30,23 @@
 (.mkdirs (io/file scratch))
 
 (def log (str scratch "/source.log"))
-(def co (new-coord log))
-(register-pred! co "status" "single" "literal")
-(commit! co "w7" "fixture" "status" :assert "ready" nil)
+(def db (new-database log))
+(register-pred! db "status" "single" "literal")
+(commit! db "w7" "fixture" "status" :assert "ready" nil)
 
 (def root (w/version-id nil []))
-(world-create! co "w7" "sweep" root)
-(def blob (:ok (world-blob-put! co "w7" (bytes "(ns sweep.core)\n"))))
+(world-create! db "w7" "sweep" root)
+(def blob (:ok (world-blob-put! db "w7" (bytes "(ns sweep.core)\n"))))
 (def candidate
-  (:ok (world-begin! co "w7" "sweep" root
+  (:ok (world-begin! db "w7" "sweep" root
                      "0123456789abcdef0123456789abcdef")))
-(world-append! co "w7" candidate
+(world-append! db "w7" candidate
                (w/put-op "src/sweep/core.bclj" "100644" blob))
 
 ;; The seal is deliberately the final block: it contains a Version record,
 ;; declared op-count, sealed digest, and its terminating commit.
 (def block-start (.length (io/file log)))
-(world-seal! co "w7" candidate)
+(world-seal! db "w7" candidate)
 (def source-bytes (read-bytes log))
 (def block-end (alength source-bytes))
 (def block-length (- block-end block-start))

@@ -10,7 +10,7 @@
 ;;      nonzero before serving a single request, even with an otherwise fully
 ;;      valid restricted environment.
 ;;   C. GRAPH-EDIT STARTUP FENCE — graph-edit-v1, and full whenever
-;;      FRAM_GRAPH_EDIT=1, refuse to start unless FRAM_FLIP=1; FRAM_PORT and
+;;      FRAM_GRAPH_EDIT=1, refuse to start unless FRAM_FLIP=1; FRAM_SERVER_PORT and
 ;;      FRAM_CODE_PORT are valid/equal; canonical FRAM_LOG and FRAM_CODE_LOG are
 ;;      equal; and one LIVE STRICT-FENCED coordinator serves that exact in-tree
 ;;      log with the candidate protocol.
@@ -112,7 +112,7 @@
                          :env (assoc daemon-env
                                      "FRAM_REQUIRE_LOG_FENCE"
                                      (if fence? "1" "0"))}
-                        "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) log)]
+                        "clojure" "-M" "server.clj" "serve-flat" (str port) log)]
     (loop [i 0]
       (cond
         (and (.exists (io/file outf)) (str/includes? (slurp outf) "listening on")) proc
@@ -129,14 +129,14 @@
 ;; pass through, so a live north/fram runtime's FRAM_* can never leak in.
 (def base-env
   (cond-> {"PATH" (System/getenv "PATH") "HOME" home
-           "FRAM_LOG" facts-log "FRAM_THREADS" tmp "FRAM_PORT" (str dead-port)}
+           "FRAM_LOG" facts-log "FRAM_THREADS" tmp "FRAM_SERVER_PORT" (str dead-port)}
     (System/getenv "FRAM_RACKET") (assoc "FRAM_RACKET" (System/getenv "FRAM_RACKET"))))
 
 (def good-env
   (merge base-env
          {"FRAM_MCP_PROFILE" "graph-edit-v1"
           "FRAM_GRAPH_EDIT" "1" "FRAM_FLIP" "1"
-          "FRAM_PORT" (str strict-port)
+          "FRAM_SERVER_PORT" (str strict-port)
           "FRAM_CODE_PORT" (str strict-port)
           "FRAM_LOG" code-log
           "FRAM_CODE_LOG" code-log
@@ -224,14 +224,14 @@
 (fence-refuses "full-profile graph-edit with FRAM_FLIP missing"
                (dissoc (assoc good-env "FRAM_MCP_PROFILE" "full") "FRAM_FLIP")
                "FRAM_FLIP=1")
-(fence-refuses "FRAM_PORT missing" (dissoc good-env "FRAM_PORT") "FRAM_PORT")
-(fence-refuses "FRAM_PORT non-numeric" (assoc good-env "FRAM_PORT" "notaport") "FRAM_PORT")
+(fence-refuses "FRAM_SERVER_PORT missing" (dissoc good-env "FRAM_SERVER_PORT") "FRAM_SERVER_PORT")
+(fence-refuses "FRAM_SERVER_PORT non-numeric" (assoc good-env "FRAM_SERVER_PORT" "notaport") "FRAM_SERVER_PORT")
 (fence-refuses "FRAM_CODE_PORT missing" (dissoc good-env "FRAM_CODE_PORT") "FRAM_CODE_PORT")
 (fence-refuses "FRAM_CODE_PORT non-numeric" (assoc good-env "FRAM_CODE_PORT" "notaport") "FRAM_CODE_PORT")
 (fence-refuses "read/edit ports diverge"
-               (assoc good-env "FRAM_PORT" (str dead-port)) "must be equal")
+               (assoc good-env "FRAM_SERVER_PORT" (str dead-port)) "must be equal")
 (fence-refuses "full-profile graph-edit read/edit ports diverge"
-               (assoc good-env "FRAM_MCP_PROFILE" "full" "FRAM_PORT" (str dead-port))
+               (assoc good-env "FRAM_MCP_PROFILE" "full" "FRAM_SERVER_PORT" (str dead-port))
                "must be equal")
 (fence-refuses "FRAM_SRC missing" (dissoc good-env "FRAM_SRC") "FRAM_SRC")
 (fence-refuses "FRAM_SRC relative" (assoc good-env "FRAM_SRC" "srcroot") "ABSOLUTE")
@@ -251,14 +251,14 @@
                "same canonical file")
 (fence-refuses "dead coordinator port"
                (assoc good-env
-                      "FRAM_PORT" (str dead-port)
+                      "FRAM_SERVER_PORT" (str dead-port)
                       "FRAM_CODE_PORT" (str dead-port))
                "strict-fenced")
 (fence-refuses "coordinator serves a DIFFERENT log"
                (assoc good-env "FRAM_LOG" other-log "FRAM_CODE_LOG" other-log) "DIFFERENT")
 (fence-refuses "coordinator is PERMISSIVE (no strict log fence)"
                (assoc good-env
-                      "FRAM_PORT" (str perm-port)
+                      "FRAM_SERVER_PORT" (str perm-port)
                       "FRAM_CODE_PORT" (str perm-port)
                       "FRAM_LOG" permissive-log
                       "FRAM_CODE_LOG" permissive-log)

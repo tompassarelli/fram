@@ -2,20 +2,20 @@
 (require '[fram.text-index :as text-index]
          '[fram.text-search :as text-search]
          '[fram.types :as t])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def checks (atom []))
 (defn chk [name ok] (swap! checks conj [name ok]))
 (def cancellation {:cancelled (atom false) :query-control (atom nil)})
-(def cached! (var coord-daemon/cached-text-index!))
+(def cached! (var server/cached-text-index!))
 (defn snapshot [version] {:generation 7 :space "text-cache" :version version})
 (def propositions
   (vec (for [i (range 100)]
          (t/triple (str "@e" i) "body" (str "alpha beta " i)))))
 (def deadline (+ (System/nanoTime) 60000000000))
 
-(reset! coord-daemon/daemon-generation 7)
-((var coord-daemon/drop-query-caches!))
+(reset! server/server-generation 7)
+((var server/drop-query-caches!))
 
 (def build-count (atom 0))
 (with-redefs [text-index/build-source
@@ -32,8 +32,8 @@
     (chk "an exact snapshot builds once" (= 1 @build-count)))
 
   (reset! build-count 0)
-  (reset! coord-daemon/text-index-cache
-          ((var coord-daemon/empty-text-index-cache) 7))
+  (reset! server/text-index-cache
+          ((var server/empty-text-index-cache) 7))
   (let [barrier (java.util.concurrent.CountDownLatch. 1)
         results (atom [])
         threads
@@ -57,11 +57,11 @@
   (cached!
    (snapshot version) cancellation deadline #(identity propositions)))
 (chk "LRU retains at most four exact snapshot versions"
-     (<= (count (:entries @coord-daemon/text-index-cache)) 4))
+     (<= (count (:entries @server/text-index-cache)) 4))
 (chk "LRU retains at most 64 MiB by estimated resident weight"
-     (<= (:bytes @coord-daemon/text-index-cache) (* 64 1024 1024)))
+     (<= (:bytes @server/text-index-cache) (* 64 1024 1024)))
 (chk "new snapshot keys structurally invalidate old lookup identity"
-     (not (contains? (:entries @coord-daemon/text-index-cache)
+     (not (contains? (:entries @server/text-index-cache)
                      [7 "text-cache" 2])))
 
 (let [entered (promise)
@@ -78,14 +78,14 @@
                       (snapshot 9) cancellation deadline
                       #(identity propositions)))]
           (deref entered 2000 false)
-          (reset! coord-daemon/text-index-cache
-                  ((var coord-daemon/empty-text-index-cache) 8))
+          (reset! server/text-index-cache
+                  ((var server/empty-text-index-cache) 8))
           (deliver release true)
           (deref work 5000 nil)))]
   (chk "generation rollover does not retain a stale completed build"
        (and (some? future-source)
-            (= 8 (:generation @coord-daemon/text-index-cache))
-            (empty? (:entries @coord-daemon/text-index-cache)))))
+            (= 8 (:generation @server/text-index-cache))
+            (empty? (:entries @server/text-index-cache)))))
 
 (let [problem (try
                 (text-search/build-source propositions 1)

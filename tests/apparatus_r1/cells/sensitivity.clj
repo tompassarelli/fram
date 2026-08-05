@@ -12,7 +12,7 @@
 (def f3 "{:tx 3 :op \"assert\" :l \"@c\" :p \"note\" :r \"three\" :ts \"t3\"}")
 (def prefix (str f1 "\n" f2 "\n" f3 "\n"))
 (def gen (m/bytes->str (m/gen-record-bytes {:tx 4 :gen-n 1 :telem-prefix prefix})))
-(def coord-buf (m/str->bytes (str gen "\n" prefix)))
+(def database-buf (m/str->bytes (str gen "\n" prefix)))
 ;; telemetry: consumed prefix + one append byte-identical to retained f2.
 (def telem-buf (m/str->bytes (str prefix f2 "\n")))
 
@@ -20,7 +20,7 @@
   "How many logical events carry tx=2 under the given model (the append counts
    iff it survives shadowing)."
   [model]
-  (let [kv (m/kev-vector (m/logical-events model coord-buf telem-buf))]
+  (let [kv (m/kev-vector (m/logical-events model database-buf telem-buf))]
     (count (filter (fn [[tx _ _]] (= tx 2)) kv))))
 
 (h/section "S1 — post-flip byte-identical telemetry append (identity)")

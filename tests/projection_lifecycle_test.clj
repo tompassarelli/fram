@@ -4,7 +4,7 @@
          '[fram.projection-lifecycle :as lifecycle]
          '[fram.rt :as rt])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def checks (atom []))
 (defn check! [label value]
@@ -159,13 +159,13 @@
                   :dir checkout-root)
         port (free-port)
         server (when (zero? (:exit ingest))
-                 (future (coord-daemon/serve! port log-path space :active)))]
+                 (future (server/serve! port log-path space :active)))]
     (try
       (check! "repair fixture graph is served"
               (some? (and server
                           (eventually
                            #(rt/native-call! port space :rpc/version
-                                             coord-daemon-wire/rpc-unit
+                                             framrpc/rpc-unit
                                              nil nil nil)))))
       (spit target "STALE-COMPLETE")
       (let [stale (lifecycle/projection-status!

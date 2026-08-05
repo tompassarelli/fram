@@ -20,7 +20,7 @@
 (check "strip-at of a bare @ is empty" (= "" (kc/strip-at "@")))
 (check "strip-at of empty is empty" (= "" (kc/strip-at "")))
 
-;; --- ref-shape? (coord_daemon.clj:1821) -------------------------------------
+;; --- ref-shape? (server.clj:1821) -------------------------------------
 (check "ref-shape? accepts @id" (true? (kc/ref-shape? "@2026-07-30-thing")))
 (check "ref-shape? rejects a bare @ (length > 1)" (false? (kc/ref-shape? "@")))
 (check "ref-shape? rejects the empty string" (false? (kc/ref-shape? "")))
@@ -106,7 +106,7 @@
        (clojure.string/starts-with? (kc/key-of-triple "@a" "p" "@r")
                                     (kc/key-of-group "@a" "p")))
 
-;; --- normalize-ref-value (coord_daemon.clj:1875-1882) -----------------------
+;; --- normalize-ref-value (server.clj:1875-1882) -----------------------
 (check "ref-kind promotes a bare id" (= "@thing" (kc/normalize-ref-value "ref" "thing")))
 (check "ref-kind leaves an already-@ value alone" (= "@thing" (kc/normalize-ref-value "ref" "@thing")))
 (check "literal-kind never promotes" (= "thing" (kc/normalize-ref-value "literal" "thing")))
@@ -117,7 +117,7 @@
 (check "ref-kind never promotes an all-whitespace value"
        (= "   " (kc/normalize-ref-value "ref" "   ")))
 
-;; --- lease codec (coord.clj:841-847, coord_daemon.clj:749-751) --------------
+;; --- lease codec (database.clj:841-847, server.clj:749-751) --------------
 (check "lease-subject is the @lease:<res> entity"
        (= "@lease:corpus" (kc/lease-subject "corpus")))
 (check "lease-encode is holder|exp|epoch"
@@ -134,17 +134,17 @@
                    ["non-numeric exp" "agent-7|soon|42"]
                    ["empty string" ""]]]
   (check (str "lease-decode rejects " label) (false? (:valid (kc/lease-decode v)))))
-(check "an empty holder still decodes (coord.clj splits to 3 parts)"
+(check "an empty holder still decodes (database.clj splits to 3 parts)"
        (true? (:valid (kc/lease-decode "|1|2"))))
 
-;; --- lease schema seed lines (coord_daemon.clj:749-751) ---------------------
+;; --- lease schema seed lines (server.clj:749-751) ---------------------
 (check "exactly two lease schema seed lines" (= 2 (count kc/lease-schema-lines)))
 (check "the lease cardinality seed line"
        (= "@lease cardinality single" (first kc/lease-schema-lines)))
 (check "the lease value_kind seed line"
        (= "@lease value_kind literal" (second kc/lease-schema-lines)))
 
-;; --- delivery-trigger? (coord_daemon.clj:2066) ------------------------------
+;; --- delivery-trigger? (server.clj:2066) ------------------------------
 (check "to is a delivery trigger" (true? (kc/delivery-trigger? "to")))
 (check "target is a delivery trigger" (true? (kc/delivery-trigger? "target")))
 (check "an ordinary pred is not a delivery trigger" (false? (kc/delivery-trigger? "title")))

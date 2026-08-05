@@ -1,7 +1,7 @@
 ;; claims_daemon_test.clj — fram.claims is usable through the durable daemon
 ;; boundary, including cold replay of cid-subject evidence and cid-object verdicts.
 (require '[clojure.java.io :as io])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def failures (atom 0))
 (def total (atom 0))

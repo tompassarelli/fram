@@ -1,11 +1,11 @@
 ;; W25 memory/build and warm end-to-end FRAMRPC query bars.
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.store :as store]
          '[fram.text-search :as text-search]
          '[fram.types :as t])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (defn p95 [values]
@@ -97,10 +97,10 @@
          (t/triple (str "@e" i) "body"
                    (str "common group" (mod i 500) " unique" i)))))
 
-(coord/create-triple-log! log-path space)
-(def seed-coordinator (coord/open-coordinator! log-path space))
+(database/create-triple-log! log-path space)
+(def seed-coordinator (database/open-database! log-path space))
 (def seed-result
-  (coord/commit!
+  (database/commit!
    seed-coordinator
    {:operations (mapv store/assert-operation corpus-10k)}))
 (when-not (:ok seed-result)
@@ -108,7 +108,7 @@
 (def log-bytes-before-query (.length (io/file log-path)))
 
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (defn timed-query [needle]
   (let [started (System/nanoTime)
@@ -129,9 +129,9 @@
       (timed-query (str/join " " (repeat i "group42")))
       (timed-query
        (str "group42 " (str/join " " (repeat i "unique42")))))
-    (reset! coord-daemon/query-result-cache
-            ((var coord-daemon/empty-query-result-cache)
-             @coord-daemon/daemon-generation))
+    (reset! server/query-result-cache
+            ((var server/empty-query-result-cache)
+             @server/server-generation))
     (let [missing
           (vec (for [i (range 30)] (timed-query (str "absent" i))))
           one-token
@@ -142,9 +142,9 @@
                  (timed-query
                   (str "group42 " (str/join " " (repeat i "unique42"))))))]
       {:missing missing :one-token one-token :two-token two-token
-       :cache @coord-daemon/query-result-cache})
+       :cache @server/query-result-cache})
     (finally
-      (coord-daemon/shutdown!)
+      (server/shutdown!)
       (deref server 5000 nil))))
 
 (def missing-p95 (p95 (mapv first (:missing rpc-results))))

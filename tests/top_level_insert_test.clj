@@ -114,7 +114,7 @@
            "FRAM_OUT" (str root "/out")
            "FRAM_BIN" (str root "/bin")
            "FRAM_RESOLVE" (str root "/out/resolve.clj")
-           "FRAM_COORD_READ_TIMEOUT_MS" "180000"}
+           "FRAM_SERVER_READ_TIMEOUT_MS" "180000"}
     (System/getenv "JAVA_HOME") (assoc "JAVA_HOME" (System/getenv "JAVA_HOME"))))
 
 (def ingest
@@ -140,10 +140,10 @@
              (str root "/bin/fram-daemon")
              "serve-flat" (str port) code-log))
 
-(defn coord [req]
-  (rt/coord-request-for-log port code-log req))
+(defn database [req]
+  (rt/database-request-for-log port code-log req))
 (defn version []
-  (:version (coord {:op :version})))
+  (:version (database {:op :version})))
 (defn eventually [f]
   (loop [remaining 600]
     (cond
@@ -156,7 +156,7 @@
          {"FRAM_MCP_PROFILE" "graph-edit-v1"
           "FRAM_GRAPH_EDIT" "1"
           "FRAM_FLIP" "1"
-          "FRAM_PORT" (str port)
+          "FRAM_SERVER_PORT" (str port)
           "FRAM_CODE_PORT" (str port)
           "FRAM_LOG" code-log
           "FRAM_CODE_LOG" code-log

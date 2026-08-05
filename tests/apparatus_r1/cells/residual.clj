@@ -12,13 +12,13 @@
 (def prefix "{:tx 1 :p \"e\" :r \"a\"}\n{:tx 2 :p \"e\" :r \"b\"}\n")
 (def prefix-bytes (m/str->bytes prefix))
 (def gen (m/bytes->str (m/gen-record-bytes {:tx 3 :gen-n 1 :telem-prefix prefix})))
-(def coord (str gen "\n" prefix))
+(def database (str gen "\n" prefix))
 ;; a legitimate later append, byte-identical to retained line 1, lands beyond boundary
 (def append "{:tx 1 :p \"e\" :r \"a\"}\n")
 (def telem-mid (str prefix append)) ; mid-residual crash state
 (def cf (io/file root "coordination.log"))
 (def tf (io/file root "telemetry.log"))
-(spit cf coord) (spit tf telem-mid)
+(spit cf database) (spit tf telem-mid)
 
 (h/section "Generation-bound residual oracle")
 (def grec (m/generation-record (remove :torn (m/split-lines (m/read-bytes (.getPath cf))))))
@@ -44,7 +44,7 @@
 ;; and B-prime would (wrongly) shadow it by byte-equality.
 (h/check! "B-prime byte-equality would suppress the legitimate append"
           true (m/bprime-telem-shadow?
-                (m/coord-line-byteset (remove :torn (m/split-lines (m/read-bytes (.getPath cf)))))
+                (m/database-line-byteset (remove :torn (m/split-lines (m/read-bytes (.getPath cf)))))
                 append-line))
 
 (h/finish!)

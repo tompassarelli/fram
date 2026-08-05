@@ -5,7 +5,7 @@
 ;; projection for it.
 ;;
 ;; A thread's bar_evidence fact is a non-authoritative projection written by the
-;; coordinator, so its :by is always "coord". The mechanically bound proof is the
+;; coordinator, so its :by is always "database". The mechanically bound proof is the
 ;; run subject's `run_bar_evidence` JSON (run/thread/reporter/bar/observed);
 ;; cmd-show joins the projection literal — exactly (bar " → " observed) — back to
 ;; it at read time. This test pins the join AND its three honest degradations.
@@ -40,30 +40,30 @@
                "reporter" reporter "run" run "thread" thread
                "version" "north:run-bar-evidence:v1")))
 
-;; One flat log: the thread projections (all written by coord, as north writes
+;; One flat log: the thread projections (all written by database, as north writes
 ;; them) plus the run subjects that carry the true reporters.
 (spit log
       (str
-       (line thread "title" "reporter-join test thread" "coord")
-       (line thread "bar_evidence" (projection bar-a obs-a) "coord")
-       (line thread "bar_evidence" (projection bar-b obs-b) "coord")
-       (line thread "bar_evidence" (projection bar-c obs-c) "coord")
+       (line thread "title" "reporter-join test thread" "database")
+       (line thread "bar_evidence" (projection bar-a obs-a) "database")
+       (line thread "bar_evidence" (projection bar-b obs-b) "database")
+       (line thread "bar_evidence" (projection bar-c obs-c) "database")
        ;; degradation 1: a projection with no run record behind it
-       (line thread "bar_evidence" "bar D → hand-written, no run record" "coord")
-       (line "@run:alpha-1" "run_bar_evidence" (run-record "@run:alpha-1" lane-a bar-a obs-a) "coord")
-       (line "@run:beta-1"  "run_bar_evidence" (run-record "@run:beta-1"  lane-b bar-b obs-b) "coord")
+       (line thread "bar_evidence" "bar D → hand-written, no run record" "database")
+       (line "@run:alpha-1" "run_bar_evidence" (run-record "@run:alpha-1" lane-a bar-a obs-a) "database")
+       (line "@run:beta-1"  "run_bar_evidence" (run-record "@run:beta-1"  lane-b bar-b obs-b) "database")
        ;; degradation 2: two lanes, identical bar AND observation -> one thread
        ;; literal, two candidate reporters -> unresolvable by construction
-       (line "@run:alpha-2" "run_bar_evidence" (run-record "@run:alpha-2" lane-a bar-c obs-c) "coord")
-       (line "@run:beta-2"  "run_bar_evidence" (run-record "@run:beta-2"  lane-b bar-c obs-c) "coord")
+       (line "@run:alpha-2" "run_bar_evidence" (run-record "@run:alpha-2" lane-a bar-c obs-c) "database")
+       (line "@run:beta-2"  "run_bar_evidence" (run-record "@run:beta-2"  lane-b bar-c obs-c) "database")
        ;; degradation 3: a malformed run record must be skipped, never crash
-       (line "@run:broken" "run_bar_evidence" "{not json" "coord")))
+       (line "@run:broken" "run_bar_evidence" "{not json" "database")))
 
-;; FRAM_PORT=1 forces the cold read: no daemon, this log only.
+;; FRAM_SERVER_PORT=1 forces the cold read: no daemon, this log only.
 (def out
   (:out (proc/shell {:out :string :err :string :continue true :dir root
                      :extra-env {"FRAM_LOG" log "FRAM_THREADS" (str tmp "/threads")
-                                 "FRAM_TELEMETRY_LOG" "" "FRAM_PORT" "1"}}
+                                 "FRAM_TELEMETRY_LOG" "" "FRAM_SERVER_PORT" "1"}}
                     "bb" "-cp" "out" "-m" "fram.main" "show" (subs thread 1))))
 
 (def fails (atom 0))
@@ -75,15 +75,15 @@
 
 (println "show output:\n" out)
 (check "lane A's evidence names lane-alpha"
-       (str/includes? (marked (projection bar-a obs-a)) "· by lane-alpha via coord"))
+       (str/includes? (marked (projection bar-a obs-a)) "· by lane-alpha via database"))
 (check "lane B's evidence names lane-beta"
-       (str/includes? (marked (projection bar-b obs-b)) "· by lane-beta via coord"))
+       (str/includes? (marked (projection bar-b obs-b)) "· by lane-beta via database"))
 (check "neither evidence fact claims the other lane"
        (and (not (str/includes? (marked (projection bar-a obs-a)) "beta"))
             (not (str/includes? (marked (projection bar-b obs-b)) "alpha"))))
 (check "no run record -> writer only, no reporter claimed"
        (let [l (marked "bar D →")]
-         (and (str/includes? l "· by coord") (not (str/includes? l "lane-")))))
+         (and (str/includes? l "· by database") (not (str/includes? l "lane-")))))
 (check "run records disagree -> ambiguous, no lane claimed"
        (let [l (marked (projection bar-c obs-c))]
          (and (str/includes? l "reporter ambiguous") (not (str/includes? l "lane-")))))

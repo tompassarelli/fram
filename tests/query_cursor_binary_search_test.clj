@@ -1,11 +1,11 @@
-;; Differential proof for coord_daemon.clj query-cursor-position! (binary search).
+;; Differential proof for server.clj query-cursor-position! (binary search).
 ;; Run: bb -cp out tests/query_cursor_binary_search_test.clj
 (require '[clojure.java.io :as io]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.query :as query]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (def failures (atom []))
@@ -68,7 +68,7 @@
 (def log-path (str (io/file scratch "history.framlog")))
 (def space "query-cursor-binary-search")
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (try
   (check! "listener starts" (some? (eventually #(request! port space :rpc/version wire/rpc-unit))))

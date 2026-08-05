@@ -74,7 +74,7 @@ if len(matches) != 1:
     raise SystemExit("graph-edit runtime smoke: manifest has no unique Fram root")
 print(matches[0])
 ' "$manifest")"
-daemon_source="$fram_package/libexec/fram/coord_daemon.clj"
+daemon_source="$fram_package/libexec/fram/server.clj"
 [[ -r "$daemon_source" ]] || { echo "graph-edit runtime smoke: missing coordinator source" >&2; exit 1; }
 "$python" - "$runtime_driver" "$daemon_source" <<'PY'
 import pathlib

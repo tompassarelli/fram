@@ -1,4 +1,4 @@
-(require '[coord-daemon-wire :as wire]
+(require '[framrpc :as wire]
          '[fram.provider-host :as host]
          '[fram.rt :as rt]
          '[fram.store :as store]

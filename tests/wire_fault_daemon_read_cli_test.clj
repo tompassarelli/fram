@@ -32,12 +32,12 @@
 (defn cli! [port log]
   (let [child (proc/process
                {:dir root :out :string :err :string
-                :extra-env {"FRAM_PORT" (str port)
+                :extra-env {"FRAM_SERVER_PORT" (str port)
                             "FRAM_LOG" log
                             "FRAM_THREADS" (str (.getParent (io/file log)) "/threads")
-                            "FRAM_COORD_RETRY_WINDOW_MS" "0"
-                            "FRAM_COORD_CONNECT_TIMEOUT_MS" "150"
-                            "FRAM_COORD_READ_TIMEOUT_MS" "150"}}
+                            "FRAM_SERVER_RETRY_WINDOW_MS" "0"
+                            "FRAM_SERVER_CONNECT_TIMEOUT_MS" "150"
+                            "FRAM_SERVER_READ_TIMEOUT_MS" "150"}}
                "bin/fram" "show" subject)
         started (System/nanoTime)
         result (future @child)
@@ -74,13 +74,13 @@
                                                     :p "owner" :r "scratch" :by "fault-test"}) "\n"))))
       daemon-port (free-port)
       daemon (proc/process {:dir root :out :string :err :string}
-                           "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
+                           "bb" "-cp" "out" "server.clj" "serve-flat"
                            (str daemon-port) log)]
   (try
     (check! "scratch daemon starts on a free non-7977 port"
             (and (not= 7977 daemon-port)
                  (eventually #(integer? (:version
-                                          ((requiring-resolve 'fram.rt/coord-request-for-log)
+                                          ((requiring-resolve 'fram.rt/database-request-for-log)
                                            daemon-port log {:op :version}))))))
     (let [closed-port (free-port)
           cold (cli! closed-port log)

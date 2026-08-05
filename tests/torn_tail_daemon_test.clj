@@ -10,7 +10,7 @@
 ;; too-low seek. Genuine mid-tail corruption fails closed; a torn unparseable tail
 ;; recovers + warns with the exact byte offset.
 (require '[clojure.string :as str] '[clojure.java.io :as io])
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def failures (atom 0))
 (defn check [name ok?]

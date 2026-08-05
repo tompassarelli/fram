@@ -30,7 +30,7 @@ printf '%s\n' \
 port="$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')"
 cold_started="$(date +%s%N)"
 actual="$(
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_THREADS="$scratch/threads" \
   "$ROOT/bin/fram" show offline
@@ -48,7 +48,7 @@ cold_ms="$(( (cold_stopped - cold_started) / 1000000 ))"
 }
 
 FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
-  bb -cp out coord_daemon.clj serve-flat "$port" "$scratch/coordination.log" \
+  bb -cp out server.clj serve-flat "$port" "$scratch/coordination.log" \
   >"$scratch/daemon.log" 2>&1 &
 daemon_pid="$!"
 
@@ -68,7 +68,7 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 run_show() {
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
@@ -78,7 +78,7 @@ run_show() {
 query_spec='{:find "po" :rules [{:head {:rel "po" :args [{:var "x"} {:var "y"}]} :body [{:rel "fact" :args [{:var "x"} "process_outcome" {:var "y"}]}]}]}'
 
 run_query() {
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
@@ -90,7 +90,7 @@ run_query_quiet() {
 }
 
 run_tell() {
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
@@ -98,7 +98,7 @@ run_tell() {
 }
 
 run_tell_existing() {
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \
@@ -107,7 +107,7 @@ run_tell_existing() {
 }
 
 run_tell_existing_bare_ref() {
-  FRAM_PORT="$port" \
+  FRAM_SERVER_PORT="$port" \
   FRAM_LOG="$scratch/coordination.log" \
   FRAM_TELEMETRY_LOG="$scratch/telemetry.log" \
   FRAM_THREADS="$scratch/threads" \

@@ -20,9 +20,9 @@ required=(
   "$package_root/bin/fram" "$package_root/bin/fram-daemon"
   "$package_root/bin/fram-mcp" "$package_root/bin/fram-primer"
   "$runtime/bin/fram-fast.clj" "$runtime/bin/fram-migrate-triple-log"
-  "$runtime/coord.clj" "$runtime/coord_daemon.clj"
-  "$runtime/coord_writer_authority.clj" "$runtime/rotations.clj"
-  "$runtime/out/coord_daemon_wire.clj" "$runtime/out/fram/rt.clj"
+  "$runtime/database.clj" "$runtime/server.clj"
+  "$runtime/writer_authority.clj" "$runtime/rotations.clj"
+  "$runtime/out/framrpc.clj" "$runtime/out/fram/rt.clj"
   "$runtime/out/fram/types.clj" "$runtime/tests/fram_mcp.clj"
   "$runtime/daemon.classpath"
 )
@@ -108,7 +108,7 @@ start_daemon() {
 }
 
 native_probe='
-(require (quote [coord-daemon-wire :as wire])
+(require (quote [framrpc :as wire])
          (quote [fram.rt :as rt])
          (quote [fram.types :as t]))
 (let [port (parse-long (first *command-line-args*))
@@ -164,7 +164,7 @@ if [[ "$require_proc" == "1" ]]; then
     echo "fram package smoke: daemon cwd is not packaged runtime" >&2; exit 1; }
 fi
 
-cli_env=("$env_bin" -i FRAM_PORT="$port" FRAM_SPACE_ID="$space")
+cli_env=("$env_bin" -i FRAM_SERVER_PORT="$port" FRAM_SPACE_ID="$space")
 tell_output="$("${cli_env[@]}" "$package_root/bin/fram" tell package title installed)"
 "$grep_bin" -Fq "committed via coordinator" <<<"$tell_output" || {
   echo "fram package smoke: native CLI tell failed" >&2; printf '%s\n' "$tell_output" >&2; exit 1; }
@@ -176,7 +176,7 @@ validate_output="$("${cli_env[@]}" "$package_root/bin/fram" validate)"
   echo "fram package smoke: native CLI validate failed" >&2; exit 1; }
 
 mcp_input='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tell","arguments":{"subject":"package","predicate":"kind","object":"smoke"}}}'
-mcp_output="$(printf '%s\n' "$mcp_input" | "$env_bin" -i FRAM_PORT="$port" \
+mcp_output="$(printf '%s\n' "$mcp_input" | "$env_bin" -i FRAM_SERVER_PORT="$port" \
   FRAM_SPACE_ID="$space" FRAM_GRAPH_OPS_LOG=off "$package_root/bin/fram-mcp" \
   2>"$work/mcp.err")"
 if ! "$grep_bin" -Fq '"isError":false' <<<"$mcp_output"; then
@@ -185,7 +185,7 @@ if ! "$grep_bin" -Fq '"isError":false' <<<"$mcp_output"; then
 fi
 
 lease_probe='
-(require (quote [coord-daemon-wire :as wire])
+(require (quote [framrpc :as wire])
          (quote [fram.rt :as rt])
          (quote [fram.types :as t]))
 (let [port (parse-long (first *command-line-args*)) space (second *command-line-args*)
@@ -210,7 +210,7 @@ lease_receipt="$("$bb" -cp "$runtime/out" -e "$lease_probe" "$port" "$space")"
 
 bytes_before="$(wc -c <"$log")"
 wrong_space_probe='
-(require (quote [coord-daemon-wire :as wire])
+(require (quote [framrpc :as wire])
          (quote [fram.rt :as rt])
          (quote [fram.types :as t]))
 (let [port (parse-long (first *command-line-args*))

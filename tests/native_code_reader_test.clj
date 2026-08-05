@@ -5,7 +5,7 @@
          '[fram.rt :as rt]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def checks (atom []))
 (defn check! [label value]
@@ -80,7 +80,7 @@
 (def port (free-port))
 (def server
   (when (zero? (:exit ingest))
-    (future (coord-daemon/serve! port log-path space :active))))
+    (future (server/serve! port log-path space :active))))
 
 (try
   (check! "native ingest creates the scratch code corpus"
@@ -89,7 +89,7 @@
           (some? (and server
                       (eventually
                        #(rt/native-call! port space :rpc/version
-                                         coord-daemon-wire/rpc-unit
+                                         framrpc/rpc-unit
                                          nil nil nil)))))
   (when server
     (let [module-snapshot
@@ -121,12 +121,12 @@
       (check! "reader accepts the derived maximum page limit"
               (some? (code-reader/read-corpus-snapshot!
                       port space
-                      (- coord-daemon-wire/term-codec-v1-depth-limit 3))))
+                      (- framrpc/term-codec-v1-depth-limit 3))))
       (check! "reader rejects page limit above the derived maximum"
               (try
                 (code-reader/read-corpus-snapshot!
                  port space
-                 (inc (- coord-daemon-wire/term-codec-v1-depth-limit 3)))
+                 (inc (- framrpc/term-codec-v1-depth-limit 3)))
                 false
                 (catch clojure.lang.ExceptionInfo e
                   (and (= :invalid-code-snapshot (:type (ex-data e)))

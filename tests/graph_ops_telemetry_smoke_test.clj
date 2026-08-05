@@ -35,7 +35,7 @@
                         "HOME" home
                         "FRAM_LOG" (.getCanonicalPath facts)
                         "FRAM_THREADS" (.getCanonicalPath tmp)
-                        "FRAM_PORT" "59998"
+                        "FRAM_SERVER_PORT" "59998"
                         "FRAM_SRC" (.getCanonicalPath src)
                         "FRAM_OUT" (str root "/out")
                         "FRAM_RESOLVE" (str root "/out/resolve.clj")

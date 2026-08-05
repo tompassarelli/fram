@@ -6,7 +6,7 @@
          '[fram.rt :as rt]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def checks (atom []))
 (defn check! [label value]
@@ -87,7 +87,7 @@
             :dir checkout-root))
 (def server
   (when (zero? (:exit ingest))
-    (future (coord-daemon/serve! port log-path space :active))))
+    (future (server/serve! port log-path space :active))))
 (def gate-options
   {:verifier (str (io/file fram-root "bin/fram-edit-verifier"))
    :verifier-env
@@ -98,7 +98,7 @@
 
 (defn version! []
   (-> (rt/native-call! port space :rpc/version
-                       coord-daemon-wire/rpc-unit nil nil nil)
+                       framrpc/rpc-unit nil nil nil)
       rt/require-native-success!
       t/rpcresponse-served-version))
 

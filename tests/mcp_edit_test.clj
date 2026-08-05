@@ -179,7 +179,7 @@
                                                {"FRAM_EDIT_VERIFIER" (str root "/bin/fram-edit-verifier")
                                                 "FRAM_EDIT_VERIFIER_RACKET" racket-bin})
                              :out (str tmp "/code-daemon.log") :err (str tmp "/code-daemon.log")}
-                            "clojure" "-M" "coord_daemon.clj" "serve-flat" (str port) code-log)]
+                            "clojure" "-M" "server.clj" "serve-flat" (str port) code-log)]
       (try
         ;; Wait for the coordinator to answer, never a constant: this corpus folds a
         ;; ~300k-fact code log, so any fixed sleep races the boot fold on a busy box.

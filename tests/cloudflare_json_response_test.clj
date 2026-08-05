@@ -3,7 +3,7 @@
          '[babashka.process :as proc]
          '[cheshire.core :as json]
          '[clojure.java.io :as io]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.rt :as rt]
          '[fram.types :as terms])
 (import '[java.net URI ServerSocket]
@@ -118,7 +118,7 @@
       token "cloudflare-rpc-secret"
       inherited (apply dissoc (into {} (System/getenv))
                        ["FRAM_LOG" "FRAM_TELEMETRY_LOG" "SHIM_LIBRARY"
-                        "FRAM_COORD_TLS" "FRAM_TLS_KEYSTORE" "FRAM_TLS_TRUSTSTORE"])
+                        "FRAM_SERVER_TLS" "FRAM_TLS_KEYSTORE" "FRAM_TLS_TRUSTSTORE"])
       daemon (atom nil)
       shim (atom nil)
       start-daemon!
@@ -143,7 +143,7 @@
             (proc/process
              {:dir root
               :env (assoc inherited "FRAM_HOST" "127.0.0.1"
-                          "FRAM_PORT" (str daemon-port)
+                          "FRAM_SERVER_PORT" (str daemon-port)
                           "SHIM_PORT" (str shim-port)
                           "SHIM_TOKEN" token)
               :out :inherit :err :inherit}

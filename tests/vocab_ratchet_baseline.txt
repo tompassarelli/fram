@@ -21,11 +21,11 @@
 3	integrations/north/hooks/code-upstream-guard.sh
 2	integrations/north/hooks/code-upstream-guard.test.sh
 1	integrations/north/skills/code-as-facts/SKILL.md
-1	out/coord_daemon_wire.clj
+1	out/framrpc.clj
 28	out/fram/claims.clj
 1	out/fram/rt.clj
 2	out/fram/world.clj
-6	src/coord_daemon_wire.bclj
+6	src/framrpc.bclj
 31	src/fram/claims.bclj
 1	src/fram/rt.clj
 3	src/fram/world.bclj

@@ -5,11 +5,11 @@
 ;; Emits the deterministic K_ev serialization to stdout.
 (require '[r1.model :as m])
 
-(let [[model coord-path telem-path] *command-line-args*
+(let [[model database-path telem-path] *command-line-args*
       model (keyword (clojure.string/replace (str model) #"^:" ""))
-      coord (m/read-bytes coord-path)
+      database (m/read-bytes database-path)
       telem (m/read-bytes telem-path)
-      evs   (m/logical-events model coord telem)
+      evs   (m/logical-events model database telem)
       kv    (m/kev-vector evs)]
   (print (m/kev-serialize kv))
   (flush))

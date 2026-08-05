@@ -85,23 +85,23 @@
 (let [r (proc/sh {:dir repo} "bin/fram-ingest-code" (str arena "/gw") "--out" code-log)]
   (when-not (zero? (:exit r)) (log! "INGEST FAILED:" (:err r)) (System/exit 3)))
 
-(def coord-port (free-port))
-(log! "booting throwaway coordinator on" coord-port)
-(proc/sh {:dir repo :extra-env {"FRAM_PORT" (str coord-port) "FRAM_LOG" code-log}} "bin/fram-up")
+(def database-port (free-port))
+(log! "booting throwaway coordinator on" database-port)
+(proc/sh {:dir repo :extra-env {"FRAM_SERVER_PORT" (str database-port) "FRAM_LOG" code-log}} "bin/fram-up")
 (Thread/sleep 3000)
 
-(defn coord [req]
+(defn database [req]
   (with-open [s (java.net.Socket.)]
-    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int coord-port)) 3000)
+    (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int database-port)) 3000)
     (let [w (io/writer (.getOutputStream s)) rd (io/reader (.getInputStream s))]
       (.write w (str (pr-str req) "\n")) (.flush w)
       (clojure.edn/read-string (.readLine rd)))))
 
 (defn run []
   ;; SAFETY: refuse to run unless the daemon serves OUR selftest log.
-  (let [st (coord {:op :status})]
+  (let [st (database {:op :status})]
     (when-not (str/includes? (str (:log st)) "fram-a2-selftest")
-      (log! "SAFETY ABORT: coordinator :" coord-port " serves" (:log st) "— not the selftest arena") (System/exit 4))
+      (log! "SAFETY ABORT: coordinator :" database-port " serves" (:log st) "— not the selftest arena") (System/exit 4))
     (log! "coordinator OK —" (pr-str (select-keys st [:version :log]))))
 
   ;; Load the primitive with explicit scratch ports + a private gwdir.
@@ -109,7 +109,7 @@
   (let [ns' (find-ns 'fram.defcheck)
         gv  (fn [s] (ns-resolve ns' s))
         ctor (deref (gv '->DefcheckState))
-        state (ctor coord-port sidecar-port (str arena "/gwdir") true nil nil true)
+        state (ctor database-port sidecar-port (str arena "/gwdir") true nil nil true)
         ensure-state! (deref (gv 'ensure-sidecar-with-state!))
         prime-state! (deref (gv 'prime-gwdir-with-state!))
         modules-state (deref (gv 'live-modules-with-state))
@@ -161,8 +161,8 @@
   (try (run)
        (catch Throwable t (log! "EXCEPTION:" (.getMessage t)) (swap! results conj ["harness" false (.getMessage t)]))
        (finally
-         (log! "teardown: killing coordinator" coord-port "+ sidecar" sidecar-port)
-         (kill-port! coord-port) (kill-port! sidecar-port)))
+         (log! "teardown: killing coordinator" database-port "+ sidecar" sidecar-port)
+         (kill-port! database-port) (kill-port! sidecar-port)))
   (let [fails (filter (comp not second) @results)]
     (log! (format "\n=== %d/%d checks passed ===" (- (count @results) (count fails)) (count @results)))
     (System/exit (if (empty? fails) 0 1))))

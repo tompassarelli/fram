@@ -4,7 +4,7 @@
          '[clojure.string :as str])
 
 (def daemon-source
-  (->> (str/split-lines (slurp "coord_daemon.clj"))
+  (->> (str/split-lines (slurp "server.clj"))
        (map #(str/replace % #";.*$" ""))
        (str/join "\n")))
 (def docker-source (slurp "deploy/cloudflare/Dockerfile"))
@@ -23,7 +23,7 @@
 (def load-assets (set (concat direct-loads cwd-loads)))
 (def root-assets
   (conj (set (remove #(str/starts-with? % "out/") load-assets))
-        "coord_daemon.clj"))
+        "server.clj"))
 
 (def docker-copy-sources
   (->> (str/split-lines docker-source)
@@ -41,7 +41,7 @@
   (swap! checks conj [label ok detail]))
 
 (chk "daemon load-file closure is recognized"
-     (= #{"coord.clj" "coord_writer_authority.clj"} load-assets)
+     (= #{"database.clj" "writer_authority.clj"} load-assets)
      load-assets)
 (chk "Docker source COPYs equal the Graal build closure"
      (= expected-docker-sources docker-copy-sources)

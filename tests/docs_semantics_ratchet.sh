@@ -19,7 +19,7 @@ canonical_docs=(
 
 scoped_v030_docs=(
   THREAD-FORMAT.md
-  docs/coordinator-cutover.md
+  docs/v0.3-writer-handoff.md
 )
 
 # Historical documents are quarantined by location AND by banner; the policy

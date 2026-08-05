@@ -2,7 +2,7 @@
          '[clojure.string :as str]
          '[fram.types :as t])
 
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (defn check! [label ok]
   (println (str (if ok "[PASS] " "[FAIL] ") label))
@@ -94,15 +94,15 @@
 
 (spit legacy-file (str (str/join "\n" (map pr-str rows)) "\n"))
 
-(def result-a (coord/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-a)))
-(def result-b (coord/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-b)))
+(def result-a (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-a)))
+(def result-b (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-b)))
 
 (def bytes-a (java.nio.file.Files/readAllBytes (.toPath target-a)))
 (def bytes-b (java.nio.file.Files/readAllBytes (.toPath target-b)))
 (def manifest-a (slurp (str (.getPath target-a) ".migration.edn")))
 (def manifest-b (slurp (str (.getPath target-b) ".migration.edn")))
 (def decoded (decode-log target-a))
-(def runtime-a (coord/open-coordinator! (.getPath target-a) "msa-space"))
+(def runtime-a (database/open-database! (.getPath target-a) "msa-space"))
 (def tx5 (first (:frames decoded)))
 (def tx5-ops (:operations tx5))
 
@@ -111,7 +111,7 @@
 (check! "sealed migration refuses to overwrite an existing generation"
         (= :migration-target-exists
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath legacy-file)
+            #(database/migrate-legacy-flat-log! (.getPath legacy-file)
                                              "msa-space" (.getPath target-a)))))
 (check! "header is FRAMLOG v1 with immutable SpaceId"
         (and (= "FRAMLOG\u0000" (:magic decoded))
@@ -119,10 +119,10 @@
              (= "msa-space" (:space decoded))))
 (check! "sealed migration output boots directly as authoritative TermStore history"
         (and (= (t/transaction-coordinate "msa-space" 6)
-                (coord/current-transaction runtime-a))
+                (database/current-transaction runtime-a))
              (not (some #{(t/triple "Alice" "email" "alice@example.com")}
-                        (coord/live-propositions runtime-a)))
-             (every? t/triple? (coord/history runtime-a))))
+                        (database/live-propositions runtime-a)))
+             (every? t/triple? (database/history runtime-a))))
 (check! "source operation ordinals stay first and contiguous"
         (= [0 1 2] (mapv :ordinal (take 3 tx5-ops))))
 (check! "synthetic operations follow source operations contiguously"
@@ -163,14 +163,14 @@
              :reason "flat sources contain no cid field; v2/FRI caches are rejected as non-authoritative"}]
            (:unresolved-classes (edn/read-string manifest-a))))
 (check! "new header reader returns SpaceId"
-        (= "msa-space" (coord/require-triple-log-header! (.getPath target-a))))
+        (= "msa-space" (database/require-triple-log-header! (.getPath target-a))))
 (check! "legacy runtime input is a typed migration requirement"
         (= :migration-required
-           (throwable-code #(coord/require-triple-log-header! (.getPath legacy-file)))))
+           (throwable-code #(database/require-triple-log-header! (.getPath legacy-file)))))
 
 ;; Same tx numbers in another immutable space resolve to different coordinates.
 (def target-other (java.io.File. tmp-dir "other.framlog"))
-(coord/migrate-legacy-flat-log! (.getPath legacy-file) "telemetry-space" (.getPath target-other))
+(database/migrate-legacy-flat-log! (.getPath legacy-file) "telemetry-space" (.getPath target-other))
 (def other (decode-log target-other))
 (check! "overlapping transaction numbers remain distinct across spaces"
         (and (= 5 (:tx (first (:frames decoded))))
@@ -182,7 +182,7 @@
 (def torn-target (java.io.File. tmp-dir "torn.framlog"))
 (spit torn-source (str (pr-str (first rows)) "\n{:tx 9, :op \"assert\", :l \"cut"))
 (def torn-result
-  (coord/migrate-legacy-flat-log! (.getPath torn-source) "torn-space" (.getPath torn-target)))
+  (database/migrate-legacy-flat-log! (.getPath torn-source) "torn-space" (.getPath torn-target)))
 (check! "strictly later unterminated transaction is dropped and reported"
         (and (= {:line 2 :byte-offset (inc (count (.getBytes (pr-str (first rows)) "UTF-8")))
                  :bytes (count (.getBytes "{:tx 9, :op \"assert\", :l \"cut" "UTF-8"))
@@ -204,7 +204,7 @@
            (pr-str tx5-row-b) "\n"
            "{:tx 5, :op \"assert\", :l \"cut"))
 (def same-tx-result
-  (coord/migrate-legacy-flat-log! (.getPath same-tx-source)
+  (database/migrate-legacy-flat-log! (.getPath same-tx-source)
                                   "same-tx-space" (.getPath same-tx-target)))
 (check! "torn same-transaction prefix drops every completed row of the final tx"
         (and (= [4] (mapv :tx (:frames (decode-log same-tx-target))))
@@ -224,7 +224,7 @@
       (str (pr-str tx5-row-a) "\n"
            "{:tx 6, :op \"assert\", :l \":tx is data\", :p \"cut"))
 (def hidden-token-result
-  (coord/migrate-legacy-flat-log! (.getPath hidden-token-source)
+  (database/migrate-legacy-flat-log! (.getPath hidden-token-source)
                                   "hidden-token-space" (.getPath hidden-token-target)))
 (check! "transaction-like text inside a torn String is not an ambiguous coordinate"
         (and (= [5] (mapv :tx (:frames (decode-log hidden-token-target))))
@@ -238,7 +238,7 @@
 (check! "multiple coordinates in a torn tail fail typed without guessing"
         (= :migration-torn-transaction-ambiguous
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath ambiguous-tail-source)
+            #(database/migrate-legacy-flat-log! (.getPath ambiguous-tail-source)
                                              "ambiguous-space" (.getPath ambiguous-tail-target)))))
 
 (def missing-tail-source (java.io.File. tmp-dir "missing-tail-tx.log"))
@@ -248,7 +248,7 @@
 (check! "missing leading coordinate in a torn tail fails typed"
         (= :migration-torn-transaction-missing
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath missing-tail-source)
+            #(database/migrate-legacy-flat-log! (.getPath missing-tail-source)
                                              "missing-space" (.getPath missing-tail-target)))))
 
 (def partial-tail-source (java.io.File. tmp-dir "partial-tail-tx.log"))
@@ -257,7 +257,7 @@
 (check! "a cut transaction number fails typed as ambiguous"
         (= :migration-torn-transaction-ambiguous
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath partial-tail-source)
+            #(database/migrate-legacy-flat-log! (.getPath partial-tail-source)
                                              "partial-space" (.getPath partial-tail-target)))))
 
 (def backward-tail-source (java.io.File. tmp-dir "backward-tail.log"))
@@ -267,7 +267,7 @@
 (check! "backward torn transaction fails typed"
         (= :migration-nonmonotonic-torn-transaction
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath backward-tail-source)
+            #(database/migrate-legacy-flat-log! (.getPath backward-tail-source)
                                              "backward-space" (.getPath backward-tail-target)))))
 
 (def backward-complete-source (java.io.File. tmp-dir "backward-complete.log"))
@@ -277,7 +277,7 @@
 (check! "completed transaction rows must be contiguous and nondecreasing"
         (= :migration-nonmonotonic-transaction
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath backward-complete-source)
+            #(database/migrate-legacy-flat-log! (.getPath backward-complete-source)
                                              "backward-complete-space"
                                              (.getPath backward-complete-target)))))
 
@@ -287,7 +287,7 @@
 (check! "completed malformed interior input fails"
         (= :migration-malformed-interior
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath corrupt-source)
+            #(database/migrate-legacy-flat-log! (.getPath corrupt-source)
                                              "bad-space" (.getPath corrupt-target)))))
 
 (def v2-source (java.io.File. tmp-dir "snapshot.v2log"))
@@ -296,7 +296,7 @@
 (check! "lossy v2 cache is rejected as a migration source"
         (= :migration-v2-cache-not-source
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath v2-source)
+            #(database/migrate-legacy-flat-log! (.getPath v2-source)
                                              "bad-space" (.getPath v2-target)))))
 
 (def fri-source (java.io.File. tmp-dir "snapshot.fri"))
@@ -307,13 +307,13 @@
 (check! "FRI cache is rejected as a migration source"
         (= :migration-v2-cache-not-source
            (throwable-code
-            #(coord/migrate-legacy-flat-log! (.getPath fri-source)
+            #(database/migrate-legacy-flat-log! (.getPath fri-source)
                                              "bad-space" (.getPath fri-target)))))
 
 ;; Cross-runtime golden owned jointly with src/zig/log.zig.
 (def golden-triple (t/triple "Alice" :email "alice@example.com"))
 (def golden-write
-  ((deref #'coord/write-triple-log-temp!)
+  ((deref #'database/write-triple-log-temp!)
    (.toPath tmp-dir) "msa-space"
    [{:tx-seq 1842
      :operations [{:ordinal 0 :action 1 :triple golden-triple}]}]))
@@ -329,7 +329,7 @@
             (t/triple "middle" :edge "two")
             (t/triple "right" :edge "three")))
 (def nested-write
-  ((deref #'coord/write-triple-log-temp!)
+  ((deref #'database/write-triple-log-temp!)
    (.toPath tmp-dir) "recursive-space"
    [{:tx-seq 9
      :operations [{:ordinal 0 :action 1 :triple nested-triple}]}]))

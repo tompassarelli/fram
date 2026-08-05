@@ -2,7 +2,7 @@
 ;; library (no command args => no listener) and exercises its private boot gate.
 (require '[clojure.java.io :as io])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 
 (def checks (atom []))
 (defn chk [name ok] (swap! checks conj [name ok]))
@@ -10,23 +10,23 @@
 (def telemetry-var (ns-resolve 'user 'telemetry-log))
 (def tmp (str (System/getProperty "java.io.tmpdir") "/fram-log-split-" (System/nanoTime)))
 (.mkdirs (io/file tmp))
-(def coord (str tmp "/coordination.log"))
+(def database (str tmp "/coordination.log"))
 (def telemetry (str tmp "/telemetry.log"))
 (def legacy (str tmp "/facts.log"))
 (def alternate (str tmp "/alternate.log"))
-(spit coord "")
+(spit database "")
 (spit legacy "")
 
 (reset! (var-get telemetry-var) nil)
 (chk "coordination.log activates its sibling telemetry.log"
-     (and (= (.getCanonicalPath (io/file coord))
-             (.getCanonicalPath (io/file (reaim coord))))
+     (and (= (.getCanonicalPath (io/file database))
+             (.getCanonicalPath (io/file (reaim database))))
           (= (.getCanonicalPath (io/file telemetry))
              (.getCanonicalPath (io/file @(var-get telemetry-var))))))
 
 (reset! (var-get telemetry-var) nil)
 (chk "legacy facts.log re-aims to coordination.log"
-     (= (.getCanonicalPath (io/file coord))
+     (= (.getCanonicalPath (io/file database))
         (.getCanonicalPath (io/file (reaim legacy)))))
 
 (reset! (var-get telemetry-var) nil)
@@ -36,7 +36,7 @@
 
 (reset! (var-get telemetry-var) (str tmp "/wrong.log"))
 (chk "an explicit non-sibling telemetry path fails closed"
-     (try (reaim coord) false (catch clojure.lang.ExceptionInfo _ true)))
+     (try (reaim database) false (catch clojure.lang.ExceptionInfo _ true)))
 
 (let [fails (remove second @checks)]
   (doseq [[name ok] @checks] (println (if ok "  [PASS]" "  [FAIL]") name))

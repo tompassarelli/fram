@@ -7,7 +7,7 @@
          '[clojure.java.io :as io] '[clojure.string :as str] '[babashka.process :refer [sh]])
 ;; resolve.clj + its Beagle-compiled parts are bare-ns files at the repo ROOT
 ;; (build.sh), off the `bb -cp out` classpath — load them the way the daemon
-;; does (coord_daemon.clj), then alias.
+;; does (server.clj), then alias.
 (load-file "out/resolve.clj")
 (alias 'r 'resolve)
 

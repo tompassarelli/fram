@@ -2,12 +2,12 @@
 ;; query snapshots, leases, cancellation, malformed input, and restart replay.
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
-         '[coord-daemon-wire :as wire]
+         '[framrpc :as wire]
          '[fram.kernel :as kernel]
          '[fram.query :as query]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (def failures (atom []))
@@ -129,20 +129,20 @@
 (def log-path (str (io/file scratch "history.framlog")))
 (def space "native-rpc-test")
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (try
   (check! "listener starts on FRAMRPC v1"
           (some? (eventually #(request! port space :rpc/version wire/rpc-unit))))
 
   (check! "operation disposition is exhaustive for the thirteen v1 operations"
-          (and (= 13 (count coord-daemon/native-rpc-operations))
-               (every? #(= :supported (coord-daemon/native-op-disposition %))
-                       coord-daemon/native-rpc-operations)
-               (every? #(= :unsupported (coord-daemon/native-op-disposition %))
+          (and (= 13 (count server/native-rpc-operations))
+               (every? #(= :supported (server/native-op-disposition %))
+                       server/native-rpc-operations)
+               (every? #(= :unsupported (server/native-op-disposition %))
                        [:status :facts :query :for-log :rpc/not-an-operation])))
 
-  (let [source (slurp "coord_daemon.clj")]
+  (let [source (slurp "server.clj")]
     (check! "listener source has no EDN/line-reader compatibility path"
             (not-any? #(str/includes? source %)
                       ["clojure.edn" "edn/read" "readLine" "io/reader"])))
@@ -181,7 +181,7 @@
     (check! "oversized frames are rejected from the header before body allocation"
             (= :rpc-frame-too-large
                (try
-                 (coord-daemon/read-rpc-frame!
+                 (server/read-rpc-frame!
                   (java.io.ByteArrayInputStream. cancel-bytes))
                  nil
                  (catch clojure.lang.ExceptionInfo error
@@ -307,8 +307,8 @@
                  :page (wire/rpc-page-request! 1 cursor))]
             (check! "query cursor binds the resolved since lower bound"
                     (= :query-cursor-mismatch (error-code mismatched))))
-          (with-redefs [coord-daemon/query-checkpoint-interval 1]
-            (#'coord-daemon/drop-query-caches!)
+          (with-redefs [server/query-checkpoint-interval 1]
+            (#'server/drop-query-caches!)
             (let [checkpoint (io/file
                               (str log-path ".query-checkpoints")
                               "snapshot-1.fri")
@@ -317,7 +317,7 @@
                          (wire/rpc-query-request!
                           occurrence-plan (wire/rpc-query-as-of! 1)))
                   _ (spit checkpoint "corrupt-derived-cache")
-                  _ (#'coord-daemon/drop-query-caches!)
+                  _ (#'server/drop-query-caches!)
                   rebuilt (request!
                            port space :rpc/query
                            (wire/rpc-query-request!
@@ -332,25 +332,25 @@
                         port space :rpc/query
                         (wire/rpc-query-request!
                          occurrence-plan (wire/rpc-query-as-of! 1)))
-                entry (coord-daemon/seal-query-epoch! 1)
+                entry (server/seal-query-epoch! 1)
                 after (request!
                        port space :rpc/query
                        (wire/rpc-query-request!
                         occurrence-plan (wire/rpc-query-as-of! 1)))
                 _ (.delete (io/file (:path entry)))
-                _ (reset! (var-get #'coord-daemon/query-archive-coordinators) {})
-                _ (#'coord-daemon/drop-query-caches!)
+                _ (reset! (var-get #'server/query-archive-databases) {})
+                _ (#'server/drop-query-caches!)
                 unavailable (request!
                              port space :rpc/query
                              (wire/rpc-query-request!
                               occurrence-plan (wire/rpc-query-as-of! 1)))
-                _ (coord-daemon/seal-query-epoch! 1)
-                _ (coord-daemon/expire-query-epoch! 1)
+                _ (server/seal-query-epoch! 1)
+                _ (server/expire-query-epoch! 1)
                 expired (request!
                          port space :rpc/query
                          (wire/rpc-query-request!
                           occurrence-plan (wire/rpc-query-as-of! 1)))
-                _ (coord-daemon/seal-query-epoch! 1)]
+                _ (server/seal-query-epoch! 1)]
             (check! "sealed epoch preserves rows and distinguishes unavailable from expired"
                     (and (= (query-rows before) (query-rows after))
                          (= :query/archive-unavailable
@@ -367,7 +367,7 @@
                         (triples-result current-after-ack :rpc/triples))))
         (let [work-limited
               (with-redefs-fn
-                {#'coord-daemon/cached-result!
+                {#'server/cached-result!
                  (fn [& _]
                    (throw (ex-info "query evaluation stopped: query-work-limit"
                                    {:fram/code :query-work-limit})))}
@@ -563,7 +563,7 @@
           status (request! port space :rpc/status wire/rpc-unit)
           [_ _ _ cache] (fields (payload status) :rpc/status 4)
           [hits misses bytes evictions] (fields cache :rpc/result-cache 4)
-          cache-state @coord-daemon/query-result-cache
+          cache-state @server/query-result-cache
           version-counts (frequencies (map first (keys (:entries cache-state))))
           validated (request! port space :rpc/validate wire/rpc-unit)
           [valid violations] (fields (payload validated) :rpc/validation 2)]
@@ -618,12 +618,12 @@
           scan-payload (wire/rpc-triple-pattern! nil predicate nil)
           scan-reference (fn []
                            (filterv #(= predicate (t/triple-slot1 %))
-                                    (coord/live-propositions
-                                     @coord-daemon/coordinator)))
+                                    (database/live-propositions
+                                     @server/database)))
           occurrence-reference (fn []
                                  (filterv kernel/operation-occurrence?
-                                          (coord/history
-                                           @coord-daemon/coordinator)))]
+                                          (database/history
+                                           @server/database)))]
       (doseq [batch (partition-all 100 (range fixture-count))]
         (request! port space :rpc/batch
                   (wire/rpc-batch!
@@ -657,13 +657,13 @@
                      (= :term-depth-exceeded (error-code unpaged-occurrences)))))
 
       (let [visited (atom 0)
-            live coord/live-propositions
-            bounded (with-redefs [coord/live-propositions
-                                  (fn [co]
+            live database/live-propositions
+            bounded (with-redefs [database/live-propositions
+                                  (fn [db]
                                     (map (fn [proposition]
                                            (swap! visited inc)
                                            proposition)
-                                         (live co)))]
+                                         (live db)))]
                       (request! port space :rpc/scan scan-payload))]
         (check! "unpaged scan stops folding once the depth bound is unreachable"
                 (and (= :term-depth-exceeded (error-code bounded))
@@ -720,8 +720,8 @@
           (request! port space :rpc/assert
                     (wire/rpc-write! proposition wire/rpc-subject-any nil)))
         (let [reference (filterv #(= :page-dup (t/triple-slot1 %))
-                                 (coord/live-propositions
-                                  @coord-daemon/coordinator))
+                                 (database/live-propositions
+                                  @server/database))
               paged (paged-read port space :rpc/scan dup-payload
                                 3 :rpc/triples)]
           (check! "scan pages resume by position, not by row value"
@@ -750,7 +750,7 @@
     (let [before (t/rpcresponse-served-version
                   (request! port space :rpc/version wire/rpc-unit))
           cancellation {:cancelled (atom true) :query-control (atom nil)}
-          refused (coord-daemon/handle-rpc-request!
+          refused (server/handle-rpc-request!
                    (wire/rpc-request!
                     space :rpc/assert nil nil nil
                     (wire/rpc-write! (t/triple "cancelled" :value 1)
@@ -762,20 +762,20 @@
               (and (= :rpc/cancelled (error-code refused)) (= before after))))
 
     (let [cancellation {:cancelled (atom false) :query-control (atom nil)}]
-      (swap! coord-daemon/active-requests assoc 777 cancellation)
-      (coord-daemon/handle-rpc-frame! (wire/rpc-cancel-frame 777)
+      (swap! server/active-requests assoc 777 cancellation)
+      (server/handle-rpc-frame! (wire/rpc-cancel-frame 777)
                                       {:cancelled (atom false)
                                        :query-control (atom nil)})
-      (swap! coord-daemon/active-requests dissoc 777)
+      (swap! server/active-requests dissoc 777)
       (check! "cancel frames target the matching active request id"
               @(:cancelled cancellation))))
 
   (finally
-    (coord-daemon/shutdown!)
+    (server/shutdown!)
     (deref server 3000 nil)))
 
 (let [restart-port (free-port)
-      restarted (future (coord-daemon/serve! restart-port log-path space :active))]
+      restarted (future (server/serve! restart-port log-path space :active))]
   (try
     (let [version (eventually #(request! restart-port space :rpc/version wire/rpc-unit))
           scan (request! restart-port space :rpc/scan
@@ -789,7 +789,7 @@
                       (triples-result scan :rpc/triples))
                    (= [0 0 0 0] cache-stats))))
     (finally
-      (coord-daemon/shutdown!)
+      (server/shutdown!)
       (deref restarted 3000 nil))))
 
 (shutdown-agents)

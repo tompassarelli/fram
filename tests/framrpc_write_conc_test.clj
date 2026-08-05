@@ -2,11 +2,11 @@
 ;; per-writer order under concurrent socket writers, and expected-version OCC
 ;; must still fire on the race.
 ;; Run from the repository root: bb -cp out tests/framrpc_write_conc_test.clj
-(require '[coord-daemon-wire :as wire]
+(require '[framrpc :as wire]
          '[fram.kernel :as kernel]
          '[fram.types :as t])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (load-file "tests/native_rpc_client.clj")
 
 (def checks (atom []))
@@ -56,7 +56,7 @@
 
 ;; One acked write == one FRAMLOG frame carrying exactly that proposition.
 (defn assert-frames [path]
-  (let [parsed (coord/read-triple-log! path)]
+  (let [parsed (database/read-triple-log! path)]
     (assoc parsed :asserts
            (vec (for [frame (:frames parsed)
                       operation (:operations frame)
@@ -78,7 +78,7 @@
     (make-array java.nio.file.attribute.FileAttribute 0))))
 (def log-path (str (java.io.File. scratch "history.framlog")))
 (def port (free-port))
-(def server (future (coord-daemon/serve! port log-path space :active)))
+(def server (future (server/serve! port log-path space :active)))
 
 (def watchdog
   (future
@@ -168,12 +168,12 @@
                      (= expected (set (:rows scanned)))
                      (= issued (count (distinct (:rows scanned)))))))
 
-      ;; durable FRAMLOG bytes, read through the coord log reader
+      ;; durable FRAMLOG bytes, read through the database log reader
       (let [durable (assert-frames log-path)
             noted (filterv #(= :note (t/triple-slot1 (:triple %))) (:asserts durable))
             by-writer (group-by #(t/triple-slot0 (:triple %)) noted)
             version-of (into {} (map (juxt :proposition :version) all-acks))
-            sequencer @coord-daemon/write-sequencer-stats]
+            sequencer @server/commit-sequencer-stats]
         (check! "A: FRAMLOG is a whole, untorn generation of one frame per write"
                 (and (nil? (:torn-tail durable))
                      (= issued (count (:frames durable)))
@@ -285,7 +285,7 @@
 
   (finally
     (future-cancel watchdog)
-    (coord-daemon/shutdown!)
+    (server/shutdown!)
     (deref server 3000 nil)))
 
 (let [failures (remove second @checks)]

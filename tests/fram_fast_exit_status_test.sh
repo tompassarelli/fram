@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 port="$(bb -e '(with-open [socket (java.net.ServerSocket. 0)] (print (.getLocalPort socket)))')"
-bb -cp out coord_daemon.clj serve "$port" "$scratch/coordination.log" test-space \
+bb -cp out server.clj serve "$port" "$scratch/coordination.log" test-space \
   >"$scratch/daemon.log" 2>&1 &
 daemon_pid="$!"
 
@@ -38,7 +38,7 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 run_fast() {
-  FRAM_PORT="$1" FRAM_SPACE_ID=test-space bb -cp out bin/fram-fast.clj "${@:2}"
+  FRAM_SERVER_PORT="$1" FRAM_SPACE_ID=test-space bb -cp out bin/fram-fast.clj "${@:2}"
 }
 
 fail=0

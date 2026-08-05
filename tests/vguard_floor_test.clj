@@ -74,8 +74,8 @@
     f))
 
 (def plain-lines
-  [{:tx 1 :op "assert" :l "@t1" :p "title" :r "SECRET-PAYLOAD-XYZZY" :by "coord" :ts "2026-07-20T00:00:00Z"}
-   {:tx 2 :op "assert" :l "@t1" :p "owner" :r "personal" :by "coord" :ts "2026-07-20T00:00:00Z"}])
+  [{:tx 1 :op "assert" :l "@t1" :p "title" :r "SECRET-PAYLOAD-XYZZY" :by "database" :ts "2026-07-20T00:00:00Z"}
+   {:tx 2 :op "assert" :l "@t1" :p "owner" :r "personal" :by "database" :ts "2026-07-20T00:00:00Z"}])
 (def gen-line
   {:tx 3 :op "assert" :l "@log:gen" :p "generation" :r "0197f000-0000-7000-8000-000000000001"
    :by "fram:unify" :ts "2026-07-20T00:00:00Z" :gen_prev "genesis" :gen_n 1 :gen_src "none"
@@ -105,11 +105,11 @@
   (check (str "append under a SHARED holder is immediate (" dt "ms < 1000)") (< dt 1000)))
 
 (println "\n== 1c. daemon group-batch seam: ticket delivered only after the flip window ==")
-(load-file "coord.clj")   ; the daemon's group appender library (repo root)
+(load-file "database.clj")   ; the daemon's group appender library (repo root)
 (let [d (scratch! "s1c") log (write-corpus! d plain-lines)
       pr (hold-lock! log 1500 "excl")
       t0 (now-ms)
-      r  (enqueue-durable! log [(str (pr-str {:tx 12 :op "assert" :l "@t4" :p "title" :r "batch" :by "coord" :ts "x"}) "\n")] nil)
+      r  (enqueue-durable! log [(str (pr-str {:tx 12 :op "assert" :l "@t4" :p "title" :r "batch" :by "database" :ts "x"}) "\n")] nil)
       dt (- (now-ms) t0)]
   @pr
   (check (str "group batch ack DELAYED past the exclusive window (" dt "ms >= 1000)") (>= dt 1000))
@@ -157,11 +157,11 @@
       telem (str d "/telemetry.log") _ (spit telem "{:tx 1 :op \"assert\" :l \"@run1\" :p \"kind\" :r \"run\"}\n")
       _ (rt/set-file-mode! log 0600) _ (rt/set-file-mode! telem 0660)
       pre (vec (fbytes log)) pret (vec (fbytes telem))
-      _ (mk-intent log {:coord {:ino (ino log) :mode (mode log) :bytes (alength (fbytes log))
+      _ (mk-intent log {:database {:ino (ino log) :mode (mode log) :bytes (alength (fbytes log))
                                 :sha (sha16 (fbytes log))}
                         :telem {:ino (ino telem) :mode (mode telem) :bytes (alength (fbytes telem))
                                 :sha (sha16 (fbytes telem))}})
-      _ (spit (rt/rewrite-coord-tmp-path log) "half-composed")
+      _ (spit (rt/rewrite-database-tmp-path log) "half-composed")
       _ (spit (rt/rewrite-telem-tmp-path log) "")
       ;; fence exactly as a flip would (both logs a-w)
       _ (rt/set-file-mode! log 0400) _ (rt/set-file-mode! telem 0440)
@@ -172,7 +172,7 @@
   (check "telemetry mode restored EXACTLY 0660" (= 0660 (mode telem)))
   (check "coordination bytes untouched" (= pre (vec (fbytes log))))
   (check "telemetry bytes untouched" (= pret (vec (fbytes telem))))
-  (check "composed tmps swept" (and (not (.exists (io/file (rt/rewrite-coord-tmp-path log))))
+  (check "composed tmps swept" (and (not (.exists (io/file (rt/rewrite-database-tmp-path log))))
                                     (not (.exists (io/file (rt/rewrite-telem-tmp-path log))))))
   (check "intent deleted" (not (.exists (io/file (rt/rewrite-intent-path log)))))
   (let [h2 (rt/acquire-rewrite-lock! log false true)
@@ -184,12 +184,12 @@
       log (write-corpus! d plain-lines)
       telem (str d "/telemetry.log") _ (spit telem "{:tx 1 :op \"assert\" :l \"@run1\" :p \"kind\" :r \"run\"}\n")
       _ (rt/set-file-mode! log 0600) _ (rt/set-file-mode! telem 0660)
-      old-intent {:coord {:ino (ino log) :mode (mode log) :bytes (alength (fbytes log))
+      old-intent {:database {:ino (ino log) :mode (mode log) :bytes (alength (fbytes log))
                           :sha (sha16 (fbytes log))}
                   :telem {:ino (ino telem) :mode (mode telem) :bytes (alength (fbytes telem))
                           :sha (sha16 (fbytes telem))}}
       ;; compose the replacement: generation record line 1 + retained lines
-      newc (str d "/.fram.rewrite.coord.compose")
+      newc (str d "/.fram.rewrite.database.compose")
       _ (spit newc (str (str/join "\n" (map pr-str (cons gen-line plain-lines))) "\n"))
       line1 (first (str/split (clojure.core/slurp newc) #"\n"))
       _ (rt/set-file-mode! newc 0444)
@@ -229,7 +229,7 @@
          (try (rt/read-rewrite-intent log) false
               (catch clojure.lang.ExceptionInfo e
                 (and (:fram/doctor-refusal (ex-data e)) (str/includes? (.getMessage e) ":v 1")))))
-  (mk-intent log {:coord {:ino 1 :mode 0644 :bytes 5 :sha "beef"} :new_coord {:ino 2 :sha1 "dead"}})
+  (mk-intent log {:database {:ino 1 :mode 0644 :bytes 5 :sha "beef"} :new_coord {:ino 2 :sha1 "dead"}})
   (let [h (rt/acquire-rewrite-lock! log false true)]
     (check "unclassifiable corpus (no ino/sha match) refuses loud, touches nothing"
            (try (rt/doctor-rewrite-intent! log) false
@@ -243,7 +243,7 @@
 (println "\n== 4d. crashed-unhealed flip: the daemon batch seam refuses loud ==")
 (let [d (scratch! "s4d") log (write-corpus! d plain-lines)
       pre (vec (fbytes log))]
-  (mk-intent log {:coord {:ino (ino log) :mode (mode log) :bytes 1 :sha "x"}})
+  (mk-intent log {:database {:ino (ino log) :mode (mode log) :bytes 1 :sha "x"}})
   (check "with-append-admission refuses with :fram/rewrite-in-progress"
          (try (rt/with-append-admission log (fn [] :wrote)) false
               (catch clojure.lang.ExceptionInfo e (boolean (:fram/rewrite-in-progress (ex-data e))))))
@@ -258,12 +258,12 @@
 (println "\n== 5. boot gate: heal-at-boot, block-under-live-flip, hold across the fold ==")
 (let [d (scratch! "s5") log (write-corpus! d plain-lines)]
   (rt/set-file-mode! log 0600)
-  (mk-intent log {:coord {:ino (ino log) :mode 0600 :bytes (alength (fbytes log)) :sha (sha16 (fbytes log))}})
-  (spit (rt/rewrite-coord-tmp-path log) "junk")
+  (mk-intent log {:database {:ino (ino log) :mode 0600 :bytes (alength (fbytes log)) :sha (sha16 (fbytes log))}})
+  (spit (rt/rewrite-database-tmp-path log) "junk")
   (let [gate (rt/boot-rewrite-gate! log)]
     (check "boot gate healed the crashed flip (intent gone, tmp swept, mode 0600)"
            (and (not (.exists (io/file (rt/rewrite-intent-path log))))
-                (not (.exists (io/file (rt/rewrite-coord-tmp-path log))))
+                (not (.exists (io/file (rt/rewrite-database-tmp-path log))))
                 (= 0600 (mode log))))
     ;; while the gate handle is held, a flip's exclusive tryLock must FAIL:
     (check "gate handle really holds the shared lock (exclusive try fails cross-check)"
@@ -288,11 +288,11 @@
       ;; ambient FRAM_TELEMETRY_LOG (north wrapper env) must never leak into the
       ;; scratch daemon or activate-split! refuses the mismatched pair.
       port (+ 8400 (rand-int 500))
-      pr (p/process ["bb" "-cp" "out" "coord_daemon.clj" "serve-flat" (str port) log]
+      pr (p/process ["bb" "-cp" "out" "server.clj" "serve-flat" (str port) log]
                     {:out :string :err :string
                      :extra-env {"FRAM_TELEMETRY_LOG" (str d "/telemetry.log")}})
       st (loop [k 0]
-           (let [r (try (rt/coord-request-for-log port log {:op :status}) (catch Exception _ nil))]
+           (let [r (try (rt/database-request-for-log port log {:op :status}) (catch Exception _ nil))]
              (cond (some? r) r
                    (> k 100) nil
                    :else (do (Thread/sleep 150) (recur (inc k))))))]
@@ -308,7 +308,7 @@
       threads (str d "/threads") _ (.mkdirs (io/file threads))
       env {"FRAM_LOG" log "FRAM_THREADS" threads}]
   (rt/set-file-mode! log 0600)
-  (mk-intent log {:coord {:ino (ino log) :mode 0600 :bytes (alength (fbytes log)) :sha (sha16 (fbytes log))}})
+  (mk-intent log {:database {:ino (ino log) :mode 0600 :bytes (alength (fbytes log)) :sha (sha16 (fbytes log))}})
   (let [r (p/shell {:out :string :err :string :continue true :extra-env env :dir "."}
                    "bin/fram" "doctor")
         o (str (:out r) (:err r))]

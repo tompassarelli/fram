@@ -5,7 +5,7 @@
          '[clojure.java.io :as io]
          '[clojure.set :as set])
 
-(load-file "coord.clj")
+(load-file "database.clj")
 (load-file "bridge/world_git.clj")
 
 (def failures (atom 0))
@@ -96,10 +96,10 @@
 (git cloned "branch" "feature" "origin/feature")
 
 (def log (str scratch "/worlds.log"))
-(def co (coord/new-coord log))
+(def db (database/new-database log))
 (def imported
   (bridge.world-git/import-repo!
-   co "w5" cloned {:world-prefix "corpus"}))
+   db "w5" cloned {:world-prefix "corpus"}))
 (def import-ok (:ok imported))
 
 (println "world ⇄ git bridge — real object database, branches, merge, binary, modes")
@@ -120,7 +120,7 @@
       (fn [[ref world-name]]
         (= (get (:versions import-ok)
                 (git cloned "rev-parse" ref))
-           (coord/world-head co world-name)))
+           (database/world-head db world-name)))
       (:worlds import-ok)))
 
 (defn expected-world-manifest [repo commit]
@@ -137,7 +137,7 @@
        vec))
 
 (defn actual-world-manifest [version]
-  (->> (coord/world-manifest co version)
+  (->> (database/world-manifest db version)
        (map #(select-keys % [:slot :mode :blob-id]))
        (sort-by :slot)
        vec))
@@ -173,7 +173,7 @@
                        {})
               after (bridge.world-git/git-manifest cloned commit)
               version (get (:versions import-ok) commit)
-              overlay (:overlay (coord/world-version co version))]
+              overlay (:overlay (database/world-version db version))]
           (= (changed-slots before after)
              (set (map :slot overlay)))))
       (:commits import-ok)))
@@ -183,10 +183,10 @@
             n 0]
        (if (= version (fram.world/version-id nil []))
          (= 5 n)
-         (recur (:base (coord/world-version co version)) (inc n)))))
+         (recur (:base (database/world-version db version)) (inc n)))))
 
 (bar "empty commit: a new Version is retained with an empty sparse overlay"
-     (let [record (coord/world-version co (get (:versions import-ok) c-empty))]
+     (let [record (database/world-version db (get (:versions import-ok) c-empty))]
        (and (= [] (:overlay record))
             (= (get (:versions import-ok) c-merge) (:base record)))))
 
@@ -195,11 +195,11 @@
 (def main-version (get (:versions import-ok) c-empty))
 (def render-a
   (bridge.world-git/render-version!
-   co main-version rendered-a
+   db main-version rendered-a
    {:object-format (:object-format import-ok)}))
 (def render-b
   (bridge.world-git/render-version!
-   co main-version rendered-b
+   db main-version rendered-b
    {:object-format (:object-format import-ok)}))
 
 (def source-tree (git cloned "rev-parse" "main^{tree}"))
@@ -215,7 +215,7 @@
 (def head-before-format-reject (git rendered-a "rev-parse" "HEAD"))
 (def format-reject
   (bridge.world-git/render-version!
-   co main-version rendered-a {:object-format "sha256"}))
+   db main-version rendered-a {:object-format "sha256"}))
 
 (bar "format: an existing repository rejects an explicit object-format mismatch"
      (and (= :git-object-format-mismatch (:reject format-reject))
@@ -229,12 +229,12 @@
 (def rendered-process (str scratch "/rendered-process"))
 (def fresh-code
   (str
-   "(load-file \"coord.clj\")"
+   "(load-file \"database.clj\")"
    "(load-file \"bridge/world_git.clj\")"
-   "(let [co {:store (coord/replay (System/getenv \"W5_LOG\"))"
+   "(let [db {:store (database/replay (System/getenv \"W5_LOG\"))"
    " :log nil :lock (Object.)}"
    " r (bridge.world-git/render-version!"
-   " co (System/getenv \"W5_VERSION\") (System/getenv \"W5_OUT\")"
+   " db (System/getenv \"W5_VERSION\") (System/getenv \"W5_OUT\")"
    " {:object-format (System/getenv \"W5_OBJECT_FORMAT\")})]"
    " (prn r))"))
 (def fresh
@@ -265,11 +265,11 @@
               (repeat (inc fram.world/max-blob-bytes) 65))
 (git-commit! oversized "oversized blob")
 (def oversized-log (str scratch "/oversized-worlds.log"))
-(def oversized-co (coord/new-coord oversized-log))
+(def oversized-db (database/new-database oversized-log))
 (def oversized-before (.length (io/file oversized-log)))
 (def oversized-result
   (bridge.world-git/import-repo!
-   oversized-co "w5" oversized {:world-prefix "oversized"}))
+   oversized-db "w5" oversized {:world-prefix "oversized"}))
 
 (bar "limit: a 524289-byte Git blob is rejected, never split"
      (and (= :world-blob-too-large (:reject oversized-result))

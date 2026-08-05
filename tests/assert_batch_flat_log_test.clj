@@ -39,7 +39,7 @@
       _ (spit log "")
       daemon (proc/process
               {:dir root :out :string :err :string}
-              "bb" "-cp" "out" "coord_daemon.clj" "serve-flat"
+              "bb" "-cp" "out" "server.clj" "serve-flat"
               (str port) (.getPath log))
       subject "@assert-batch-flat-log"
       shadow-derived-fact-value "shadow-derived-fact-value"

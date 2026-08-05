@@ -5,7 +5,7 @@
          '[fram.store :as store]
          '[fram.types :as t])
 
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (def checks (atom []))
 (defn check! [label ok]
@@ -49,9 +49,9 @@
 (def cut-path (.getPath (java.io.File. scratch "cut.framlog")))
 (def passive-path (.getPath (java.io.File. scratch "passive.framlog")))
 
-(coord/create-triple-log! source-path space)
-(def co (coord/open-coordinator! source-path space))
-(def empty-image (store/dump-term-store (coord/coordinator-store co)))
+(database/create-triple-log! source-path space)
+(def db (database/open-database! source-path space))
+(def empty-image (store/dump-term-store (database/database-store db)))
 
 (def nested-2
   (t/triple (t/triple "Alice" :knows "Bob")
@@ -73,32 +73,32 @@
         end (.length file)]
     (swap! boundaries conj
            {:label label :start start :end end
-            :image (store/dump-term-store (coord/coordinator-store co))})
+            :image (store/dump-term-store (database/database-store db))})
     result))
 
 (step! "single assert"
-       #(coord/assert! co (t/triple "Alice" :email "alice@example.com")
+       #(database/assert! db (t/triple "Alice" :email "alice@example.com")
                        {:actor "Tom"
                         :recorded-at (t/instant 1785560000 123456789)
                         :source-frame "framlog-torn-sweep"}))
 (step! "batch of three asserts"
-       #(coord/commit! co {:actor "batcher"
+       #(database/commit! db {:actor "batcher"
                            :operations
                            [{:action :assert :proposition (t/triple "A" :count 1)}
                             {:action :assert :proposition (t/triple "B" :count 2)}
                             {:action :assert :proposition (t/triple "C" :count 3)}]}))
-(step! "depth-2 recursive term" #(coord/assert! co nested-2 {:actor "recorder"}))
-(step! "depth-3 recursive term" #(coord/assert! co nested-3 {}))
+(step! "depth-2 recursive term" #(database/assert! db nested-2 {:actor "recorder"}))
+(step! "depth-3 recursive term" #(database/assert! db nested-3 {}))
 (def draft-occurrence
   (kernel/occurrence-of
-   (first (:occurrences (step! "draft assert" #(coord/assert! co draft {}))))))
-(step! "retraction" #(coord/retract! co (t/triple "A" :count 1) {:actor "Tom"}))
+   (first (:occurrences (step! "draft assert" #(database/assert! db draft {}))))))
+(step! "retraction" #(database/retract! db (t/triple "A" :count 1) {:actor "Tom"}))
 (step! "supersession"
-       #(coord/supersede! co draft-occurrence (t/triple "Task" :status "final")
+       #(database/supersede! db draft-occurrence (t/triple "Task" :status "final")
                           {:actor "reviewer"}))
 ;; This frame must exceed dense-limit so the strided sweep path is exercised.
 (step! "wide batch"
-       #(coord/commit! co {:actor "wide"
+       #(database/commit! db {:actor "wide"
                            :operations
                            (mapv (fn [n]
                                    {:action :assert
@@ -110,7 +110,7 @@
 (def frames (vec @boundaries))
 (def images (into [empty-image] (map :image) frames))
 (def source-bytes (read-all source-path))
-(def parsed-source (coord/read-triple-log! source-path))
+(def parsed-source (database/read-triple-log! source-path))
 
 ;; Both ends stay dense; only a large frame's middle is strided, to hold the
 ;; whole sweep inside the CI per-test budget.
@@ -141,12 +141,12 @@
         expected-kept (if complete? (inc index) index)]
     (write-bytes! cut-path (prefix-bytes source-bytes cut))
     (try
-      (let [opened (coord/open-coordinator! cut-path space {:repair-torn? true})
-            image (store/dump-term-store (coord/coordinator-store opened))
+      (let [opened (database/open-database! cut-path space {:repair-torn? true})
+            image (store/dump-term-store (database/database-store opened))
             reported (:recovered-tail opened)
-            repaired (coord/read-triple-log! cut-path)
-            marker (coord/assert! opened (t/triple "sweep-marker" :cut cut) {})
-            cold (coord/open-coordinator! cut-path space)]
+            repaired (database/read-triple-log! cut-path)
+            marker (database/assert! opened (t/triple "sweep-marker" :cut cut) {})
+            cold (database/open-database! cut-path space)]
         (cond-> {}
           (not= expected-image image) (assoc :divergent true)
           (and expect-torn? (nil? reported)) (assoc :missing-torn true)
@@ -156,7 +156,7 @@
           (not= (t/transaction-coordinate space (inc expected-kept)) (:ok marker))
           (assoc :write-rejected true)
           (not (some #{(t/triple "sweep-marker" :cut cut)}
-                     (coord/live-propositions cold)))
+                     (database/live-propositions cold)))
           (assoc :marker-not-durable true)))
       (catch Throwable error
         {:threw (or (:fram/code (ex-data error)) (str error))}))))
@@ -170,11 +170,11 @@
         written (prefix-bytes source-bytes cut)]
     (write-bytes! passive-path written)
     (try
-      (let [opened (coord/open-coordinator! passive-path space)
-            image (store/dump-term-store (coord/coordinator-store opened))
+      (let [opened (database/open-database! passive-path space)
+            image (store/dump-term-store (database/database-store opened))
             reported (:torn-tail opened)
             write-code (when expect-torn?
-                         (error-code #(coord/assert! opened nested-2 {})))]
+                         (error-code #(database/assert! opened nested-2 {})))]
         (cond-> {}
           (not= expected-image image) (assoc :divergent true)
           (and expect-torn? (nil? reported)) (assoc :missing-torn true)
@@ -198,8 +198,8 @@
         written (flipped-bytes truncated offset mask)]
     (write-bytes! cut-path written)
     (try
-      (let [opened (coord/open-coordinator! cut-path space {:repair-torn? true})
-            image (store/dump-term-store (coord/coordinator-store opened))]
+      (let [opened (database/open-database! cut-path space {:repair-torn? true})
+            image (store/dump-term-store (database/database-store opened))]
         (condp = image
           before {:outcome :repaired-to-prefix}
           after {:outcome :flip-was-benign}

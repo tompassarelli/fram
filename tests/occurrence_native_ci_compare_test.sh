@@ -9,7 +9,7 @@ trap 'rm -rf "${scratch:?}"' EXIT INT TERM
 printf '%s\n' \
   $'catalog-drift\tcatalog-drift' \
   $'vocab-residue\tRELEASE-v0.3.0.md' \
-  $'vocab-residue\tcoord_daemon.clj' \
+  $'vocab-residue\tserver.clj' \
   $'vocab-residue\tdeploy/cloudflare/PROCEDURE.md' \
   > "$scratch/pristine.tsv"
 printf '%s\n' \
@@ -41,11 +41,11 @@ if [ "$subset_status" -eq 0 ]; then
 else
   echo "  [FAIL] a candidate vocabulary subset was rejected" >&2
 fi
-if grep -Fq $'RESOLVED vocab-residue\tcoord_daemon.clj' <<< "$subset_output"; then
-  echo "  [PASS] resolved coord_daemon.clj is reported"
+if grep -Fq $'RESOLVED vocab-residue\tserver.clj' <<< "$subset_output"; then
+  echo "  [PASS] resolved server.clj is reported"
   passes=$((passes + 1))
 else
-  echo "  [FAIL] resolved coord_daemon.clj was silent" >&2
+  echo "  [FAIL] resolved server.clj was silent" >&2
 fi
 if grep -Fq $'RESOLVED vocab-residue\tdeploy/cloudflare/PROCEDURE.md' <<< "$subset_output"; then
   echo "  [PASS] resolved Cloudflare procedure is reported"

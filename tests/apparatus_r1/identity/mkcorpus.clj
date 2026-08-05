@@ -15,10 +15,10 @@
       prefix (str f1 "\n" f2 "\n" f3 "\n")
       gen (m/bytes->str (m/gen-record-bytes {:tx 4 :gen-n 1 :telem-prefix prefix}))
       ;; coordination.log: control record then retained facts, byte-verbatim.
-      coord (str gen "\n" prefix)
+      database (str gen "\n" prefix)
       ;; telemetry.log: the consumed prefix (shadowed) + a legitimate later
       ;; append that byte-equals retained line f2 but lands beyond the boundary.
       telem (str prefix f2 "\n")]
-  (spit (io/file dir "coordination.log") coord)
+  (spit (io/file dir "coordination.log") database)
   (spit (io/file dir "telemetry.log") telem)
-  (println "corpus:" dir "coord=" (count (m/str->bytes coord)) "B telem=" (count (m/str->bytes telem)) "B"))
+  (println "corpus:" dir "database=" (count (m/str->bytes database)) "B telem=" (count (m/str->bytes telem)) "B"))

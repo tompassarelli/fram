@@ -4,7 +4,7 @@
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
          '[fram.world :as w])
-(load-file "coord.clj")
+(load-file "database.clj")
 
 (def failures (atom 0))
 (def total (atom 0))
@@ -64,37 +64,37 @@
 
 (def fixture-log (str scratch "/fixture.log"))
 (def fixture
-  (let [co (new-coord fixture-log)
+  (let [db (new-database fixture-log)
         root (w/version-id nil [])
-        _ (world-create! co "w7" "A" root)
-        blob (:ok (world-blob-put! co "w7" (b8 "(ns w7.core)\n")))
-        cid (:ok (world-begin! co "w7" "A" root nonce))
+        _ (world-create! db "w7" "A" root)
+        blob (:ok (world-blob-put! db "w7" (b8 "(ns w7.core)\n")))
+        cid (:ok (world-begin! db "w7" "A" root nonce))
         op-ranges
         (mapv (fn [slot]
                 (let [start (flen fixture-log)
-                      result (world-append! co "w7" cid
+                      result (world-append! db "w7" cid
                                             (w/put-op slot mode blob))]
                   {:slot slot :start start :end (flen fixture-log)
                    :result result}))
               slots)
         seal-start (flen fixture-log)
-        version (:ok (world-seal! co "w7" cid))
+        version (:ok (world-seal! db "w7" cid))
         seal-end (flen fixture-log)
-        lock (:ok (world-lock! co version build-spec))
-        receipt (:ok (world-build! co "w7" lock))]
+        lock (:ok (world-lock! db version build-spec))
+        receipt (:ok (world-build! db "w7" lock))]
     {:root root :blob blob :cid cid :version version :receipt receipt
      :op-ranges op-ranges :seal-start seal-start :seal-end seal-end}))
 
-(defn reject-probe [co path expected-head cid receipt]
-  (let [head0 (world-head co "A")
+(defn reject-probe [db path expected-head cid receipt]
+  (let [head0 (world-head db "A")
         sha0 (log-sha path)
         len0 (flen path)
         result (try
-                 (world-promote! co "w7" "A" expected-head cid receipt)
+                 (world-promote! db "w7" "A" expected-head cid receipt)
                  (catch Throwable e
                    {:threw (or (ex-message e) (str e))}))]
     {:result result
-     :head-pure? (= head0 (world-head co "A"))
+     :head-pure? (= head0 (world-head db "A"))
      :bytes-pure? (and (= sha0 (log-sha path)) (= len0 (flen path)))}))
 
 (defn exact-pure-reject? [probe expected]
@@ -156,15 +156,15 @@
 
 (def stale-probe
   (let [path (copy-log fixture-log "head-stale")
-        co (reopen path)
-        winner (:ok (world-begin! co "w7" "A" (:root fixture) winner-nonce))]
-    (world-append! co "w7" winner
+        db (reopen path)
+        winner (:ok (world-begin! db "w7" "A" (:root fixture) winner-nonce))]
+    (world-append! db "w7" winner
                    (w/put-op "src/w7/winner.bclj" mode (:blob fixture)))
-    (let [version (:ok (world-seal! co "w7" winner))
-          lock (:ok (world-lock! co version build-spec))
-          receipt (:ok (world-build! co "w7" lock))]
-      (world-promote! co "w7" "A" (:root fixture) winner receipt))
-    (reject-probe co path (:root fixture) (:cid fixture) (:receipt fixture))))
+    (let [version (:ok (world-seal! db "w7" winner))
+          lock (:ok (world-lock! db version build-spec))
+          receipt (:ok (world-build! db "w7" lock))]
+      (world-promote! db "w7" "A" (:root fixture) winner receipt))
+    (reject-probe db path (:root fixture) (:cid fixture) (:receipt fixture))))
 
 (println "adversarial world log surgery:")
 (check "fixture contains three distinct candidate-op tx ranges"

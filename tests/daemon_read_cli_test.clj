@@ -52,7 +52,7 @@
                   [target predicate value
                    (if (contains? #{"bar_evidence" "progress" "outcome"} predicate)
                      "lane-probe"
-                     "coord")])
+                     "database")])
                 rows))
          projections))))
 
@@ -69,8 +69,8 @@
 (let [read-called? (atom false)
       scan-called? (atom false)
       warm-output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-show-for-log
                     (fn [_ _ requested]
                       (when (= subject requested)
                         {:version 2 :rows projection}))
@@ -94,8 +94,8 @@
                (not (str/includes? warm-output "· by lane-probe")))))
 
 (let [warm-output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-show-for-log
                     (fn [_ _ requested]
                       (when (= subject requested)
                         {:version 2 :rows projection}))]
@@ -110,10 +110,10 @@
       sleeps (atom [])
       response {:version 12 :rows projection}
       result
-      (with-redefs [fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-show-for-log
                     (fn [& _]
                       (if (= 3 (swap! show-calls inc)) response nil))
-                    fram-fast/coord-version-for-log (fn [& _] -1)
+                    fram-fast/database-version-for-log (fn [& _] -1)
                     fram-fast/retry-delays (constantly [100 250 500])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
         (#'fram-fast/coordinator-show 7977 log-path subject))]
@@ -125,9 +125,9 @@
 (let [show-calls (atom 0)
       sleeps (atom [])
       result
-      (with-redefs [fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-show-for-log
                     (fn [& _] (swap! show-calls inc) nil)
-                    fram-fast/coord-version-for-log (fn [& _] -3)
+                    fram-fast/database-version-for-log (fn [& _] -3)
                     fram-fast/retry-delays (constantly [100 250])
                     fram-fast/*sleep!* #(swap! sleeps conj %)]
         (#'fram-fast/coordinator-show 7977 log-path subject))]
@@ -141,8 +141,8 @@
          {:version "1" :rows [["title" "ok"]]}
          {:version 1 :rows [["title" 7]]}]]
   (let [result
-        (with-redefs [fram-fast/coord-show-for-log (fn [& _] malformed)
-                      fram-fast/coord-version-for-log (fn [& _] 1)]
+        (with-redefs [fram-fast/database-show-for-log (fn [& _] malformed)
+                      fram-fast/database-version-for-log (fn [& _] 1)]
           (#'fram-fast/coordinator-show 7977 log-path subject))]
     (check! (str "malformed daemon response rejected " (pr-str malformed))
             (nil? result))))
@@ -152,8 +152,8 @@
 
 (let [scan-called? (atom false)
       output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-show-for-log
                     (fn [& _] {:version 13 :rows [["title" "exact fast row"]]})
                     fram-fast/matching-ops
                     (fn [& _]
@@ -169,8 +169,8 @@
 (doseq [[target rows] wire-projections]
   (let [bare (subs target 1)
         warm-output
-        (with-redefs [fram-fast/coord-port (constantly 7977)
-                      fram-fast/coord-show-for-log
+        (with-redefs [fram-fast/database-port (constantly 7977)
+                      fram-fast/database-show-for-log
                       (fn [_ _ requested]
                         (when (= requested target)
                           {:version 10 :rows rows}))]
@@ -187,9 +187,9 @@
 (let [read-called? (atom false)
       write-call (atom nil)
       output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-version-for-log (fn [_ _] 8)
-                    fram-fast/coord-assert-for-log
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-version-for-log (fn [_ _] 8)
+                    fram-fast/database-assert-for-log
                     (fn [port log subject predicate value version]
                       (reset! write-call
                               [port log subject predicate value version])
@@ -214,9 +214,9 @@
 
 (let [read-called? (atom false)
       output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-version-for-log (fn [& _] 8)
-                    fram-fast/coord-assert-for-log (fn [& _] "reject:cycle")
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-version-for-log (fn [& _] 8)
+                    fram-fast/database-assert-for-log (fn [& _] "reject:cycle")
                     rt/read-log
                     (fn [& _]
                       (reset! read-called? true)
@@ -240,8 +240,8 @@
 
 (let [write-call (atom nil)
       output
-      (with-redefs [fram-fast/coord-port (constantly 7977)
-                    fram-fast/coord-write-existing-for-log
+      (with-redefs [fram-fast/database-port (constantly 7977)
+                    fram-fast/database-write-existing-for-log
                     (fn [operation port log requested predicate value]
                       (reset! write-call
                               [operation port log requested predicate value])
@@ -263,11 +263,11 @@
 
 (let [request (atom nil)
       response
-      (with-redefs [fram-fast/coord-request-for-log
+      (with-redefs [fram-fast/database-request-for-log
                     (fn [_ _ sent]
                       (reset! request sent)
                       {:ok 23})]
-        (#'fram-fast/coord-write-existing-for-log
+        (#'fram-fast/database-write-existing-for-log
          :retract 7977 log-path subject "progress" "one client"))]
   (check! "existing write sends one atomic coordinator request"
           (and (= "ok:23" response)
@@ -279,22 +279,22 @@
                   @request))))
 
 (let [response
-      (with-redefs [fram-fast/coord-request-for-log
+      (with-redefs [fram-fast/database-request-for-log
                     (fn [& _] {:error "unknown op"})]
-        (#'fram-fast/coord-write-existing-for-log
+        (#'fram-fast/database-write-existing-for-log
          :assert 7977 log-path subject "progress" "one client"))]
   (check! "old daemon rejects atomic op before any legacy mutation"
           (= "protocol-incompatible" response)))
 
 (let [write-call (atom nil)]
-  (with-redefs [fram-fast/coord-port (constantly 7977)
+  (with-redefs [fram-fast/database-port (constantly 7977)
                 fram-fast/coordinator-show
                 (fn [& _]
                   (throw
                    (ex-info
                     "bare-token exact write performed a separate show"
                     {})))
-                fram-fast/coord-write-existing-for-log
+                fram-fast/database-write-existing-for-log
                 (fn [operation port log requested predicate value]
                   (reset! write-call
                           [operation port log requested predicate value])
@@ -310,8 +310,8 @@
                @write-call))))
 
 (let [write-called? (atom false)]
-  (with-redefs [fram-fast/coord-port (constantly 7977)
-                fram-fast/coord-write-existing-for-log
+  (with-redefs [fram-fast/database-port (constantly 7977)
+                fram-fast/database-write-existing-for-log
                 (fn [& _]
                   (reset! write-called? true)
                   "missing-subject")]
@@ -325,8 +325,8 @@
             @write-called?)))
 
 (check! "daemon absence preserves cold show fallback signal"
-        (with-redefs [fram-fast/coord-show-for-log (fn [& _] nil)
-                      fram-fast/coord-version-for-log (fn [& _] -1)
+        (with-redefs [fram-fast/database-show-for-log (fn [& _] nil)
+                      fram-fast/database-version-for-log (fn [& _] -1)
                       fram-fast/retry-delays (constantly [])]
           (false? (fram-fast/fast-show!
                    log-path
@@ -335,7 +335,7 @@
 
 (let [scan-called? (atom false)
       output
-      (with-redefs [fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-show-for-log
                     (fn [& _] {:version 15 :rows []})
                     fram-fast/relevant-ops
                     (fn [& _]
@@ -354,14 +354,14 @@
            "no facts for @019fa4d4-93aa-7447-aae5-0a5bcfca6800")))
 
 (check! "substring show preserves cold fallback on an empty daemon projection"
-        (with-redefs [fram-fast/coord-show-for-log
+        (with-redefs [fram-fast/database-show-for-log
                       (fn [& _] {:version 16 :rows []})]
           (false? (fram-fast/fast-show! log-path "019fa4d4" false))))
 
 (let [requested (atom nil)
       scan-called? (atom false)
       output
-      (with-redefs [fram-fast/coord-show-for-log
+      (with-redefs [fram-fast/database-show-for-log
                     (fn [_ _ subject]
                       (reset! requested subject)
                       {:version 17 :rows [["lease" "holder|9999999999999|1"]]})
@@ -381,7 +381,7 @@
 
 (let [requested (atom nil)]
   (check! "bare existing non-thread subject uses the daemon show path"
-          (with-redefs [fram-fast/coord-show-for-log
+          (with-redefs [fram-fast/database-show-for-log
                         (fn [_ _ subject]
                           (reset! requested subject)
                           {:version 18 :rows [["agent_death" "dead"]]})]
@@ -390,7 +390,7 @@
           (= "@swarm" @requested)))
 
 (check! "missing bare non-UUID token preserves the resolver fallback"
-        (with-redefs [fram-fast/coord-show-for-log
+        (with-redefs [fram-fast/database-show-for-log
                       (fn [& _] {:version 19 :rows []})]
           (false? (fram-fast/fast-show! log-path "missing-prefix" false))))
 
@@ -409,8 +409,8 @@
 (def sample-query "{:find \"agg\" :rules []}")
 
 (let [read-called? (atom false)
-      out (with-redefs [fram-fast/coord-port (constantly 7977)
-                        fram-fast/coord-query-for-log
+      out (with-redefs [fram-fast/database-port (constantly 7977)
+                        fram-fast/database-query-for-log
                         (fn [_ _ q]
                           (when (= {:find "agg" :rules []} q)
                             {:ok [["@a" "ran"] ["@b" "died"]] :version 9}))
@@ -426,8 +426,8 @@
           (and (str/includes? out "  [\"@a\" \"ran\"]")
                (str/includes? out "  [\"@b\" \"died\"]"))))
 
-(let [out (with-redefs [fram-fast/coord-port (constantly 7977)
-                        fram-fast/coord-query-for-log (fn [& _] {:ok [] :version 9})]
+(let [out (with-redefs [fram-fast/database-port (constantly 7977)
+                        fram-fast/database-query-for-log (fn [& _] {:ok [] :version 9})]
             (with-out-str (fram-fast/fast-query! log-path sample-query)))]
   (check! "empty result matches cold's (no results)"
           (str/includes? out "  (no results)")))
@@ -435,26 +435,26 @@
 ;; Every path the cold renderer must still own, so its diagnostics stay
 ;; byte-identical rather than being half-reproduced here.
 (check! "unreachable daemon leaves query to cold"
-        (false? (with-redefs [fram-fast/coord-port (constantly 7977)
-                              fram-fast/coord-query-for-log (fn [& _] nil)]
+        (false? (with-redefs [fram-fast/database-port (constantly 7977)
+                              fram-fast/database-query-for-log (fn [& _] nil)]
                   (fram-fast/fast-query! log-path sample-query))))
 
 (check! "daemon-reported query errors leave query to cold"
-        (false? (with-redefs [fram-fast/coord-port (constantly 7977)
-                              fram-fast/coord-query-for-log
+        (false? (with-redefs [fram-fast/database-port (constantly 7977)
+                              fram-fast/database-query-for-log
                               (fn [& _] {:error ["unbound var ?x"]})]
                   (fram-fast/fast-query! log-path sample-query))))
 
 (let [contacted? (atom false)]
   (check! "unparseable EDN leaves query to cold"
-          (false? (with-redefs [fram-fast/coord-port (constantly 7977)
-                                fram-fast/coord-query-for-log
+          (false? (with-redefs [fram-fast/database-port (constantly 7977)
+                                fram-fast/database-query-for-log
                                 (fn [& _] (reset! contacted? true) {:ok []})]
                     (fram-fast/fast-query! log-path "{:find"))))
   (check! "unparseable EDN never contacts the daemon" (not @contacted?)))
 
 (let [fallback-args (atom nil)]
-  (with-redefs [fram-fast/coord-query-for-log (fn [& _] nil)
+  (with-redefs [fram-fast/database-query-for-log (fn [& _] nil)
                 fram-fast/cold-main! #(reset! fallback-args %)]
     (fram-fast/-main "query" sample-query))
   (check! "query fallback reaches cold-main with its original args"
@@ -471,7 +471,7 @@
 ;; Asserts the PROPERTY (comfortably above a cold daemon read), not the exact
 ;; number, so tuning stays free while a regression to a sub-second default fails.
 (check! "the default read timeout leaves room for a cold daemon read"
-        (>= fram-fast/default-coord-read-timeout-ms 10000))
+        (>= fram-fast/default-snapshot-read-timeout-ms 10000))
 
 ;; --- the cold fallback must be explicable ----------------------------------
 ;; Falling back to the whole-log fold is a 20x+ latency cliff that still
@@ -480,9 +480,9 @@
 ;; measured 650ms, and the entire difference was an invisible fallback.
 (let [out (with-out-str
             (binding [*err* *out*]
-              (with-redefs [fram-fast/coord-port (constantly 7977)
+              (with-redefs [fram-fast/database-port (constantly 7977)
                             fram-fast/debug-enabled? (constantly true)
-                            fram-fast/coord-request-for-log
+                            fram-fast/database-request-for-log
                             (fn [& _] {:reject ["log mismatch: client expects /a but coordinator serves /b"]})]
                 (fram-fast/fast-query! log-path sample-query))))]
   (check! "a rejected request names the rejection at DEBUG"
@@ -491,9 +491,9 @@
 
 (let [out (with-out-str
             (binding [*err* *out*]
-              (with-redefs [fram-fast/coord-port (constantly 7977)
+              (with-redefs [fram-fast/database-port (constantly 7977)
                             fram-fast/debug-enabled? (constantly true)
-                            fram-fast/coord-request-for-log
+                            fram-fast/database-request-for-log
                             (fn [& _] (throw (ex-info "read timed out" {})))]
                 (fram-fast/fast-query! log-path sample-query))))]
   (check! "a thrown probe names the exception at DEBUG"
@@ -504,9 +504,9 @@
 ;; performance problem.
 (let [out (with-out-str
             (binding [*err* *out*]
-              (with-redefs [fram-fast/coord-port (constantly 7977)
+              (with-redefs [fram-fast/database-port (constantly 7977)
                             fram-fast/debug-enabled? (constantly false)
-                            fram-fast/coord-request-for-log
+                            fram-fast/database-request-for-log
                             (fn [& _] (throw (ex-info "read timed out" {})))]
                 (fram-fast/fast-query! log-path sample-query))))]
   (check! "silent at default verbosity" (not (str/includes? out "falling back"))))
@@ -514,9 +514,9 @@
 ;; A SUCCESSFUL warm query must never claim it fell back.
 (let [out (with-out-str
             (binding [*err* *out*]
-              (with-redefs [fram-fast/coord-port (constantly 7977)
+              (with-redefs [fram-fast/database-port (constantly 7977)
                             fram-fast/debug-enabled? (constantly true)
-                            fram-fast/coord-request-for-log
+                            fram-fast/database-request-for-log
                             (fn [& _] {:ok [["@a" "ran"]] :version 9})]
                 (fram-fast/fast-query! log-path sample-query))))]
   (check! "the warm path reports no fallback" (not (str/includes? out "falling back"))))
@@ -526,8 +526,8 @@
 ;; directly, and the fallback check passes identically whether the branch
 ;; exists or not, because an unhandled command also lands in cold-main!.
 (let [reached-cold? (atom false)
-      out (with-redefs [fram-fast/coord-port (constantly 7977)
-                        fram-fast/coord-query-for-log
+      out (with-redefs [fram-fast/database-port (constantly 7977)
+                        fram-fast/database-query-for-log
                         (fn [& _] {:ok [["@a" "ran"]] :version 9})
                         fram-fast/cold-main! (fn [_] (reset! reached-cold? true))]
             (with-out-str (fram-fast/-main "query" sample-query)))]

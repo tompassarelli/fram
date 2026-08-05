@@ -5,7 +5,7 @@
          '[fram.fold :as fold]
          '[fram.rt :as rt])
 
-(load-file "coord_daemon.clj")
+(load-file "server.clj")
 (reset! snapshot-boot-enabled? false)
 (reset! telemetry-log nil)
 

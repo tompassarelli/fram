@@ -1,6 +1,6 @@
 ;; doctor_fingerprint_test.clj — `fram doctor` surfaces the FACTS-DERIVED cardinality
 ;; source (the finding #23 operator cross-check). Drives the real CLI over a synthetic
-;; log with a `@<pred> cardinality single` fact (FRAM_PORT points at a dead port so the
+;; log with a `@<pred> cardinality single` fact (FRAM_SERVER_PORT points at a dead port so the
 ;; live coordinator can't leak in) and asserts doctor reports the facts-derived count,
 ;; the cardinality-overlay fingerprint (which reflects the fact), and the fact > env >
 ;; fallback precedence note.
@@ -20,7 +20,7 @@
      '{:tx 3 :op "assert" :l "@T1"  :p "tag"   :r "x" :frame "test"}]))
 
 (def out (:out (p/shell {:out :string :err :string
-                         :extra-env {"FRAM_LOG" logpath "FRAM_THREADS" tmp "FRAM_PORT" "59997"}}
+                         :extra-env {"FRAM_LOG" logpath "FRAM_THREADS" tmp "FRAM_SERVER_PORT" "59997"}}
                         "bb" "-cp" "out" "-m" "fram.main" "doctor")))
 
 (chk "doctor reports a facts-derived cardinality count (>=1)"

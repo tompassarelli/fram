@@ -8,7 +8,7 @@
          '[fram.store :as store]
          '[fram.types :as t])
 
-(load-file "coord.clj")
+(load-file "database.clj")
 (load-file "tests/model/occurrence_model.clj")
 
 (alias 'model 'occurrence-model)
@@ -200,13 +200,13 @@
     :supersede (model/supersede m (:target op) (:replacement op) (:options op))
     :withdraw (model/withdraw-occurrence m (:target op) (:options op))))
 
-(defn engine-apply [co op]
+(defn engine-apply [db op]
   (case (:kind op)
-    :assert (coord/assert! co (:proposition op) (:options op))
-    :retract (coord/retract! co (:proposition op) (:options op))
-    :batch (coord/commit! co (assoc (:options op) :operations (:operations op)))
-    :supersede (coord/supersede! co (:target op) (:replacement op) (:options op))
-    :withdraw (coord/withdraw-occurrence! co (:target op) (:options op))))
+    :assert (database/assert! db (:proposition op) (:options op))
+    :retract (database/retract! db (:proposition op) (:options op))
+    :batch (database/commit! db (assoc (:options op) :operations (:operations op)))
+    :supersede (database/supersede! db (:target op) (:replacement op) (:options op))
+    :withdraw (database/withdraw-occurrence! db (:target op) (:options op))))
 
 (defn generate-ops
   "Every sequence opens with a fixed nested-Term prelude — assert, equal
@@ -270,16 +270,16 @@
   "Every engine projection is a full-corpus rebuild, so each accessor is called
    once per comparison. EXHAUSTIVE? adds the accessors that are definitionally
    derived from one already checked here."
-  ([m co] (compare-projections m co false))
-  ([m co exhaustive?]
-   (let [engine-history (coord/history co)
-         engine-live (coord/live-occurrences co)
+  ([m db] (compare-projections m db false))
+  ([m db exhaustive?]
+   (let [engine-history (database/history db)
+         engine-live (database/live-occurrences db)
          model-history (model/history m)
          model-live (model/live-occurrences m)
          model-live-propositions (model/live-propositions m)]
      (some identity
            [(diff :current-transaction
-                  (model/current-transaction m) (coord/current-transaction co))
+                  (model/current-transaction m) (database/current-transaction db))
             (diff :history-length (count model-history) (count engine-history))
             (diff :live-proposition-count (count model-live-propositions)
                   (count engine-live))
@@ -288,24 +288,24 @@
             (diff :live-occurrences model-live engine-live)
             (diff :history model-history engine-history)
             (diff :withdrawal-triples
-                  (model/withdrawal-triples m) (coord/withdrawal-triples co))
+                  (model/withdrawal-triples m) (database/withdrawal-triples db))
             (diff :supersession-triples
-                  (model/supersession-triples m) (coord/supersession-triples co))
+                  (model/supersession-triples m) (database/supersession-triples db))
             (diff :store-live-propositions
                   (model/store-live-propositions m)
-                  (store/live-propositions (coord/coordinator-store co)))
+                  (store/live-propositions (database/database-store db)))
             (when exhaustive?
               (diff :public-live-propositions
-                    model-live-propositions (coord/live-propositions co)))]))))
+                    model-live-propositions (database/live-propositions db)))]))))
 
-(defn compare-occurrence-resolution [co receipt]
+(defn compare-occurrence-resolution [db receipt]
   (some (fn [event]
           (let [coordinate (t/triple-slot0 event)]
-            (diff :occurrence-resolution event (coord/occurrence co coordinate))))
+            (diff :occurrence-resolution event (database/occurrence db coordinate))))
         (:occurrences receipt)))
 
-(defn compare-temporal-projections [m co]
-  (let [root @(coord/coordinator-store co)
+(defn compare-temporal-projections [m db]
+  (let [root @(database/database-store db)
         current (dec (:next-sequence m))
         upper (quot current 2)
         lower (max -1 (- upper 3))
@@ -348,7 +348,7 @@
 
 (defn- fresh-log! []
   (let [file (java.io.File. scratch (str "run-" (swap! run-counter inc) ".framlog"))]
-    (coord/create-triple-log! (.getPath file) space-id)
+    (database/create-triple-log! (.getPath file) space-id)
     file))
 
 (defn run-sequence
@@ -356,43 +356,43 @@
    after every op and after a cold restart. Returns {:mismatch …} or {:stats …}."
   [ops]
   (let [file (fresh-log!)
-        co (coord/open-coordinator! (.getPath file) space-id)]
+        db (database/open-database! (.getPath file) space-id)]
     (loop [index 0
            m (model/new-model space-id
                               (when negative-control?
                                 {:dedupe-live-assertions? true}))
            committed 0]
       (if (>= index (count ops))
-        (let [restarted (coord/open-coordinator! (.getPath file) space-id)]
+        (let [restarted (database/open-database! (.getPath file) space-id)]
           (if-let [mismatch
-                   (or (compare-projections m co true)
-                       (compare-temporal-projections m co)
+                   (or (compare-projections m db true)
+                       (compare-temporal-projections m db)
                        (compare-projections m restarted true)
                        (compare-temporal-projections m restarted)
                        ;; Replay determinism is byte-exact at the store level,
                        ;; not merely projection-equal.
                        (diff :cold-restart-term-store-dump
-                             (store/dump-term-store (coord/coordinator-store co))
+                             (store/dump-term-store (database/database-store db))
                              (store/dump-term-store
-                              (coord/coordinator-store restarted))))]
+                              (database/database-store restarted))))]
             {:mismatch (assoc mismatch :index :cold-restart)}
             {:stats {:ops (count ops)
                      :committed committed
-                     :history (count (coord/history co))
-                     :live (count (coord/live-propositions co))
+                     :history (count (database/history db))
+                     :live (count (database/live-propositions db))
                      :log-bytes (.length file)}}))
         (let [op (nth ops index)
               expected (guarded #(model-apply m op))
-              actual (guarded #(engine-apply co op))
+              actual (guarded #(engine-apply db op))
               receipt (:receipt (:value expected))]
           (if-let [mismatch
                    (or (diff :thrown (:threw expected) (:threw actual))
                        (when-not (:threw actual)
                          (or (diff :receipt receipt (:value actual))
-                             (compare-projections (:model (:value expected)) co)
+                             (compare-projections (:model (:value expected)) db)
                              (compare-temporal-projections
-                              (:model (:value expected)) co)
-                             (compare-occurrence-resolution co receipt))))]
+                              (:model (:value expected)) db)
+                             (compare-occurrence-resolution db receipt))))]
             {:mismatch (assoc mismatch :index index :op op)}
             (recur (inc index) (:model (:value expected))
                    (cond-> committed (:ok receipt) inc))))))))

@@ -21,17 +21,17 @@
 ;; later stage can widen the bar without editing the check.
 (def sources
   (str/split (or (not-empty (System/getenv "FRAM_S0_SOURCES"))
-                 "src/fram/text_index.bclj,src/coord_read.bclj")
+                 "src/fram/text_index.bclj,src/snapshot_read.bclj")
              #","))
 (def modules
   (str/split (or (not-empty (System/getenv "FRAM_S0_MODULES"))
-                 "fram.text_index,coord_read")
+                 "fram.text_index,snapshot_read")
              #","))
 
 ;; every namespace the render closure must NOT pull in: the removed-API casualties
 ;; plus the whole authoring layer they belong to.
 (def forbidden-namespaces
-  #{"fram.schema" "fram.claims" "fram.tools" "codegraph" "pull" "coord-read"
+  #{"fram.schema" "fram.claims" "fram.tools" "codegraph" "pull" "snapshot-read"
     "rename" "supersession-check" "rep-jurisdiction" "roundtrip-fram" "resolve"
     "resolve-core" "resolve-read" "resolve-binds" "resolve-modules"
     "resolve-render" "resolve-query" "resolve-walk" "resolve-corpus"

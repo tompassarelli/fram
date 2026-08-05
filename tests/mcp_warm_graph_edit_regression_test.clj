@@ -98,7 +98,7 @@
                                  "FRAM_SNAPSHOT_BOOT" "0"})}
              "bin/fram-daemon" "serve-flat" (str port) code-log))
 
-(defn coord [req] (rt/coord-request-for-log port code-log req))
+(defn database [req] (rt/database-request-for-log port code-log req))
 ;; Sized for a JVM coordinator boot, not for a quiet machine: readiness is the only
 ;; thing polled here, and a 10s budget flakes whenever the box is loaded.
 (defn eventually [f]
@@ -112,9 +112,9 @@
   (merge base-tool-env
          {"FRAM_FLIP" "1"
           "FRAM_GRAPH_EDIT" "1"
-          "FRAM_PORT" (str port)
+          "FRAM_SERVER_PORT" (str port)
           "FRAM_CODE_PORT" (str port)
-          "FRAM_COORD_READ_TIMEOUT_MS" "180000"
+          "FRAM_SERVER_READ_TIMEOUT_MS" "180000"
           "FRAM_CODE_LOG" code-log
           "FRAM_LOG" code-log
           "FRAM_THREADS" project
@@ -139,7 +139,7 @@
 (defn reply-error? [reply]
   (boolean (or (:error reply) (get-in reply [:result :isError]))))
 (defn reply-text [reply] (or (get-in reply [:result :content 0 :text]) ""))
-(defn version [] (:version (coord {:op :version})))
+(defn version [] (:version (database {:op :version})))
 
 (def watchdog
   (future
@@ -152,7 +152,7 @@
   (when-not (eventually #(integer? (version)))
     (throw (ex-info "code coordinator did not become ready" {:daemon-log (slurp (str tmp "/daemon.log"))})))
 
-  (let [path-response (coord {:op :module-path :module "src.plangrep.model"})]
+  (let [path-response (database {:op :module-path :module "src.plangrep.model"})]
     (check! ":module-path resolves the exact registered nested source"
             (and (:ok path-response) (= source-file (:path path-response)))))
 
@@ -163,7 +163,7 @@
             (and (zero? (:exit status))
                  (str/includes? (:out status) "level=3 ")
                  (str/includes? (:out status) "mcp=present")
-                 (str/includes? (:out status) "coord=alive")
+                 (str/includes? (:out status) "database=alive")
                  (str/includes? (:out status) "canonical=1"))))
 
   (let [event (json/generate-string
