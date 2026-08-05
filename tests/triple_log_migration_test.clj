@@ -35,6 +35,18 @@
     8 (java.time.Instant/ofEpochSecond (.getLong buf) (u32 buf))
     (throw (ex-info "unknown test term tag" {}))))
 
+(defn inflate [^bytes bytes]
+  (let [out (java.io.ByteArrayOutputStream.)
+        buffer (byte-array 8192)]
+    (with-open [in (java.util.zip.GZIPInputStream.
+                    (java.io.ByteArrayInputStream. bytes))]
+      (loop []
+        (let [n (.read in buffer)]
+          (when (pos? n)
+            (.write out buffer 0 n)
+            (recur)))))
+    (.toByteArray out)))
+
 (defn decode-log [path]
   (let [bytes (java.nio.file.Files/readAllBytes (.toPath (java.io.File. (str path))))
         buf (doto (java.nio.ByteBuffer/wrap bytes)
@@ -53,7 +65,12 @@
                 (.get buf payload)
                 (let [stored-crc (u32 buf)
                       crc (doto (java.util.zip.CRC32.) (.update payload))
-                      pbuf (doto (java.nio.ByteBuffer/wrap payload)
+                      decoded-payload (case flags
+                                        0 payload
+                                        1 (inflate payload)
+                                        (throw (ex-info "unknown test FRAMLOG flags"
+                                                        {:flags flags})))
+                      pbuf (doto (java.nio.ByteBuffer/wrap decoded-payload)
                              (.order java.nio.ByteOrder/LITTLE_ENDIAN))
                       tx (.getLong pbuf)
                       nops (u32 pbuf)
@@ -83,6 +100,8 @@
 (def legacy-file (java.io.File. tmp-dir "legacy.log"))
 (def target-a (java.io.File. tmp-dir "a.framlog"))
 (def target-b (java.io.File. tmp-dir "b.framlog"))
+(def deflate-target-a (java.io.File. tmp-dir "deflate-a.framlog"))
+(def deflate-target-b (java.io.File. tmp-dir "deflate-b.framlog"))
 
 (def rows
   [{:tx 5 :op "assert" :l "Alice" :p "email" :r "alice@example.com"
@@ -96,18 +115,37 @@
 
 (def result-a (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-a)))
 (def result-b (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space" (.getPath target-b)))
+(def deflate-result-a
+  (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space"
+                                     (.getPath deflate-target-a) {:deflate? true}))
+(def deflate-result-b
+  (database/migrate-legacy-flat-log! (.getPath legacy-file) "msa-space"
+                                     (.getPath deflate-target-b) {:deflate? true}))
 
 (def bytes-a (java.nio.file.Files/readAllBytes (.toPath target-a)))
 (def bytes-b (java.nio.file.Files/readAllBytes (.toPath target-b)))
+(def deflate-bytes-a (java.nio.file.Files/readAllBytes (.toPath deflate-target-a)))
+(def deflate-bytes-b (java.nio.file.Files/readAllBytes (.toPath deflate-target-b)))
 (def manifest-a (slurp (str (.getPath target-a) ".migration.edn")))
 (def manifest-b (slurp (str (.getPath target-b) ".migration.edn")))
+(def deflate-manifest-a
+  (slurp (str (.getPath deflate-target-a) ".migration.edn")))
+(def deflate-manifest-b
+  (slurp (str (.getPath deflate-target-b) ".migration.edn")))
 (def decoded (decode-log target-a))
+(def deflate-decoded (decode-log deflate-target-a))
 (def runtime-a (database/open-database! (.getPath target-a) "msa-space"))
+(def deflate-runtime-a
+  (database/open-database! (.getPath deflate-target-a) "msa-space"))
 (def tx5 (first (:frames decoded)))
 (def tx5-ops (:operations tx5))
 
 (check! "double migration is byte-identical" (java.util.Arrays/equals bytes-a bytes-b))
 (check! "double migration manifest is byte-identical" (= manifest-a manifest-b))
+(check! "double Deflate migration is byte-identical"
+        (java.util.Arrays/equals deflate-bytes-a deflate-bytes-b))
+(check! "double Deflate migration manifest is byte-identical"
+        (= deflate-manifest-a deflate-manifest-b))
 (check! "sealed migration refuses to overwrite an existing generation"
         (= :migration-target-exists
            (throwable-code
@@ -117,12 +155,81 @@
         (and (= "FRAMLOG\u0000" (:magic decoded))
              (= 1 (:version decoded)) (= 0 (:flags decoded))
              (= "msa-space" (:space decoded))))
+(check! "default migration manifest seals the uncompressed FRAMLOG encoding"
+        (= {:encoding :uncompressed :framlog-flags 0 :framlog-version 1}
+           (select-keys (:output (edn/read-string manifest-a))
+                        [:encoding :framlog-flags :framlog-version])))
+(check! "explicit Deflate migration seals FRAMLOG header flag 1"
+        (and (= "FRAMLOG\u0000" (:magic deflate-decoded))
+             (= 1 (:version deflate-decoded)) (= 1 (:flags deflate-decoded))
+             (= "msa-space" (:space deflate-decoded))
+             (= {:encoding :deflate :framlog-flags 1 :framlog-version 1}
+                (select-keys (:output (edn/read-string deflate-manifest-a))
+                             [:encoding :framlog-flags :framlog-version]))))
 (check! "sealed migration output boots directly as authoritative TermStore history"
         (and (= (t/transaction-coordinate "msa-space" 6)
                 (database/current-transaction runtime-a))
              (not (some #{(t/triple "Alice" "email" "alice@example.com")}
                         (database/live-propositions runtime-a)))
              (every? t/triple? (database/history runtime-a))))
+(check! "Deflate migration boots with identical database state and history"
+        (and (= (database/current-transaction runtime-a)
+                (database/current-transaction deflate-runtime-a))
+             (= (database/live-propositions runtime-a)
+                (database/live-propositions deflate-runtime-a))
+             (= (database/history runtime-a)
+                (database/history deflate-runtime-a))))
+(check! "Deflate migration result reports its sealed encoding"
+        (= {:encoding :deflate :framlog-flags 1 :framlog-version 1}
+           (select-keys (:output deflate-result-a)
+                        [:encoding :framlog-flags :framlog-version])))
+(check! "migration verifier accepts the exact Deflate output and manifest"
+        (= (edn/read-string deflate-manifest-a)
+           (database/verify-legacy-flat-log-migration!
+            (.getPath deflate-target-a))))
+
+(def cli-deflate-target (java.io.File. tmp-dir "cli-deflate.framlog"))
+(def cli-deflate-process
+  (.start
+   (doto (ProcessBuilder.
+          (into-array String ["bin/fram-migrate-triple-log" "--deflate"
+                              (.getPath legacy-file) "msa-space"
+                              (.getPath cli-deflate-target)]))
+     (.directory (java.io.File. (System/getProperty "user.dir")))
+     (.redirectErrorStream true))))
+(def cli-deflate-output (slurp (.getInputStream cli-deflate-process)))
+(def cli-deflate-exit (.waitFor cli-deflate-process))
+(check! "--deflate CLI route creates and seals a flag-1 generation"
+        (and (zero? cli-deflate-exit)
+             (= 1 (:flags (decode-log cli-deflate-target)))
+             (= :deflate
+                (get-in (edn/read-string
+                         (slurp (str (.getPath cli-deflate-target) ".migration.edn")))
+                        [:output :encoding]))))
+
+(def mismatched-flags-target (java.io.File. tmp-dir "mismatched-flags.framlog"))
+(java.nio.file.Files/copy (.toPath deflate-target-a) (.toPath mismatched-flags-target)
+                          (make-array java.nio.file.CopyOption 0))
+(spit (str (.getPath mismatched-flags-target) ".migration.edn")
+      (str (pr-str (assoc-in (edn/read-string deflate-manifest-a)
+                             [:output :framlog-flags] 0)) "\n"))
+(check! "migration verifier fails closed on an encoding/flags mismatch"
+        (= :migration-seal-invalid
+           (throwable-code
+            #(database/verify-legacy-flat-log-migration!
+              (.getPath mismatched-flags-target)))))
+
+(def mismatched-hash-target (java.io.File. tmp-dir "mismatched-hash.framlog"))
+(java.nio.file.Files/copy (.toPath deflate-target-a) (.toPath mismatched-hash-target)
+                          (make-array java.nio.file.CopyOption 0))
+(spit (str (.getPath mismatched-hash-target) ".migration.edn")
+      (str (pr-str (assoc-in (edn/read-string deflate-manifest-a)
+                             [:output :sha256] (apply str (repeat 64 "0")))) "\n"))
+(check! "migration verifier fails closed on an output hash mismatch"
+        (= :migration-seal-invalid
+           (throwable-code
+            #(database/verify-legacy-flat-log-migration!
+              (.getPath mismatched-hash-target)))))
 (check! "source operation ordinals stay first and contiguous"
         (= [0 1 2] (mapv :ordinal (take 3 tx5-ops))))
 (check! "synthetic operations follow source operations contiguously"

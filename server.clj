@@ -2097,18 +2097,28 @@
       (finally (shutdown!)))))
 
 (defn -main [& arguments]
-  (let [[command first-arg second-arg third-arg] arguments]
+  (let [[command & command-arguments] arguments]
     (case command
       "serve"
-      (serve! (Integer/parseInt (or first-arg "7977"))
-              (or second-arg
-                  (str (System/getProperty "user.dir") "/data/history.framlog"))
-              (or third-arg (System/getenv "FRAM_SPACE_ID"))
-              (writer-authority/server-role-from-env))
+      (let [[first-arg second-arg third-arg] command-arguments]
+        (serve! (Integer/parseInt (or first-arg "7977"))
+                (or second-arg
+                    (str (System/getProperty "user.dir") "/data/history.framlog"))
+                (or third-arg (System/getenv "FRAM_SPACE_ID"))
+                (writer-authority/server-role-from-env)))
 
       "migrate-triple-log"
-      (println (pr-str
-                (database/migrate-legacy-flat-log! first-arg second-arg third-arg)))
+      (let [[options positional]
+            (if (= "--deflate" (first command-arguments))
+              [{:deflate? true} (rest command-arguments)]
+              [{} command-arguments])]
+        (when-not (= 3 (count positional))
+          (server-fail! :migration-arguments-invalid
+                        "expected [--deflate] SOURCE SPACE_ID TARGET"
+                        {:arguments command-arguments}))
+        (println (pr-str
+                  (apply database/migrate-legacy-flat-log!
+                         (concat positional [options])))))
 
       (server-fail! :unknown-command
                     "expected serve or migrate-triple-log"

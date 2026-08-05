@@ -1443,7 +1443,13 @@
      :unparseable-recorded-at
      (count (filter #(= :unparseable-recorded-at (:code %)) diagnostics)))))
 
-(defn- write-migration-temp! [parent space-id rows]
+(defn- migration-output-format [deflate?]
+  (sorted-map
+   :encoding (if deflate? :deflate :uncompressed)
+   :framlog-flags (if deflate? deflate-flag triple-log-flags)
+   :framlog-version triple-log-version))
+
+(defn- write-migration-temp! [parent space-id rows deflate?]
   (let [classification (final-cardinality rows)
         zero-counts (migration-counts [] [])
         tmp (java.nio.file.Files/createTempFile
@@ -1453,7 +1459,8 @@
       (let [result
             (with-open [file-out (java.io.FileOutputStream. (.toFile tmp))
                         out (java.io.BufferedOutputStream. file-out)]
-              (write-header! out space-id)
+              (write-header! out space-id
+                             (if deflate? deflate-flag triple-log-flags))
               (let [migration
                     (loop [remaining (seq rows) previous-tx nil first-tx nil
                            active {} counts zero-counts diagnostics []]
@@ -1467,7 +1474,7 @@
                                space-id tx-sequence (vec same) active classification [])
                               tx-counts (migration-counts [transaction] tx-diagnostics)
                               sample-room (- 32 (count diagnostics))]
-                          (write-transaction-frame! out transaction false)
+                          (write-transaction-frame! out transaction deflate?)
                           (recur (seq later) tx-sequence (or first-tx tx-sequence)
                                  next-active (merge-with + counts tx-counts)
                                  (if (pos? sample-room)
@@ -1482,68 +1489,143 @@
         (java.nio.file.Files/deleteIfExists tmp)
         (throw error)))))
 
+(defn- migration-manifest! [manifest-file]
+  (try
+    (edn/read-string (slurp manifest-file))
+    (catch Throwable error
+      (migration-fail! :migration-manifest-invalid
+                       "migration manifest is not valid EDN"
+                       {:manifest (.getPath ^java.io.File manifest-file)
+                        :cause (.getMessage error)}))))
+
+(defn verify-legacy-flat-log-migration!
+  "Verify a migrated FRAMLOG generation against its adjacent sealed manifest."
+  [target]
+  (let [input (java.io.File. (str target))
+        canonical (.getCanonicalFile input)
+        manifest-file (java.io.File. (str (.getPath canonical) ".migration.edn"))]
+    (when-not (and (.isAbsolute input)
+                   (= (.getPath input) (.getPath canonical))
+                   (.isFile canonical)
+                   (.isFile manifest-file))
+      (migration-fail! :migration-seal-missing
+                       "migration target and adjacent manifest must both exist"
+                       {:target (str target) :manifest (.getPath manifest-file)}))
+    (let [manifest (migration-manifest! manifest-file)
+          output (:output manifest)
+          encoding (:encoding output)
+          expected-flags (case encoding
+                           :uncompressed triple-log-flags
+                           :deflate deflate-flag
+                           nil)
+          bytes (java.nio.file.Files/size (.toPath canonical))
+          sha256 (sha256-file (.toPath canonical))
+          parsed (read-triple-log! (.getPath canonical))]
+      (when-not (and (= triple-log-manifest-version (:format manifest))
+                     (= triple-log-version (:framlog-version output))
+                     (some? expected-flags)
+                     (= expected-flags (:framlog-flags output))
+                     (= (= deflate-flag expected-flags) (:deflate? parsed))
+                     (= (:space-id manifest) (:space-id parsed))
+                     (= bytes (:bytes output))
+                     (= sha256 (:sha256 output)))
+        (migration-fail! :migration-seal-invalid
+                         "migration target does not match its sealed manifest"
+                         {:target (.getPath canonical)
+                          :manifest (.getPath manifest-file)}))
+      manifest)))
+
+(defn- migration-options! [options]
+  (when-not (and (map? options)
+                 (every? #{:deflate?} (keys options))
+                 (or (not (contains? options :deflate?))
+                     (instance? Boolean (:deflate? options))))
+    (migration-fail! :migration-options-invalid
+                     "migration options accept only a Boolean :deflate? value"
+                     {:options options}))
+  (boolean (:deflate? options)))
+
 (defn migrate-legacy-flat-log!
   "Seal one frozen canonical flat log into FRAMLOG. The converter is the only
    legacy reader; runtime boot never dual-accepts the source bytes."
-  [source space-id target]
-  (let [space-bytes (strict-utf8-bytes space-id "SpaceId")]
-    (when (zero? (alength ^bytes space-bytes))
-      (migration-fail! :migration-space-id-required
-                       "SpaceId must be a nonempty UTF-8 String" {})))
-  (let [frozen (frozen-source! source)
-        parsed (parse-legacy-flat (:bytes frozen))
-        target-file (java.io.File. (str target))
-        canonical-target (.getCanonicalFile target-file)
-        manifest-file (java.io.File. (str (.getPath canonical-target)
-                                          ".migration.edn"))
-        parent (.toPath (.getParentFile canonical-target))]
-    (when-not (and (.isAbsolute target-file)
-                   (= (.getPath target-file) (.getPath canonical-target))
-                   (.isDirectory (.getParentFile canonical-target))
-                   (not= (:path frozen) (.getPath canonical-target)))
-      (migration-fail! :migration-target-invalid
-                       "migration target must be a distinct absolute canonical path"
-                       {:target (str target) :canonical (.getPath canonical-target)}))
-    (when (or (.exists canonical-target) (.exists manifest-file))
-      (migration-fail! :migration-target-exists
-                       "sealed migration refuses to overwrite a target or manifest"
-                       {:target (.getPath canonical-target)
-                        :manifest (.getPath manifest-file)}))
-    (let [written (write-migration-temp! parent space-id (:rows parsed))
-          counts (:summary written)
-          manifest
-          (sorted-map
-           :diagnostics (:diagnostics written)
-           :format triple-log-manifest-version
-           :output (sorted-map :bytes (:bytes written) :sha256 (:sha256 written))
-           :source (sorted-map :bytes (:byte-count frozen)
-                               :file-key (:file-key frozen)
-                               :path (:path frozen) :sha256 (:sha256 frozen))
-           :space-id space-id
-           :summary counts
-           :torn-tail (:torn-tail parsed)
-           :transaction-range (:transaction-range written)
-           :unresolved-classes
-           [{:class :cid-addressed-v2-only-data
-             :disposition :not-migrated
-             :reason "flat sources contain no cid field; v2/FRI caches are rejected as non-authoritative"}])
-          manifest-bytes (.getBytes (str (pr-str manifest) "\n")
-                                    java.nio.charset.StandardCharsets/UTF_8)
-          manifest-tmp (write-bytes-temp! parent ".fram-migration-manifest-"
-                                          manifest-bytes)
-          target-path (.toPath canonical-target)
-          manifest-path (.toPath manifest-file)]
-      (try
-        (atomic-install! (:path written) target-path)
-        (try
-          (atomic-install! manifest-tmp manifest-path)
-          (catch Throwable error
-            (java.nio.file.Files/deleteIfExists target-path)
-            (throw error)))
-        {:target (.getPath canonical-target)
-         :manifest (.getPath manifest-file)
-         :summary counts :sha256 (:sha256 written)
-         :torn-tail (:torn-tail parsed)}
-        (finally
-          (java.nio.file.Files/deleteIfExists (:path written))
-          (java.nio.file.Files/deleteIfExists manifest-tmp))))))
+  ([source space-id target]
+   (migrate-legacy-flat-log! source space-id target {}))
+  ([source space-id target options]
+   (let [deflate? (migration-options! options)
+         space-bytes (strict-utf8-bytes space-id "SpaceId")]
+     (when (zero? (alength ^bytes space-bytes))
+       (migration-fail! :migration-space-id-required
+                        "SpaceId must be a nonempty UTF-8 String" {}))
+     (let [frozen (frozen-source! source)
+           parsed (parse-legacy-flat (:bytes frozen))
+           target-file (java.io.File. (str target))
+           canonical-target (.getCanonicalFile target-file)
+           manifest-file (java.io.File. (str (.getPath canonical-target)
+                                             ".migration.edn"))
+           parent (.toPath (.getParentFile canonical-target))]
+       (when-not (and (.isAbsolute target-file)
+                      (= (.getPath target-file) (.getPath canonical-target))
+                      (.isDirectory (.getParentFile canonical-target))
+                      (not= (:path frozen) (.getPath canonical-target)))
+         (migration-fail! :migration-target-invalid
+                          "migration target must be a distinct absolute canonical path"
+                          {:target (str target) :canonical (.getPath canonical-target)}))
+       (when (or (.exists canonical-target) (.exists manifest-file))
+         (migration-fail! :migration-target-exists
+                          "sealed migration refuses to overwrite a target or manifest"
+                          {:target (.getPath canonical-target)
+                           :manifest (.getPath manifest-file)}))
+       (let [written (write-migration-temp! parent space-id (:rows parsed) deflate?)
+             counts (:summary written)
+             output (merge (migration-output-format deflate?)
+                           (sorted-map :bytes (:bytes written)
+                                       :sha256 (:sha256 written)))
+             manifest
+             (sorted-map
+              :diagnostics (:diagnostics written)
+              :format triple-log-manifest-version
+              :output (into (sorted-map) output)
+              :source (sorted-map :bytes (:byte-count frozen)
+                                  :file-key (:file-key frozen)
+                                  :path (:path frozen) :sha256 (:sha256 frozen))
+              :space-id space-id
+              :summary counts
+              :torn-tail (:torn-tail parsed)
+              :transaction-range (:transaction-range written)
+              :unresolved-classes
+              [{:class :cid-addressed-v2-only-data
+                :disposition :not-migrated
+                :reason "flat sources contain no cid field; v2/FRI caches are rejected as non-authoritative"}])
+             manifest-bytes (.getBytes (str (pr-str manifest) "\n")
+                                       java.nio.charset.StandardCharsets/UTF_8)
+             manifest-tmp (write-bytes-temp! parent ".fram-migration-manifest-"
+                                             manifest-bytes)
+             target-path (.toPath canonical-target)
+             manifest-path (.toPath manifest-file)]
+         (try
+           (atomic-install! (:path written) target-path)
+           (try
+             (atomic-install! manifest-tmp manifest-path)
+             (catch Throwable error
+               (java.nio.file.Files/deleteIfExists target-path)
+               (throw error)))
+           (try
+             (when-not (= manifest
+                          (verify-legacy-flat-log-migration!
+                           (.getPath canonical-target)))
+               (migration-fail! :migration-seal-invalid
+                                "installed migration manifest changed during publication"
+                                {:target (.getPath canonical-target)
+                                 :manifest (.getPath manifest-file)}))
+             (catch Throwable error
+               (java.nio.file.Files/deleteIfExists target-path)
+               (java.nio.file.Files/deleteIfExists manifest-path)
+               (throw error)))
+           {:target (.getPath canonical-target)
+            :manifest (.getPath manifest-file)
+            :output (:output manifest)
+            :summary counts :sha256 (:sha256 written)
+            :torn-tail (:torn-tail parsed)}
+           (finally
+             (java.nio.file.Files/deleteIfExists (:path written))
+             (java.nio.file.Files/deleteIfExists manifest-tmp))))))))
