@@ -34,18 +34,20 @@ The measured scenarios are:
 
 ## Measurement boundary
 
-The managed worktree sandbox denies loopback `bind(2)`. The current Fram
-adapter therefore runs `boot-flat!` and `handle` in-process against a scratch
-log, using the same durable serve-flat state machine but excluding JVM startup,
-TCP bind, and EDN transport. SQLite uses Python's standard `sqlite3` binding
-with WAL, `synchronous=FULL`, one writer connection, and independent reader
-connections. Its seed transaction is complete and checkpointed before the boot
-timer begins.
+The Fram adapter seeds a scratch FRAMLOG through the current server engine, then
+times FRAMLOG replay plus the first successful `rpc/status` request over a real
+loopback FRAMRPC v1 socket. It loads the server in the benchmark JVM and binds
+the listener between those two timed steps, so JVM startup and TCP bind remain
+outside `boot-to-serving-ms`; steady reads and writes do cross the socket and
+use the production binary protocol. SQLite uses Python's standard `sqlite3`
+binding with WAL, `synchronous=FULL`, one writer connection, and independent
+reader connections. Its seed transaction is complete and checkpointed before
+the boot timer begins.
 
-Consequently, `boot-to-serving-ms` currently means durable corpus activation to
-adapter readiness, not full production daemon process startup. Do not cite it
-as a socket-serving cold-start number. A socket-capable future adapter may add
-transport metadata, but must not silently mix those rows with this boundary.
+Consequently, `boot-to-serving-ms` means durable FRAMLOG replay plus an
+adapter-ready FRAMRPC probe, not full process cold start. Do not cite it as a
+server executable startup number or compare it with results from the retired
+flat-log/EDN adapter.
 
 Every measured write is an individual acknowledged durable commit. Corpus
 generation and initial SQLite seeding are outside the timers. Scratch state is
