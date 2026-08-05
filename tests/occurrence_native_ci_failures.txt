@@ -16,5 +16,4 @@ vocab-residue	flake.nix
 vocab-residue	integrations/north/hooks/code-upstream-guard.sh
 vocab-residue	integrations/north/hooks/code-upstream-guard.test.sh
 vocab-residue	integrations/north/skills/fram-modeling/SKILL.md
-vocab-residue	tests/daemon_read_cli_test.clj
 vocab-residue	tests/docs_semantics_ratchet.sh

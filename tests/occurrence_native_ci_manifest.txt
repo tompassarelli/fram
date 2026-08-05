@@ -113,8 +113,6 @@ exclude	removed-flat-store	tests/snapshot_views_resolve_test.clj	tests/snapshot_
 exclude	removed-flat-store	tests/snapshot_views_test.clj	tests/snapshot_views_test.clj#c/value-id
 exclude	moved-graph-control	tests/code_write_def_realcheck_test.clj	tests/code_write_def_realcheck_test.clj#write-def
 exclude	moved-graph-control	tests/code_write_def_test.clj	tests/code_write_def_test.clj#write-def
-exclude	removed-flat-log	tests/daemon_read_cli_test.clj	tests/daemon_read_cli_test.clj#coordination\.log
-exclude	removed-flat-log	tests/daemon_small_corpus_order_test.clj	tests/daemon_small_corpus_order_test.clj#facts\.log
 exclude	removed-query-v1	tests/datalog_diff_test.clj	tests/datalog_diff_test.clj#fixpoint-oracle
 exclude	removed-flat-store	tests/datalog_scale_test.clj	tests/datalog_scale_test.clj#k/->Fact
 exclude	removed-query-v1	tests/datalog_shared_index_test.clj	tests/datalog_shared_index_test.clj#fixpoint-bi
@@ -149,7 +147,6 @@ exclude	moved-graph-control	tests/store_replace_in_body_test.clj	tests/store_rep
 exclude	removed-flat-store	tests/store_replay_test.clj	tests/store_replay_test.clj#c/value!
 exclude	removed-flat-log	tests/tls_test.clj	tests/tls_test.clj#facts\.log
 exclude	moved-graph-control	tests/tools_test.clj	tests/tools_test.clj#replace-in-body
-exclude	removed-flat-log	tests/torn_tail_daemon_test.clj	tests/torn_tail_daemon_test.clj#rt/read-log
 exclude	removed-flat-log	tests/torn_tail_test.clj	tests/torn_tail_test.clj#rt/read-log
 exclude	moved-world-service	tests/world_git_bridge_test.clj	tests/world_git_bridge_test.clj#fram\.world
 exclude	moved-world-service	tests/world_kernel_test.clj	tests/world_kernel_test.clj#fram\.world
