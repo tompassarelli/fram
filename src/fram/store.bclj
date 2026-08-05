@@ -275,8 +275,16 @@
     (if (t/triple? term)
       (let [slot0 (known-term-handle store (t/triple-slot0 term))
             slot1 (known-term-handle store (t/triple-slot1 term))
-            slot2 (known-term-handle store (t/triple-slot2 term))]
-        (if (every? some? [slot0 slot1 slot2])
+            slot2 (known-term-handle store (t/triple-slot2 term))
+            handles: (Vec Int?) [slot0 slot1 slot2]
+            all-known
+            (loop [position 0]
+              (if (>= position (count handles))
+                true
+                (if (some? (nth handles position))
+                  (recur (inc position))
+                  false)))]
+        (if all-known
           (let [position
                 (find-triple-position
                  (t/termstore-triples store) (t/termstore-triple-slots store)
