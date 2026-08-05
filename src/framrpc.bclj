@@ -1,6 +1,6 @@
 #lang beagle/clj
 
-;; coord-daemon-wire — pure request/response formatting and classification.
+;; framrpc — pure FRAMRPC request/response formatting and classification.
 ;;
 ;; Legacy EDN adapter helpers remain here for non-listener callers and adapters
 ;; outside the native data boundary.
@@ -10,7 +10,7 @@
 ;; protocol; there is one live binary data surface.
 ;; Request-map typing remains intentionally Any on that isolated legacy seam.
 ;;
-(ns coord-daemon-wire
+(ns framrpc
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [fram.types :as t])

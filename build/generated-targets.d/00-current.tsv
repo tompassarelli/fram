@@ -40,9 +40,9 @@ beagle	src/resolve_mint.bclj	out/resolve_mint.clj
 beagle	src/resolve_verbs.bclj	out/resolve_verbs.clj
 beagle	src/fri_port.bclj	out/fri_port.clj
 beagle	src/fri.bclj	out/fri.clj
-beagle	src/coord_daemon_wire.bclj	out/coord_daemon_wire.clj
-beagle	src/coord_read.bclj	out/coord_read.clj
-beagle	src/coord_commit.bclj	out/coord_commit.clj
+beagle	src/framrpc.bclj	out/framrpc.clj
+beagle	src/snapshot_read.bclj	out/snapshot_read.clj
+beagle	src/commit_plan.bclj	out/commit_plan.clj
 beagle	src/defcheck_gate.bclj	out/defcheck_gate.clj
 beagle	codegraph/src/codegraph.bclj	out/codegraph.clj
 beagle	codegraph/src/callgraph.bclj	out/callgraph.clj

@@ -1,7 +1,7 @@
 #lang beagle/clj
 
 (ns fram.native-lease-ops
-  (:require [coord-commit :as commit]
+  (:require [commit-plan :as plan]
             [fram.rotation :as rot]
             [fram.schema :as schema]
             [fram.store :as store]
@@ -109,7 +109,7 @@
 (defn expected-version-matches?
   [served-version: Int
    expected-version: Int?] -> Bool
-  (and (not (commit/version-conflict? true served-version expected-version))
+  (and (not (plan/version-conflict? true served-version expected-version))
        (or (nil? expected-version) (= served-version expected-version))))
 
 (defn millis->instant [value: Int] -> t/Instant
@@ -193,8 +193,8 @@
         (recur (vec (rest remaining))
                (if (nil? candidate) current candidate))))))
 
-(defn decision-snapshot [lease: LeaseState] -> commit/LeaseSnapshot
-  (commit/->LeaseSnapshot ""
+(defn decision-snapshot [lease: LeaseState] -> plan/LeaseSnapshot
+  (plan/->LeaseSnapshot ""
                           (leasestate-expires-ms lease)
                           (leasestate-epoch lease)))
 
@@ -203,7 +203,7 @@
    now-ms: Int] -> Bool
   (if (nil? lease)
     false
-    (commit/lease-held? (decision-snapshot lease) now-ms)))
+    (plan/lease-held? (decision-snapshot lease) now-ms)))
 
 (defn matching-fence?
   [lease: LeaseState?

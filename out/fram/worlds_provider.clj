@@ -1,7 +1,7 @@
 (ns fram.worlds-provider
   (:require [fram.provider-host :as host]
             [fram.types :as t]
-            [coord-daemon-wire :as wire]))
+            [framrpc :as framrpc]))
 
 (def worlds-capability (host/capability "worlds" 1))
 
@@ -21,7 +21,7 @@
 (defn operation-id [candidate ordinal]
   (if (>= ordinal 0) (t/triple candidate :worlds/operation ordinal) (throw (ex-info "operation identity requires a non-negative ordinal" {:type :worlds/invalid-operation}))))
 
-(def local-term-codec-writer wire/write-term-codec-v1!)
+(def local-term-codec-writer framrpc/write-term-codec-v1!)
 
 (declare canonical-term-digest promotion-result-marker promotion-recovery)
 
@@ -224,7 +224,7 @@
 (defn ^String canonical-term-digest [term]
   (if (t/term? term) (let [out (java.io.ByteArrayOutputStream.)]
   (do
-  (local-term-codec-writer out term wire/rpc-v1-max-string-bytes wire/rpc-v1-max-term-nodes wire/rpc-v1-max-term-depth)
+  (local-term-codec-writer out term framrpc/rpc-v1-max-string-bytes framrpc/rpc-v1-max-term-nodes framrpc/rpc-v1-max-term-depth)
   (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-256") (.toByteArray out))]
   (str "sha256:" (apply str (mapv (fn [value] (format "%02x" (bit-and 255 value))) (vec digest))))))) (throw (ex-info "world digest input lies outside TermCodecV1" {:type :worlds/invalid-term}))))
 

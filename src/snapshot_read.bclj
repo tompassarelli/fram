@@ -1,12 +1,12 @@
 #lang beagle/clj
 
 ;; ============================================================================
-;; coord-read — pure coordinator readers.
+;; snapshot-read — pure database snapshot readers.
 ;; ============================================================================
-;; OCC, leases, locks, queues, promises, fsync, and group commit remain in
-;; coord.clj. This module owns only read-time derivations over coordinator state.
+;; OCC, leases, locks, queues, promises, fsync, and group commit remain in the
+;; server runtime. This module owns only read-time derivations over database state.
 ;; ============================================================================
-(ns coord-read (:require [fram.store :as c] [fram.schema :as s]))
+(ns snapshot-read (:require [fram.store :as c] [fram.schema :as s]))
 
 (define-mode strict)
 

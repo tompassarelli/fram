@@ -1,4 +1,4 @@
-(ns coord-commit
+(ns commit-plan
   (:require [fram.types :as t]))
 
 (defn ^Boolean version-conflict? [^Boolean single base-version expected-version]

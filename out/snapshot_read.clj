@@ -1,4 +1,4 @@
-(ns coord-read
+(ns snapshot-read
   (:require [fram.store :as c]
             [fram.schema :as s]))
 
@@ -13,7 +13,7 @@
   (reduce max 0 (map (fn [cid] (seq-of ctx cid)) (live-cids-lp ctx te pid))))
 
 (defn current-seq [ctx]
-  (c/current-seq ctx))
+  (c/current-sequence ctx))
 
 (defn agent-of [ctx cid]
   (let [txid (c/fact-tx ctx cid)]
@@ -54,10 +54,11 @@
   (if (int? r) r nil))))
 
 (defn withdrawal-of [ctx cid]
-  (let [wb (s/resolve-predicate ctx "withdrawn_by")
+  (let [session (s/session ctx)
+   wb (s/resolve-predicate session "withdrawn_by")
    by-id (live-r-on ctx cid wb)]
-  (if (nil? by-id) nil (let [at-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_at"))
-   reason-id (live-r-on ctx cid (s/resolve-predicate ctx "withdrawn_reason"))]
+  (if (nil? by-id) nil (let [at-id (live-r-on ctx cid (s/resolve-predicate session "withdrawn_at"))
+   reason-id (live-r-on ctx cid (s/resolve-predicate session "withdrawn_reason"))]
   {:by (c/literal ctx by-id) :at (if (nil? at-id) nil (c/literal ctx at-id)) :reason (if (nil? reason-id) nil (c/literal ctx reason-id))}))))
 
 (defn ^Boolean withdrawn? [ctx cid]
@@ -70,8 +71,9 @@
   (vec (distinct (concat live resurrected)))) live)))
 
 (defn view-selects [ctx ^String view]
-  (let [ve (s/resolve-name ctx view)
-   sel (s/resolve-predicate ctx "selects")]
+  (let [session (s/session ctx)
+   ve (s/resolve-name session view)
+   sel (s/resolve-predicate session "selects")]
   (if (or (nil? ve) (nil? sel)) nil (reduce (fn [acc cid] (let [f (c/fact-of ctx cid)
    r (if (nil? f) nil (:r f))]
   (if (int? r) (conj acc r) acc))) #{} (c/by-lp ctx ve sel)))))

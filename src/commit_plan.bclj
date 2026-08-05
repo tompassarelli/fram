@@ -3,13 +3,13 @@
 ;; generated view. Author substantive forms only through the Fram graph-edit
 ;; verbs. SEEDED 2026-07-28 for engine-core M5 Cut B.
 ;; ============================================================================
-;; coord-commit — pure coordinator commit decisions.
+;; commit-plan — pure commit-sequencer decisions.
 ;; ============================================================================
-;; Store snapshots and proposed writes enter explicitly. Mutation, coordinator
+;; Store snapshots and proposed writes enter explicitly. Mutation, server
 ;; locks, queues, futures, promises, fsync, group commit, and dynamic vars stay
-;; in coord.clj.
+;; in the server runtime.
 ;; ============================================================================
-(ns coord-commit (:require [fram.types :as t]))
+(ns commit-plan (:require [fram.types :as t]))
 
 (define-mode strict)
 

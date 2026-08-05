@@ -1,8 +1,8 @@
 #lang beagle/clj
 
 (ns fram.native-dispatch
-  (:require [coord-commit :as commit]
-            [coord-read :as read]
+  (:require [commit-plan :as plan]
+            [snapshot-read :as snapshot]
             [fram.native-lease-ops :as lease]
             [fram.native-query-ops :as query-ops]
             [fram.schema :as schema]
@@ -201,7 +201,7 @@
 (defn expected-version-matches?
   [served-version: Int
    expected-version: Int?] -> Bool
-  (and (not (commit/version-conflict? true served-version expected-version))
+  (and (not (plan/version-conflict? true served-version expected-version))
        (or (nil? expected-version) (= served-version expected-version))))
 
 (defn unit-response
@@ -605,7 +605,7 @@
           (do
             (schema/refresh! session)
             (response
-             request (read/current-seq root)
+             request (snapshot/current-seq root)
              (mutation-results transaction
                                (preparedmutation-decisions prepared)))))))))
 
@@ -705,7 +705,7 @@
    request: t/RpcRequest
    now-ms: Int] -> t/RpcResponse
   (let [root (schema/store-of session)
-        served-version (read/current-seq root)
+        served-version (snapshot/current-seq root)
         operation (t/rpcrequest-op request)]
     (cond
       [(not (= (store/space-id root) (t/rpcrequest-space request)))
