@@ -29,13 +29,19 @@ done
 cat >"$scratch/native_shim.h" <<'HEADER'
 #ifndef NATIVE_SHIM_H
 #define NATIVE_SHIM_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+typedef struct native_arena_chunk native_arena_chunk;
 
 typedef struct native_arena {
   uint8_t *bytes;
   size_t capacity;
   size_t offset;
+  native_arena_chunk *chunks;
+  size_t growth_floor;
+  bool growable;
 } native_arena;
 
 typedef struct native_capability {
@@ -49,6 +55,9 @@ typedef struct native_vec {
 } native_vec;
 
 void native_arena_init(native_arena *arena, uint8_t *storage, size_t capacity);
+bool native_arena_init_growable(native_arena *arena, size_t growth_floor);
+void native_arena_destroy(native_arena *arena);
+size_t native_arena_reserved_bytes(const native_arena *arena);
 void *native_arena_alloc(native_arena *arena, size_t size, size_t alignment);
 uint64_t native_text_alloc(native_arena *arena, uint64_t length, uint8_t **out);
 uint64_t native_text_length(uint64_t handle);
@@ -68,6 +77,7 @@ cat >"$scratch/module_0.h" <<'HEADER'
 #ifndef NATIVE_MODULE_0_ABI_H
 #define NATIVE_MODULE_0_ABI_H
 #include "native_shim.h"
+#include <stdbool.h>
 
 typedef int64_t native_m0_type_0;
 typedef uint64_t native_m0_type_1;
@@ -93,6 +103,8 @@ typedef struct native_m0_type_6 {
   native_m0_type_3 field_1;
   native_m0_type_3 field_2;
   native_m0_type_2 field_3;
+  native_m0_type_4 field_4;
+  bool field_5;
 } native_m0_type_6;
 
 typedef struct native_m0_type_7 {
@@ -111,8 +123,9 @@ native_m0_type_4 fram_stub_store_boot(
     native_m0_type_1 canonical_log_path, native_m0_type_1 space_id,
     native_m0_type_2 log_bytes);
 native_m0_type_6 fram_stub_store_dispatch(
-    const native_capability *capability, native_m0_type_4 store,
-    native_m0_type_5 request, native_m0_type_0 now_milliseconds);
+    native_arena *arena, const native_capability *capability,
+    native_m0_type_4 store, native_m0_type_5 request,
+    native_m0_type_0 now_milliseconds);
 native_m0_type_8 fram_stub_store_shutdown(native_m0_type_4 store);
 native_m0_type_5 fram_stub_codec_read_request(native_arena *arena,
                                                native_m0_type_2 frame);
@@ -164,13 +177,13 @@ typedef native_m0_type_6 fram_server_codec_release_response_arg_0;
 #define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability)                \
   FRAM_SERVER_SYMBOL_GENERATED_ABI()
 #define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1,     \
-                                        arg_2)                               \
+                                    arg_2)                                \
   FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), \
-                                    (arg_2))
+                                (arg_2))
 #define FRAM_SERVER_CALL_STORE_DISPATCH(                                 \
     arena, capability, arg_0, arg_1, arg_2)                                  \
-  FRAM_SERVER_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1),      \
-                                        (arg_2))
+  FRAM_SERVER_SYMBOL_STORE_DISPATCH((arena), (capability), (arg_0),      \
+                                        (arg_1), (arg_2))
 #define FRAM_SERVER_CALL_STORE_SHUTDOWN(arena, capability, arg_0)        \
   FRAM_SERVER_SYMBOL_STORE_SHUTDOWN((arg_0))
 #define FRAM_SERVER_CALL_CODEC_READ_REQUEST(arena, capability, arg_0)    \
@@ -188,24 +201,88 @@ HEADER
 cat >"$scratch/native_shim.c" <<'C'
 #include "native_shim.h"
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+struct native_arena_chunk {
+  struct native_arena_chunk *next;
+  size_t capacity;
+  max_align_t alignment;
+  uint8_t bytes[];
+};
 
 void native_arena_init(native_arena *arena, uint8_t *storage, size_t capacity) {
   arena->bytes = storage;
   arena->capacity = capacity;
   arena->offset = 0u;
+  arena->chunks = NULL;
+  arena->growth_floor = 0u;
+  arena->growable = false;
+}
+
+bool native_arena_init_growable(native_arena *arena, size_t growth_floor) {
+  if (growth_floor == 0u) {
+    return false;
+  }
+  native_arena_init(arena, NULL, 0u);
+  arena->growth_floor = growth_floor;
+  arena->growable = true;
+  return true;
+}
+
+void native_arena_destroy(native_arena *arena) {
+  native_arena_chunk *chunk = arena->chunks;
+
+  while (chunk != NULL) {
+    native_arena_chunk *next = chunk->next;
+    free(chunk);
+    chunk = next;
+  }
+  native_arena_init(arena, NULL, 0u);
+}
+
+size_t native_arena_reserved_bytes(const native_arena *arena) {
+  const native_arena_chunk *chunk;
+  size_t total = arena->growable ? 0u : arena->capacity;
+
+  for (chunk = arena->chunks; chunk != NULL; chunk = chunk->next) {
+    if (total > SIZE_MAX - chunk->capacity) {
+      abort();
+    }
+    total += chunk->capacity;
+  }
+  return total;
 }
 
 void *native_arena_alloc(native_arena *arena, size_t size, size_t alignment) {
-  uintptr_t current = (uintptr_t)(arena->bytes + arena->offset);
+  native_arena_chunk *chunk;
+  uintptr_t current;
   uintptr_t aligned;
   size_t offset;
 
   if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
     abort();
   }
+  if (arena->growable) {
+    size_t capacity = size > arena->growth_floor ? size : arena->growth_floor;
+
+    if (alignment > _Alignof(max_align_t) ||
+        capacity > SIZE_MAX - sizeof(*chunk)) {
+      abort();
+    }
+    chunk = malloc(sizeof(*chunk) + capacity);
+    if (chunk == NULL) {
+      abort();
+    }
+    chunk->next = arena->chunks;
+    chunk->capacity = capacity;
+    arena->chunks = chunk;
+    return chunk->bytes;
+  }
+  current = (uintptr_t)(arena->bytes + arena->offset);
   aligned = (current + alignment - 1u) & ~(uintptr_t)(alignment - 1u);
   offset = (size_t)(aligned - (uintptr_t)arena->bytes);
   if (offset > arena->capacity || size > arena->capacity - offset) {
@@ -338,7 +415,7 @@ static native_vec *make_vector(native_arena *arena, const uint8_t *bytes,
   return vector;
 }
 
-native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(1); }
+native_m0_type_0 fram_stub_generated_abi(void) { return INT64_C(2); }
 
 native_m0_type_4 fram_stub_store_boot(
     native_arena *arena, const native_capability *capability,
@@ -346,8 +423,8 @@ native_m0_type_4 fram_stub_store_boot(
     native_m0_type_2 log_bytes) {
   static const uint8_t old_log[] = {'O', 'L', 'D', '!', 'x'};
   static const uint8_t boot_bytes[] = {'B', 'O', 'O', 'T'};
-  native_m0_type_4 result = {FATAL, UINT64_C(0), UINT64_C(0), INT64_C(0),
-                             NULL};
+  native_m0_type_4 result = {FATAL, UINT64_C(0), UINT64_C(0),
+                             INT64_C(0), NULL};
 
   boot_calls += 1u;
   if (capability->token == UINT64_C(1) &&
@@ -363,9 +440,17 @@ native_m0_type_4 fram_stub_store_boot(
 }
 
 native_m0_type_6 fram_stub_store_dispatch(
-    const native_capability *capability, native_m0_type_4 store,
-    native_m0_type_5 request, native_m0_type_0 now_milliseconds) {
-  native_m0_type_6 result = {FATAL, UINT64_C(0), UINT64_C(0), NULL};
+    native_arena *arena, const native_capability *capability,
+    native_m0_type_4 store, native_m0_type_5 request,
+    native_m0_type_0 now_milliseconds) {
+  native_m0_type_6 result = {FATAL,
+                             UINT64_C(0),
+                             UINT64_C(0),
+                             NULL,
+                             {FATAL, UINT64_C(0), UINT64_C(0),
+                              INT64_C(0), NULL},
+                             false};
+  (void)arena;
 
   dispatch_calls += 1u;
   if (capability->token == UINT64_C(1) && store.field_0 == OK &&
@@ -374,6 +459,8 @@ native_m0_type_6 fram_stub_store_dispatch(
     result.field_0 = OK;
     result.field_1 = request.field_1;
     result.field_3 = &tail_append;
+    result.field_4 = store;
+    result.field_5 = true;
   }
   return result;
 }
@@ -391,14 +478,24 @@ native_m0_type_5 fram_stub_codec_read_request(native_arena *arena,
                                                native_m0_type_2 frame) {
   native_m0_type_5 result = {FATAL, UINT64_C(0), UINT64_C(0)};
   const int64_t *body;
-  (void)arena;
 
   read_calls += 1u;
   if (frame != NULL && native_vec_length(frame) == INT64_C(29)) {
     body = native_vec_at(frame, INT64_C(26), INT64_C(8));
     if (*body == INT64_C(0xaa)) {
       result.field_0 = OK;
-      result.field_1 = (uint64_t)(uintptr_t)frame;
+      {
+        native_vec *copy = native_vec_new(arena, frame->length, INT64_C(8),
+                                          _Alignof(int64_t));
+        int64_t index;
+
+        for (index = INT64_C(0); index < frame->length; index += INT64_C(1)) {
+          const int64_t *value = native_vec_at(frame, index, INT64_C(8));
+          copy = native_vec_push(arena, copy, value, INT64_C(8),
+                                 _Alignof(int64_t));
+        }
+        result.field_1 = (uint64_t)(uintptr_t)copy;
+      }
     }
   }
   return result;
@@ -439,8 +536,9 @@ native_m0_type_3 fram_stub_codec_release_response(
 }
 
 bool generated_stub_observed_exact_calls(void) {
-  return boot_calls == 1u && dispatch_calls == 1u && shutdown_calls == 1u &&
-         read_calls == 2u && write_calls == 1u &&
+  return boot_calls == 1u && dispatch_calls == 1u &&
+         shutdown_calls == 1u && read_calls == 2u &&
+         write_calls == 1u &&
          release_request_calls == 2u && release_response_calls == 1u;
 }
 C

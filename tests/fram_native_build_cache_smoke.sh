@@ -39,6 +39,7 @@ if [[ "$command" == "native-module" ]]; then
 
 #include "native_shim.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef int64_t native_m0_type_0;
@@ -56,6 +57,8 @@ typedef struct native_m0_type_5 {
   uint64_t field_1;
   uint64_t field_2;
   native_vec *field_3;
+  native_m0_type_1 field_4;
+  bool field_5;
 } native_m0_type_5;
 typedef struct native_m0_type_6 {
   int64_t field_0;
@@ -72,7 +75,7 @@ native_m0_type_1 native_m0_fn_2(native_arena *arena, const native_capability *ca
 native_m0_type_9 native_m0_fn_3(native_m0_type_1 native_v_0);
 native_m0_type_6 native_m0_fn_5(native_arena *arena, const native_capability *capability, native_m0_type_5 native_v_0);
 native_m0_type_0 native_m0_fn_7(void);
-native_m0_type_5 native_m0_fn_11(const native_capability *capability, native_m0_type_1 native_v_0, native_m0_type_7 native_v_1, native_m0_type_0 native_v_2);
+native_m0_type_5 native_m0_fn_11(native_arena *arena, const native_capability *capability, native_m0_type_1 native_v_0, native_m0_type_7 native_v_1, native_m0_type_0 native_v_2);
 native_m0_type_8 native_m0_fn_13(native_m0_type_7 native_v_0);
 native_m0_type_8 native_m0_fn_17(const native_capability *capability, native_m0_type_5 native_v_0);
 native_m0_type_7 native_m0_fn_19(native_arena *arena, native_m0_type_4 native_v_0);
@@ -108,12 +111,14 @@ native_m0_type_6 native_m0_fn_5(native_arena *arena,
                             .field_1 = (native_vec *)0};
 }
 
-native_m0_type_0 native_m0_fn_7(void) { return 1; }
+native_m0_type_0 native_m0_fn_7(void) { return 2; }
 
-native_m0_type_5 native_m0_fn_11(const native_capability *capability,
+native_m0_type_5 native_m0_fn_11(native_arena *arena,
+                                   const native_capability *capability,
                                    native_m0_type_1 native_v_0,
                                    native_m0_type_7 native_v_1,
                                    native_m0_type_0 native_v_2) {
+  (void)arena;
   (void)capability;
   return (native_m0_type_5){
       .field_0 = native_v_0.field_0 + native_v_1.field_0 + native_v_2};
@@ -136,6 +141,7 @@ native_m0_type_7 native_m0_fn_19(native_arena *arena,
   (void)arena;
   return (native_m0_type_7){.field_0 = native_v_0 == (native_vec *)0 ? 2 : 0};
 }
+
 C
   printf '%s\n' 'export function w $main() { ret 0 }' >"$out/module_0.ssa"
   cat >"$out/native_shim.h" <<'C'
@@ -469,7 +475,7 @@ required_symbol_lines=(
   'typedef native_m0_type_5 fram_server_codec_release_response_arg_0;'
   '#define FRAM_SERVER_CALL_GENERATED_ABI(arena, capability) FRAM_SERVER_SYMBOL_GENERATED_ABI()'
   '#define FRAM_SERVER_CALL_STORE_BOOT(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_BOOT((arena), (capability), (arg_0), (arg_1), (arg_2))'
-  '#define FRAM_SERVER_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_DISPATCH((capability), (arg_0), (arg_1), (arg_2))'
+  '#define FRAM_SERVER_CALL_STORE_DISPATCH(arena, capability, arg_0, arg_1, arg_2) FRAM_SERVER_SYMBOL_STORE_DISPATCH((arena), (capability), (arg_0), (arg_1), (arg_2))'
   '#define FRAM_SERVER_CALL_STORE_SHUTDOWN(arena, capability, arg_0) FRAM_SERVER_SYMBOL_STORE_SHUTDOWN((arg_0))'
   '#define FRAM_SERVER_CALL_CODEC_READ_REQUEST(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_READ_REQUEST((arena), (arg_0))'
   '#define FRAM_SERVER_CALL_CODEC_WRITE_RESPONSE(arena, capability, arg_0) FRAM_SERVER_SYMBOL_CODEC_WRITE_RESPONSE((arena), (capability), (arg_0))'
