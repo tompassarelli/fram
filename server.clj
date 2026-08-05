@@ -13,12 +13,14 @@
             [fram.text-search :as text-search]
             [fram.types :as t]
             [fri-port :as fri])
-  (:import [java.net ServerSocket Socket]
+  (:import [java.net ServerSocket Socket SocketException SocketTimeoutException]
            [java.io ByteArrayOutputStream InputStream OutputStream Writer]
            [java.nio ByteBuffer ByteOrder]
            [java.security MessageDigest]
            [java.time Instant]
-           [java.util.concurrent LinkedBlockingQueue TimeUnit]))
+           [java.util.concurrent ArrayBlockingQueue LinkedBlockingQueue
+            ThreadFactory ThreadPoolExecutor TimeUnit]
+           [java.util.concurrent.atomic AtomicLong]))
 
 (load-file "database.clj")
 (load-file "writer_authority.clj")
@@ -29,6 +31,12 @@
 (def listener (atom nil))
 (def stopping? (atom false))
 (def active-requests (atom {}))
+(def connection-executor (atom nil))
+(def connection-sockets (atom #{}))
+(def active-connections (atom 0))
+(def admission-rejections (atom 0))
+(def ^:private connection-drain-monitor (Object.))
+(def ^:private connection-thread-sequence (AtomicLong. 0))
 (def published-snapshot (atom nil))
 (def server-generation (atom 0))
 (def commit-sequencer (atom nil))
@@ -75,7 +83,8 @@
 (def text-index-cache (atom (empty-text-index-cache 0)))
 
 (declare start-commit-sequencer! stop-commit-sequencer! sequence-commit!
-         response-version read-query-archive-manifest!)
+         stop-connection-admission! serve-connection! response-version
+         read-query-archive-manifest!)
 
 ;; Request observability: the slow threshold is checked before the quiet gate,
 ;; so a stalled request still leaves a trace under FRAM_SERVER_QUIET.
@@ -88,9 +97,29 @@
         (try (Long/parseLong (.trim ^String raw)) (catch Throwable _ nil)))
       fallback))
 
+(defn- bounded-positive-env-int [name fallback ceiling]
+  (let [raw (env-string name)
+        value (some-> raw parse-long)]
+    (cond
+      (nil? raw) fallback
+      (or (nil? value) (not (pos? value)) (> value ceiling))
+      (throw (ex-info (str name " must be an integer in [1," ceiling "]")
+                      {:variable name :value raw :ceiling ceiling}))
+      :else (int value))))
+
 (def request-log-path (env-string "FRAM_SERVER_LOG"))
 (def request-log-quiet? (= "1" (System/getenv "FRAM_SERVER_QUIET")))
 (def slow-request-ms (env-long "FRAM_SLOW_MS" 1000))
+(def connection-worker-limit
+  (bounded-positive-env-int "FRAM_CONNECTION_WORKERS" 32 512))
+(def connection-pending-limit
+  (bounded-positive-env-int "FRAM_CONNECTION_QUEUE" 128 65536))
+(def connection-first-frame-timeout-ms
+  (bounded-positive-env-int "FRAM_CONNECTION_READ_TIMEOUT_MS" 5000 600000))
+(def connection-drain-grace-ms
+  (bounded-positive-env-int "FRAM_SHUTDOWN_CONNECTION_GRACE_MS" 3000 600000))
+(def connection-stop-timeout-ms
+  (bounded-positive-env-int "FRAM_SHUTDOWN_TIMEOUT_MS" 8000 600000))
 (def runtime-engine (atom :rpc/jvm))
 (def query-checkpoint-interval
   (max 1 (env-long "FRAM_QUERY_CHECKPOINT_INTERVAL" 1000)))
@@ -229,6 +258,7 @@
     (reset! (:cancelled cancellation) true)
     (when-let [control @(:query-control cancellation)]
       (datalog/cancel-query! control :server-shutdown)))
+  (stop-connection-admission!)
   (stop-commit-sequencer!)
   (reset! active-requests {})
   (drop-query-caches!)
@@ -1994,6 +2024,138 @@
   (when-let [control @(:query-control cancellation)]
     (datalog/cancel-query! control reason)))
 
+(defn- connection-thread-factory []
+  (reify ThreadFactory
+    (newThread [_ runnable]
+      (doto (Thread. ^Runnable runnable
+                     (str "fram-rpc-connection-"
+                          (.incrementAndGet connection-thread-sequence)))
+        (.setDaemon false)))))
+
+(defn- start-connection-admission! []
+  (when-let [^ThreadPoolExecutor existing @connection-executor]
+    (when-not (.isTerminated existing)
+      (throw (ex-info "connection executor is already running" {}))))
+  (let [executor
+        (ThreadPoolExecutor.
+         connection-worker-limit connection-worker-limit
+         0 TimeUnit/MILLISECONDS
+         (ArrayBlockingQueue. connection-pending-limit)
+         (connection-thread-factory))]
+    (reset! active-connections 0)
+    (reset! connection-sockets #{})
+    (reset! admission-rejections 0)
+    (reset! connection-executor executor)
+    executor))
+
+(defn- finish-accepted-connection! [^Socket socket]
+  (locking connection-drain-monitor
+    (when (contains? @connection-sockets socket)
+      (swap! connection-sockets disj socket)
+      (swap! active-connections dec)
+      (.notifyAll connection-drain-monitor))))
+
+(defn- close-accepted-connections! []
+  (let [sockets (locking connection-drain-monitor
+                  (vec @connection-sockets))]
+    (doseq [^Socket socket sockets]
+      (try (.close socket) (catch Throwable _ nil)))
+    (count sockets)))
+
+(defn- remaining-stop-ms [started-ns]
+  (max 0 (- (long connection-stop-timeout-ms)
+            (quot (- (System/nanoTime) started-ns) 1000000))))
+
+(defn- await-connection-executor! [^ThreadPoolExecutor executor timeout-ms]
+  (try
+    (.awaitTermination executor (max 0 (long timeout-ms)) TimeUnit/MILLISECONDS)
+    (catch InterruptedException _ false)))
+
+(defn- stop-connection-admission! []
+  (when-let [^ThreadPoolExecutor executor @connection-executor]
+    (let [started-ns (System/nanoTime)]
+      (.shutdown executor)
+      (when-not (await-connection-executor!
+                 executor (min connection-drain-grace-ms
+                               connection-stop-timeout-ms))
+        (close-accepted-connections!)
+        (when-not (await-connection-executor!
+                   executor (remaining-stop-ms started-ns))
+          (.shutdownNow executor)
+          (close-accepted-connections!)
+          (await-connection-executor! executor 250)))
+      (when-not (.isTerminated executor)
+        (emit-log-line!
+         (str "fram-rpc ts=" (Instant/now)
+              " op=server/connection-stop outcome=timed-out"
+              " active=" @active-connections
+              " pending=" (.size (.getQueue executor)))))
+      (compare-and-set! connection-executor executor nil)))
+  nil)
+
+(defn- admission-error-code [error]
+  (cond
+    (instance? SocketTimeoutException error) :rpc/read-timeout
+    (instance? SocketException error) :rpc/connection-error
+    :else
+    (let [data (ex-data error)]
+      (or (:fram/code data) (:code data) (:type data) :rpc/internal-error))))
+
+(defn- serve-accepted-connection! [^Socket socket]
+  (try
+    (.setSoTimeout socket connection-first-frame-timeout-ms)
+    (serve-connection! socket)
+    (catch Throwable error
+      (when (= :rpc/internal-error (admission-error-code error))
+        (.printStackTrace ^Throwable error System/err)))
+    (finally
+      (try (.close socket) (catch Throwable _ nil))
+      (finish-accepted-connection! socket))))
+
+(defn- record-admission-rejection! [^ThreadPoolExecutor executor]
+  (let [rejections (swap! admission-rejections inc)]
+    (when (or (= 1 rejections) (zero? (mod rejections 1024)))
+      (emit-log-line!
+       (str "fram-rpc ts=" (Instant/now)
+            " op=server/reject outcome=overloaded"
+            " workers=" (.getActiveCount executor)
+            " pending=" (.size (.getQueue executor))
+            " rejected=" rejections)))))
+
+(defn- admit-connection! [^Socket socket]
+  (let [tracked?
+        (locking connection-drain-monitor
+          (when-not @stopping?
+            (swap! connection-sockets conj socket)
+            (swap! active-connections inc)
+            true))]
+    (if-not tracked?
+      (try (.close socket) (catch Throwable _ nil))
+      (let [^ThreadPoolExecutor executor @connection-executor]
+        (try
+          (.execute
+           executor
+           ^Runnable
+           (reify Runnable
+             (run [_]
+               (if @stopping?
+                 (do
+                   (try (.close socket) (catch Throwable _ nil))
+                   (finish-accepted-connection! socket))
+                 (serve-accepted-connection! socket)))))
+          (catch Throwable error
+            (if (= "java.util.concurrent.RejectedExecutionException"
+                   (.getName (class error)))
+              (do
+                (when-not @stopping?
+                  (record-admission-rejection! executor))
+                (try (.close socket) (catch Throwable _ nil))
+                (finish-accepted-connection! socket))
+              (do
+                (try (.close socket) (catch Throwable _ nil))
+                (finish-accepted-connection! socket)
+                (throw error)))))))))
+
 (defn- register-request! [request-id cancellation]
   (locking active-requests
     (when (contains? @active-requests request-id)
@@ -2023,6 +2185,8 @@
       (try
         (let [frame (read-rpc-frame! input)
               started (System/nanoTime)]
+          (when (.isConnected socket)
+            (.setSoTimeout socket 0))
           (when frame
             (if (= :cancel (t/rpcframev1-kind frame))
               (let [result (handle-rpc-frame! frame (cancellation-state))]
@@ -2050,9 +2214,7 @@
         (catch Throwable error
           ;; Frame-level failures never reach handle-rpc-request!, so without
           ;; this arm a malformed or duplicated request is served invisibly.
-          (let [data (ex-data error)
-                code (or (:fram/code data) (:code data) (:type data)
-                         :rpc/internal-error)]
+          (let [code (admission-error-code error)]
             (record-request! nil (- (System/nanoTime) opened) :error code nil))
           (throw error))))))
 
@@ -2064,7 +2226,8 @@
   (boot! path expected-space role)
   (let [bind-host (or (not-empty (System/getenv "FRAM_BIND")) "127.0.0.1")
         server (ServerSocket. (int port) 128
-                              (java.net.InetAddress/getByName bind-host))]
+                              (java.net.InetAddress/getByName bind-host))
+        _ (start-connection-admission!)]
     (reset! listener server)
     (println (str "Fram server listening on " bind-host ":" port
                   " space=" (database/database-space @database)
@@ -2078,20 +2241,15 @@
           " slow-ms=" slow-request-ms
           " quiet=" (if request-log-quiet? 1 0)
           " log=" (or request-log-path "stderr")
+          " connection-workers=" connection-worker-limit
+          " connection-queue=" connection-pending-limit
+          " connection-read-timeout-ms=" connection-first-frame-timeout-ms
           " max-heap-mb=" (quot (.maxMemory (Runtime/getRuntime)) 1048576)))
     (try
       (while (not @stopping?)
         (try
           (let [socket (.accept server)]
-            (future
-              (try (serve-connection! socket)
-                   (catch Throwable error
-                     (let [data (ex-data error)
-                           code (or (:fram/code data) (:code data) (:type data)
-                                    :rpc/internal-error)]
-                       (when (= :rpc/internal-error code)
-                         (.printStackTrace ^Throwable error System/err)))
-                     (try (.close socket) (catch Throwable _ nil))))))
+            (admit-connection! socket))
           (catch java.net.SocketException error
             (when-not @stopping? (throw error)))))
       (finally (shutdown!)))))
